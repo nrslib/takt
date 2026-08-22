@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { getLabelObject } from '../../shared/i18n/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { prependInitialPromptContext, formatSourceContextSection } from './promptSections.js';
-import { formatStepPreviews, selectSummaryAction } from './interactive-summary.js';
+import {
+  buildTaskInstructionFormat,
+  formatStepPreviews,
+  selectSummaryAction,
+} from './interactive-summary.js';
 import type { SummaryPromptOptions } from './conversationLoop.js';
 import type { PostSummaryAction } from './interactive-summary-types.js';
 import type { InteractiveImageAttachment } from './imageAttachments.js';
@@ -71,6 +75,7 @@ export function buildOrderRevisionPrompt(
     stepDetails: hasWorkflowPreview
       ? formatStepPreviews(options.workflowContext!.stepPreviews!, options.lang)
       : '',
+    taskInstructionFormat: buildTaskInstructionFormat(options.lang, options.formalSpec),
   });
   return prependInitialPromptContext(prompt, options.promptContext);
 }

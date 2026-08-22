@@ -64,6 +64,10 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectOption: vi.fn(),
 }));
 
+vi.mock('../shared/prompt/confirm.js', () => ({
+  confirm: vi.fn(),
+}));
+
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string, lang: string) => {
     if (key === 'orderRevision.attachmentsHeading') {
@@ -105,12 +109,14 @@ import {
 import { selectOption } from '../shared/prompt/index.js';
 import { info } from '../shared/ui/index.js';
 import { loadTemplate } from '../shared/prompts/index.js';
+import { confirm } from '../shared/prompt/confirm.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
 const mockLoadTemplate = vi.mocked(loadTemplate);
 const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
+const mockConfirm = vi.mocked(confirm);
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
 
@@ -182,6 +188,9 @@ describe('runInstructMode', () => {
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Add unit tests from inline /go task.');
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockLoadTemplate).toHaveBeenCalledWith('score_summary_gherkin_instructions', 'en');
+    expect(mockLoadTemplate).not.toHaveBeenCalledWith('score_summary_formal_spec_instructions', 'en');
   });
 
   it('should return action=execute with task on initial suffix /go command text', async () => {

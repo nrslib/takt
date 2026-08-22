@@ -180,6 +180,17 @@ export function formatTaskHistorySummary(taskHistory: TaskHistorySummaryItem[], 
   return `${heading}\n${details}`;
 }
 
+export function buildTaskInstructionFormat(
+  lang: 'en' | 'ja',
+  formalSpec: boolean,
+): string {
+  const gherkinInstructions = loadTemplate('score_summary_gherkin_instructions', lang).trim();
+  const formalSpecInstructions = formalSpec
+    ? `\n\n${loadTemplate('score_summary_formal_spec_instructions', lang).trim()}`
+    : '';
+  return `\n${gherkinInstructions}${formalSpecInstructions}`;
+}
+
 function buildTaskFromHistory(history: ConversationMessage[]): string {
   return history
     .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
@@ -195,7 +206,7 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
-  gherkin = false,
+  formalSpec = false,
 ): string {
   let conversation = '';
   if (history.length > 0) {
@@ -220,9 +231,7 @@ export function buildSummaryPrompt(
     ? formatTaskHistorySummary(workflowContext.taskHistory, lang)
     : '';
 
-  const taskInstructionFormat = gherkin
-    ? `\n${loadTemplate('score_summary_gherkin_instructions', lang).trim()}`
-    : '';
+  const taskInstructionFormat = buildTaskInstructionFormat(lang, formalSpec);
   const summaryPrompt = loadTemplate('score_summary_system_prompt', lang, {
     hasWorkflowPreview: hasWorkflow,
     workflowName: workflowContext?.name ?? '',

@@ -6,7 +6,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { restoreStdin, setupRawStdin, toRawInputs } from './helpers/stdinSimulator.js';
+import {
+  createMockProvider,
+  restoreStdin,
+  setupRawStdin,
+  toRawInputs,
+} from './helpers/stdinSimulator.js';
 
 // ── Mocks ──────────────────────────────────────────────
 
@@ -55,15 +60,20 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectOptionWithDefault: vi.fn(),
 }));
 
+vi.mock('../shared/prompt/confirm.js', () => ({
+  confirm: vi.fn(),
+}));
+
 import { getProvider } from '../infra/providers/index.js';
 import { selectOptionWithDefault, selectOption } from '../shared/prompt/index.js';
 import { info } from '../shared/ui/index.js';
+import { confirm } from '../shared/prompt/confirm.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOptionWithDefault = vi.mocked(selectOptionWithDefault);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
-const attachmentSessionDirs = new Set<string>();
+const mockConfirm = vi.mocked(confirm);
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
 
@@ -114,53 +124,12 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
-  for (const sessionDir of attachmentSessionDirs) {
-    fs.rmSync(sessionDir, { recursive: true, force: true });
-  }
-  attachmentSessionDirs.clear();
   if (originalTmpDir === undefined) {
     delete process.env.TMPDIR;
   } else {
     process.env.TMPDIR = originalTmpDir;
   }
 });
-
-function createOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
-}
-
-function createInvalidSizeOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length + 1}:${imageData.toString('base64')}\x07`;
-}
-
-function trackAttachmentSession(tempPath: string): void {
-  attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
-}
-
-function createIsolatedTmpRoot(prefix: string): string {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  attachmentSessionDirs.add(tmpRoot);
-  return tmpRoot;
-}
-
-function listTaktTempSessionDirs(): Set<string> {
-  const taktTempRoot = path.join(os.tmpdir(), 'takt');
-  if (!fs.existsSync(taktTempRoot)) {
-    return new Set();
-  }
-  return new Set(
-    fs.readdirSync(taktTempRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(taktTempRoot, entry.name)),
-  );
-}
-
-function expectNoNewTaktTempSessionDirs(previous: Set<string>): void {
-  const leaked = [...listTaktTempSessionDirs()].filter((sessionDir) => !previous.has(sessionDir));
-  expect(leaked).toEqual([]);
-}
 
 // ── InteractiveMode type & constants tests ──
 
@@ -468,7 +437,8 @@ describe('personaMode', () => {
 
   it('should summarize initial /go task text without prior conversation', async () => {
     setupRawStdin(toRawInputs(['/go add regression coverage', '/cancel']));
-    setupMockProvider(['Add regression coverage for the shared /go path.']);
+    const { provider, capture } = createMockProvider(['Add regression coverage for the shared /go path.']);
+    mockGetProvider.mockReturnValue(provider);
     mockSelectOption.mockResolvedValue('execute');
 
     const result = await personaMode('/project', mockFirstStep);
@@ -477,6 +447,9 @@ describe('personaMode', () => {
       action: 'execute',
       task: 'Add regression coverage for the shared /go path.',
     });
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(capture.prompts[0]).toMatch(/Gherkin/);
+    expect(capture.prompts[0]).not.toMatch(/\bQuint\b|\bAlloy\b/);
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
   });

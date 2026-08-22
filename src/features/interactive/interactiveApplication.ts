@@ -25,7 +25,7 @@ export function buildConversationSummaryPrompt(
   userNote: string,
   lang: 'en' | 'ja',
   promptContext?: string,
-  gherkin = false,
+  formalSpec = false,
   context?: ConversationSummaryContext,
 ): string {
   const trimmedNote = userNote.trim();
@@ -43,6 +43,6 @@ export function buildConversationSummaryPrompt(
     context?.workflowContext,
     context?.sourceContext,
     promptContext,
-    gherkin,
+    formalSpec,
   );
 }

@@ -10,6 +10,11 @@ import {
   createMockProvider,
 } from './helpers/stdinSimulator.js';
 
+const { mockResolveFormalSpecMode, mockSelectRecentSession } = vi.hoisted(() => ({
+  mockResolveFormalSpecMode: vi.fn(),
+  mockSelectRecentSession: vi.fn(),
+}));
+
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
   getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
@@ -17,6 +22,15 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(),
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveFormalSpecMode: (cwd: string) => mockResolveFormalSpecMode(cwd),
+}));
+
+vi.mock('../features/interactive/sessionSelector.js', () => ({
+  selectRecentSession: (...args: unknown[]) => mockSelectRecentSession(...args),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -71,6 +85,8 @@ function setupMockProvider(responses: string[]): void {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSelectOption.mockResolvedValue('execute');
+  mockResolveFormalSpecMode.mockResolvedValue(false);
+  mockSelectRecentSession.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -78,6 +94,78 @@ afterEach(() => {
 });
 
 describe('interactiveMode', () => {
+  it.each([
+    ['assistant', undefined, undefined],
+    ['Grill Me', undefined, { assistantMode: 'grill-me' as const }],
+    ['resumed assistant', 'existing-session', undefined],
+  ] as const)('should resolve formal specification mode once when starting a %s session', async (_label, sessionId, options) => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await interactiveMode('/project', undefined, undefined, sessionId, undefined, options);
+
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledOnce();
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledWith('/project');
+  });
+
+  it.each([
+    [false, true],
+    [true, false],
+  ] as const)(
+    'should apply formal specification mode=%s before resume and mode=%s after selecting a session',
+    async (initialFormalSpec, resumedFormalSpec) => {
+      setupRawStdin(toRawInputs([
+        'describe the initial behavior',
+        '/resume',
+        'describe the resumed behavior',
+        '/go',
+      ]));
+      const { provider, capture } = createMockProvider([
+        'Which initial states matter?',
+        'Which resumed states matter?',
+        '# Task instruction',
+      ]);
+      mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+      mockSelectRecentSession.mockResolvedValue('selected-session');
+      mockResolveFormalSpecMode
+        .mockResolvedValueOnce(initialFormalSpec)
+        .mockResolvedValueOnce(resumedFormalSpec);
+
+      await interactiveMode('/project');
+
+      expect(mockResolveFormalSpecMode).toHaveBeenCalledTimes(2);
+      expect(mockResolveFormalSpecMode).toHaveBeenNthCalledWith(1, '/project');
+      expect(mockResolveFormalSpecMode).toHaveBeenNthCalledWith(2, '/project');
+      expect(capture.systemPrompts).toHaveLength(3);
+    },
+  );
+
+  it('should not resolve formal specification mode again when session selection is cancelled', async () => {
+    setupRawStdin(toRawInputs(['/resume', '/cancel']));
+    setupMockProvider([]);
+    mockSelectRecentSession.mockResolvedValue(null);
+
+    await interactiveMode('/project');
+
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['assistant', undefined],
+    ['Grill Me', { assistantMode: 'grill-me' as const }],
+  ] as const)('should apply resolved formal specification mode to the %s system prompt', async (_label, options) => {
+    setupRawStdin(toRawInputs(['plan a stateful feature', '/cancel']));
+    const { provider, capture } = createMockProvider(['Which states are involved?']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+    mockResolveFormalSpecMode.mockResolvedValue(true);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, options);
+
+    expect(capture.systemPrompts[0]).toMatch(/Gherkin/);
+    expect(capture.systemPrompts[0]).toMatch(/\bQuint\b/);
+    expect(capture.systemPrompts[0]).toMatch(/\bAlloy\b/);
+  });
+
   it('should return action=cancel when user types /cancel', async () => {
     // Given
     setupRawStdin(toRawInputs(['/cancel']));

@@ -31,7 +31,7 @@ interactive_preview_steps: 3  # インタラクティブモードでの step プ
 auto_requeue_max_attempts: 0  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、デフォルト: 0 = 無効）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用（デフォルト: false）
 assistant:
-  gherkin: true               # 最終指示書を Markdown + 要所の Gherkin で生成（デフォルト: true、無効化は false）
+  formal_spec: 'y/N'          # Alloy／Quint モード: true, false, Y/n, y/N（デフォルト: y/N）
 # auto_fetch: false           # クローン作成前にリモートを fetch（デフォルト: false）
 # base_branch: main           # クローン作成のベースブランチ（デフォルト: リモートのデフォルトブランチ）
 
@@ -190,7 +190,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` の並列タスク数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
-| `assistant.gherkin` | boolean | `true` | assistant 対話から生成する最終指示書で、重要な観測可能動作、状態遷移、境界、失敗、不変条件を最小数の Gherkin Scenario に整理します。未設定時は有効で、プロジェクト設定で明示した値がグローバル値より優先されます。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` | 適用可能な要件に限り、該当する Alloy／Quint のガイダンスを追加します。要件ごとに必要な記法だけを使い、同じ要件を複数の記法へ重複させず、両方の記法を強制しません。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。プロジェクトの明示値がグローバル値より優先されます。Gherkin のガイダンスは独立して常時有効です。 |
 | `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
@@ -257,7 +257,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 # プロジェクト固有の assistant 設定
 # assistant:
-#   gherkin: true              # global 設定を上書き。false で無効化
+#   formal_spec: 'Y/n'         # global の Alloy／Quint モードを上書き。TTY では Yes を既定に質問
 #   init_files:
 #     # project config 専用。インタラクティブ assistant モードの初期コンテキストファイル
 #     - docs/assistant-context.md
@@ -333,7 +333,7 @@ steps:
 
 `provider` と `model` の宣言は TAKT 実行で使う provider、model、thinking level を選択するもので、Pi CLI の設定を取り込むものではありません。Pi の認証は Pi SDK credential store または provider-native 環境変数で別途処理されます。この境界により、グローバル設定への意図しない書き込みを防ぎ、プロジェクトローカル設定の信頼性と予測可能性を保ちます。
 
-`provider_options.pi` は、`extensions` や `no_*` の探索制御など、Pi リソースを読み込むための別経路です。これらの option は認証、model、thinking level を宣言するものではありません。明示したリソース source は TAKT 実行時だけ temporary resolution され、Pi settings には永続化されません。リソースの信頼境界については [Pi のリソース読み込み](#pi-resource-loading) を参照してください。
+`provider_options.pi` は、`extensions` や `no_*` の探索制御など、Pi リソースを読み込むための別経路です。これらの option は認証、model、thinking level を宣言するものではありません。version 指定のない明示 npm source は既存の project scope、user scope を順に再利用し、どちらも正常に読み込めない場合だけ temporary resolution に fallback します。version 指定付き npm source と npm 以外の source は常に temporary resolution されます。明示した source は Pi settings には永続化されません。リソースの信頼境界については [Pi のリソース読み込み](#pi-resource-loading) を参照してください。
 
 ### プロバイダ無応答 deadline と OpenCode 実行ガード
 
@@ -398,7 +398,7 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
-| `assistant.gherkin` | boolean | `true`（global 設定またはデフォルト由来） | グローバル設定を上書きする設定です。quiet モードを含む assistant 対話から最終指示書を生成するとき、背景、範囲、実装詳細、設計意図、制約、確認方法は Markdown に残し、重要な観測可能動作、状態遷移、境界、失敗、不変条件だけを最小数の Gherkin Scenario で整理するよう要約エージェントへ指示します。未設定の場合はグローバル値、どちらも未設定の場合は `true` になります。`false` を明示すると無効化できます。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"`（global 設定またはデフォルト由来） | 適用可能な要件に限り、該当する Alloy／Quint のガイダンスを追加するプロジェクト上書きです。要件ごとに必要な記法だけを使い、同じ要件を複数の記法へ重複させず、両方の記法を強制しません。プロジェクト値がグローバル値より優先されます。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは常時有効です。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |
@@ -582,12 +582,24 @@ companion reviewer は既定で無効です。有効化する場合はトップ�
 version: 1
 companion:
   enabled: true
+  review_mode: completion # completion | live
 ```
+
+`companion` ポリシーには `enabled` または `review_mode` の少なくとも一方を
+指定します。`companion: { review_mode: live }` のような mode 単独指定は受理され、
+`enabled: false` として解決されます。空の `companion: {}` は拒否されます。
 
 global と project の両方にポリシーがある場合、その値は論理積で合成されるため、global
 側で無効化した companion を project 側の `true` で再有効化することはできません。
 レイヤー合成時に未指定のポリシーは中立として扱い、両方とも未指定なら companion は
 無効のままです。
+
+`companion.review_mode` の既定値は `completion` です。project に指定した値は global
+を上書きし、project で省略した場合は global の値を継承します。`completion` は実装
+エージェントの成功応答後に累積差分をレビューし、`live` は応答中の quiet、forced、
+commit 発火を維持します。指定できる値は `completion` と `live` だけで、無効な値は
+`runtime.yaml` の読み込み時にエラーになります。`companion.enabled` が `false` でも
+mode の構造は検証されますが、Companion provider の解決と実行は行われません。
 
 companion の provider target（`targets.companions`）とプロバイダ能力要件が適用されるのは
 companion が有効な間だけです。無効時も companion 宣言と `targets.companions` の構造検証は
@@ -1314,10 +1326,12 @@ provider_options:
 ```
 
 - `extensions` には npm package、Git source、local path を指定できます。
-- 明示した source は TAKT 実行時に temporary resolution され、Pi settings には永続化されません。
+- version 指定のない明示 npm source は既存の project scope install、user scope install の順に再利用します。どちらも有効な resource に解決できない場合だけ temporary resolution に fallback し、永続 scope への新規 install は行いません。version 指定付き npm source は常に temporary resolution されます。
+- npm 以外の明示した source は TAKT 実行時に temporary resolution されます。
+- 明示した source は Pi settings には永続化されません。
 - `no_extensions` は extension 探索を無効にしますが、`extensions` に列挙した source は読み込みます。
-- その他の `no_*` オプションはそれぞれ対応するリソース種別の探索を無効にします。
-- 暗黙の project-local Pi extension は信頼せず、読み込みません。
+- その他の `no_*` オプションは、それぞれ対応するリソース種別の探索を無効にします。
+- 暗黙の project-local Pi resource は信頼せず、読み込みません。project package storage から再利用するのは、明示した npm source に対して検出した絶対 path だけです。
 - 明示した extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。
 - 認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。
 
@@ -1331,7 +1345,7 @@ provider_options:
 
 **推奨（正）の YAML キー**（同梱の `builtins/{lang}/workflow-categories.yaml` と一致）: トップレベル **`workflow_categories`**、各カテゴリオブジェクト直下の **`workflows`** 配列に **workflow 名**（各 workflow YAML の `name` フィールド。ビルトインなら `default` など）を列挙します。ファイルパスではありません。
 
-カテゴリ構造には正準キーの **`workflow_categories`** と **`workflows`** を使います。加えて、上の例にあるトップレベルの任意設定 `show_others_category` / `others_category_name` も使えます。削除済みの旧カテゴリキーは受理されません。指定すると validation error になります。
+カテゴリ構造には正準キーの **`workflow_categories`** と **`workflows`** を使います。加えて、トップレベルの任意設定 `show_others_category` / `others_category_name` も使えます。削除済みの旧カテゴリキーは受理されません。指定すると validation error になります。
 
 ### 設定方法
 
@@ -1345,7 +1359,9 @@ provider_options:
 # ~/.takt/preferences/workflow-categories.yaml（または workflow_categories_file で指定したファイル）
 workflow_categories:
   Development:
-    workflows: [default, simple]
+    workflows:
+      - default: "標準の開発をする"   # 名前: 説明 で選択ラベルに説明を併記
+      - simple
     Backend:
       workflows: [dual-cqrs]
     Frontend:
@@ -1361,6 +1377,7 @@ others_category_name: "Other Workflows"  # 未分類カテゴリの名前
 
 - **ネストされたカテゴリ** — 階層的な整理のための無制限の深さ。カテゴリ配下の `workflows` 以外のキーはすべて子カテゴリ名として扱われます（`children:` キーはありません）
 - **カテゴリごとの workflow リスト** — 各カテゴリの `workflows:` に、そのグループに表示する workflow 名を並べる
+- **Workflow の説明** — `workflows:` のエントリを `- 名前: 説明` の形にすると選択ラベルに短い説明を併記します（文字列だけの従来形式も使えます）。複数カテゴリに列挙される workflow にはどのカテゴリでも同じ説明を書いてください。同じファイル内で異なる説明を付けると validation error になります。ユーザー overlay は builtin を workflow 名単位で上書きでき、ユーザー固有の名前も追加可能
 - **その他カテゴリ** — いずれのカテゴリにも列挙されていない workflow を自動収集（`show_others_category: false` で無効化可能）
 - **ビルトイン workflow フィルタリング** — `enable_builtin_workflows: false` ですべてのビルトインを無効化、または `disabled_builtins: [name1, name2]` で名前指定で無効化
 

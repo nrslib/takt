@@ -18,6 +18,7 @@ import type {
   McpServerConfig,
   PermissionMode,
 } from '../models/types.js';
+import type { CompanionReviewMode } from '../models/companion-types.js';
 import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
@@ -359,6 +360,7 @@ export interface WorkflowEvents {
   'companion:start': (payload: {
     step: string;
     companion: string;
+    reviewMode: CompanionReviewMode;
   }) => void;
   'companion:pool_selected': (payload: {
     step: string;
@@ -384,6 +386,7 @@ export interface WorkflowEvents {
   }) => void;
   'companion:review_round': (payload: {
     step: string;
+    reviewMode: CompanionReviewMode;
     companion: string;
     trigger: CompanionReviewTrigger;
     digest: string;
@@ -619,6 +622,7 @@ export interface WorkflowEngineOptions {
   internalAgentSeats?: InternalAgentSeats;
   /** runtime.yaml から解決済みの companion ごとの実行環境。 */
   companionEnabled?: boolean;
+  companionReviewMode?: CompanionReviewMode;
   companionProviders?: Readonly<Record<string, ProviderRoutingEntry>>;
   companionDiffReader?: CompanionDiffReader;
   /**

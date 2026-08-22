@@ -30,6 +30,7 @@ import {
   renderPullRequestContext,
   type PullRequestContext,
 } from '../../../core/workflow/pr-context.js';
+import { resolveFormalSpecModeWithoutPrompt } from '../../interactive/taskInstructionFormat.js';
 
 export interface DirectInstructModeOptions {
   readonly cwd: string;
@@ -86,6 +87,7 @@ export async function runDirectInstructMode(
 ): Promise<InstructModeResult> {
   const globalConfig = resolveWorkflowConfigValues(options.cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
+  const formalSpec = resolveFormalSpecModeWithoutPrompt(options.cwd);
 
   const baseCtx = initializeSession(options.cwd, 'instruct');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };
@@ -104,6 +106,7 @@ export async function runDirectInstructMode(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
+    formalSpec,
     allowedTools: DIRECT_INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),

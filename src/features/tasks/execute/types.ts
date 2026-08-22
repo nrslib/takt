@@ -2,7 +2,7 @@
  * Execution module type definitions
  */
 
-import type { Language } from '../../../core/models/index.js';
+import type { CompanionReviewMode, Language } from '../../../core/models/index.js';
 import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
@@ -127,6 +127,7 @@ export type WorkflowExecutionEvent =
       action: 'start';
       step: string;
       companion: string;
+      reviewMode: CompanionReviewMode;
     }
   | {
       type: 'companion';
@@ -162,6 +163,7 @@ export type WorkflowExecutionEvent =
       type: 'companion';
       action: 'review_round';
       step: string;
+      reviewMode: CompanionReviewMode;
       companion: string;
       trigger: 'quiet' | 'forced' | 'completion' | 'commit';
       digest: string;

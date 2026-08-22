@@ -92,12 +92,20 @@ function mergeRuntimeProviderFiles(
 ): RuntimeProviderFile {
   const provider = mergeProviderSections(global.provider, project.provider);
   const mcp = mergeMcpSections(global.mcp, project.mcp);
+  const globalEnabled = global.companion?.enabled;
+  const projectEnabled = project.companion?.enabled;
+  const enabled = globalEnabled === undefined && projectEnabled === undefined
+    ? undefined
+    : globalEnabled !== false && projectEnabled !== false;
   const loopAnalysis = project.loop_analysis ?? global.loop_analysis;
   const companion = global.companion === undefined && project.companion === undefined
     ? undefined
     : {
-        enabled: global.companion?.enabled !== false
-          && project.companion?.enabled !== false,
+        ...(enabled === undefined ? {} : { enabled }),
+        ...(project.companion?.review_mode === undefined
+          && global.companion?.review_mode === undefined
+          ? {}
+          : { review_mode: project.companion?.review_mode ?? global.companion?.review_mode }),
       };
   return {
     version: RUNTIME_PROVIDER_VERSION,

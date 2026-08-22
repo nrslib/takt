@@ -143,7 +143,11 @@ export interface DeepSeekHarnessProviderOptions {
   runtimeMode?: 'exe' | 'node';
 }
 
-/** Pi SDK resource-loading options. Extension sources are resolved temporarily. */
+/**
+ * Pi SDK resource-loading options. Bare npm sources try existing project and user
+ * installs before temporary resolution; version-qualified npm and non-npm sources
+ * are always temporary and explicit sources are never persisted to Pi settings.
+ */
 export interface PiProviderOptions {
   guards?: ProviderGuardOptions;
   extensions?: string[];

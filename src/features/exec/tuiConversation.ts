@@ -149,8 +149,9 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
       });
     },
 
-    resumeSession(): void {
+    resumeSession(): Promise<void> {
       // Exec has no session picker; `/resume` is not in its command set.
+      return Promise.resolve();
     },
 
     pasteClipboardImage(abortSignal: AbortSignal): Promise<string> {

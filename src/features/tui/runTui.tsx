@@ -43,6 +43,7 @@ import type { TranscriptEntry } from './TranscriptEntryView.js';
 import { createTuiConversation } from './tuiConversation.js';
 import { describeSessionModel } from './tuiSetup.js';
 import type { TuiChatSetup, TuiPassthroughSetup } from './tuiSetup.js';
+import { resolveFormalSpecMode } from '../interactive/taskInstructionFormat.js';
 
 /** What the mode setup needs from the chosen workflow. */
 type WorkflowSummary = ReturnType<typeof getWorkflowDescription>;
@@ -181,12 +182,12 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
    * Single boundary for setup failures: everything below throws domain errors and
    * this turns the ones a user can act on into localized messages.
    */
-  function prepareMode(
+  async function prepareMode(
     mode: InteractiveMode,
     description: WorkflowSummary,
-  ): TuiChatSetup | TuiPassthroughSetup {
+  ): Promise<TuiChatSetup | TuiPassthroughSetup> {
     try {
-      return buildModeSetup(mode, description);
+      return await buildModeSetup(mode, description);
     } catch (error) {
       if (error instanceof ProviderNotConfiguredError) {
         throw new Error(getLabel('tui.errors.providerNotConfigured', options.lang));
@@ -195,10 +196,10 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     }
   }
 
-  function buildModeSetup(
+  async function buildModeSetup(
     mode: InteractiveMode,
     description: WorkflowSummary,
-  ): TuiChatSetup | TuiPassthroughSetup {
+  ): Promise<TuiChatSetup | TuiPassthroughSetup> {
     if (mode === 'passthrough') {
       return {
         kind: 'passthrough',
@@ -222,10 +223,13 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     };
     const personaFallback = mode === 'persona' && description.firstStep === undefined;
     const continued = resolveContinuedSession(mode);
-    const plan: ConversationPlan = mode === 'persona' && description.firstStep !== undefined
-      ? createPersonaConversationPlan(options.cwd, description.firstStep)
+    const usePersonaPlan = mode === 'persona' && description.firstStep !== undefined;
+    const formalSpec = usePersonaPlan ? false : await resolveFormalSpecMode(options.cwd);
+    const plan: ConversationPlan = usePersonaPlan
+      ? createPersonaConversationPlan(options.cwd, description.firstStep!)
       : createAssistantConversationPlan(options.cwd, {
         assistantMode: mode === 'grill-me' ? 'grill-me' : 'assistant',
+        formalSpec,
         workflowContext,
         ...agentProviderOverrides(),
         ...(continued.sessionId ? { sessionId: continued.sessionId } : {}),
@@ -351,7 +355,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     // chosen, before the conversation starts.
     displayAndClearSessionState(options.cwd, options.lang);
 
-    const setup = prepareMode(mode, description);
+    const setup = await prepareMode(mode, description);
     const result = setup.kind === 'passthrough'
       ? await runPassthrough(setup)
       : await runConversation(setup, workflowId);

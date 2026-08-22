@@ -105,9 +105,8 @@ export interface RoutingDecisionEvent {
   timestamp: string;
 }
 
-export interface CompanionAnalyticsEvent {
+interface CompanionAnalyticsEventBase {
   type: 'companion';
-  action: 'start' | 'pool_selected' | 'finding' | 'fix_round' | 'complete' | 'review_round' | 'queue_coalesced';
   step: string;
   companion?: string;
   selected?: string[];
@@ -119,7 +118,6 @@ export interface CompanionAnalyticsEvent {
   completionFailure?: boolean;
   followUpRounds?: number;
   reason?: string;
-  trigger?: 'quiet' | 'forced' | 'completion' | 'commit';
   digest?: string;
   changedLines?: number;
   replaced?: {
@@ -137,6 +135,36 @@ export interface CompanionAnalyticsEvent {
   runId: string;
   timestamp: string;
 }
+
+export interface CompanionReviewRoundAnalyticsEvent {
+  type: 'companion';
+  action: 'review_round';
+  step: string;
+  companion: string;
+  reviewMode: 'completion' | 'live';
+  trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+  digest: string;
+  changedLines: number;
+  findingCount: number;
+  runPathNamespace?: readonly string[];
+  runId: string;
+  timestamp: string;
+}
+
+export type CompanionReviewRoundAnalyticsPayload = Omit<
+  CompanionReviewRoundAnalyticsEvent,
+  'type' | 'action' | 'runId' | 'timestamp'
+>;
+
+export type CompanionAnalyticsEvent =
+  | (CompanionAnalyticsEventBase & {
+      action: 'start';
+      reviewMode: 'completion' | 'live';
+    })
+  | (CompanionAnalyticsEventBase & {
+      action: 'pool_selected' | 'finding' | 'fix_round' | 'complete' | 'queue_coalesced';
+    })
+  | CompanionReviewRoundAnalyticsEvent;
 
 /** Union of all analytics event types */
 export type AnalyticsEvent =

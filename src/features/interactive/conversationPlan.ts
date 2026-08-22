@@ -16,16 +16,24 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 import type { SessionContext } from './aiCaller.js';
 import { getAssistantSessionPersona } from './assistantMode.js';
 import { loadAssistantInitContext } from './assistantInitFiles.js';
-import type { ConversationStrategy } from './conversationLoop.js';
+import type {
+  ConversationPromptConfiguration,
+  ConversationStrategy,
+} from './conversationLoop.js';
 import { DEFAULT_INTERACTIVE_TOOLS } from './interactiveApplication.js';
 import { formatStepPreviews } from './interactive-summary.js';
 import type { WorkflowContext } from './interactive-summary-types.js';
 import {
+  frameUserComment,
   prependSourceContext,
   prependSourceContextGuardToSystemPrompt,
 } from './promptSections.js';
 import { formatRunSessionForPrompt, type RunSessionContext } from './runSessionReader.js';
 import { initializeSession } from './sessionInitialization.js';
+import {
+  resolveFormalSpecMode,
+  resolveFormalSpecModeWithoutPrompt,
+} from './taskInstructionFormat.js';
 
 /**
  * The order `/replay` resubmits and `/retry` offers, or nothing when there is
@@ -52,6 +60,7 @@ const EMPTY_RUN_SESSION_VARS = {
 
 export interface InteractiveSystemPromptInput {
   grillMe: boolean;
+  formalSpec?: boolean;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
 }
@@ -68,6 +77,7 @@ export function buildInteractiveSystemPrompt(
 
   return loadTemplate('score_interactive_system_prompt', lang, {
     grillMe: input.grillMe,
+    formalSpec: input.formalSpec ?? false,
     hasWorkflowPreview,
     workflowStructure: input.workflowContext?.workflowStructure ?? '',
     stepDetails: hasWorkflowPreview ? formatStepPreviews(stepPreviews, lang) : '',
@@ -84,6 +94,8 @@ export interface ConversationPlan {
 
 export interface AssistantConversationInput {
   assistantMode: AssistantInteractiveMode;
+  /** Initial value resolved by the front-end before the conversation starts. */
+  formalSpec?: boolean;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
   provider?: ProviderType;
@@ -110,22 +122,32 @@ export function createAssistantConversationPlan(
   const ctx = input.sessionId ? { ...baseCtx, sessionId: input.sessionId } : baseCtx;
   const grillMe = input.assistantMode === 'grill-me';
   const assistantInitContext = loadAssistantInitContext(cwd);
+  const formalSpec = input.formalSpec ?? resolveFormalSpecModeWithoutPrompt(cwd);
+  const buildPromptConfiguration = (resolvedFormalSpec: boolean): ConversationPromptConfiguration => ({
+    formalSpec: resolvedFormalSpec,
+    systemPrompt: buildInteractiveSystemPrompt(ctx.lang, {
+      grillMe,
+      formalSpec: resolvedFormalSpec,
+      ...(input.workflowContext ? { workflowContext: input.workflowContext } : {}),
+      ...(input.runSessionContext ? { runSessionContext: input.runSessionContext } : {}),
+    }),
+  });
+  const resolvePromptConfiguration = async (): Promise<ConversationPromptConfiguration> =>
+    buildPromptConfiguration(await resolveFormalSpecMode(cwd));
+  const initialPromptConfiguration = buildPromptConfiguration(formalSpec);
 
   return {
     ctx,
     strategy: {
-      systemPrompt: buildInteractiveSystemPrompt(ctx.lang, {
-        grillMe,
-        ...(input.workflowContext ? { workflowContext: input.workflowContext } : {}),
-        ...(input.runSessionContext ? { runSessionContext: input.runSessionContext } : {}),
-      }),
+      ...initialPromptConfiguration,
       allowedTools: grillMe ? GRILL_ME_INTERACTIVE_TOOLS : DEFAULT_INTERACTIVE_TOOLS,
       ...(grillMe ? { permissionMode: 'readonly' as const } : {}),
       transformPrompt: (message: string, sourceContext?: string) =>
-        prependSourceContext(ctx.lang, message, sourceContext),
+        prependSourceContext(ctx.lang, frameUserComment(ctx.lang, message), sourceContext),
       introMessage: getLabel(grillMe ? 'interactive.ui.introGrillMe' : 'interactive.ui.intro', ctx.lang),
       initialPromptContext: assistantInitContext,
       summaryPromptContext: assistantInitContext,
+      resolveResumedSessionConfiguration: resolvePromptConfiguration,
     },
   };
 }
@@ -140,6 +162,7 @@ export function createPersonaConversationPlan(
     ctx,
     strategy: {
       systemPrompt: prependSourceContextGuardToSystemPrompt(ctx.lang, firstStep.personaContent),
+      formalSpec: false,
       allowedTools: firstStep.allowedTools.length > 0
         ? firstStep.allowedTools
         : DEFAULT_INTERACTIVE_TOOLS,

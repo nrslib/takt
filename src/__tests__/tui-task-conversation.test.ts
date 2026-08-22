@@ -51,6 +51,7 @@ function createPlan(strategy: Partial<ConversationStrategy>): ConversationPlan {
       transformPrompt: (message: string) => message,
       introMessage: 'Retry mode - describe additional instructions.',
       ...strategy,
+      formalSpec: strategy.formalSpec ?? false,
     },
   };
 }

@@ -8,13 +8,15 @@ import {
   type ConversationMessage,
 } from './interactiveApplication.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
-import type { SummaryPromptBuilder } from './conversationLoop.js';
+import type {
+  ConversationPromptConfiguration,
+  SummaryPromptBuilder,
+} from './conversationLoop.js';
 import type { WorkflowContext } from './interactive-summary-types.js';
 import type { InteractiveMetadata } from '../tasks/execute/types.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
-import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 
 export interface ConversationSessionStrategy {
@@ -41,6 +43,7 @@ export interface ConversationSessionStrategy {
 
 export interface ConversationSessionOptions {
   cwd: string;
+  formalSpec: boolean;
   outputMode?: 'terminal' | 'silent';
   ctx: SessionContext;
   strategy: ConversationSessionStrategy;
@@ -130,6 +133,8 @@ export interface InteractiveConversationSession extends ConversationSession {
   recordRejectedDraft(task: string): void;
   /** Continue from a previously recorded provider session (/resume). */
   setSessionId(nextSessionId: string): void;
+  /** Apply the prompt configuration resolved for the selected session. */
+  setPromptConfiguration(configuration: ConversationPromptConfiguration): void;
 }
 
 const WORKFLOW_IDENTIFIER_PATTERNS = [
@@ -168,11 +173,12 @@ function resolveWorkflowIdentifierFromUserInputs(history: ConversationMessage[],
 }
 
 export function createConversationSession(options: ConversationSessionOptions): InteractiveConversationSession {
-  const gherkin = shouldUseGherkinTaskInstructions(options.cwd);
   let history: ConversationMessage[] = options.initialUserMessage
     ? [{ role: 'user', content: options.initialUserMessage }]
     : [];
   let sessionId = options.ctx.sessionId;
+  let formalSpec = options.formalSpec;
+  let systemPrompt = options.strategy.systemPrompt;
   let shouldSendInitialPromptContext = !!options.strategy.initialPromptContext;
   /**
    * The turn whose result the session still belongs to.
@@ -234,7 +240,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     }
     const { result, sessionId: newSessionId, error: callError } = await callAIWithRetry(
       prompt,
-      options.strategy.systemPrompt,
+      systemPrompt,
       options.strategy.allowedTools,
       options.cwd,
       { ...options.ctx, sessionId },
@@ -312,7 +318,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         ...(options.strategy.summaryPromptContext
           ? { promptContext: options.strategy.summaryPromptContext }
           : {}),
-        gherkin,
+        formalSpec,
         userNote,
       })
       : buildConversationSummaryPrompt(
@@ -320,7 +326,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         userNote,
         options.ctx.lang,
         options.strategy.summaryPromptContext,
-        gherkin,
+        formalSpec,
         {
           ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
           ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
@@ -399,6 +405,11 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
     setSessionId(nextSessionId: string): void {
       sessionId = nextSessionId;
+    },
+
+    setPromptConfiguration(configuration: ConversationPromptConfiguration): void {
+      formalSpec = configuration.formalSpec;
+      systemPrompt = configuration.systemPrompt;
     },
 
     recordRejectedDraft(task: string): void {

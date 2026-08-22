@@ -1095,6 +1095,13 @@ steps:
 companion reviewer は既定で無効です。workflow に宣言した reviewer を実行するには
 `runtime.yaml` で `companion.enabled: true` を設定します。
 
+発火方式は `runtime.yaml` の `companion.review_mode` で選択します。既定値は
+`completion` で、実装エージェントの成功応答が完了した時点（workflow が次へ進む前）に
+レビューし、応答中の quiet、forced、commit 発火は行いません。採用した指摘は既存の
+follow-up prompt で配達されます。`live` を指定すると、従来の quiet、forced、commit、
+queue、completion drain の動作を維持します。この設定は global または project 単位で、
+step や Companion 定義単位の上書きはできません。
+
 ```yaml
 - name: implement
   persona: coder
@@ -1111,7 +1118,7 @@ workflow の遷移ルールから `companion.*` state は参照できません�
 
 定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。
 
-TAKT は変更系 tool event を観測し、静穏時間または強制発火時間の経過後に現在の累積差分をレビューします。各レビューラウンドでは指摘一覧を新しく生成し、任意の moderator がラウンド内 index によって提出済みの全指摘を `accept` または `reject` します。指摘をラウンド間で引き継ぐことはありません。採用した指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ1行1件の NDJSON として追記します。この mailbox は監査ログ兼参考ビューであり、実装エージェントは任意のタイミングで読めます。engine は mailbox へ書き込みますが、配達や完了の判定では読み取り、解釈、保護を行いません。
+`live` mode では TAKT は変更系 tool event を観測し、静穏時間、強制発火時間、commit 発火に応じて現在の累積差分をレビューします。`completion` mode では実装エージェントの応答完了時点まで待ちます。各レビューラウンドでは指摘一覧を新しく生成し、任意の moderator がラウンド内 index によって提出済みの全指摘を `accept` または `reject` します。指摘をラウンド間で引き継ぐことはありません。採用した指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ1行1件の NDJSON として追記します。この mailbox は監査ログ兼参考ビューであり、実装エージェントは任意のタイミングで読めます。engine は mailbox へ書き込みますが、配達や完了の判定では読み取り、解釈、保護を行いません。
 
 実装エージェントの各ターン境界で、TAKT は未配達の採用済み指摘を follow-up prompt 本文へ直接埋め込み、その後メモリ上の配達バッファを空にします。各指摘へ対応するかは実装エージェントが判断し、対応しない場合は応答で理由を説明します。完了時には新規 trigger を停止し、実行中および queue 済みのレビューラウンドを drain してから現在の diff digest を読み、未レビューの digest だけを完了レビューします。指摘が生成された場合は別の follow-up ターンへ配達し、完了処理を繰り返します。未配達の指摘がなく、最後に指摘を配達した時点から digest が変わっていない場合にだけ step を終了します。Companion の follow-up ループに上限はなく、workflow または step の AbortSignal による中断が終了手段です。follow-up が `error`、`rate_limited`、`blocked` を返すか例外を送出した場合、その follow-up を再試行せず Companion の follow-up ループを打ち切り、最後に成功した実装エージェント応答と session ID で step を続行します。Companion の診断値には `completionSettled: false`、実際に試行した `followUpRounds`、サニタイズ済みの失敗理由を記録します。AbortSignal による中断は従来どおり伝播します。Companion 呼び出しは provider に対する既定回数の retry 後に fail-soft とします。
 

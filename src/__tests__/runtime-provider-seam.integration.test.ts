@@ -87,6 +87,10 @@ function writeGlobalRuntimeFile(content: unknown): void {
   );
 }
 
+function companionReviewMode(value: unknown): string | undefined {
+  return (value as { companionReviewMode?: string } | undefined)?.companionReviewMode;
+}
+
 describe('resolveCompiledProviderEnvironment seam', () => {
   beforeEach(() => {
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-seam-project-'));
@@ -286,7 +290,7 @@ describe('resolveCompiledProviderEnvironment seam', () => {
   it('skips companion target semantic resolution when companion is disabled', () => {
     writeGlobalRuntimeFile({
       version: 1,
-      companion: { enabled: false },
+      companion: { enabled: false, review_mode: 'live' },
       provider: {
         defaults: { profile: 'default' },
         profiles: { default: { provider: 'codex', model: 'gpt-default' } },
@@ -303,6 +307,7 @@ describe('resolveCompiledProviderEnvironment seam', () => {
     });
 
     expect(resolved.companionEnabled).toBe(false);
+    expect(companionReviewMode(resolved)).toBe('live');
     expect(resolved.providerEnvironment.provider).toBe('codex');
     expect(resolved.providerEnvironment.companions).toBeUndefined();
   });
@@ -333,6 +338,34 @@ describe('resolveCompiledProviderEnvironment seam', () => {
 
     expect(resolved.companionEnabled).toBe(false);
     expect(resolved.providerEnvironment.model).toBe('project-model');
+  });
+
+  it('resolves project review_mode over global while preserving the companion enabled AND', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      companion: { enabled: false, review_mode: 'live' },
+      provider: {
+        defaults: { profile: 'global' },
+        profiles: { global: { provider: 'codex', model: 'global-model' } },
+      },
+    });
+    writeFileSync(join(projectCwd, '.takt', RUNTIME_PROVIDER_FILENAME), stringifyYaml({
+      version: 1,
+      companion: { enabled: true, review_mode: 'completion' },
+      provider: {
+        defaults: { profile: 'project' },
+        profiles: { project: { provider: 'codex', model: 'project-model' } },
+      },
+    }));
+
+    const resolved = resolveRuntimeEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    });
+
+    expect(companionReviewMode(resolved)).toBe('completion');
+    expect(resolved.companionEnabled).toBe(false);
   });
 
   it('does not activate runtime-v1 mode for a disabled companion-only target', () => {
@@ -384,6 +417,7 @@ describe('resolveCompiledProviderEnvironment seam', () => {
 
     const env = resolved.providerEnvironment;
     expect(resolved.companionEnabled).toBe(false);
+    expect(companionReviewMode(resolved)).toBe('completion');
     expect(env.provider).toBe('codex');
     expect(env.providerSource).toBe('global');
     expect(env.model).toBe('gpt-x');

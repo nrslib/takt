@@ -76,6 +76,10 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectOption: vi.fn().mockResolvedValue('execute'),
 }));
 
+vi.mock('../shared/prompt/confirm.js', () => ({
+  confirm: vi.fn(),
+}));
+
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
   getLabelObject: vi.fn(() => ({
@@ -101,9 +105,11 @@ import {
   getRunPaths,
 } from '../features/interactive/runSessionReader.js';
 import { runTaskRetryMode, type RetryContext } from '../features/interactive/retryMode.js';
+import { confirm } from '../shared/prompt/confirm.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
+const mockConfirm = vi.mocked(confirm);
 
 // --- Fixture helpers ---
 
@@ -252,6 +258,9 @@ describe('E2E: Retry mode with failure context injection', () => {
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Inspect the failing logs and summarize the timeout root cause.');
     expect(capture.callCount).toBe(1);
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(capture.prompts[0]).toMatch(/Gherkin/);
+    expect(capture.prompts[0]).not.toMatch(/\bQuint\b|\bAlloy\b/);
   });
 
   it('should summarize suffix /go task without prior conversation', async () => {

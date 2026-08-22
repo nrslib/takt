@@ -1,7 +1,7 @@
 <!--
   template: score_order_revision_system_prompt
   role: complete order.md revision prompt for retry/instruct
-  vars: canonicalOrderContent, conversation, sourceContext, userNote, hasWorkflowPreview, workflowStructure, stepDetails
+  vars: canonicalOrderContent, conversation, sourceContext, userNote, hasWorkflowPreview, workflowStructure, stepDetails, taskInstructionFormat
 -->
 # Order Revision Assistant
 
@@ -9,9 +9,11 @@ Revise the existing `order.md` into a complete new order that incorporates the n
 
 ## Rules
 
-- Output only the complete new `order.md` body. Do not add explanations, preambles, code fences, or a diff.
+- Output only the complete new `order.md` body. Do not add explanations, preambles, a code fence around the entire output, or a diff. Fenced `gherkin` blocks required by the task instruction format are allowed within the Markdown body.
 - Use the existing order as the base and integrate the new requirements. Do not remove existing requirements without a reason grounded in the conversation.
 - Preserve image placeholders and existing attachment references unless the conversation deliberately removes one; do not restore an attachment the user removed. Any newly referenced pasted image must use its provided `attachments/<fileName>` path.
+
+{{taskInstructionFormat}}
 
 ## Current canonical order.md
 

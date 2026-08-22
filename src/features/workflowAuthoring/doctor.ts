@@ -18,6 +18,7 @@ import { resolveAuxiliaryRuntimeEnvironment } from '../../infra/config/runtime-p
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../../infra/config/loaders/workflowDoctor.js';
 import { isMissingWorkflowCallArgError } from '../../infra/config/loaders/workflowCallableArgResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from '../../infra/config/loaders/workflowResolvedLoader.js';
+import type { CompanionReviewMode } from '../../core/models/companion-types.js';
 import type { WorkflowConfig, WorkflowStep } from '../../core/models/types.js';
 import { getAllParallelSubSteps } from '../../core/models/types.js';
 import type { WorkflowDoctorReport, WorkflowDoctorTarget } from '../../infra/config/loaders/workflowDoctor.js';
@@ -58,9 +59,9 @@ function validateWorkflowRuntimeContract(
   target: WorkflowDoctorTarget,
   projectDir: string,
   selectorOverrides: SelectorProviderOverrides | undefined,
-): void {
+): CompanionReviewMode | undefined {
   if (reportHasErrors(report)) {
-    return;
+    return undefined;
   }
 
   let workflow: ReturnType<typeof loadWorkflowForRuntimeValidation> | undefined;
@@ -98,6 +99,7 @@ function validateWorkflowRuntimeContract(
       workflowCallResolver: () => null,
     });
     warnOnUnproducibleReportReferences(report, workflow);
+    return runtimeEnvironment.companionReviewMode;
   } catch (validationError) {
     const translatedError = workflow === undefined
       ? validationError
@@ -106,6 +108,7 @@ function validateWorkflowRuntimeContract(
       level: 'error',
       message: getErrorMessage(translatedError),
     });
+    return undefined;
   }
 }
 
@@ -357,9 +360,12 @@ export async function doctorWorkflowCommand(
   for (const target of resolvedTargets) {
     const { filePath, lookupCwd, source } = target;
     const report = inspectWorkflowFile(filePath, projectDir, { lookupCwd, source });
-    validateWorkflowRuntimeContract(report, target, projectDir, selectorOverrides);
-    if (report.diagnostics.length === 0) {
-      success(`Workflow OK: ${sanitizeTerminalText(filePath)}`);
+    const companionReviewMode = validateWorkflowRuntimeContract(report, target, projectDir, selectorOverrides);
+    if (companionReviewMode !== undefined && report.diagnostics.length === 0) {
+      success(
+        `Workflow OK: ${sanitizeTerminalText(filePath)} `
+        + `(Companion review mode: ${companionReviewMode})`,
+      );
       continue;
     }
 

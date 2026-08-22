@@ -26,6 +26,7 @@ function createSession(sessionId?: string) {
   return createConversationSession({
     cwd: '/repo',
     outputMode: 'silent',
+    formalSpec: false,
     ctx: makeSessionContext({
       provider: makeProvider({ setup: () => ({ call: mockCall }) }),
       sessionId,

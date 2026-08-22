@@ -136,7 +136,7 @@ export interface TuiConversation {
   /** Summarize straight into a task instruction, skipping the chat turn. */
   createInstruction(input: TuiSubmitInput): Promise<TuiSubmission>;
   /** Continue from a session picked with /resume. */
-  resumeSession(sessionId: string): void;
+  resumeSession(sessionId: string): Promise<void>;
   /**
    * Put a `/go` draft the user rejected back into the conversation, so the next
    * revision starts from what was proposed. Left out by a front-end whose
@@ -160,6 +160,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     outputMode: 'silent',
     ctx,
     strategy,
+    formalSpec: strategy.formalSpec,
     ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
     // `--continue` and `/resume` hand the TUI a live session with no local
     // transcript; summarizing it straight away has to work.
@@ -311,8 +312,11 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         };
     },
 
-    resumeSession(sessionId: string): void {
+    async resumeSession(sessionId: string): Promise<void> {
       session.setSessionId(sessionId);
+      if (strategy.resolveResumedSessionConfiguration) {
+        session.setPromptConfiguration(await strategy.resolveResumedSessionConfiguration());
+      }
     },
 
     pasteClipboardImage(abortSignal: AbortSignal): Promise<string> {

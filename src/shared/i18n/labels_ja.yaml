@@ -8,8 +8,10 @@
 # ===== Interactive Mode UI =====
 interactive:
   sourceContextLabel: "Source Context"
+  userCommentLabel: "ユーザーからのコメント"
   conversationLabel: "会話:"
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
+  formalSpecPrompt: "形式仕様モード（Alloy, Quint）を有効にしますか？ 既定値は assistant.formal_spec で変更できます。"
   ui:
     intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
     introGrillMe: "Grill Meモード - 要件の判断分岐を1問ずつ掘り下げます。要件が固まるとアシスタントが /go を案内します。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"

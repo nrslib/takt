@@ -1112,6 +1112,14 @@ Add `companion` to a normal agent step to run stateless, read-only reviewers whi
 Companion reviewers are disabled by default. Set `companion.enabled: true` in
 `runtime.yaml` to run reviewers declared by a workflow.
 
+Set `companion.review_mode` in `runtime.yaml` to choose the trigger policy. It
+defaults to `completion`: a successful implementer response is reviewed at the
+response boundary, before the workflow advances, and quiet, forced, and commit
+triggers are not used during that response. Accepted findings are delivered in
+the existing follow-up prompt. Set it to `live` to keep the existing quiet,
+forced, commit, queue, and completion-drain behavior. The setting is global or
+project-wide; it is not a step or Companion definition override.
+
 ```yaml
 - name: implement
   persona: coder
@@ -1128,7 +1136,7 @@ Workflow transition rules cannot reference `companion.*` state. Companion findin
 
 Definitions are YAML files resolved from `.takt/companions/`, `~/.takt/companions/`, then `builtins/{language}/companions/`. They may contain `name`, `description`, facet references (`persona`, `policy`, `knowledge`, `instruction`), and `interval_ms`; provider and tool settings are not allowed. `interval_ms` must be a positive integer no greater than `2,147,483,647`.
 
-TAKT observes mutating tool events and reviews the current cumulative diff after a quiet period or forced interval. Each review round creates a fresh finding list, and an optional moderator accepts or rejects every submitted finding by its round-local index; findings are not carried between rounds. Accepted findings are appended as one NDJSON record per line to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. This mailbox is an audit log and reference view that the implementer may read at any time. The engine writes it but does not read, interpret, protect, or use it to decide delivery or completion.
+In `live` mode, TAKT observes mutating tool events and reviews the current cumulative diff after a quiet period or forced interval, including commit-triggered reviews. In `completion` mode, it waits for the implementer response boundary instead. Each review round creates a fresh finding list, and an optional moderator accepts or rejects every submitted finding by its round-local index; findings are not carried between rounds. Accepted findings are appended as one NDJSON record per line to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. This mailbox is an audit log and reference view that the implementer may read at any time. The engine writes it but does not read, interpret, protect, or use it to decide delivery or completion.
 
 At each implementer turn boundary, TAKT embeds all undelivered accepted findings directly in the follow-up prompt and then clears the in-memory delivery buffer. The implementer decides whether to address each finding and explains any decision not to act. On completion, TAKT stops new triggers, drains running and queued review rounds, reads the current diff digest, and runs a completion review only for an unreviewed digest. If that produces findings, it delivers another follow-up turn and repeats completion processing. The step finishes only when no findings remain undelivered and the digest has not changed since the latest finding delivery. There is no Companion follow-up loop limit; cancellation through the workflow or step abort signal is the termination mechanism. If a follow-up returns `error`, `rate_limited`, or `blocked`, or throws an error, TAKT stops the Companion follow-up loop without retrying that follow-up and continues the step with the latest successful implementer response and session ID. The Companion diagnostics record `completionSettled: false`, the attempted `followUpRounds`, and a sanitized failure reason. AbortSignal cancellation still propagates. Companion calls retain their bounded provider retry policy before failing soft.
 

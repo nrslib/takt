@@ -30,8 +30,9 @@ import {
   createPostSummaryActionSelector,
 } from './interactive-summary.js';
 import { buildConversationSummaryPrompt } from './interactiveApplication.js';
-import { type RunSessionContext } from './runSessionReader.js';
+import type { RunSessionContext } from './runSessionReader.js';
 import type { ImageAttachmentCleanupOwner, InteractiveImageAttachment } from './imageAttachments.js';
+import { resolveFormalSpecMode } from './taskInstructionFormat.js';
 
 /** Shape of interactive UI text */
 export interface InteractiveUIText {
@@ -114,7 +115,7 @@ export function buildSummaryPrompt(
   userNote: string,
   lang: 'en' | 'ja',
   promptContext?: string,
-  gherkin?: boolean,
+  formalSpec?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -125,18 +126,18 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
-  gherkin?: boolean,
+  formalSpec?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
   userNoteOrHasSession: string | boolean,
   lang: 'en' | 'ja',
   promptContextOrNoTranscript?: string,
-  conversationLabelOrGherkin?: string | boolean,
+  conversationLabelOrFormalSpec?: string | boolean,
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
-  gherkin?: boolean,
+  formalSpec?: boolean,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -144,11 +145,11 @@ export function buildSummaryPrompt(
       userNoteOrHasSession,
       lang,
       promptContextOrNoTranscript ?? '',
-      typeof conversationLabelOrGherkin === 'string' ? conversationLabelOrGherkin : '',
+      typeof conversationLabelOrFormalSpec === 'string' ? conversationLabelOrFormalSpec : '',
       workflowContext,
       sourceContext,
       promptContext,
-      gherkin,
+      formalSpec,
     );
   }
 
@@ -157,7 +158,7 @@ export function buildSummaryPrompt(
     userNoteOrHasSession,
     lang,
     promptContextOrNoTranscript,
-    typeof conversationLabelOrGherkin === 'boolean' ? conversationLabelOrGherkin : false,
+    typeof conversationLabelOrFormalSpec === 'boolean' ? conversationLabelOrFormalSpec : false,
   );
 }
 
@@ -200,8 +201,10 @@ export async function interactiveMode(
   options?: InteractiveModeOptions,
 ): Promise<InteractiveModeResult> {
   const assistantMode = options?.assistantMode ?? 'assistant';
+  const initialFormalSpec = await resolveFormalSpecMode(cwd);
   const { ctx, strategy } = createAssistantConversationPlan(cwd, {
     assistantMode,
+    formalSpec: initialFormalSpec,
     ...(workflowContext ? { workflowContext } : {}),
     ...(runSessionContext ? { runSessionContext } : {}),
     ...(options?.provider ? { provider: options.provider } : {}),

@@ -78,6 +78,14 @@ function lastCallAllowedTools(): string[] {
   return call[2] as string[];
 }
 
+function lastCallSystemPrompt(): string {
+  const call = mockCallAIWithRetry.mock.calls.at(-1);
+  if (!call) {
+    throw new Error('callAIWithRetry was not called');
+  }
+  return call[1] as string;
+}
+
 function summaryTemplateVars(): Record<string, unknown> {
   const call = mockLoadTemplate.mock.calls.find((args) => args[0] === 'score_summary_system_prompt');
   if (!call) {
@@ -410,6 +418,37 @@ describe('TUI local commands', () => {
 
     expect(outcome).toMatchObject({ kind: 'task_instruction', task: 'Task instruction' });
     expect(summaryTemplateVars().conversation).toContain('No local transcript');
+  });
+
+  it('should re-resolve formal specification mode and apply it after /resume', async () => {
+    const plan = createPlan();
+    const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue({
+      systemPrompt: 'resumed system prompt',
+      formalSpec: true,
+    });
+    const conversation = createConversation({
+      plan: {
+        ...plan,
+        strategy: {
+          ...plan.strategy,
+          systemPrompt: 'initial system prompt',
+          formalSpec: false,
+          resolveResumedSessionConfiguration,
+        },
+      },
+    });
+    const chunks: string[] = [];
+
+    await conversation.resumeSession('resumed-session');
+    expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
+
+    await send(conversation, 'continue the task', chunks);
+    const regularCall = mockCallAIWithRetry.mock.calls.at(-1);
+    expect(lastCallSystemPrompt()).toBe('resumed system prompt');
+    expect(regularCall?.[4]).toMatchObject({ sessionId: 'resumed-session' });
+
+    await send(conversation, '/go', chunks);
+    expect(mockLoadTemplate).toHaveBeenCalledWith('score_summary_formal_spec_instructions', 'en');
   });
 
   it('should report /replay and /retry as unavailable, matching the readline loop', () => {

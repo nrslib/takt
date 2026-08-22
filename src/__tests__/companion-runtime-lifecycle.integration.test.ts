@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
+  CompanionReviewMode,
   NormalAgentWorkflowStep,
   TeamLeaderWorkflowStep,
   WorkflowState,
@@ -24,12 +25,18 @@ const snapshot = {
   truncated: false,
 };
 
+const reviewableSnapshot = {
+  ...snapshot,
+  changedLines: 20,
+};
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function step(fixed: string[]): NormalAgentWorkflowStep {
+function step(fixed: string[], allowGitCommit = false): NormalAgentWorkflowStep {
   return {
     name: 'implement',
     persona: 'coder',
@@ -39,6 +46,7 @@ function step(fixed: string[]): NormalAgentWorkflowStep {
     passPreviousResponse: true,
     companion: { fixed, pool: [] },
     rules: [],
+    ...(allowGitCommit ? { allowGitCommit: true } : {}),
   };
 }
 
@@ -65,6 +73,8 @@ function dependencies(
   cwd: string,
   workflowStep: NormalAgentWorkflowStep | TeamLeaderWorkflowStep,
   diffReader: CompanionDiffReader,
+  reviewMode: CompanionReviewMode = 'completion',
+  intervalMs = 60_000,
   selectorProvider?: { provider: 'mock' },
 ) {
   return {
@@ -81,12 +91,13 @@ function dependencies(
         name: 'reviewer',
         description: 'review',
         instruction: 'review',
-        intervalMs: 60_000,
+        intervalMs,
       },
     },
     providers: { reviewer: { provider: 'mock' as const } },
     ...(selectorProvider === undefined ? {} : { selectorProvider }),
     diffReader,
+    reviewMode,
     buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
     emitEvent: vi.fn(),
     recordUsage: vi.fn(),
@@ -211,11 +222,11 @@ describe('companion runtime lifecycle', () => {
     const workflowStep = teamLeaderStep();
 
     const firstRuntime = await CompanionStepRuntime.create(
-      dependencies(cwd, workflowStep, diffReader, { provider: 'mock' }),
+      dependencies(cwd, workflowStep, diffReader, 'completion', 60_000, { provider: 'mock' }),
     );
     firstRuntime.stop();
     const secondRuntime = await CompanionStepRuntime.create(
-      dependencies(cwd, workflowStep, diffReader, { provider: 'mock' }),
+      dependencies(cwd, workflowStep, diffReader, 'completion', 60_000, { provider: 'mock' }),
     );
     secondRuntime.stop();
 
@@ -250,7 +261,7 @@ describe('companion runtime lifecycle', () => {
       });
     const workflowStep = teamLeaderStep();
     const runtime = await CompanionStepRuntime.create(
-      dependencies(cwd, workflowStep, diffReader, { provider: 'mock' }),
+      dependencies(cwd, workflowStep, diffReader, 'completion', 60_000, { provider: 'mock' }),
     );
     const workflowState = state();
 
@@ -286,6 +297,7 @@ describe('companion runtime lifecycle', () => {
         timestamp: new Date('2026-08-14T00:00:00.000Z'),
       });
     const runtime = await CompanionStepRuntime.create(dependencies(cwd, step(['reviewer']), diffReader));
+    expect(diffReader.readDiff).not.toHaveBeenCalled();
     const workflowState = state();
 
     try {
@@ -317,6 +329,309 @@ describe('companion runtime lifecycle', () => {
         companionName: 'reviewer',
       });
       expect(readFileSync(mailboxPath, 'utf8').trim().split('\n')).toHaveLength(1);
+    } finally {
+      runtime.stop();
+    }
+  });
+
+  it('defers quiet, forced, commit, and changed-tool triggers until completion mode reaches the response boundary', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-companion-completion-mode-'));
+    roots.push(cwd);
+    const diffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot: reviewableSnapshot }),
+    } satisfies CompanionDiffReader;
+    const call = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockResolvedValue({
+      persona: 'reviewer',
+      status: 'done',
+      content: 'reviewed',
+      structuredOutput: { findings: [], notes: null },
+      timestamp: new Date('2026-08-14T00:00:00.000Z'),
+    });
+    const emitEvent = vi.fn();
+    const runtime = await CompanionStepRuntime.create({
+      ...dependencies(cwd, step(['reviewer'], true), diffReader, 'completion', 1),
+      emitEvent,
+    });
+    const workflowState = state();
+
+    try {
+      runtime.beginReviewAttempt();
+      runtime.observe({
+        type: 'tool_use',
+        data: { tool: 'Write', input: { file_path: 'src/a.ts' }, id: 'write-1' },
+      });
+      runtime.observe({
+        type: 'tool_use',
+        data: { tool: 'Bash', input: { command: 'git commit -am "change"' }, id: 'commit-1' },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(call).not.toHaveBeenCalled();
+
+      await runtime.complete(workflowState, 'done', { followUpRound: 0 });
+
+      expect(call).toHaveBeenCalledOnce();
+      expect(emitEvent).toHaveBeenCalledWith('companion:start', {
+        step: 'implement',
+        companion: 'reviewer',
+        reviewMode: 'completion',
+      });
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round'))
+        .toEqual([
+          ['companion:review_round', expect.objectContaining({ trigger: 'completion' })],
+        ]);
+    } finally {
+      runtime.stop();
+    }
+  });
+
+  it('keeps quiet-triggered review active in live mode', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-companion-live-mode-'));
+    roots.push(cwd);
+    const diffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot: reviewableSnapshot }),
+    } satisfies CompanionDiffReader;
+    const call = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockResolvedValue({
+      persona: 'reviewer',
+      status: 'done',
+      content: 'reviewed',
+      structuredOutput: { findings: [], notes: null },
+      timestamp: new Date('2026-08-14T00:00:00.000Z'),
+    });
+    const emitEvent = vi.fn();
+    const runtime = await CompanionStepRuntime.create({
+      ...dependencies(cwd, step(['reviewer']), diffReader, 'live'),
+      emitEvent,
+    });
+
+    try {
+      runtime.beginReviewAttempt();
+      runtime.observe({
+        type: 'tool_use',
+        data: { tool: 'Write', input: { file_path: 'src/a.ts' }, id: 'write-1' },
+      });
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(call).toHaveBeenCalledOnce();
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round'))
+        .toEqual([
+          ['companion:review_round', expect.objectContaining({ trigger: 'quiet' })],
+        ]);
+    } finally {
+      runtime.stop();
+    }
+  });
+
+  it('does not emit companion:start when the live initial snapshot fails', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-companion-live-init-failure-'));
+    roots.push(cwd);
+    const diffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'error',
+        failure: { code: 'git_failure', message: 'git diff failed' },
+      }),
+    } satisfies CompanionDiffReader;
+    const emitEvent = vi.fn();
+
+    await expect(CompanionStepRuntime.create({
+      ...dependencies(cwd, step(['reviewer']), diffReader, 'live'),
+      emitEvent,
+    })).rejects.toThrow();
+
+    expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:start'))
+      .toEqual([]);
+  });
+
+  it('waits for a running live review before completing and skips its reviewed digest', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-companion-live-drain-reviewed-'));
+    roots.push(cwd);
+    const diffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot: reviewableSnapshot }),
+    } satisfies CompanionDiffReader;
+    let releaseReview!: () => void;
+    let reviewStarted!: () => void;
+    const reviewStartedPromise = new Promise<void>((resolve) => { reviewStarted = resolve; });
+    const reviewGate = new Promise<void>((resolve) => { releaseReview = resolve; });
+    const call = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockImplementation(async () => {
+      reviewStarted();
+      await reviewGate;
+      return {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'reviewed',
+        structuredOutput: { findings: [], notes: null },
+        timestamp: new Date('2026-08-14T00:00:00.000Z'),
+      };
+    });
+    const emitEvent = vi.fn();
+    const runtime = await CompanionStepRuntime.create({
+      ...dependencies(cwd, step(['reviewer']), diffReader, 'live'),
+      emitEvent,
+    });
+    const workflowState = state();
+
+    try {
+      runtime.beginReviewAttempt();
+      runtime.observe({
+        type: 'tool_use',
+        data: { tool: 'Write', input: { file_path: 'src/a.ts' }, id: 'write-1' },
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      await reviewStartedPromise;
+
+      let settled = false;
+      const completion = runtime.complete(workflowState, 'done', { followUpRound: 0 })
+        .then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      releaseReview();
+      await completion;
+
+      expect(call).toHaveBeenCalledOnce();
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round'))
+        .toEqual([
+          ['companion:review_round', expect.objectContaining({ trigger: 'quiet', digest: 'digest-1' })],
+        ]);
+    } finally {
+      releaseReview();
+      runtime.stop();
+    }
+  });
+
+  it('reviews a new digest after draining the running live review at completion', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-companion-live-drain-new-'));
+    roots.push(cwd);
+    const changedSnapshot = {
+      ...reviewableSnapshot,
+      digest: 'digest-2',
+      content: '+changed after quiet review\n',
+      fileFingerprints: { 'src/a.ts': 'file-2' },
+      hunkFingerprints: { 'src/a.ts:1-1': 'hunk-2' },
+    };
+    let latestSnapshot = reviewableSnapshot;
+    const diffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockImplementation(async () => ({ status: 'ok', snapshot: latestSnapshot })),
+    } satisfies CompanionDiffReader;
+    let releaseReview!: () => void;
+    let reviewStarted!: () => void;
+    const reviewStartedPromise = new Promise<void>((resolve) => { reviewStarted = resolve; });
+    const reviewGate = new Promise<void>((resolve) => { releaseReview = resolve; });
+    let firstCall = true;
+    const call = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockImplementation(async () => {
+      if (firstCall) {
+        firstCall = false;
+        reviewStarted();
+        await reviewGate;
+      }
+      return {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'reviewed',
+        structuredOutput: { findings: [], notes: null },
+        timestamp: new Date('2026-08-14T00:00:00.000Z'),
+      };
+    });
+    const emitEvent = vi.fn();
+    const runtime = await CompanionStepRuntime.create({
+      ...dependencies(cwd, step(['reviewer']), diffReader, 'live'),
+      emitEvent,
+    });
+    const workflowState = state();
+
+    try {
+      runtime.beginReviewAttempt();
+      runtime.observe({
+        type: 'tool_use',
+        data: { tool: 'Write', input: { file_path: 'src/a.ts' }, id: 'write-1' },
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      await reviewStartedPromise;
+      latestSnapshot = changedSnapshot;
+
+      const completion = runtime.complete(workflowState, 'done', { followUpRound: 0 });
+      releaseReview();
+      await completion;
+
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round'))
+        .toEqual([
+          ['companion:review_round', expect.objectContaining({ trigger: 'quiet', digest: 'digest-1' })],
+          ['companion:review_round', expect.objectContaining({ trigger: 'completion', digest: 'digest-2' })],
+        ]);
+    } finally {
+      releaseReview();
+      runtime.stop();
+    }
+  });
+
+  it('reviews a changed follow-up digest after delivering an accepted finding', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-companion-digest-'));
+    roots.push(cwd);
+    const changedSnapshot = {
+      ...reviewableSnapshot,
+      digest: 'digest-2',
+      content: '+changed again\n',
+      fileFingerprints: { 'src/a.ts': 'file-2' },
+      hunkFingerprints: { 'src/a.ts:1-1': 'hunk-2' },
+    };
+    const diffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn()
+        .mockResolvedValueOnce({ status: 'ok', snapshot: reviewableSnapshot })
+        .mockResolvedValueOnce({ status: 'ok', snapshot: changedSnapshot }),
+    } satisfies CompanionDiffReader;
+    const call = vi.spyOn(CompanionStructuredCaller.prototype, 'call')
+      .mockResolvedValueOnce({
+        persona: 'reviewer',
+        status: 'done',
+        content: 'reviewed',
+        structuredOutput: {
+          findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'unsafe' }],
+          notes: null,
+        },
+        timestamp: new Date('2026-08-14T00:00:00.000Z'),
+      })
+      .mockResolvedValueOnce({
+        persona: 'reviewer',
+        status: 'done',
+        content: 'reviewed again',
+        structuredOutput: { findings: [], notes: null },
+        timestamp: new Date('2026-08-14T00:00:01.000Z'),
+      });
+    const emitEvent = vi.fn();
+    const runtime = await CompanionStepRuntime.create({
+      ...dependencies(cwd, step(['reviewer']), diffReader, 'completion'),
+      emitEvent,
+    });
+    const workflowState = state();
+
+    try {
+      runtime.beginReviewAttempt();
+      const first = await runtime.complete(workflowState, 'initial', { followUpRound: 0 });
+      runtime.beginFollowUpRound(1, first.findings.length);
+      await runtime.complete(workflowState, 'fixed', { followUpRound: 1 });
+
+      expect(first.findings).toHaveLength(1);
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round'))
+        .toEqual([
+          ['companion:review_round', expect.objectContaining({ trigger: 'completion', digest: 'digest-1' })],
+          ['companion:review_round', expect.objectContaining({ trigger: 'completion', digest: 'digest-2' })],
+        ]);
     } finally {
       runtime.stop();
     }

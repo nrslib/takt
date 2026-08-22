@@ -31,7 +31,7 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 auto_requeue_max_attempts: 0  # Auto-requeue failed workflow tasks during takt run (non-negative integer, default: 0 = disabled)
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed (default: false)
 assistant:
-  gherkin: true               # Generate final task instructions as Markdown + focused Gherkin (default: true; set false to disable)
+  formal_spec: 'y/N'          # Alloy/Quint mode: true, false, Y/n, or y/N (default: y/N)
 # auto_fetch: false           # Fetch remote before cloning (default: false)
 # base_branch: main           # Base branch for clone creation (default: remote default branch)
 
@@ -190,7 +190,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` |
 | `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks |
 | `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
-| `assistant.gherkin` | boolean | `true` | Organize important observable behavior, state transitions, boundaries, failures, and invariants in a minimal number of Gherkin scenarios in final task instructions generated from assistant conversations. Gherkin is enabled when unset; an explicit project value overrides the global value. |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` | Adds Alloy/Quint guidance only for applicable requirements. Use only the notation needed for each requirement; do not duplicate the same requirement across notations or require both. `true` and `false` are used without prompting. On a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. An explicit project value overrides the global value. Gherkin guidance is always enabled independently. |
 | `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into the worktree before retry / re-execution; set `false` to keep the worktree copy |
@@ -257,7 +257,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 # Project-specific assistant settings
 # assistant:
-#   gherkin: true              # Override the global setting; set false to disable
+#   formal_spec: 'Y/n'         # Override global Alloy/Quint mode; prompts on TTY with Yes as default
 #   init_files:
 #     # Project config only; initial context files for interactive assistant mode
 #     - docs/assistant-context.md
@@ -333,7 +333,7 @@ steps:
 
 The `provider` and `model` declarations select the provider, model, and thinking level for a TAKT run; they do not import Pi CLI settings. Pi authentication is handled separately through the Pi SDK credential store or provider-native environment variables. The boundary avoids unintended writes to global settings and keeps project-local configuration trustworthy and predictable.
 
-`provider_options.pi` is a separate path for loading Pi resources such as `extensions` and `no_*` discovery controls. These options do not declare authentication, model, or thinking level. Explicit resource sources are resolved temporarily for the TAKT run and are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
+`provider_options.pi` is a separate path for loading Pi resources such as `extensions` and `no_*` discovery controls. These options do not declare authentication, model, or thinking level. Bare explicit npm sources reuse an existing project-scope install, then an existing user-scope install, and fall back to temporary resolution only when neither candidate loads successfully; version-qualified npm sources and non-npm sources are always resolved temporarily. Explicit sources are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
 
 ### Provider inactivity deadline and OpenCode execution guards
 
@@ -403,7 +403,7 @@ Project config accepts most global keys and overrides their global values (e.g. 
 | `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
-| `assistant.gherkin` | boolean | `true` (from global/default) | Project override for final task instructions generated from assistant conversations, including quiet mode. When enabled, TAKT keeps background, scope, implementation details, design intent, constraints, and verification in Markdown, and asks the summarizer to use a minimal number of Gherkin scenarios only for important observable behavior, state transitions, boundaries, failures, and invariants. When unset, TAKT uses the global value; when both are unset, it defaults to `true`. |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` (from global/default) | Project override for Alloy/Quint guidance, applied only to applicable requirements. Use only the notation needed for each requirement; do not duplicate the same requirement across notations or require both. Project values take precedence over global values. Answers to `"Y/n"` or `"y/N"` prompts are session-local and are resolved again when a conversation is resumed; ACP and non-TTY execution never prompt and use the configured default answer. Gherkin guidance remains always enabled. The deprecated `assistant.gherkin` key produces a warning and is ignored without conversion, persistence, or file modification. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
@@ -590,12 +590,25 @@ Companion reviewers are disabled by default. Enable them with the top-level
 version: 1
 companion:
   enabled: true
+  review_mode: completion # completion | live
 ```
+
+The `companion` policy must specify at least one of `enabled` or `review_mode`.
+A mode-only policy such as `companion: { review_mode: live }` is accepted and
+resolves to `enabled: false`; an empty `companion: {}` policy is rejected.
 
 When both global and project policies are specified, their values are combined
 with logical AND; a project value of `true` cannot re-enable a globally disabled
 companion. An omitted policy is neutral during layer merging, and Companion
 remains disabled when neither layer specifies one.
+
+`companion.review_mode` defaults to `completion`. The project value overrides the
+global value, and a project omission inherits the global value. `completion`
+reviews the cumulative diff after a successful implementer response; `live`
+preserves quiet, forced, and commit-triggered reviews during the response. Only
+`completion` and `live` are accepted, and invalid values fail while loading
+`runtime.yaml`. The mode is validated even when `companion.enabled` is `false`,
+but no Companion provider is resolved or executed in that case.
 
 Companion provider targets (`targets.companions`) and provider capability
 requirements apply only while companions are enabled. When disabled, companion
@@ -1371,10 +1384,12 @@ provider_options:
 ```
 
 - `extensions` accepts npm packages, Git sources, and local paths.
-- Explicit sources are resolved temporarily for the TAKT run and are not persisted into Pi settings.
+- Bare explicit npm sources reuse an existing project-scope install first, then an existing user-scope install; when neither can be resolved to enabled resources, TAKT falls back to temporary resolution without installing into either persistent scope. Version-qualified npm sources are always resolved temporarily.
+- Explicit non-npm sources are resolved temporarily for the TAKT run.
+- Explicit sources are not persisted into Pi settings.
 - `no_extensions` disables extension discovery but still loads the sources listed in `extensions`.
 - The other `no_*` options disable discovery of their respective resource types.
-- Implicit project-local Pi extensions are not trusted or loaded.
+- Implicit project-local Pi resources are not trusted or loaded; only the absolute path discovered for an explicitly configured npm source can be reused from project package storage.
 - Explicit extensions execute inside the TAKT process, so configure only trusted local paths and package sources.
 - Extension URLs containing embedded credentials or secret-bearing query parameters are rejected.
 
@@ -1402,7 +1417,9 @@ Categories can be configured in:
 # ~/.takt/preferences/workflow-categories.yaml (or the file set by workflow_categories_file)
 workflow_categories:
   Development:
-    workflows: [default, simple]
+    workflows:
+      - default: "Standard coding workflow"   # name: description adds it to the selection label
+      - simple
     Backend:
       workflows: [dual-cqrs]
     Frontend:
@@ -1418,6 +1435,7 @@ others_category_name: "Other Workflows"  # Name for uncategorized category
 
 - **Nested categories** — unlimited depth for hierarchical organization; under a category, every key other than `workflows` is treated as a child category name (there is no `children:` key)
 - **Per-category workflow lists** — under each category, `workflows:` holds workflow names to show in that group
+- **Workflow descriptions** — write a `workflows:` entry as `- name: description` to append a short description to its selection label (plain string entries still work). For a workflow listed in multiple categories, write the same description at each occurrence; conflicting descriptions for the same workflow in one file are rejected as a validation error. User overlay entries override builtin entries by workflow name and may add user-only names
 - **Others category** — collects workflows not listed under any category (disable with `show_others_category: false`)
 - **Builtin workflow filtering** — turn off all builtins with `enable_builtin_workflows: false`, or specific names with `disabled_builtins: [name1, name2]`
 

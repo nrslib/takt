@@ -31,7 +31,7 @@ import {
   createSessionImageAttachmentStore,
   resolvePromptImageAttachments,
 } from './imageAttachments.js';
-import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
+import { resolveFormalSpecMode } from './taskInstructionFormat.js';
 
 const log = createLogger('quiet-mode');
 
@@ -55,6 +55,7 @@ export async function quietMode(
   workflowContext?: WorkflowContext,
 ): Promise<InteractiveModeResult> {
   const ctx = initializeSession(cwd, 'interactive');
+  const formalSpec = await resolveFormalSpecMode(cwd);
   const sourceContext = initialInput?.sourceContext;
   const attachmentStore = createSessionImageAttachmentStore(cwd, initialInput?.attachments);
   const history: ConversationMessage[] = initialInput?.userMessage
@@ -87,7 +88,7 @@ export async function quietMode(
   const summaryPrompt = buildSummaryPrompt(
     history, !!ctx.sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext, sourceContext,
     undefined,
-    shouldUseGherkinTaskInstructions(cwd),
+    formalSpec,
   );
 
   if (!summaryPrompt) {

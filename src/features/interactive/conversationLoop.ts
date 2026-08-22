@@ -37,7 +37,6 @@ import {
 } from './conversationLogMeta.js';
 import { resolvePreviousOrder } from './conversationPlan.js';
 import { prependInitialPromptContext } from './promptSections.js';
-import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import {
   buildInteractiveResultWithAttachments,
@@ -103,7 +102,7 @@ export interface SummaryPromptOptions {
   readonly workflowContext?: WorkflowContext;
   readonly sourceContext?: string;
   readonly promptContext?: string;
-  readonly gherkin: boolean;
+  readonly formalSpec: boolean;
   readonly userNote: string;
 }
 
@@ -119,10 +118,19 @@ export type SummaryTaskNormalizer = (
   attachments: readonly InteractiveImageAttachment[],
 ) => NormalizedSummaryTask;
 
+export interface ConversationPromptConfiguration {
+  readonly systemPrompt: string;
+  readonly formalSpec: boolean;
+}
+
 /** Strategy for customizing conversation loop behavior */
 export interface ConversationStrategy {
   /** System prompt for AI calls */
   systemPrompt: string;
+  /** Resolved formal specification mode for this conversation session. */
+  formalSpec: boolean;
+  /** Resolve prompt configuration after the user selects another session. */
+  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
   /** Allowed tools for AI calls */
   allowedTools: string[];
   /** Permission mode for AI calls. */
@@ -170,13 +178,16 @@ export async function runConversationLoop(
   workflowContext: WorkflowContext | undefined,
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
-  const gherkin = shouldUseGherkinTaskInstructions(cwd);
   const history: ConversationMessage[] = initialInput?.userMessage
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
   const sourceContext = initialInput?.sourceContext;
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
   let sessionId = ctx.sessionId;
+  let activePromptConfiguration: ConversationPromptConfiguration = {
+    systemPrompt: strategy.systemPrompt,
+    formalSpec: strategy.formalSpec,
+  };
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
@@ -292,7 +303,11 @@ export async function runConversationLoop(
           strategy.transformPrompt(trimmed, sourceContext),
           shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
         );
-        const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
+        const result = await doCallAI(
+          promptWithTransform,
+          activePromptConfiguration.systemPrompt,
+          strategy.allowedTools,
+        );
         if (result) {
           shouldSendInitialPromptContext = false;
           if (!result.success) {
@@ -360,7 +375,7 @@ export async function runConversationLoop(
               workflowContext,
               sourceContext,
               promptContext: strategy.summaryPromptContext,
-              gherkin,
+              formalSpec: activePromptConfiguration.formalSpec,
               userNote,
             })
             : buildSummaryPrompt(
@@ -372,7 +387,7 @@ export async function runConversationLoop(
               workflowContext,
               sourceContext,
               strategy.summaryPromptContext,
-              gherkin,
+              activePromptConfiguration.formalSpec,
             );
           if (!summaryPrompt) {
             info(ui.noConversation);
@@ -442,6 +457,9 @@ export async function runConversationLoop(
           const selectedId = await selectRecentSession(cwd, ctx.lang);
           if (selectedId) {
             sessionId = selectedId;
+            if (strategy.resolveResumedSessionConfiguration) {
+              activePromptConfiguration = await strategy.resolveResumedSessionConfiguration();
+            }
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }
           continue;

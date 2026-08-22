@@ -188,7 +188,7 @@ export async function runTuiConversation(
       case 'resume_session': {
         const selected = await selectRecentSession(options.cwd, options.lang);
         if (selected !== null) {
-          options.conversation.resumeSession(selected);
+          await options.conversation.resumeSession(selected);
           info(getLabel('interactive.resumeSessionLoaded', options.lang));
         }
         break;

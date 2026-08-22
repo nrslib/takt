@@ -39,6 +39,10 @@ import {
 } from '../index.js';
 import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import {
+  DEFAULT_COMPANION_REVIEW_MODE,
+  type CompanionReviewMode,
+} from '../../../core/models/companion-types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import { getEffectiveRuntimeProviderFile } from './schema.js';
 import { createRuntimeProviderResolutionContext } from './resolution-context.js';
@@ -49,6 +53,7 @@ export interface ResolvedRuntimeEnvironment {
   /** Provider options resolved from config.yaml and environment variables. */
   configProviderOptions?: StepProviderOptions;
   companionEnabled: boolean;
+  companionReviewMode: CompanionReviewMode;
   providerConfigMode: ProviderConfigMode;
 }
 
@@ -78,6 +83,7 @@ export function resolveRuntimeEnvironment(
   });
   const runtimeFile = resolvedRuntimeFile.runtimeFile;
   const companionEnabled = runtimeFile?.companion?.enabled ?? DEFAULT_COMPANION_ENABLED;
+  const companionReviewMode = runtimeFile?.companion?.review_mode ?? DEFAULT_COMPANION_REVIEW_MODE;
   const runtimeFileForProviderResolution = getEffectiveRuntimeProviderFile(runtimeFile);
   const { mode } = determineProviderConfigMode({
     runtimeFile: runtimeFileForProviderResolution,
@@ -87,6 +93,7 @@ export function resolveRuntimeEnvironment(
     return {
       providerEnvironment: compileProviderEnvironment({ kind: 'legacy', legacy: input.legacy }),
       companionEnabled,
+      companionReviewMode,
       providerConfigMode: mode,
     };
   }
@@ -109,6 +116,7 @@ export function resolveRuntimeEnvironment(
       providerEnvironment: { ...legacyEnvironment, mcpAssignment: activeMcp },
       configProviderOptions: input.legacy.providerOptions,
       companionEnabled,
+      companionReviewMode,
       providerConfigMode: mode,
     };
   }
@@ -136,6 +144,7 @@ export function resolveRuntimeEnvironment(
     ),
     configProviderOptions: input.legacy.providerOptions,
     companionEnabled,
+    companionReviewMode,
     providerConfigMode: mode,
   };
 }

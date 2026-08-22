@@ -118,6 +118,7 @@ describe('SessionLogger', () => {
 
     logger.onCompanionReviewRound({
       step: 'implement',
+      reviewMode: 'live',
       companion: 'security-reviewer',
       trigger: 'quiet',
       digest: 'digest-2',
@@ -152,6 +153,7 @@ describe('SessionLogger', () => {
       expect.objectContaining({
         type: 'companion_review_round',
         step: 'implement',
+        reviewMode: 'live',
         companion: 'security-reviewer',
         trigger: 'quiet',
         digest: 'digest-2',
@@ -164,6 +166,31 @@ describe('SessionLogger', () => {
         replacement: expect.objectContaining({ digest: 'digest-2' }),
       }),
     ]));
+  });
+
+  it('review roundのreviewMode欠落と未知値をNDJSON parserで拒否する', () => {
+    const record = {
+      type: 'companion_review_round' as const,
+      step: 'implement',
+      reviewMode: 'live' as const,
+      companion: 'security-reviewer',
+      trigger: 'quiet' as const,
+      digest: 'digest-1',
+      changedLines: 1,
+      findingCount: 0,
+      reviewerFindings: [],
+      acceptedFindings: [],
+      timestamp: '2026-08-14T00:00:00.000Z',
+    };
+    const withoutMode = Object.fromEntries(
+      Object.entries(record).filter(([key]) => key !== 'reviewMode'),
+    );
+
+    expect(() => parseNdjsonRecord(JSON.stringify(withoutMode))).toThrow(/review mode is invalid/);
+    expect(() => parseNdjsonRecord(JSON.stringify({ ...record, reviewMode: 'automatic' })))
+      .toThrow(/review mode is invalid/);
+    expect(() => parseNdjsonRecord(JSON.stringify({ ...record, reviewMode: true })))
+      .toThrow(/review mode is invalid/);
   });
 
   it('Companion の実呼び出し、採否結果、skip理由を run NDJSON に永続化する', () => {
@@ -198,6 +225,7 @@ describe('SessionLogger', () => {
     });
     logger.onCompanionReviewRound({
       step: 'implement',
+      reviewMode: 'completion',
       companion: 'security-reviewer',
       trigger: 'completion',
       digest: 'digest-1',

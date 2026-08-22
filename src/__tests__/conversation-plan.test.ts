@@ -160,6 +160,7 @@ describe('persona conversation plan', () => {
     expect(strategy.allowedTools).toEqual(['Read']);
     expect(strategy.systemPrompt).toContain('You are the reviewer.');
     expect(strategy.introMessage).toContain('[Reviewer]');
+    expect(strategy.resolveResumedSessionConfiguration).toBeUndefined();
   });
 
   it('should fall back to the default tools when the step declares none', () => {

@@ -155,8 +155,9 @@ function createScriptedConversation(
     createInstruction(input: TuiSubmitInput): Promise<TuiSubmission> {
       return recordAndHold(instructionCalls, input);
     },
-    resumeSession(sessionId: string): void {
+    resumeSession(sessionId: string): Promise<void> {
       resumedSessions.push(sessionId);
+      return Promise.resolve();
     },
     pasteClipboardImage(): Promise<string> {
       return Promise.resolve(PASTED_IMAGE_PLACEHOLDER);
