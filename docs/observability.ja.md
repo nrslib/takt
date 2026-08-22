@@ -45,7 +45,7 @@ TAKT は `observability.enabled: true` の場合だけ、次の counter を送�
 | `takt.token.output_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | phase または `judge_stage.*` span が provider の input / output usage を持って終了した場合。 |
 | `takt.token.cached_input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | phase または `judge_stage.*` span に cached input token が含まれる場合。 |
 | `takt.token.estimated_cost_usd` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | provider、model、usage、既知の価格定義が揃う場合。未知 model や model 名欠落時は送信しません。 |
-| `takt.provider.errors` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.provider.error_type` | step が分類済み provider failure（rate limit、stream idle timeout などの failure category、error status response）を返す、または retry 後に成功した場合。step span を通じて送出された例外は計上しません。 |
+| `takt.provider.errors` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.provider.error_type` | `providerErrorType(response)` でプロバイダ起因の failure に分類された場合だけ provider failure として記録します。分類できない例外や、同関数で分類されない error response は含みません。`response.retryCount` がある場合の retry は `error_type = retry` として別途計上します。 |
 | `takt.quality_gate.results` | `takt.run.id`, `takt.workflow.name`, `takt.step.name`, `takt.quality_gate.name`, `takt.quality_gate.result` | command quality gate が pass / fail した場合。manual / text quality gate は対象外です。`takt.quality_gate.name` は sanitize 済みの `gate.name` があればそれを使い、なければ `(unnamed)` を使います。 |
 | `takt.workflow.loops_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | loop detector が current step について警告した場合。 |
 | `takt.workflow.cycles_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | 設定済み loop monitor の cycle threshold に到達した場合。 |

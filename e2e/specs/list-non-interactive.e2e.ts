@@ -277,17 +277,14 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       cwd: testRepo.path,
       encoding: 'utf-8',
       stdio: 'pipe',
-    })
-      .trim()
-      .split('\n')
-      .filter(Boolean);
+    });
     const restoredBranch = execFileSync('git', ['branch', '--list', taskMeta.branch!], {
       cwd: testRepo.path,
       encoding: 'utf-8',
       stdio: 'pipe',
     }).trim();
     expect(restoredBranch).toContain(taskMeta.branch!);
-    expect(stagedFiles).toEqual(['README.md']);
+    expect(stagedFiles.trim()).toBe('README.md');
   }, 240_000);
 
   it('should use top-level concrete provider for AI slug generation and auto_routing for workflow execution', () => {
