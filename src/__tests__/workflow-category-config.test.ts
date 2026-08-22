@@ -328,6 +328,14 @@ workflow_categories:
     );
   });
 
+  it('should reject empty workflow names in the top-level descriptions map', () => {
+    expect(() => parseWorkflowCategoryOverlay({
+      workflow_descriptions: { '   ': 'Valid description' },
+    }, 'test-categories.yaml')).toThrow(
+      'workflow name must be a non-empty string in test-categories.yaml at workflow_descriptions',
+    );
+  });
+
   it('should use builtin categories when user overlay file is missing', () => {
     writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
 workflow_categories:
