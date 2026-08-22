@@ -3,7 +3,7 @@
 
 ## Result: verified / incomplete / plan_invalid
 
-When a plan omission or other plan defect coexists with an implementation or evidence gap, the top-level `Result` must be `plan_invalid`; retain every implementation or evidence gap in the unmet or unverified items instead of allowing `incomplete` to mask the plan defect. Use `incomplete` only when the plan has no defect and a planned obligation has an implementation or evidence gap. For an item affected by both conditions, record both applicable conditions, their evidence, and the required actions.
+When a plan omission or other plan defect coexists with an implementation or evidence gap, record every gap of both kinds in the unmet or unverified items — never drop one kind of gap because the other exists. For an item affected by both conditions, record both applicable conditions, their evidence, and the required actions. Selecting among `verified` / `incomplete` / `plan_invalid` is owned by the remediation workflow rules; this contract defines only what must be recorded.
 
 ## Summary
 {Decision and primary evidence}

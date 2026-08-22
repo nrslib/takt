@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -35,7 +35,7 @@ let fixtureDir: string;
 let fakeBinDir: string;
 let pidFile: string;
 let workDirFile: string;
-let activeChildren: ChildProcess[];
+let activeChildren: StartedProvider[];
 
 function collectResult(child: ChildProcessWithoutNullStreams): Promise<ProcessResult> {
   return new Promise((resolveResult, reject) => {
@@ -81,8 +81,10 @@ function startProvider(
       },
     },
   );
-  activeChildren.push(child);
-  return { child, result: collectResult(child) };
+  const result = collectResult(child);
+  const started = { child, result };
+  activeChildren.push(started);
+  return started;
 }
 
 function readWorkerPids(): number[] {
@@ -113,11 +115,40 @@ async function waitForFile(path: string): Promise<void> {
 }
 
 async function expectProcessesGone(pids: number[]): Promise<void> {
-  const deadline = Date.now() + 3_000;
+  expect(await waitForProcessesGone(pids, 3_000)).toBe(true);
+}
+
+async function waitForCompletion(
+  result: Promise<ProcessResult>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      result.then(() => true, () => true),
+      new Promise<boolean>((resolveWait) => {
+        timeout = setTimeout(() => resolveWait(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function waitForProcessesGone(pids: number[], timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
   while (pids.some(isProcessAlive) && Date.now() < deadline) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 20));
   }
-  expect(pids.filter(isProcessAlive)).toEqual([]);
+  return pids.every((pid) => !isProcessAlive(pid));
+}
+
+function signalProcess(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
 }
 
 function expectWorkDirectoryRemoved(): void {
@@ -172,16 +203,24 @@ esac
   chmodSync(fakeOpencode, 0o755);
 });
 
-afterEach(() => {
-  for (const child of activeChildren) {
+afterEach(async () => {
+  for (const { child, result } of activeChildren) {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+    if (await waitForCompletion(result, 1_000)) continue;
+
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    expect(await waitForCompletion(result, 1_000)).toBe(true);
   }
-  for (const pid of readWorkerPids()) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+
+  const workerPids = readWorkerPids().filter(isProcessAlive);
+  for (const pid of workerPids) {
+    signalProcess(pid, 'SIGTERM');
+  }
+  if (!(await waitForProcessesGone(workerPids, 1_000))) {
+    for (const pid of workerPids.filter(isProcessAlive)) {
+      signalProcess(pid, 'SIGKILL');
     }
+    expect(await waitForProcessesGone(workerPids, 1_000)).toBe(true);
   }
   rmSync(testDir, { recursive: true, force: true });
 });

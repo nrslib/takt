@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -57,7 +58,7 @@ function collectResult(child: ChildProcessWithoutNullStreams): Promise<ProcessRe
 function startProvider(
   mode: 'success' | 'failure' | 'activity' | 'idle' | 'exit-race',
   environment: NodeJS.ProcessEnv = {},
-): Promise<ProcessResult> {
+): StartedProvider {
   const currentPath = process.env.PATH;
   if (currentPath === undefined) {
     throw new Error('PATH is required for the Codex provider integration test');
@@ -79,8 +80,9 @@ function startProvider(
     },
   );
   const result = collectResult(child);
-  activeChildren.push({ child, result });
-  return result;
+  const started = { child, result };
+  activeChildren.push(started);
+  return started;
 }
 
 function readWorkerPids(): number[] {
@@ -240,7 +242,9 @@ afterEach(async () => {
 
 describe('Codex review eval provider process boundary', () => {
   it('returns the final response on normal completion', async () => {
-    await expect(startProvider('success')).resolves.toEqual({
+    const { result } = startProvider('success');
+
+    await expect(result).resolves.toEqual({
       code: 0,
       signal: null,
       stdout: 'review complete\n',
@@ -249,7 +253,9 @@ describe('Codex review eval provider process boundary', () => {
   });
 
   it('allows total runtime beyond the idle threshold while events continue', async () => {
-    await expect(startProvider('activity')).resolves.toEqual({
+    const { result } = startProvider('activity');
+
+    await expect(result).resolves.toEqual({
       code: 0,
       signal: null,
       stdout: 'review complete\n',
@@ -258,7 +264,7 @@ describe('Codex review eval provider process boundary', () => {
   });
 
   it('returns 124 after observable inactivity and terminates the process group', async () => {
-    const result = startProvider('idle');
+    const { result } = startProvider('idle');
     await waitForFile(pidFile);
     const workerPids = readWorkerPids();
     const completed = await result;
@@ -269,8 +275,27 @@ describe('Codex review eval provider process boundary', () => {
     await expectProcessesGone(workerPids);
   });
 
+  it('returns 143 and cleans up the worker process group and output directory on external SIGTERM', async () => {
+    const outputRootDir = join(testDir, 'provider-tmp');
+    mkdirSync(outputRootDir);
+    const { child, result } = startProvider('idle', {
+      CODEX_REVIEW_IDLE_TIMEOUT_SECONDS: '30',
+      TMPDIR: outputRootDir,
+    });
+    await waitForFile(pidFile);
+    const workerPids = readWorkerPids();
+
+    child.kill('SIGTERM');
+    const completed = await result;
+
+    expect(completed).toMatchObject({ code: 143, signal: null });
+    await expectProcessesGone(workerPids);
+    expect(readdirSync(outputRootDir)).toEqual([]);
+  });
+
   it('preserves a nonzero Codex exit and diagnostic output', async () => {
-    const completed = await startProvider('failure');
+    const { result } = startProvider('failure');
+    const completed = await result;
 
     expect(completed.code).toBe(7);
     expect(completed.signal).toBeNull();
@@ -301,7 +326,7 @@ describe('Codex review eval provider process boundary', () => {
       );
 
       await expect(
-        startProvider('exit-race', { NODE_OPTIONS: `--require=${preload}` }),
+        startProvider('exit-race', { NODE_OPTIONS: `--require=${preload}` }).result,
       ).resolves.toEqual({
         code: 0,
         signal: null,
