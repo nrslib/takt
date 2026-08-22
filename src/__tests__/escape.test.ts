@@ -4,12 +4,15 @@
  * Tests escapeTemplateChars and replaceTemplatePlaceholders functions.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   escapeTemplateChars,
   replaceTemplatePlaceholders,
 } from '../core/workflow/instruction/escape.js';
-import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import { makeStep, makeInstructionContext } from './test-helpers.js';
 
 describe('escapeTemplateChars', () => {
@@ -72,6 +75,33 @@ describe('replaceTemplatePlaceholders', () => {
     const result = replaceTemplatePlaceholders(template, step, ctx);
     expect(result).toBe('Step run #5');
   });
+
+  it('should replace inherited workflow-call vars and use the explicit fallback when absent', () => {
+    const step = makeStep();
+    const inherited = makeInstructionContext({
+      workflowCallVars: { review_mode: 'follow_up' },
+    });
+
+    expect(replaceTemplatePlaceholders('{var:review_mode}', step, inherited)).toBe('follow_up');
+    expect(replaceTemplatePlaceholders('{var:review_mode}', step, makeInstructionContext())).toBe('unspecified');
+    expect(replaceTemplatePlaceholders('{var:constructor}', step, makeInstructionContext({
+      workflowCallVars: {},
+    }))).toBe('unspecified');
+    expect(replaceTemplatePlaceholders('{var:constructor}', step, makeInstructionContext({
+      workflowCallVars: { constructor: 'explicit' },
+    }))).toBe('explicit');
+  });
+
+  it.each(['Initial', '', 1, true])(
+    'should render an unexpected runtime review_mode value as mode_unknown: %j',
+    (reviewMode) => {
+      expect(replaceTemplatePlaceholders(
+        '{var:review_mode}',
+        makeStep(),
+        makeInstructionContext({ workflowCallVars: { review_mode: reviewMode } }),
+      )).toBe('mode_unknown');
+    },
+  );
 
   it('should replace {previous_response} when passPreviousResponse is true', () => {
     const step = makeStep({ passPreviousResponse: true });
@@ -149,58 +179,223 @@ describe('replaceTemplatePlaceholders', () => {
     expect(result).toBe('Reports: /tmp/reports/run-1');
   });
 
-  it('should replace {report:filename} with full path', () => {
-    const step = makeStep();
-    const ctx = makeInstructionContext({ reportDir: '/tmp/reports' });
-    const template = 'Read {report:review.md} and {report:plan.md}';
+  describe('{report:filename} resolution', () => {
+    let reportDir: string;
 
-    const result = replaceTemplatePlaceholders(template, step, ctx);
-    expect(result).toBe('Read /tmp/reports/review.md and /tmp/reports/plan.md');
-  });
+    beforeEach(() => {
+      reportDir = mkdtempSync(join(tmpdir(), 'takt-escape-report-'));
+    });
 
-  it('should replace report handle placeholders with resolved paths', () => {
-    const step = makeStep();
-    const ctx = {
-      ...makeInstructionContext(),
-      currentReport: '/tmp/reports/07-fix.md',
-      previousReport: '/tmp/reports/07-fix.md.20260420T010000Z',
-      reportHistory: [
-        '/tmp/reports/07-fix.md.20260420T010000Z',
-        '/tmp/reports/07-fix.md.20260419T230000Z',
-      ].join('\n'),
-      peerReports: [
-        '/tmp/reports/05-arch-review.md',
-        '/tmp/reports/06-security-review.md',
-      ].join('\n'),
-    } as InstructionContext;
-    const template = [
-      'Current: {current_report}',
-      'Previous: {previous_report}',
-      'History: {report_history}',
-      'Peers: {peer_reports}',
-    ].join('\n');
+    afterEach(() => {
+      rmSync(reportDir, { recursive: true, force: true });
+    });
 
-    const result = replaceTemplatePlaceholders(template, step, ctx);
+    it('should replace {report:filename} with the verified report content', () => {
+      writeFileSync(join(reportDir, 'review.md'), 'review');
+      writeFileSync(join(reportDir, 'plan.md'), 'plan');
+      const step = makeStep();
+      const ctx = makeInstructionContext({ reportDir });
+      const template = 'Read {report:review.md} and {report:plan.md}';
 
-    expect(result).toContain('Current: /tmp/reports/07-fix.md');
-    expect(result).toContain('Previous: /tmp/reports/07-fix.md.20260420T010000Z');
-    expect(result).toContain('/tmp/reports/07-fix.md.20260419T230000Z');
-    expect(result).toContain('/tmp/reports/05-arch-review.md');
-    expect(result).toContain('/tmp/reports/06-security-review.md');
-    expect(result).not.toContain('{current_report}');
-    expect(result).not.toContain('{previous_report}');
-    expect(result).not.toContain('{report_history}');
-    expect(result).not.toContain('{peer_reports}');
-  });
+      const result = replaceTemplatePlaceholders(template, step, ctx);
+      expect(result).toBe('Read review and plan');
+    });
 
-  it('should replace missing report handle placeholders with empty strings', () => {
-    const step = makeStep();
-    const ctx = makeInstructionContext() as InstructionContext;
-    const template = 'Current:{current_report}|Previous:{previous_report}|History:{report_history}|Peers:{peer_reports}';
+    it('should preserve ASCII braces in report content', () => {
+      const report = '{"finding":{"line":12,"evidence":"const value = { safe: true };"}}';
+      writeFileSync(join(reportDir, 'review.md'), report);
+      const step = makeStep();
+      const ctx = makeInstructionContext({ reportDir });
 
-    const result = replaceTemplatePlaceholders(template, step, ctx);
+      expect(replaceTemplatePlaceholders('{report:review.md}', step, ctx)).toBe(report);
+    });
 
-    expect(result).toBe('Current:|Previous:|History:|Peers:');
+    it('should preserve report code and JSON through InstructionBuilder', () => {
+      const report = '```json\n{"finding":{"line":12}}\n```\nconst value = { safe: true };';
+      writeFileSync(join(reportDir, 'review.md'), report);
+      const step = makeStep({ instruction: 'Use this evidence exactly:\n{report:review.md}' });
+      const ctx = makeInstructionContext({ reportDir });
+
+      const instruction = new InstructionBuilder(step, ctx).build();
+
+      expect(instruction).toContain(report);
+      expect(instruction).not.toContain('｛"finding"');
+    });
+
+    it('should replace a missing report with a plain sentence', () => {
+      const step = makeStep({ name: 'arbitrate' });
+      const ctx = makeInstructionContext({ reportDir });
+      const template = 'Read {report:missing-review.md}';
+
+      expect(replaceTemplatePlaceholders(template, step, ctx)).toBe(
+        'Read （参照先の報告 missing-review.md はこの run に存在しない）',
+      );
+    });
+
+    it('should reject report references escaping the report directory', () => {
+      const step = makeStep({ name: 'arbitrate' });
+      const ctx = makeInstructionContext({ reportDir });
+      const template = 'Read {report:../../secrets.md}';
+
+      expect(() => replaceTemplatePlaceholders(template, step, ctx)).toThrow(
+        /not a valid report-relative path: dot path segment/,
+      );
+    });
+
+    // workflow_call の子は名前空間付き reportDir（reports/subworkflows/...）を
+    // 持つ。親 run の成果物（例: draft の implement が参照する plan.md）は、
+    // engine から明示的に渡された reports ルートへ read-only フォールバック
+    // して解決される。
+    it('should fall back to the run reports root for subworkflow namespace dirs (explicit reportsRootDir)', () => {
+      const runRoot = join(reportDir, '.takt', 'runs', 'run-slug');
+      const reportsRoot = join(runRoot, 'reports');
+      const childReportDir = join(reportsRoot, 'subworkflows', 'draft#3');
+      mkdirSync(childReportDir, { recursive: true });
+      writeFileSync(join(reportsRoot, 'plan.md'), 'parent plan');
+
+      const step = makeStep({ name: 'implement' });
+      const ctx = makeInstructionContext({ reportDir: childReportDir, reportsRootDir: reportsRoot });
+      const result = replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx);
+      expect(result).toBe('Read parent plan');
+
+      expect(replaceTemplatePlaceholders('Read {report:ghost.md}', step, ctx)).toBe(
+        'Read （参照先の報告 ghost.md はこの run に存在しない）',
+      );
+    });
+
+    it('should prefer the nearest parent workflow report in a nested call', () => {
+      const reportsRoot = join(reportDir, '.takt', 'runs', 'run-slug', 'reports');
+      const parentReportDir = join(reportsRoot, 'subworkflows', 'develop#1');
+      const childReportDir = join(parentReportDir, 'subworkflows', 'remediation#1');
+      mkdirSync(childReportDir, { recursive: true });
+      writeFileSync(join(reportsRoot, 'resolution.md'), 'outer');
+      writeFileSync(join(parentReportDir, 'resolution.md'), 'nearest');
+
+      const step = makeStep({ name: 'plan' });
+      const ctx = makeInstructionContext({ reportDir: childReportDir, reportsRootDir: reportsRoot });
+
+      expect(replaceTemplatePlaceholders('Read {report:resolution.md}', step, ctx)).toBe('Read nearest');
+    });
+
+    it('should continue to the reports root when the nearest parent report is missing', () => {
+      const reportsRoot = join(reportDir, '.takt', 'runs', 'run-slug', 'reports');
+      const parentReportDir = join(reportsRoot, 'subworkflows', 'develop#1');
+      const childReportDir = join(parentReportDir, 'subworkflows', 'remediation#1');
+      mkdirSync(childReportDir, { recursive: true });
+      writeFileSync(join(reportsRoot, 'resolution.md'), 'outer');
+
+      const step = makeStep({ name: 'plan' });
+      const ctx = makeInstructionContext({ reportDir: childReportDir, reportsRootDir: reportsRoot });
+
+      expect(replaceTemplatePlaceholders('Read {report:resolution.md}', step, ctx)).toBe('Read outer');
+    });
+
+    it('should prefer the child report over the parent when both exist', () => {
+      const reportsRoot = join(reportDir, '.takt', 'runs', 'run-slug', 'reports');
+      const childReportDir = join(reportsRoot, 'subworkflows', 'draft#3');
+      mkdirSync(childReportDir, { recursive: true });
+      writeFileSync(join(reportsRoot, 'plan.md'), 'parent plan');
+      writeFileSync(join(childReportDir, 'plan.md'), 'child plan');
+
+      const step = makeStep({ name: 'implement' });
+      const ctx = makeInstructionContext({ reportDir: childReportDir, reportsRootDir: reportsRoot });
+      const result = replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx);
+      expect(result).toBe('Read child plan');
+    });
+
+    it('should not fall back for nested report dirs outside the subworkflows namespace', () => {
+      const reportsRoot = join(reportDir, '.takt', 'runs', 'run-slug', 'reports');
+      const nestedDir = join(reportsRoot, 'nested', 'not-a-subworkflow');
+      mkdirSync(nestedDir, { recursive: true });
+      // 親に実在しても、subworkflows 名前空間の外では掴まない。
+      writeFileSync(join(reportsRoot, 'plan.md'), 'parent plan');
+
+      const step = makeStep({ name: 'implement' });
+      const ctx = makeInstructionContext({ reportDir: nestedDir, reportsRootDir: reportsRoot });
+      expect(replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx)).toBe(
+        'Read （参照先の報告 plan.md はこの run に存在しない）',
+      );
+    });
+
+    it('should not fall back when reportsRootDir is not provided', () => {
+      const reportsRoot = join(reportDir, '.takt', 'runs', 'run-slug', 'reports');
+      const childReportDir = join(reportsRoot, 'subworkflows', 'draft#3');
+      mkdirSync(childReportDir, { recursive: true });
+      writeFileSync(join(reportsRoot, 'plan.md'), 'parent plan');
+
+      const step = makeStep({ name: 'implement' });
+      const ctx = makeInstructionContext({ reportDir: childReportDir });
+      expect(replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx)).toBe(
+        'Read （参照先の報告 plan.md はこの run に存在しない）',
+      );
+    });
+
+    // resume-artifacts.json は内部予約名（resume スナップショット manifest）。
+    // 通常レポートとして解決させない — 内部形式への依存を明示エラーで拒否。
+    it('should reject references to the reserved resume-artifacts.json (case/whitespace insensitive)', () => {
+      writeFileSync(join(reportDir, 'resume-artifacts.json'), '{}');
+      const step = makeStep({ name: 'arbitrate' });
+      const ctx = makeInstructionContext({ reportDir });
+      for (const reference of ['resume-artifacts.json', ' Resume-Artifacts.JSON ']) {
+        expect(() => replaceTemplatePlaceholders(`Read {report:${reference}}`, step, ctx)).toThrow(
+          /reserved internal file/,
+        );
+      }
+      expect(() => replaceTemplatePlaceholders(
+        'Read {report:sub\\Resume-Artifacts.JSON}',
+        step,
+        ctx,
+      )).toThrow(/non-canonical path separator/);
+    });
+
+    it('should reject normalized references into the internal report namespace', () => {
+      const step = makeStep({ name: 'arbitrate' });
+      const ctx = makeInstructionContext({ reportDir });
+      expect(() => replaceTemplatePlaceholders(
+        'Read {report:.takt-report-internal/history/review.md}',
+        step,
+        ctx,
+      )).toThrow(/internal report namespace/);
+      expect(() => replaceTemplatePlaceholders(
+        'Read {report:.takt-report-internal\\history\\review.md}',
+        step,
+        ctx,
+      )).toThrow(/non-canonical path separator/);
+      for (const reference of [
+        './.takt-report-internal/history/review.md',
+        'public/../.takt-report-internal/history/review.md',
+      ]) {
+        expect(() => replaceTemplatePlaceholders(`Read {report:${reference}}`, step, ctx)).toThrow(
+          /not a valid report-relative path: dot path segment/,
+        );
+      }
+    });
+
+    it('should reject report-relative traversal before reading the filesystem', () => {
+      const step = makeStep({ name: 'arbitrate' });
+      const ctx = makeInstructionContext({ reportDir });
+      expect(() => replaceTemplatePlaceholders(
+        'Read {report:nested/../../outside.md}',
+        step,
+        ctx,
+      )).toThrow(/not a valid report-relative path/);
+    });
+
+    // statSync はリンク先を追うため、reportDir 外を指す symlink の {report:X} を
+    // 受理してしまう（codex 指摘）。lstat でリンク自体を拒否する。
+    it('should reject report references that resolve to a symlink', () => {
+      const outsideDir = mkdtempSync(join(tmpdir(), 'takt-escape-outside-'));
+      const outside = join(outsideDir, 'outside.md');
+      writeFileSync(outside, 'outside content');
+      symlinkSync(outside, join(reportDir, 'link.md'));
+
+      const step = makeStep({ name: 'arbitrate' });
+      const ctx = makeInstructionContext({ reportDir });
+      expect(() => replaceTemplatePlaceholders('Read {report:link.md}', step, ctx)).toThrow(
+        /resolves to a symlink/,
+      );
+      rmSync(outsideDir, { recursive: true, force: true });
+    });
   });
 
   it('should handle template with multiple different placeholders', () => {

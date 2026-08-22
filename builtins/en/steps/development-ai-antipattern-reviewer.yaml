@@ -1,0 +1,29 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction }
+name: ai-antipattern-review
+capabilities: readonly
+tags: [review]
+edit: false
+persona: ai-antipattern-reviewer
+policy:
+  - ai-antipattern
+  - architecture
+  - contract-change
+  - review
+  - $param: review_policy_additions
+knowledge:
+  - architecture
+  - $param: review_knowledge_additions
+instruction:
+  $param: ai_antipattern_review_instruction
+pass_previous_response: false
+output_contracts:
+  report:
+    - name: ai-antipattern-review.md
+      format: ai-antipattern-review

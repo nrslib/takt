@@ -3,8 +3,13 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { devNull } from 'node:os';
 import { createLogger } from '../../shared/utils/index.js';
+import { buildSafeGitEnvironment } from './git-environment.js';
+import {
+  toLocalBranchRef,
+  toPullRequestBaseRef,
+  toRemoteTrackingBranchRef,
+} from '../../shared/utils/gitBranchValidation.js';
 
 const log = createLogger('git');
 
@@ -24,60 +29,15 @@ export function getCurrentBranch(cwd: string): string {
   }).trim();
 }
 
-function getFilterConfigNames(cwd: string): string[] {
-  try {
-    const output = execFileSync('git', ['config', '--local', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'], {
-      cwd,
-      stdio: 'pipe',
-      encoding: 'utf-8',
-    });
-
-    return output
-      .trim()
-      .split('\n')
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-function getSafeGitEnv(cwd: string, options: StageAndCommitOptions): NodeJS.ProcessEnv | undefined {
-  const configEntries: Array<readonly [string, string]> = [];
-
-  if (!options.allowGitHooks) {
-    configEntries.push(['core.hooksPath', devNull] as const);
-  }
-
-  if (!options.allowGitFilters) {
-    const configNames = getFilterConfigNames(cwd);
-    configEntries.push(...configNames.map(configName => [
-      configName,
-      configName.endsWith('.required') ? 'false' : '',
-    ] as const));
-  }
-
-  if (configEntries.length === 0) {
-    return undefined;
-  }
-
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_CONFIG_COUNT: String(configEntries.length),
-  };
-
-  configEntries.forEach(([key, value], index) => {
-    env[`GIT_CONFIG_KEY_${index}`] = key;
-    env[`GIT_CONFIG_VALUE_${index}`] = value;
-  });
-
-  return env;
-}
-
 /**
  * Returns the short commit hash if changes were committed, undefined if no changes.
  */
-export function stageAndCommit(cwd: string, message: string, options: StageAndCommitOptions = {}): string | undefined {
-  const env = getSafeGitEnv(cwd, options);
+export async function stageAndCommit(
+  cwd: string,
+  message: string,
+  options: StageAndCommitOptions = {},
+): Promise<string | undefined> {
+  const env = await buildSafeGitEnvironment(cwd, options);
 
   execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe', env });
 
@@ -111,8 +71,47 @@ export function stageAndCommit(cwd: string, message: string, options: StageAndCo
  */
 export function checkoutBranch(cwd: string, branch: string): void {
   log.info('Checking out branch from origin', { branch });
-  execFileSync('git', ['fetch', 'origin', branch], { cwd, stdio: 'pipe' });
-  execFileSync('git', ['checkout', branch], { cwd, stdio: 'pipe' });
+  execFileSync('git', [
+    'fetch',
+    '--force',
+    'origin',
+    `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
+  ], { cwd, stdio: 'pipe' });
+  execFileSync('git', ['checkout', '-B', branch, toRemoteTrackingBranchRef(branch)], {
+    cwd,
+    stdio: 'pipe',
+  });
+}
+
+export function materializePullRequestBase(
+  projectCwd: string,
+  targetCwd: string,
+  baseBranch: string,
+): string {
+  const baseRef = toPullRequestBaseRef(baseBranch);
+  const remoteTrackingRef = toRemoteTrackingBranchRef(baseBranch);
+  execFileSync('git', [
+    'fetch',
+    '--force',
+    'origin',
+    `${toLocalBranchRef(baseBranch)}:${remoteTrackingRef}`,
+  ], { cwd: projectCwd, stdio: 'pipe' });
+
+  if (projectCwd === targetCwd) {
+    execFileSync('git', ['update-ref', baseRef, remoteTrackingRef], {
+      cwd: targetCwd,
+      stdio: 'pipe',
+    });
+  } else {
+    execFileSync('git', [
+      'fetch',
+      '--force',
+      '--no-write-fetch-head',
+      projectCwd,
+      `${remoteTrackingRef}:${baseRef}`,
+    ], { cwd: targetCwd, stdio: 'pipe' });
+  }
+  return baseRef;
 }
 
 function throwPushFailureWithStderr(err: unknown, extraHint: string): never {
@@ -131,14 +130,53 @@ function throwPushFailureWithStderr(err: unknown, extraHint: string): never {
  */
 export function pushBranch(cwd: string, branch: string): void {
   log.info('Pushing branch to origin', { branch });
+  pushBranchToRemote(cwd, 'origin', branch);
+}
+
+function pushBranchToRemote(cwd: string, remote: string, branch: string): void {
+  log.info('Pushing branch', { branch, remote });
   try {
-    execFileSync('git', ['push', 'origin', branch], {
+    execFileSync('git', ['push', remote, branch], {
       cwd,
       stdio: 'pipe',
     });
   } catch (err) {
     throwPushFailureWithStderr(err, NON_FAST_FORWARD_PUSH_HINT);
   }
+}
+
+function resolvePublicationRemote(cwd: string): string | undefined {
+  const output = execFileSync('git', ['remote'], {
+    cwd,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  }).trim();
+  const remotes = output.length > 0 ? output.split(/\r?\n/).filter((remote) => remote.length > 0) : [];
+
+  if (remotes.length === 0) {
+    return undefined;
+  }
+  if (remotes.includes('origin')) {
+    return 'origin';
+  }
+  if (remotes.length === 1) {
+    return remotes[0];
+  }
+  throw new Error(`Cannot determine publication remote: multiple remotes configured (${remotes.join(', ')}).`);
+}
+
+export function publishTaskBranch(cloneCwd: string, projectCwd: string, branch: string): void {
+  const remote = resolvePublicationRemote(cloneCwd);
+  if (remote !== undefined) {
+    pushBranchToRemote(cloneCwd, remote, branch);
+    return;
+  }
+
+  execFileSync('git', ['fetch', cloneCwd, `${branch}:${branch}`], {
+    cwd: projectCwd,
+    stdio: 'pipe',
+  });
+  pushBranch(projectCwd, branch);
 }
 
 export function materializeCloneHeadToRootBranch(cloneCwd: string, rootCwd: string, branch: string): void {

@@ -10,13 +10,13 @@ import { SlashCommand } from '../../shared/constants.js';
 /** i18n label key for each slash command description */
 const SLASH_COMMAND_LABEL_KEYS: Readonly<Record<SlashCommand, string>> = {
   '/accept': 'interactive.commands.accept',
-  '/play': 'interactive.commands.play',
   '/go': 'interactive.commands.go',
   '/retry': 'interactive.commands.retry',
   '/replay': 'interactive.commands.replay',
   '/cancel': 'interactive.commands.cancel',
   '/resume': 'interactive.commands.resume',
   '/paste-image': 'interactive.commands.pasteImage',
+  '/setup': 'interactive.commands.setup',
 } as const;
 
 /**
@@ -35,6 +35,8 @@ const SLASH_COMMAND_REGISTRY: readonly {
 export interface CommandAvailability {
   readonly enableRetryCommand?: boolean;
   readonly hasPreviousOrder?: boolean;
+  readonly enableSetupCommand?: boolean;
+  readonly enabledCommands?: readonly SlashCommand[];
 }
 
 /**
@@ -50,6 +52,8 @@ export const filterSlashCommands = (
   const lower = prefix.toLowerCase();
   return SLASH_COMMAND_REGISTRY.filter((entry) => {
     if (!entry.command.startsWith(lower)) return false;
+    if (availability?.enabledCommands && !availability.enabledCommands.includes(entry.command)) return false;
+    if (entry.command === SlashCommand.Setup && availability?.enableSetupCommand !== true) return false;
     if (!availability) return true;
     if (entry.command === SlashCommand.Retry && !availability.enableRetryCommand) return false;
     if (entry.command === SlashCommand.Replay && !availability.hasPreviousOrder) return false;

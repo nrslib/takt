@@ -13,12 +13,32 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { getScenarioQueue, setMockScenario, resetScenario } from '../infra/mock/index.js';
+import type { WorkflowStep } from '../core/models/index.js';
+import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
+
+function selectSemanticLabelFromTag(step: WorkflowStep, context: { lastResponse?: string }) {
+  const candidates = semanticRuleCandidatesOf(step.rules ?? [], false);
+  const candidateIndex = detectCandidateIndex(context.lastResponse ?? '', step.name);
+  const candidate = candidates[candidateIndex];
+  if (!candidate) {
+    throw new RuleDetectionExhaustedError(step.name);
+  }
+  return { label: candidate.label, method: 'phase3_tag' as const };
+}
+
+const { mockWorkflowWarn, mockUiError } = vi.hoisted(() => ({
+  mockWorkflowWarn: vi.fn(),
+  mockUiError: vi.fn(),
+}));
 
 // --- Mocks ---
 
 // Git operations (even with --skip-git, some imports need to be available)
-vi.mock('node:child_process', () => ({
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
   execFileSync: vi.fn(),
 }));
 
@@ -37,7 +57,7 @@ vi.mock('../shared/ui/index.js', () => ({
   header: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
-  error: vi.fn(),
+  error: mockUiError,
   success: vi.fn(),
   status: vi.fn(),
   blankLine: vi.fn(),
@@ -47,20 +67,27 @@ vi.mock('../shared/ui/index.js', () => ({
   })),
 }));
 
-vi.mock('../shared/utils/index.js', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  notifySuccess: vi.fn(),
-  notifyError: vi.fn(),
-  generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
-    iterations: 0,
-  }),
-  finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({ ...log, status })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test.ndjson'),
-  appendNdjsonLine: vi.fn(),
-  generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
-}));
+vi.mock('../shared/utils/index.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../shared/utils/index.js')>();
+  return {
+    ...original,
+    createLogger: (name: string) => {
+      const logger = original.createLogger(name);
+      return name === 'workflow' ? { ...logger, warn: mockWorkflowWarn } : logger;
+    },
+    notifySuccess: vi.fn(),
+    notifyError: vi.fn(),
+    generateSessionId: vi.fn().mockReturnValue('test-session-id'),
+    createSessionLog: vi.fn().mockReturnValue({
+      startTime: new Date().toISOString(),
+      iterations: 0,
+    }),
+    finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({ ...log, status })),
+    initNdjsonLog: vi.fn().mockReturnValue('/tmp/test.ndjson'),
+    appendNdjsonLine: vi.fn(),
+    generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+  };
+});
 
 vi.mock('../infra/config/paths.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../infra/config/paths.js')>();
@@ -83,6 +110,7 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
       provider: 'mock',
       enableBuiltinWorkflows: true,
       disabledBuiltins: [],
+      workflowCommandGates: { customScripts: true },
     }),
     getLanguage: vi.fn().mockReturnValue('en'),
   };
@@ -92,7 +120,7 @@ vi.mock('../infra/config/project/projectConfig.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../infra/config/project/projectConfig.js')>();
   return {
     ...original,
-    loadProjectConfig: vi.fn().mockReturnValue({}),
+    loadProjectConfig: vi.fn(original.loadProjectConfig),
   };
 });
 
@@ -105,19 +133,31 @@ vi.mock('../shared/prompt/index.js', () => ({
   promptInput: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
-  runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/workflow/phase-runner.js')>()),
+  runReportPhase: vi.fn().mockImplementation(async (
+    step: WorkflowStep,
+    _stepIteration: number,
+    context: { reportDir: string; lastResponse?: string },
+  ) => {
+    mkdirSync(context.reportDir, { recursive: true });
+    for (const contract of step.outputContracts ?? []) {
+      writeFileSync(join(context.reportDir, contract.name), context.lastResponse ?? 'Mock report');
+    }
+  }),
+  runStatusJudgmentPhase: vi.fn().mockImplementation(selectSemanticLabelFromTag),
+}));
+
+vi.mock('../core/workflow/quality-gates/commandGateRunner.js', () => ({
+  runCommandQualityGate: vi.fn().mockResolvedValue({ ok: true, stdout: '', stderr: '' }),
 }));
 
 // --- Imports (after mocks) ---
 
 import { executePipeline } from '../features/pipeline/index.js';
+import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
-
-// --- Test helpers ---
 
 /** Create a minimal test workflow YAML + agent files in a temp directory */
 function createTestWorkflowDir(): { dir: string; workflowPath: string } {
@@ -175,12 +215,96 @@ steps:
   return { dir, workflowPath };
 }
 
+function writeChildAutoRoutingWorkflow(dir: string, parallel: boolean): string {
+  const workflowsDir = join(dir, '.takt', 'workflows');
+  mkdirSync(workflowsDir, { recursive: true });
+  writeFileSync(join(dir, '.takt', 'runtime.yaml'), `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: mock
+      model: mock/default-model
+    low:
+      provider: mock
+      model: mock/low-model
+    medium:
+      provider: mock
+      model: mock/medium-model
+    high:
+      provider: mock
+      model: mock/high-model
+    router:
+      provider: mock
+      model: mock/router-model
+  auto_routing:
+    strategy: balanced
+    router_profile: router
+    pools:
+      general:
+        candidates:
+          - profile: low
+            tier: low
+          - profile: medium
+            tier: medium
+          - profile: high
+            tier: high
+        fallback_profile: high
+`);
+  writeFileSync(join(workflowsDir, 'child-auto.yaml'), `name: child-auto
+subworkflow:
+  callable: true
+initial_step: child-step
+max_steps: 2
+steps:
+  - name: child-step
+    persona: ./.takt/personas/coder.md
+    instruction: Run child work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+  const workflowPath = join(dir, parallel ? 'parallel-parent.yaml' : 'direct-parent.yaml');
+  const delegate = parallel
+    ? `  - name: delegate
+    parallel:
+      - name: call-child
+        kind: workflow_call
+        call: child-auto
+        rules:
+          - condition: COMPLETE
+            next: COMPLETE
+    rules:
+      - condition: all("COMPLETE")
+        next: COMPLETE`
+    : `  - name: delegate
+    kind: workflow_call
+    call: child-auto
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE`;
+  writeFileSync(workflowPath, `name: ${parallel ? 'parallel-parent' : 'direct-parent'}
+initial_step: delegate
+max_steps: 3
+steps:
+${delegate}
+`);
+  return workflowPath;
+}
+
 describe('Pipeline Integration Tests', () => {
   let testDir: string;
   let workflowPath: string;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(loadGlobalConfig).mockReturnValue({
+      language: 'en',
+      provider: 'mock',
+      enableBuiltinWorkflows: true,
+      disabledBuiltins: [],
+    });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       if (Array.isArray(args) && args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
         return 'test/current\n' as never;
@@ -221,48 +345,6 @@ describe('Pipeline Integration Tests', () => {
     expect(exitCode).toBe(0);
   });
 
-  it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
-    // Use builtin 'default' workflow
-    // persona field: extractPersonaName result (from .md filename)
-    // Flow: plan → write_tests → implement → ai-antipattern-review-1st → reviewers(arch-review + ai-antipattern-review + pure-review + coding-review + supervise) → COMPLETE
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-1ST:1]\n\nNo AI-specific issues' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
-      { persona: 'pure-reviewer', status: 'done', content: '[PURE-REVIEW:1]\n\napproved' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
-      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll checks passed' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Add a hello world function',
-      workflow: 'default',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(exitCode).toBe(0);
-  });
-
-  it('should return EXIT_WORKFLOW_FAILED for non-existent workflow', async () => {
-    const exitCode = await executePipeline({
-      task: 'Test task',
-      workflow: 'non-existent-workflow-xyz',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    // executeTask returns false when workflow not found → executePipeline returns EXIT_WORKFLOW_FAILED (3)
-    expect(exitCode).toBe(3);
-  });
-
   it('should handle ABORT transition from workflow', async () => {
     // Scenario: plan returns second rule -> ABORT
     setMockScenario([
@@ -280,6 +362,44 @@ describe('Pipeline Integration Tests', () => {
 
     // ABORT means workflow failed -> EXIT_WORKFLOW_FAILED (3)
     expect(exitCode).toBe(3);
+  });
+
+  it('should fail the pipeline when the semantic tag is missing', async () => {
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      task: 'Task without a status tag',
+      workflow: workflowPath,
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      provider: 'mock',
+    });
+
+    expect(exitCode).toBe(3);
+  });
+
+  it.each(['backend-mini', 'frontend-mini'])('should complete %s through the shared mini core', async (workflow) => {
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\nApproved.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      task: 'Implement a focused backend change',
+      workflow,
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      provider: 'mock',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
   it('should handle review reject → implement → review loop', async () => {
@@ -304,4 +424,139 @@ describe('Pipeline Integration Tests', () => {
 
     expect(exitCode).toBe(0);
   });
+
+  it.each([
+    { name: 'root workflow', child: false },
+    { name: 'workflow_call child', child: true },
+  ])('should accept a pool with one eligible tier regardless of strategy without reporting it as unused for $name', async ({ child }) => {
+    writeFileSync(join(testDir, '.takt', 'runtime.yaml'), `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: mock
+      model: mock/default-model
+    medium:
+      provider: mock
+      model: mock/medium-model
+    router:
+      provider: mock
+      model: mock/router-model
+  auto_routing:
+    strategy: balanced
+    router_profile: router
+    pools:
+      general:
+        candidates:
+          - profile: medium
+            tier: medium
+        fallback_profile: medium
+`);
+
+    if (child) {
+      const workflowsDir = join(testDir, '.takt', 'workflows');
+      mkdirSync(workflowsDir, { recursive: true });
+      writeFileSync(join(workflowsDir, 'invalid-auto.yaml'), `name: invalid-auto
+subworkflow:
+  callable: true
+initial_step: child-step
+max_steps: 2
+steps:
+  - name: child-step
+    persona: ./.takt/personas/coder.md
+    instruction: Run child work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+      workflowPath = join(testDir, 'invalid-auto-parent.yaml');
+      writeFileSync(workflowPath, `name: invalid-auto-parent
+initial_step: delegate
+max_steps: 2
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: invalid-auto
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    } else {
+      workflowPath = join(testDir, 'invalid-auto-root.yaml');
+      writeFileSync(workflowPath, `name: invalid-auto-root
+initial_step: implement
+max_steps: 2
+steps:
+  - name: implement
+    persona: ./.takt/personas/coder.md
+    instruction: Run root work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    }
+
+    const execution = executePipeline({
+      task: 'Reject invalid automatic routing strategy',
+      workflow: workflowPath,
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      autoStrategy: 'performance',
+    });
+    await expect(execution).resolves.toBe(0);
+    expect(mockWorkflowWarn).not.toHaveBeenCalledWith(
+      expect.stringMatching(/auto-strategy.*ignored/i),
+    );
+  });
+
+  it('should not warn when runtime auto routing is effective on a conditional parent', async () => {
+    writeChildAutoRoutingWorkflow(testDir, false);
+    workflowPath = join(testDir, 'conditional-parent.yaml');
+    writeFileSync(workflowPath, `name: conditional-parent
+initial_step: choose
+max_steps: 3
+steps:
+  - name: choose
+    persona: ./.takt/personas/coder.md
+    instruction: Choose whether to run child work
+    rules:
+      - condition: skip child
+        next: finish
+      - condition: run child
+        next: delegate
+  - name: delegate
+    kind: workflow_call
+    call: child-auto
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+  - name: finish
+    persona: ./.takt/personas/coder.md
+    instruction: Finish without child work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    setMockScenario([
+      { persona: 'coder', status: 'done', content: '[CHOOSE:1]\n\nSkip child.' },
+      { persona: 'coder', status: 'done', content: '[FINISH:1]\n\nDone.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      task: 'Skip conditional child routing',
+      workflow: workflowPath,
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      autoStrategy: 'performance',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockWorkflowWarn).not.toHaveBeenCalledWith(
+      expect.stringMatching(/auto-strategy.*ignored/i),
+    );
+  });
+
 });

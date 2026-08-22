@@ -26,6 +26,7 @@ steps:
     tags:
       - plan
     persona: planner
+    policy: contract-change
     instruction: audit-security-plan
     edit: false
     output_contracts:
@@ -40,7 +41,8 @@ steps:
     tags:
       - review
     persona: security-reviewer
-    knowledge: security
+    policy: contract-change
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
     instruction: audit-security-team-leader
     edit: false
     team_leader:
@@ -58,8 +60,10 @@ steps:
   - name: supervise
     tags:
       - review
+      - supervise
     persona: supervisor
-    knowledge: security
+    policy: contract-change
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
     instruction: audit-security-supervise
     edit: false
     rules:
@@ -72,7 +76,8 @@ steps:
     tags:
       - review
     persona: security-reviewer
-    knowledge: security
+    policy: contract-change
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
     instruction: audit-security-review
     edit: false
     output_contracts:

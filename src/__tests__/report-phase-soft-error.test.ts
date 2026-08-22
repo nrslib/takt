@@ -1,0 +1,385 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
+import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
+import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
+import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import { makeStep } from './test-helpers.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
+
+vi.mock('../agents/agent-usecases.js', () => ({
+  executeAgent: vi.fn(),
+}));
+
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/phase-runner.js')>();
+  return {
+    ...actual,
+    runReportPhase: vi.fn(),
+    runStatusJudgmentPhase: vi.fn(),
+  };
+});
+
+import { executeAgent } from '../agents/agent-usecases.js';
+import {
+  runReportPhase,
+  ReportPhaseGenerationError,
+  runStatusJudgmentPhase,
+} from '../core/workflow/phase-runner.js';
+
+function makeState(): WorkflowState {
+  return {
+    workflowName: 'test-workflow',
+    currentStep: 'review',
+    iteration: 1,
+    stepOutputs: new Map(),
+    structuredOutputs: new Map(),
+    systemContexts: new Map(),
+    effectResults: new Map(),
+    userInputs: [],
+    personaSessions: new Map(),
+    stepIterations: new Map(),
+    status: 'running',
+  };
+}
+
+function makeDoneResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
+  return {
+    persona: 'reviewer',
+    status: 'done',
+    content: 'phase 1 output',
+    timestamp: new Date('2026-06-30T00:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+function makeReportStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  return makeStep({
+    name: 'review',
+    persona: 'reviewer',
+    instruction: 'Review the change',
+    outputContracts: [{ name: 'review.md', format: 'markdown' }],
+    rules: [
+      normalizeRule({ condition: 'complete', next: 'COMPLETE' }),
+      normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+    ],
+    ...overrides,
+  });
+}
+
+function makeStepExecutor(): StepExecutor {
+  const deps: StepExecutorDeps = {
+    optionsBuilder: {
+      buildAgentOptions: vi.fn().mockReturnValue({}),
+      buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
+    } as unknown as StepExecutorDeps['optionsBuilder'],
+    getCwd: () => '/tmp/project',
+    getProjectCwd: () => '/tmp/project',
+    getReportDir: () => '.takt/runs/test/reports',
+    getRunPaths: () => ({
+      slug: 'test-run',
+      runRootRel: '.takt/runs/test',
+      reportsRel: '.takt/runs/test/reports',
+      contextRel: '.takt/runs/test/context',
+      contextKnowledgeRel: '.takt/runs/test/context/knowledge',
+      contextPolicyRel: '.takt/runs/test/context/policy',
+      contextPreviousResponsesRel: '.takt/runs/test/context/previous_responses',
+      logsRel: '.takt/runs/test/logs',
+      metaRel: '.takt/runs/test/meta.json',
+      runRootAbs: '/tmp/project/.takt/runs/test',
+      reportsAbs: '/tmp/project/.takt/runs/test/reports',
+      contextAbs: '/tmp/project/.takt/runs/test/context',
+      contextKnowledgeAbs: '/tmp/project/.takt/runs/test/context/knowledge',
+      contextPolicyAbs: '/tmp/project/.takt/runs/test/context/policy',
+      contextPreviousResponsesAbs: '/tmp/project/.takt/runs/test/context/previous_responses',
+      logsAbs: '/tmp/project/.takt/runs/test/logs',
+      metaAbs: '/tmp/project/.takt/runs/test/meta.json',
+    }),
+    getFailureDir: () => '/tmp/project/.takt/runs/test/failures',
+    getLanguage: () => undefined,
+    getInteractive: () => false,
+    getWorkflowSteps: () => [{ name: 'review' }],
+    getWorkflowName: () => 'test-workflow',
+    getWorkflowDescription: () => undefined,
+    getWorkflowRules: () => undefined,
+    getRetryNote: () => undefined,
+    getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
+    structuredCaller: {
+      evaluateCondition: vi.fn(),
+      judgeStatus: vi.fn(),
+      decomposeTask: vi.fn(),
+      requestMoreParts: vi.fn(),
+    },
+    structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+    onPhaseStart: vi.fn(),
+    onPhaseComplete: vi.fn(),
+    onJudgeStage: vi.fn(),
+  };
+  return new StepExecutor(deps);
+}
+
+function makeParallelRunner(): ParallelRunner {
+  const deps: ParallelRunnerDeps = {
+    optionsBuilder: {
+      buildAgentOptions: vi.fn().mockReturnValue({}),
+      buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
+      resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
+    } as unknown as ParallelRunnerDeps['optionsBuilder'],
+    stepExecutor: {
+      prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
+      buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
+      emitStepReports: vi.fn(),
+      persistPreviousResponseSnapshot: vi.fn(),
+      normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
+      completeReviewerResponse: vi.fn(async ({ initialResponse }) => ({
+        response: initialResponse,
+        reviewerSessionId: initialResponse.sessionId,
+      })),
+    } as unknown as ParallelRunnerDeps['stepExecutor'],
+    engineOptions: {
+      projectCwd: '/tmp/project',
+    },
+    getCwd: () => '/tmp/project',
+    getReportDir: () => '.takt/runs/test/reports',
+    getWorkflowName: () => 'test-workflow',
+    getInteractive: () => false,
+    observabilityEnabled: false,
+    structuredCaller: {
+      evaluateCondition: vi.fn(),
+      judgeStatus: vi.fn(),
+      decomposeTask: vi.fn(),
+      requestMoreParts: vi.fn(),
+    },
+    runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
+    updateMaxSteps: vi.fn(),
+    setActiveResumePoint: vi.fn(),
+  };
+  return new ParallelRunner(deps);
+}
+
+function makeParallelStep(subStep: WorkflowStep): WorkflowStep {
+  return makeStep({
+    name: 'reviewers',
+    instruction: 'Run reviewers',
+    parallel: [subStep],
+  });
+}
+
+function queueAgentResponse(response: AgentResponse): void {
+  vi.mocked(executeAgent).mockImplementationOnce(async (_persona, instruction, options) => {
+    options.onPromptResolved?.({
+      systemPrompt: 'system prompt',
+      userInstruction: instruction,
+    });
+    return response;
+  });
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(runStatusJudgmentPhase).mockResolvedValue({
+    label: 'complete',
+    method: 'phase3_tag',
+  });
+});
+
+describe('ReportPhaseGenerationError soft error', () => {
+  it('continues StepExecutor to Phase 3 when report phase raises ReportPhaseGenerationError', async () => {
+    const executor = makeStepExecutor();
+    const step = makeReportStep();
+    const state = makeState();
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+      ),
+    );
+
+    const response = await executor.applyPostExecutionPhases(
+      step,
+      state,
+      1,
+      makeDoneResponse(),
+      vi.fn(),
+    );
+
+    expect(runReportPhase).toHaveBeenCalledOnce();
+    expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
+    expect(response.matchedRuleIndex).toBe(0);
+    expect(response.matchedRuleMethod).toBe('phase3_tag');
+  });
+
+  it('rethrows generic report errors from StepExecutor instead of continuing to Phase 3', async () => {
+    const executor = makeStepExecutor();
+    const step = makeReportStep();
+    vi.mocked(runReportPhase).mockRejectedValue(new Error('generic report failure'));
+
+    await expect(executor.applyPostExecutionPhases(
+      step,
+      makeState(),
+      1,
+      makeDoneResponse(),
+      vi.fn(),
+    )).rejects.toThrow('generic report failure');
+
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+  });
+
+  it('fails StepExecutor fast on a report parse failure without entering Phase 3', async () => {
+    const executor = makeStepExecutor();
+    const step = makeReportStep();
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report parse failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+        AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+        'provider stream parse error: Failed to parse item: report output',
+      ),
+    );
+
+    await expect(executor.applyPostExecutionPhases(
+      step,
+      makeState(),
+      1,
+      makeDoneResponse(),
+      vi.fn(),
+    )).rejects.toMatchObject({
+      name: 'ProviderStreamParseError',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      message: 'provider stream parse error: Failed to parse item: report output',
+    });
+
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+  });
+
+  it('continues ParallelRunner sub-step to Phase 3 when report phase raises ReportPhaseGenerationError', async () => {
+    const runner = makeParallelRunner();
+    const subStep = makeReportStep({ name: 'security-review', persona: 'security-review' });
+    const state = makeState();
+    queueAgentResponse(makeDoneResponse({ persona: 'security-review' }));
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+      ),
+    );
+
+    const result = await runner.runParallelStep(makeParallelStep(subStep), state, 'review task', 5, vi.fn());
+
+    expect(runReportPhase).toHaveBeenCalledOnce();
+    expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
+    expect(state.stepOutputs.get('security-review')?.matchedRuleIndex).toBe(0);
+    expect(result.response.status).toBe('done');
+  });
+
+  it('propagates generic report errors from ParallelRunner as sub-step errors', async () => {
+    const runner = makeParallelRunner();
+    const subStep = makeReportStep({ name: 'security-review', persona: 'security-review' });
+    queueAgentResponse(makeDoneResponse({ persona: 'security-review' }));
+    vi.mocked(runReportPhase).mockRejectedValue(new Error('generic report failure'));
+
+    const result = await runner.runParallelStep(makeParallelStep(subStep), makeState(), 'review task', 5, vi.fn());
+
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+    expect(result.response.status).toBe('error');
+    expect(result.response.error).toContain('generic report failure');
+  });
+
+  it('fails a ParallelRunner sub-step fast on a report parse failure without entering Phase 3', async () => {
+    const runner = makeParallelRunner();
+    const subStep = makeReportStep({ name: 'security-review', persona: 'security-review' });
+    const state = makeState();
+    queueAgentResponse(makeDoneResponse({ persona: 'security-review' }));
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report parse failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+        AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+        'provider stream parse error: Failed to parse item: report output',
+      ),
+    );
+
+    const result = await runner.runParallelStep(makeParallelStep(subStep), state, 'review task', 5, vi.fn());
+
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+    expect(result.response.status).toBe('error');
+    expect(state.stepOutputs.get('security-review')?.error)
+      .toBe('provider stream parse error: Failed to parse item: report output');
+    expect(state.stepOutputs.get('security-review')?.failureCategory)
+      .toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR);
+    expect(result.response.failureCategory)
+      .toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR);
+    expect(result.response.error).toContain('provider stream parse error: Failed to parse item: report output');
+    expect(result.response.error).not.toBe(result.response.content);
+  });
+
+  it('keeps blank-content structured output responses successful in ParallelRunner', async () => {
+    const runner = makeParallelRunner();
+    const subStep = makeStep({
+      name: 'structured-review',
+      persona: 'structured-review',
+      instruction: 'Return structured output',
+    });
+    const state = makeState();
+    queueAgentResponse(makeDoneResponse({
+      persona: 'structured-review',
+      content: '',
+      structuredOutput: { result: 'ok' },
+    }));
+
+    const result = await runner.runParallelStep(makeParallelStep(subStep), state, 'review task', 5, vi.fn());
+
+    expect(state.stepOutputs.get('structured-review')?.status).toBe('done');
+    expect(result.response.status).toBe('done');
+  });
+
+  it('keeps blank-content structured output responses successful in StepExecutor', async () => {
+    const executor = makeStepExecutor();
+    const step = makeStep({
+      name: 'structured-review',
+      persona: 'structured-review',
+      instruction: 'Return structured output',
+      structuredOutput: {
+        schemaRef: 'structured-review',
+        schema: {
+          type: 'object',
+          properties: {
+            result: { type: 'string' },
+          },
+          required: ['result'],
+          additionalProperties: false,
+        },
+      },
+    });
+    const state = makeState();
+    queueAgentResponse(makeDoneResponse({
+      persona: 'structured-review',
+      content: '',
+      structuredOutput: { result: 'ok' },
+    }));
+    vi.spyOn(executor, 'persistPreviousResponseSnapshot').mockReturnValue('');
+
+    const result = await executor.runNormalStep(step, state, 'review task', 5, vi.fn());
+
+    expect(result.response.status).toBe('done');
+    expect(result.response.structuredOutput).toEqual({ result: 'ok' });
+  });
+});

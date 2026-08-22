@@ -1,0 +1,94 @@
+name: peer-review-suite-cqrs
+description: 共通レビューへCQRS・イベントソーシング専門レビューを合成するスイート。
+facet_pools:
+  security-review-facets:
+    uses: security-review-facets
+  takt-security-review-facets:
+    uses: takt-security-review-facets
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - needs_fix
+  params:
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    security_review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    security_review_pool:
+      type: facet_pool_ref
+      default: security-review-facets
+    architecture_review_instruction: { type: facet_ref, facet_kind: instruction, default: architecture-review }
+    security_review_instruction: { type: facet_ref, facet_kind: instruction, default: security-review }
+    testing_review_instruction: { type: facet_ref, facet_kind: instruction, default: testing-review }
+    coding_review_instruction: { type: facet_ref, facet_kind: instruction, default: coding-review }
+    ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction, default: ai-antipattern-review }
+    frontend_review_instruction: { type: facet_ref, facet_kind: instruction, default: frontend-review }
+    cqrs_es_review_instruction: { type: facet_ref, facet_kind: instruction, default: cqrs-es-review }
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      - name: base-reviewers
+        kind: workflow_call
+        call: peer-review-suite-base
+        args:
+          review_policy_additions:
+            $param: review_policy_additions
+          review_knowledge_additions:
+            $param: review_knowledge_additions
+          security_review_knowledge_additions:
+            $param: security_review_knowledge_additions
+          security_review_pool:
+            $param: security_review_pool
+          architecture_review_instruction:
+            $param: architecture_review_instruction
+          security_review_instruction:
+            $param: security_review_instruction
+          testing_review_instruction:
+            $param: testing_review_instruction
+          coding_review_instruction:
+            $param: coding_review_instruction
+          ai_antipattern_review_instruction:
+            $param: ai_antipattern_review_instruction
+        rules:
+          - condition: COMPLETE
+          - condition: needs_fix
+      - name: cqrs-es-review
+        uses: peer-review-cqrs-reviewer
+        with:
+          review_policy_additions:
+            $param: review_policy_additions
+          review_knowledge_additions:
+            $param: review_knowledge_additions
+          cqrs_es_review_instruction:
+            $param: cqrs_es_review_instruction
+        rules:
+          - condition: approved
+          - condition: needs_fix
+    rules:
+      - condition: any("error")
+        next: reviewers
+      - condition: all("COMPLETE", "approved")
+        next: COMPLETE
+      - condition: any("needs_fix")
+        return: needs_fix

@@ -105,6 +105,55 @@ describe('SdkOptionsBuilder.build() — mcpServers', () => {
 });
 
 describe('SdkOptionsBuilder.build() — settingSources', () => {
+  it('strict-readonly isolation disables built-in tools, settings, Skills, and external MCP', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpServers: {
+        docs: { command: 'docs-mcp', args: ['serve'] },
+      },
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+    });
+
+    expect(options.tools).toEqual([]);
+    expect(options.settingSources).toEqual([]);
+    expect(options.strictMcpConfig).toBe(true);
+    expect(options.skills).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+    expect(options).not.toHaveProperty('allowedTools');
+    expect(options).not.toHaveProperty('mcpServers');
+  });
+
+  it('maps readonly permission without changing ordinary Claude settings', () => {
+    const options = buildSdkOptions({ cwd: '/test', permissionMode: 'readonly' });
+
+    expect(options.settingSources).toEqual(['project']);
+    expect(options).not.toHaveProperty('tools');
+    expect(options).not.toHaveProperty('strictMcpConfig');
+  });
+
+  it('Given Skills are disabled, When building SDK options, Then it passes an empty Skill allowlist without changing settingSources', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      skillsEnabled: false,
+    });
+
+    expect(options.skills).toEqual([]);
+    expect(options.settingSources).toEqual(['project']);
+  });
+
+  it('Given Skills are enabled, When building SDK options, Then it leaves the SDK Skill option unset for standard discovery', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      skillsEnabled: true,
+    });
+
+    expect(options).not.toHaveProperty('skills');
+  });
+
   it('includes project in settingSources', () => {
     const options = buildSdkOptions({ cwd: '/test' });
     expect(options.settingSources).toEqual(['project']);

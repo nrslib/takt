@@ -1,10 +1,65 @@
-import { describe, expect, it, vi } from 'vitest';
-import { access, mkdtemp, readFile } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import { callClaudeTerminal } from '../infra/claude-terminal/client.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/index.js';
+
+const {
+  assertClaudeSkillsDisableSupportedMock,
+  ClaudeCliCapabilityAbortErrorMock,
+  defaultTerminalBackend,
+} = vi.hoisted(() => ({
+  assertClaudeSkillsDisableSupportedMock: vi.fn(),
+  ClaudeCliCapabilityAbortErrorMock: class ClaudeCliCapabilityAbortError extends Error {
+    constructor(readonly reason: unknown) {
+      super('Claude CLI capability check aborted');
+    }
+  },
+  defaultTerminalBackend: {
+    start: vi.fn(),
+    pasteText: vi.fn(),
+    stop: vi.fn(),
+  },
+}));
+
+const fsMockState = vi.hoisted(() => ({
+  abortDuringWrite: undefined as (() => void) | undefined,
+  writtenConfigPath: '',
+  readFileCount: 0,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readFile: vi.fn(async (...args: Parameters<typeof actual.readFile>) => {
+      fsMockState.readFileCount += 1;
+      return await actual.readFile(...args);
+    }),
+    writeFile: vi.fn(async (...args: Parameters<typeof actual.writeFile>) => {
+      fsMockState.writtenConfigPath = String(args[0]);
+      await actual.writeFile(...args);
+      fsMockState.abortDuringWrite?.();
+    }),
+  };
+});
+
+vi.mock('../infra/claude/cli-capability.js', () => ({
+  assertClaudeSkillsDisableSupported: assertClaudeSkillsDisableSupportedMock,
+  ClaudeCliCapabilityAbortError: ClaudeCliCapabilityAbortErrorMock,
+}));
+
+vi.mock('../infra/claude-terminal/tmux-backend.js', () => ({
+  TmuxTerminalBackend: vi.fn(() => defaultTerminalBackend),
+}));
+
+async function wait(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 function createBackend() {
   return {
@@ -23,6 +78,14 @@ function createTranscriptReader(response: unknown) {
 }
 
 describe('Claude terminal client', () => {
+  beforeEach(() => {
+    assertClaudeSkillsDisableSupportedMock.mockReset();
+    assertClaudeSkillsDisableSupportedMock.mockResolvedValue(undefined);
+    defaultTerminalBackend.start.mockReset();
+    defaultTerminalBackend.pasteText.mockReset();
+    defaultTerminalBackend.stop.mockReset();
+  });
+
   it('Given mock terminal backend, When call succeeds, Then prompt is pasted and session is stopped by default', async () => {
     const backend = createBackend();
     const transcriptReader = createTranscriptReader({
@@ -70,6 +133,324 @@ describe('Claude terminal client', () => {
       content: 'done',
       sessionId: 'claude-session-1',
     });
+  });
+
+  it('Given readonly permission, When terminal lifecycle starts, Then only the normal permission flag is used', async () => {
+    const backend = createBackend();
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+
+    await callClaudeTerminal('selector', 'select reviewers', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      permissionMode: 'readonly',
+      skillsEnabled: true,
+      terminalBackend: backend,
+      transcriptReader,
+    });
+
+    expect(backend.start).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        args: expect.arrayContaining(['--permission-mode', 'default']),
+      }),
+    }));
+    const args = vi.mocked(backend.start).mock.calls[0]?.[0].command.args ?? [];
+    expect(args).not.toContain('--tools');
+    expect(args).not.toContain('--strict-mcp-config');
+    expect(args).not.toContain('--disable-slash-commands');
+  });
+
+  it('Given strict-readonly isolation, When terminal lifecycle starts, Then the command is tool, settings, MCP, and Skills free', async () => {
+    const backend = createBackend();
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+
+    await callClaudeTerminal('selector', 'select reviewers', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
+      },
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+      terminalBackend: backend,
+      transcriptReader,
+    });
+
+    const args = vi.mocked(backend.start).mock.calls[0]?.[0].command.args ?? [];
+    expect(args).toEqual(expect.arrayContaining([
+      '--tools',
+      '',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(args).not.toContain('--allowed-tools');
+    expect(args).not.toContain('--mcp-config');
+  });
+
+  it('Given disabled Skills, When terminal lifecycle runs, Then it keeps slash commands disabled while starting, prompting, receiving, and stopping the session', async () => {
+    const backend = createBackend();
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      keepSession: false,
+      skillsEnabled: false,
+      terminalBackend: backend,
+      transcriptReader,
+    });
+
+    expect(backend.start).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        args: expect.arrayContaining(['--disable-slash-commands']),
+      }),
+    }));
+    expect(backend.pasteText).toHaveBeenCalledWith(
+      { id: 'tmux-session', name: 'takt-claude-terminal' },
+      'implement task',
+    );
+    expect(transcriptReader.waitForAssistantResponse).toHaveBeenCalledOnce();
+    expect(backend.stop).toHaveBeenCalledWith({ id: 'tmux-session', name: 'takt-claude-terminal' });
+    expect(assertClaudeSkillsDisableSupportedMock).not.toHaveBeenCalled();
+    expect(result.status).toBe('done');
+  });
+
+  it('Given disabled Skills and an unsupported Claude executable, When no terminal backend is injected, Then capability failure is returned before terminal start', async () => {
+    const capabilityError = new Error('Claude Code must support --disable-slash-commands.');
+    assertClaudeSkillsDisableSupportedMock.mockRejectedValue(capabilityError);
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      skillsEnabled: false,
+      pathToClaudeCodeExecutable: 'claude-unsupported',
+      transcriptReader: createTranscriptReader({
+        sessionId: 'claude-session-1',
+        assistantText: 'unused',
+        events: [],
+      }),
+    });
+
+    expect(assertClaudeSkillsDisableSupportedMock).toHaveBeenCalledWith(
+      'claude-unsupported',
+      undefined,
+    );
+    expect(defaultTerminalBackend.start).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'error',
+      failureCategory: 'provider_error',
+      error: capabilityError.message,
+    });
+  });
+
+  it('Given an unrelated AbortError races with signal abort, When no terminal backend is injected, Then the provider failure is preserved', async () => {
+    const controller = new AbortController();
+    const capabilityError = new Error('Claude capability probe failed');
+    capabilityError.name = 'AbortError';
+    assertClaudeSkillsDisableSupportedMock.mockImplementation(async () => {
+      controller.abort(new Error('late user interruption'));
+      throw capabilityError;
+    });
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      skillsEnabled: false,
+      abortSignal: controller.signal,
+      transcriptReader: createTranscriptReader({
+        sessionId: 'claude-session-1',
+        assistantText: 'unused',
+        events: [],
+      }),
+    });
+
+    expect(defaultTerminalBackend.start).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'error',
+      failureCategory: 'provider_error',
+      error: capabilityError.message,
+    });
+  });
+
+  it('Given an unrelated AbortError without signal abort, When no terminal backend is injected, Then the provider failure is preserved', async () => {
+    const capabilityError = new Error('unrelated abort-shaped failure');
+    capabilityError.name = 'AbortError';
+    assertClaudeSkillsDisableSupportedMock.mockRejectedValue(capabilityError);
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      skillsEnabled: false,
+      transcriptReader: createTranscriptReader({
+        sessionId: 'claude-session-1',
+        assistantText: 'unused',
+        events: [],
+      }),
+    });
+
+    expect(defaultTerminalBackend.start).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'error',
+      failureCategory: 'provider_error',
+      error: capabilityError.message,
+    });
+  });
+
+  it('Given capability verification reports a caller-signal abort, When no terminal backend is injected, Then external_abort is returned', async () => {
+    const controller = new AbortController();
+    const abortReason = new Error('caller aborted capability verification');
+    const capabilityAbortError = new ClaudeCliCapabilityAbortErrorMock(abortReason);
+    assertClaudeSkillsDisableSupportedMock.mockImplementation(async () => {
+      controller.abort(abortReason);
+      throw capabilityAbortError;
+    });
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      skillsEnabled: false,
+      abortSignal: controller.signal,
+      transcriptReader: createTranscriptReader({
+        sessionId: 'claude-session-1',
+        assistantText: 'unused',
+        events: [],
+      }),
+    });
+
+    expect(defaultTerminalBackend.start).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'error',
+      failureCategory: 'external_abort',
+      error: abortReason.message,
+    });
+  });
+
+  it('Given a branded capability abort without an aborted signal, When no terminal backend is injected, Then provider_error is returned', async () => {
+    const capabilityAbortError = new ClaudeCliCapabilityAbortErrorMock(
+      new Error('unattributed capability abort'),
+    );
+    assertClaudeSkillsDisableSupportedMock.mockRejectedValue(capabilityAbortError);
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      skillsEnabled: false,
+      transcriptReader: createTranscriptReader({
+        sessionId: 'claude-session-1',
+        assistantText: 'unused',
+        events: [],
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: 'error',
+      failureCategory: 'provider_error',
+      error: capabilityAbortError.message,
+    });
+  });
+
+  it('Given a branded capability abort with a different signal reason, When no terminal backend is injected, Then provider_error is returned', async () => {
+    const controller = new AbortController();
+    const capabilityAbortError = new ClaudeCliCapabilityAbortErrorMock(
+      new Error('different capability abort'),
+    );
+    assertClaudeSkillsDisableSupportedMock.mockImplementation(async () => {
+      controller.abort(new Error('actual caller abort'));
+      throw capabilityAbortError;
+    });
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      skillsEnabled: false,
+      abortSignal: controller.signal,
+      transcriptReader: createTranscriptReader({
+        sessionId: 'claude-session-1',
+        assistantText: 'unused',
+        events: [],
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: 'error',
+      failureCategory: 'provider_error',
+      error: capabilityAbortError.message,
+    });
+  });
+
+  it('Given disabled Skills and a supported Claude executable, When no terminal backend is injected, Then capability verification completes before terminal start', async () => {
+    const terminalSession = { id: 'tmux-session', name: 'takt-claude-terminal' };
+    defaultTerminalBackend.start.mockResolvedValue(terminalSession);
+    defaultTerminalBackend.pasteText.mockResolvedValue(undefined);
+    defaultTerminalBackend.stop.mockResolvedValue(undefined);
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      skillsEnabled: false,
+      pathToClaudeCodeExecutable: 'claude-supported',
+      transcriptReader,
+    });
+
+    expect(assertClaudeSkillsDisableSupportedMock).toHaveBeenCalledWith(
+      'claude-supported',
+      undefined,
+    );
+    expect(defaultTerminalBackend.start).toHaveBeenCalledOnce();
+    expect(defaultTerminalBackend.stop).toHaveBeenCalledWith(terminalSession);
+    expect(result.status).toBe('done');
+  });
+
+  it('Given enabled Skills and no injected terminal backend, When the terminal lifecycle runs, Then capability verification is skipped', async () => {
+    const terminalSession = { id: 'tmux-session', name: 'takt-claude-terminal' };
+    defaultTerminalBackend.start.mockResolvedValue(terminalSession);
+    defaultTerminalBackend.pasteText.mockResolvedValue(undefined);
+    defaultTerminalBackend.stop.mockResolvedValue(undefined);
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      skillsEnabled: true,
+      pathToClaudeCodeExecutable: 'claude-supported',
+      transcriptReader,
+    });
+
+    expect(assertClaudeSkillsDisableSupportedMock).not.toHaveBeenCalled();
+    expect(defaultTerminalBackend.start).toHaveBeenCalledOnce();
+    expect(defaultTerminalBackend.stop).toHaveBeenCalledWith(terminalSession);
+    expect(result.status).toBe('done');
   });
 
   it('Given mcpServers, When call succeeds, Then Claude command receives a temporary mcp config and cleanup removes it', async () => {
@@ -386,6 +767,7 @@ describe('Claude terminal client', () => {
     const backend = createBackend();
     const onPermissionRequest = vi.fn();
     const onAskUserQuestion = vi.fn().mockResolvedValue({ answer: 'Use option A.' });
+    const onActivity = vi.fn();
     const transcriptReader = {
       readBaseline: vi.fn().mockResolvedValue({ byteOffset: 0, lineNumberOffset: 0 }),
       findSession: vi.fn().mockResolvedValue({ sessionId: 'claude-session-1' }),
@@ -412,6 +794,7 @@ describe('Claude terminal client', () => {
       backend: 'tmux',
       onPermissionRequest,
       onAskUserQuestion,
+      onActivity,
       terminalBackend: backend,
       transcriptReader,
     });
@@ -432,6 +815,16 @@ describe('Claude terminal client', () => {
       'Use option A.',
     );
     expect(transcriptReader.waitForAssistantResponse).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenCalledTimes(3);
+    expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(3, { kind: 'attempt_started' });
+    expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+      transcriptReader.waitForAssistantResponse.mock.invocationCallOrder[0]!,
+    );
+    expect(onActivity.mock.invocationCallOrder[2]).toBeLessThan(
+      transcriptReader.waitForAssistantResponse.mock.invocationCallOrder[1]!,
+    );
     expect(result).toMatchObject({
       persona: 'coder',
       status: 'done',
@@ -901,3 +1294,190 @@ describe('Claude terminal client', () => {
 	    expect(backend.pasteText).toHaveBeenCalledOnce();
 	  });
 	});
+
+describe('Claude terminal client abort cleanup', () => {
+  beforeEach(() => {
+    fsMockState.abortDuringWrite = undefined;
+    fsMockState.writtenConfigPath = '';
+    fsMockState.readFileCount = 0;
+  });
+
+  afterEach(async () => {
+    fsMockState.abortDuringWrite = undefined;
+    if (fsMockState.writtenConfigPath) {
+      await rm(dirname(fsMockState.writtenConfigPath), { recursive: true, force: true });
+    }
+  });
+
+  it('Given abort fires while MCP config is prepared, When call returns, Then the temporary config is cleaned up', async () => {
+    const controller = new AbortController();
+    const backend = createBackend();
+    fsMockState.abortDuringWrite = () => {
+      controller.abort(new Error('aborted during mcp config preparation'));
+    };
+
+    const result = await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      abortSignal: controller.signal,
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
+      },
+      terminalBackend: backend,
+      transcriptReader: createTranscriptReader({
+        sessionId: 'claude-session-1',
+        assistantText: 'done',
+        events: [],
+      }),
+    });
+
+    expect(backend.start).not.toHaveBeenCalled();
+    expect(fsMockState.writtenConfigPath).toMatch(/mcp-config\.json$/);
+    await expect(access(fsMockState.writtenConfigPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'error',
+      failureCategory: 'external_abort',
+    });
+    expect(result.error).toMatch(/aborted during mcp config preparation/i);
+  });
+
+  it('Given abortSignal is provided, When client waits for transcript polling, Then reader polling receives the same signal', async () => {
+    const controller = new AbortController();
+    const backend = createBackend();
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+
+    await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      abortSignal: controller.signal,
+      terminalBackend: backend,
+      transcriptReader,
+    });
+
+    expect(transcriptReader.findSession).toHaveBeenCalledWith(expect.objectContaining({
+      abortSignal: controller.signal,
+    }));
+    expect(transcriptReader.waitForAssistantResponse).toHaveBeenCalledWith(expect.objectContaining({
+      abortSignal: controller.signal,
+    }));
+  });
+
+  it('Given abort fires during init stream, When the reader would reject an already aborted wait, Then polling is not started', async () => {
+    const controller = new AbortController();
+    const backend = createBackend();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason);
+    };
+    const transcriptReader = {
+      ...createTranscriptReader({
+        sessionId: 'claude-session-1',
+        assistantText: 'done',
+        events: [],
+      }),
+      waitForAssistantResponse: vi.fn((args: { abortSignal?: AbortSignal }) => {
+        if (args.abortSignal?.aborted) {
+          return Promise.reject(new Error('reader observed aborted signal before wait'));
+        }
+        return Promise.resolve({
+          sessionId: 'claude-session-1',
+          assistantText: 'done',
+          events: [],
+        });
+      }),
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    try {
+      const result = await callClaudeTerminal('coder', 'implement task', {
+        cwd: '/tmp/worktree',
+        backend: 'tmux',
+        abortSignal: controller.signal,
+        model: 'claude-sonnet-4-5',
+        terminalBackend: backend,
+        transcriptReader,
+        onStream: () => {
+          controller.abort(new Error('user interrupted after init'));
+        },
+      });
+      await wait(0);
+
+      expect(transcriptReader.waitForAssistantResponse).not.toHaveBeenCalled();
+      expect(unhandledRejections).toEqual([]);
+      expect(result).toMatchObject({
+        persona: 'coder',
+        status: 'error',
+        failureCategory: 'external_abort',
+      });
+      expect(result.error).toMatch(/user interrupted after init/i);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+    }
+  });
+
+  it('Given client aborts while the real transcript reader is polling, When call returns, Then terminal and polling timers are cleaned up', async () => {
+    const originalHome = process.env.HOME;
+    const homeDir = await mkdtemp(`${tmpdir()}/takt-claude-terminal-home-`);
+    const projectDir = await mkdtemp(`${tmpdir()}/takt-claude-terminal-project-`);
+    process.env.HOME = homeDir;
+
+    try {
+      const { ProjectClaudeTranscriptReader } = await import('../infra/claude-terminal/transcript-reader.js');
+      const { getClaudeProjectSessionsDir } = await import('../infra/config/project/sessionStore.js');
+      const controller = new AbortController();
+      const backend = createBackend();
+      const sessionId = 'claude-session-1';
+
+      const resultPromise = callClaudeTerminal('coder', 'implement task', {
+        cwd: projectDir,
+        backend: 'tmux',
+        abortSignal: controller.signal,
+        sessionId,
+        keepSession: true,
+        timeoutMs: 200,
+        transcriptPollIntervalMs: 10,
+        terminalBackend: backend,
+        transcriptReader: new ProjectClaudeTranscriptReader(),
+      });
+
+      await vi.waitFor(() => {
+        expect(backend.pasteText).toHaveBeenCalled();
+        expect(fsMockState.readFileCount).toBeGreaterThan(0);
+      });
+      const readCountAtAbort = fsMockState.readFileCount;
+
+      controller.abort(new Error('user interrupted while transcript polling'));
+      const result = await resultPromise;
+      const sessionsDir = getClaudeProjectSessionsDir(projectDir);
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(join(sessionsDir, `${sessionId}.jsonl`), JSON.stringify({
+        type: 'user',
+        session_id: sessionId,
+        message: { role: 'user', content: [{ type: 'text', text: 'late prompt' }] },
+      }), 'utf-8');
+      await wait(30);
+
+      expect(backend.stop).toHaveBeenCalledWith({ id: 'tmux-session', name: 'takt-claude-terminal' });
+      expect(result).toMatchObject({
+        persona: 'coder',
+        status: 'error',
+        failureCategory: 'external_abort',
+      });
+      expect(result.error).toMatch(/user interrupted while transcript polling/i);
+      expect(fsMockState.readFileCount).toBe(readCountAtAbort);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await rm(homeDir, { recursive: true, force: true });
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+});

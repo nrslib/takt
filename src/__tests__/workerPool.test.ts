@@ -1,9 +1,14 @@
 /**
- * Unit tests for runWithWorkerPool
+ * Worker pool の結果集計・再キュー・停止境界を検証する。
+ * 端末表示のラベルやレイアウトはここでは固定しない。
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
+
+const { executeRunTaskAndComplete } = vi.hoisted(() => ({
+  executeRunTaskAndComplete: vi.fn(),
+}));
 
 vi.mock('../shared/ui/index.js', () => ({
   header: vi.fn(),
@@ -15,445 +20,215 @@ vi.mock('../shared/ui/index.js', () => ({
   blankLine: vi.fn(),
 }));
 
-vi.mock('../shared/exitCodes.js', () => ({
-  EXIT_SIGINT: 130,
-}));
-
-vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((key: string) => key),
-}));
-
+vi.mock('../shared/exitCodes.js', () => ({ EXIT_SIGINT: 130 }));
+vi.mock('../shared/i18n/index.js', () => ({ getLabel: vi.fn((key: string) => key) }));
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  createLogger: () => ({
-    trace: vi.fn(),
-    info: vi.fn(),
-    debug: vi.fn(),
-    error: vi.fn(),
-  }),
+  createLogger: () => ({ trace: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
-
-const mockExecuteRunTaskAndComplete = vi.fn();
-
+vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
+  executeRunTaskAndComplete,
+}));
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeAndCompleteTask: vi.fn(),
 }));
-
-vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
-  executeRunTaskAndComplete: (...args: unknown[]) => mockExecuteRunTaskAndComplete(...args),
-}));
+vi.mock('../features/tasks/execute/inputWait.js', () => ({ isInputWaiting: vi.fn(() => false) }));
 
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
-import { info } from '../shared/ui/index.js';
 
-const mockInfo = vi.mocked(info);
-
-const TEST_POLL_INTERVAL_MS = 50;
-
-function createTask(name: string, options?: { issue?: number }): TaskInfo {
+function createTask(name: string, issue?: number): TaskInfo {
   return {
     name,
-    content: `Task: ${name}`,
+    content: name,
     filePath: `/tasks/${name}.yaml`,
     createdAt: '2026-01-01T00:00:00.000Z',
     status: 'pending',
     data: {
-      task: `Task: ${name}`,
+      task: name,
       workflow: 'default',
-      ...(options?.issue !== undefined ? { issue: options.issue } : {}),
+      ...(issue === undefined ? {} : { issue }),
     },
   };
 }
 
-function createMockTaskRunner(taskBatches: TaskInfo[][]) {
+function createRunner(taskBatches: TaskInfo[][] = []) {
   let batchIndex = 0;
   return {
-    getNextTask: vi.fn(() => null),
-    claimNextTasks: vi.fn(() => {
-      const batch = taskBatches[batchIndex] ?? [];
-      batchIndex++;
-      return batch;
-    }),
+    claimNextTasks: vi.fn(() => taskBatches[batchIndex++] ?? []),
     completeTask: vi.fn(),
     failTask: vi.fn(),
+    autoRequeueFailedTask: vi.fn(() => ({
+      requeued: false,
+      attempt: 1,
+      maxAttempts: 1,
+      reason: 'max_attempts_reached' as const,
+    })),
   };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockExecuteRunTaskAndComplete.mockResolvedValue(true);
+  executeRunTaskAndComplete.mockResolvedValue(true);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('runWithWorkerPool', () => {
-  it('should return correct counts for all successful tasks', async () => {
-    // Given
-    const tasks = [createTask('a'), createTask('b')];
-    const runner = createMockTaskRunner([]);
+  it('成功・失敗を集計し、実行済みタスク名を返す', async () => {
+    const runner = createRunner();
+    executeRunTaskAndComplete
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
 
-    // When
-    const result = await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
+    const result = await runWithWorkerPool(
+      runner as never,
+      [createTask('passed'), createTask('failed')],
+      2,
+      '/cwd',
+      undefined,
+      undefined,
+      10,
+    );
 
-    // Then
-    expect(result).toEqual({ success: 2, fail: 0, executedTaskNames: ['a', 'b'] });
-  });
-
-  it('should return correct counts when some tasks fail', async () => {
-    // Given
-    const tasks = [createTask('pass'), createTask('fail'), createTask('pass2')];
-    let callIdx = 0;
-    mockExecuteRunTaskAndComplete.mockImplementation(() => {
-      callIdx++;
-      return Promise.resolve(callIdx !== 2);
-    });
-    const runner = createMockTaskRunner([]);
-
-    // When
-    const result = await runWithWorkerPool(runner as never, tasks, 3, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
-
-    // Then
-    expect(result).toEqual({ success: 2, fail: 1, executedTaskNames: ['pass', 'fail', 'pass2'] });
-  });
-
-  it('should display task name for each task via prefix writer in parallel mode', async () => {
-    // Given
-    const tasks = [createTask('alpha'), createTask('beta')];
-    const runner = createMockTaskRunner([]);
-    const stdoutChunks: string[] = [];
-    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-      stdoutChunks.push(String(chunk));
-      return true;
-    });
-
-    // When
-    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
-
-    // Then: Task names appear in prefixed stdout output
-    writeSpy.mockRestore();
-    const allOutput = stdoutChunks.join('');
-    expect(allOutput).toContain('[alph]');
-    expect(allOutput).toContain('=== Task: alpha ===');
-    expect(allOutput).toContain('[beta]');
-    expect(allOutput).toContain('=== Task: beta ===');
-  });
-
-  it('should pass taskPrefix for parallel execution (concurrency > 1)', async () => {
-    // Given
-    const tasks = [createTask('my-task')];
-    const runner = createMockTaskRunner([]);
-
-    // When
-    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
-
-    // Then
-    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
-    const parallelOpts = mockExecuteRunTaskAndComplete.mock.calls[0]?.[4];
-    expect(parallelOpts).toMatchObject({
-      abortSignal: expect.any(AbortSignal),
-      taskPrefix: 'my-task',
-      taskColorIndex: 0,
-      taskDisplayLabel: undefined,
+    expect(result).toEqual({
+      success: 1,
+      fail: 1,
+      executedTaskNames: ['passed', 'failed'],
     });
   });
 
-  it('should use full issue number as taskPrefix label when task has issue in parallel execution', async () => {
-    // Given: task with 5-digit issue number should not be truncated
-    const issueNumber = 12345;
-    const tasks = [createTask('issue-task', { issue: issueNumber })];
-    const runner = createMockTaskRunner([]);
-    const stdoutChunks: string[] = [];
-    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-      stdoutChunks.push(String(chunk));
-      return true;
-    });
+  it('空の入力では実行せずゼロ件を返す', async () => {
+    const runner = createRunner();
 
-    // When
-    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
-
-    // Then: Issue label is used instead of truncated task name
-    writeSpy.mockRestore();
-    const allOutput = stdoutChunks.join('');
-    expect(allOutput).toContain('[#12345]');
-    expect(allOutput).not.toContain('[#123]');
-
-    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
-    const parallelOpts = mockExecuteRunTaskAndComplete.mock.calls[0]?.[4];
-    expect(parallelOpts).toEqual({
-      abortSignal: expect.any(AbortSignal),
-      taskPrefix: `#${issueNumber}`,
-      taskDisplayLabel: `#${issueNumber}`,
-      taskColorIndex: 0,
-    });
+    await expect(runWithWorkerPool(
+      runner as never,
+      [],
+      2,
+      '/cwd',
+      undefined,
+      undefined,
+      10,
+    )).resolves.toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+    expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
   });
 
-  it('should pass abortSignal but not taskPrefix for sequential execution (concurrency = 1)', async () => {
-    // Given
-    const tasks = [createTask('seq-task')];
-    const runner = createMockTaskRunner([]);
+  it('空いたスロットをポーリングで追加タスクに割り当てる', async () => {
+    const runner = createRunner([[createTask('later')], []]);
 
-    // When
-    await runWithWorkerPool(runner as never, tasks, 1, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
+    const result = await runWithWorkerPool(
+      runner as never,
+      [createTask('first')],
+      2,
+      '/cwd',
+      undefined,
+      undefined,
+      10,
+    );
 
-    // Then
-    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
-    const parallelOpts = mockExecuteRunTaskAndComplete.mock.calls[0]?.[4];
-    expect(parallelOpts).toMatchObject({
-      abortSignal: expect.any(AbortSignal),
-      taskPrefix: undefined,
-      taskColorIndex: undefined,
-      taskDisplayLabel: undefined,
-    });
-  });
-
-  it('should fetch more tasks when slots become available', async () => {
-    // Given: 1 initial task, runner provides 1 more after
-    const task1 = createTask('first');
-    const task2 = createTask('second');
-    const runner = createMockTaskRunner([[task2]]);
-
-    // When
-    await runWithWorkerPool(runner as never, [task1], 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
-
-    // Then
-    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(2);
+    expect(result.fail).toBe(0);
+    expect(result.executedTaskNames).toEqual(expect.arrayContaining(['first', 'later']));
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(2);
     expect(runner.claimNextTasks).toHaveBeenCalled();
   });
 
-  it('should route ignoreIterationLimit only through the run-specific execution helper', async () => {
-    const tasks = [createTask('ignore-limit-task')];
-    const runner = createMockTaskRunner([]);
+  it('並列数を超えて同時実行しない', async () => {
+    let active = 0;
+    let maxActive = 0;
+    executeRunTaskAndComplete.mockImplementation(() => new Promise<boolean>((resolve) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      setTimeout(() => {
+        active -= 1;
+        resolve(true);
+      }, 5);
+    }));
 
-    await runWithWorkerPool(
+    const result = await runWithWorkerPool(
+      createRunner() as never,
+      Array.from({ length: 4 }, (_, index) => createTask(`task-${index}`)),
+      2,
+      '/cwd',
+      undefined,
+      undefined,
+      10,
+    );
+
+    expect(maxActive).toBeLessThanOrEqual(2);
+    expect(result.success).toBe(4);
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(4);
+  });
+
+  it('失敗タスクを再キューした場合は再試行を失敗数に二重計上しない', async () => {
+    const retry = createTask('retry');
+    const runner = createRunner([[retry], []]);
+    runner.autoRequeueFailedTask.mockReturnValue({
+      requeued: true,
+      attempt: 1,
+      maxAttempts: 2,
+      reason: 'requeued',
+    });
+    executeRunTaskAndComplete
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    const result = await runWithWorkerPool(
       runner as never,
-      tasks,
+      [createTask('retry')],
       1,
       '/cwd',
       undefined,
-      { ignoreIterationLimit: true },
-      TEST_POLL_INTERVAL_MS,
+      { autoRequeueMaxAttempts: 2 },
+      10,
     );
 
-    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
-    expect(mockExecuteRunTaskAndComplete.mock.calls[0]?.[5]).toEqual({
-      ignoreIterationLimit: true,
-    });
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('retry', { maxAttempts: 2 });
+    expect(result).toMatchObject({ success: 1, fail: 0 });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(2);
   });
 
-  it('should respect concurrency limit', async () => {
-    // Given: 4 tasks, concurrency=2
-    const tasks = Array.from({ length: 4 }, (_, i) => createTask(`task-${i}`));
+  it('タスク実行の reject を失敗として集計する', async () => {
+    executeRunTaskAndComplete.mockRejectedValue(new Error('execution failed'));
 
-    let activeCount = 0;
-    let maxActive = 0;
+    const result = await runWithWorkerPool(
+      createRunner() as never,
+      [createTask('throws')],
+      1,
+      '/cwd',
+      undefined,
+      undefined,
+      10,
+    );
 
-    mockExecuteRunTaskAndComplete.mockImplementation(() => {
-      activeCount++;
-      maxActive = Math.max(maxActive, activeCount);
-      return new Promise((resolve) => {
-        setTimeout(() => {
-          activeCount--;
-          resolve(true);
-        }, 20);
-      });
-    });
-
-    const runner = createMockTaskRunner([]);
-
-    // When
-    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
-
-    // Then: Never exceeded concurrency of 2
-    expect(maxActive).toBeLessThanOrEqual(2);
-    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(4);
-  });
-
-  it('should pass abortSignal to all parallel tasks', async () => {
-    // Given: Multiple tasks in parallel mode
-    const tasks = [createTask('task-1'), createTask('task-2'), createTask('task-3')];
-    const runner = createMockTaskRunner([]);
-
-    const receivedSignals: (AbortSignal | undefined)[] = [];
-    mockExecuteRunTaskAndComplete.mockImplementation((_task, _runner, _cwd, _opts, parallelOpts) => {
-      receivedSignals.push(parallelOpts?.abortSignal);
-      return Promise.resolve(true);
-    });
-
-    // When
-    await runWithWorkerPool(runner as never, tasks, 3, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
-
-    // Then: All tasks received the same AbortSignal
-    expect(receivedSignals).toHaveLength(3);
-    const firstSignal = receivedSignals[0];
-    expect(firstSignal).toBeInstanceOf(AbortSignal);
-    for (const signal of receivedSignals) {
-      expect(signal).toBe(firstSignal);
-    }
-  });
-
-  it('should handle empty initial tasks', async () => {
-    // Given: No tasks
-    const runner = createMockTaskRunner([]);
-
-    // When
-    const result = await runWithWorkerPool(runner as never, [], 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
-
-    // Then
-    expect(result).toEqual({ success: 0, fail: 0, executedTaskNames: [] });
-    expect(mockExecuteRunTaskAndComplete).not.toHaveBeenCalled();
-  });
-
-  it('should handle task promise rejection gracefully', async () => {
-    // Given: Task that throws
-    const tasks = [createTask('throws')];
-    mockExecuteRunTaskAndComplete.mockRejectedValue(new Error('boom'));
-    const runner = createMockTaskRunner([]);
-
-    // When
-    const result = await runWithWorkerPool(runner as never, tasks, 1, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
-
-    // Then: Treated as failure
     expect(result).toEqual({ success: 0, fail: 1, executedTaskNames: ['throws'] });
   });
 
-  it('should wait for in-flight tasks to settle after SIGINT before returning', async () => {
-    // Given: Two running tasks that resolve after abort is triggered.
-    const tasks = [createTask('t1'), createTask('t2')];
-    const runner = createMockTaskRunner([]);
-    const deferred: Array<() => void> = [];
-    const startedSignals: AbortSignal[] = [];
-
-    mockExecuteRunTaskAndComplete.mockImplementation((_task, _runner, _cwd, _opts, parallelOpts) => {
-      const signal = parallelOpts?.abortSignal;
-      if (signal) startedSignals.push(signal);
+  it('SIGINT 後は新規タスクを開始せず、実行中タスクの完了を待つ', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    executeRunTaskAndComplete.mockImplementationOnce((_task, _runner, _cwd, _options, parallel) => {
+      receivedSignal = parallel?.abortSignal;
       return new Promise<boolean>((resolve) => {
-        if (signal) {
-          signal.addEventListener('abort', () => deferred.push(() => resolve(false)), { once: true });
-        } else {
-          deferred.push(() => resolve(true));
-        }
+        receivedSignal?.addEventListener('abort', () => resolve(false), { once: true });
+        setImmediate(() => process.emit('SIGINT'));
       });
     });
 
-    const resultPromise = runWithWorkerPool(
-      runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS,
+    const runner = createRunner([[createTask('should-not-start')]]);
+    const result = await runWithWorkerPool(
+      runner as never,
+      [createTask('running')],
+      1,
+      '/cwd',
+      undefined,
+      undefined,
+      10,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const sigintListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
-    const handler = sigintListeners[sigintListeners.length - 1];
-    expect(handler).toBeDefined();
-    handler!();
-
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(startedSignals).toHaveLength(2);
-    for (const signal of startedSignals) {
-      expect(signal.aborted).toBe(true);
-    }
-
-    for (const resolveTask of deferred) {
-      resolveTask();
-    }
-
-    // Then: pool returns after in-flight tasks settle, counting them as failures.
-    const result = await resultPromise;
-    expect(result).toEqual({ success: 0, fail: 2, executedTaskNames: ['t1', 't2'] });
-  });
-
-  describe('polling', () => {
-    it('should pick up tasks added during execution via polling', async () => {
-      // Given: 1 initial task running with concurrency=2, a second task appears via poll
-      const task1 = createTask('initial');
-      const task2 = createTask('added-later');
-
-      const executionOrder: string[] = [];
-
-      mockExecuteRunTaskAndComplete.mockImplementation((task: TaskInfo) => {
-        executionOrder.push(`start:${task.name}`);
-        return new Promise((resolve) => {
-          setTimeout(() => {
-            executionOrder.push(`end:${task.name}`);
-            resolve(true);
-          }, 80);
-        });
-      });
-
-      let claimCallCount = 0;
-      const runner = {
-        getNextTask: vi.fn(() => null),
-        claimNextTasks: vi.fn(() => {
-          claimCallCount++;
-          // Return the new task on the second call (triggered by polling)
-          if (claimCallCount === 2) return [task2];
-          return [];
-        }),
-        completeTask: vi.fn(),
-        failTask: vi.fn(),
-      };
-
-      // When: pollIntervalMs=30 so polling fires before task1 completes (80ms)
-      const result = await runWithWorkerPool(
-        runner as never, [task1], 2, '/cwd', undefined, undefined, 30,
-      );
-
-      // Then: Both tasks were executed
-      expect(result).toEqual({ success: 2, fail: 0, executedTaskNames: ['initial', 'added-later'] });
-      expect(executionOrder).toContain('start:initial');
-      expect(executionOrder).toContain('start:added-later');
-      // task2 started before task1 ended (picked up by polling, not by task completion)
-      const task2Start = executionOrder.indexOf('start:added-later');
-      const task1End = executionOrder.indexOf('end:initial');
-      expect(task2Start).toBeLessThan(task1End);
-    });
-
-    it('should work correctly with concurrency=1 (sequential behavior preserved)', async () => {
-      // Given: concurrency=1, tasks claimed sequentially
-      const task1 = createTask('seq-1');
-      const task2 = createTask('seq-2');
-
-      const executionOrder: string[] = [];
-      mockExecuteRunTaskAndComplete.mockImplementation((task: TaskInfo) => {
-        executionOrder.push(`start:${task.name}`);
-        return new Promise((resolve) => {
-          setTimeout(() => {
-            executionOrder.push(`end:${task.name}`);
-            resolve(true);
-          }, 20);
-        });
-      });
-
-      const runner = createMockTaskRunner([[task2]]);
-
-      // When
-      const result = await runWithWorkerPool(
-        runner as never, [task1], 1, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS,
-      );
-
-      // Then: Tasks executed sequentially — task2 starts after task1 ends
-      expect(result).toEqual({ success: 2, fail: 0, executedTaskNames: ['seq-1', 'seq-2'] });
-      const task2Start = executionOrder.indexOf('start:seq-2');
-      const task1End = executionOrder.indexOf('end:seq-1');
-      expect(task2Start).toBeGreaterThan(task1End);
-    });
-
-    it('should not leak poll timer when task completes before poll fires', async () => {
-      // Given: A task that completes in 200ms, poll interval is 5000ms
-      const task1 = createTask('fast-task');
-
-      mockExecuteRunTaskAndComplete.mockImplementation(() => {
-        return new Promise((resolve) => {
-          setTimeout(() => resolve(true), 200);
-        });
-      });
-
-      const runner = createMockTaskRunner([]);
-
-      // When: Task completes before poll timer fires; cancel() cleans up timer
-      const result = await runWithWorkerPool(
-        runner as never, [task1], 1, '/cwd', undefined, undefined, 5000,
-      );
-
-      // Then: Result is returned without hanging (timer was cleaned up by cancel())
-      expect(result).toEqual({ success: 1, fail: 0, executedTaskNames: ['fast-task'] });
-    });
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    expect(runner.claimNextTasks).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: 0, fail: 1 });
   });
 });

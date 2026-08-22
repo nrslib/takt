@@ -19,12 +19,36 @@ import {
   type RetryRunInfo,
   type WorkflowContext,
 } from '../../interactive/index.js';
+import { cleanupInteractiveResultAttachments } from '../../interactive/imageAttachments.js';
+import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
+import {
+  createPullRequestContext,
+  type PullRequestContext,
+} from '../../../core/workflow/pr-context.js';
+import {
+  getCurrentBranch,
+  localBranchExists,
+  materializePullRequestBase,
+} from '../../../infra/task/index.js';
+import { toLocalBranchRef } from '../../../shared/utils/gitBranchValidation.js';
 import { executeTaskWithResult } from '../execute/taskExecution.js';
-import type { DirectResumeMetadata } from '../execute/runMeta.js';
+import {
+  resolveTaskSpecForExecution,
+  type ResolvedTaskSpec,
+} from '../execute/taskSpecContext.js';
+import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { buildTraceTaskMetadata } from '../execute/traceTaskMetadata.js';
+import type { TaskAttachment } from '../attachments.js';
+import {
+  cleanupPreparedRetryTaskSpec,
+  hasAttachments,
+  prepareRetryTaskSpecWithAttachments,
+  type PreparedRetryTaskSpec,
+} from '../retryTaskSpecAttachments.js';
 import { runDirectInstructMode } from './directInstructMode.js';
 import { findLatestResumableDirectRun, type ResumableDirectRun } from './directRunFinder.js';
+import { warnIfResumePointAdjusted } from '../execute/resumePointAdjustmentWarning.js';
 
 type DirectRunResumeAction = 'requeue' | 'retry' | 'instruct' | 'view_reports' | 'cancel';
 
@@ -84,6 +108,14 @@ interface ResolvedTaskContent {
   readonly previousOrderContent: string | null;
 }
 
+interface PreparedDirectResumeExecution {
+  readonly task: string;
+  readonly reportDirName: string;
+  readonly taskSpec: ResolvedTaskSpec;
+  readonly retryNote: string;
+  readonly preparedSpec: PreparedRetryTaskSpec;
+}
+
 function resolveTaskContent(projectDir: string, run: ResumableDirectRun): ResolvedTaskContent {
   const orderContent = readRunContextOrderContent(projectDir, run.slug)?.trim();
   if (orderContent) {
@@ -110,8 +142,12 @@ function resolveResumePoint(
   return trimResumePointStackForWorkflow({
     workflow: workflowConfig,
     resumePoint: run.meta.resumePoint,
-    resolveWorkflowCall: (parentWorkflow, step) =>
-      resolveWorkflowCallTarget(parentWorkflow, step.call, step.name, projectDir, projectDir),
+    resolveWorkflowCall: (parentWorkflow, step) => resolveWorkflowCallTarget(
+      parentWorkflow,
+      step,
+      projectDir,
+      projectDir,
+    ),
   });
 }
 
@@ -134,16 +170,36 @@ function resolveStartStep(
 }
 
 function loadWorkflow(projectDir: string, run: ResumableDirectRun): WorkflowConfig {
-  const workflowConfig = loadWorkflowByIdentifier(run.meta.workflow, projectDir, { lookupCwd: projectDir });
+  const workflowConfig = loadWorkflowByIdentifier(
+    run.meta.workflow,
+    projectDir,
+    { lookupCwd: projectDir },
+  );
   if (!workflowConfig) {
-    throw new Error(`Workflow "${sanitizeTerminalText(run.meta.workflow)}" not found for direct run "${sanitizeTerminalText(run.slug)}".`);
+    throw new Error(
+      `Workflow "${sanitizeTerminalText(run.meta.workflow)}" not found for `
+      + `direct run "${sanitizeTerminalText(run.slug)}".`,
+    );
   }
   return workflowConfig;
 }
 
-function buildWorkflowContext(projectDir: string, workflowIdentifier: string): WorkflowContext {
-  const previewCount = resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps');
-  const workflowDesc = getWorkflowDescription(workflowIdentifier, projectDir, previewCount, projectDir);
+function buildWorkflowContext(
+  projectDir: string,
+  workflowIdentifier: string,
+  agentOverrides: TaskExecutionOptions | undefined,
+): WorkflowContext {
+  const previewCount = resolveWorkflowConfigValue(
+    projectDir,
+    'interactivePreviewSteps',
+  );
+  const workflowDesc = getWorkflowDescription(
+    workflowIdentifier,
+    projectDir,
+    previewCount,
+    projectDir,
+    agentOverrides,
+  );
   return {
     name: workflowDesc.name,
     description: workflowDesc.description,
@@ -152,53 +208,155 @@ function buildWorkflowContext(projectDir: string, workflowIdentifier: string): W
   };
 }
 
-function buildExecutionContext(projectDir: string, run: ResumableDirectRun): DirectRunResumeExecutionContext {
+function materializeResumePullRequestContext(
+  projectDir: string,
+  context: PullRequestContext,
+): PullRequestContext {
+  const headDiffRef = toLocalBranchRef(context.headBranch);
+  const checkedOutBranch = getCurrentBranch(projectDir);
+  if (checkedOutBranch !== context.headBranch) {
+    throw new Error(
+      `Direct run resume is checked out on "${checkedOutBranch}", expected PR head "${context.headBranch}".`,
+    );
+  }
+  if (!localBranchExists(projectDir, context.headBranch)) {
+    throw new Error(`Direct run resume is missing PR head ref ${headDiffRef}.`);
+  }
+  return createPullRequestContext({
+    ...context,
+    baseDiffRef: materializePullRequestBase(projectDir, projectDir, context.baseBranch),
+    headDiffRef,
+  });
+}
+
+function buildExecutionContext(
+  projectDir: string,
+  run: ResumableDirectRun,
+  agentOverrides: TaskExecutionOptions | undefined,
+): DirectRunResumeExecutionContext {
   const workflowConfig = loadWorkflow(projectDir, run);
   const resumePoint = resolveResumePoint(projectDir, workflowConfig, run);
+  const startStep = resolveStartStep(workflowConfig, run, resumePoint);
+  warnIfResumePointAdjusted({
+    context: 'direct_resume',
+    outputMode: 'terminal',
+    workflow: workflowConfig.name,
+    original: run.meta.resumePoint,
+    accepted: resumePoint,
+    startStep,
+  });
   const resolvedTask = resolveTaskContent(projectDir, run);
+  const materializedRun = run.meta.prContext === undefined
+    ? run
+    : {
+      ...run,
+      meta: {
+        ...run.meta,
+        prContext: materializeResumePullRequestContext(projectDir, run.meta.prContext),
+      },
+    };
   return {
-    run,
+    run: materializedRun,
     taskContent: resolvedTask.taskContent,
     previousOrderContent: resolvedTask.previousOrderContent,
-    startStep: resolveStartStep(workflowConfig, run, resumePoint),
+    startStep,
     resumePoint,
-    workflowContext: buildWorkflowContext(projectDir, run.meta.workflow),
+    workflowContext: buildWorkflowContext(
+      projectDir,
+      run.meta.workflow,
+      agentOverrides,
+    ),
   };
 }
 
-function buildDirectResumeMetadata(
+function buildResumeSource(
   run: ResumableDirectRun,
-  resumeMode: DirectResumeMetadata['resumeMode'],
-): DirectResumeMetadata {
+  resumeMode: RunResumeSource['resumeMode'],
+): RunResumeSource {
   return {
     sourceRunSlug: run.slug,
     resumeMode,
   };
 }
 
+function prepareDirectResumeExecutionWithAttachments(
+  projectDir: string,
+  context: DirectRunResumeExecutionContext,
+  retryNote: string,
+  attachments: readonly TaskAttachment[],
+): PreparedDirectResumeExecution {
+  const preparedSpec = prepareRetryTaskSpecWithAttachments(
+    projectDir,
+    context.taskContent,
+    retryNote,
+    attachments,
+  );
+  if (!preparedSpec) {
+    throw new Error('Direct resume image attachments were not prepared.');
+  }
+
+  try {
+    const reportDirName = generateExecutionReportDir(projectDir, context.taskContent);
+    const taskSpec = resolveTaskSpecForExecution(
+      projectDir,
+      projectDir,
+      preparedSpec.taskDirRelative,
+      reportDirName,
+    );
+    return {
+      task: taskSpec.taskPrompt,
+      reportDirName,
+      taskSpec,
+      retryNote: preparedSpec.retryNote,
+      preparedSpec,
+    };
+  } catch (error) {
+    cleanupPreparedRetryTaskSpec(preparedSpec);
+    throw error;
+  }
+}
+
 async function executeDirectResume(
   projectDir: string,
   context: DirectRunResumeExecutionContext,
-  resumeMode: DirectResumeMetadata['resumeMode'],
+  resumeMode: RunResumeSource['resumeMode'],
   agentOverrides: TaskExecutionOptions | undefined,
   retryNote?: string,
+  attachments?: readonly TaskAttachment[],
 ): Promise<boolean> {
-  const result = await executeTaskWithResult({
-    task: context.taskContent,
-    cwd: projectDir,
-    projectCwd: projectDir,
-    workflowIdentifier: context.run.meta.workflow,
-    agentOverrides,
-    startStep: context.startStep,
-    retryNote,
-    resumePoint: context.resumePoint,
-    directResume: buildDirectResumeMetadata(context.run, resumeMode),
-    traceTaskMetadata: buildTraceTaskMetadata({
-      taskContent: context.taskContent,
-      taskSlug: context.run.slug,
-    }),
-  });
-  return result.success;
+  let preparedExecution: PreparedDirectResumeExecution | undefined;
+  if (hasAttachments(attachments)) {
+    if (retryNote === undefined) {
+      throw new Error('Direct resume image attachments require a retry note.');
+    }
+    preparedExecution = prepareDirectResumeExecutionWithAttachments(projectDir, context, retryNote, attachments);
+  }
+  const executionTask = preparedExecution ? preparedExecution.task : context.taskContent;
+  const executionRetryNote = preparedExecution ? preparedExecution.retryNote : retryNote;
+
+  try {
+    const result = await executeTaskWithResult({
+      task: executionTask,
+      cwd: projectDir,
+      projectCwd: projectDir,
+      workflowIdentifier: context.run.meta.workflow,
+      agentOverrides,
+      startStep: context.startStep,
+      retryNote: executionRetryNote,
+      resumePoint: context.resumePoint,
+      resumeSource: buildResumeSource(context.run, resumeMode),
+      ...(preparedExecution ? { reportDirName: preparedExecution.reportDirName } : {}),
+      ...(preparedExecution ? { taskSpec: preparedExecution.taskSpec } : {}),
+      ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
+      traceTaskMetadata: buildTraceTaskMetadata({
+        taskContent: executionTask,
+        taskSlug: context.run.slug,
+      }),
+    });
+    return result.success;
+  } finally {
+    cleanupPreparedRetryTaskSpec(preparedExecution?.preparedSpec);
+  }
 }
 
 function requireConversationNote(note: string): string {
@@ -245,6 +403,7 @@ function buildRetryContext(
     workflowContext: context.workflowContext,
     run: buildRetryRunInfo(projectDir, context.run),
     previousOrderContent: context.previousOrderContent,
+    ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
   };
 }
 
@@ -255,16 +414,21 @@ async function retryDirectRun(
 ): Promise<boolean> {
   const retryContext = buildRetryContext(projectDir, context);
   const retryResult = await runDirectRetryMode(projectDir, retryContext);
-  if (retryResult.action === 'cancel') {
-    return false;
+  try {
+    if (retryResult.action === 'cancel') {
+      return false;
+    }
+    return await executeDirectResume(
+      projectDir,
+      context,
+      'retry',
+      agentOverrides,
+      requireConversationNote(retryResult.task),
+      retryResult.attachments,
+    );
+  } finally {
+    cleanupInteractiveResultAttachments(retryResult);
   }
-  return executeDirectResume(
-    projectDir,
-    context,
-    'retry',
-    agentOverrides,
-    requireConversationNote(retryResult.task),
-  );
 }
 
 async function instructDirectRun(
@@ -279,17 +443,23 @@ async function instructDirectRun(
     workflowContext: context.workflowContext,
     runSessionContext: loadRunSessionContext(projectDir, context.run.slug),
     previousOrderContent: context.previousOrderContent,
+    ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
   });
-  if (result.action === 'cancel') {
-    return false;
+  try {
+    if (result.action === 'cancel') {
+      return false;
+    }
+    return await executeDirectResume(
+      projectDir,
+      context,
+      'instruct',
+      agentOverrides,
+      requireConversationNote(result.task),
+      result.attachments,
+    );
+  } finally {
+    cleanupInteractiveResultAttachments(result);
   }
-  return executeDirectResume(
-    projectDir,
-    context,
-    'instruct',
-    agentOverrides,
-    requireConversationNote(result.task),
-  );
 }
 
 function showRunPaths(projectDir: string, run: ResumableDirectRun): void {
@@ -320,7 +490,7 @@ export async function resumeDirectRun(
     return true;
   }
 
-  const context = buildExecutionContext(projectDir, run);
+  const context = buildExecutionContext(projectDir, run, agentOverrides);
   if (action === 'requeue') {
     return executeDirectResume(projectDir, context, 'requeue', agentOverrides);
   }

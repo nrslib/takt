@@ -1,11 +1,6 @@
 name: compound-eye
-description: 複眼レビュー - 同じ指示を Claude と Codex に同時に投げ、両者の回答を統合する
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+description: 複眼レビュー - 同じ指示を独立に割り当てた2つの eye へ同時に投げ、両者の回答を統合する。各 eye のプロバイダーは runtime.yaml（provider.targets.steps -> eye1 / eye2）で割り当てる。workflow 自身はプロバイダー名を持たない。
+capabilities: readonly
 max_steps: 10
 initial_step: evaluate
 steps:
@@ -13,91 +8,77 @@ steps:
     tags:
       - review
     parallel:
-      - name: claude-eye
+      - name: eye1
         tags:
           - review
         edit: false
         persona: coder
-        provider: claude-sdk
+        session: refresh
+        policy: architecture
         knowledge: architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: done
           - condition: failed
         output_contracts:
           report:
-            - name: claude-review.md
+            - name: eye1-review.md
               format: |
                 ```markdown
-                # Claudeレビュー結果
+                # Eye 1 レビュー結果
 
                 ## 結論
-                {1行結論}
+                {1行の結論}
 
-                ## 主要な指摘
-                - {finding 1}
-                - {finding 2}
+                ## 主要な発見
+                - {発見1}
+                - {発見2}
 
                 ## 根拠
                 - {file:line と理由}
 
                 ## リスク / 注意点
-                - {risk}
+                - {リスク}
 
-                ## 推奨次アクション
-                - {action}
+                ## 推奨する次の一手
+                - {アクション}
                 ```
-      - name: codex-eye
+      - name: eye2
         tags:
           - review
         edit: false
         persona: coder
-        provider: codex
+        session: refresh
+        policy: architecture
         knowledge: architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: done
           - condition: failed
         output_contracts:
           report:
-            - name: codex-review.md
+            - name: eye2-review.md
               format: |
                 ```markdown
-                # Codexレビュー結果
+                # Eye 2 レビュー結果
 
                 ## 結論
-                {1行結論}
+                {1行の結論}
 
-                ## 主要な指摘
-                - {finding 1}
-                - {finding 2}
+                ## 主要な発見
+                - {発見1}
+                - {発見2}
 
                 ## 根拠
                 - {file:line と理由}
 
                 ## リスク / 注意点
-                - {risk}
+                - {リスク}
 
-                ## 推奨次アクション
-                - {action}
+                ## 推奨する次の一手
+                - {アクション}
                 ```
     rules:
+      - condition: any("error")
+        next: evaluate
       - condition: any("done")
         next: synthesize
   - name: synthesize
@@ -105,28 +86,22 @@ steps:
       - review
     edit: false
     persona: supervisor
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
     rules:
-      - condition: 統合完了
+      - condition: synthesis complete
         next: COMPLETE
     instruction: |
-      2つのモデル（Claude / Codex）が同じ指示に対して独立に回答しました。
-      両者の回答を統合してください。
+      2つの eye が同じ指示に独立に回答した。runtime.yaml の割り当てによっては
+      異なるプロバイダー・モデルである。両者の回答を統合せよ。
 
-      **やること:**
-      1. Report Directory 内のレポートを読む
-         - `claude-review.md`（Claude の回答）
-         - `codex-review.md`（Codex の回答）
-         ※ 片方が存在しない場合（エラーで失敗した場合）、存在するレポートのみで統合する
-      2. 両方のレポートがある場合は比較し、以下を明示する
+      **タスク:**
+      1. Report Directory のレポートを読む
+         - `eye1-review.md`（eye 1 の回答）
+         - `eye2-review.md`（eye 2 の回答）
+         両方のレポートが必須であり、いずれかの eye が error なら evaluate ステップを再試行する。
+      2. 両方のレポートを比較して明確にする:
          - 一致している点
-         - 相違している点
-         - 片方だけが指摘・言及している点
+         - 食い違っている点
+         - 片方だけが言及している点
       3. 統合した結論を出す
 
       **出力フォーマット:**
@@ -137,53 +112,53 @@ steps:
       {統合した結論}
 
       ## 回答状況
-      | モデル | 状態 |
-      |--------|------|
-      | Claude | ✅ / ❌ |
-      | Codex | ✅ / ❌ |
+      | Eye | 状況 |
+      |-----|------|
+      | Eye 1 | ✅ / ❌ |
+      | Eye 2 | ✅ / ❌ |
 
       ## 一致点
-      - {両モデルが同じ見解を示した点}
+      - {両者が一致した点}
 
       ## 相違点
-      | 論点 | Claude | Codex |
-      |------|--------|-------|
-      | {論点} | {Claudeの見解} | {Codexの見解} |
+      | 論点 | Eye 1 | Eye 2 |
+      |------|-------|-------|
+      | {論点} | {eye 1 の見解} | {eye 2 の見解} |
 
-      ## 片方のみの指摘
-      - **Claude のみ:** {Claudeだけが言及した点}
-      - **Codex のみ:** {Codexだけが言及した点}
+      ## 片方のみの発見
+      - **Eye 1 のみ:** {eye 1 だけが言及した点}
+      - **Eye 2 のみ:** {eye 2 だけが言及した点}
 
       ## 総合評価
-      {両者の回答を踏まえた総合的な評価}
+      {両者を踏まえた総合評価}
       ```
     output_contracts:
       report:
         - name: synthesis.md
           format: |
             ```markdown
-            # 複数モデルレビュー統合
+            # 複眼レビュー統合
 
             ## 結論
-            {統合結論}
+            {統合した結論}
 
-            ## 応答状況
-            | モデル | 状態 |
-            |--------|------|
-            | Claude | ✅ / ❌ |
-            | Codex | ✅ / ❌ |
+            ## 回答状況
+            | Eye | 状況 |
+            |-----|------|
+            | Eye 1 | ✅ / ❌ |
+            | Eye 2 | ✅ / ❌ |
 
             ## 一致点
             - {両者が一致した点}
 
             ## 相違点
-            | 論点 | Claude | Codex |
-            |------|--------|-------|
-            | {topic} | {Claudeの見解} | {Codexの見解} |
+            | 論点 | Eye 1 | Eye 2 |
+            |------|-------|-------|
+            | {論点} | {eye 1 の見解} | {eye 2 の見解} |
 
-            ## 片側のみの指摘
-            - **Claudeのみ:** {Claudeのみが言及}
-            - **Codexのみ:** {Codexのみが言及}
+            ## 片方のみの発見
+            - **Eye 1 のみ:** {eye 1 だけが言及した点}
+            - **Eye 2 のみ:** {eye 2 だけが言及した点}
 
             ## 総合評価
             {両者を踏まえた総合評価}

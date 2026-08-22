@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: fix-plan preflights a candidate method against its target boundary'
+
+prompts:
+  - file://prompts/fix-plan-boundary-preflight.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/fix-plan-boundary-preflight
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'fix-plan: reject a locally reversible method that aliases at the persistence boundary'
+    vars:
+      task: file://cases/fix-plan-boundary-preflight-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-plan/boundary-preflight
+        value: |
+          Judge the proposed behavior and candidate decision, not headings, table shape, or exact wording. Pass only if the plan chooses encodeFixedWidth over the reviewer's encodeJsonBase64 suggestion after inspecting the unchanged NameStorage behavior, keeps the storage adapter API unchanged, and plans behavioral verification through ArtifactStore write/read plus snapshot/reload for distinct IDs, domain boundaries, and rejection before mutation. The reviewer-proposed legacy encodeJsonBase64 fallback is not requirement authority: the plan must reject it rather than preserving or adding dual-read, aliasing, conversion, migration, or backfill support. Fail if it relies on local encode/decode reversibility, treats the review plan or existing persisted representation as authority for legacy support, changes NameStorage to accommodate a candidate, or reopens the adjudicated documentation item.

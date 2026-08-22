@@ -3,8 +3,8 @@
  */
 
 import type { AskUserQuestionHandler } from '../../core/workflow/types.js';
-import type { PermissionMode } from '../../core/models/index.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { Language, OpenCodeGuardOptions, PermissionMode } from '../../core/models/index.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 
 /** OpenCode permission reply values */
@@ -199,32 +199,168 @@ export function buildOpenCodePermissionRuleset(
 
 export type OpenCodeAllowedTools = readonly string[];
 
+/**
+ * Build the permission ruleset used at session creation.
+ *
+ * A session-scoped `deny` can never be escalated later (verified against a
+ * live OpenCode server: neither agent-level `allow` nor a new ruleset can
+ * override it), while TAKT reuses one session across step phases and the
+ * report phase needs file writes on read-only steps. Therefore `edit`/`write`
+ * denies are lifted to `allow` at session scope (`ask` rules stay: the
+ * permission auto-reply already approves them per phase) and the per-phase
+ * restriction is enforced by the explicit per-prompt tools map instead
+ * (see buildOpenCodePromptTools).
+ *
+ * `external_directory` is denied explicitly. Note that this session-scoped
+ * rule only holds until the first prompt: a prompt-level tools map is
+ * materialized into `session.permission` by OpenCode and replaces this
+ * ruleset. The authoritative deny lives in the server config passed to
+ * `createOpencode` (see client.ts), which the rewrite does not touch; the
+ * rule here covers the window before the first prompt.
+ */
+export function buildOpenCodeSessionPermission(
+  mode?: PermissionMode,
+  networkAccess?: boolean,
+  allowedTools?: OpenCodeAllowedTools,
+): OpenCodePermissionRule[] {
+  const rules = buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools)
+    .map((rule) => (
+      (rule.permission === 'edit' || rule.permission === 'write') && rule.action === 'deny'
+        ? { ...rule, action: 'allow' as const }
+        : rule
+    ));
+  for (const permission of ['edit', 'write'] as const) {
+    if (!rules.some((rule) => rule.permission === permission)) {
+      rules.push({ permission, pattern: '*', action: 'allow' });
+    }
+  }
+  rules.push({ permission: 'external_directory', pattern: '*', action: 'deny' });
+  return rules;
+}
+
+/**
+ * OpenCode tool ids grouped by the permission that governs them.
+ * `task` is intentionally absent: TAKT disables subagent spawning at the
+ * agent level and never re-enables it per prompt. `skill` loads skill files
+ * (read-shaped), so it follows the read permission.
+ *
+ * バージョン差への頑健性（opencode 1.17.18 実測）: 'list' / 'patch' /
+ * 'todoread' は 1.17.18 の tool registry に存在しない（'ls' への改名でもなく
+ * 削除。プローブで tools 配列を実測: 既定有効集合は bash, edit, glob, grep,
+ * question, read, skill, todowrite, webfetch, write）。未知 ID を per-prompt
+ * tools マップで送ってもサーバは黙って無視する（実測で無害）一方、マップは
+ * 全ツールを明示制御する full-coverage 契約なので、これらの ID が実在する
+ * 旧バージョンでのフェーズ制限リークを防ぐため**送信は継続**する。ただし
+ * モデルへ提示する「有効ツール一覧」（unavailable-tool recovery の前置文）には
+ * 載せない — OPEN_CODE_WIRE_ONLY_TOOL_IDS を参照。
+ */
+const OPEN_CODE_TOOL_IDS_BY_PERMISSION: Record<Exclude<OpenCodePermissionKey, 'task'>, readonly string[]> = {
+  read: ['read', 'list', 'skill'],
+  glob: ['glob'],
+  grep: ['grep'],
+  // 'apply_patch' は 1.17.18 の registry に実在する（tool.ids で実測）。
+  // edit 権限で明示制御し、report フェーズ等での漏れを防ぐ。
+  edit: ['edit', 'write', 'patch', 'apply_patch'],
+  write: ['write'],
+  bash: ['bash'],
+  todowrite: ['todowrite', 'todoread'],
+  websearch: ['websearch'],
+  webfetch: ['webfetch'],
+  question: ['question'],
+};
+
+/**
+ * ワイヤ（per-prompt tools マップ）でのみ送る ID。現行 opencode（1.17.18 の
+ * `/experimental/tool/ids` で実測: invalid, question, bash, read, glob, grep,
+ * edit, write, task, webfetch, todowrite, websearch, skill, apply_patch）の
+ * registry に存在せず、モデルからは呼べない。旧バージョン互換の制御のため
+ * だけに送り続けるが、モデル向けの有効ツール一覧には決して載せない
+ * （v3-r4: recovery 前置文が 'list' を「利用可能」と誤誘導し、fresh session
+ * 後も同名再発 → 確定失敗した死因の再発防止）。
+ *
+ * 'list' の扱い: TAKT の list 互換シム（plugins/list-tool.ts）が登録された
+ * サーバでは 'list' は実ツールになり、写像 read → list:true がそのまま可視性
+ * 制御として機能する（read 無効フェーズでは非表示）。シムの登録は起動時の
+ * registry プローブで upstream 衝突を排除した場合のみ（client.ts の
+ * shouldRegisterListToolShim）。シム無効時もワイヤ送信は継続する（無害・
+ * 旧バージョン互換）。
+ */
+export const OPEN_CODE_WIRE_ONLY_TOOL_IDS: readonly string[] = Object.freeze(['list', 'patch', 'todoread']);
+
+/** 全プロンプトで明示するツール ID の完全集合（固着リーク防止の契約） */
+export const OPEN_CODE_MANAGED_TOOL_IDS = Object.freeze([
+  'task',
+  ...new Set(Object.values(OPEN_CODE_TOOL_IDS_BY_PERMISSION).flat()),
+]);
+
+/**
+ * Build the explicit per-prompt tools map that enforces the current phase's
+ * tool restriction on a shared session.
+ *
+ * The map is sent with every prompt and always covers the full managed tool
+ * set: OpenCode persists the last explicit map on the session, so omitting a
+ * key would silently leak the previous phase's restriction into the next one
+ * (verified against a live OpenCode server).
+ */
+export function buildOpenCodePromptTools(
+  mode?: PermissionMode,
+  networkAccess?: boolean,
+  allowedTools?: OpenCodeAllowedTools,
+): Record<string, boolean> {
+  const enabledPermissions = new Set<string>();
+  if (allowedTools !== undefined) {
+    for (const permission of resolveOpenCodeAllowedPermissions(mode, networkAccess, allowedTools)) {
+      enabledPermissions.add(permission);
+    }
+  } else {
+    const permissionMap = applyNetworkAccessOverride(buildPermissionMap(mode), networkAccess);
+    for (const [permission, action] of Object.entries(permissionMap)) {
+      if (action !== 'deny') {
+        enabledPermissions.add(permission);
+      }
+    }
+  }
+
+  const tools: Record<string, boolean> = { task: false };
+  for (const [permission, toolIds] of Object.entries(OPEN_CODE_TOOL_IDS_BY_PERMISSION)) {
+    for (const toolId of toolIds) {
+      tools[toolId] = (tools[toolId] ?? false) || enabledPermissions.has(permission);
+    }
+  }
+  return tools;
+}
+
 function buildOpenCodeAllowedToolsRuleset(
   mode: PermissionMode | undefined,
   networkAccess: boolean | undefined,
   allowedTools: OpenCodeAllowedTools,
 ): OpenCodePermissionRule[] {
   if (allowedTools.length === 0) {
-    return OPEN_CODE_PERMISSION_KEYS.map((permission) => ({
-      permission,
-      pattern: '**',
-      action: 'deny',
-    }));
+    return [{ permission: '*', pattern: '*', action: 'deny' }];
   }
 
-  const allowed = allowedTools
-    .map(toOpenCodeAllowedPermission)
-    .filter((permission): permission is string => (
-      permission !== null
-      && isAllowedByPermissionMode(permission, mode)
-      && (networkAccess !== false || !isOpenCodeWebPermission(permission))
-    ));
-  const uniqueAllowed = Array.from(new Set(allowed));
+  const uniqueAllowed = resolveOpenCodeAllowedPermissions(mode, networkAccess, allowedTools);
 
   return [
     { permission: '*', pattern: '*', action: 'deny' },
     ...uniqueAllowed.map((permission) => ({ permission, pattern: '*', action: 'allow' as const })),
   ];
+}
+
+export function resolveOpenCodeAllowedPermissions(
+  mode: PermissionMode | undefined,
+  networkAccess: boolean | undefined,
+  allowedTools: OpenCodeAllowedTools,
+): string[] {
+  const allowed = allowedTools
+    .map(toOpenCodeAllowedPermission)
+    .filter((permission): permission is string => (
+      permission !== null
+      && isOpenCodePermissionKey(permission)
+      && (permission !== 'edit' || isAllowedByPermissionMode(permission, mode))
+      && (networkAccess !== false || !isOpenCodeWebPermission(permission))
+    ));
+  return Array.from(new Set(allowed));
 }
 
 function isOpenCodeWebPermission(permission: string): boolean {
@@ -297,9 +433,26 @@ export interface OpenCodeCallOptions {
   permissionMode?: PermissionMode;
   networkAccess?: boolean;
   variant?: string;
+  /** Guard feature switches from provider_options.opencode.guards. */
+  guards?: OpenCodeGuardOptions;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   onAskUserQuestion?: AskUserQuestionHandler;
   opencodeApiKey?: string;
   interactionTimeoutMs?: number;
+  childProcessEnv?: Readonly<Record<string, string>>;
+  /** JSON schema for native structured output (OpenCode format: json_schema). */
+  outputSchema?: Record<string, unknown>;
+  language?: Language;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
+}
+
+export interface OpenCodeCompactSessionOptions {
+  cwd: string;
+  sessionId: string;
+  model: string;
+  abortSignal?: AbortSignal;
+  opencodeApiKey?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
 }

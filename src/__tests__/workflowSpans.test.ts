@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { WorkflowStep } from '../core/models/types.js';
-import type { StepRunResult } from '../core/workflow/types.js';
+import type { StepProviderInfo, StepRunResult } from '../core/workflow/types.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { TeamLeaderPartCancellation } from '../core/workflow/engine/team-leader-part-cancellation.js';
 
 type FakeSpanStatus = {
   code: number;
@@ -157,6 +159,12 @@ async function loadWorkflowSpansWithRealSdk() {
     autoDetectResources: false,
     instrumentations: [],
     spanProcessors: [new SimpleSpanProcessor(exporter)],
+    // Without explicit empty lists the SDK creates env-default OTLP metric and
+    // log exporters whose shutdown flush retries against a collector that does
+    // not exist in unit tests, stalling shutdown for many seconds. These tests
+    // only assert span behavior.
+    metricReaders: [],
+    logRecordProcessors: [],
   });
   sdk.start();
 
@@ -174,7 +182,7 @@ function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     name: 'implement',
     persona: '../agents/coder.md',
     instruction: 'Implement',
-    rules: [{ condition: 'done', next: 'COMPLETE' }],
+    rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     ...overrides,
   };
 }
@@ -475,6 +483,8 @@ describe('workflow OpenTelemetry spans', () => {
             kind: 'step_error',
             step: 'implement',
             reason: 'Step "implement" failed: secret content',
+            error: 'secret content',
+            failureCategory: 'provider_stream_parse_error',
           },
         })),
       ).rejects.toThrow('workflow execution rejected');
@@ -483,6 +493,7 @@ describe('workflow OpenTelemetry spans', () => {
       expect(workflowSpan.attributes).toMatchObject({
         'takt.workflow.status': 'error',
         'takt.failure.kind': 'step_error',
+        'takt.failure.category': 'provider_stream_parse_error',
         'takt.failure.step': 'implement',
         'takt.failure.reason': 'Step "implement" failed: [REDACTED] content',
       });
@@ -591,18 +602,27 @@ describe('workflow OpenTelemetry spans', () => {
         kind: 'step_error',
         step: 'implement',
         reason: 'Step "implement" failed: secret content',
+        error: 'secret content',
+        failureCategory: 'provider_stream_parse_error',
       },
     }));
 
     const workflowSpan = findSpan(spans, 'workflow.test-workflow');
     expect(workflowSpan.attributes).toMatchObject({
       'takt.failure.kind': 'step_error',
+      'takt.failure.category': 'provider_stream_parse_error',
       'takt.failure.step': 'implement',
       'takt.failure.reason': 'Step "implement" failed: [REDACTED] content',
     });
-    expect(findSpan(spans, 'workflow_start.test-workflow').attributes['takt.failure.kind']).toBeUndefined();
+    const startSpanAttributes = findSpan(
+      spans,
+      'workflow_start.test-workflow',
+    ).attributes;
+    expect(startSpanAttributes['takt.failure.kind']).toBeUndefined();
+    expect(startSpanAttributes['takt.failure.category']).toBeUndefined();
     for (const record of metricRecords) {
       expect(record.attributes['takt.failure.kind']).toBeUndefined();
+      expect(record.attributes['takt.failure.category']).toBeUndefined();
       expect(record.attributes['takt.failure.step']).toBeUndefined();
       expect(record.attributes['takt.failure.reason']).toBeUndefined();
     }
@@ -763,7 +783,13 @@ describe('workflow OpenTelemetry spans', () => {
         iteration: 2,
         stepIteration: 1,
         getFinalStepIteration: () => 1,
-      }, async () => makeDoneResult());
+      }, async () => ({
+        ...makeDoneResult(),
+        response: {
+          ...makeDoneResult().response,
+          matchedRuleMethod: 'phase3_tag',
+        },
+      }));
       return { done: true };
     }, () => ({ status: 'completed' }));
 
@@ -781,6 +807,7 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.step.iteration': 2,
       'takt.step.local_iteration': 1,
       'takt.step.status': 'done',
+      'takt.step.result.match_method': 'tag_fallback',
       'takt.provider.name': 'codex',
       'takt.provider.source': 'project',
       'takt.model.name': 'gpt-5',
@@ -832,7 +859,7 @@ describe('workflow OpenTelemetry spans', () => {
     });
   });
 
-  it('serializes provider options onto step spans for session-log parity', async () => {
+  it('serializes redacted provider options onto step spans for session-log parity', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
 
     await module.runWithStepSpan({
@@ -845,14 +872,30 @@ describe('workflow OpenTelemetry spans', () => {
         model: 'gpt-5',
         providerSource: 'project',
         modelSource: 'global',
-        providerOptions: { codex: { reasoningEffort: 'high' } },
-        providerOptionsSources: { 'codex.reasoningEffort': 'project' },
+        providerOptions: {
+          codex: {
+            baseUrl: 'http://user:token@127.0.0.1:8787/v1?api_key=secret',
+            fastMode: false,
+            reasoningEffort: 'high',
+          },
+        },
+        providerOptionsSources: {
+          'codex.baseUrl': 'workflow',
+          'codex.fastMode': 'project',
+          'codex.reasoningEffort': 'project',
+        },
       },
     }, async () => makeDoneResult());
 
     expect(spans[0]?.attributes).toMatchObject({
-      'takt.provider.options': JSON.stringify({ codex: { reasoningEffort: 'high' } }),
-      'takt.provider.options_sources': JSON.stringify({ 'codex.reasoningEffort': 'project' }),
+      'takt.provider.options': JSON.stringify({
+        codex: { baseUrl: '[configured]', fastMode: false, reasoningEffort: 'high' },
+      }),
+      'takt.provider.options_sources': JSON.stringify({
+        'codex.baseUrl': 'workflow',
+        'codex.fastMode': 'project',
+        'codex.reasoningEffort': 'project',
+      }),
     });
   });
 
@@ -906,7 +949,7 @@ describe('workflow OpenTelemetry spans', () => {
 
   it('creates phase spans as step children and records phase outcomes', async () => {
     const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
-    const step = makeStep({ personaDisplayName: 'coder' });
+    const step = makeStep({ personaDisplayName: 'coder', tags: ['coding', 'review'] });
 
     await module.runWithStepSpan({
       enabled: true,
@@ -955,10 +998,15 @@ describe('workflow OpenTelemetry spans', () => {
       'phase.implement.execute',
     ]);
     expect(spans[1]?.parentName).toBe('step.implement');
+    expect(spans[0]?.attributes).toMatchObject({
+      'takt.step.persona': 'coder',
+      'takt.step.tags': ['coding', 'review'],
+    });
     expect(spans[1]?.attributes).toMatchObject({
       'takt.workflow.name': 'test-workflow',
       'takt.step.name': 'implement',
       'takt.step.persona': 'coder',
+      'takt.step.tags': ['coding', 'review'],
       'takt.step.iteration': 3,
       'takt.phase.number': 1,
       'takt.phase.name': 'execute',
@@ -991,16 +1039,72 @@ describe('workflow OpenTelemetry spans', () => {
     }));
   });
 
+  it('Team Leader part cancellationをusage missingなしのcancelled phaseとして記録する', async () => {
+    const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
+    const cancellation = new TeamLeaderPartCancellation('part-1');
+
+    await expect(module.runWithPhaseSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step: makeStep(),
+      iteration: 1,
+      phase: 1,
+      phaseName: 'execute',
+      phaseExecutionId: 'implement.part-1:1:1:1',
+      getPromptParts: () => ({ systemPrompt: 'system', userInstruction: 'instruction' }),
+      providerInfo: { provider: 'mock', model: 'mock-model' },
+    }, async () => {
+      throw cancellation;
+    }, () => ({ status: 'done' }), (error) => (
+      error instanceof TeamLeaderPartCancellation ? { status: 'cancelled' } : undefined
+    ))).rejects.toBe(cancellation);
+
+    expect(spans[0]?.attributes).toMatchObject({
+      'takt.phase.status': 'cancelled',
+    });
+    expect(spans[0]?.attributes).not.toHaveProperty('takt.usage.missing');
+    expect(spans[0]?.status).toBeUndefined();
+    expect(spans[0]?.exceptions).toEqual([]);
+    expect(metricRecords).toContainEqual(expect.objectContaining({
+      name: 'takt.workflow.phase.runs',
+      attributes: expect.objectContaining({ 'takt.phase.status': 'cancelled' }) as unknown,
+    }));
+  });
+
   it('attaches the workflow stack to phase and judge spans for parity', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
     const step = makeStep({ personaDisplayName: 'coder' });
     const workflowStack = [
-      { workflow: 'parent', step: 'review', kind: 'workflow_call' as const },
-      { workflow: 'child', step: 'implement', kind: 'agent' as const },
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'review',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      },
+      {
+        workflow: 'child',
+        workflow_ref: 'child',
+        step: 'implement',
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
     ];
     const expectedStackJson = JSON.stringify([
-      { workflow: 'parent', step: 'review', kind: 'workflow_call' },
-      { workflow: 'child', step: 'implement', kind: 'agent' },
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'review',
+        kind: 'workflow_call',
+        occurrence: 1,
+      },
+      {
+        workflow: 'child',
+        workflow_ref: 'child',
+        step: 'implement',
+        kind: 'agent',
+        occurrence: 1,
+      },
     ]);
 
     await module.runWithPhaseSpan({
@@ -1048,7 +1152,7 @@ describe('workflow OpenTelemetry spans', () => {
 
   it('creates judge stage sub-spans under the active phase span', async () => {
     const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
-    const step = makeStep({ personaDisplayName: 'conductor' });
+    const step = makeStep({ personaDisplayName: 'conductor', tags: ['review'] });
 
     await module.runWithPhaseSpan({
       enabled: true,
@@ -1098,6 +1202,8 @@ describe('workflow OpenTelemetry spans', () => {
     expect(spans[1]?.parentName).toBe('phase.implement.judge');
     expect(spans[1]?.attributes).toMatchObject({
       'takt.phase.execution_id': 'implement:3:4:1',
+      'takt.step.persona': 'conductor',
+      'takt.step.tags': ['review'],
       'takt.judge.stage': 1,
       'takt.judge.method': 'structured_output',
       'takt.judge.status': 'done',

@@ -5,22 +5,15 @@
  * including empty array round-trip behavior.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
+import { ProjectConfigSchema } from '../core/models/index.js';
 import type { ProjectLocalConfig } from '../infra/config/types.js';
 import type { QualityGate } from '../core/models/workflow-types.js';
 import { MAX_ASSISTANT_INIT_FILES } from '../core/models/assistant-config.js';
-import {
-  unexpectedInteractivePreviewConfigKey,
-  unexpectedInteractivePreviewEnvVar,
-  unexpectedWorkflowArpeggioConfigKey,
-  unexpectedWorkflowMcpServersConfigKey,
-  unexpectedWorkflowOverridesConfigKey,
-  unexpectedWorkflowRuntimePrepareConfigKey,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 type ObservabilityConfigForTest = {
@@ -33,6 +26,7 @@ type ObservabilityConfigForTest = {
 type ProjectConfigWithAssistant = ProjectLocalConfig & {
   assistant?: {
     initFiles?: string[];
+    formalSpec?: boolean | 'Y/n' | 'y/N';
   };
 };
 
@@ -163,6 +157,169 @@ describe('projectConfig', () => {
     });
   });
 
+  describe('assistant formal specification mode', () => {
+    it.each([
+      ['absent assistant config', ''],
+      ['assistant config without formal specification mode', 'assistant: {}'],
+    ])('should keep assistant undefined for %s', (_label, yaml) => {
+      if (yaml) {
+        writeFileSync(join(testDir, '.takt', 'config.yaml'), yaml, 'utf-8');
+      }
+
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+      expect(loaded.assistant).toBeUndefined();
+    });
+
+    it.each([
+      ['absent assistant config', undefined],
+      ['assistant config without formal specification mode', {}],
+    ] as const)('should not save a formal_spec key for %s', (_label, assistant) => {
+      const config: ProjectConfigWithAssistant = assistant === undefined ? {} : { assistant };
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).not.toContain('formal_spec:');
+    });
+
+    it.each([true, false, 'Y/n', 'y/N'] as const)(
+      'should load assistant.formal_spec=%s from project config',
+      (formalSpec) => {
+        writeFileSync(
+          join(testDir, '.takt', 'config.yaml'),
+          ['assistant:', `  formal_spec: ${JSON.stringify(formalSpec)}`].join('\n'),
+          'utf-8',
+        );
+
+        const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+        expect(loaded.assistant).toEqual({ formalSpec });
+      },
+    );
+
+    it.each([true, false, 'Y/n', 'y/N'] as const)(
+      'should preserve assistant.formal_spec=%s in save/load cycle',
+      (formalSpec) => {
+        const config: ProjectConfigWithAssistant = {
+          assistant: { formalSpec },
+        };
+
+        saveProjectConfig(testDir, config);
+
+        const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+        const reloaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+        expect(raw).toContain('formal_spec:');
+        expect(reloaded.assistant?.formalSpec).toBe(formalSpec);
+      },
+    );
+
+    it('should warn and ignore assistant.gherkin without changing the project config file', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const original = ['assistant:', '  gherkin: true'].join('\n');
+      writeFileSync(configPath, original, 'utf-8');
+      const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+      expect(warning).toHaveBeenCalledOnce();
+      expect(String(warning.mock.calls[0]?.[0])).toMatch(/assistant\.gherkin/);
+      expect(String(warning.mock.calls[0]?.[0])).toMatch(/deprecated|廃止/i);
+      expect(loaded.assistant?.formalSpec).toBeUndefined();
+      expect(readFileSync(configPath, 'utf-8')).toBe(original);
+    });
+
+    it('should keep explicit formal_spec when assistant.gherkin is also present', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const original = ['assistant:', '  gherkin: true', '  formal_spec: false'].join('\n');
+      writeFileSync(configPath, original, 'utf-8');
+      const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+      expect(warning).toHaveBeenCalledOnce();
+      expect(loaded.assistant?.formalSpec).toBe(false);
+      expect(readFileSync(configPath, 'utf-8')).toBe(original);
+    });
+
+    it.each([
+      ['formal_spec', "formal_spec: 'Y/n'"],
+      ['gherkin', 'gherkin: true'],
+    ])('should reject top-level %s as an unknown project setting', (_key, yaml) => {
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), yaml, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(new RegExp(_key));
+    });
+  });
+
+  it('should load a provider-only OpenCode selector before top-level composition', () => {
+    const configPath = join(testDir, '.takt', 'config.yaml');
+    writeFileSync(configPath, [
+      'provider: opencode',
+      'model: opencode/big-pickle',
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+    ].join('\n'), 'utf-8');
+
+    expect(loadProjectConfig(testDir).taktProviders?.selector).toEqual({
+      provider: 'opencode',
+    });
+  });
+
+  describe('selector provider endpoint trust', () => {
+    it.each(['codex', 'claude'])('should reject an external %s selector base_url in project config', (provider) => {
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), [
+        'takt_providers:',
+        '  selector:',
+        `    provider: ${provider}`,
+        '    provider_options:',
+        `      ${provider}:`,
+        '        base_url: https://attacker.example.test/v1',
+      ].join('\n'), 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/base_url/);
+    });
+
+    it.each(['codex', 'claude'])('should accept a loopback %s selector base_url in project config', (provider) => {
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), [
+        'takt_providers:',
+        '  selector:',
+        `    provider: ${provider}`,
+        '    provider_options:',
+        `      ${provider}:`,
+        '        base_url: http://127.0.0.1:8080/v1',
+      ].join('\n'), 'utf-8');
+
+      expect(loadProjectConfig(testDir).taktProviders?.selector?.providerOptions).toBeDefined();
+    });
+
+    it.each(['codex', 'claude'])('should reject an external %s selector base_url when saving project config', (provider) => {
+      const config = {
+        taktProviders: {
+          selector: {
+            provider,
+            providerOptions: {
+              [provider]: { baseUrl: 'https://attacker.example.test/v1' },
+            },
+          },
+        },
+      } as unknown as ProjectLocalConfig;
+
+      expect(() => saveProjectConfig(testDir, config)).toThrow(/base_url/);
+    });
+  });
+
+  it('rejects a project DeepSeek Cordis override because it selects executable tools', () => {
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), [
+      'provider_options:',
+      '  deepseek_harness:',
+      '    cordis: .takt/cordis.yml',
+    ].join('\n'), 'utf-8');
+
+    expect(() => loadProjectConfig(testDir)).toThrow(/cordis.*trusted user configuration/i);
+  });
+
   describe('workflow_overrides empty array round-trip', () => {
     it('should preserve empty rate_limit_fallback switch_chain in save/load cycle', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
@@ -210,7 +367,7 @@ describe('projectConfig', () => {
       expect(() => loadProjectConfig(testDir)).toThrow(/provider 'opencode' requires model/);
     });
 
-    it('should reject rate_limit_fallback codex entry with Claude model alias', () => {
+    it('should allow rate_limit_fallback codex entry with arbitrary model name', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(
         configPath,
@@ -223,7 +380,11 @@ describe('projectConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/Claude model alias/);
+      const config = loadProjectConfig(testDir);
+      expect(config.rateLimitFallback?.switchChain[0]).toMatchObject({
+        provider: 'codex',
+        model: 'sonnet',
+      });
     });
 
     it('should preserve empty quality_gates array in save/load cycle', () => {
@@ -480,16 +641,31 @@ unexpected_overrides:
   });
 
   describe('migrated project-local fields', () => {
-    it('should fail fast when codex reasoning_effort is outside SDK enum', () => {
+    it('should pass through arbitrary codex reasoning_effort values', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [
         'provider_options:',
         '  codex:',
-        '    reasoning_effort: extreme',
+        "    reasoning_effort: '  extreme  '",
       ].join('\n');
       writeFileSync(configPath, configContent, 'utf-8');
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/reasoning_effort/);
+      expect(loadProjectConfig(testDir).providerOptions).toEqual({
+        codex: { reasoningEffort: 'extreme' },
+      });
+    });
+
+    it('should fail fast when Codex Skill inheritance is not boolean', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider_options:',
+        '  codex:',
+        '    skills:',
+        '      repo: disabled',
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/skills.*repo|boolean/i);
     });
 
     it('should reject empty persona_providers provider_options during load', () => {
@@ -518,16 +694,37 @@ unexpected_overrides:
       );
     });
 
-    it('should fail fast when claude effort is outside SDK enum', () => {
+    it('should pass through arbitrary claude effort values', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [
         'provider_options:',
         '  claude:',
-        '    effort: impossible',
+        "    effort: '  impossible  '",
       ].join('\n');
       writeFileSync(configPath, configContent, 'utf-8');
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/effort/);
+      expect(loadProjectConfig(testDir).providerOptions).toEqual({
+        claude: { effort: 'impossible' },
+      });
+    });
+
+    it.each([
+      ['codex reasoning_effort', 'empty', '  codex:', '    reasoning_effort:', "''"],
+      ['codex reasoning_effort', 'whitespace-only', '  codex:', '    reasoning_effort:', "'   '"],
+      ['claude effort', 'empty', '  claude:', '    effort:', "''"],
+      ['claude effort', 'whitespace-only', '  claude:', '    effort:', "'   '"],
+      ['copilot effort', 'empty', '  copilot:', '    effort:', "''"],
+      ['copilot effort', 'whitespace-only', '  copilot:', '    effort:', "'   '"],
+    ])('should reject %s values that are %s', (_name, _valueKind, providerLine, effortLine, value) => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider_options:',
+        providerLine,
+        `${effortLine} ${value}`,
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/effort/i);
     });
 
     it('should load project-local fields from project config yaml', () => {
@@ -605,18 +802,6 @@ unexpected_overrides:
       expect(loaded.interactivePreviewSteps).toBe(4);
     });
 
-    it('should reject unknown interactive preview key in project config yaml', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        `${unexpectedInteractivePreviewConfigKey}: 4\n`,
-        'utf-8',
-      );
-
-      expect(() => loadProjectConfig(testDir)).toThrow(
-        new RegExp(`${unexpectedInteractivePreviewConfigKey}|unrecognized`, 'i'),
-      );
-    });
 
     it('should accept TAKT_INTERACTIVE_PREVIEW_STEPS for project config env override', () => {
       process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '5';
@@ -626,22 +811,6 @@ unexpected_overrides:
       expect(loaded.interactivePreviewSteps).toBe(5);
     });
 
-    it('should ignore unknown interactive preview env override for project config', () => {
-      process.env[unexpectedInteractivePreviewEnvVar] = '4';
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.interactivePreviewSteps).toBeUndefined();
-    });
-
-    it('should prefer canonical interactive preview env override over unknown env for project config', () => {
-      process.env[unexpectedInteractivePreviewEnvVar] = '4';
-      process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '5';
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.interactivePreviewSteps).toBe(5);
-    });
 
     it('should reject unsupported workflow key in project config yaml', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
@@ -672,6 +841,70 @@ unexpected_overrides:
       expect(loaded.taktProviders).toEqual({
         assistant: { provider: 'claude', model: 'haiku' },
       });
+    });
+
+    it('should load selector provider options without requiring an assistant entry', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options:',
+          '      codex:',
+          '        reasoning_effort: medium',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.taktProviders).toEqual({
+        selector: {
+          providerOptions: {
+            codex: { reasoningEffort: 'medium' },
+          },
+        },
+      });
+    });
+
+    it('should reject a blank selector model in project config', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, [
+        'takt_providers:',
+        '  selector:',
+        '    model: "   "',
+      ].join('\n'), 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/model must not be empty/);
+    });
+
+    it('should trim only selector models and preserve ordinary project models', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, [
+        'provider:',
+        '  type: codex',
+        '  model: " provider-model "',
+        'model: " project-model "',
+        'takt_providers:',
+        '  selector:',
+        '    model: " selector-model "',
+      ].join('\n'), 'utf-8');
+
+      expect(loadProjectConfig(testDir)).toMatchObject({
+        model: ' provider-model ',
+        taktProviders: { selector: { model: 'selector-model' } },
+      });
+    });
+
+    it('should preserve a top-level project model exactly', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, [
+        'provider: codex',
+        'model: " project-model "',
+      ].join('\n'), 'utf-8');
+
+      expect(loadProjectConfig(testDir).model).toBe(' project-model ');
     });
 
     it('should save project-local fields as snake_case keys', () => {
@@ -739,6 +972,58 @@ unexpected_overrides:
       expect(raw).not.toContain('allowedTools:');
     });
 
+    it('should save autoRouting as auto_routing with snake_case candidate keys', () => {
+      const config = {
+        provider: 'mock',
+        model: 'project-default-model',
+        autoRouting: {
+          strategy: 'balanced',
+          router: {
+            provider: 'claude-sdk',
+            model: 'claude-haiku-4-5-20251001',
+          },
+          candidates: [
+            {
+              name: 'coding',
+              description: 'Implementation and tests',
+              provider: 'codex',
+              model: 'gpt-5',
+              routingTier: 'medium',
+              providerOptions: {
+                codex: {
+                  reasoningEffort: 'high',
+                },
+              },
+            },
+          ],
+          defaultPool: 'general',
+          candidatePools: {
+            general: { candidates: ['coding'], fallback: 'coding' },
+          },
+        },
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).toContain('provider: mock');
+      expect(raw).toContain('model: project-default-model');
+      expect(raw).toContain('auto_routing:');
+      expect(raw).toContain('routing_tier: medium');
+      expect(raw).toContain('provider_options:');
+      expect(raw).toContain('reasoning_effort: high');
+      expect(raw).not.toContain('autoRouting:');
+      expect(raw).not.toContain('default_provider:');
+      expect(raw).not.toContain('defaultProvider:');
+      expect(raw).not.toContain('costTier:');
+      expect(raw).not.toContain('providerOptions:');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.provider).toBe('mock');
+      expect(loaded.model).toBe('project-default-model');
+      expect(loaded.autoRouting).toEqual(config.autoRouting);
+    });
+
     it('should save interactive preview count with canonical step key', () => {
       saveProjectConfig(testDir, {
         interactivePreviewSteps: 2,
@@ -767,6 +1052,36 @@ unexpected_overrides:
       expect(raw).toContain('assistant:');
       expect(raw).toContain('provider: claude');
       expect(raw).toContain('model: haiku');
+    });
+
+    it('should save selector provider options with snake_case keys', () => {
+      const config = {
+        taktProviders: {
+          selector: {
+            provider: 'codex',
+            model: 'gpt-5.6-luna',
+            providerOptions: {
+              codex: { reasoningEffort: 'medium' },
+            },
+          },
+        },
+      } as unknown as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).toContain('takt_providers:');
+      expect(raw).toContain('selector:');
+      expect(raw).toContain('provider_options:');
+      expect(raw).toContain('reasoning_effort: medium');
+      expect(raw).not.toContain('providerOptions:');
+      expect(loadProjectConfig(testDir).taktProviders).toEqual({
+        selector: {
+          provider: 'codex',
+          model: 'gpt-5.6-luna',
+          providerOptions: { codex: { reasoningEffort: 'medium' } },
+        },
+      });
     });
 
     it('should not persist empty pipeline object on save', () => {
@@ -940,7 +1255,117 @@ unexpected_overrides:
       expect(() => loadProjectConfig(testDir)).toThrow(/Configuration error: invalid takt_providers\.assistant/);
     });
 
-    it('should throw when takt_providers.assistant uses incompatible provider/model', () => {
+    it.each([
+      [
+        'empty selector entry',
+        [
+          'takt_providers:',
+          '  selector: {}',
+        ],
+      ],
+      [
+        'empty selector provider options',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options: {}',
+        ],
+      ],
+      [
+        'empty selector provider branch',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options:',
+          '      codex: {}',
+        ],
+      ],
+      [
+        'unknown selector provider branch',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options:',
+          '      unknown_provider:',
+          '        enabled: true',
+        ],
+      ],
+      [
+        'unknown selector field',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: codex',
+          '    unsupported: true',
+        ],
+      ],
+      [
+        'unknown selector option',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: codex',
+          '    provider_options:',
+          '      codex:',
+          '        unknown_option: true',
+        ],
+      ],
+      [
+        'mixed valid and unknown selector options',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: codex',
+          '    provider_options:',
+          '      codex:',
+          '        reasoning_effort: medium',
+          '        unknown_option: true',
+        ],
+      ],
+      [
+        'unknown nested codex skills selector option',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: codex',
+          '    provider_options:',
+          '      codex:',
+          '        skills:',
+          '          repo: true',
+          '          unknown_skill: true',
+        ],
+      ],
+      [
+        'unknown nested claude sandbox selector option',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: claude',
+          '    provider_options:',
+          '      claude:',
+          '        sandbox:',
+          '          allow_unsandboxed_commands: true',
+          '          unknown_sandbox_option: true',
+        ],
+      ],
+      [
+        'invalid selector effort type',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options:',
+          '      codex:',
+          '        reasoning_effort: 42',
+        ],
+      ],
+    ])('should reject %s in project config', (_name, lines) => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, lines.join('\n'), 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/takt_providers\.selector/);
+    });
+
+    it('should allow takt_providers.assistant to pass arbitrary codex model names downstream', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(
         configPath,
@@ -953,7 +1378,11 @@ unexpected_overrides:
         'utf-8',
       );
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/Claude model alias/);
+      const config = loadProjectConfig(testDir);
+      expect(config.taktProviders?.assistant).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should throw when persona_providers entry has invalid provider', () => {
@@ -987,7 +1416,7 @@ unexpected_overrides:
       expect(() => loadProjectConfig(testDir)).toThrow(/Configuration error: invalid persona_providers\.coder/);
     });
 
-    it('should throw when persona_providers entry has codex provider with Claude model alias', () => {
+    it('should allow persona_providers entry to pass arbitrary codex model names downstream', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(
         configPath,
@@ -1000,7 +1429,11 @@ unexpected_overrides:
         'utf-8',
       );
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/Claude model alias/);
+      const config = loadProjectConfig(testDir);
+      expect(config.personaProviders?.coder).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should throw when persona_providers entry has opencode provider without model', () => {
@@ -1034,16 +1467,16 @@ unexpected_overrides:
       expect(() => loadProjectConfig(testDir)).not.toThrow();
     });
 
-    it('should throw on save when takt_providers is set without assistant', () => {
+    it('should throw on save when takt_providers has no configured entry', () => {
       const invalidConfig = {
         provider: 'codex',
         taktProviders: {},
       } as unknown as ProjectLocalConfig;
 
-      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Configuration error: 'takt_providers\.assistant' is required when takt_providers is set\./);
+      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Configuration error: 'takt_providers' must include assistant or selector\./);
     });
 
-    it('should throw on save when takt_providers.assistant has incompatible provider/model', () => {
+    it('should allow arbitrary codex model names in takt_providers.assistant on save', () => {
       const invalidConfig = {
         provider: 'codex',
         taktProviders: {
@@ -1054,7 +1487,12 @@ unexpected_overrides:
         },
       } as unknown as ProjectLocalConfig;
 
-      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Claude model alias/);
+      saveProjectConfig(testDir, invalidConfig);
+      const config = loadProjectConfig(testDir);
+      expect(config.taktProviders?.assistant).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should throw on save when takt_providers.assistant is empty object', () => {
@@ -1066,6 +1504,27 @@ unexpected_overrides:
       } as unknown as ProjectLocalConfig;
 
       expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Configuration error: 'takt_providers\.assistant' must include provider or model\./);
+    });
+
+    it.each([
+      ['an empty selector entry', {}],
+      ['empty selector provider options', { providerOptions: {} }],
+      ['an empty selector provider branch', { providerOptions: { codex: {} } }],
+      ['an unknown selector provider branch', { providerOptions: { unknownProvider: { enabled: true } } }],
+      ['an unknown selector field', { provider: 'codex', unsupported: true }],
+      ['a mixed valid and unknown selector option', {
+        providerOptions: { codex: { reasoningEffort: 'medium', unknownOption: true } },
+      }],
+      ['an unknown nested selector option', {
+        providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
+      }],
+      ['an invalid selector effort type', { providerOptions: { codex: { reasoningEffort: 42 } } }],
+    ])('should reject %s when saving project config', (_label, selector) => {
+      const invalidConfig = {
+        taktProviders: { selector },
+      } as unknown as ProjectLocalConfig;
+
+      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow();
     });
   });
 
@@ -1151,46 +1610,6 @@ unexpected_overrides:
   });
 
   describe('workflow_runtime_prepare policy round-trip', () => {
-    it.each([
-      [
-        unexpectedWorkflowOverridesConfigKey,
-        [
-          `${unexpectedWorkflowOverridesConfigKey}:`,
-          '  quality_gates:',
-          '    - blocked',
-        ].join('\n'),
-      ],
-      [
-        unexpectedWorkflowRuntimePrepareConfigKey,
-        [
-          `${unexpectedWorkflowRuntimePrepareConfigKey}:`,
-          '  custom_scripts: true',
-        ].join('\n'),
-      ],
-      [
-        unexpectedWorkflowArpeggioConfigKey,
-        [
-          `${unexpectedWorkflowArpeggioConfigKey}:`,
-          '  custom_data_source_modules: true',
-          '  custom_merge_inline_js: false',
-          '  custom_merge_files: true',
-        ].join('\n'),
-      ],
-      [
-        unexpectedWorkflowMcpServersConfigKey,
-        [
-          `${unexpectedWorkflowMcpServersConfigKey}:`,
-          '  stdio: true',
-          '  http: false',
-          '  sse: true',
-        ].join('\n'),
-      ],
-    ])('should reject unknown workflow-facing key %s in project config yaml', (unknownKey, content) => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(configPath, `${content}\n`, 'utf-8');
-
-      expect(() => loadProjectConfig(testDir)).toThrow(new RegExp(`${unknownKey}|unrecognized`, 'i'));
-    });
 
     it('should load workflow_runtime_prepare policy block', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
@@ -1214,19 +1633,6 @@ unexpected_overrides:
       const reloaded = loadProjectConfig(testDir);
 
       expect(reloaded.workflowRuntimePrepare).toEqual({ customScripts: true });
-    });
-
-    it('should load workflow_runtime_prepare policy block', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        ['workflow_runtime_prepare:', '  custom_scripts: true'].join('\n'),
-        'utf-8',
-      );
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.workflowRuntimePrepare).toEqual({ customScripts: true });
     });
 
     it('should save workflowRuntimePrepare using workflow_runtime_prepare key', () => {
@@ -1291,28 +1697,6 @@ unexpected_overrides:
         customDataSourceModules: true,
         customMergeInlineJs: true,
         customMergeFiles: false,
-      });
-    });
-
-    it('should load workflow_arpeggio policy block', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        [
-          'workflow_arpeggio:',
-          '  custom_data_source_modules: true',
-          '  custom_merge_inline_js: false',
-          '  custom_merge_files: true',
-        ].join('\n'),
-        'utf-8',
-      );
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.workflowArpeggio).toEqual({
-        customDataSourceModules: true,
-        customMergeInlineJs: false,
-        customMergeFiles: true,
       });
     });
 
@@ -1391,6 +1775,61 @@ unexpected_overrides:
     });
   });
 
+  describe('run retry config round-trip', () => {
+    it('should load auto_requeue_max_attempts and ignore_exceed config keys', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        ['auto_requeue_max_attempts: 2', 'ignore_exceed: true'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir) as Record<string, unknown>;
+
+      expect(loaded.autoRequeueMaxAttempts).toBe(2);
+      expect(loaded.ignoreExceed).toBe(true);
+    });
+
+    it('should round-trip auto_requeue_max_attempts and ignore_exceed config keys', () => {
+      const config = {
+        autoRequeueMaxAttempts: 2,
+        ignoreExceed: true,
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+      const reloaded = loadProjectConfig(testDir) as Record<string, unknown>;
+
+      expect(reloaded.autoRequeueMaxAttempts).toBe(2);
+      expect(reloaded.ignoreExceed).toBe(true);
+    });
+
+    it('should save run retry config using snake_case keys', () => {
+      const config = {
+        autoRequeueMaxAttempts: 2,
+        ignoreExceed: true,
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(saved).toContain('auto_requeue_max_attempts: 2');
+      expect(saved).toContain('ignore_exceed: true');
+    });
+
+    it.each([
+      ['negative auto_requeue_max_attempts', 'auto_requeue_max_attempts: -1', /auto_requeue_max_attempts/i],
+      ['non-integer auto_requeue_max_attempts', 'auto_requeue_max_attempts: 1.5', /auto_requeue_max_attempts/i],
+      ['string auto_requeue_max_attempts', 'auto_requeue_max_attempts: "2"', /auto_requeue_max_attempts/i],
+      ['numeric ignore_exceed', 'ignore_exceed: 1', /ignore_exceed/i],
+      ['string ignore_exceed', 'ignore_exceed: "true"', /ignore_exceed/i],
+    ])('should reject invalid %s through loadProjectConfig', (_caseName, yaml, expectedMessage) => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, `${yaml}\n`, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(expectedMessage);
+    });
+  });
+
   describe('workflow_mcp_servers round-trip', () => {
     it('should load workflow_mcp_servers config block', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
@@ -1414,19 +1853,6 @@ unexpected_overrides:
       const reloaded = loadProjectConfig(testDir);
 
       expect(reloaded.workflowMcpServers).toEqual({ stdio: true, http: true, sse: false });
-    });
-
-    it('should load workflow_mcp_servers config block', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        ['workflow_mcp_servers:', '  stdio: true', '  http: false', '  sse: true'].join('\n'),
-        'utf-8',
-      );
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.workflowMcpServers).toEqual({ stdio: true, http: false, sse: true });
     });
 
     it('should save workflowMcpServers using workflow_mcp_servers key', () => {
@@ -1539,5 +1965,35 @@ unexpected_overrides:
 
       expect(loaded.analytics?.eventsPath).toBe(homedir());
     });
+  });
+});
+
+describe('ProjectConfigSchema submodules and concurrency', () => {
+  it('should accept concurrency in ProjectConfigSchema', () => {
+    const result = ProjectConfigSchema.parse({ concurrency: 3 });
+    expect(result.concurrency).toBe(3);
+  });
+
+  it('should accept submodules all in ProjectConfigSchema', () => {
+    const result = ProjectConfigSchema.parse({ submodules: 'ALL' });
+    expect(result.submodules).toBe('ALL');
+  });
+
+  it('should accept explicit submodule path list in ProjectConfigSchema', () => {
+    const result = ProjectConfigSchema.parse({ submodules: ['path/a', 'path/b'] });
+    expect(result.submodules).toEqual(['path/a', 'path/b']);
+  });
+
+  it('should accept with_submodules in ProjectConfigSchema', () => {
+    const result = ProjectConfigSchema.parse({ with_submodules: true });
+    expect(result.with_submodules).toBe(true);
+  });
+
+  it('should reject wildcard path in ProjectConfigSchema submodules', () => {
+    expect(() => ProjectConfigSchema.parse({ submodules: ['libs/*'] })).toThrow();
+  });
+
+  it('should reject non-all string in ProjectConfigSchema submodules', () => {
+    expect(() => ProjectConfigSchema.parse({ submodules: 'libs' })).toThrow();
   });
 });

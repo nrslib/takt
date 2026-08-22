@@ -5,11 +5,23 @@
  */
 
 import type { Command } from 'commander';
-import type { TaskExecutionOptions } from '../../features/tasks/index.js';
-import type { ProviderType } from '../../infra/providers/index.js';
-import { isIssueReference } from '../../infra/git/index.js';
+import type { TaskExecutionOptions } from '../../features/tasks/execute/types.js';
+import type { AutoRoutingStrategy } from '../../core/models/config-types.js';
+import type { ProviderType } from '../../shared/types/provider.js';
+import { isIssueReference } from '../../infra/git/format.js';
 
 const REMOVED_ROOT_COMMANDS = new Set(['switch']);
+const AUTO_ROUTING_STRATEGIES = new Set(['cost', 'balanced', 'performance']);
+
+function resolveAutoStrategy(value: unknown): AutoRoutingStrategy | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string' || !AUTO_ROUTING_STRATEGIES.has(value)) {
+    throw new Error('--auto-strategy must be one of: cost, balanced, performance');
+  }
+  return value as AutoRoutingStrategy;
+}
 
 /**
  * Resolve --provider and --model options into TaskExecutionOptions.
@@ -19,14 +31,15 @@ export function resolveAgentOverrides(program: Command): TaskExecutionOptions | 
   const opts = program.opts();
   const provider = opts.provider as ProviderType | undefined;
   const model = opts.model as string | undefined;
+  const autoStrategy = resolveAutoStrategy(opts.autoStrategy);
 
-  if (!provider && !model) {
+  if (!provider && !model && !autoStrategy) {
     return undefined;
   }
-
   return {
     ...(provider !== undefined ? { provider, providerSource: 'cli' as const } : {}),
     ...(model !== undefined ? { model, modelSource: 'cli' as const } : {}),
+    ...(autoStrategy !== undefined ? { autoStrategy } : {}),
   };
 }
 

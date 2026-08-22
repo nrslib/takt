@@ -1,10 +1,11 @@
 ```markdown
 # テストレビュー
 
-## 結果: APPROVE / REJECT
+{{include:output-contracts/base-review-result}}
 
-## サマリー
-{1-2文で結果を要約}
+{{include:output-contracts/base-review-summary}}
+
+テスト追加を要求する指摘には、守る観測可能な契約、壊れる具体的な経路、既存テストでは検出できない根拠を記録する。内部構造の固定や既存検証との重複だけを目的とする指摘は記録しない。
 
 ## 確認した観点
 | 観点 | 結果 | 備考 |
@@ -17,30 +18,26 @@
 | テスト戦略（ユニット/統合/E2E） | ✅ | - |
 | 契約入力位置（body/query/path） | ✅ | - |
 
-## 今回の指摘（new）
-| # | finding_id | family_tag | カテゴリ | 場所 | 問題 | 修正案 |
-|---|------------|------------|---------|------|------|--------|
-| 1 | TEST-NEW-src-test-L42 | test-structure | カバレッジ | `src/test.ts:42` | 問題の説明 | 修正方法 |
+{{include:output-contracts/base-review-problem-family-completion-sweep}}
 
-## 継続指摘（persists）
-| # | finding_id | family_tag | 前回根拠 | 今回根拠 | 問題 | 修正案 |
-|---|------------|------------|----------|----------|------|--------|
+{{include:output-contracts/base-review-new-findings-category}}
+| 1 | TEST-NEW-src-test-L42 | test-structure | カバレッジ | `src/test.ts:42` | 問題の説明 | remediation_regression | 初回test review後の修正がこの挙動を変更した | 修正方法 |
+
+{{include:output-contracts/base-review-follow-up-authorization}}
+
+{{include:output-contracts/base-review-persists}}
+{{include:output-contracts/base-review-carry-over-findings}}
 | 1 | TEST-PERSIST-src-test-L77 | test-structure | `src/test.ts:77` | `src/test.ts:77` | 未解消 | 修正方法 |
 
-## 解消済み（resolved）
-| finding_id | 解消根拠 |
-|------------|----------|
+{{include:output-contracts/base-review-resolved-findings}}
 | TEST-RESOLVED-src-test-L10 | `src/test.ts:10` でカバレッジ充足 |
 
-## 再開指摘（reopened）
-| # | finding_id | family_tag | 解消根拠（前回） | 再発根拠 | 問題 | 修正案 |
-|---|------------|------------|----------------|---------|------|--------|
-| 1 | TEST-REOPENED-src-test-L55 | test-structure | `前回: src/test.ts:10 で修正済み` | `src/test.ts:55 で再発` | 問題の説明 | 修正方法 |
+{{include:output-contracts/base-review-adjudicated-out-of-scope}}
+{{include:output-contracts/base-review-reopened-findings}}
+| 1 | TEST-REOPENED-src-test-L55 | test-structure | `review-resolution.md`: 解消済み | d | `src/test.ts:55 で再発` | 問題の説明 | 修正方法 |
 
-## 検証証跡
-- ビルド: {確認対象・確認内容・結果。未確認ならその旨}
-- テスト: {確認対象・確認内容・結果。未確認ならその旨}
-- 動作確認: {確認対象・確認内容・結果。未確認ならその旨}
+{{include:output-contracts/base-review-reopened}}
+{{include:output-contracts/base-review-verification-evidence}}
 
 ## 未確認範囲
 | 項目 | 理由 | 判定への影響 |
@@ -48,10 +45,12 @@
 | {未確認の範囲。なければ「なし」} | {未確認の理由} | {APPROVE可 / REJECT理由} |
 
 ## REJECT判定条件
-- `new`、`persists`、または `reopened` が1件以上ある場合のみ REJECT 可
+{{include:output-contracts/base-review-rejection-gate}}
 - `finding_id` なしの指摘は無効
 ```
 
 **認知負荷軽減ルール:**
-- APPROVE → サマリーと未確認範囲のみ（8行以内）
-- REJECT → 該当指摘のみ表で記載（30行以内）
+- APPROVE かつ解消済み指摘なし → サマリー、未確認範囲、継続レビューで必要な確認観点・検証証跡のみ（簡潔に集約）
+- APPROVE かつ解消済み指摘あり → サマリー、解消済み指摘、未確認範囲、継続レビューで必要な確認観点・検証証跡のみ（簡潔に集約）
+- REJECT → 確認済みの指摘をすべて表で記載し、同じ原因の場所は集約
+{{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

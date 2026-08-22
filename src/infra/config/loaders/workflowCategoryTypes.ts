@@ -8,6 +8,8 @@ export interface WorkflowCategoryNode {
   children: WorkflowCategoryNode[];
 }
 
+export type WorkflowDescriptions = Readonly<Record<string, string>>;
+
 export interface CategoryConfig {
   workflowCategories: WorkflowCategoryNode[];
   builtinWorkflowCategories: WorkflowCategoryNode[];
@@ -15,12 +17,14 @@ export interface CategoryConfig {
   hasUserCategories: boolean;
   showOthersCategory: boolean;
   othersCategoryName: string;
+  workflowDescriptions?: WorkflowDescriptions;
 }
 
 export interface CategorizedWorkflows {
   categories: WorkflowCategoryNode[];
   allWorkflows: Map<string, WorkflowWithSource>;
   missingWorkflows: MissingWorkflow[];
+  workflowDescriptions?: WorkflowDescriptions;
 }
 
 export interface MissingWorkflow {

@@ -33,26 +33,8 @@ export function resolveTaskWorkflowValue(record: Record<string, unknown>): strin
   return getStringField(record, 'workflow');
 }
 
-function validateTaskStartStepAlias(record: Record<string, unknown>, ctx: z.core.$RefinementCtx): void {
-  const startAlias = getStringField(record, 'start_movement');
-  const startStep = getStringField(record, 'start_step');
-
-  if (
-    startAlias !== undefined
-    && startStep !== undefined
-    && startAlias !== startStep
-  ) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'start_step and start_movement must match when both are set',
-      input: record,
-      path: ['start_movement'],
-    });
-  }
-}
-
 export function resolveTaskStartStepValue(record: Record<string, unknown>): string | undefined {
-  return getStringField(record, 'start_movement') ?? getStringField(record, 'start_step');
+  return getStringField(record, 'start_step');
 }
 
 export function normalizeTaskConfig(input: unknown): unknown {
@@ -61,26 +43,24 @@ export function normalizeTaskConfig(input: unknown): unknown {
     return input;
   }
 
-  const workflow = resolveTaskWorkflowValue(record);
-  const startStep = resolveTaskStartStepValue(record);
   const exceededMax = resolveExceededMaxValue(record);
   const resumePoint = resolveResumePointValue(record);
+  // v0.55.1 までの serializeTaskConfig が start_step を start_movement という
+  // キー名で書き出していたため、既存の tasks.yaml を読めるようにする。
+  const legacyStartStep = getStringField(record, 'start_movement');
 
   const next: Record<string, unknown> = { ...record };
   if (exceededMax !== undefined) {
     next.exceeded_max_steps = exceededMax;
   }
-  if (workflow !== undefined) {
-    next.workflow = workflow;
-  }
-  if (startStep !== undefined) {
-    next.start_step = startStep;
-  }
-  if (typeof record.start_movement === 'string') {
-    delete next.start_movement;
-  }
   if (resumePoint !== undefined) {
     next.resume_point = resumePoint;
+  }
+  if (legacyStartStep !== undefined) {
+    delete next.start_movement;
+    if (record.start_step === undefined) {
+      next.start_step = legacyStartStep;
+    }
   }
 
   return next;
@@ -95,7 +75,6 @@ export function serializeTaskConfig(record: Record<string, unknown>): Record<str
 
   delete serialized.workflow;
   delete serialized.start_step;
-  delete serialized.start_movement;
   delete serialized.exceeded_max_steps;
   delete serialized.resume_point;
 
@@ -103,7 +82,7 @@ export function serializeTaskConfig(record: Record<string, unknown>): Record<str
     serialized.workflow = workflow;
   }
   if (startStep !== undefined) {
-    serialized.start_movement = startStep;
+    serialized.start_step = startStep;
   }
   if (exceededMax !== undefined) {
     serialized.exceeded_max_steps = exceededMax;
@@ -117,13 +96,6 @@ export function serializeTaskConfig(record: Record<string, unknown>): Record<str
 
 export function buildTaskSchema<T extends z.ZodType>(schema: T) {
   return z.unknown()
-    .superRefine((input, ctx) => {
-      const record = toTaskConfigRecord(input);
-      if (!record) {
-        return;
-      }
-      validateTaskStartStepAlias(record, ctx);
-    })
     .transform(normalizeTaskConfig)
     .pipe(schema);
 }

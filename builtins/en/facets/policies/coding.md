@@ -9,12 +9,13 @@ Prioritize correctness over speed, and code accuracy over ease of implementation
 | Simple > Easy | Prioritize readability over writability |
 | DRY | Eliminate essential duplication |
 | Comments | Why only. Never write What/How |
-| Function size | One function, one responsibility. ~30 lines |
-| File size | ~300 lines as a guideline. Be flexible depending on the task |
-| Boy Scout | Leave touched areas a little better than you found them |
+| Function and file size | Judge by responsibility and reason to change, not line count |
+| Boy Scout | Improve only problems the current change depends on, expands, or newly exposes |
 | Fail Fast | Detect errors early. Never swallow them |
 | Project scripts first | Use project-defined scripts for tool execution. Direct invocation is a last resort |
 | State normalization | Do not keep the same fact in multiple states |
+
+Minimal means a direct change that satisfies the requirement and real safety conditions, not the fewest lines. Do not add structure for predicted flexibility or quality metrics, but do not omit validation, authorization, cleanup, or error handling at a changed trust boundary.
 
 ## No Fallbacks or Default Arguments
 
@@ -169,9 +170,9 @@ Decision criteria:
 
 ### Think Before Adding Conditionals
 
-- Does the same condition exist elsewhere? → Abstract with a pattern
-- Will more branches be added? → Use Strategy/Map pattern
-- Branching on type? → Replace with polymorphism
+- Does the same condition exist elsewhere with the same meaning, contract, and reason to change? → Candidate for a common owner or abstraction
+- Might more branches be added later? → Do not abstract from prediction alone; confirm a real axis of change
+- Do type variants have independent named responsibilities under one replacement contract? → Consider polymorphism
 
 ```typescript
 // ❌ Growing conditionals
@@ -179,9 +180,9 @@ if (type === 'A') { ... }
 else if (type === 'B') { ... }
 else if (type === 'C') { ... }  // Yet another branch
 
-// ✅ Abstract with a Map
-const handlers = { A: handleA, B: handleB, C: handleC };
-handlers[type]?.();
+// ✅ Express a real replacement contract as a domain concept
+const paymentMethods = { card: cardPaymentMethod, bankTransfer: bankTransferPaymentMethod };
+paymentMethods[type]?.pay(order);
 ```
 
 ### Do Not Over-Abstract
@@ -191,8 +192,7 @@ Use abstraction to reduce duplication and real axes of change, and also to name 
 | Criteria | Judgment |
 |----------|----------|
 | A small number of branches differs by event type, state, or domain concept | Use explicit `when` / `switch` |
-| The same operation with the same argument shape repeats in 3+ places | Consider abstraction |
-| A config array or function object is used in only one place | REJECT. Prefer explicit branching first |
+| A config array or function object hides meaning, contracts, or change boundaries so behavior requires cross-reading configuration and execution code | REJECT. Name the concept or use explicit branching |
 | Side effects or removed fields cannot be understood without reading config objects | REJECT |
 | Strategy names a domain concept and makes interchangeable implementations explicit | OK |
 | Branch names read as domain concepts | OK |
@@ -303,6 +303,17 @@ interface Channel {
 }
 ```
 
+### Explicit Dependencies
+
+Pass dependencies in a form whose role and type are visible. Do not reject function-typed parameters categorically; judge whether they hide a stable business role or external dependency behind an anonymous callback.
+
+| Pattern | Verdict |
+|---------|---------|
+| A business rule or external lookup relayed through multiple layers as an anonymous callback | REJECT. Give the role a name and promote it to a port, validator, service, or equivalent boundary |
+| A function type defined as a named business role or port | OK. Its meaning and substitution boundary are visible |
+| A function passed for local enrichment or conversion at a layer boundary | OK. The responsibility stays within the boundary and is not relayed onward |
+| A block that scopes a lock, transaction, or resource | OK. It is a control structure, not dependency smuggling |
+
 ### Leaky Abstraction
 
 If a specific implementation appears in a generic layer, the abstraction is leaking. The generic layer should only know interfaces; branching should be absorbed by implementations.
@@ -329,6 +340,8 @@ A name expresses the code's actual role and effect, not its implementation mecha
 | Side effects or call frequency are unreadable | Cannot tell from the name whether it initializes, retrieves, or updates | REJECT |
 | Cannot distinguish it from nearby APIs | Same name as the wrapped or delegated API, hiding which layer owns the responsibility | REJECT |
 | Named after role/effect | The provided value, state change, or responsibility is clear from the name | OK |
+| Path/origin suffix with no distinct counterpart path in existence | FromRequest / ViaApi on the only existing path | REJECT. Drop the suffix; when the counterpart path disappears, the name follows |
+| Naming convention differs for only some of a set of same-kind operations | createXxxFromRequest / updateXxxFromRequest / deleteXxx | REJECT. Make them consistent |
 
 ```typescript
 // REJECT - Name reads as if it causes a side effect every time, but it is a memoized accessor
@@ -359,9 +372,7 @@ Criteria:
 
 ### Criteria for Splitting
 
-- Has its own state → Separate
-- UI/logic exceeding 50 lines → Separate
-- Has multiple responsibilities → Separate
+- Has an independent reason to change, responsibility, or reuse boundary → Separate. Whether small supporting types may share a file depends on language conventions and file cohesion
 
 ### Reachability When Adding Features
 
@@ -406,6 +417,8 @@ When changing contracts that other code or users depend on — types, interfaces
 ## State Management
 
 - Confine state to where it is used
+- Do not directly mutate values owned by callers, shared state, or values exposed externally
+- A function or test may mutate a local accumulator collection that it creates internally and never exposes
 - Children do not modify state directly (notify parents via events)
 - State flow is unidirectional
 - Do not keep derived values that can be computed from canonical state as independent state
@@ -418,16 +431,27 @@ When changing contracts that other code or users depend on — types, interfaces
 | Persistence, sending, or diffing depends on derived values | REJECT |
 | Only canonical state is stored, and derived values are generated at use sites or boundaries | OK |
 
+## Separate Input Sets from Generated Artifacts
+
+Do not implicitly mix the inputs discovered by a process with artifacts written by that process. When generated artifacts intentionally become downstream inputs, define the iteration boundary, termination condition, and deduplication contract explicitly.
+
+| Criteria | Judgment |
+|----------|----------|
+| A process writes into a directory and then scans the same scope without excluding its generated artifacts | REJECT |
+| Temporary or intermediate artifacts are captured by an overly broad glob or listing and receive the same transformation or validation again | REJECT |
+| Generated artifacts feed back into the same process without a defined iteration boundary, termination condition, and deduplication contract | REJECT |
+| The input set is fixed before side effects, or input and output locations or artifact kinds are separated | OK |
+| Generated artifacts intentionally enter the next iteration, with termination and idempotency verified as behavior | OK |
+
 ## Unfinished Code
 
 Do not leave TODO/FIXME comments, empty implementations, stubs, or commented-out old implementations as substitutes for completed code. Implement what is needed now and delete what is not needed.
 
 | Criteria | Judgment |
 |----------|----------|
-| TODO/FIXME without an issue number, external blocker, and removal condition | REJECT |
 | Authorization, validation, persistence, or error handling is deferred with TODO | REJECT |
 | Empty implementations, `return null`, `pass`, or commented-out old implementations remain | REJECT |
-| An external dependency or known blocker makes implementation impossible now, with issue number and removal condition documented | Acceptable |
+| An external constraint makes implementation impossible now, and the constraint and condition for removing the TODO/FIXME are documented | Acceptable |
 | TODO only for future extension | REJECT |
 
 ## Sensitive Information Handling
@@ -444,10 +468,10 @@ Do not expose passwords, tokens, API keys, session IDs, auth headers, personal i
 
 ## Error Handling
 
-Centralize error handling. Do not scatter try-catch everywhere.
+Consolidate error translation for the same external contract under the boundary that owns that contract. Do not move different operation or protocol error contracts into one global handler.
 
 ```typescript
-// ❌ Scattered try-catch
+// ❌ Duplicate the same HTTP error translation in each endpoint
 async function createUser(data) {
   try {
     const user = await userService.create(data)
@@ -458,9 +482,7 @@ async function createUser(data) {
   }
 }
 
-// ✅ Centralized handling at the upper layer
-// Catch collectively at the Controller/Handler layer
-// Or handle via @ControllerAdvice / ErrorBoundary
+// ✅ Translate at the adapter boundary that owns the HTTP contract
 async function createUser(data) {
   return await userService.create(data)  // Let exceptions propagate up
 }
@@ -471,8 +493,20 @@ async function createUser(data) {
 | Layer | Responsibility |
 |-------|---------------|
 | Domain/Service layer | Throw exceptions on business rule violations |
-| Controller/Handler layer | Catch exceptions and convert to responses |
-| Global handler | Handle common exceptions (NotFound, auth errors, etc.) |
+| Application layer | Do not swallow exceptions; only handle explicit compensation or retry |
+| Adapter boundary | Translate exceptions to protocol-specific responses or presentation |
+| Global handler | Handle only cross-cutting exceptions such as authentication, validation, and common error shapes |
+
+### HTTP Exception Translation
+
+HTTP adapters / controllers / handlers must not translate exceptions into HTTP representation endpoint by endpoint. Translate exceptions into HTTP status codes, response bodies, and headers at an exception translation layer on the HTTP adapter boundary.
+
+| Criteria | Judgment |
+|----------|----------|
+| Each endpoint maps exceptions to HTTP representation through the same try-catch or wrapper | REJECT. Move it to an exception translation layer at the HTTP adapter boundary |
+| API-specific exception mapping is added to a global handler shared by all APIs | REJECT. Keep it inside the target API boundary |
+| Only truly cross-cutting mappings such as authentication, validation, and common error shapes are handled by a global handler | OK |
+| HTTP representation mapping lives in the application or domain layer | REJECT. Keep it at the HTTP adapter boundary |
 
 ## Conversion Placement
 
@@ -502,14 +536,15 @@ Request → toInput() → UseCase/Service → Output → Response.from()
 
 ## Shared Code Decisions
 
-Eliminate duplication by default. When logic is essentially the same and should be unified, apply DRY. Do not decide mechanically by count.
+When a second implementation with the same meaning, contract, and reason to change is confirmed, decide whether both belong under a common owner. A direct reference or call relationship is not required when actual code shows that both share the same authority, invariant, and reason to change. Changing only one would make the contract diverge, so both participate in the impact path of the current change.
+
+Do not treat use of the same generic API, visual similarity, or argument-shape similarity as proof of one contract. A real boundary in the current change between external I/O and domain logic, Policy and Mechanism, or public contract and internal implementation may justify an abstraction on the first implementation. Do not abstract from predicted future variants alone.
 
 ### Should Be Shared
 
-- Essentially identical logic duplicated
-- Same style/UI pattern
-- Same validation logic
-- Same formatting logic
+- Logic derived from the same authority and sharing a reason to change
+- Validation or transformation implementing the same external contract
+- UI patterns where changing only one copy would break the contract
 
 ### Should Not Be Shared
 
@@ -539,6 +574,8 @@ AI tends to define the same logic under multiple function names.
 |---------|---------|---------|
 | Same implementation with different names | `copyFacets()` and `placeFacetFiles()` doing the same thing | REJECT |
 | Same parameter signature and body | Two functions taking the same params and doing the same work | REJECT |
+| Public method only forwards to a private method with the identical signature and has no distinct public contract, registration, decorator, authorization, instrumentation, or side effect | Internal alias delegates 1:1 to the implementation | REJECT. Promote the delegate and merge |
+| A 1:1 delegating public method is a stable API or an entry point for framework registration, decorators, authorization, or instrumentation | Public boundary delegates implementation while preserving an external contract | OK. Keep the boundary and make its role explicit |
 
 ```typescript
 // REJECT - Same implementation exists under different names
@@ -603,18 +640,16 @@ Verification approach:
 - **Fallbacks are prohibited by default** - Do not write fallbacks using `?? 'unknown'`, `|| 'default'`, or swallowing via `try-catch`. Propagate errors upward. If absolutely necessary, add a comment explaining why
 - **Explanatory comments** - Express intent through code. Do not write What/How comments
 - **Unused code** - Do not write "just in case" code
-- **Unfinished code** - Do not leave TODO/FIXME without an issue number, external blocker, and removal condition; do not leave stubs or commented-out old code
+- **Unfinished code** - Do not defer required work with TODO/FIXME or leave stubs or commented-out old code
 - **any type** - Do not break type safety
-- **Direct mutation of objects/arrays** - Create new instances with spread operators
+- **Direct mutation of objects/arrays outside local ownership** - Do not mutate caller-owned, shared, or externally exposed values; create new values instead
 - **console.log** - Do not leave in production code
 - **Sensitive information exposure** - Do not include sensitive data in hardcoded values, logs, error responses, or test output
 - **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited
-- **Scattered try-catch** - Centralize error handling at the upper layer
-- **Unsolicited backward compatibility / legacy support** - Not needed unless explicitly instructed
+- **Scattered try-catch** - Consolidate error translation for the same external contract under the owner of that boundary. Do not mix different operation contracts into one global handler
 - **Internal implementation exported from public API** - Only export domain-level functions and types. Do not export infrastructure functions or internal classes
 - **Replaced code surviving after refactoring** - Remove replaced code and exports. Do not keep unless explicitly told to
 - **Workarounds that bypass safety mechanisms** - If the root fix is correct, no additional bypass is needed
 - **Direct tool execution bypassing project scripts** - `npx tool` and similar bypass the lockfile, causing version mismatches. Look for project-defined scripts (npm scripts, Makefile, etc.) first. Only consider direct execution when no script exists
-- **Missing wiring** - When adding new parameters or fields, search the entire call chain to verify. If callers do not pass the value, `options.xxx ?? fallback` always uses the fallback
+- **Missing wiring** - Producers, propagation paths, and consumers of new parameters or fields must share one contract. A value omitted by callers and always replaced by `options.xxx ?? fallback` is not wired
 - **Redundant conditionals** - When if/else calls the same function with only argument differences, unify using ternary operators or spread syntax
-- **Copy-paste patterns** - Before writing new code, search for existing implementations of the same kind and follow the existing pattern. Do not introduce your own style

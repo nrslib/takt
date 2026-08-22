@@ -35,31 +35,96 @@ export type {
 } from './interactive-summary-types.js';
 export { BASE_SUMMARY_ACTIONS } from './interactive-summary-types.js';
 
-export function formatStepPreviews(previews: StepPreview[], lang: TaskHistoryLocale): string {
-  return previews.map((p, i) => {
-    const toolsStr = p.allowedTools.length > 0
-      ? p.allowedTools.join(', ')
-      : (lang === 'ja' ? 'なし' : 'None');
-    const editStr = p.canEdit
-      ? (lang === 'ja' ? '可' : 'Yes')
-      : (lang === 'ja' ? '不可' : 'No');
-    const personaLabel = lang === 'ja' ? 'ペルソナ' : 'Persona';
-    const instructionLabel = lang === 'ja' ? 'インストラクション' : 'Instruction';
-    const toolsLabel = lang === 'ja' ? 'ツール' : 'Tools';
-    const editLabel = lang === 'ja' ? '編集' : 'Edit';
+function formatPreviewMetadata(p: StepPreview, lang: TaskHistoryLocale): string[] {
+  const sessionKeyLabel = lang === 'ja' ? 'セッションキー' : 'Session key';
+  const userInputLabel = lang === 'ja' ? 'ユーザー入力' : 'User input';
+  const parallelLabel = lang === 'ja' ? '並列サブステップ' : 'Parallel substeps';
+  const requiredLabel = lang === 'ja' ? '必要' : 'required';
+  const lines: string[] = [];
 
-    const lines = [
-      `### ${i + 1}. ${p.name} (${p.personaDisplayName})`,
-    ];
-    if (p.personaContent) {
-      lines.push(`**${personaLabel}:**`, p.personaContent);
-    }
-    if (p.instructionContent) {
-      lines.push(`**${instructionLabel}:**`, p.instructionContent);
-    }
-    lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
-    return lines.join('\n');
-  }).join('\n\n');
+  if (p.sessionKey) {
+    lines.push(`**${sessionKeyLabel}:** ${p.sessionKey}`);
+  }
+  if (p.requiresUserInput === true) {
+    lines.push(`**${userInputLabel}:** ${requiredLabel}`);
+  }
+  if (p.substeps && p.substeps.length > 0) {
+    lines.push(`**${parallelLabel}:** ${p.substeps.length}`);
+  }
+  return lines;
+}
+
+function formatStepPreview(p: StepPreview, label: string, lang: TaskHistoryLocale): string {
+  const toolsStr = p.allowedTools.length > 0
+    ? p.allowedTools.join(', ')
+    : (lang === 'ja' ? 'なし' : 'None');
+  const editStr = p.canEdit
+    ? (lang === 'ja' ? '可' : 'Yes')
+    : (lang === 'ja' ? '不可' : 'No');
+  const personaLabel = lang === 'ja' ? 'ペルソナ' : 'Persona';
+  const instructionLabel = lang === 'ja' ? 'インストラクション' : 'Instruction';
+  const toolsLabel = lang === 'ja' ? 'ツール' : 'Tools';
+  const editLabel = lang === 'ja' ? '編集' : 'Edit';
+  const providerLabel = lang === 'ja' ? 'プロバイダー' : 'Provider';
+  const modelLabel = lang === 'ja' ? 'モデル' : 'Model';
+  const providerSourceLabel = lang === 'ja' ? 'プロバイダー解決元' : 'Provider source';
+  const modelSourceLabel = lang === 'ja' ? 'モデル解決元' : 'Model source';
+  const permissionLabel = lang === 'ja' ? '権限' : 'Permission';
+
+  const lines = [
+    `### ${label}. ${p.name} (${p.personaDisplayName})`,
+    ...formatPreviewMetadata(p, lang),
+  ];
+  if (p.provider) {
+    lines.push(`**${providerLabel}:** ${p.provider}`);
+  }
+  if (p.model) {
+    lines.push(`**${modelLabel}:** ${p.model}`);
+  }
+  if (p.providerSource) {
+    lines.push(`**${providerSourceLabel}:** ${p.providerSource}`);
+  }
+  if (p.modelSource) {
+    lines.push(`**${modelSourceLabel}:** ${p.modelSource}`);
+  }
+  if (p.permissionMode) {
+    lines.push(`**${permissionLabel}:** ${p.permissionMode}`);
+  }
+  if (p.personaContent) {
+    lines.push(`**${personaLabel}:**`, p.personaContent);
+  }
+  if (p.instructionContent) {
+    lines.push(`**${instructionLabel}:**`, p.instructionContent);
+  }
+  lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
+
+  if (p.dynamicFacets) {
+    const poolLabel = lang === 'ja' ? '動的ファセットプール' : 'Dynamic facet pool';
+    const candidatesLabel = lang === 'ja' ? '候補' : 'Candidates';
+    const poolSourceLabel = lang === 'ja' ? 'ソース' : 'Source';
+    const candidateIds = p.dynamicFacets.candidates.map((c) => c.id).join(', ');
+    lines.push(
+      `**${poolLabel}:** ${p.dynamicFacets.pool}`,
+      `**${candidatesLabel}:** ${candidateIds}`,
+      `**${poolSourceLabel}:** ${p.dynamicFacets.source}`,
+    );
+  }
+
+  if (p.substeps && p.substeps.length > 0) {
+    lines.push(
+      ...p.substeps.map((substep, index) =>
+        formatStepPreview(substep, `${label}.${index + 1}`, lang),
+      ),
+    );
+  }
+
+  return lines.join('\n');
+}
+
+export function formatStepPreviews(previews: StepPreview[], lang: TaskHistoryLocale): string {
+  return previews.map((preview, index) =>
+    formatStepPreview(preview, String(index + 1), lang),
+  ).join('\n\n');
 }
 
 function normalizeDateTime(value: string): string {
@@ -115,6 +180,17 @@ export function formatTaskHistorySummary(taskHistory: TaskHistorySummaryItem[], 
   return `${heading}\n${details}`;
 }
 
+export function buildTaskInstructionFormat(
+  lang: 'en' | 'ja',
+  formalSpec: boolean,
+): string {
+  const gherkinInstructions = loadTemplate('score_summary_gherkin_instructions', lang).trim();
+  const formalSpecInstructions = formalSpec
+    ? `\n\n${loadTemplate('score_summary_formal_spec_instructions', lang).trim()}`
+    : '';
+  return `\n${gherkinInstructions}${formalSpecInstructions}`;
+}
+
 function buildTaskFromHistory(history: ConversationMessage[]): string {
   return history
     .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
@@ -130,6 +206,7 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
+  formalSpec = false,
 ): string {
   let conversation = '';
   if (history.length > 0) {
@@ -154,6 +231,7 @@ export function buildSummaryPrompt(
     ? formatTaskHistorySummary(workflowContext.taskHistory, lang)
     : '';
 
+  const taskInstructionFormat = buildTaskInstructionFormat(lang, formalSpec);
   const summaryPrompt = loadTemplate('score_summary_system_prompt', lang, {
     hasWorkflowPreview: hasWorkflow,
     workflowName: workflowContext?.name ?? '',
@@ -162,6 +240,7 @@ export function buildSummaryPrompt(
     taskHistory: summaryTaskHistory,
     sourceContext: formattedSourceContext,
     conversation,
+    taskInstructionFormat,
   });
   return prependInitialPromptContext(summaryPrompt, promptContext);
 }
@@ -215,12 +294,17 @@ export function selectSummaryAction(
   return selectOption<PostSummaryAction>(actionPrompt, options);
 }
 
-export function selectPostSummaryAction(
-  task: string,
+/**
+ * Action selector for a finished summary, with the run's withheld actions
+ * applied. Shared so the readline loop and the TUI offer the same list in the
+ * same order rather than each assembling one.
+ */
+export function createPostSummaryActionSelector(
   proposedLabel: string,
   ui: InteractiveSummaryUIText,
-): Promise<PostSummaryAction | null> {
-  return selectSummaryAction(
+  excludeActions: readonly SummaryActionValue[] = [],
+): (task: string) => Promise<PostSummaryAction | null> {
+  return (task: string) => selectSummaryAction(
     task,
     proposedLabel,
     ui.actionPrompt,
@@ -232,8 +316,18 @@ export function selectPostSummaryAction(
         continue: ui.actions.continue,
       },
       ['create_issue'],
+      excludeActions,
     ),
   );
+}
+
+/** The same selector, for a run that withholds nothing. */
+export function selectPostSummaryAction(
+  task: string,
+  proposedLabel: string,
+  ui: InteractiveSummaryUIText,
+): Promise<PostSummaryAction | null> {
+  return createPostSummaryActionSelector(proposedLabel, ui)(task);
 }
 
 /**

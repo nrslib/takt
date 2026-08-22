@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Prompt quality eval for TAKT facets: 2周目レビューの再走査（rescan evidence）の
+# coding-review 断面。前回指摘が解消済みの文脈で、残存する既知欠陥を
+# coding-review 視点の再走査で検出できるかを測る。
+# ローカルモデルは opencode CLI 経由（実プロバイダ認証が必要）。
+# 実行: npm run eval:prompts -- rescan-coding
+
+description: 'TAKT facet eval: peer-review / coding-review round-2 re-scan'
+
+prompts:
+  - file://prompts/rescan-coding.phase1.md
+
+providers:
+  - id: 'exec: bash providers/opencode-review.sh ollama-cloud/gemma4:31b fixtures/inventory-es'
+    label: gemma4-31b
+
+tests:
+  - description: 'round-2: resolved previous findings must not suppress a full re-scan'
+    vars:
+      task: file://cases/inventory-review-task.md
+      previous_response: file://cases/prev-review-inventory-round2.md
+    assert:
+      - type: javascript
+        metric: rescan/evidence-table-present
+        value: |
+          const ok = /再走査証跡|Re-scan Evidence/i.test(output);
+          return ok;
+      - type: javascript
+        metric: recall/ship-projection-contract
+        value: |
+          return /(出荷|Ship)/i.test(output) &&
+            /(全予約|予約合計|すべての予約|全ての予約|reservations = \{\}|reserved = 0|合計を減算|全量|totalReserved)/.test(output);
+      - type: javascript
+        metric: recall/version-dual-bookkeeping
+        value: |
+          return /version/i.test(output) &&
+            /(二重|重複|別々|導出|events\.length|配列長|配列の長さ)/.test(output);
+      - type: javascript
+        metric: recall/monolith
+        value: |
+          const ok = /(分割|単一ファイル|モノリ|複数の責務|1ファイル|一つのファイル)/.test(output);
+          return ok;
+      - type: javascript
+        metric: recall/mutable-initial-state
+        value: |
+          return /initialState/.test(output) &&
+            /(freeze|可変|mutable|変更可能|不変|readonly|凍結)/i.test(output);
+      - type: javascript
+        metric: precision/no-fabricated-citations
+        value: |
+          // 行番号付き引用（事実主張）のみ検査する。行番号なしのファイル名は
+          // 分割提案などの正当な修正案に現れるため対象外。
+          const cited = [...output.matchAll(/((?:src|tests)\/[\w./-]+\.ts):\d+/g)].map((m) => m[1]);
+          const allowed = new Set([
+            'src/index.ts', 'src/types.ts',
+            'tests/domain.test.ts', 'tests/event-store.test.ts',
+            'tests/command-handler.test.ts', 'tests/projection.test.ts',
+          ]);
+          const bad = [...new Set(cited.filter((c) => !allowed.has(c)))];
+          return {
+            pass: bad.length === 0,
+            score: bad.length === 0 ? 1 : 0,
+            reason: bad.length === 0 ? 'all line-cited files exist' : `fabricated citations: ${bad.join(', ')}`,
+          };
+      - type: javascript
+        metric: verdict/reject
+        value: |
+          // src/features/analytics/report-parser.ts の extractDecisionFromReport と
+          // 同様に、verdict 値を語（\w+）として抽出し REJECT と厳密比較する。
+          // 部分一致（REJECTED 等）を verdict と誤認しないため。
+          const labeled = [...output.matchAll(/(?:結果|判定|Verdict)[^\w\n]{0,12}(\w+)/g)].map((m) => m[1]);
+          const headings = [...output.matchAll(/^#+ *(\w+)/gm)].map((m) => m[1]);
+          return [...labeled, ...headings].some((v) => v.toUpperCase() === 'REJECT');

@@ -8,11 +8,27 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 // ── Mocks ─────────────────────────────────────────────────────────────
 
+const { mockResolveFormalSpecMode } = vi.hoisted(() => ({
+  mockResolveFormalSpecMode: vi.fn(),
+}));
+
 vi.mock('../features/interactive/conversationLoop.js', () => ({
   callAIWithRetry: vi.fn(),
+}));
+
+vi.mock('../infra/config/global/globalConfig.js', () => ({
+  loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveFormalSpecMode: (cwd: string) => mockResolveFormalSpecMode(cwd),
 }));
 
 vi.mock('../features/interactive/sessionInitialization.js', () => ({
@@ -51,12 +67,14 @@ import { quietMode } from '../features/interactive/quietMode.js';
 import { callAIWithRetry } from '../features/interactive/conversationLoop.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 import { buildSummaryPrompt, selectPostSummaryAction } from '../features/interactive/interactive.js';
+import { error as logError } from '../shared/ui/index.js';
 import type { SessionContext } from '../features/interactive/aiCaller.js';
 
 const mockInitializeSession = vi.mocked(initializeSession);
 const mockCallAIWithRetry = vi.mocked(callAIWithRetry);
 const mockBuildSummaryPrompt = vi.mocked(buildSummaryPrompt);
 const mockSelectPostSummaryAction = vi.mocked(selectPostSummaryAction);
+const mockLogError = vi.mocked(logError);
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -71,10 +89,22 @@ function createMockSessionContext(sessionId: string | undefined): SessionContext
   };
 }
 
+function createMissingImageAttachment() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-quiet-missing-image-'));
+  const tempPath = path.join(tempDir, 'missing-image.png');
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  return {
+    placeholder: '[Image #1]',
+    tempPath,
+    fileName: 'image-1.png',
+  };
+}
+
 // ── Setup ─────────────────────────────────────────────────────────────
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockResolveFormalSpecMode.mockResolvedValue(false);
 });
 
 // =================================================================
@@ -82,6 +112,36 @@ beforeEach(() => {
 // =================================================================
 
 describe('quietMode: summary AI session isolation', () => {
+  it.each([false, true])('should resolve once and apply formal specification mode=%s to the quiet summary prompt', async (formalSpec) => {
+    mockResolveFormalSpecMode.mockResolvedValue(formalSpec);
+    const actualInteractive = await vi.importActual<typeof import('../features/interactive/interactive.js')>(
+      '../features/interactive/interactive.js',
+    );
+    mockBuildSummaryPrompt.mockImplementation(actualInteractive.buildSummaryPrompt);
+    mockInitializeSession.mockReturnValue(createMockSessionContext(undefined));
+    mockCallAIWithRetry.mockResolvedValue({
+      result: { content: 'Generated task instruction.', success: true },
+      sessionId: undefined,
+    });
+    mockSelectPostSummaryAction.mockResolvedValue('execute');
+
+    const result = await quietMode('/repo', { userMessage: 'fix the bug' });
+
+    expect(result.action).toBe('execute');
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledOnce();
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledWith('/repo');
+    expect(mockBuildSummaryPrompt.mock.calls[0]?.[8]).toBe(formalSpec);
+    const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
+    expect(prompt).toContain('## Markdown + Gherkin Output Format');
+    if (formalSpec) {
+      expect(prompt).toMatch(/\bQuint\b/);
+      expect(prompt).toMatch(/\bAlloy\b/);
+    } else {
+      expect(prompt).not.toMatch(/\bQuint\b/);
+      expect(prompt).not.toMatch(/\bAlloy\b/);
+    }
+  });
+
   it('should pass sessionId as undefined to callAIWithRetry even when ctx carries an active sessionId', async () => {
     // Given: initializeSession returns a ctx with an active session
     const ctxWithSession = createMockSessionContext('active-session-123');
@@ -159,6 +219,20 @@ describe('quietMode: summary AI session isolation', () => {
 
     // Then: short-circuits before callAIWithRetry
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should return cancel before calling AI when a referenced image is missing', async () => {
+    mockInitializeSession.mockReturnValue(createMockSessionContext(undefined));
+    mockBuildSummaryPrompt.mockReturnValue('Summary prompt with [Image #1]');
+
+    const result = await quietMode('/test/cwd', {
+      userMessage: 'inspect [Image #1]',
+      attachments: [createMissingImageAttachment()],
+    });
+
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('missing-image.png'));
     expect(result.action).toBe('cancel');
   });
 });

@@ -6,7 +6,15 @@ import {
 } from '../../infra/git/index.js';
 import type { Issue } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
-import { stageAndCommit, resolveBaseBranch, resolveBaseBranchName, pushBranch, checkoutBranch, getCurrentBranch } from '../../infra/task/index.js';
+import {
+  stageAndCommit,
+  resolveBaseBranch,
+  resolveBaseBranchName,
+  pushBranch,
+  checkoutBranch,
+  getCurrentBranch,
+  materializePullRequestBase,
+} from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type ExecuteTaskOptions, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { info, error, success } from '../../shared/ui/index.js';
 import { statusLine } from '../../shared/ui/StatusLine.js';
@@ -14,6 +22,15 @@ import { getErrorMessage } from '../../shared/utils/index.js';
 import type { PipelineConfig } from '../../core/models/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { expandPipelineTemplate } from './templateExpander.js';
+import {
+  createPullRequestContext,
+  type PullRequestContext,
+} from '../../core/workflow/pr-context.js';
+import {
+  assertValidLocalBranchName,
+  toLocalBranchRef,
+} from '../../shared/utils/gitBranchValidation.js';
+import type { LoopAnalysisPublicationCoordinator } from '../tasks/execute/loopAnalysisPublication.js';
 
 export interface TaskContent {
   task: string;
@@ -28,6 +45,7 @@ export interface GitExecutionContext {
   branch: string;
   baseBranch: string;
   taskSlug?: string;
+  prContext?: PullRequestContext;
 }
 
 export interface SkipGitExecutionContext {
@@ -35,6 +53,7 @@ export interface SkipGitExecutionContext {
   isWorktree: false;
   branch?: string;
   baseBranch?: string;
+  prContext?: PullRequestContext;
 }
 
 export type ExecutionContext = GitExecutionContext | SkipGitExecutionContext;
@@ -53,6 +72,57 @@ function requireBranch(branch: string | undefined, context: string): string {
     throw new Error(`Branch is required (${context})`);
   }
   return branch;
+}
+
+function validatePrBranches(
+  prNumber: number,
+  prBranch: string | undefined,
+  prBaseBranch: string | undefined,
+): void {
+  if (prBranch === undefined) {
+    throw new Error(`PR #${prNumber} head branch is required.`);
+  }
+  assertValidLocalBranchName(prBranch, {
+    branchLabel: `PR #${prNumber} head branch`,
+    invalidBranchLabel: `Invalid PR #${prNumber} head branch`,
+  });
+  if (prBaseBranch !== undefined) {
+    assertValidLocalBranchName(prBaseBranch, {
+      branchLabel: `PR #${prNumber} base branch`,
+      invalidBranchLabel: `Invalid PR #${prNumber} base branch`,
+    });
+  }
+}
+
+function attachPipelinePrContext(
+  prNumber: number | undefined,
+  prBaseBranch: string | undefined,
+  context: ExecutionContext,
+  materializedDiffRefs?: { baseRef?: string; headRef?: string },
+): ExecutionContext {
+  if (prNumber === undefined) {
+    return context;
+  }
+  const branch = requireBranch(context.branch, `PR #${prNumber} execution`);
+  const baseBranch = requireBaseBranch(context.baseBranch, `PR #${prNumber} execution`);
+  return {
+    ...context,
+    prContext: createPullRequestContext({
+      source: 'pr_review',
+      prNumber,
+      baseBranch,
+      headBranch: branch,
+      baseBranchSource: prBaseBranch === undefined
+        ? 'default_branch_fallback'
+        : 'pull_request',
+      ...(materializedDiffRefs?.baseRef && materializedDiffRefs.headRef
+        ? {
+          baseDiffRef: materializedDiffRefs.baseRef,
+          headDiffRef: materializedDiffRefs.headRef,
+        }
+        : {}),
+    }),
+  };
 }
 
 function generatePipelineBranchName(pipelineConfig: PipelineConfig | undefined, issueNumber?: number): string {
@@ -181,41 +251,77 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
 export async function resolveExecutionContext(
   cwd: string,
   task: string,
-  options: Pick<PipelineExecutionOptions, 'createWorktree' | 'skipGit' | 'branch' | 'issueNumber'>,
+  options: Pick<PipelineExecutionOptions, 'createWorktree' | 'skipGit' | 'branch' | 'issueNumber' | 'prNumber'>,
   pipelineConfig: PipelineConfig | undefined,
   prBranch?: string,
   prBaseBranch?: string,
 ): Promise<ExecutionContext> {
+  if (options.prNumber !== undefined) {
+    validatePrBranches(options.prNumber, prBranch, prBaseBranch);
+  }
   if (options.createWorktree) {
-    const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree, prBranch, prBaseBranch);
+    const result = await confirmAndCreateWorktree(
+      cwd,
+      task,
+      options.createWorktree,
+      prBranch,
+      prBaseBranch,
+      options.prNumber !== undefined,
+    );
     const branch = requireBranch(result.branch, 'worktree execution');
     const baseBranch = requireBaseBranch(result.baseBranch, 'worktree execution');
     if (result.isWorktree) {
       success(`Worktree created: ${sanitizeTerminalText(result.execCwd)}`);
     }
-    return {
-      execCwd: result.execCwd,
-      branch,
-      baseBranch,
-      isWorktree: result.isWorktree,
-      taskSlug: result.taskSlug,
-    };
+    if (
+      options.prNumber !== undefined
+      && (!result.pullRequestBaseRef || !result.pullRequestHeadRef)
+    ) {
+      throw new Error(`PR #${options.prNumber} worktree did not materialize PR diff refs.`);
+    }
+    return attachPipelinePrContext(
+      options.prNumber,
+      prBaseBranch,
+      {
+        execCwd: result.execCwd,
+        branch,
+        baseBranch,
+        isWorktree: result.isWorktree,
+        taskSlug: result.taskSlug,
+      },
+      {
+        baseRef: result.pullRequestBaseRef,
+        headRef: result.pullRequestHeadRef,
+      },
+    );
   }
   if (options.skipGit) {
-    return resolveSkipGitExecutionContext(cwd, prBranch, prBaseBranch);
+    return attachPipelinePrContext(
+      options.prNumber,
+      prBaseBranch,
+      resolveSkipGitExecutionContext(cwd, prBranch, prBaseBranch),
+    );
   }
   if (prBranch) {
     const safePrBranch = sanitizeTerminalText(prBranch);
     info(`Fetching and checking out PR branch: ${safePrBranch}`);
     checkoutBranch(cwd, prBranch);
     success(`Checked out PR branch: ${safePrBranch}`);
-    const baseBranch = resolveExecutionBaseBranch(cwd, prBaseBranch);
-    return {
-      execCwd: cwd,
-      branch: prBranch,
-      baseBranch,
-      isWorktree: false,
-    };
+    const baseBranch = prBaseBranch ?? resolveExecutionBaseBranch(cwd);
+    return attachPipelinePrContext(
+      options.prNumber,
+      prBaseBranch,
+      {
+        execCwd: cwd,
+        branch: prBranch,
+        baseBranch,
+        isWorktree: false,
+      },
+      {
+        baseRef: materializePullRequestBase(cwd, cwd, baseBranch),
+        headRef: toLocalBranchRef(prBranch),
+      },
+    );
   }
   const baseBranch = resolveExecutionBaseBranch(cwd);
   const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
@@ -231,13 +337,18 @@ export async function runWorkflow(
   workflow: string,
   task: string,
   execCwd: string,
-  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'issueNumber' | 'prNumber'>,
+  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'autoStrategy' | 'issueNumber' | 'prNumber'>,
   context: ExecutionContext,
+  loopAnalysisPublication?: LoopAnalysisPublicationCoordinator,
 ): Promise<boolean> {
   const safeWorkflow = sanitizeTerminalText(workflow);
   info(`Running workflow: ${safeWorkflow}`);
-  const agentOverrides: TaskExecutionOptions | undefined = (options.provider || options.model)
-    ? { provider: options.provider, model: options.model }
+  const agentOverrides: TaskExecutionOptions | undefined = (options.provider || options.model || options.autoStrategy)
+    ? {
+        ...(options.provider !== undefined ? { provider: options.provider } : {}),
+        ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.autoStrategy !== undefined ? { autoStrategy: options.autoStrategy } : {}),
+      }
     : undefined;
 
   statusLine.start('Running...');
@@ -250,6 +361,10 @@ export async function runWorkflow(
       projectCwd,
       agentOverrides,
       traceTaskContext: buildPipelineTraceTaskContext(options, context),
+      ...(context.prContext ? { prContext: context.prContext } : {}),
+      ...(loopAnalysisPublication === undefined
+        ? {}
+        : { loopAnalysisPublication }),
     });
   } finally {
     statusLine.stop();
@@ -277,17 +392,17 @@ function buildPipelineTraceTaskContext(
   };
 }
 
-export function commitAndPush(
+export async function commitAndPush(
   execCwd: string,
   projectCwd: string,
   branch: string,
   commitMessage: string,
   isWorktree: boolean,
-): boolean {
+): Promise<boolean> {
   const safeBranch = sanitizeTerminalText(branch);
   info('Committing changes...');
   try {
-    const commitHash = stageAndCommit(execCwd, commitMessage, {
+    const commitHash = await stageAndCommit(execCwd, commitMessage, {
       allowGitHooks: resolveConfigValue(projectCwd, 'allowGitHooks') ?? false,
       allowGitFilters: resolveConfigValue(projectCwd, 'allowGitFilters') ?? false,
     });

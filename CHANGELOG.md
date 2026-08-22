@@ -6,6 +6,431 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.60.0] - 2026-08-18
+
+### Added
+
+- Formal specification mode for assistant conversations. `assistant.formal_spec` accepts `true`, `false`, `"Y/n"`, or `"y/N"`; project values override global values, TTY sessions ask once when configured to ask, and non-TTY and ACP sessions use the configured default without consuming standard input. Enabled sessions receive applicable Quint and Alloy guidance, while Gherkin guidance is always available.
+- Official DeepSeek Harness SDK provider (#1388). The new `deepseek-harness` provider drives the official DeepSeek Harness Python SDK through a private JSON-RPC bridge, with `provider_options.deepseek_harness` covering `base_url`, `session_root`, `max_tokens`, `request_timeout_ms`, `shutdown_timeout_ms`, and `runtime_mode` (`python_path` and `cordis` remain trusted-global/environment only). Credentials come from `DEEPSEEK_API_KEY` and the optional `DEEPSEEK_BASE_URL`, and the key is passed only to the bridge environment — never to command arguments or a generated workflow config. It requires Python 3.10+ with matching `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` packages and runs on Linux x64/arm64 and macOS arm64 only; Windows and macOS x64 fail fast instead of silently falling back to another provider. This is a developer-preview compatibility surface — the upstream API and event vocabulary can change between releases, so run the opt-in live smoke procedure in the configuration guide before relying on a new SDK/runtime pair.
+- `takt-experimental-team` workflow (#1401, #1404). An experimental TAKT development workflow that keeps `takt-experimental`'s planning, testing, review, and final-gate contracts while running implementation, remediation, and retry remediation as static Team Leader coder execution through the new callable `development-implement-team` and `development-remediation-team` workflows. Leader and part steps carry their own routing tags. Current schema constraints mean this variant does not use implementation dynamic facets or companions.
+- Instruct and pull-request actions for failed tasks in `takt list` (#1391, #1339). A failed task can now be sent to the same conversational instruct flow that completed tasks already had — the failed entry point targets the run's uncommitted worktree and seeds the conversation with a summary of the final adjudication report and the working-tree diff. A new Create PR action is available on both completed and failed tasks: it commits with the existing auto-commit naming, pushes through the project repository when the shared clone has no remote of its own, and fills the pull-request body from the run's final report, after showing the file list and body preview for confirmation.
+- Codex permission control (`provider_options.codex.permission_control`) (#1397). The default `takt` keeps mapping TAKT permission modes onto the Codex SDK's `sandboxMode` and `networkAccessEnabled`. Setting `permission_control: codex` omits both from every Codex call — including strict isolated structured calls — so Codex's own `config.toml`, `default_permissions`, and permission profile decide the effective permissions; `approvalPolicy: never` is still set for non-interactive execution. It cannot be combined with `network_access`, and the resolved configuration fails fast when both are set. `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL` is the matching environment override.
+- `instruction` accepts an ordered array (#1395). A step or parallel sub-step can compose several instruction facets or inline texts; items are resolved in place and joined with an explicit `---` boundary. In a callable workflow an array item may also be an `instruction` `facet_ref` / `facet_ref[]` parameter, and a `facet_ref[]` value is spliced at its position without disturbing the surrounding order. The scalar form is unchanged.
+- Simplified Chinese documentation (#1385, #1408). The onboarding path (README, tutorial, configuration, CLI reference), workflow authoring, provider and external integrations, and task management are available with the `.zh-CN.md` suffix, starting from `docs/README.zh-CN.md`. The remaining pages are intentionally not duplicated and stay in English or Japanese.
+
+### Changed
+
+- `assistant.gherkin` is deprecated. It is warned about and ignored without conversion, persistence, or configuration-file updates; Gherkin guidance is now always enabled for interactive and final task-instruction prompts.
+- **BREAKING:** Provider settings were removed from workflow YAML (#1398). `provider`, `model`, `provider_options`, `auto_routing`, `rate_limit_fallback`, `workflow_config.provider*`, and `workflow_call.overrides` are no longer workflow fields, and a workflow that still writes them fails at the load boundary with a diagnostic naming the migration target. `promotion` entries must now be the strict `{at: N}` shape — provider, model, provider-options, and `condition` are rejected — and a match advances to the next stage of the runtime target's `ladder`. Provider, model, options, and routing belong in `runtime.yaml` (with the retained legacy `config.yaml` mode) and CLI/environment overrides still apply; `capabilities` remains the only provider-option surface in workflow YAML.
+- Team Leader feedback reaches the leader as a bounded report summary instead of accumulating in the session (#1407). Part results are written as reports and the leader receives a size-capped summary, so a long decomposition no longer inflates the leader's context. The leader is now expected to open the full reports and verify the actual artifacts, and the engine gives the decomposition and additional-part decision phases a default read-only tool set (`read`, `glob`, `grep`) on providers that support tool allowlists — `inspect_tools` no longer has to be declared in the workflow. An explicit value still overrides the default, an explicit empty list is preserved as an empty allowlist, and providers that cannot restrict tools (such as Codex) leave the allowlist unset. Planning steps keep passing `{previous_response}` losslessly.
+- Builtin review guidance was centralized (#1395, #1390). Review scope, findings handling, terminology, family lookup, and recurrence guidance moved out of per-instruction facet partials into shared `workflows/rules/` files applied through `all_steps.rules`, and per-domain review criteria were split into their own policy facets (architecture, backend, frontend, react, cqrs-es, failure-boundary, implementation-semantics, resource-ownership, robustness, takt). The experimental reviewer suites became reusable step fragments, and the internal `experimental-review-adapter` / `takt-experimental-review-adapter` workflows were removed. `{review_scope}` now reaches builtin general-purpose reviewers through the shared `findings-handling` rule instead of the removed `instructions/review-round-scope` partial. Parent and child workflow rules that share `ref`, position, and resolved content are applied once.
+- Builtin decision steps no longer carry the `review` tag (#1405). Adjudication, fix planning, fix verification, the final gate, and the supervise/synthesis completion steps are tagged by their actual role (`adjudication`, `plan`, `verification`, `final-gate`, `supervise`) so that routing aimed at reviewers no longer captures them. Routing configured against the `review` tag for these steps must be moved to the role tag.
+- The builtin final gate must confirm the called implementation before judging fulfillment (#1406). A requirement is not treated as satisfied on the strength of a call site alone; the gate follows through to the callee's implementation, and genuinely undecidable cases still report as undecidable rather than being forced into a verdict.
+
+### Fixed
+
+- Child-process stdio errors no longer kill the TAKT process (#1410, #1411, #1412). An unhandled `error` event on a child process's stdin/stdout/stderr — an EPIPE on a stream whose peer has already exited, most often — took down the whole run. A shared guard now handles those events locally across the Claude headless, Claude terminal (tmux), Cursor, Kiro, clone-exec, and companion git-diff paths; the OpenCode shared server runs through a dedicated server process wrapper that also keeps a bounded tail of server output to explain abnormal exits; and the Codex SDK's internal spawn is wrapped so a stdin EPIPE inside the SDK cannot crash the process either.
+- OpenCode exact-repeat detection now goes through the tool-guard recovery path instead of failing the call outright (#1419). When a tool returns an identical result for identical input often enough, TAKT first issues a correction telling the agent to stop calling that tool and report actual progress, then retries in a fresh session, and only fails after both recovery options are spent.
+
+### Internal
+
+- Build output is cleaned before compilation and a test verifies that stale artifacts are not packaged (#1387); the remaining Finding Contract references were removed from documentation and facets.
+- Test suite maintenance: brittle text and builtin-content assertions were removed, and the prompt evaluation suites were restored (#1396, #1399, #1400).
+- Eval coverage was extended for coding-review metrics and final-readiness decisions (#1395, #1406), and CI validates the DeepSeek bridge against Python 3.10 (#1388).
+
+## [0.59.1] - 2026-08-16
+
+### Fixed
+
+- The builtin review-fix loop no longer re-adjudicates stale findings from `review-resolution.md` (#1393). A `review-resolution.md` that exists when adjudication starts is treated as adjudication history and the step's output destination, never as a finding submission source: only findings submitted by the reviewer reports of the immediately preceding completed review round can enter the actionable set. The selector continues a reviewer only from the current `Actionable Families` section — history, dispositions, and carry-forward rows cannot keep a reviewer selected — and when the latest round approves with no findings while a verified fix merely repeats in the resolution file, the loop monitor chooses its declared non-retry outcome instead of rerunning reviewers or the same fix.
+
+## [0.59.0] - 2026-08-16
+
+### Added
+
+- Workflow-wide rules (`all_steps.rules`) (#1366). A workflow can declare Markdown rule files that are injected into every agent step's Phase 1 prompt, either after the automatic execution rules or with `position: before_instruction`. Rule files are `<ref>.md` under `workflows/rules/`, resolved project → global → builtin, and a called workflow inherits its parent's rules additively before its own. Rules do not apply to output reports, status routing, or companion reviewers.
+- Reviewer completion retry (`completion_retry`) (#1312, #1337, #1341, #1353). A step can opt into bounded completeness checks with `completion_retry: { retry_instruction: <facet>, min_retry?, max_retry? }`: after each successful reviewer response, a fresh completion judge checks the report against the reviewer's actual original instruction, task, scope, and evidence, and an incomplete result is retried in the same reviewer session up to the retry ceiling (default 4). The judge is assignable through the new `internal_agents.review-completion-judge` seat in `runtime.yaml`.
+- Selector guidance (#1205, #1338). Dynamic parallel and `dynamic_facets` selectors accept a `selector` block with optional `persona` and required `instruction` guidance referencing the workflow's existing persona/instruction facets. Guidance only describes how to select candidate IDs — TAKT retains the evidence references, read-only structured execution, candidate validation, and output contract.
+- A provider inactivity deadline for every provider (#1351, #1358). `guards.call_timeout_ms` now applies to `codex`, `opencode`, `claude` / `claude-sdk`, `claude_terminal`, `cursor`, `copilot`, `kiro`, and `pi`: the timer resets on each observable provider event (default 60 minutes; 60,000–86,400,000 ms) and cumulative execution time is not capped. For OpenCode this replaces the per-call wall-clock limit and the separate 10-minute stream-idle timeout — a healthy long call keeps running while events arrive, and an in-flight tool call becomes stale after six times the deadline. `claude_terminal.timeout_ms` is honored only when `guards.call_timeout_ms` is unset.
+- Requirement scenarios (experimental) (#1309, #1310, #1313, #1314, #1364). The `experimental` / `takt-experimental` workflows can plan, write tests, fix-plan, and run the final gate from enumerated requirement scenarios with variant and numeric-boundary coverage; scenarios link to tests through a report correspondence table instead of scenario IDs written into code.
+
+### Changed
+
+- **BREAKING:** Finding Contract configuration, execution, and persistence were removed (#1321). Workflows that retain the old syntax fail to load with migration guidance, while existing `finding-contract.sqlite` files are left in place without being deleted, migrated, or read. Use `review-adjudication`, requirement scenarios, and `final-gate` for review workflows. The Finding Contract runtime seats (`intake-normalizer`, `findings-manager`, `terminal-adjudicator`, `escalation-reviewer`) and the profile-level `escalate` declaration were removed with it; `internal_agents` now holds `selector`, `assistant`, `loop-judge`, and `review-completion-judge`.
+- **BREAKING:** `runtime.yaml` auto routing requires explicit pool assignments (#1266, #1336). `provider.defaults` must choose a fixed `profile` or an ordered `ladder` and can no longer name a `pool`; only `personas` / `tags` / `steps` targets that explicitly declare `pool` are auto-routed. Targets without a pool, non-workflow operations, and other auxiliary processing use `provider.defaults` — there is no implicit default pool. A `workflow_call` child keeps its parent's auto-routing context, and `takt workflow preview` shows the assignment the run would actually use.
+- Companion reviewers are opt-in now and deliver findings per round (#1307, #1311, #1323, #1344, #1354, #1362, #1367). Companions are disabled by default; enable them with the top-level `companion.enabled: true` policy in `runtime.yaml` (global and project values combine with logical AND). The strict-isolation provider restriction is gone: companion structured calls use the provider-neutral fresh-session transport — OpenCode included — and companion reviewer, moderator, and selector calls always run read-only. The finding lifecycle was replaced by round-based delivery: each review round produces a fresh finding list, an optional moderator accepts or rejects each finding, accepted findings are embedded directly in the implementer's next follow-up prompt, and the JSONL mailbox is an audit log only. Companion findings and failures are advisory diagnostics — workflow routing is decided solely by ordinary conditions and Phase 3 judgment — and the fixed 5-minute companion call timer was removed in favor of the provider deadline.
+- The builtin development and review workflows end with the supervisor's final requirement check instead of a separate merge-readiness review (#1370, #1372). The `merge-readiness-reviewer` / `merge-readiness-supervisor` personas and their steps were removed, the final gate is limited to deciding requirement fulfillment, finding resolution, and recurrence-register carry-forward, and provider routing targets the `final-gate` tag or the `supervise` step.
+- The builtin security review selects reviewers by threat model in every suite (#1380). Security reviewers are no longer fixed members of the peer-review and standalone review suites: they live in an outer pool whose selection criteria default to not selecting them, and boundary-specific security knowledge is chosen dynamically per target.
+- The builtin review and fix prompts converge instead of circling (#1308, #1329, #1330, #1332, #1343, #1346, #1350, #1368, #1369, #1379, #1382). Adjudication results now reach later review and remediation rounds — the invariant ledger is inherited across remediation instances through adjudication, and a finding on the same owner and invariant merges into its existing family instead of opening a new one. Fix plans must cite concrete evidence for bounded-state claims and may not settle on an unconfirmed cause. Review scope contracts are enforced, defaults need an explicit priority, primary run paths take precedence, documented-but-unimplemented config keys are detected, and the review-fix selector keeps choosing the submitter of an unresolved finding until it is resolved.
+- Builtin reviewers request new tests only for observable, undetected failures (#1318). The testing policy no longer lets a reviewer demand tests that merely restate the implementation.
+
+### Fixed
+
+- Report references resolve when the report exists and no longer kill the run when it does not (#1377). Reports copied by requeue are recorded in the resume report snapshot so a new run — including chained requeues — reliably finds them, and a missing report or artifact is replaced by an explicit missing notice in the read paths (instruction `{report:...}`, judge reports, dynamic selectors, exec/interactive reads, trace generation) instead of throwing. Fail-fast is kept for real corruption, integrity, and safety violations.
+- Requeue is more robust (#1359, #1363, #1365, #1374). A task can be requeued after a pre-step failure, step report numbering continues from inherited artifacts instead of restarting, restart-path matching no longer depends on `call_instance`, and ambiguous legacy-format artifacts are excluded from the index — treated as absent, with their namespaces reserved against collisions — instead of failing the whole requeue at startup.
+- Parallel step terminal errors are aggregated explicitly, and the builtin review workflows retry a bounded number of times on reviewer provider errors (#1360).
+- Codex: deep reasoning no longer trips the inactivity watchdog — `model_reasoning_summary: auto` keeps stream events flowing during long reasoning (#1344); provider parse failures keep their failure category through parallel aggregation and workflow aborts instead of appearing as empty output (#1272, #1316); and the tool shell preserves the caller's `PATH` (#1386).
+- Kiro: compaction-only responses are rejected as errors instead of being treated as empty successful output (#1297, #1298).
+- Oversized diffs passed to a dynamic selector are truncated instead of overflowing the selector input (#1328).
+
+### Internal
+
+- The prompt-eval harness moved to `tools/opencode-probe` (#1361), and the Finding-Contract-era eval suites and assets were removed (#1320, #1334).
+- Mock E2E shards get the same one-time birpc-noise re-measurement as unit shards (#1333).
+- `@openai/codex-sdk` was updated to 0.147.0 (#1371).
+- Eval coverage for reviewer-evaluation composition, dynamic facet selection, and CLI execution boundaries, plus removal of non-behavioral and redundant tests (#1315, #1317, #1372, #1375, #1378, #1381, #1383).
+- Documented the Pi provider global-settings boundary and resource-loading examples (#1340, #1348, #1349), and repaired documentation broken by the Finding Contract removal (#1322).
+
+## [0.58.0] - 2026-08-11
+
+### Added
+
+- Pi SDK provider (#1283, #1302). The new `pi` provider runs Pi through SDK-only in-memory sessions with streaming, abort handling, and native image attachments. Permission modes map to Pi active-tool allowlists (`readonly` / `edit` / `full`), and `provider_options.pi` controls resource loading (`extensions`, `no_extensions`, `no_skills`, `no_prompt_templates`, `no_themes`, `no_context_files`) with matching `TAKT_PROVIDER_OPTIONS_PI_*` environment overrides. Credentials come from the Pi SDK credential store or provider-native environment variables. Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox — explicit extensions execute inside the TAKT process, implicit project-local extensions are never loaded, and Pi is not eligible for dynamic internal agents that require strict read-only isolation.
+- Companion reviewers (#1269, #1300). A normal agent step can declare `companion` to run up to three stateless, read-only reviewers alongside the implementing agent. TAKT observes mutating tool events, reviews the cumulative diff after a quiet period or forced interval, checks for unreviewed changes at implementer completion, and appends findings to per-companion JSONL mailboxes under `.takt/runs/{run}/companion/`. Open `must_fix` findings drive a same-session fix loop before the step's post-execution rules are evaluated, companion findings feed the review adjudication flow, and companion failures are fail-soft — they are retried without blocking the implementer. Companion definitions are YAML files resolved from `.takt/companions/`, `~/.takt/companions/`, then the builtin `companions/` (an AI-antipattern review companion and moderator ship as builtins). Companions require an active `runtime.yaml` provider section: each referenced companion resolves through `provider.targets.companions` (fixed profiles only), falling back to `provider.defaults`, and the resolved provider must support strict isolated execution and structured output.
+- `takt-experimental` workflow (#1263, #1276, #1296, #1299). An experimental TAKT development workflow that adds TAKT-specific reviewers and implementation companions on top of the shared adjudication, verified-remediation, follow-up review, and merge-readiness flow. It shares reviewer suites with the generic `experimental` workflow through the new `experimental-review` / `takt-experimental-review` suites and their adapter workflows (#1299).
+- Dynamic facets on parallel reviewers (#1299). `dynamic_facets` is now valid on a static `parallel` child and on a dynamic parallel `fixed` / `pool` entry: participant selection runs first, and each selected dynamic child runs its own facet selector before any parallel child starts. Two callable-workflow parameter types support this composition without widening shared contracts (#1263, #1296): `facet_pool_ref` binds a child-local facet pool (`dynamic_facets.pool: { $param: ... }`), and `companion_ref[]` supplies fixed companions (`companion: { $param: ... }`; an empty array omits the `companion` field entirely).
+
+### Changed
+
+- **BREAKING:** The builtin TAKT development and Finding Contract workflow variants were consolidated (#1296). `takt-default-fc`, `takt-default-high`, `takt-default-team-high`, `takt-default-localllm`, `review-fix-takt-default-high`, and the Finding Contract builtin sub-workflows (`finding-contract-boundary-review`, `finding-contract-local-review`, `finding-contract-remediation`, `merge-readiness-finding-contract-final-gate`, `peer-review-finding-contract`, `peer-review-finding-contract-localllm`, `peer-review-suite-finding-contract-base`) were removed. TAKT development consolidates onto `takt-default` and the new `takt-experimental`, and the shared `development-core` now composes injectable `development-implement` / `development-remediation` subworkflows (plus `-dynamic` variants) with adjudication, verified remediation, follow-up review, and merge-readiness, parameterized by implementation facet pool and companions.
+- The `experimental` workflow was rebuilt on the shared development core (#1263, #1296, #1299). It is now a thin wrapper over `development-core` with dynamic implementation and remediation subworkflows, reviewer suites bound through `experimental-review-adapter`, and the builtin AI-antipattern review companion and moderator enabled by default — an `experimental` run now includes companion review during implementation.
+- `assistant.gherkin` is a global setting now (#1260). Previously project-only, it can also live in `~/.takt/config.yaml`; an explicit project value overrides the global one.
+- Builtin review, adjudication, and planning prompts hold the task scope (#1262, #1284, #1291). Review adjudication keeps findings within the task scope while preserving actionable quality findings, backed by a new `review-adjudication` policy facet; the shared review policy controls how far a convergence fix may reach; and the planning and review instructions constrain scope expansion in the development workflows.
+- The builtin security review facets were reorganized by system surface (#1270, #1274). The security policy was specialized for review, and the existing security knowledge is routed by the target's system surface, shared across peer review and audit review — a facet reorganization without new review content.
+- Resuming a process re-runs dynamic selection (#1292). A process resume no longer restores a saved participant or facet selection; it invokes the selector again against the current pool. Resume points recorded with the removed dynamic-selection fields are not supported.
+
+### Fixed
+
+- Provider `effort` values pass through to the provider (#1261). `effort` / `reasoning_effort` provider options were validated against fixed per-provider enums, so levels a provider accepts but TAKT did not list were rejected at load time; any non-empty value is now passed through unchanged.
+- Finding Contract: manager adjudication input overflow no longer drops observations (#1278, #1281, #1287). Call-site identity embedded a redundant ~1.2KB stack encoding into every raw finding ID, and prompt rendering was unbounded against the fixed 24,000-byte input cap, so raw tasks overflowed and observations — including resolution claims — were silently dropped. Raw IDs now use the compact run-path segment, every rendered field has a fixed byte cap with visible truncation markers (verbatim quotes are bounded at publication time and never truncated for byte-exact matching), a static budget proof verifies that a single raw task always fits the cap, and a per-observation accounting check fails the run as an engine bug if a submitted observation neither lands in the ledger nor fails explicitly with a reason.
+- Finding Contract: conflict adjudication no longer loops without progress (#1264, #1265, #1267, #1271). Re-adjudication is bound to actual code changes, re-observing the same claim no longer resets the adjudication budget, adjudication requests reference raw findings in a compacted form under a dedicated 96KiB input cap, and the persistent conflict-landing registry keeps append order — ending the reviewer/adjudication round-trips that exhausted the input budget and terminated the run.
+- Finding Contract: resolving a finding that holds an unsettled conflict landing is deferred instead of failing the run (#1285, #1288, #1290). The normal resolution path could resolve such a provisional finding without settling the landing, and the next adjudication snapshot failed the whole run on an invariant violation. Resolution is now held while the conflict is active — the claim is recorded as an audit-only attachment, reported in a dedicated verification-report field, without altering the adjudication basis — and proceeds normally on the round after the adjudication settles.
+- Retried runs separate report inheritance from operation ancestry (#1293). A fallback execution that inherits an earlier run's reports recorded that inheritance as its verified operation lineage in run metadata; the two sources are now tracked separately.
+
+### Internal
+
+- The prompt-eval gate was removed from `check:release` (#1259), package-lock metadata was normalized, and the Nix flake lock integrity was restored.
+- SQLite-heavy integration suites moved to the serial test group and the heavy parallel CI shards increased from four to six (#1264).
+
+## [0.57.0] - 2026-08-09
+
+### Added
+
+- `capabilities` references (#1231, #1237). A workflow, step, or parallel sub-step can declare `capabilities: <name>` (or a list, merged left to right with later names winning per leaf) referencing a semantic provider-options preset instead of writing inline `provider_options`. The bundled presets are `readonly` (read, search, shell, and web lookup plus network access), `edit` (`readonly` plus file creation and editing), and `enable-skills` (Codex repo/user skills). Only capability leaves (`allowed_tools` / `network_access` / `sandbox` / `skills`) are accepted — a preset carrying a quality or machine leaf fails fast at load time, as does an unresolved name. A step's own declaration replaces the workflow default, and a parallel parent's resolved capabilities become the sub-steps' default.
+- Profile ladders in `runtime.yaml` (#1231). `defaults` and every `provider.targets` entry now pick exactly one assignment form: a fixed `profile`, an auto-routing `pool`, or an ordered `ladder` of profiles whose first profile is the initial assignment and whose later stages are advanced by a step `promotion`. Self-referencing and cyclic ladders are rejected at load time. Steps can also reference workflow-level `mcp_servers` definitions by name via `mcp: [name, ...]`, with unresolved names failing fast.
+- Grill Me interactive mode (#1251). The new `grill-me` mode refines a task by resolving material decision branches one recommended question at a time, then suggests `/go` when the requirements are ready. It is offered in the interactive mode prompt and selectable as the default via `interactive_mode: grill-me`.
+- Markdown + Gherkin task instructions (#1252). The project-only `assistant.gherkin: true` setting makes final task instructions generated from assistant conversations (including quiet mode) keep background, scope, design intent, constraints, and verification in Markdown while expressing important observable behavior, state transitions, boundaries, failures, and invariants as a minimal number of Gherkin scenarios. Unset preserves the existing Markdown-only instructions.
+- An experimental dynamic coding workflow (#1247, #1275). The `experimental` and `takt-experimental` wrappers select reviewer-suite adapters that bind generic or TAKT-specific external security-review facet pools only at the consuming `parallel` security reviewer, without widening shared workflow contracts. `dynamic_facets.max_selected` is optional: when omitted, the selector may select up to every candidate in the pool; selector failure still stops the run with no all-candidate fallback.
+
+### Changed
+
+- **BREAKING:** Finding Contract synthetic roles are no longer assigned a provider or model in the workflow (#1234). `finding_contract.manager` / `finding_contract.adjudicator` accept persona/instruction customization only; leftover `provider` / `model` keys are rejected at load time. Assign the roles through the new `runtime.yaml` `provider.targets.internal_agents` seats instead — `findings-manager`, `terminal-adjudicator`, `loop-judge`, `escalation-reviewer`, and `intake-normalizer`. Every seat is optional: an unassigned seat keeps the role's existing default resolution, and the `escalation-reviewer` seat only replaces the destination of an escalation that the reviewer profile's `escalate` declaration already enabled.
+- **BREAKING:** The builtin workflows migrated from inline `provider_options` to `capabilities` references, and the provider-options presets were reworked to match (#1238, #1239): `review-readonly` was renamed to `readonly`, `review-files` was removed, and `enable-skills` was added alongside the existing `edit`. User workflows or fragments using `extends: review-readonly` / `review-files` must switch to `readonly` / `edit`.
+- The `compound-eye` review workflow is provider-neutral now (#1239, #1241). Its parallel reviewers, previously the provider-pinned `claude-eye` (claude-sdk) and `codex-eye` (codex) sub-steps, are the neutral sub-steps `eye1` / `eye2` with no provider names in the workflow YAML. Both eyes run on the default provider until each is assigned a different provider in `runtime.yaml` (`provider.targets.steps`), which is what produces the multi-engine review; routing rules targeting the old sub-step names must switch to `eye1` / `eye2`.
+- Finding Contract review (experimental) was reworked around a single Markdown intake path (#1219, #1221, #1222, #1226, #1227, #1229, #1230, #1232, #1235, #1246). Every FC reviewer — including the escalation slot — writes an ordinary Markdown report, and one isolated intake-normalizer call turns it into findings whose quotes and anchors are verified byte-exact against the files; the structured and legacy publication descriptors are gone. Reviewers are observation-only: they report what is broken, where, why, and where evidence can be quoted, while the normalizer assigns severity, title, and family classification — so a correct observation can no longer die over classification bookkeeping. The engine now computes each reviewer's review scope and injects it as a `review_scope` variable, and a REJECT-consistency gate keeps a REJECT verdict with no surviving claims from being silently swallowed. Restatement moved from next-round piggybacking to per-reviewer slots inside the same round, so follow-ups no longer burn the review budget, and a reviewer profile may declare `escalate: <profile>` in `runtime.yaml` to hand the final presentation to a stronger model for a full re-review.
+- The builtin review facets gained three investigation-discipline principles, raising finding detection (#1220).
+- Finding Contract review (experimental) no longer aborts immediately on restatement exhaustion or an undetermined conflict (#1257). A claim-bearing anomaly that reaches its presentation limit now gets one engine-side evidence-search attempt before terminal disposition: the engine reads the claimed files, supplies bounded windows around the claimed lines to the isolated intake normalizer, and only a byte-exact verified quote promotes the claim (recorded as `promotionOrigin: evidence-search`). A conflict whose adjudication ends `verification_undetermined` gets one grounded re-adjudication over digest-bound windows from the review-scope snapshot, and the builtin FC workflows keep an active conflict in the fix/review loop while `findings.rounds.budgetExhausted == false`, reserving the `ABORT` arm for the exhausted-budget exit.
+
+### Fixed
+
+- Steps combining `structured_output` with a report output contract write the Phase 2 Markdown report again instead of the Phase 1 structured-output JSON (#1242, #1245). A regression from the 0.56.0 Finding Contract overhaul passed the step's structured-output schema to the report phase, so the report file contained schema-shaped JSON.
+- OpenCode's idle-timeout guard no longer misfires during long silent tool executions (#1243). OpenCode emits no stream events between `tool_use` and `tool_result`, so a long-running tool call such as a test suite looked idle and healthy runs were cut off after 10 minutes; in-flight tool calls now pause the idle measurement.
+- Retrying a task now selects the correct session log (#1254). Phase-usage and OTel shadow logs are excluded from the candidate set and the selection is deterministic.
+
+### Internal
+
+- The test gates were restructured (#1249, #1250, #1253, #1255, #1258): a light integration gate (`npm run test:it`) was split from the heavy one (`npm run test:it:heavy`), observed integration boundaries moved out of the unit gate, the heavy integration jobs are sharded across isolated CI runners, and the serial workflow integration group was stabilized.
+- A unit shard that fails only due to the spurious vitest birpc `onTaskUpdate` timeout noise is re-measured once locally instead of failing the gate (#1244); CI remains strict.
+
+## [0.56.0] - 2026-08-07
+
+### Added
+
+- Finding Contract (experimental) was overhauled (#1128, #1193, #1187, #1188, #1201, #1180): findings now live in a per-run SQLite ledger as machine-verified records, intake is contract-based so weak reviewer models no longer stall a round, a `takt-default-fc` workflow variant was added, and the manager/adjudicator roles are configurable from the workflow. Ledgers from before the consolidation are not readable. Workflows without `finding_contract:` are unaffected.
+- Dynamic facet pools (#1138). A normal agent step can declare `dynamic_facets: { pool, max_selected }`, and an internal selector agent picks which policies or knowledge facets from the named pool to inject for that round. Pools live in `.takt/facet-pools/`, `~/.takt/facet-pools/`, or a repertoire package; unknown selections fail before the step runs rather than silently degrading to the whole pool, and a resumed round restores its saved selection without re-running the selector. `parallel` sub-steps reject `dynamic_facets` at schema level. `takt eject` copies referenced pools alongside ejected workflows.
+- `runtime.yaml`, a dedicated provider configuration layer (#1136). `~/.takt/runtime.yaml` and `<project>/.takt/runtime.yaml` (project wins) own provider, model, provider options, auto routing, and internal-agent assignment in one place, replacing the provider settings scattered across `config.yaml`. It replaces the `config.yaml` provider keys as the configuration-layer default — step-side overrides (`promotion`, step `provider` / `model`, `workflow_call`, `provider_routing`, auto routing) still apply above it, and provider and model resolve independently per field. Mixing it with the legacy provider keys is rejected with a diagnostic naming the offending file and the key to migrate to, rather than silently picking one. CLI and environment overrides (`TAKT_PROVIDER` / `TAKT_MODEL`) still win, including on the non-workflow and selector seams. `config.yaml` continues to work unchanged when no `runtime.yaml` is present.
+- A `replan` step in `development-core` (#1206). `need_replan` used to restart the whole workflow from the beginning; it now routes to a dedicated replan step that revises the plan in place and continues, so a mid-run replan no longer discards completed work.
+- Post-edit self-scan in the builtin implement and fix instructions (#1179). After editing, the agent re-reads what it changed and checks the edit against the stated contract before handing off.
+
+### Changed
+
+- OpenCode now supports isolated structured execution (#1198), so steps that need a structured result run on OpenCode the same way they do on the other providers.
+- The `peer-review` reviewers-cycle loop monitor threshold dropped from 5 to 3 (#1211), so a review/fix cycle is caught earlier.
+
+### Fixed
+
+- Content deltas are excluded from OpenCode's structural event count (#1185), so streamed text no longer consumes the guard's budget.
+- Repeated tool-input updates no longer double-count sensitive sources (#1184).
+
+### Internal
+
+- Test-suite consolidation and pool rebalancing, plus a fix for a quadratic sanitize path (#1176).
+- Test timeout corrections: per-case budgets for the observability wiring tests that exceeded the shared 15s ceiling under 4-shard parallelism (#1212), a concurrent-CAS test that pinned one of two valid conflict paths (#1215), and a Windows-only 60s test timeout — three of the last four Windows CI failures were 15s timeouts (#1216).
+- Documentation: `CLAUDE.md` rewritten against the current architecture (#1189), all manuals aligned with the implementation (#1177), and the TAKT logo added and refined (#1186, #1194, #1213).
+
+## [0.55.1] - 2026-08-04
+
+### Changed
+
+- **BREAKING:** OpenCode guard v6 replaces the cumulative tool error/signature/success/stagnation budgets with mandatory bounded-resource and integrity guards plus a consecutive exact terminal-tuple detector. Calls now have a 60-minute wall-clock limit by default; calls that may exceed 60 minutes must set `provider_options.opencode.guards.call_timeout_ms` explicitly. The removed `TAKT_OPENCODE_TOOL_ERROR_BUDGET`, `TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE`, `TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS`, `TAKT_OPENCODE_TOOL_SUCCESS_REPEATS`, and `TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS` variables are ignored with a one-time warning. Use `provider_options.opencode.guards` for profiles, per-model selection, and supported limits.
+- The long-standing ban on unsolicited backward compatibility was made precise and contract-enforced (#1172). An explicit compatibility requirement authorizes only its stated target and scope, and each target (schema migration, data backfill, event upcasting, read-model rebuild, API compatibility) needs its own authority. Migrating current consumers to a new contract is classified as normal replacement work rather than legacy support, and current code, existing tests, stored data, or released status count as impact-analysis evidence, not authority to keep a superseded path. Plans record the supported target and scope in the plan output contract, so reviewers verify compatibility as a contract instead of a prose guideline. Contract-replacement judgment now has one shared policy owner, while personas, phase instructions, and output contracts contain only their role-specific responsibilities.
+
+### Fixed
+
+- OpenCode's structural event-count guard now defaults to 500,000 instead of 10,000 and supports `provider_options.opencode.guards.event_limit` and `TAKT_OPENCODE_STREAM_EVENT_LIMIT`, preventing healthy long-reasoning reviews from being aborted.
+- Fresh installs no longer break the ACP integration (#1171). `@agentclientprotocol/sdk` is bumped to `^1.3.0` and the ACP entrypoint follows its renamed MCP server id field and extended elicitation response contract; a lockfile-less install had resolved 1.3.0 against code written for 1.0.x.
+
+## [0.55.0] - 2026-08-03
+
+### Added
+
+- Reusable workflow step fragments (#852, #1131). A step in any workflow can declare `uses: <name>` to expand a single-step fragment YAML at load time, looked up in `.takt/steps/`, `~/.takt/steps/`, bundled builtin `steps/`, or a repertoire package's `steps/` (scoped as `@owner/repo/name`). Fragments declare required typed `params` (`facet_ref`, `facet_ref[]` with a `facet_kind` of `policy` / `knowledge` / `instruction` / `persona` / `report_format`, or `workflow_ref`), callers bind them with `with:`, and fragment bodies reference them via `$param` — including splicing facet lists into `policy` / `knowledge`. Routing stays with the caller: fragments cannot declare `rules`, and parallel-fragment callers supply a rule tree for the sub-steps. Expansion happens before validation, so `takt workflow doctor`, previews, and prompts see plain steps. Repertoire packages can now ship a `steps/` directory, and `takt eject` copies referenced fragments alongside ejected workflows.
+- Dynamic parallel steps (#1139). A `parallel` step can take an object form with `fixed` sub-steps that always run and a `pool` of candidates, each carrying a `description`. On step entry an internal read-only selector agent picks the pool members for the round from the task, in-scope reports, and the current diff, returning a strict `{ selected_ids, rationale }` structured output; invalid or unknown selections fail before any participant starts instead of falling back to the whole pool. `selection.mode: replace` (default) re-selects each round, `cumulative` keeps earlier selections, resuming a round restores its saved selection without re-running the selector, and `all()` / `any()` aggregate only the round's actual participants. `takt_providers.selector` assigns the selector a dedicated provider/model/provider options; Claude, Codex, and Mock satisfy the required read-only isolation and structured-output contract.
+- Review adjudication before remediation (#1154). In the peer-review flow an adjudication step now sits between the reviewers and the fix loop: a review-adjudicator persona consolidates the parallel review reports into a single `review-resolution.md` verdict, and the remediation steps fix against that resolution instead of each raw report. The standalone final gate was folded into the merge-readiness supervisor.
+- Retry/Requeue can now start from a step inside a nested subworkflow (#1129). The start-position prompt in `takt list` is a browsable, paginated tree: `Resume failed position` keeps the saved checkpoint (call stack, iteration counters, elapsed time), `Restart from` starts a new logical execution at the chosen path without inheriting them, and `Browse child workflow from` descends into a `workflow_call` to pick one of its steps, with fully qualified paths distinguishing duplicate step names. Selections are re-validated immediately before execution and rejected if the step or workflow identity changed; both immediate Execute and Save task carry the selection.
+- `vars` on `workflow_call` steps (#1157). Scalar execution context (strings, finite numbers, booleans) is inherited through nested workflow calls, overridable per call, and read in instruction facets as `{var:name}`; a missing value renders as `unspecified`.
+- `loop_monitors.ignore_steps` (#1158). Cycle monitors can exclude optional verification or retry steps from cycle matching, so a logical `review ↔ fix` cycle is still caught when an optional step sometimes runs between them.
+
+### Changed
+
+- **BREAKING:** `workflow_call` is now a non-counting control node, while the root workflow's `max_steps` is shared by executable steps across the complete descendant call tree (#1133). Callable workflows must no longer define `max_steps`; explicit values fail during loading, and direct root execution of a callable workflow is rejected. Call wrappers no longer resolve or report provider/model data. Session logs and traces expose provider-independent call lifecycle records keyed by call invocation and the complete call stack. The iteration limit is checked only before a counting step, so entering a `workflow_call` at the cap is allowed and the run stops at the child's first executable step; interactive limit extension and `--ignore-exceed` extend the single shared budget. Subworkflow report directories under `.takt/runs/*/reports/` switch from `iteration-N--step-X--workflow-Y` segments to `call-…` segments, and support for reading or resuming runs recorded in the older formats was removed entirely (#1170) — run state is self-contained per run, so no migration is provided. Consumers that parse iteration numbers, wrapper provider data, or report paths must update.
+- **BREAKING:** Claude providers no longer inherit filesystem Skills by default (#1078). The new `provider_options.claude.skills.enabled` flag (plus the `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED` env override) controls whether `claude-sdk`, `claude`, and `claude-terminal` discover Skills, and it defaults to `false`: `claude-sdk` receives `skills: []`, while the CLI-backed `claude` and `claude-terminal` are launched with `--disable-slash-commands`, which also disables custom Claude slash commands in those sessions. Set `enabled: true` to restore Claude's normal discovery. CLI-backed sessions verify the flag is supported before starting; Claude Code 2.1.220 is the verified minimum. This is a context filter, not a sandbox — Skill files remain reachable via Read or Bash.
+- The builtin development workflows were recomposed onto shared step fragments (#1132, #1140, #1141, #1163). `takt-default`, `default`, `default-high`, the domain workflows, the `*-mini` family, and the `simple` family now share `development-core` / `mini-core` plan, test, implement, review, and remediation fragments, and a dedicated `fix-plan` step sits between the reviewers and the fix. `default-high` and `dual` now implement directly instead of delegating to a Team Leader — use `takt-default-team-high` for the leader flow.
+- Builtin planning, test-writing, and implementation prompts now enforce contract traceability and requirement authority (#1162, #1164, #1165, #1166) — a prompt-tuning pass aligned with what current models can reliably carry. Plans assign a stable ID to every independently verifiable completion obligation, and those IDs flow append-only through the test report into a new `implementation-report.md` artifact with per-contract verification status; implementation may add IDs but never renumber or repurpose upstream ones. Every requirement and completion contract must cite its origin: current code, WIP diffs, tests, review reports, and knowledge/policy facets count as evidence and can no longer create requirements, and planners must keep the stated objective, constraints, and acceptance criteria fixed instead of reframing the task or promoting a reviewer's suggestion into a requirement. Phase 2 report generation for every step now receives the original workflow task as the authoritative requirement source, so reports no longer drift toward whatever Phase 1 happened to say.
+- Review and remediation now converge by problem family (#1153, #1157, #1158, #1160). Reviewers scan for and report the whole defect family behind each finding, the initial review round is separated from bounded follow-up rounds, and incomplete fix verification routes to a dedicated `fix-retry` step instead of replanning from scratch.
+
+### Removed
+
+- **BREAKING:** The QA reviewer was removed from the builtin review workflows (#1153). The `qa-reviewer` persona, `qa` policy, and `qa-review` output contracts were deleted, with its distinct perspective folded into the coding policy. User workflows referencing them must switch to the remaining reviewer facets.
+
+### Fixed
+
+- OpenCode runs no longer abort with `OpenCode stream tracking limit exceeded` on reasoning-heavy steps (#1130). Reasoning deltas were tracked as response text and charged against the response-text byte budget; part types are now tracked, reasoning is routed to the thinking stream instead of response content, and tracking-limit failures report which guard tripped.
+- Workflow progress is preserved across task requeues (#1156, #1159). Auto-requeued and retried tasks keep their nested resume checkpoint, retry iteration metadata, and step counters instead of restarting blind, and the step limit for restored iterations grows linearly by the workflow's `max_steps` per attempt rather than doubling.
+- Projects whose path crosses a filesystem-root symlink (such as `/tmp` → `/private/tmp` on macOS) no longer fail private-artifact validation with a trusted-root symlink error (#1141); symlinks below the trusted boundary are still rejected.
+- Workflow file references are canonicalized through symlinks (#1158), keeping trust and identity consistent when the same workflow is reached via different paths.
+- Finding-ledger summaries shown to agents now reflect the committed ledger state instead of a pre-commit projection (#1157).
+
+### Internal
+
+- READMEs and the teaser site now lead with tutorial video previews (#1121).
+- The prompt-eval harness under `eval/` gained cases and assertions covering the planning and remediation prompt changes (#1153, #1154, #1158, #1160, #1164).
+
+## [0.54.1] - 2026-07-29
+
+### Fixed
+
+- Codex auto-routing no longer falls back for every routed step because of an invalid strict structured-output schema (#1123). Router output schemas are now validated when the estimator is created, so deterministic schema incompatibilities fail fast while runtime estimation failures continue to use the configured pool fallback. The shared Codex/Claude schema path is covered through the Claude Agent SDK query boundary.
+
+## [0.54.0] - 2026-07-28
+
+### Added
+
+- The `simple` workflow family (#1117). Seven builtin workflows for capable models that trust the model's judgment and keep orchestration minimal: `simple` (plan → write tests → implement → code review → fix loop → final supervision), `simple-mini` (omits dedicated test writing and final supervision), and the domain variants `simple-frontend`, `simple-backend`, `simple-cqrs`, `simple-dual`, and `simple-dual-cqrs`, which inject the matching knowledge and policies into a shared internal `simple-core` subworkflow. The steps direct the model to select relevant available skills on its own, and on codex the family inherits repository and user Skills (`provider_options.codex.skills.repo/user: true`). The catalog gained a ✨ Simple category, and `simple` now leads the 🚀 Quick Start category.
+
+### Internal
+
+- Prose-coupled assertions were removed from the skill-docs tests, and the builtin-facet deployment test covers the new `use-relevant-skills` instruction partial (#1117).
+
+## [0.53.0] - 2026-07-27
+
+### Removed
+
+- **BREAKING:** The `for-local-llm` workflow family was removed (#1070): `takt-default-for-local-llm`, `frontend-for-local-llm`, `backend-for-local-llm`, `backend-cqrs-for-local-llm`, `dual-for-local-llm`, and `peer-review-for-local-llm`. Use `takt-default`, `takt-default-high`, or the corresponding domain workflows instead. Saved tasks or runs that reference a removed workflow must switch workflows before retrying or resuming.
+- **BREAKING:** The MCP tools `takt_create_issue_and_enqueue_task` and `takt_run_next_task` were removed (#1104). `takt_enqueue_task` is now the only MCP tool: pass `issue: { number }` to link an existing issue, or `issue: { title?, labels? }` to create one before enqueueing. Run queued tasks with `takt run` or `takt watch`.
+
+### Added
+
+- `takt-default-team-high` workflow (#1055). A Team Leader variant of `takt-default-high`: plan, tests, Team Leader-directed implementation, six compact specialist reviews, Team Leader-directed fixes, and a fail-closed final gate.
+- Team Leader Finding Contract fix mode (#1089, #1090, #1091, #1100). `team_leader.mode: finding_contract_fix` turns a team_leader step into a Finding Contract repair step: every part is assigned to explicit actionable findings, `complete` requires successful verification plus `fixCoverage` for every actionable finding present at step start, and the decision routes via mechanical conditions such as `when(structured.fix.decision == "complete")`. Wildcard contract paths are rejected (#1090), and part `writePaths` document coordination between parallel parts rather than acting as a sandbox (#1100).
+- The findings-manager now acts as an adjudicator (#1053): dismiss adjudication and duplicate consolidation actually take effect in the ledger, manager state is injected into the review-fix judge, and manager/interpreter LLM calls are recorded in usage events instead of being a token-accounting blind spot.
+- Multi-select facet prompts (#1065). The exec facet editor now offers multi-select prompts, so facet references can be picked in one pass instead of one-at-a-time dialogs.
+- Codex Skill inheritance control (#1081). New `provider_options.codex.skills.repo` / `.user` flags (plus `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` env overrides) control whether Codex discovers repository (`.agents/skills`) and user (`~/.agents/skills`, `$CODEX_HOME/skills`) Skills. Workflows now default to not inheriting either scope; `takt exec` defaults to inheriting and snapshots the resolved values into the generated workflow.
+- Resumed runs inherit review reports (#1059). Resuming a run carries prior review reports over (best effort), so a resumed fix step no longer starts blind; same-run requeues skip the resume snapshot.
+- Shared fix steps now persist a structured `fix-report` (#1116). The builtin workflows that use the shared fix instruction write addressed/unaddressed findings, verification results, and family coverage as a non-judging output contract, so the next iteration or a resumed run can pick up where the fix left off. Rules, transitions, and completion judgment are unchanged.
+
+### Changed
+
+- **BREAKING:** Node.js `>=24.15.0` is now required (#1111), up from `^20.20.0 || >=22.22.0`, because Finding Contract authority uses the built-in `node:sqlite` module.
+- **BREAKING:** Auto-routing candidates were reworked around pools and tiers (#1103). `cost_tier` was renamed to `routing_tier` (`high` | `medium` | `low`), and `default_pool` plus `candidate_pools` (each with a pool-local `fallback`) are now required; optional `pool_rules` pin tags/steps/personas to a pool. The router now only estimates the required tier — from the normalized task, the raw step instruction, and current remaining work — and TAKT deterministically picks the candidate: `cost` and `balanced` take the lowest sufficient `routing_tier` in the selected pool, `performance` the highest. Existing configs must rename `cost_tier` and add `default_pool` / `candidate_pools`.
+- High workflows are capped at 50 steps (#1061): `max_steps` dropped from 200 to 50 on `takt-default-high`, `review-fix-takt-default-high`, and `takt-default-team-high`.
+- Merge-readiness now runs before final supervision in the high workflows (#1060), and the Finding Contract final gate was extracted into `merge-readiness-finding-contract-final-gate`.
+- The stop-budget time cap is now opt-in (#1052). `stop_budget.max_minutes` no longer defaults to 90 minutes — churn shows up in round counts, not minutes, and the time default had falsely stopped healthy large runs; the round cap (default 40) remains the deterministic stop guarantee. Reviewers are also barred from filing demands for quality-gate execution evidence as findings; evaluating verification results is the final gate's job.
+- The Team Leader total part limit was removed (#1084): the leader may keep adding batches until it judges the work complete, and `initial_max_parts` bounds only the first decomposition batch.
+
+### Fixed
+
+- Team Leader robustness: obsolete running parts are cancelled and completion judgment waits for still-running parts (#1105); invalid decompositions are regenerated with validation diagnostics instead of failing (#1113); the feedback fallback stops on abort (#1085); reviewer-anomaly invariants are passed to loop monitors (#1114); and the implementation judgment receives the agent's completion report (#1101).
+- Finding Contract convergence and recovery hardening (#1056, #1058, #1063, #1067, #1069, #1072, #1074, #1086, #1087, #1092, #1093). The findings-manager no longer discards its entire output on dedup/evidence conflicts and degrades to mechanical classification instead of an empty result (#1056); convergence state survives retries (#1058) and finding context survives resumes (#1074); stalled Finding Contract workflows re-plan and final-gate `needs_fix` decisions are honored (#1069); review target snapshots are bound to the structured output contract (#1086); reviewer anomalies are kept after re-matching (#1087); invalid manager decisions are retried (#1092) with hardened recovery (#1093); explanatory adjudication evidence citations are accepted (#1063); post-fix loop monitor states are distinguished (#1067); and re-plans justified only by external blockers abort instead of looping (#1072).
+- The fix loop now aborts with an explicit verdict when verification is impossible for environmental reasons (#1102), instead of spinning on unfixable findings.
+- PR-derived tasks and Instruct now use the same diff basis (#1106), with PR diff refs materialized so review context matches what is actually being merged.
+- Concurrent clone/worktree path collisions were fixed (#1110): clone directories get a unique random suffix, covering same-second task starts and PR-sync worktrees.
+- Isolated temporary paths were shortened (#1071) to stay within platform path-length limits, with Windows temp-env precedence covered.
+- `auto-improvement-loop` now completes a full issue → implement → PR → self-review → merge cycle on codex (#1045); it previously aborted at `plan_from_issue`.
+- OpenCode runs on local models were stabilized (#1017): tool-call failures now log the offending arguments to the debug log, and Finding Contract freezes under weak models were resolved.
+
+### Internal
+
+- Finding Contract-only SQLite authority (#1111). Finding state is separated from run lifecycle artifacts and managed in `.takt/runs/<run>/finding-contract.sqlite`.
+- Builtin TAKT workflows were unified on first-match rule semantics (#1083).
+- The MCP stdio integration test now passes the isolated `TAKT_CONFIG_DIR` to the spawned server, so it no longer reads the operator's real `~/.takt/config.yaml`.
+- Docs: reusable TAKT overview assets (#1108, #1109) and YouTube tutorial links (#1112).
+
+## [0.52.0] - 2026-07-19
+
+### Removed
+
+- **BREAKING:** Removed the `{current_report}`, `{previous_report}`, `{peer_reports}`, and `{report_history}` instruction placeholders without backward compatibility. Use `{report:filename}` to inline the required report content instead.
+
+### Added
+
+- Auto-routing is now actually usable (#1040). The `provider: auto` switch announced in 0.51.0 did not work in practice; it has been replaced with a simpler activation model. Keep a concrete top-level `provider` and define effective `auto_routing` candidates — their presence enables automatic per-step provider/model routing. Operations without workflow-step context (such as AI task-slug generation) use the concrete top-level provider/model; `auto_routing.router` and candidates are never implicit defaults. `provider: auto` is no longer accepted — if you had set it, replace it with a concrete provider.
+- `auto_requeue_max_attempts` and `ignore_exceed` config keys (#935, #937). `takt run` can now automatically requeue tasks whose workflow execution failed, up to the configured number of attempts (`0` disables it, the default). `ignore_exceed: true` applies the iteration-limit bypass to `takt run` and `takt watch` like the `--ignore-exceed` flag; an explicit CLI flag still takes precedence. Both keys work in global and project config.
+- Kiro CLI provider `model` support (#1034). The `kiro` provider now forwards a configured `model` to the Kiro CLI via `--model`.
+- Step metadata on phase usage events (#1033). Phase usage events now record the step name, step type, persona, and tags alongside provider/model, and `tools/token-usage.sh` distinguishes steps in its summary output, so per-step token accounting no longer requires correlating spans by hand.
+
+### Changed
+
+- CLI startup is lazy-loaded (#1035, #1047). Subcommand implementations and config/Git/log initialization now load on demand, cutting `--help` / `--version` startup by ~84% (196 ms → 32 ms). Update checking was split into a cheap synchronous cache read in the parent process, with a background worker refreshing the cache.
+- Reviewer verification duties were divided (#1048). The review policy now directs reviewers to spend verification time reproducing their own findings and running risk-based targeted checks instead of re-running full test suites; whole-suite verification belongs to the step that carries it as a quality gate (such as a merge-readiness final gate).
+- Review↔fix convergence hardening (#1038, #1039, #1046). Fixers must now fix all branches of the same finding family at once and report a family coverage table — partial fixes that leave sibling branches open count as non-productive loop iterations. Peer-review convergence gates judge progress by verified resolution, align review scope with blocking dependencies, and preserve genuinely productive loops.
+
+### Fixed
+
+- Codex safety-filter refusals no longer abort workflows as rule-evaluation failures (#1050). A refusal response (short body matching refusal patterns) is detected and retried on a fresh session up to twice; when retries are exhausted it surfaces as an explicit provider error instead of flowing into rule evaluation. Pure structured-output responses are never treated as refusals, and the review policy now states its defensive-audit premise up front to lower the refusal rate.
+- `takt_providers.assistant` now applies to instruct and retry personas, not only interactive planning (#1011, #1018). The 0.51.0 notes listed this fix, but the change actually landed after the 0.51.0 tag; it ships in this release.
+- OpenCode prompts no longer serialize globally (#1026). Prompt queuing is now scoped per session, so parallel steps running on different sessions execute concurrently; implicit retries still get fresh sessions.
+- Kiro session continuity (#781, #1036). Kiro CLI output has ANSI escapes stripped, the session ID is resolved via `kiro-cli chat --list-sessions` after the first turn, and subsequent turns resume with `--resume-id`, so multi-turn workflows no longer lose conversation context. The session lookup also gained a timeout and abort-signal propagation.
+- Auto-routing structured output now uses strict schemas (#1030), so router responses with unknown keys are rejected instead of silently accepted.
+- `timeout_ms` on command quality gates now survives `workflow_call` resolution (#1021). Command gates in callable workflows dropped their timeout during config normalization.
+
+### Internal
+
+- The dogfood quality gates in `.takt/config.yaml` were tiered (#1048, #1049): in-loop fix/implement steps run lightweight gates (build, lint, per-file targeted tests, smoke E2E) and the full suites moved to the merge-readiness gate.
+- OpenCode E2E now targets `ollama-cloud/qwen3.5:397b` after `qwen3-coder-next` was retired upstream; the stale model name was also removed from config examples.
+- The `auto_routing` docs examples were refreshed to a production-style configuration with an explicit note on `assistant` routing.
+
+## [0.51.0] - 2026-07-11
+
+### Added
+
+- Auto-routing: `provider: auto` (#921, #964). TAKT can now choose the provider/model per step. Configure an `auto_routing` block with a `strategy` (`cost`, `balanced`, or `performance`), a lightweight `router` model that classifies each step, and named `candidates` (provider + model + `cost_tier`); `rules.tags` can pin a step tag to a candidate deterministically. Routing decisions are recorded locally as NDJSON under `.takt/events/` — nothing is uploaded — and local recording can be controlled via `telemetry.routing_decisions` or `takt telemetry status|enable|disable`.
+- Image attachments in exec input (#934, #936). While editing the exec input line, `/paste-image` or `Ctrl+V` attaches a clipboard image on macOS, and OSC 1337 inline images from compatible terminals are also accepted. TAKT inserts an `[Image #N]` placeholder; referencing it in an Assistant message or `/go` note sends the image with that request, and `/go` copies referenced images into the generated task spec. PNG, JPEG, GIF, and WebP are supported with a 10 MiB limit; providers without native image input receive the attachment as a local path reference in the prompt.
+- `session: compact` mode (#994, #995). Steps and parallel sub-steps can now set `session: compact` to resume the saved persona session and ask the provider to compact it before Phase 1, keeping long-running personas within context limits. Compaction runs only before Phase 1; providers without a compaction capability continue unchanged, and a compaction failure logs a warning and continues with the uncompressed session.
+- Finding Contract manager provider/model (#970, #1008). `finding_contract.manager` now accepts dedicated `provider` / `model` fields for the synthetic Finding Manager step. When set, they take priority over `provider_routing`, deprecated `persona_providers`, workflow defaults, and the resolved input provider/model.
+
+### Changed
+
+- Finding Manager mechanical classification (#1007). Decidable raw findings — resolution confirmations and exact location+familyTag matches against open findings — are now classified in code, so the manager LLM only sees the residual judgment calls (with a slimmed ledger). When there are no residuals and no dispute claims, the LLM call is skipped entirely. In live benches the manager had been the largest token consumer, carrying ~200 KB ledgers every round.
+- `implement` dead ends now route to `plan` (re-planning) instead of ABORT in the `for-local-llm` family (#1009), matching what `write_tests` and `fix` already did. ABORT remains reserved for loop-monitor verdicts, unclear requirements, and review conflicts.
+- Bundled SDKs updated: `@openai/codex-sdk` 0.144.1 and `@anthropic-ai/claude-agent-sdk` 0.3.206 (#1015). The bundled Codex CLI now knows the GPT-5.6 model family (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`), so these can be specified as `model` on the codex provider.
+
+### Removed
+
+- `takt-default-refresh-all` and `takt-default-refresh-fast` were removed. Use `takt-default` or `takt-default-high` instead. Saved tasks or runs that reference either removed workflow must switch workflows before retrying or resuming, or be recreated.
+
+### Fixed
+
+- `takt_providers.assistant` now applies to instruct and retry dialogue, not only interactive planning (#1011).
+- OpenCode silent-timeout autopsy classifies provider 429s as `rate_limited` (#985, #1010). The OpenCode server retries provider 429s internally without emitting `session.error`, so a rate-limited session looked like a zero-progress stall and the idle watchdog aborted it without engaging the engine's rate-limit backoff. On an idle-timeout abort, TAKT now inspects the session's last assistant message (with a 5-second budget) and returns 429-class errors as `rate_limited`.
+- The Finding Contract dispute route now works with `language: ja`, and index-state findings are prevented (#1012, #1014). The FC instructions were English-only, which starved the ja dispute entry point; prose is now localized while machine-matched tokens (`## Disputed Findings`, field names) stay English. The coder persona's "reviewer findings are absolute — never argue" stance, which suppressed legitimate disputes, was rewritten into an evidence discipline. Git rules now forbid treating index/staging state as evidence, preventing unsatisfiable "commit this file" findings in TAKT-managed runs.
+- Stale findings are covered end to end in the dispute route (#993). Dispute guidance now covers findings that contradict the current code (verify against reality, dispute with fresh file:line evidence), and the review-fix loop judge treats fixes-landed-but-findings-persist as a findings-side deadlock that re-planning plus dispute can break, instead of aborting.
+- Overnight hardening from live bench operations (#999). Partial `provider_profiles` in user config now overlay the per-provider defaults instead of replacing the whole map; `edit: true` supplies the `edit` permission floor so an editing step can never run with a read-only tool map; a per-call tool error budget (25, no resets) stops degenerate loops that rotate tool names; and a per-call cap on assistant message cycles stops pure text-fragment spin loops.
+
+### Internal
+
+- Facet guidance clarified: output contracts and boundaries (#1013), actor and auth knowledge (#1004), declarative validation (#1000), exception translation boundaries (#998), MCP worktree/autoPr descriptions (#997).
+
+## [0.50.0] - 2026-07-06
+
+### Added
+
+- MCP server entrypoint `takt-mcp` (#938, #943). TAKT can now run as a stdio Model Context Protocol server, letting an MCP client (Codex, Claude Code, …) drive TAKT without shelling out to `takt add` / `takt run`. Three tools are exposed: `takt_enqueue_task` (save a pending task to `.takt/tasks.yaml`), `takt_create_issue_and_enqueue_task` (create an issue through the configured issue provider, then enqueue the task with the new issue number), and `takt_run_next_task` (claim and execute the next pending task). Every tool `cwd` is resolved with `realpath` and must stay inside the server's allowed project root. Register it in Codex with `codex mcp add takt -- takt-mcp` or a `[mcp_servers.takt]` block. See the CLI Reference for the full tool schemas.
+- ACP agent entrypoint `takt-acp` (#913, #916). TAKT can now run as an Agent Client Protocol agent over stdio JSON-RPC, launched from an ACP-compatible client. `session/prompt` is enqueue-first by default: prompts such as "enqueue this task" add a pending task (with `worktree: true`) to `.takt/tasks.yaml` for later `takt run`, while explicit "run it now" / "execute now" prompts execute directly. TAKT supports `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `session/update`; stdio MCP servers passed on `session/new` are forwarded to workflow execution.
+- `for-local-llm` workflow family (#958, #974, #982). Five workflows tuned for local or weaker models — `takt-default-for-local-llm`, `frontend-for-local-llm`, `backend-for-local-llm`, `backend-cqrs-for-local-llm`, and `dual-for-local-llm` — each running four (five for dual) parallel deep reviewers backed by the Finding Contract (ledger, resolution confirmations, dispute adjudication) plus a flat merge-readiness final gate. A new `implementation-semantics` reviewer (persona, knowledge, instruction, and finding-contract output contract) catches behavioral defects that survive compilation. A review-only `peer-review-for-local-llm` workflow ships alongside them.
+- `cli` workflow (#947). A CLI-development workflow: plan → write_tests → draft (implement + AI self-review) → peer-review (parallel reviewers + fix) → supervise → COMPLETE.
+- Finding Contract dispute/waiver lifecycle (#969). A coder that cannot fix a valid finding can now state a dispute under a fixed `## Disputed Findings` heading (finding id / reason / file:line); the findings manager either waives the finding (removing it from the blocking set with a recorded reason and evidence) or rejects the dispute (it stays open and blocking). Gates keep their existing `findings.open.count == 0` condition, so this unblocks runs that previously deadlocked on a valid-but-unfixable finding.
+- `when()` syntax for engine-evaluated conditions (#977). Deterministic state expressions in rule conditions are now declared explicitly with `when(...)`, matching the existing `ai()` / `all()` / `any()` family — e.g. `condition: when(findings.conflicts.count > 0)` or `approved && when(findings.open.count == 0)`. The rule-level `when:` key is sugar that wraps its expression automatically. See the BREAKING note below for custom workflows.
+- Final-gate provider routing tag (#954). Builtin final-gate steps now carry a `final-gate` tag, so `provider_routing.tags.final-gate` can route the merge-readiness gate to a stronger provider/model independently of other review steps.
+- Merge-readiness review gate (#949). Builtin development and maintenance workflows gained a parallel final merge-readiness gate (`merge-readiness-final-gate` / `merge-readiness-dual-final-gate`) that judges only whether the change is ready to merge.
+- OpenCode native `json_schema` structured output (#965), with a one-shot corrective retry when a reviewer emits invalid structured output (#963). OpenCode reviewer steps now request structured output via OpenCode's native `format: json_schema`, which enforces key structure at the source instead of relying on hand-written JSON; when a reviewer still emits invalid JSON, TAKT asks the same session once to re-emit the corrected payload before failing.
+
+### Changed
+
+- **BREAKING:** deterministic rule conditions now require the explicit `when()` wrapper (#977). Bare comparison expressions (e.g. `findings.open.count == 0`) in a rule `condition` are treated as plain prose tag conditions, not engine-evaluated facts, and aggregate guards containing a bare expression fail configuration with a migration hint. This replaces a fragile comparison-operator heuristic that could silently turn prose like `coverage >= 80%` into an unmatchable dead rule. Custom workflows that relied on the old heuristic must wrap deterministic clauses in `when(...)` (or use the `when:` rule key); builtin workflows were migrated.
+- **BREAKING:** the `-with-fc` workflow lineage was removed (#974). `takt-default-with-fc` and `peer-review-with-fc` (added in 0.47.0) are superseded by the new `for-local-llm` family, which is now the Finding Contract lineup. Update any references to the old workflow names.
+- The fixer no longer aborts a run on "cannot proceed" (#986). When the fixer gives up on a blocker, the workflow now routes back to the planner to re-decompose it (the planner seat can be routed to a stronger model) instead of throwing away the whole run. A new replan-cycle loop monitor aborts only when consecutive replans repeat the same dead end, with a handoff summary for the human. Applies to the five development workflows.
+- Codex `approval_policy` is pinned to `never`. Because TAKT runs Codex non-interactively there is no human to approve escalations, so the sandbox mode is now the sole write boundary: `readonly` hard-blocks writes and `edit`/`full` behave as before, instead of Codex's default approval policy auto-approving an escalation past a read-only sandbox.
+- Codex model-capability checks are delegated to the provider (#983).
+
+### Fixed
+
+- OpenCode idle watchdog now fires on stalled sessions (#984). The 10-minute idle watchdog could sleep through a stall because its timer reset on any server-wide event (LSP, file watcher, sibling sessions); the reset is now scoped to the session's own events.
+- OpenCode session is preserved across step phases via per-prompt tool restriction (#948), and out-of-workspace denial is kept effective but non-fatal (#957).
+- OpenCode structured-output recovery: fall back to a formatless retry when native structured output is not produced (#967), recover when the gateway rejects `json_schema`, and treat empty or typo'd raw-finding location/suggestion fields as unset (#962).
+- Finding-contract resolution is reachable and guarded tag rules are supported (#961); dispute guidance is injected only when open findings exist (#973).
+- Cursor CLI config directory is preserved across runs (#960).
+- Symlinked stdio entrypoints are resolved to their real path (#955), so `takt-mcp` / `takt-acp` work when launched via a symlink.
+- Report-phase failures and empty Phase 1 output are now soft errors (#907, #911, #927). A report-generation failure continues to Phase 3 (status judgment) instead of aborting, empty Phase 1 output is detected as an error so later phases do not run on no content, and a report fallback path was added.
+- Isolated clone fetch no longer fails when the parent repo HEAD is on the target branch (#924) — TAKT detaches HEAD before fetching.
+- `bash` tool handling in OpenCode readonly and no-tools phases corrected (#918, #919).
+- `takt list` instruct + requeue flow fixed (#942).
+- Judgment, findings, and OpenCode handling hardened per a full-area audit (#981).
+
+### Internal
+
+- CQRS+ES knowledge and guidance strengthened (#925, #940, #941, #979, #988).
+- Prompt-quality tooling: a promptfoo-based facet quality eval (#946) and a rescan-semantics eval suite for the implementation-semantics reviewer (#951, #952, #959).
+- Reviewers must cite re-scan evidence in review reports (#951), were taught published-state immutability and family-level finding aggregation (#953), and no longer flag guarded Records (#968).
+- Review / write-tests / test-policy facet contracts tightened (#915, #917, #932, #944, #966, #987).
+- Codex: parallelized test gates (#920), MCP task workflow and auto-PR decisions (#972).
+- `when()` helpers tightened per coding standards (#978).
+
+## [0.49.0] - 2026-06-28
+
+### Added
+
+- `takt exec` — instant multi-agent exec mode (#880, #893, #908). Start an interactive session without writing workflow YAML by hand. An Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Review agent(s) review the result, a Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles. Four builtin presets ship out of the box (`backend`, `frontend`, `dual`, `research`). Use `/setup` during the conversation to edit agents, loop thresholds, presets, and referenced facets; changes persist to `~/.takt/exec.yaml` for the next session. Presets can be saved/deleted at project or global scope, and custom presets can be exported as standalone workflow YAML via the `/setup` menu.
+- `session_key` workflow field. Normal agent steps, parallel sub-steps, and `loop_monitors.judge` now accept `session_key` to share or isolate persona sessions across steps. The runtime key is built as `session_key` plus the resolved provider suffix (e.g. `shared-coder:claude`). When omitted, TAKT uses the persona key or step name as before.
+- External contract verification policies (#891). New policy rules prevent treating compile success or mock success as proof of external service contracts. Added to `existing-system-respect`, `review`, and `testing` policies.
+
+### Fixed
+
+- Team leader decomposition turn limit (#904, #906). The team leader's `decomposeTask` and `requestMoreParts` calls could fail with "Reached maximum number of turns (15)" on larger projects. The hardcoded turn limit has been removed from these read-only decomposition calls.
+- OpenCode unavailable tool loop detection (#886). The `UnavailableToolLoopDetector` was being reset on every non-error tool state, including `running`. Since OpenCode emits `running → error` for each tool call, the running event reset the counter before errors could trigger the threshold. Now only `completed` states reset the counter.
+- OpenCode tool handling in no-tools phases (#887). OpenCode no-tools phases now use wildcard deny, preventing tools from slipping through in tool-free execution phases.
+- OpenCode runtime tool list polarity (#890). OpenCode runtime instructions now use positive tool lists instead of negative lists, reducing confusion about which tools are available.
+- OpenCode non-existent tool calls (#892). Defined a custom TAKT agent for OpenCode to prevent the model from calling non-existent `list` and `task` tools referenced in OpenCode's default few-shot examples.
+
+### Internal
+
+- Product Hunt landing page added under `docs/index.html`.
+- Documentation clarified: TAKT runtime asset boundaries, Headroom is optional, `--no-telemetry` option.
+- `review-web` provider options removed (merged into `review-readonly`).
+
+## [0.48.0] - 2026-06-21
+
+### Added
+
+- Provider `base_url` support (#867). Custom API endpoints can now be configured for Claude and Codex providers via `provider_options.claude.base_url` and `provider_options.codex.base_url` at global, project, or workflow level. Non-loopback URLs in project/workflow config are blocked for security; use global config or environment variables for external endpoints.
+- Team leader `inspect_tools` (#857, #858). The `team_leader` block now accepts `inspect_tools` to limit which tools the leader agent can use during task decomposition. Supported values: `read`, `glob`, `grep`. Currently available on OpenCode and Claude providers.
+- Team leader part tags (#855). Worker parts decomposed by the team leader now support `tags`, enabling `provider_routing.tags` to apply provider/model overrides at the part level.
+- Nix flake packaging (#837). TAKT is now available as a Nix flake, providing reproducible builds across `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`. Includes a dev shell with Node.js 22 and Bun.
+- `backend-maintenance` builtin workflow. A strict workflow template for production system maintenance with multiple review phases (architecture, testing, security, QA, pure-review, coding-review), loop monitors for anti-pattern and reviewer cycles, and dual-supervisor final sign-off.
+- `token-usage.sh` analytics tool. A shell script under `tools/` that aggregates token consumption across TAKT runs, displaying top-N runs by tokens with per-step breakdown, caching percentages, and CSV export.
+
+### Fixed
+
+- OpenCode tool guidance omitted for no-tools phases (#874). The OpenCode provider's tool naming guidance now respects `allowedTools` and returns `null` when the allowed tools list is empty, preventing unnecessary guidance in tool-free execution phases.
+- `.takt/.gitignore` handling in worktree clones (#862, #864). The deny-by-default `.takt/.gitignore` template is now correctly created in worktree clones, ensuring runtime artifacts under `.takt/runs/` are not committed.
+- E2E test stability. Prevented `git` authentication prompts from hanging mock E2E tests (`GIT_TERMINAL_PROMPT=0`), and inherited the GitHub credential helper into the isolated E2E gitconfig so provider tests can push.
+
+### Internal
+
+- Review and testing facets strengthened (#859, #868). Testing policy expanded with REJECT conditions for absence-only and non-inherited-value tests. E2E knowledge facet added. Review-test instructions updated.
+- Workflow categories updated with `backend-maintenance` ordering.
+- Codex faceted-prompting dependency updated (#863).
+
 ## [0.47.0] - 2026-06-18
 
 ### Added
@@ -53,7 +478,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `team_leader` part limits split into `max_concurrency` and `max_total_parts` (#799). `max_concurrency` (up to 3) caps how many worker parts run at the same time, while `max_total_parts` (up to 20) caps the total number of parts the leader may plan for the step. The older `max_parts` key is still accepted as a compatibility alias for `max_concurrency`. Team-leader budget-error detection was also tightened so a worker part hitting its budget no longer aborts the whole run.
+- `team_leader` scheduling now separates concurrency from initial decomposition (#799). `max_concurrency` (up to 3) caps how many worker parts run at the same time, while optional `initial_max_parts` limits only the first decomposition batch. The leader may add later batches until it decides the work is complete. The older `max_parts` key is still accepted as a compatibility alias for `max_concurrency`.
 - Pure review pass added to the builtin review and development workflows. A new general-purpose `pure-reviewer` persona (with the `review-pure` instruction and `pure-review` output contract) judges only "can this change be merged now?" — flagging unmet requests, broken existing behavior, missing tests, and out-of-scope changes — and was wired into the peer-review, review, review-fix, backend(-cqrs), frontend, dual(-cqrs), terraform, and maintenance workflows. It replaces the former requirements reviewer (the `requirements-reviewer` persona and `requirements-review` output contract were removed).
 - Builtin review and testing facets hardened. Reviewers and the test-writing guidance now guard against absence-only tests that merely assert a replaced specification is gone, and the behavior-verification, review-verification, and naming-policy guidance were strengthened across the coding, review, and testing policies.
 

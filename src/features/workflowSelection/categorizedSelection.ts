@@ -6,6 +6,8 @@ import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import {
   applyBookmarks,
+  formatWorkflowLabel,
+  getWorkflowDescriptionOption,
   type SelectionOption,
   parseCategorySelection,
   CATEGORY_VALUE_PREFIX,
@@ -25,6 +27,7 @@ function getSelectableBookmarkedWorkflows(categorized: CategorizedWorkflows): st
 function buildCategoryLevelOptions(
   categories: WorkflowCategoryNode[],
   workflows: string[],
+  workflowDescriptions?: Readonly<Record<string, string>>,
 ): {
   options: SelectionOption[];
   categoryMap: Map<string, WorkflowCategoryNode>;
@@ -42,8 +45,9 @@ function buildCategoryLevelOptions(
 
   for (const workflowName of workflows) {
     options.push({
-      label: `🎼 ${sanitizeTerminalText(workflowName)}`,
+      label: formatWorkflowLabel(workflowName, true),
       value: workflowName,
+      description: getWorkflowDescriptionOption(workflowName, workflowDescriptions),
     });
   }
 
@@ -53,6 +57,7 @@ function buildCategoryLevelOptions(
 async function selectWorkflowFromCategoryTree(
   categories: WorkflowCategoryNode[],
   hasSourceSelection: boolean,
+  workflowDescriptions?: Readonly<Record<string, string>>,
   rootWorkflows: string[] = [],
 ): Promise<string | null> {
   if (categories.length === 0 && rootWorkflows.length === 0) {
@@ -67,7 +72,11 @@ async function selectWorkflowFromCategoryTree(
     const currentCategories = currentNode ? currentNode.children : categories;
     const currentWorkflows = currentNode ? currentNode.workflows : rootWorkflows;
     const currentPathLabel = sanitizeTerminalText(stack.map((node) => node.name).join(' / '));
-    const { options, categoryMap } = buildCategoryLevelOptions(currentCategories, currentWorkflows);
+    const { options, categoryMap } = buildCategoryLevelOptions(
+      currentCategories,
+      currentWorkflows,
+      workflowDescriptions,
+    );
 
     if (options.length === 0) {
       if (stack.length === 0) {
@@ -130,8 +139,9 @@ async function selectTopLevelWorkflowOption(
 
     for (const workflowName of getSelectableBookmarkedWorkflows(categorized)) {
       options.push({
-        label: `🎼 ${sanitizeTerminalText(workflowName)} [*]`,
+        label: `${formatWorkflowLabel(workflowName, true)} [*]`,
         value: workflowName,
+        description: getWorkflowDescriptionOption(workflowName, categorized.workflowDescriptions),
       });
     }
 
@@ -193,6 +203,7 @@ export async function selectWorkflowFromCategorizedWorkflows(
     const workflow = await selectWorkflowFromCategoryTree(
       selection.node.children,
       true,
+      categorized.workflowDescriptions,
       selection.node.workflows,
     );
     if (workflow) {

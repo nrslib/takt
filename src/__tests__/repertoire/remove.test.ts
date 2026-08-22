@@ -1,13 +1,15 @@
 /**
  * Regression test for repertoireRemoveCommand scan configuration.
  *
- * Verifies that findScopeReferences is called with exactly the 3 spec-defined
- * scan locations:
+ * Verifies that findScopeReferences receives workflow, provider-options,
+ * step-fragment, and category scan locations:
  *   1. ~/.takt/workflows (global workflows dir)
  *   2. .takt/workflows (project workflows dir)
  *   3. ~/.takt/provider-options (global provider_options dir)
  *   4. .takt/provider-options (project provider_options dir)
- *   5. ~/.takt/preferences/workflow-categories.yaml (categories file)
+ *   5. ~/.takt/steps (global step fragments dir)
+ *   6. .takt/steps (project step fragments dir)
+ *   7. ~/.takt/preferences/workflow-categories.yaml (categories file)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -37,6 +39,10 @@ vi.mock('../../infra/config/paths.js', () => ({
   getProjectWorkflowsDir: vi.fn().mockReturnValue('/project/.takt/workflows'),
   getGlobalProviderOptionsDir: vi.fn().mockReturnValue('/home/user/.takt/provider-options'),
   getProjectProviderOptionsDir: vi.fn().mockReturnValue('/project/.takt/provider-options'),
+  getGlobalStepsDir: vi.fn().mockReturnValue('/home/user/.takt/steps'),
+  getProjectStepsDir: vi.fn().mockReturnValue('/project/.takt/steps'),
+  getGlobalFacetPoolsDir: vi.fn().mockReturnValue('/home/user/.takt/facet-pools'),
+  getProjectFacetPoolsDir: vi.fn().mockReturnValue('/project/.takt/facet-pools'),
 }));
 
 vi.mock('../../infra/config/global/index.js', () => ({
@@ -60,6 +66,7 @@ import { repertoireRemoveCommand } from '../../commands/repertoire/remove.js';
 import { findScopeReferences } from '../../features/repertoire/remove.js';
 import { getWorkflowCategoriesPath } from '../../infra/config/global/index.js';
 import { confirm } from '../../shared/prompt/index.js';
+import { info } from '../../shared/ui/index.js';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -71,6 +78,9 @@ describe('repertoireRemoveCommand — scan configuration', () => {
     vi.mocked(findScopeReferences).mockReturnValue([]);
     vi.mocked(getWorkflowCategoriesPath).mockClear();
     vi.mocked(getWorkflowCategoriesPath).mockReturnValue('/home/user/.takt/preferences/workflow-categories.yaml');
+    vi.mocked(confirm).mockClear();
+    vi.mocked(info).mockClear();
+    vi.mocked(rmSync).mockClear();
     vi.mocked(confirm).mockResolvedValue(false);
     vi.mocked(realpathSync).mockImplementation((path: string) => path);
   });
@@ -89,6 +99,13 @@ describe('repertoireRemoveCommand — scan configuration', () => {
 
     // Then: exactly 2 provider-options directories
     expect(scanConfig.providerOptionsDirs).toHaveLength(2);
+
+    expect(scanConfig.stepsDirs).toHaveLength(2);
+
+    expect(scanConfig.facetPoolsDirs).toEqual([
+      '/home/user/.takt/facet-pools',
+      '/project/.takt/facet-pools',
+    ]);
 
     // Then: exactly 1 categories file
     expect(scanConfig.categoriesFiles).toHaveLength(1);
@@ -128,6 +145,22 @@ describe('repertoireRemoveCommand — scan configuration', () => {
     const [, scanConfig] = vi.mocked(findScopeReferences).mock.calls[0]!;
 
     expect(scanConfig.providerOptionsDirs).toContain('/project/.takt/provider-options');
+  });
+
+  it('should include global steps dir in scan', async () => {
+    await repertoireRemoveCommand('@owner/repo');
+
+    const [, scanConfig] = vi.mocked(findScopeReferences).mock.calls[0]!;
+
+    expect(scanConfig.stepsDirs).toContain('/home/user/.takt/steps');
+  });
+
+  it('should include project steps dir in scan', async () => {
+    await repertoireRemoveCommand('@owner/repo');
+
+    const [, scanConfig] = vi.mocked(findScopeReferences).mock.calls[0]!;
+
+    expect(scanConfig.stepsDirs).toContain('/project/.takt/steps');
   });
 
   it('should include preferences/workflow-categories.yaml in categoriesFiles', async () => {
@@ -179,5 +212,27 @@ describe('repertoireRemoveCommand — scan configuration', () => {
     await expect(repertoireRemoveCommand('@owner/repo')).rejects.toThrow(/escapes repertoire directory/);
 
     expect(rmSync).not.toHaveBeenCalled();
+  });
+
+  it('should stop before confirmation and deletion when reference scanning fails', async () => {
+    vi.mocked(findScopeReferences).mockImplementation(() => {
+      throw new Error('Failed to read YAML file while scanning references');
+    });
+
+    await expect(repertoireRemoveCommand('@owner/repo')).rejects.toThrow('Failed to read YAML file while scanning references');
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(rmSync).not.toHaveBeenCalled();
+  });
+
+  it('should sanitize reference paths only at the terminal output boundary', async () => {
+    const referencePath = '/project/.takt/workflows/review\x1b[31m.yaml';
+    vi.mocked(findScopeReferences).mockReturnValue([{ filePath: referencePath }]);
+
+    await repertoireRemoveCommand('@owner/repo');
+
+    expect(findScopeReferences).toHaveBeenCalledWith('@owner/repo', expect.any(Object));
+    expect(vi.mocked(info).mock.calls.flat().join('\n')).toContain('/project/.takt/workflows/review.yaml');
+    expect(vi.mocked(info).mock.calls.flat().join('\n')).not.toContain('\x1b');
   });
 });

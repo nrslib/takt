@@ -10,7 +10,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { parse as parseYaml } from 'yaml';
 import type { WorkflowConfig } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -19,31 +23,43 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+  notifySuccess: vi.fn(),
+  notifyError: vi.fn(),
+  sendSlackNotification: vi.fn(),
+  getSlackWebhookUrl: vi.fn(() => undefined),
 }));
 
 // --- Imports (after mocks) ---
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { runAllTasks } from '../features/tasks/index.js';
+import { TaskRunner } from '../infra/task/index.js';
+import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 import {
   makeResponse,
   makeStep,
   makeRule,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -93,12 +109,13 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -134,13 +151,14 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
       makeResponse({ persona: 'implement', content: 'Impl done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
-      { index: 0, method: 'phase1_tag' }, // implement → COMPLETE
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
+      { index: 0, method: 'phase3_tag' }, // implement → COMPLETE
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -150,6 +168,58 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     // Then: engine completed because limit was extended (plan+limit check+implement → COMPLETE)
     expect(state.status).toBe('completed');
     expect(onIterationLimit).toHaveBeenCalledOnce();
+  });
+
+  it('should apply an extended task limit before executing the resumed step', async () => {
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'implement',
+      steps: [makeStep('implement', {
+        provider: undefined,
+        rules: [makeRule('done', 'COMPLETE')],
+      })],
+    };
+    const onIterationLimit = vi.fn().mockResolvedValueOnce(1);
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      startStep: 'implement',
+      initialIteration: 1,
+      onIterationLimit,
+    });
+
+    const state = await engine.run();
+
+    expect(onIterationLimit).toHaveBeenCalledWith(expect.objectContaining({
+      maxSteps: 1,
+      currentIteration: 1,
+    }));
+    expect(state.iteration).toBe(2);
+  });
+
+  it('should prefer the task maxStepsOverride when resuming', async () => {
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'implement',
+      steps: [makeStep('implement', {
+        provider: undefined,
+        rules: [makeRule('done', 'COMPLETE')],
+      })],
+    };
+    const onIterationLimit = vi.fn();
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      startStep: 'implement',
+      initialIteration: 1,
+      maxStepsOverride: 3,
+      onIterationLimit,
+    });
+
+    const state = await engine.run();
+
+    expect(onIterationLimit).not.toHaveBeenCalled();
+    expect(state.iteration).toBe(2);
   });
 
   it('should continue without calling onIterationLimit when iteration limit is ignored', async () => {
@@ -174,13 +244,14 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
       makeResponse({ persona: 'implement', content: 'Impl done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
-      { index: 0, method: 'phase1_tag' }, // implement → COMPLETE
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
+      { index: 0, method: 'phase3_tag' }, // implement → COMPLETE
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
       ignoreIterationLimit: true,
     } as never);
@@ -223,15 +294,16 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       makeResponse({ persona: 'fix', content: 'Fix complete' }),
       makeResponse({ persona: 'verify', content: 'Verify complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
     engine.on('iteration:limit', (iteration, maxSteps) => {
@@ -271,14 +343,15 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       makeResponse({ persona: 'review', content: 'Review complete' }),
       makeResponse({ persona: 'stop', content: 'Abort now' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -310,11 +383,12 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
         });
         return makeResponse({ content: `iteration ${i}` });
       });
-      mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
     }
 
     const loopEngine = new WorkflowEngine(loopConfig, tmpDir, 'loop task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const loopAbort = vi.fn();
@@ -345,6 +419,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     const blockedEngine = new WorkflowEngine(blockedConfig, tmpDir, 'blocked task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const blockedAbort = vi.fn();
@@ -364,6 +439,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     const errorEngine = new WorkflowEngine(blockedConfig, tmpDir, 'error task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const errorAbort = vi.fn();
@@ -380,6 +456,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     vi.mocked(runAgent).mockRejectedValueOnce(new Error('runtime exploded'));
     const runtimeEngine = new WorkflowEngine(blockedConfig, tmpDir, 'runtime task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const runtimeAbort = vi.fn();
@@ -394,6 +471,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     const interruptEngine = new WorkflowEngine(blockedConfig, tmpDir, 'interrupt task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const interruptAbort = vi.fn();
@@ -432,12 +510,13 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -476,14 +555,15 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       // Third step needed after extension
       makeResponse({ persona: 'implement', content: 'Impl done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
-      { index: 0, method: 'phase1_tag' }, // implement → COMPLETE
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
+      { index: 0, method: 'phase3_tag' }, // implement → COMPLETE
       // This never runs because we complete on the second implement
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -517,12 +597,13 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit: async (request) => {
         eventOrder.push('onIterationLimit');
         return onIterationLimit(request);
@@ -577,12 +658,13 @@ describe('WorkflowEngine: initialIteration option', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       initialIteration: 30,
     });
 
@@ -610,12 +692,13 @@ describe('WorkflowEngine: initialIteration option', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
     });
 
     // When: engine runs one step
@@ -643,6 +726,7 @@ describe('WorkflowEngine: initialIteration option', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       initialIteration: 30,
       onIterationLimit,
     });
@@ -683,12 +767,13 @@ describe('WorkflowEngine: initialIteration option', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       initialIteration: 30,
       onIterationLimit,
     });

@@ -1,0 +1,23 @@
+name: cli
+description: CLI開発向けファセットを共通開発フローへ注入するワークフロー。
+max_steps: 51
+initial_step: develop
+steps:
+  - name: develop
+    kind: workflow_call
+    call: development-core
+    args:
+      plan_policy: [design-planning, architecture]
+      plan_knowledge: [architecture]
+      testing_policy: [coding, testing, architecture]
+      testing_knowledge: [architecture, unit-testing, e2e-testing]
+      development_policy: [coding, testing, architecture, task-decomposition]
+      development_knowledge: [architecture, task-decomposition]
+      implementation_instruction: implement
+      review_policy: [coding, testing, review, architecture]
+      review_knowledge: [architecture, unit-testing, e2e-testing]
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

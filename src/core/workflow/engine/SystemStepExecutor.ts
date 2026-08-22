@@ -1,6 +1,6 @@
 import type { AgentResponse, WorkflowEffect, WorkflowState, WorkflowStep } from '../../models/types.js';
-import { detectMatchedRule } from '../evaluation/index.js';
 import type { RuleEvaluatorContext } from '../evaluation/RuleEvaluator.js';
+import type { StatusJudgmentPhaseContext } from '../phase-runner.js';
 import type {
   SystemStepRuntimeState,
   SystemStepInputResolutionContext,
@@ -9,6 +9,8 @@ import type {
 } from '../system/system-step-services.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
 import { waitForStepDelay } from './step-delay.js';
+import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
+import type { RuntimeStepResolution } from '../types.js';
 
 interface SystemStepExecutorDeps {
   readonly task: string;
@@ -18,7 +20,16 @@ interface SystemStepExecutorDeps {
     readonly issueNumber?: number;
     readonly runSlug?: string;
   };
-  readonly getRuleContext: (step: WorkflowStep) => Omit<RuleEvaluatorContext, 'state'>;
+  readonly getRuleContext: (
+    step: WorkflowStep,
+    runtime?: RuntimeStepResolution,
+  ) => Omit<RuleEvaluatorContext, 'state'>;
+  readonly getStatusJudgmentContext: (
+    step: WorkflowStep,
+    state: WorkflowState,
+    lastResponse: string,
+    runtime?: RuntimeStepResolution,
+  ) => StatusJudgmentPhaseContext;
   readonly systemStepServicesFactory?: SystemStepServicesFactory;
 }
 
@@ -105,13 +116,18 @@ export class SystemStepExecutor {
     return services.executeEffect(effect, payload, state);
   }
 
-  async run(step: WorkflowStep, state: WorkflowState): Promise<AgentResponse> {
+  async run(
+    step: WorkflowStep,
+    state: WorkflowState,
+    runtime?: RuntimeStepResolution,
+  ): Promise<AgentResponse> {
     await waitForStepDelay(step);
-    const ruleContext = this.deps.getRuleContext(step);
+    const cwd = this.deps.getCwd();
+    const ruleContext = this.deps.getRuleContext(step, runtime);
 
-    const resolvedContext: Record<string, unknown> = {};
+    const resolvedContext: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     if ((step.systemInputs?.length ?? 0) > 0) {
-      const services = this.requireServices(this.deps.getCwd());
+      const services = this.requireServices(cwd);
       const resolutionContext: SystemStepInputResolutionContext = {
         cache: new Map(),
         resolvedBindings: new Map(),
@@ -133,12 +149,18 @@ export class SystemStepExecutor {
     if (step.effects && step.effects.length > 0) {
       const stepEffectResults: Record<string, unknown> = {};
       for (const effect of step.effects) {
-        stepEffectResults[effect.type] = await this.executeEffect(effect, state, ruleContext.cwd);
+        stepEffectResults[effect.type] = await this.executeEffect(effect, state, cwd);
         state.effectResults.set(step.name, { ...stepEffectResults });
       }
     }
 
-    const match = await detectMatchedRule(step, '', '', {
+    const responseContent = `System step "${step.name}" completed.`;
+    const match = await evaluatePostExecutionRules(step, () => this.deps.getStatusJudgmentContext(
+      step,
+      state,
+      responseContent,
+      runtime,
+    ), {
       ...ruleContext,
       state,
     });
@@ -146,7 +168,7 @@ export class SystemStepExecutor {
     const response: AgentResponse = {
       persona: step.name,
       status: 'done',
-      content: `System step "${step.name}" completed.`,
+      content: responseContent,
       timestamp: new Date(),
       matchedRuleIndex: match?.index,
       matchedRuleMethod: match?.method,

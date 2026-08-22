@@ -6,8 +6,13 @@ import {
   classifyAbortSignalReason,
   type AgentFailureCategory,
 } from '../../shared/types/agent-failure.js';
+import { PROVIDER_CALL_TIMEOUT_DEFAULT_MS } from '../../shared/types/provider-deadline.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
+import {
+  assertClaudeSkillsDisableSupported,
+  ClaudeCliCapabilityAbortError,
+} from '../claude/cli-capability.js';
 import { buildClaudeTerminalCommand } from './command.js';
 import { normalizeClaudeTerminalResponse } from './response-normalizer.js';
 import { ProjectClaudeTranscriptReader } from './transcript-reader.js';
@@ -23,7 +28,6 @@ import type {
 } from './types.js';
 
 const DEFAULT_BACKEND: ClaudeTerminalBackendName = 'tmux';
-const DEFAULT_TIMEOUT_MS = 900000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const log = createLogger('claude-terminal');
 
@@ -154,7 +158,7 @@ export async function callClaudeTerminal(
   options: ClaudeTerminalCallOptions,
 ): Promise<AgentResponse> {
   const backendName = options.backend ?? DEFAULT_BACKEND;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const callTimeoutMs = options.callTimeoutMs ?? options.timeoutMs ?? PROVIDER_CALL_TIMEOUT_DEFAULT_MS;
   const pollIntervalMs = options.transcriptPollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const keepSession = options.keepSession === true;
   const terminalBackend = resolveTerminalBackend(backendName, options.terminalBackend);
@@ -163,7 +167,10 @@ export async function callClaudeTerminal(
   let responseSessionId: string | undefined = options.sessionId;
   let terminalSession: TerminalSession | undefined;
   let stopRequested = false;
-  let cleanup: (() => Promise<void>) | undefined;
+  // Keep adapter disposal reachable even when MCP argument preparation fails.
+  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined
+    ? undefined
+    : () => options.preparedMcp!.dispose();
   let abortHandler: (() => void) | undefined;
   let aborted = false;
   let pendingStart: Promise<TerminalSession> | undefined;
@@ -241,17 +248,42 @@ export async function callClaudeTerminal(
   }
 
   try {
-    const prepared = await prepareClaudeMcpConfig(options.mcpServers);
-    cleanup = prepared.cleanup;
+    const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
+    if (
+      options.skillsEnabled === false
+      && options.terminalBackend === undefined
+    ) {
+      await assertClaudeSkillsDisableSupported(
+        options.pathToClaudeCodeExecutable ?? 'claude',
+        options.abortSignal,
+      );
+    }
+    const preparedMcpConfig = options.preparedMcp === undefined
+      ? await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers)
+      : { path: undefined, cleanup: async () => {} };
+    const legacyCleanup = preparedMcpConfig.cleanup;
+    cleanup = async () => {
+      const results = await Promise.allSettled([
+        legacyCleanup(),
+        ...(options.preparedMcp === undefined ? [] : [options.preparedMcp.dispose()]),
+      ]);
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed?.status === 'rejected') {
+        throw failed.reason;
+      }
+    };
     if (options.abortSignal?.aborted) {
       throw new ClaudeTerminalAbortError(options.abortSignal.reason);
     }
     const command = buildClaudeTerminalCommand({
       pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
+      internalAgentIsolation: options.internalAgentIsolation,
       model: options.model,
       effort: options.effort,
+      skillsEnabled: options.skillsEnabled,
       allowedTools: options.allowedTools,
-      mcpConfigPath: prepared.path,
+      mcpConfigPath: preparedMcpConfig.path,
+      preparedMcpArgs: options.preparedMcp?.args,
       permissionMode: options.permissionMode,
       bypassPermissions: options.bypassPermissions,
       sessionId: options.sessionId,
@@ -260,6 +292,7 @@ export async function callClaudeTerminal(
       outputSchema: options.outputSchema,
     });
 
+    options.onActivity?.({ kind: 'attempt_started' });
     const startedSession = await withAbort(() => {
       const startPromise = terminalBackend.start({
         cwd: options.cwd,
@@ -284,9 +317,10 @@ export async function callClaudeTerminal(
     const session = await withAbort(() => transcriptReader.findSession({
       cwd: options.cwd,
       sessionId: claudeSessionId,
-      timeoutMs,
+      timeoutMs: callTimeoutMs,
       pollIntervalMs,
       abortSignal: options.abortSignal,
+      onActivity: options.onActivity,
     }));
     responseSessionId = session.sessionId;
     emitInit(options, session.sessionId);
@@ -294,13 +328,15 @@ export async function callClaudeTerminal(
     const handledEvents: ClaudeTerminalEvent[] = [];
     let response: ClaudeTerminalTranscript;
     while (true) {
+      options.onActivity?.({ kind: 'attempt_started' });
       response = await withAbort(() => transcriptReader.waitForAssistantResponse({
         session,
         baseline,
         cwd: options.cwd,
-        timeoutMs,
+        timeoutMs: callTimeoutMs,
         pollIntervalMs,
         abortSignal: options.abortSignal,
+        onActivity: options.onActivity,
       }));
 
       handledEvents.push(...response.events);
@@ -329,9 +365,29 @@ export async function callClaudeTerminal(
     });
   } catch (error) {
     if (error instanceof ClaudeTerminalAbortError) {
+      return createAbortResponse(
+        agentName,
+        error.reason,
+        responseSessionId,
+      );
+    }
+    if (
+      error instanceof ClaudeCliCapabilityAbortError
+      && options.abortSignal?.aborted
+      && error.reason === options.abortSignal.reason
+    ) {
       return createAbortResponse(agentName, error.reason, responseSessionId);
     }
-    return createErrorResponse(agentName, getErrorMessage(error), AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR, responseSessionId);
+    const errorMessage = getErrorMessage(error);
+    const classified = classifyAbortSignalReason(errorMessage);
+    return createErrorResponse(
+      agentName,
+      errorMessage,
+      classified.category === AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
+        ? classified.category
+        : AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      responseSessionId,
+    );
   } finally {
     if (abortHandler) {
       options.abortSignal?.removeEventListener('abort', abortHandler);

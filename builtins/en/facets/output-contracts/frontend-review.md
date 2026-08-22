@@ -1,10 +1,9 @@
 ```markdown
 # Frontend Review
 
-## Result: APPROVE / REJECT
+{{include:output-contracts/base-review-result}}
 
-## Summary
-{Summarize the result in 1-2 sentences}
+{{include:output-contracts/base-review-summary}}
 
 ## Reviewed Aspects
 | Aspect | Result | Notes |
@@ -16,31 +15,31 @@
 | Accessibility | ✅ | - |
 | Type safety | ✅ | - |
 
-## Current Iteration Findings (new)
-| # | finding_id | family_tag | Location | Issue | Fix Suggestion |
-|---|------------|------------|----------|-------|----------------|
-| 1 | FE-NEW-src-file-L42 | component-design | `src/file.tsx:42` | Issue description | Fix approach |
+{{include:output-contracts/base-review-problem-family-completion-sweep}}
 
-## Carry-over Findings (persists)
-| # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |
-|---|------------|------------|-------------------|------------------|-------|----------------|
+## Current Iteration Findings (new)
+| # | finding_id | family_tag | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
+|---|------------|------------|----------|-------|---------------------|----------------------------------|----------------|
+| 1 | FE-NEW-src-file-L42 | component-design | `src/file.tsx:42` | Issue description | required_consumer_migration | The initial review evidence did not inspect this consumer | Fix approach |
+
+{{include:output-contracts/base-review-follow-up-authorization}}
+
+{{include:output-contracts/base-review-persists}}
+{{include:output-contracts/base-review-carry-over-findings}}
 | 1 | FE-PERSIST-src-file-L77 | component-design | `src/file.tsx:77` | `src/file.tsx:77` | Still unresolved | Apply prior fix plan |
 
-## Resolved Findings (resolved)
-| finding_id | Resolution Evidence |
-|------------|---------------------|
+{{include:output-contracts/base-review-resolved-findings}}
 | FE-RESOLVED-src-file-L10 | `src/file.tsx:10` now satisfies the rule |
 
-## Reopened Findings (reopened)
-| # | finding_id | family_tag | Prior Resolution Evidence | Recurrence Evidence | Issue | Fix Suggestion |
-|---|------------|------------|--------------------------|---------------------|-------|----------------|
-| 1 | FE-REOPENED-src-file-L55 | component-design | `Previously fixed at src/file.tsx:10` | `Recurred at src/file.tsx:55` | Issue description | Fix approach |
+{{include:output-contracts/base-review-adjudicated-out-of-scope}}
+{{include:output-contracts/base-review-reopened-findings}}
+| 1 | FE-REOPENED-src-file-L55 | component-design | `review-resolution.md`: previously resolved | d | `Recurred at src/file.tsx:55` | Issue description | Fix approach |
 
+{{include:output-contracts/base-review-reopened}}
 ## Rejection Gate
-- REJECT is valid only when at least one finding exists in `new`, `persists`, or `reopened`
+{{include:output-contracts/base-review-rejection-gate}}
 - Findings without `finding_id` are invalid
 ```
 
-**Cognitive load reduction rules:**
-- APPROVE → Summary only (5 lines or fewer)
-- REJECT → Include only relevant finding rows (30 lines or fewer)
+{{include:output-contracts/base-review-cognitive-load-with-resolved}}
+{{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

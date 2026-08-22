@@ -1,30 +1,24 @@
-/**
- * WorkflowEngine integration tests: error handling scenarios.
- *
- * Covers:
- * - No rule matched (abort)
- * - runAgent throws (abort)
- * - Loop detection (abort)
- * - Iteration limit (abort and extend)
- */
-
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
-
-// --- Mock setup (must be before imports that use these modules) ---
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -32,19 +26,25 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 
-// --- Imports (after mocks) ---
+vi.mock('../core/runtime/runtime-environment.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  prepareRuntimeEnvironment: vi.fn(),
+}));
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
-import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { prepareRuntimeEnvironment } from '../core/runtime/runtime-environment.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
+import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import {
   makeResponse,
   makeStep,
   makeRule,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
@@ -59,16 +59,33 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   });
 
   afterEach(() => {
+    resetScenario();
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  // =====================================================
-  // 1. No rule matched
-  // =====================================================
+  it('should prepare run resources before reporting an invalid workflow configuration', () => {
+    const config = buildDefaultWorkflowConfig({
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'missing-step')],
+        }),
+      ],
+    });
+
+    expect(() => new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      reportDirName: 'invalid-workflow',
+    }))
+      .toThrow('target step "missing-step" does not exist');
+
+    expect(existsSync(join(tmpDir, '.takt/runs/invalid-workflow/reports'))).toBe(true);
+    expect(vi.mocked(prepareRuntimeEnvironment)).toHaveBeenCalledWith(tmpDir, config.runtime);
+  });
+
   describe('No rule matched', () => {
-    it('should abort when detectMatchedRule returns undefined', async () => {
+    it('should abort when mockRuleEvaluation returns undefined', async () => {
       const config = buildDefaultWorkflowConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
@@ -76,7 +93,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         makeResponse({ persona: 'plan', content: 'Unclear output' }),
       ]);
 
-      mockDetectMatchedRuleSequence([undefined]);
+      mockRuleEvaluationSequence([undefined]);
 
       const abortFn = vi.fn();
       engine.on('workflow:abort', abortFn);
@@ -86,13 +103,257 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       expect(state.status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
       const reason = abortFn.mock.calls[0]![1] as string;
-      expect(reason).toContain('plan');
+      expect(reason).toContain('rule_no_match');
     });
   });
 
-  // =====================================================
-  // 2. runAgent throws
-  // =====================================================
+  describe('User input runtime requirements', () => {
+    it('should abort before running a user-input step when workflow interactive mode is disabled', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'replan',
+        steps: [
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+      expect(abortFn).toHaveBeenCalledOnce();
+      const abortState = abortFn.mock.calls[0]?.[0];
+      expect(abortState?.status).toBe('aborted');
+      expect(abortState?.currentStep).toBe('replan');
+      const reason = abortFn.mock.calls[0]?.[1] as string;
+      expect(reason).toContain('interactive mode is disabled');
+    });
+
+    it('should abort before running a user-input step when no user input handler is configured', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'replan',
+        steps: [
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        interactive: true,
+      });
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+      expect(abortFn).toHaveBeenCalledOnce();
+      const abortState = abortFn.mock.calls[0]?.[0];
+      expect(abortState?.status).toBe('aborted');
+      expect(abortState?.currentStep).toBe('replan');
+      const reason = abortFn.mock.calls[0]?.[1] as string;
+      expect(reason).toContain('no handler is configured');
+    });
+
+    it('should run a user-input step without waiting when interactive requirements are satisfied and no rule asks for input', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'replan',
+        steps: [
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      });
+      const onUserInput = vi.fn();
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        interactive: true,
+        onUserInput,
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'replan', status: 'done', content: 'done' }),
+      ]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+      expect(onUserInput).not.toHaveBeenCalled();
+    });
+
+    it('should collect exec replan input, rerun replan, and return to execute', async () => {
+      const workerStep = makeStep('worker-1', {
+        rules: [makeRule('done', 'COMPLETE')],
+      });
+      const judgeStep = makeStep('judge-1', {
+        rules: [
+          makeRule('approved', 'COMPLETE'),
+          makeRule('needs_fix', 'COMPLETE'),
+          makeRule('needs_replan', 'COMPLETE'),
+        ],
+      });
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'execute',
+        steps: [
+          makeStep('execute', {
+            parallel: [workerStep],
+            rules: [
+              makeRule('all("done")', 'judge'),
+            ],
+          }),
+          makeStep('judge', {
+            parallel: [judgeStep],
+            rules: [
+              makeRule('all("approved")', 'COMPLETE'),
+              makeRule('any("needs_replan")', 'replan'),
+            ],
+          }),
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [
+              makeRule('User input needed for clarification', 'replan', {
+                requiresUserInput: true,
+                interactiveOnly: true,
+              }),
+              makeRule('New plan ready', 'execute'),
+              makeRule('Cannot proceed', 'ABORT'),
+            ],
+          }),
+        ],
+      });
+      const onUserInput = vi.fn().mockResolvedValueOnce('Refine the implementation plan');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        interactive: true,
+        onUserInput,
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'worker-1', content: 'done' }),
+        makeResponse({ persona: 'judge-1', content: 'needs_replan' }),
+        makeResponse({ persona: 'replan', content: 'User input needed for clarification' }),
+        makeResponse({ persona: 'replan', content: 'New plan ready' }),
+        makeResponse({ persona: 'worker-1', content: 'done' }),
+        makeResponse({ persona: 'judge-1', content: 'approved' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 2, method: 'phase3_tag' },
+        { index: 1, method: 'aggregate' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'aggregate' },
+      ]);
+
+      const userInputFn = vi.fn();
+      engine.on('step:user_input', userInputFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(onUserInput).toHaveBeenCalledOnce();
+      expect(onUserInput).toHaveBeenCalledWith(expect.objectContaining({
+        step: expect.objectContaining({ name: 'replan' }),
+        prompt: 'User input needed for clarification',
+      }));
+      expect(userInputFn).toHaveBeenCalledOnce();
+      expect(state.userInputs).toEqual(['Refine the implementation plan']);
+      expect(state.stepIterations.get('replan')).toBe(2);
+      expect(vi.mocked(runAgent).mock.calls.map((call) => call[0])).toEqual([
+        '../personas/worker-1.md',
+        '../personas/judge-1.md',
+        '../personas/replan.md',
+        '../personas/replan.md',
+        '../personas/worker-1.md',
+        '../personas/judge-1.md',
+      ]);
+    });
+
+    it('should abort exec replan when requested user input is canceled', async () => {
+      const workerStep = makeStep('worker-1', {
+        rules: [makeRule('done', 'COMPLETE')],
+      });
+      const judgeStep = makeStep('judge-1', {
+        rules: [
+          makeRule('approved', 'COMPLETE'),
+          makeRule('needs_replan', 'COMPLETE'),
+        ],
+      });
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'execute',
+        steps: [
+          makeStep('execute', {
+            parallel: [workerStep],
+            rules: [
+              makeRule('all("done")', 'judge'),
+            ],
+          }),
+          makeStep('judge', {
+            parallel: [judgeStep],
+            rules: [
+              makeRule('all("approved")', 'COMPLETE'),
+              makeRule('any("needs_replan")', 'replan'),
+            ],
+          }),
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [
+              makeRule('User input needed for clarification', 'replan', {
+                requiresUserInput: true,
+                interactiveOnly: true,
+              }),
+              makeRule('New plan ready', 'execute'),
+            ],
+          }),
+        ],
+      });
+      const onUserInput = vi.fn().mockResolvedValueOnce(null);
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        interactive: true,
+        onUserInput,
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'worker-1', content: 'done' }),
+        makeResponse({ persona: 'judge-1', content: 'needs_replan' }),
+        makeResponse({ persona: 'replan', content: 'User input needed for clarification' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 1, method: 'aggregate' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(state.currentStep).toBe('replan');
+      expect(state.userInputs).toEqual([]);
+      expect(onUserInput).toHaveBeenCalledOnce();
+      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    });
+  });
+
   describe('runAgent throws', () => {
     it('should abort when runAgent throws an error', async () => {
       const config = buildDefaultWorkflowConfig();
@@ -113,48 +374,35 @@ describe('WorkflowEngine Integration: Error Handling', () => {
 
   });
 
-  // =====================================================
-  // 2.5 Phase 3 fallback
-  // =====================================================
-  describe('Phase 3 fallback', () => {
-    it('should continue with phase1 rule evaluation when status judgment throws', async () => {
+  describe('Phase 3 failure', () => {
+    it('should abort without Phase 1 rule evaluation when status judgment throws', async () => {
       const config = buildDefaultWorkflowConfig({
         initialStep: 'plan',
         steps: [
           makeStep('plan', {
-            rules: [makeRule('continue', 'COMPLETE')],
+            rules: [
+              makeRule('continue', 'COMPLETE'),
+              makeRule('retry', 'plan'),
+            ],
           }),
         ],
       });
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
-      vi.mocked(needsStatusJudgmentPhase).mockReturnValue(true);
       vi.mocked(runStatusJudgmentPhase).mockRejectedValueOnce(new Error('Phase 3 failed'));
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: '[STEP:1] continue' }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-      ]);
-
       const state = await engine.run();
 
-      expect(state.status).toBe('completed');
+      expect(state.status).toBe('aborted');
       expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
-      expect(detectMatchedRule).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'plan' }),
-        '[STEP:1] continue',
-        '',
-        expect.any(Object),
-      );
-      expect(state.stepOutputs.get('plan')?.matchedRuleMethod).toBe('phase1_tag');
+      expect(mockRuleEvaluation).not.toHaveBeenCalled();
+      expect(state.stepOutputs.get('plan')).toBeUndefined();
     });
   });
 
-  // =====================================================
-  // 3. Interrupted status routing
-  // =====================================================
   describe('Error status', () => {
     it('should abort immediately and skip report phase when step returns error', async () => {
       const config = buildDefaultWorkflowConfig({
@@ -197,7 +445,10 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'claude',
+      });
 
       mockRunAgentSequence([
         makeResponse({
@@ -221,6 +472,41 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   });
 
   describe('runSingleIteration status routing', () => {
+    it('should classify an exhausted semantic selection as rule_no_match', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      mockRunAgentSequence([makeResponse({ persona: 'plan', content: 'no matching label' })]);
+      vi.mocked(mockRuleEvaluation).mockImplementationOnce(() => {
+        throw new RuleDetectionExhaustedError('plan');
+      });
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.nextStep).toBe('ABORT');
+      expect(result.isComplete).toBe(true);
+      expect(engine.getState().status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledWith(
+        expect.anything(),
+        'rule_no_match',
+        'rule_no_match',
+        {
+          kind: 'rule_no_match',
+          step: 'plan',
+          reason: 'rule_no_match',
+          error: 'rule_no_match',
+        },
+      );
+    });
+
     it('should abort without rule resolution when a step returns blocked', async () => {
       const config = buildDefaultWorkflowConfig({
         initialStep: 'plan',
@@ -290,7 +576,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         steps: [
           makeStep('plan', {
             rules: [
-              { condition: 'retry', returnValue: 'retry_plan' },
+              normalizeRule({ condition: 'retry', return: 'retry_plan' }),
             ],
           }),
         ],
@@ -303,8 +589,8 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           content: '[STEP:1] retry',
         }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const result = await engine.runSingleIteration();
@@ -317,9 +603,44 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     });
   });
 
-  // =====================================================
-  // 4. Loop detection
-  // =====================================================
+  it('should classify an aborted execution as interrupt before rule_no_match', async () => {
+    const abortController = new AbortController();
+    const config = buildDefaultWorkflowConfig({
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('continue', 'COMPLETE')],
+        }),
+      ],
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      abortSignal: abortController.signal,
+    });
+    mockRunAgentSequence([makeResponse({ persona: 'plan', content: 'no matching label' })]);
+    vi.mocked(mockRuleEvaluation).mockImplementationOnce(() => {
+      abortController.abort(new Error('cancelled'));
+      throw new RuleDetectionExhaustedError('plan');
+    });
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      'Workflow interrupted by external AbortSignal',
+      'interrupt',
+      {
+        kind: 'interrupt',
+        step: 'plan',
+        reason: 'Workflow interrupted by external AbortSignal',
+        error: 'Workflow interrupted by external AbortSignal',
+      },
+    );
+  });
+
   describe('Loop detection', () => {
     it('should abort when loop detected with action: abort', async () => {
       const config = buildDefaultWorkflowConfig({
@@ -343,8 +664,8 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           });
           return makeResponse({ content: `iteration ${i}` });
         });
-        vi.mocked(detectMatchedRule).mockResolvedValueOnce(
-          { index: 0, method: 'phase1_tag' }
+        vi.mocked(mockRuleEvaluation).mockReturnValueOnce(
+          { index: 0, method: 'phase3_tag' }
         );
       }
 
@@ -361,9 +682,60 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     });
   });
 
-  // =====================================================
-  // 5. Iteration limit
-  // =====================================================
+  describe('Scenario queue exhaustion', () => {
+    it('should handle scenario queue exhaustion mid-workflow', async () => {
+      // Delegate the mocked runAgent to the real implementation so the mock
+      // provider's scenario queue (and its empty-queue fallback) is exercised.
+      const actualRunner = await vi.importActual<typeof import('../agents/runner.js')>('../agents/runner.js');
+      vi.mocked(runAgent).mockImplementation(actualRunner.runAgent);
+
+      const personasDir = join(tmpDir, '.takt', 'personas');
+      mkdirSync(personasDir, { recursive: true });
+      for (const name of ['plan', 'implement']) {
+        writeFileSync(join(personasDir, `${name}.md`), `You are a ${name} agent.`);
+      }
+
+      // Only 1 scenario entry, but the workflow needs 2 steps
+      setMockScenario([
+        { persona: 'plan', status: 'done', content: '[PLAN:1]\n\nClear.' },
+      ]);
+
+      const config = buildDefaultWorkflowConfig({
+        steps: [
+          makeStep('plan', {
+            persona: './.takt/personas/plan.md',
+            personaPath: join(personasDir, 'plan.md'),
+            rules: [
+              makeRule('Requirements are clear', 'implement'),
+              makeRule('Requirements unclear', 'ABORT'),
+            ],
+          }),
+          makeStep('implement', {
+            persona: './.takt/personas/implement.md',
+            personaPath: join(personasDir, 'implement.md'),
+            rules: [
+              makeRule('Implementation complete', 'COMPLETE'),
+              makeRule('Cannot proceed', 'plan'),
+            ],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'Task', { projectCwd: tmpDir, provider: 'mock' });
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      // Should not throw; mock client falls back to generic response when queue is empty
+      const state = await engine.run();
+
+      // Even with queue exhaustion, engine should reach some terminal state
+      expect(['completed', 'aborted']).toContain(state.status);
+      // The step after exhaustion still received a provider response
+      expect(vi.mocked(runAgent).mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   describe('Iteration limit', () => {
     it('should abort when max iterations reached without onIterationLimit callback', async () => {
       const config = buildDefaultWorkflowConfig({ maxSteps: 2 });
@@ -375,10 +747,10 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         makeResponse({ persona: 'ai_review', content: 'OK' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // plan → implement
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers (won't be reached)
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const limitFn = vi.fn();
@@ -408,21 +780,20 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
         makeResponse({ persona: 'implement', content: 'Impl done' }),
-        // After hitting limit at iteration 2, onIterationLimit extends to 12
         makeResponse({ persona: 'ai_review', content: 'OK' }),
         makeResponse({ persona: 'arch-review', content: 'OK' }),
         makeResponse({ persona: 'security-review', content: 'OK' }),
         makeResponse({ persona: 'supervise', content: 'All passed' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // plan → implement
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 0, method: 'phase1_tag' },  // security-review → approved
-        { index: 0, method: 'aggregate' },   // reviewers → supervise
-        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();

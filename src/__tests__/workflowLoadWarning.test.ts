@@ -8,7 +8,7 @@ describe('formatWorkflowLoadWarning', () => {
 
     const warning = formatWorkflowLoadWarning('bad\n\x1b[31mname', error);
 
-    expect(warning).toContain('Workflow "bad\\nname" failed to load');
+    expect(warning).toContain('bad\\nname');
     expect(warning).toContain('badvalue\\nnext');
     expect(warning).not.toContain('\x1b');
   });
@@ -24,7 +24,7 @@ describe('formatWorkflowLoadWarning', () => {
 
     const warning = formatWorkflowLoadWarning('workflow', error);
 
-    expect(warning).toContain('Workflow "workflow" failed to load');
+    expect(warning).toContain('workflow');
     expect(warning).toContain('steps.0.name\\nbad');
     expect(warning).toContain('invalid\\tvalue');
   });

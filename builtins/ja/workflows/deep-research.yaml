@@ -1,35 +1,23 @@
 name: deep-research
 description: 深掘り調査ワークフロー - 発見駆動で新たな問いを追跡し、多角的に調査する
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    capabilities: readonly
     tags:
       - plan
     persona: research-planner
     policy: research
     knowledge: research
     instruction: research-plan
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     rules:
       - condition: 計画が完了した
         next: dig
       - condition: 情報が不足しており計画を立てられない
         next: ABORT
   - name: dig
+    capabilities: edit
     tags:
       - plan
     persona: research-digger
@@ -49,22 +37,13 @@ steps:
         - Grep
         - WebSearch
         - WebFetch
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Write
-          - Bash
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     rules:
       - condition: 調査が完了した
         next: analyze
       - condition: 調査を実行できない
         next: ABORT
   - name: analyze
+    capabilities: edit
     tags:
       - plan
     persona: research-analyzer
@@ -72,35 +51,20 @@ steps:
     knowledge: research
     instruction: research-analyze
     edit: true
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Write
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     rules:
       - condition: 新たな問いがあり追加調査が必要
         next: dig
       - condition: 十分に掘り下げた
         next: supervise
   - name: supervise
+    capabilities: readonly
     tags:
       - review
+      - supervise
     persona: research-supervisor
     policy: research
     knowledge: research
     instruction: research-supervise
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     output_contracts:
       report:
         - name: research-report.md

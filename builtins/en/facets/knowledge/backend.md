@@ -7,7 +7,6 @@ Dependency direction flows from outer to inner layers. Reverse dependencies are 
 ```
 adapter (external) → application (use cases) → domain (business logic)
 ```
-
 Directory structure:
 
 ```
@@ -56,12 +55,6 @@ data class Order(
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Framework dependencies in domain layer (@Entity, @Component, etc.) | REJECT |
-| Controller directly referencing Repository | REJECT. Must go through UseCase layer |
-| Outward dependencies from domain layer (DB, HTTP, etc.) | REJECT |
-| Direct dependencies between adapters (inbound → outbound) | REJECT |
 
 ## API Layer Design (Controller)
 
@@ -139,12 +132,6 @@ data class OrderGetResponse(
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Returning domain model directly as response | REJECT |
-| Business logic in Request DTO | REJECT. Only validation is allowed |
-| Domain logic (calculations, etc.) in Response DTO | REJECT |
-| Same type for Request and Response | REJECT |
 
 ### RESTful Action Design
 
@@ -158,11 +145,6 @@ POST   /api/orders/{id}/approve → Approve (state transition)
 POST   /api/orders/{id}/cancel  → Cancel (state transition)
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| PUT/PATCH for domain operations (approve, cancel, etc.) | REJECT. Use POST + verb sub-resource |
-| Single endpoint branching into multiple operations | REJECT. Separate endpoints per operation |
-| DELETE for soft deletion | REJECT. Use POST + explicit operation like cancel |
 
 ## Validation Strategy
 
@@ -201,27 +183,34 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Domain state transition rules in API layer | REJECT |
-| Business rule verification in Controller | REJECT. Belongs in UseCase layer |
-| Structural validation (@NotBlank, etc.) in domain | REJECT. Belongs in API layer |
-| UseCase-level validation inside Aggregate | REJECT. Read Model queries belong in UseCase layer |
+
+### Entry Validation Ownership
+
+Give each entry constraint a single owner and a single enforcement mechanism. Validations with different purposes per layer are not duplication, but do not re-implement the same boundary and the same condition in multiple mechanisms. Where declarative validation is active, invalid input is rejected before the handler; the downstream check remains reachable for valid input but redundantly re-evaluates the same condition and cannot define the violation response. Whether declarative validation is actually active depends on the framework configuration — verify it, then make a single mechanism the effective owner.
+
+```kotlin
+// Avoid: same constraint twice; declarative validation owns the violation response
+@GetMapping("/orders/{id}")
+fun get(@PathVariable @Size(max = MAX_ID) id: String): OrderResponse {
+    requireIdWithinLimit(id)  // runs only for valid input and cannot define the violation response
+    return orderReadService.get(id).toResponse()
+}
+
+// Example: unify on the declaration and delete the procedural check
+@GetMapping("/orders/{id}")
+fun get(@PathVariable @Size(max = MAX_ID) id: String): OrderResponse =
+    orderReadService.get(id).toResponse()
+```
+
+In the Spring example, constraints on scalar arguments such as `@PathVariable` or `@RequestParam` work only when method validation is active. Older setups commonly require class-level `@Validated`; Spring 6.1+ can use built-in method validation depending on configuration.
+
+On a validation violation, the response may fall through to the framework's default translation outside your own exception hierarchy (some setups translate to 400, others leave it untranslated as 500). Judge not by whether a default translation is used, but by whether the status and response shape match the explicit API contract. The exception type thrown on violation depends on configuration and version, so do not guess; pin the actual exception and response with an integration test. Follow "Exception Translation Scope" for where the translation belongs.
+
 
 ### Read and Write Entrypoints
 
 Separate read and write entrypoints. Read-side query boundaries have no side effects; writes are handled by commands or UseCases.
 
-| Criteria | Judgment |
-|----------|----------|
-| Query boundary saves, deletes, calls external services, or dispatches commands | REJECT |
-| Read-oriented class or method names hide side effects | REJECT |
-| Simple read API calls a query boundary and converts to response DTO | OK |
-| Simple state-changing API resolves structural validation and authorization boundary, then dispatches one command | OK |
-| Read-side coordinator for Controllers handles authorization boundaries, multiple Read Models, pagination, etc. | Express as ApplicationService or ReadService |
-| Sender or coordinating component named QueryService is placed near QueryHandlers | Warning. Easy to confuse with the query handling side |
-| Controller contains multiple Read Model lookups, external integration, multiple commands, or result waiting | REJECT. Separate into UseCase layer |
-| UseCase only delegates to another service or command dispatch without domain coordination | Consider deleting |
 
 ## Error Handling
 
@@ -253,23 +242,11 @@ class OrderExceptionHandler {
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| HTTP status codes in domain exceptions | REJECT. Domain must not know about HTTP |
-| Throwing generic Exception or RuntimeException | REJECT. Use specific exception types |
-| Empty try-catch blocks | REJECT |
-| Controller swallowing exceptions and returning 200 | REJECT |
 
 ### Exception Translation Scope
 
 Translate exceptions into HTTP status codes at an exception translation layer on the HTTP adapter boundary. Global translation should be limited to truly cross-cutting cases such as authentication, input validation, and common error shapes; API- or resource-specific mappings belong in a boundary scoped to that API.
 
-| Criteria | Judgment |
-|----------|----------|
-| Each endpoint maps exceptions to HTTP representation through the same try-catch or wrapper | REJECT. Move it to an exception translation layer at the HTTP adapter boundary |
-| API-specific exception mapping is added to a global handler | Scope is too broad. Keep it inside the target API boundary |
-| Authentication failures, input validation, and common error shapes shared by all APIs | OK. Handle at a global boundary |
-| HTTP representation mapping lives in the application or domain layer | REJECT. Keep it at the HTTP adapter boundary |
 
 ## Domain Model Design
 
@@ -305,12 +282,6 @@ data class Order(
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| `var` fields in domain model | REJECT. Use `copy()` for immutable updates |
-| Factory without validation | REJECT. Enforce invariants with `require` |
-| Domain model calling external services | REJECT. Pure functions only |
-| Direct field mutation via setters | REJECT |
 
 ### Value Objects
 
@@ -332,11 +303,6 @@ data class DateRange(val from: LocalDateTime, val to: LocalDateTime) {
 data class ApprovalInfo(val approvedBy: String, val approvalTime: LocalDateTime)
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Same-typed IDs that can be mixed up (orderId and customerId both String) | Consider wrapping in value objects |
-| Same field combinations (from/to, etc.) appearing in multiple places | Extract to value object |
-| Value object without init block | REJECT. Enforce invariants |
 
 ## Repository Pattern
 
@@ -378,11 +344,19 @@ data class OrderEntity(
 )
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Domain model doubling as JPA Entity | REJECT. Separate them |
-| Business logic in Entity | REJECT. Entity is data structure only |
-| Repository implementation in domain layer | REJECT. Belongs in adapter/outbound |
+
+### Persistence Boundary for Structured Attributes
+
+For structured attributes in relational or read-model persistence, choose the storage format based on update granularity, integrity, size, and schema evolution — not just current query requirements. Do not implicitly use a domain type's generic serialized form as the persistence contract; use a persistence-specific representation or an explicit mapping. Event-store type identifiers and payloads may use an explicit, versioned serialization contract.
+
+
+Historical event-payload translation, relational database schema or data migration, and Read Model rebuilds are separate responsibilities. An upcaster translates versioned event payloads at the event-store restoration boundary. Database schema or data migration and Read Model rebuilds belong to their respective persistence boundaries and tests.
+
+| Target | Placement |
+|--------|-----------|
+| Historical event-payload translation | Upcaster at the event-store restoration boundary |
+| Relational schema or data transformation | Database migration boundary |
+| Read Model derived from events | Read Model rebuild process |
 
 ## Authentication & Authorization Placement
 
@@ -409,11 +383,25 @@ fun execute(input: DeleteInput, currentUserId: String) {
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Authorization logic in UseCase or domain layer | REJECT. Belongs in Controller layer |
-| Data access control in Controller | REJECT. Belongs in UseCase layer |
-| Authentication processing inside Controller | REJECT. Belongs in Filter/Interceptor |
+
+## Distinguishing the Caller from the Domain Actor
+
+Treat the API caller (authenticated principal) and the business actor recorded on the data (person in charge, author, confirmer) as separate concepts. They diverge on ingestion, delegated operations, and administrative paths.
+
+
+The author of a memo is "whoever performed that operation"; the confirmer is "whoever performed the confirmation". Obtain the actor from each operation's performer. Facts determined later, such as the person in charge, are recorded at the operation/event that determines them — do not force a value at creation time.
+
+```kotlin
+// Avoid: Store the creation-time caller in state and reuse it as the actor of later operations
+fun addMemo(text: String): MemoAddedEvent {
+    return MemoAddedEvent(id, text, authorId = this.registeredBy)  // registrant != memo author
+}
+
+// Example: Receive the performer per operation
+fun addMemo(text: String, authorId: String): MemoAddedEvent {
+    return MemoAddedEvent(id, text, authorId = authorId)
+}
+```
 
 ## Test Strategy
 
@@ -487,25 +475,3 @@ class PlaceOrderUseCaseTest {
     }
 }
 ```
-
-| Criteria | Judgment |
-|----------|----------|
-| Using mocks for domain model tests | REJECT. Test domain purely |
-| UseCase tests connecting to real DB | REJECT. Use mocks |
-| Tests requiring framework startup | REJECT for unit tests |
-| Missing error case tests for state transitions | REJECT |
-
-## Anti-Pattern Detection
-
-REJECT when these patterns are found:
-
-| Anti-Pattern | Problem |
-|--------------|---------|
-| Smart Controller | Business logic concentrated in Controller |
-| Anemic Domain Model | Domain model is just a data structure with setters/getters |
-| God Service | All operations concentrated in a single Service class |
-| Direct Repository Access | Controller directly referencing Repository |
-| Domain Leakage | Domain logic leaking into adapter layer |
-| Entity Reuse | JPA Entity reused as domain model |
-| Swallowed Exceptions | Empty catch blocks |
-| Magic Strings | Hardcoded status strings, etc. |

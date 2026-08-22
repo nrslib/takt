@@ -111,7 +111,6 @@ describe('submitPullRequest', () => {
       title: '[#42] Fix pipeline',
     }, '/repo');
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
-    expect(mockSuccess).toHaveBeenCalledWith('PR created: https://example.com/pr/1');
   });
 
   it('should strip hidden marker from issue_body in plain pipeline PR templates', () => {

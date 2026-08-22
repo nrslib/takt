@@ -1,6 +1,6 @@
 import type { AgentResponse, CommandQualityGate, QualityGate, WorkflowStep } from '../../models/types.js';
 
-export interface CommandQualityGateFailure {
+interface CommandQualityGateFailureBase {
   gateName: string;
   type: 'command';
   command: string;
@@ -11,11 +11,22 @@ export interface CommandQualityGateFailure {
   stderr: string;
   timedOut: boolean;
   timeoutMs?: number;
-  outputLimitExceeded?: boolean;
-  outputLimitBytes?: number;
   outputLogPath?: string;
   outputLogError?: string;
 }
+
+export interface CommandOutputLimitFailureDetails {
+  outputLimitExceeded: true;
+  outputLimitBytes: number;
+}
+
+export type CommandQualityGateFailure = CommandQualityGateFailureBase & (
+  | CommandOutputLimitFailureDetails
+  | {
+    outputLimitExceeded?: never;
+    outputLimitBytes?: never;
+  }
+);
 
 export type CommandQualityGateResult = {
   ok: true;

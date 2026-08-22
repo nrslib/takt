@@ -10,7 +10,7 @@ import {
   type IsolatedEnv,
 } from '../helpers/isolated-env';
 import { createTestRepo, isGitHubE2EAvailable, type TestRepo } from '../helpers/test-repo';
-import { runTakt } from '../helpers/takt-runner';
+import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -30,6 +30,9 @@ describe('E2E: Add task from GitHub issue (takt add)', () => {
     updateIsolatedConfig(isolatedEnv.taktDir, {
       provider: 'mock',
       model: 'mock-model',
+      workflow_command_gates: {
+        custom_scripts: true,
+      },
     });
 
     const createOutput = execFileSync(
@@ -82,7 +85,7 @@ describe('E2E: Add task from GitHub issue (takt add)', () => {
       timeout: 240_000,
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
 
     const tasksFile = join(testRepo.path, '.takt', 'tasks.yaml');
     const content = readFileSync(tasksFile, 'utf-8');

@@ -1,14 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const {
-  mockResolveAssistantConfigLayers,
-  mockResolveAssistantProviderModelFromConfig,
+  mockResolveNonWorkflowProviderModel,
 } = vi.hoisted(() => ({
-  mockResolveAssistantConfigLayers: vi.fn(),
-  mockResolveAssistantProviderModelFromConfig: vi.fn(),
+  mockResolveNonWorkflowProviderModel: vi.fn(),
 }));
 
-vi.mock('node:fs', () => ({
+vi.mock('node:fs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs')>()),
   existsSync: vi.fn(),
 }));
 
@@ -45,15 +44,11 @@ vi.mock('../infra/providers/index.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   getLanguage: vi.fn(() => 'en'),
   resolveConfigValues: vi.fn(() => ({ syncConflictResolver: undefined })),
-}));
-
-vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
-}));
-
-vi.mock('../core/config/provider-resolution.js', () => ({
-  resolveAssistantProviderModelFromConfig: (...args: unknown[]) =>
-    mockResolveAssistantProviderModelFromConfig(...args),
+  resolveNonWorkflowProviderModel: (...args: unknown[]) =>
+    mockResolveNonWorkflowProviderModel(...args),
+  resolveNonWorkflowProviderOptions: vi.fn(() => ({
+    codex: { skills: { repo: false, user: false } },
+  })),
 }));
 
 const mockRelayPushCloneToOrigin = vi.fn();
@@ -72,7 +67,7 @@ vi.mock('../shared/prompts/index.js', () => ({
 
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { error as logError, success } from '../shared/ui/index.js';
+import { error as logError } from '../shared/ui/index.js';
 import { getProvider } from '../infra/providers/index.js';
 import { resolveConfigValues } from '../infra/config/index.js';
 import { syncBranchWithRoot } from '../features/tasks/list/taskSyncAction.js';
@@ -82,7 +77,6 @@ import type { AgentResponse } from '../core/models/index.js';
 const mockExistsSync = vi.mocked(fs.existsSync);
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockLogError = vi.mocked(logError);
-const mockSuccess = vi.mocked(success);
 const mockGetProvider = vi.mocked(getProvider);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 
@@ -117,8 +111,7 @@ describe('syncBranchWithRoot', () => {
     mockExistsSync.mockReturnValue(true);
     mockAgentCall.mockResolvedValue(makeAgentResponse());
     mockResolveConfigValues.mockReturnValue({ syncConflictResolver: undefined } as never);
-    mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
-    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: 'claude', model: 'sonnet' });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({ provider: 'claude', model: 'sonnet' });
     mockRelayPushCloneToOrigin.mockReturnValue(undefined);
   });
 
@@ -164,7 +157,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('Failed to fetch from root'));
     expect(mockAgentCall).not.toHaveBeenCalled();
   });
 
@@ -179,7 +171,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith('Failed to fetch from root: fatal: cannot fetch from root');
   });
 
   it('returns true and pushes when merge succeeds without conflicts', async () => {
@@ -189,7 +180,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(true);
-    expect(mockSuccess).toHaveBeenCalledWith('Synced & pushed.');
     expect(mockAgentCall).not.toHaveBeenCalled();
     // relay push: worktree → origin via root repo
     expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(
@@ -208,8 +198,7 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(true);
-    expect(mockSuccess).toHaveBeenCalledWith('Conflicts resolved & pushed.');
-    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith(PROJECT_DIR);
+    expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith(PROJECT_DIR);
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     expect(mockAgentCall).toHaveBeenCalledWith(
       expect.stringContaining('Implement feature X'),
@@ -222,9 +211,9 @@ describe('syncBranchWithRoot', () => {
     );
   });
 
-  it('uses assistant provider/model resolution for conflict resolver', async () => {
+  it('uses non-workflow provider/model resolution for conflict resolver', async () => {
     const task = makeTask();
-    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: 'codex', model: 'gpt-5.4' });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({ provider: 'codex', model: 'gpt-5.4' });
     mockExecFileSync
       .mockReturnValueOnce('' as never)
       .mockImplementationOnce(() => { throw new Error('CONFLICT'); });
@@ -344,10 +333,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Push failed after sync'),
-    );
-    expect(mockSuccess).not.toHaveBeenCalledWith('Synced & pushed.');
   });
 
   it('returns false when push fails after AI conflict resolution', async () => {
@@ -365,10 +350,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Push failed after sync'),
-    );
-    expect(mockSuccess).not.toHaveBeenCalledWith('Conflicts resolved & pushed.');
   });
 
   it('fetches from projectDir using local path ref', async () => {

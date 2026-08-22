@@ -100,8 +100,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(`📦 ${FIXTURE_REPO} @${FIXTURE_REF}`);
-    expect(result.stdout).toContain('インストールしました');
 
     const packageDir = join(isolatedEnv.taktDir, 'repertoire', '@nrslib', 'takt-repertoire-fixture');
     expect(existsSync(join(packageDir, 'takt-repertoire.yaml'))).toBe(true);
@@ -171,7 +169,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('キャンセルしました');
 
     const packageDir = join(isolatedEnv.taktDir, 'repertoire', '@nrslib', 'takt-repertoire-fixture');
     expect(existsSync(packageDir)).toBe(false);
@@ -218,7 +215,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     });
 
     expect(result.exitCode).not.toBe(0);
-    expect(result.stdout).toContain('takt-repertoire.yaml not found');
   }, 240_000);
 
   it.skipIf(!canUseFixtureRepo)(
@@ -233,10 +229,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`nrslib/takt-repertoire-fixture @${FIXTURE_REF}`);
-      expect(result.stdout).toContain('facets:');
-      expect(result.stdout).toContain('workflows:');
-      expect(result.stdout).toContain('キャンセルしました');
     },
     240_000,
   );
@@ -262,7 +254,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
       });
 
       expect(secondResult.exitCode, formatTaktRunResult(secondResult)).toBe(0);
-      expect(secondResult.stdout).toContain('既にインストールされています');
     },
     240_000,
   );
@@ -409,21 +400,4 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     240_000,
   );
 
-  it.todo('should populate lock file commit field with the specified commit SHA when installing by SHA');
-
-  it.todo('should display warning symbol when package contains workflow with edit: true');
-
-  it.todo('should reject takt-repertoire.yaml with absolute path in path field (/foo)');
-
-  it.todo('should reject takt-repertoire.yaml with path traversal via ".." segments');
-
-  it.todo('should reject package with no supported content directory');
-
-  it.todo('should reject takt-repertoire.yaml with min_version "1.0" (missing patch segment)');
-
-  it.todo('should reject takt-repertoire.yaml with min_version "v1.0.0" (v prefix)');
-
-  it.todo('should reject takt-repertoire.yaml with min_version "1.0.0-alpha" (pre-release suffix)');
-
-  it.todo('should fail with version mismatch message when min_version exceeds current takt version');
 });

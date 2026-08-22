@@ -69,7 +69,6 @@ describe('E2E: Structured output rule matching', () => {
     console.log(`=== matchMethod: ${sc?.matchMethod ?? '(none)'} ===`);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
 
     // Verify session log has proper step_complete with matchMethod
     const records = readSessionRecords(repo.path);

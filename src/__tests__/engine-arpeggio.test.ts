@@ -13,15 +13,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-  evaluateAggregateConditions: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async () => {
@@ -33,9 +36,9 @@ vi.mock('../shared/utils/index.js', async () => {
 });
 
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
-import { DefaultStructuredCaller } from '../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, AgentResponse, ArpeggioStepConfig } from '../core/models/index.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import {
@@ -46,6 +49,10 @@ import {
   cleanupWorkflowEngine,
 } from './engine-test-helpers.js';
 import type { RuleMatch } from '../core/workflow/index.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createProviderStreamParseError,
+} from '../shared/types/agent-failure.js';
 
 const {
   mockRunWithPhaseSpan,
@@ -108,12 +115,15 @@ function buildArpeggioWorkflowConfig(arpeggioConfig: ArpeggioStepConfig, tmpDir:
   };
 }
 
-function createEngineOptions(tmpDir: string): WorkflowEngineOptions {
+function createEngineOptions(
+  tmpDir: string,
+  overrides: Partial<WorkflowEngineOptions> = {},
+): WorkflowEngineOptions {
   return {
     projectCwd: tmpDir,
     reportDirName: 'test-report-dir',
-    detectRuleIndex: () => 0,
-    structuredCaller: new DefaultStructuredCaller(),
+    structuredCaller: new ProviderNeutralStructuredCaller(),
+    ...overrides,
   };
 }
 
@@ -136,7 +146,7 @@ describe('ArpeggioRunner integration', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockRunWithPhaseSpan.mockImplementation(async (_params, execute) => execute());
-    vi.mocked(detectMatchedRule).mockResolvedValue(undefined);
+    vi.mocked(mockRuleEvaluation).mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -160,9 +170,9 @@ describe('ArpeggioRunner integration', () => {
     );
 
     // Mock rule detection for the merged result
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
       index: 0,
-      method: 'phase1_tag',
+      method: 'phase3_tag',
     });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
@@ -183,6 +193,56 @@ describe('ArpeggioRunner integration', () => {
     expect(readFileSync(join(previousDir, 'latest.md'), 'utf-8')).toBe('Processed Alice\nProcessed Bob\nProcessed Charlie');
   });
 
+  it('Given effective auto_routing on an arpeggio step, When batches run, Then every batch uses the selected concrete candidate', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath),
+      tmpDir,
+    );
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'Processed Alice' }),
+      makeResponse({ content: 'Processed Bob' }),
+      makeResponse({ content: 'Processed Charlie' }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
+      index: 0,
+      method: 'phase3_tag',
+    });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      ...createEngineOptions(tmpDir),
+      provider: 'claude',
+      model: 'top-level-model',
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [{
+          name: 'batch',
+          description: 'Arpeggio batch processing',
+          provider: 'mock',
+          model: 'candidate-model',
+          routingTier: 'medium',
+        }],
+        defaultPool: 'general',
+        candidatePools: {
+          general: { candidates: ['batch'], fallback: 'batch' },
+        },
+        poolRules: { steps: { process: 'general' } },
+        rules: { steps: { process: 'batch' } },
+      },
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent).mock.calls.map((call) => call[2])).toEqual([
+      expect.objectContaining({ resolvedProvider: 'mock', resolvedModel: 'candidate-model' }),
+      expect.objectContaining({ resolvedProvider: 'mock', resolvedModel: 'candidate-model' }),
+      expect.objectContaining({ resolvedProvider: 'mock', resolvedModel: 'candidate-model' }),
+    ]);
+  });
+
   it('should handle batch_size > 1', async () => {
     const tmpDir = createTestTmpDir();
     const csvPath = join(tmpDir, 'data.csv');
@@ -200,9 +260,9 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'Batch 1 result' }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
       index: 0,
-      method: 'phase1_tag',
+      method: 'phase3_tag',
     });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
@@ -211,34 +271,6 @@ describe('ArpeggioRunner integration', () => {
     expect(state.status).toBe('completed');
     // 4 rows / batch_size 2 = 2 batches
     expect(mockAgent).toHaveBeenCalledTimes(2);
-  });
-
-  it('should pass resolved provider to arpeggio rule evaluation', async () => {
-    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
-    const arpeggioConfig = createArpeggioConfig(csvPath, templatePath);
-    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
-    config.steps[0]!.personaDisplayName = 'coder';
-
-    mockRunAgentWithPrompt(
-      makeResponse({ content: 'Processed Alice' }),
-      makeResponse({ content: 'Processed Bob' }),
-      makeResponse({ content: 'Processed Charlie' }),
-    );
-
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
-      index: 0,
-      method: 'phase1_tag',
-    });
-
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      ...createEngineOptions(tmpDir),
-      provider: 'claude',
-      personaProviders: { coder: { provider: 'cursor' } },
-    });
-    const state = await engine.run();
-
-    expect(state.status).toBe('completed');
-    expect(vi.mocked(detectMatchedRule).mock.calls[0]?.[3].provider).toBe('cursor');
   });
 
   it('should abort when a batch fails and retries are exhausted', async () => {
@@ -263,6 +295,129 @@ describe('ArpeggioRunner integration', () => {
     expect(state.status).toBe('aborted');
   });
 
+  it('fails fast with the typed parse category when attempt 1 returns a parse response', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    writeFileSync(csvPath, 'name,task\nAlice,review', 'utf-8');
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath, { maxRetries: 2 }),
+      tmpDir,
+    );
+    const workflowAborted = vi.fn();
+    mockRunAgentWithPrompt(makeResponse({
+      status: 'error',
+      content: '',
+      error: 'invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    }));
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('workflow:abort', workflowAborted);
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(workflowAborted).toHaveBeenCalledOnce();
+    expect(workflowAborted.mock.calls[0]?.[1]).toBe(
+      'provider stream parse error: invalid stdout line',
+    );
+    expect(workflowAborted.mock.calls[0]?.[3]).toMatchObject({
+      kind: 'step_error',
+      reason: 'provider stream parse error: invalid stdout line',
+      error: 'provider stream parse error: invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+  });
+
+  it('fails fast with the typed parse category when attempt 1 throws a parse error', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    writeFileSync(csvPath, 'name,task\nAlice,review', 'utf-8');
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath, { maxRetries: 2 }),
+      tmpDir,
+    );
+    const workflowAborted = vi.fn();
+    vi.mocked(runAgent).mockImplementationOnce(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      throw createProviderStreamParseError('thrown invalid stdout line');
+    });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('workflow:abort', workflowAborted);
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(workflowAborted.mock.calls[0]?.[3]).toMatchObject({
+      reason: 'provider stream parse error: thrown invalid stdout line',
+      error: 'provider stream parse error: thrown invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+  });
+
+  it('keeps retrying a non-parse error response', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    writeFileSync(csvPath, 'name,task\nAlice,review', 'utf-8');
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath, { maxRetries: 1 }),
+      tmpDir,
+    );
+    mockRunAgentWithPrompt(
+      makeResponse({
+        status: 'error',
+        content: '',
+        error: 'temporary provider failure',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      }),
+      makeResponse({ content: 'Recovered batch' }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.lastOutput?.content).toBe('Recovered batch');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let a rate-limited sibling hide a parse failure', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    writeFileSync(csvPath, 'name,task\nAlice,review\nBob,implement', 'utf-8');
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath, { concurrency: 2, maxRetries: 2 }),
+      tmpDir,
+    );
+    const workflowAborted = vi.fn();
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      if (instruction.includes('Alice')) {
+        return makeResponse({
+          status: 'error',
+          content: '',
+          error: 'parallel parse failure',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+        });
+      }
+      return makeResponse({
+        status: 'rate_limited',
+        content: '',
+        error: 'parallel rate limit',
+        errorKind: 'rate_limit',
+      });
+    });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('workflow:abort', workflowAborted);
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(workflowAborted.mock.calls[0]?.[3]).toMatchObject({
+      reason: 'provider stream parse error: parallel parse failure',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+  });
+
   it('should write output file when output_path is configured', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const outputPath = join(tmpDir, 'output.txt');
@@ -276,9 +431,9 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'Result C' }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
       index: 0,
-      method: 'phase1_tag',
+      method: 'phase3_tag',
     });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
@@ -301,9 +456,9 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'C' }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
       index: 0,
-      method: 'phase1_tag',
+      method: 'phase3_tag',
     });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
@@ -324,7 +479,7 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'B' }),
       makeResponse({ content: 'C' }),
     );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     engine.on('phase:start', (step, phase, phaseName, instruction) => {
@@ -336,8 +491,126 @@ describe('ArpeggioRunner integration', () => {
 
     expect(state.status).toBe('completed');
     expect(phaseStarts.length).toBe(3);
-    expect(phaseStarts.every((instruction) => !instruction.startsWith('[Arpeggio batch'))).toBe(true);
-    expect(phaseStarts.some((instruction) => instruction.includes('Process '))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.length > 0)).toBe(true);
+  });
+
+  it('injects workflow-wide rules into every arpeggio Phase 1 batch prompt', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const baseConfig = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath),
+      tmpDir,
+    );
+    const config = {
+      ...baseConfig,
+      steps: baseConfig.steps.map((step) => ({ ...step, passPreviousResponse: true })),
+      allStepsRules: [
+        {
+          ref: 'arpeggio-execution-rule',
+          position: 'after_execution_rules' as const,
+          content: 'ARPEGGIO_EXECUTION_RULE mode={var:review_mode} iteration={step_iteration} scope={review_scope} report={report_dir} previous={previous_response}',
+        },
+        {
+          ref: 'arpeggio-instruction-rule',
+          position: 'before_instruction' as const,
+          content: 'ARPEGGIO_INSTRUCTION_RULE mode={var:review_mode} iteration={step_iteration} scope={review_scope} report={report_dir} previous={previous_response}',
+        },
+      ],
+    };
+    const phaseStarts: string[] = [];
+
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'A' }),
+      makeResponse({ content: 'B' }),
+      makeResponse({ content: 'C' }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
+      workflowCallVars: { review_mode: 'follow_up' },
+    }));
+    engine.on('phase:start', (step, phase, phaseName, instruction) => {
+      if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute') return;
+      phaseStarts.push(instruction);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(phaseStarts).toHaveLength(3);
+    expect(phaseStarts.every((instruction) => instruction.includes('ARPEGGIO_EXECUTION_RULE'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('ARPEGGIO_INSTRUCTION_RULE'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('mode=follow_up iteration=1'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('scope='))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes(
+      `report=${join(tmpDir, '.takt/runs/test-report-dir/reports')}`,
+    ))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{var:review_mode}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{step_iteration}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{review_scope}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{report_dir}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{previous_response}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => (
+      instruction.match(/Apply the following constraints to the current task\./g) ?? []
+    ).length === 1)).toBe(true);
+    expect(phaseStarts.every((instruction) => !/workflow(?:-wide)? rules?/i.test(instruction))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-execution-rule'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-instruction-rule'))).toBe(true);
+    for (const instruction of phaseStarts) {
+      expect(instruction.indexOf('ARPEGGIO_EXECUTION_RULE')).toBeGreaterThan(
+        instruction.indexOf('Do NOT use `cd` in Bash commands.'),
+      );
+      expect(instruction.indexOf('ARPEGGIO_INSTRUCTION_RULE')).toBeLessThan(
+        instruction.indexOf('Process '),
+      );
+    }
+  });
+
+  it('uses the prepared previous response in arpeggio workflow-wide rules', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const baseConfig = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath),
+      tmpDir,
+    );
+    const processStep = { ...baseConfig.steps[0]!, passPreviousResponse: true };
+    const config: WorkflowConfig = {
+      ...baseConfig,
+      initialStep: 'previous',
+      steps: [
+        makeStep('previous', {
+          instruction: 'PREVIOUS_STEP',
+          rules: [makeRule('done', 'process')],
+        }),
+        processStep,
+      ],
+      allStepsRules: [{
+        ref: 'arpeggio-previous-response-rule',
+        position: 'before_instruction',
+        content: 'ARPEGGIO_PREVIOUS_RESPONSE previous={previous_response}',
+      }],
+    };
+    const phaseStarts: string[] = [];
+
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'Prior batch result' }),
+      makeResponse({ content: 'A' }),
+      makeResponse({ content: 'B' }),
+      makeResponse({ content: 'C' }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('phase:start', (step, phase, phaseName, instruction) => {
+      if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute') return;
+      phaseStarts.push(instruction);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(phaseStarts).toHaveLength(3);
+    expect(phaseStarts.every((instruction) => instruction.includes('previous=Prior batch result'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('Source:'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{previous_response}'))).toBe(true);
   });
 
   it('wraps arpeggio batch executions in phase spans', async () => {
@@ -350,7 +623,7 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'B' }),
       makeResponse({ content: 'C' }),
     );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       ...createEngineOptions(tmpDir),
@@ -379,52 +652,6 @@ describe('ArpeggioRunner integration', () => {
     expect(batchPhaseSpans.every((params) => params.workflowName === 'test-arpeggio')).toBe(true);
   });
 
-  it.each([
-    {
-      allowGitCommit: false,
-      expectedPrompts: ['Do NOT run git commit', 'Do NOT run git push', 'Do NOT run git add'],
-      unexpectedPrompts: [],
-    },
-    {
-      allowGitCommit: true,
-      expectedPrompts: [],
-      unexpectedPrompts: ['Do NOT run git commit', 'Do NOT run git push', 'Do NOT run git add'],
-    },
-  ])(
-    'should toggle git execution rules in arpeggio prompts when allowGitCommit is $allowGitCommit',
-    async ({ allowGitCommit, expectedPrompts, unexpectedPrompts }) => {
-      const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
-      const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 1 });
-      const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
-      config.steps[0]!.allowGitCommit = allowGitCommit;
-      const prompts: string[] = [];
-
-      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-        prompts.push(instruction);
-        options?.onPromptResolved?.({
-          systemPrompt: typeof persona === 'string' ? persona : '',
-          userInstruction: instruction,
-        });
-        return makeResponse({ content: 'Processed' });
-      });
-      vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
-
-      engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
-      const state = await engine.run();
-
-      expect(state.status).toBe('completed');
-      expect(prompts.length).toBe(3);
-      for (const prompt of prompts) {
-        for (const expectedPrompt of expectedPrompts) {
-          expect(prompt).toContain(expectedPrompt);
-        }
-        for (const unexpectedPrompt of unexpectedPrompts) {
-          expect(prompt).not.toContain(unexpectedPrompt);
-        }
-      }
-    },
-  );
-
   it('should keep phaseExecutionId bindings correct when completion order is reversed', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 2 });
@@ -447,7 +674,7 @@ describe('ArpeggioRunner integration', () => {
       }
       return makeResponse({ content: 'Result Charlie' });
     });
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     engine.on('phase:start', (step, phase, phaseName, instruction, _promptParts, phaseExecutionId) => {

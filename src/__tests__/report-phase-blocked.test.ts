@@ -17,14 +17,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -38,10 +42,11 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import {
   makeResponse,
+  makeRule,
   makeStep,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
@@ -62,21 +67,21 @@ function buildConfigWithReport(): WorkflowConfig {
     steps: [
       makeStep('plan', {
         rules: [
-          { condition: 'Requirements are clear', next: 'implement' },
-          { condition: 'Requirements unclear', next: 'ABORT' },
+          makeRule('Requirements are clear', 'implement'),
+          makeRule('Requirements unclear', 'ABORT'),
         ],
       }),
       makeStep('implement', {
         outputContracts: [reportContract],
         rules: [
-          { condition: 'Implementation complete', next: 'supervise' },
-          { condition: 'Cannot proceed', next: 'plan' },
+          makeRule('Implementation complete', 'supervise'),
+          makeRule('Cannot proceed', 'plan'),
         ],
       }),
       makeStep('supervise', {
         rules: [
-          { condition: 'All checks passed', next: 'COMPLETE' },
-          { condition: 'Requirements unmet', next: 'plan' },
+          makeRule('All checks passed', 'COMPLETE'),
+          makeRule('Requirements unmet', 'plan'),
         ],
       }),
     ],
@@ -100,7 +105,10 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
 
   it('should abort when report phase is blocked and no onUserInput callback', async () => {
     const config = buildConfigWithReport();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
 
     // Phase 1 succeeds for plan, then implement
     mockRunAgentSequence([
@@ -109,8 +117,8 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
     ]);
 
     // plan → implement, then implement's report phase blocks
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // Report phase returns blocked (only implement has outputContracts, so only one call)
@@ -132,15 +140,19 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
   it('should abort when report phase is blocked and onUserInput returns null', async () => {
     const config = buildConfigWithReport();
     const onUserInput = vi.fn().mockResolvedValue(null);
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      onUserInput,
+    });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),
       makeResponse({ persona: 'implement', content: 'Impl done' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const blockedResponse = makeResponse({ persona: 'implement', status: 'blocked', content: 'Need info for report' });
@@ -155,7 +167,11 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
   it('should retry the full step when report phase is blocked and user provides input', async () => {
     const config = buildConfigWithReport();
     const onUserInput = vi.fn().mockResolvedValueOnce('User provided report clarification');
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      onUserInput,
+    });
 
     mockRunAgentSequence([
       // First: plan succeeds
@@ -168,14 +184,14 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
       makeResponse({ persona: 'supervise', content: 'All passed' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
+    mockRuleEvaluationSequence([
       // plan → implement
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
       // implement (blocked, no rule eval happens)
       // implement retry → supervise
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
       // supervise → COMPLETE
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // Report phase: only implement has outputContracts; blocks first, succeeds on retry
@@ -196,15 +212,18 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
 
   it('should propagate blocked content from report phase to engine response', async () => {
     const config = buildConfigWithReport();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),
       makeResponse({ persona: 'implement', content: 'Original impl content' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const blockedContent = 'Blocked: need specific file path for report';
@@ -237,8 +256,8 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
       }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const abortFn = vi.fn();
@@ -268,8 +287,8 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
       }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan -> implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan -> implement
     ]);
 
     const state = await engine.run();

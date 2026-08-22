@@ -9,7 +9,7 @@ import { header, success, info, warn, blankLine } from '../../shared/ui/index.js
 
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db']);
 const DIRECT_DIRS = ['workflows'] as const;
-const FACET_DIRS = ['personas', 'policies', 'instructions', 'knowledge', 'output-contracts'] as const;
+const FACET_DIRS = ['personas', 'policies', 'instructions', 'knowledge', 'output-contracts', 'partials'] as const;
 
 export type DeploySkillOptions = {
   headerTitle: string;

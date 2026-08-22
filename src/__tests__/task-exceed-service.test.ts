@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import type { WorkflowResumePointEntry } from '../core/models/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { buildWorkflowCallInvocationFixture } from './helpers/workflow-resume-fixture.js';
 
 function loadTasksFile(testDir: string): { tasks: Array<Record<string, unknown>> } {
   const raw = readFileSync(join(testDir, '.takt', 'tasks.yaml'), 'utf-8');
@@ -31,19 +34,63 @@ function writeExceededRecord(testDir: string, overrides: Record<string, unknown>
   );
 }
 
+function writeRunningRestartRecord(testDir: string, overrides: Record<string, unknown> = {}): void {
+  mkdirSync(join(testDir, '.takt'), { recursive: true });
+  const record = {
+    name: 'restart-task',
+    status: 'running',
+    content: 'Do restarted work',
+    created_at: '2026-02-09T00:00:00.000Z',
+    started_at: '2026-02-09T00:01:00.000Z',
+    completed_at: null,
+    owner_pid: 12345,
+    workflow: 'default',
+    restart_point: {
+      stack: [
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
+        { workflow: 'coding', workflow_ref: 'coding', step: 'review', kind: 'agent' },
+      ],
+    },
+    ...overrides,
+  };
+  writeFileSync(
+    join(testDir, '.takt', 'tasks.yaml'),
+    stringifyYaml({ tasks: [record] }),
+    'utf-8',
+  );
+}
+
+function makeWorkflowCallResumeStack(): WorkflowResumePointEntry[] {
+  return [
+    {
+      workflow: 'default',
+      workflow_ref: 'default',
+      step: 'delegate',
+      kind: 'workflow_call' as const,
+      occurrence: 1,
+      call_instance: 1,
+    },
+    {
+      workflow: 'coding',
+      workflow_ref: 'coding',
+      step: 'fix',
+      kind: 'agent' as const,
+      occurrence: 1,
+    },
+  ];
+}
+
 describe('TaskRunner - exceedTask', () => {
-  const testDir = `/tmp/takt-exceed-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-exceed-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should transition a running task to exceeded status', () => {
@@ -118,7 +165,37 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.owner_pid).toBeNull();
   });
 
-  it('should record the current step as start_movement', () => {
+  it('should preserve resume metadata through exceed, requeue, and claim', () => {
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'reviewers',
+        kind: 'parallel' as const,
+        occurrence: 1,
+      }],
+      iteration: 30,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    runner.addTask('Task A');
+    const running = runner.claimNextTasks(1)[0]!;
+
+    runner.exceedTask(running.name, {
+      currentStep: 'reviewers',
+      newMaxSteps: 60,
+      currentIteration: 30,
+      resumePoint,
+    });
+    runner.requeueExceededTask(running.name);
+    const reclaimed = runner.claimNextTasks(1)[0]!;
+
+    expect(reclaimed.data?.resume_point).toEqual(resumePoint);
+  });
+
+  it('should record the current step as start_step', () => {
     runner.addTask('Task A');
     runner.claimNextTasks(1);
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
@@ -131,8 +208,7 @@ describe('TaskRunner - exceedTask', () => {
 
     const afterFile = loadTasksFile(testDir);
     const exceededTask = afterFile.tasks[0]!;
-    expect(exceededTask.start_movement).toBe('reviewers');
-    expect(exceededTask.start_step).toBeUndefined();
+    expect(exceededTask.start_step).toBe('reviewers');
   });
 
   it('should record exceeded_max_steps in tasks.yaml', () => {
@@ -172,13 +248,28 @@ describe('TaskRunner - exceedTask', () => {
     runner.claimNextTasks(1);
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
     const resumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent',
+          occurrence: 1,
+        },
       ],
       iteration: 30,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.exceedTask(taskName, {
@@ -191,6 +282,88 @@ describe('TaskRunner - exceedTask', () => {
     const afterFile = loadTasksFile(testDir);
     const exceededTask = afterFile.tasks[0]!;
     expect(exceededTask.resume_point).toEqual(resumePoint);
+  });
+
+  it('should replace a consumed restart point when the task exceeds again', () => {
+    writeRunningRestartRecord(testDir, {
+      worktree_path: '/tmp/restart-worktree',
+      branch: 'takt/restart-task',
+    });
+    const stack = makeWorkflowCallResumeStack();
+    const resumePoint = {
+      version: 2 as const,
+      stack,
+      iteration: 37,
+      elapsed_ms: 240_000,
+      workflow_call_invocations: buildWorkflowCallInvocationFixture(stack),
+      workflow_step_participations: {},
+    };
+
+    runner.exceedTask('restart-task', {
+      currentStep: 'delegate',
+      newMaxSteps: 80,
+      currentIteration: 37,
+      resumePoint,
+    });
+
+    const exceededTask = loadTasksFile(testDir).tasks[0]!;
+    expect(exceededTask).toEqual(expect.objectContaining({
+      status: 'exceeded',
+      start_step: 'delegate',
+      exceeded_max_steps: 80,
+      exceeded_current_iteration: 37,
+      resume_point: resumePoint,
+      owner_pid: null,
+      worktree_path: '/tmp/restart-worktree',
+      branch: 'takt/restart-task',
+    }));
+    expect(exceededTask.restart_point).toBeUndefined();
+    expect(exceededTask.failure).toBeUndefined();
+  });
+
+  it('should remove a consumed restart point when no current resume point exists', () => {
+    writeRunningRestartRecord(testDir);
+
+    runner.exceedTask('restart-task', {
+      currentStep: 'delegate',
+      newMaxSteps: 1,
+      currentIteration: 0,
+    });
+
+    const exceededTask = loadTasksFile(testDir).tasks[0]!;
+    expect(exceededTask.status).toBe('exceeded');
+    expect(exceededTask.restart_point).toBeUndefined();
+    expect(exceededTask.resume_point).toBeUndefined();
+    expect(exceededTask.exceeded_current_iteration).toBe(0);
+    expect(exceededTask.exceeded_max_steps).toBe(1);
+  });
+
+  it('should preserve the current exceeded checkpoint when the task is requeued and claimed', () => {
+    writeRunningRestartRecord(testDir);
+    const stack = makeWorkflowCallResumeStack();
+    const resumePoint = {
+      version: 2 as const,
+      stack,
+      iteration: 12,
+      elapsed_ms: 90_000,
+      workflow_call_invocations: buildWorkflowCallInvocationFixture(stack),
+      workflow_step_participations: {},
+    };
+    runner.exceedTask('restart-task', {
+      currentStep: 'delegate',
+      newMaxSteps: 40,
+      currentIteration: 12,
+      resumePoint,
+    });
+
+    runner.requeueExceededTask('restart-task');
+    const claimed = runner.claimNextTasks(1)[0]!;
+
+    expect(claimed.data?.resume_point).toEqual(resumePoint);
+    expect(claimed.data?.start_step).toBe('delegate');
+    expect(claimed.data?.exceeded_current_iteration).toBe(12);
+    expect(claimed.data?.exceeded_max_steps).toBe(40);
+    expect(claimed.data?.restart_point).toBeUndefined();
   });
 
   it('should throw when task is not found', () => {
@@ -286,18 +459,16 @@ describe('TaskRunner - exceedTask', () => {
 });
 
 describe('TaskRunner - requeueExceededTask', () => {
-  const testDir = `/tmp/takt-requeue-exceeded-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-requeue-exceeded-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should transition exceeded task to pending', () => {
@@ -361,7 +532,7 @@ describe('TaskRunner - requeueExceededTask', () => {
     expect(file.tasks[0]?.exceeded_current_iteration).toBe(30);
   });
 
-  it('should preserve start_movement for re-entry point', () => {
+  it('should preserve start_step for re-entry point', () => {
     writeExceededRecord(testDir, {
       name: 'task-a',
       start_step: 'reviewers',
@@ -370,19 +541,33 @@ describe('TaskRunner - requeueExceededTask', () => {
     runner.requeueExceededTask('task-a');
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.start_movement).toBe('reviewers');
-    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBe('reviewers');
   });
 
   it('should preserve resume_point through requeue for workflow_call retry', () => {
     const resumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent',
+          occurrence: 1,
+        },
       ],
       iteration: 30,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     writeExceededRecord(testDir, {
       name: 'task-a',
@@ -393,6 +578,19 @@ describe('TaskRunner - requeueExceededTask', () => {
 
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
+  });
+
+  it('should preserve the source run provenance when requeueing an exceeded task', () => {
+    writeExceededRecord(testDir, {
+      name: 'task-a',
+      run_slug: '20260717-source-run',
+    });
+
+    runner.requeueExceededTask('task-a');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.source_run_slug).toBe('20260717-source-run');
+    expect(file.tasks[0]?.resume_mode).toBe('requeue');
   });
 
   it('should preserve worktree_path and branch through requeue when present on exceeded record', () => {
@@ -438,18 +636,16 @@ describe('TaskRunner - requeueExceededTask', () => {
 });
 
 describe('TaskRunner - deleteTask (exceeded)', () => {
-  const testDir = `/tmp/takt-delete-exceeded-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-delete-exceeded-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should delete an exceeded task', () => {
@@ -474,18 +670,16 @@ describe('TaskRunner - deleteTask (exceeded)', () => {
 });
 
 describe('TaskRunner - listExceededTasks', () => {
-  const testDir = `/tmp/takt-list-exceeded-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-list-exceeded-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should return exceeded tasks as TaskListItems with exceeded kind', () => {

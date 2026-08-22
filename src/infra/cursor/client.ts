@@ -3,10 +3,11 @@
  */
 
 import type { AgentResponse } from '../../core/models/index.js';
-import { crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
+import { crossSpawn, getErrorMessage, guardChildProcessStreams, createLogger } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type { CursorCallOptions } from './types.js';
+import { formatProcessExitCause } from '../../shared/utils/process-exit.js';
 
 export type { CursorCallOptions } from './types.js';
 
@@ -18,6 +19,8 @@ const CURSOR_ERROR_DETAIL_MAX_LENGTH = 400;
 const CURSOR_CLI_CONFIG_RENAME_MAX_RETRIES = 8;
 const CURSOR_CLI_CONFIG_RENAME_RETRY_BASE_DELAY_MS = 1_000;
 const CURSOR_CLI_CONFIG_RENAME_RETRY_MAX_DELAY_MS = 30_000;
+
+const log = createLogger('cursor-client');
 
 function resolveForceKillDelayMs(): number {
   const raw = process.env.TAKT_CURSOR_FORCE_KILL_DELAY_MS;
@@ -53,7 +56,12 @@ function buildPrompt(prompt: string, systemPrompt?: string): string {
 }
 
 function buildArgs(prompt: string, options: CursorCallOptions): string[] {
-  const args = ['-p', '--trust', '--output-format', 'json', '--workspace', options.cwd];
+  // Runtime MCP adapter route (issue #1137): when the runner prepared MCP
+  // material with an isolated `configRoot`, point `--workspace` at the
+  // isolated root so Cursor CLI picks up the `.cursor/mcp.json` the adapter
+  // wrote there (order.md:203-207). The adapter owns cleanup.
+  const workspace = options.preparedMcp?.configRoot ?? options.cwd;
+  const args = ['-p', '--trust', '--output-format', 'json', '--workspace', workspace];
 
   if (options.model) {
     args.push('--model', options.model);
@@ -65,6 +73,10 @@ function buildArgs(prompt: string, options: CursorCallOptions): string[] {
 
   if (options.permissionMode === 'full') {
     args.push('--force');
+  }
+
+  if (options.preparedMcp?.args && options.preparedMcp.args.length > 0) {
+    args.push(...options.preparedMcp.args);
   }
 
   args.push('--', buildPrompt(prompt, options.systemPrompt));
@@ -134,6 +146,7 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
       }
+      guardTeardown();
     };
 
     const resolveOnce = (result: CursorExecResult): void => {
@@ -143,9 +156,12 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
       resolve(result);
     };
 
-    const rejectOnce = (error: CursorExecError): void => {
+    const rejectOnce = (error: CursorExecError, terminateChild = false): void => {
       if (settled) return;
       settled = true;
+      if (terminateChild) {
+        child.kill('SIGTERM');
+      }
       cleanup();
       reject(error);
     };
@@ -185,12 +201,19 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
     child.stdout?.on('data', (chunk: Buffer | string) => appendChunk('stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
 
-    child.on('error', (error: NodeJS.ErrnoException) => {
-      rejectOnce(createExecError(error.message, {
-        code: error.code,
+    const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+      if (source === 'process') {
+        rejectOnce(createExecError(error.message, {
+          code: (error as NodeJS.ErrnoException).code,
+          stdout,
+          stderr,
+        }));
+        return;
+      }
+      rejectOnce(createExecError(`cursor-agent ${source} stream error: ${error.message}`, {
         stdout,
         stderr,
-      }));
+      }), true);
     });
 
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
@@ -212,11 +235,9 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
       }
 
       rejectOnce(createExecError(
-        signal
-          ? `cursor-agent terminated by signal ${signal}`
-          : `cursor-agent exited with code ${code ?? 'unknown'}`,
+        `cursor-agent exited with ${formatProcessExitCause(code, signal)}`,
         {
-          code: code ?? undefined,
+          ...(typeof code === 'number' ? { code } : {}),
           stdout,
           stderr,
           signal,
@@ -498,58 +519,69 @@ export class CursorClient {
     const args = buildArgs(prompt, options);
     let cliConfigRenameRetryCount = 0;
 
-    while (true) {
-      try {
-        const { stdout } = await execCursor(args, options);
-        const parsed = parseCursorOutput(stdout);
-        if ('error' in parsed) {
-          emitCursorErrorResult(options, parsed.error);
-          return buildCursorErrorResponse(agentType, parsed.error, options);
-        }
-
-        const sessionId = parsed.sessionId ?? options.sessionId;
-        if (options.onStream) {
-          options.onStream({ type: 'text', data: { text: parsed.content } });
-          options.onStream({
-            type: 'result',
-            data: {
-              result: parsed.content,
-              success: true,
-              sessionId: sessionId ?? '',
-            },
-          });
-        }
-
-        return {
-          persona: agentType,
-          status: 'done',
-          content: parsed.content,
-          timestamp: new Date(),
-          sessionId,
-        };
-      } catch (rawError) {
-        const error = toCursorExecError(rawError);
-        if (
-          isCursorCliConfigRenameEnoent(error)
-          && cliConfigRenameRetryCount < CURSOR_CLI_CONFIG_RENAME_MAX_RETRIES
-        ) {
-          cliConfigRenameRetryCount += 1;
-          try {
-            await waitForCursorCliConfigRenameRetryDelay(cliConfigRenameRetryCount, options.abortSignal);
-          } catch (delayError) {
-            const message = classifyExecutionError(toCursorExecError(delayError), options);
-            emitCursorErrorResult(options, message);
-            return buildCursorErrorResponse(agentType, message, options);
+    try {
+      while (true) {
+        options.onActivity?.({ kind: 'attempt_started' });
+        try {
+          const { stdout } = await execCursor(args, options);
+          const parsed = parseCursorOutput(stdout);
+          if ('error' in parsed) {
+            emitCursorErrorResult(options, parsed.error);
+            return buildCursorErrorResponse(agentType, parsed.error, options);
           }
-          continue;
-        }
 
-        const message = classifyExecutionError(error, options);
-        const failureCategory = isCursorCliConfigRenameEnoent(error)
-          ? AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
-          : undefined;
-        emitCursorErrorResult(options, message, failureCategory);
-        return buildCursorErrorResponse(agentType, message, options, failureCategory);
+          const sessionId = parsed.sessionId ?? options.sessionId;
+          if (options.onStream) {
+            options.onStream({ type: 'text', data: { text: parsed.content } });
+            options.onStream({
+              type: 'result',
+              data: {
+                result: parsed.content,
+                success: true,
+                sessionId: sessionId ?? '',
+              },
+            });
+          }
+
+          return {
+            persona: agentType,
+            status: 'done',
+            content: parsed.content,
+            timestamp: new Date(),
+            sessionId,
+          };
+        } catch (rawError) {
+          const error = toCursorExecError(rawError);
+          if (
+            isCursorCliConfigRenameEnoent(error)
+            && cliConfigRenameRetryCount < CURSOR_CLI_CONFIG_RENAME_MAX_RETRIES
+          ) {
+            cliConfigRenameRetryCount += 1;
+            try {
+              await waitForCursorCliConfigRenameRetryDelay(cliConfigRenameRetryCount, options.abortSignal);
+            } catch (delayError) {
+              const message = classifyExecutionError(toCursorExecError(delayError), options);
+              emitCursorErrorResult(options, message);
+              return buildCursorErrorResponse(agentType, message, options);
+            }
+            continue;
+          }
+
+          const message = classifyExecutionError(error, options);
+          const failureCategory = isCursorCliConfigRenameEnoent(error)
+            ? AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
+            : undefined;
+          emitCursorErrorResult(options, message, failureCategory);
+          return buildCursorErrorResponse(agentType, message, options, failureCategory);
+        }
+      }
+    } finally {
+      try {
+        await options.preparedMcp?.dispose?.();
+      } catch (error) {
+        log.error('Failed to clean up Cursor MCP config', {
+          error: getErrorMessage(error),
+        });
       }
     }
   }

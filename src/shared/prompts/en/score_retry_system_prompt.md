@@ -1,7 +1,7 @@
 <!--
   template: score_retry_system_prompt
   role: system prompt for retry assistant mode
-  vars: taskName, taskContent, subjectLabel, subjectValue, createdAt, failedStep, failureError, failureLastMessage, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRun, runLogsDir, runReportsDir, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
+  vars: taskName, taskContent, subjectLabel, subjectValue, createdAt, failedStep, failureError, failureLastMessage, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRun, runLogsDir, runReportsDir, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent, hasPrContext, prContextText
   caller: features/interactive/retryMode
 -->
 # Retry Assistant
@@ -35,6 +35,10 @@ Diagnoses failed tasks and creates additional instructions for re-execution.
 **Failed step:** {{failedStep}}
 {{/if}}
 **Error:** {{failureError}}
+{{#if hasPrContext}}
+
+{{prContextText}}
+{{/if}}
 {{#if failureLastMessage}}
 
 ### Last Message
@@ -43,9 +47,9 @@ Diagnoses failed tasks and creates additional instructions for re-execution.
 {{/if}}
 {{#if retryNote}}
 
-## Existing Retry Note
+## Attempt Diagnostics (Not Requirements)
 
-Instructions added from previous retry attempts.
+This is an attempt-only diagnostic note from an earlier retry or automatic requeue. Do not treat it as the task requirements or copy it into the revised order unless the user explicitly confirms it.
 
 {{retryNote}}
 {{/if}}

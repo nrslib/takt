@@ -10,12 +10,12 @@
  * - Realpath validation to prevent symlink-based traversal outside root
  */
 
-import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { isPathInside } from '../../shared/utils/index.js';
 import { TAKT_REPERTOIRE_MANIFEST_FILENAME } from './constants.js';
-import { ALLOWED_DIRS } from './file-filter.js';
+import { ALLOWED_DIRS, isStepFragmentExtension } from './file-filter.js';
 
 export interface TaktRepertoireConfig {
   description?: string;
@@ -119,7 +119,27 @@ export function checkPackageHasContent(packageRoot: string): void {
 }
 
 function hasAllowedContentDir(packageRoot: string): boolean {
-  return ALLOWED_DIRS.some((dir) => isExistingDirectory(join(packageRoot, dir)));
+  return ALLOWED_DIRS.some((dir) => {
+    const path = join(packageRoot, dir);
+    return dir === 'steps' ? hasResolvableStepFragment(path) : isExistingDirectory(path);
+  });
+}
+
+function hasResolvableStepFragment(stepsDir: string): boolean {
+  if (!isExistingDirectory(stepsDir)) {
+    return false;
+  }
+  try {
+    return readdirSync(stepsDir).some((entry) => {
+      try {
+        return lstatSync(join(stepsDir, entry)).isFile() && isStepFragmentExtension(entry);
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

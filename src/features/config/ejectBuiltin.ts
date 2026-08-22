@@ -15,50 +15,39 @@ import type { FacetType } from '../../infra/config/paths.js';
 import {
   getGlobalWorkflowsDir,
   getProjectWorkflowsDir,
+  getGlobalStepsDir,
+  getProjectStepsDir,
   getBuiltinWorkflowsDir,
   getProjectFacetDir,
   getGlobalFacetDir,
   getBuiltinFacetDir,
+  getBuiltinLanguageFacetPoolsDir,
+  getBuiltinLanguageResourcesDir,
+  getGlobalFacetPoolsDir,
+  getProjectFacetPoolsDir,
   getLanguage,
   isPathSafe,
 } from '../../infra/config/index.js';
 import { header, success, info, warn, error, blankLine } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { VALID_FACET_TYPES } from './facetTypes.js';
+import {
+  copyReferencedBuiltinStepFragments,
+  copyReferencedBuiltinFacetPools,
+  pathExistsForEject,
+  writeNewEjectedFile,
+} from './ejectStepFragments.js';
 
 export interface EjectOptions {
   global?: boolean;
   projectDir: string;
 }
 
-/** Singular CLI facet type names mapped to directory (plural) FacetType */
-const FACET_TYPE_MAP: Record<string, FacetType> = {
-  persona: 'personas',
-  policy: 'policies',
-  knowledge: 'knowledge',
-  instruction: 'instructions',
-  'output-contract': 'output-contracts',
-};
-
-/** Valid singular facet type names for CLI */
-export const VALID_FACET_TYPES = Object.keys(FACET_TYPE_MAP);
-
 function resolveEjectPath(baseDir: string, name: string, extension: '.yaml' | '.md'): string | undefined {
   const candidatePath = resolve(baseDir, `${name}${extension}`);
   return isPathSafe(baseDir, candidatePath) ? candidatePath : undefined;
 }
 
-/**
- * Parse singular CLI facet type to plural directory FacetType.
- * Returns undefined if the input is not a valid facet type.
- */
-export function parseFacetType(singular: string): FacetType | undefined {
-  return FACET_TYPE_MAP[singular];
-}
-
-/**
- * Eject a builtin workflow YAML to project or global space for customization.
- * Only copies the workflow YAML — facets are resolved via layer system.
- */
 export async function ejectBuiltin(name: string | undefined, options: EjectOptions): Promise<void> {
   header('Eject Builtin');
 
@@ -94,13 +83,49 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
     return;
   }
   const safeWorkflowDest = sanitizeTerminalText(workflowDest);
-  if (existsSync(workflowDest)) {
+  if (pathExistsForEject(workflowDest)) {
     warn(`User workflow already exists: ${safeWorkflowDest}`);
     warn('Skipping workflow copy (user version takes priority).');
   } else {
-    mkdirSync(dirname(workflowDest), { recursive: true });
     const content = readFileSync(builtinPath, 'utf-8');
-    writeFileSync(workflowDest, content, 'utf-8');
+    const targetStepsDir = options.global ? getGlobalStepsDir() : getProjectStepsDir(options.projectDir);
+    const targetFacetPoolsDir = options.global
+      ? getGlobalFacetPoolsDir()
+      : getProjectFacetPoolsDir(options.projectDir);
+    const builtinFacetPoolsDir = getBuiltinLanguageFacetPoolsDir(lang);
+    const builtinLanguageRoot = getBuiltinLanguageResourcesDir(lang);
+    const rollbackStepFragments = copyReferencedBuiltinStepFragments(
+      content,
+      lang,
+      targetStepsDir,
+      workflowDest,
+      !options.global,
+    );
+    let rollbackFacetPools: () => void;
+    try {
+      rollbackFacetPools = copyReferencedBuiltinFacetPools(
+        content,
+        lang,
+        targetFacetPoolsDir,
+        workflowDest,
+        !options.global,
+        builtinFacetPoolsDir,
+        builtinLanguageRoot,
+      );
+    } catch (error) {
+      rollbackStepFragments();
+      throw error;
+    }
+    const rollback = (): void => {
+      rollbackFacetPools();
+      rollbackStepFragments();
+    };
+    try {
+      writeNewEjectedFile(options.global ? dirname(dirname(targetWorkflowsDir)) : options.projectDir, workflowDest, content);
+    } catch (error) {
+      rollback();
+      throw error;
+    }
     success(`Ejected workflow: ${safeWorkflowDest}`);
   }
 }
@@ -126,7 +151,7 @@ export async function ejectFacet(
   }
 
   if (!existsSync(srcPath)) {
-    error(`Builtin ${facetType}/${name}.md not found`);
+    error(`Builtin ${facetType}/${safeName}.md not found`);
     info(`Available ${facetType}:`);
     listAvailableFacets(builtinDir);
     return;
@@ -143,7 +168,7 @@ export async function ejectFacet(
   }
   const safeDestPath = sanitizeTerminalText(destPath);
 
-  info(`Ejecting ${facetType}/${name} to ${targetLabel}`);
+  info(`Ejecting ${facetType}/${safeName} to ${targetLabel}`);
   blankLine();
 
   if (existsSync(destPath)) {

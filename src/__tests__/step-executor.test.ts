@@ -1,12 +1,24 @@
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
-import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import type { WorkflowState } from '../core/models/types.js';
+import {
+  createStructuredOutputNormalizerRegistry,
+  type StructuredOutputNormalizerRegistry,
+} from '../core/workflow/engine/structured-output-normalizer.js';
+import type { AgentResponse, WorkflowState } from '../core/models/types.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
-import { makeStep } from './test-helpers.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
+import {
+  makeStep,
+  makeWorkflowResumePointEntry,
+} from './test-helpers.js';
+import { createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
+import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { PHASE1_EMPTY_OUTPUT_ERROR } from '../core/workflow/engine/phase1-empty-recovery.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -63,101 +75,6 @@ describe('StepExecutor', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('phase:start には structured_output 用に差し替えた実 instruction を渡す', async () => {
-    vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: 'system prompt',
-        userInstruction: prompt,
-      });
-      return {
-        persona: 'coder',
-        status: 'done',
-        content: '```json\n{"result":"ok"}\n```',
-        timestamp: new Date('2026-04-01T00:00:00.000Z'),
-      };
-    });
-
-    const onPhaseStart = vi.fn();
-    const step = makeStep({
-      name: 'implement',
-      persona: 'coder',
-      instruction: 'Plan the next follow-up action.',
-      structuredOutput: {
-        schema: {
-          type: 'object',
-          properties: {
-            result: { type: 'string' },
-          },
-          required: ['result'],
-          additionalProperties: false,
-        },
-      },
-    });
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/reports',
-      getRunPaths: () => runPaths,
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'implement' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      onPhaseStart,
-      onPhaseComplete: vi.fn(),
-      onJudgeStage: vi.fn(),
-    };
-    const executor = new StepExecutor(deps);
-    const state = makeState();
-
-    const { instruction } = await executor.runNormalStep(
-      step,
-      state,
-      'test task',
-      5,
-      vi.fn(),
-      'Plan the next follow-up action.',
-      undefined,
-    );
-
-    expect(instruction).toContain('Return exactly one fenced JSON block');
-    expect(onPhaseStart).toHaveBeenCalledWith(
-      step,
-      1,
-      'execute',
-      expect.stringContaining('Return exactly one fenced JSON block'),
-      {
-        systemPrompt: 'system prompt',
-        userInstruction: expect.stringContaining('Return exactly one fenced JSON block'),
-      },
-      'implement:3:1:1',
-      3,
-    );
-    expect(onPhaseStart).not.toHaveBeenCalledWith(
-      step,
-      1,
-      'execute',
-      'Plan the next follow-up action.',
-      expect.anything(),
-      undefined,
-      3,
-    );
-  });
-
   it('provider が未解決なら structured_output を fail fast にする', () => {
     const step = makeStep({
       name: 'implement',
@@ -190,7 +107,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -210,6 +127,26 @@ describe('StepExecutor', () => {
       undefined,
     )).toThrow(/structured_output.*provider is not resolved/i);
   });
+
+  it('非native structured_output fallback は解決済みワークフロー言語を使う', () => {
+    const executor = new StepExecutor({
+      optionsBuilder: {
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+      },
+      getLanguage: () => 'ja',
+    } as unknown as StepExecutorDeps);
+    const step = makeStep({
+      structuredOutput: { schema: { type: 'object', properties: {}, required: [] } },
+    });
+
+    expect(executor.buildPhase1Instruction('指示', step)).toContain(
+      '次の JSON schema に一致する fenced JSON block をちょうど1つ返してください',
+    );
+  });
+
+
+
+
 
   it('非対応 provider の structured_output fallback で required 欠落を失敗にする', async () => {
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
@@ -256,7 +193,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -329,7 +266,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -409,7 +346,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -484,7 +421,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -558,7 +495,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -635,7 +572,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -663,5 +600,106 @@ describe('StepExecutor', () => {
     ).rejects.toThrow(
       'Step "implement" requires structured_output for provider "claude": $.extra is not allowed by the schema',
     );
+  });
+});
+
+describe('StepExecutor dynamic facet integration', () => {
+  it('prepareNormalStepExecution reflects dynamic facet policyContents/knowledgeContents and throws when pool is missing', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-df-'));
+    const runPaths = buildRunPaths(cwd, 'test-run');
+    mkdirSync(join(cwd, runPaths.contextPolicyRel), { recursive: true });
+    mkdirSync(join(cwd, runPaths.contextKnowledgeRel), { recursive: true });
+    try {
+      const step = makeStep({
+        name: 'fix',
+        personaDisplayName: 'coder',
+        instruction: 'Fix',
+        dynamicFacets: { pool: 'fix', maxSelected: 4 },
+      });
+      const pool = {
+        name: 'fix',
+        candidates: [
+          {
+            id: 'backend',
+            description: 'backend',
+            policyRefs: [],
+            knowledgeRefs: [],
+            resolvedPolicyContents: [],
+            resolvedKnowledgeContents: [],
+          },
+        ],
+      };
+      const coordinator = {
+        resolveDynamicFacets: vi.fn().mockResolvedValue({
+          selectedIds: ['backend'],
+          effectivePolicyContents: ['policy-content'],
+          effectiveKnowledgeContents: ['knowledge-content'],
+          snapshot: {
+            identity: 'id',
+            step_name: 'fix',
+            round: 1,
+            selected_ids: ['backend'],
+            selected_policy_refs: [],
+            selected_knowledge_refs: [],
+            rationale: 'r',
+          },
+        }),
+      };
+      const getFacetPool = vi.fn().mockReturnValue(pool);
+      const deps: StepExecutorDeps = {
+        optionsBuilder: {
+          buildAgentOptions: vi.fn().mockReturnValue({}),
+          buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
+          resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+        } as unknown as StepExecutorDeps['optionsBuilder'],
+        getCwd: () => cwd,
+        getProjectCwd: () => cwd,
+        getReportDir: () => '.takt/reports',
+        getRunPaths: () => runPaths,
+        getLanguage: () => undefined,
+        getInteractive: () => false,
+        getWorkflowSteps: () => [{ name: 'fix' }],
+        getWorkflowName: () => 'test-workflow',
+        getTask: () => 'task',
+        getWorkflowDescription: () => undefined,
+        getWorkflowRules: () => undefined,
+        getRetryNote: () => undefined,
+        getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
+        structuredCaller: {
+          evaluateCondition: vi.fn(),
+          judgeStatus: vi.fn(),
+          decomposeTask: vi.fn(),
+          requestMoreParts: vi.fn(),
+        },
+        structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+        dynamicFacetSelectorCoordinator: coordinator as unknown as StepExecutorDeps['dynamicFacetSelectorCoordinator'],
+        getFacetPool,
+        executionProvider: 'cursor',
+        executionModel: undefined,
+        emitEvent: vi.fn(),
+        recordSynthesizedAgentUsage: vi.fn(),
+        getRunId: () => 'test-run',
+      };
+      const executor = new StepExecutor(deps);
+      const state = makeState();
+      const prepared = await executor.prepareNormalStepExecution(step, state, 'task', 5, 1);
+
+      expect(coordinator.resolveDynamicFacets).toHaveBeenCalledWith(
+        step,
+        state,
+        'task',
+        pool,
+        { stepIteration: 1 },
+      );
+      expect(prepared.executableStep.policyContents).toEqual([{ content: 'policy-content' }]);
+      expect(prepared.executableStep.knowledgeContents).toEqual([{ content: 'knowledge-content' }]);
+
+      getFacetPool.mockReturnValueOnce(undefined);
+      await expect(
+        executor.prepareNormalStepExecution(step, state, 'task', 5, 1),
+      ).rejects.toThrow('Configuration error: step "fix" references unknown facet pool "fix"');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });

@@ -1,32 +1,43 @@
 import type {
-  CommandQualityGate,
   QualityGate,
   RateLimitFallbackConfig,
   StepProviderOptions,
   WorkflowRuntimeConfig,
 } from '../../core/models/workflow-types.js';
+import type { z } from 'zod';
+import {
+  NormalizedTaktSelectorProviderEntrySchema,
+  type QualityGatesSchema,
+} from '../../core/models/schema-base.js';
+import { ConfiguredModelSchema } from '../../core/models/model-schema.js';
+import type { WorkflowOverridesSchema } from '../../core/models/config-schemas.js';
 import type { PermissionMode } from '../../core/models/status.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type {
   AssistantConfig,
+  AutoRoutingConfig,
+  FormalSpecSetting,
   WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   TaktProviderConfigEntry,
+  TaktSelectorProviderConfigEntry,
   TaktProvidersConfig,
+  TelemetryConfig,
 } from '../../core/models/config-types.js';
-import { validateProviderModelCompatibility } from './providerModelCompatibility.js';
+import { validateProviderModelRequirements } from './providerModelRequirements.js';
 import {
   normalizeConfigProviderReferenceDetailed,
   type ConfigProviderReference,
 } from './providerReference.js';
-
-type RawCommandQualityGate = Omit<CommandQualityGate, 'timeoutMs'> & {
-  timeout_ms?: number;
-  timeoutMs?: number;
-};
+import {
+  assertValidCodexProviderOptions,
+  assertAllowedNormalizedProviderBaseUrls,
+  normalizeProviderOptions,
+  type NormalizeProviderOptionsOptions,
+} from './providerOptions.js';
 
 type RawProviderRoutingEntry = string | {
   type?: string;
@@ -35,8 +46,29 @@ type RawProviderRoutingEntry = string | {
   provider_options?: Record<string, unknown>;
 };
 
-type RawQualityGate = string | RawCommandQualityGate;
-type RawQualityGateOverride = { quality_gates?: RawQualityGate[] };
+type RawQualityGate = NonNullable<z.output<typeof QualityGatesSchema>>[number];
+type RawWorkflowOverrides = z.output<typeof WorkflowOverridesSchema>;
+type SerializedQualityGateOverride = { quality_gates?: RawQualityGate[] };
+
+type RawAutoRoutingConfig = {
+  strategy: AutoRoutingConfig['strategy'];
+  router: {
+    provider: AutoRoutingConfig['router']['provider'];
+    model: string;
+  };
+  candidates: Array<{
+    name: string;
+    description?: string;
+    provider: AutoRoutingConfig['candidates'][number]['provider'];
+    model: string;
+    routing_tier: AutoRoutingConfig['candidates'][number]['routingTier'];
+    provider_options?: Record<string, unknown>;
+  }>;
+  rules?: AutoRoutingConfig['rules'];
+  default_pool: string;
+  candidate_pools: AutoRoutingConfig['candidatePools'];
+  pool_rules?: AutoRoutingConfig['poolRules'];
+};
 
 function normalizeQualityGate(gate: RawQualityGate): QualityGate {
   if (typeof gate === 'string') {
@@ -47,13 +79,11 @@ function normalizeQualityGate(gate: RawQualityGate): QualityGate {
     ...(gate.name !== undefined ? { name: gate.name } : {}),
     command: gate.command,
     ...(gate.cwd !== undefined ? { cwd: gate.cwd } : {}),
-    ...(gate.timeoutMs !== undefined || gate.timeout_ms !== undefined
-      ? { timeoutMs: gate.timeoutMs ?? gate.timeout_ms }
-      : {}),
+    ...(gate.timeout_ms !== undefined ? { timeoutMs: gate.timeout_ms } : {}),
   };
 }
 
-function normalizeQualityGates(gates: RawQualityGate[] | undefined): QualityGate[] | undefined {
+export function normalizeQualityGates(gates: RawQualityGate[] | undefined): QualityGate[] | undefined {
   return gates?.map(normalizeQualityGate);
 }
 
@@ -105,7 +135,7 @@ export function normalizeRateLimitFallback(
   const switchChain = raw.switch_chain ?? [];
   return {
     switchChain: switchChain.map((entry, index) => {
-      validateProviderModelCompatibility(entry.provider, entry.model, {
+      validateProviderModelRequirements(entry.provider, entry.model, {
         modelFieldName: `Configuration error: rate_limit_fallback.switch_chain[${index}].model`,
       });
       return {
@@ -114,6 +144,101 @@ export function normalizeRateLimitFallback(
       };
     }),
   };
+}
+
+export function normalizeAutoRoutingConfig(
+  raw: RawAutoRoutingConfig | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): AutoRoutingConfig | undefined {
+  if (!raw) {
+    return undefined;
+  }
+
+  validateProviderModelRequirements(raw.router.provider, raw.router.model, {
+    modelFieldName: 'Configuration error: auto_routing.router.model',
+  });
+  return {
+    strategy: raw.strategy,
+    router: {
+      provider: raw.router.provider,
+      model: raw.router.model,
+    },
+    candidates: raw.candidates.map((candidate, index) => {
+      validateProviderModelRequirements(candidate.provider, candidate.model, {
+        modelFieldName: `Configuration error: auto_routing.candidates[${index}].model`,
+      });
+      return {
+        name: candidate.name,
+        ...(candidate.description !== undefined ? { description: candidate.description } : {}),
+        provider: candidate.provider,
+        model: candidate.model,
+        routingTier: candidate.routing_tier,
+        providerOptions: normalizeProviderOptions(candidate.provider_options, {
+          ...options,
+          pathPrefix: `auto_routing.candidates[${index}].provider_options`,
+        }),
+      };
+    }),
+    rules: raw.rules,
+    defaultPool: raw.default_pool,
+    candidatePools: raw.candidate_pools,
+    poolRules: raw.pool_rules,
+  };
+}
+
+export function denormalizeAutoRoutingConfig(
+  config: AutoRoutingConfig | undefined,
+): RawAutoRoutingConfig | undefined {
+  if (!config) {
+    return undefined;
+  }
+  if (config.defaultPool === undefined) {
+    throw new Error('Cannot serialize auto routing without a default pool');
+  }
+  return {
+    strategy: config.strategy,
+    router: {
+      provider: config.router.provider,
+      model: config.router.model,
+    },
+    candidates: config.candidates.map((candidate, index) => {
+      const path = `auto_routing.candidates[${index}]`;
+      const rawProviderOptions = denormalizeProviderOptions(candidate.providerOptions);
+      if (candidate.providerOptions !== undefined) {
+        assertNormalizedProviderOptions(path, rawProviderOptions);
+      }
+      return {
+        name: candidate.name,
+        ...(candidate.description !== undefined ? { description: candidate.description } : {}),
+        provider: candidate.provider,
+        model: candidate.model,
+        routing_tier: candidate.routingTier,
+        ...(rawProviderOptions !== undefined ? { provider_options: rawProviderOptions } : {}),
+      };
+    }),
+    ...(config.rules !== undefined ? { rules: config.rules } : {}),
+    default_pool: config.defaultPool,
+    candidate_pools: config.candidatePools,
+    ...(config.poolRules !== undefined ? { pool_rules: config.poolRules } : {}),
+  };
+}
+
+export function normalizeTelemetryConfig(
+  raw: { routing_decisions?: boolean } | undefined,
+): TelemetryConfig | undefined {
+  if (!raw || raw.routing_decisions === undefined) {
+    return undefined;
+  }
+  return { routingDecisions: raw.routing_decisions };
+}
+
+export function denormalizeTelemetryConfig(
+  config: TelemetryConfig | undefined,
+): Record<string, unknown> | undefined {
+  if (!config || config.routingDecisions === undefined) {
+    return undefined;
+  }
+  return { routing_decisions: config.routingDecisions };
 }
 
 export function denormalizeRateLimitFallback(
@@ -165,12 +290,7 @@ export function denormalizeProviderProfiles(
 }
 
 export function normalizeWorkflowOverrides(
-  raw: {
-    quality_gates?: RawQualityGate[];
-    quality_gates_edit_only?: boolean;
-    steps?: Record<string, RawQualityGateOverride>;
-    personas?: Record<string, RawQualityGateOverride>;
-  } | undefined,
+  raw: RawWorkflowOverrides,
 ): WorkflowOverrides | undefined {
   if (!raw) return undefined;
   return {
@@ -180,7 +300,7 @@ export function normalizeWorkflowOverrides(
       ? Object.fromEntries(
         Object.entries(raw.steps).map(([name, override]) => [
           name,
-          { qualityGates: normalizeQualityGates(override.quality_gates) },
+          { qualityGates: normalizeQualityGates(override?.quality_gates) },
         ])
       )
       : undefined,
@@ -188,7 +308,7 @@ export function normalizeWorkflowOverrides(
       ? Object.fromEntries(
         Object.entries(raw.personas).map(([name, override]) => [
           name,
-          { qualityGates: normalizeQualityGates(override.quality_gates) },
+          { qualityGates: normalizeQualityGates(override?.quality_gates) },
         ])
       )
       : undefined,
@@ -200,15 +320,15 @@ export function denormalizeWorkflowOverrides(
 ): {
   quality_gates?: RawQualityGate[];
   quality_gates_edit_only?: boolean;
-  steps?: Record<string, RawQualityGateOverride>;
-  personas?: Record<string, RawQualityGateOverride>;
+  steps?: Record<string, SerializedQualityGateOverride>;
+  personas?: Record<string, SerializedQualityGateOverride>;
 } | undefined {
   if (!overrides) return undefined;
   const result: {
     quality_gates?: RawQualityGate[];
     quality_gates_edit_only?: boolean;
-    steps?: Record<string, RawQualityGateOverride>;
-    personas?: Record<string, RawQualityGateOverride>;
+    steps?: Record<string, SerializedQualityGateOverride>;
+    personas?: Record<string, SerializedQualityGateOverride>;
   } = {};
   if (overrides.qualityGates !== undefined) {
     result.quality_gates = denormalizeQualityGates(overrides.qualityGates);
@@ -219,7 +339,7 @@ export function denormalizeWorkflowOverrides(
   if (overrides.steps) {
     result.steps = Object.fromEntries(
       Object.entries(overrides.steps).map(([name, override]) => {
-        const stepOverride: RawQualityGateOverride = {};
+        const stepOverride: SerializedQualityGateOverride = {};
         if (override.qualityGates !== undefined) {
           stepOverride.quality_gates = denormalizeQualityGates(override.qualityGates);
         }
@@ -230,7 +350,7 @@ export function denormalizeWorkflowOverrides(
   if (overrides.personas) {
     result.personas = Object.fromEntries(
       Object.entries(overrides.personas).map(([name, override]) => {
-        const personaOverride: RawQualityGateOverride = {};
+        const personaOverride: SerializedQualityGateOverride = {};
         if (override.qualityGates !== undefined) {
           personaOverride.quality_gates = denormalizeQualityGates(override.qualityGates);
         }
@@ -243,8 +363,9 @@ export function denormalizeWorkflowOverrides(
 
 export function normalizePersonaProviders(
   raw: Record<string, RawProviderRoutingEntry> | undefined,
+  options: NormalizeProviderOptionsOptions = {},
 ): Record<string, PersonaProviderEntry> | undefined {
-  return normalizeProviderRoutingEntries(raw, 'persona_providers');
+  return normalizeProviderRoutingEntries(raw, 'persona_providers', options);
 }
 
 export function denormalizePersonaProviders(
@@ -256,6 +377,8 @@ export function denormalizePersonaProviders(
 function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
   raw: Record<string, RawProviderRoutingEntry> | undefined,
   pathPrefix: string,
+  options: NormalizeProviderOptionsOptions,
+  allowProviderOnlyOpenCode = false,
 ): Record<string, TEntry> | undefined {
   if (!raw) return undefined;
   const entries = Object.entries(raw);
@@ -268,6 +391,10 @@ function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
       (typeof entry === 'string' ? entry : (entry.provider ?? entry.type)) as ConfigProviderReference<NonNullable<TEntry['provider']>>,
       typeof entry === 'string' ? undefined : entry.model,
       rawProviderOptions,
+      {
+        ...options,
+        pathPrefix: `${path}.provider_options`,
+      },
     );
     if (rawProviderOptions !== undefined) {
       assertNormalizedProviderOptions(path, normalizedReference.providerOptions);
@@ -288,14 +415,19 @@ function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
         `Configuration error: ${path} must include at least one of 'provider', 'model', or 'provider_options'`,
       );
     }
-    validateProviderModelCompatibility(
-      normalizedEntry.provider,
-      normalizedEntry.model,
-      {
-        modelFieldName: `Configuration error: ${path}.model`,
-        requireProviderQualifiedModelForOpencode: false,
-      },
-    );
+    if (
+      !allowProviderOnlyOpenCode
+      || normalizedEntry.provider !== 'opencode'
+      || normalizedEntry.model !== undefined
+    ) {
+      validateProviderModelRequirements(
+        normalizedEntry.provider,
+        normalizedEntry.model,
+        {
+          modelFieldName: `Configuration error: ${path}.model`,
+        },
+      );
+    }
     return [key, normalizedEntry as TEntry];
   }));
 }
@@ -347,12 +479,13 @@ export function normalizeProviderRouting(
     tags?: Record<string, RawProviderRoutingEntry>;
     steps?: Record<string, RawProviderRoutingEntry>;
   } | undefined,
+  options: NormalizeProviderOptionsOptions = {},
 ): ProviderRoutingConfig | undefined {
   if (!raw) return undefined;
   const result: ProviderRoutingConfig = {
-    personas: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.personas, 'provider_routing.personas'),
-    tags: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.tags, 'provider_routing.tags'),
-    steps: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.steps, 'provider_routing.steps'),
+    personas: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.personas, 'provider_routing.personas', options, true),
+    tags: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.tags, 'provider_routing.tags', options, true),
+    steps: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.steps, 'provider_routing.steps', options, true),
   };
   return result.personas || result.tags || result.steps ? result : undefined;
 }
@@ -391,21 +524,29 @@ export function normalizePipelineConfig(raw: {
 }
 
 export function normalizeAssistantConfig(
-  raw: { init_files?: string[] } | undefined,
+  raw: { init_files?: string[]; formal_spec?: FormalSpecSetting } | undefined,
 ): AssistantConfig | undefined {
-  if (!raw?.init_files || raw.init_files.length === 0) {
+  const initFiles = raw?.init_files?.length ? raw.init_files : undefined;
+  if (initFiles === undefined && raw?.formal_spec === undefined) {
     return undefined;
   }
-  return { initFiles: raw.init_files };
+  return {
+    ...(initFiles !== undefined ? { initFiles } : {}),
+    ...(raw?.formal_spec !== undefined ? { formalSpec: raw.formal_spec } : {}),
+  };
 }
 
 export function denormalizeAssistantConfig(
   config: AssistantConfig | undefined,
-): { init_files: string[] } | undefined {
-  if (!config?.initFiles || config.initFiles.length === 0) {
+): { init_files?: string[]; formal_spec?: FormalSpecSetting } | undefined {
+  const initFiles = config?.initFiles?.length ? config.initFiles : undefined;
+  if (initFiles === undefined && config?.formalSpec === undefined) {
     return undefined;
   }
-  return { init_files: config.initFiles };
+  return {
+    ...(initFiles !== undefined ? { init_files: initFiles } : {}),
+    ...(config?.formalSpec !== undefined ? { formal_spec: config.formalSpec } : {}),
+  };
 }
 
 export function normalizeTaktProviders(raw: {
@@ -413,15 +554,43 @@ export function normalizeTaktProviders(raw: {
     provider?: TaktProviderConfigEntry['provider'];
     model?: string;
   };
-} | undefined): TaktProvidersConfig | undefined {
+  selector?: {
+    provider?: TaktProviderConfigEntry['provider'];
+    model?: string;
+    provider_options?: Record<string, unknown>;
+  };
+} | undefined, options: NormalizeProviderOptionsOptions = {}): TaktProvidersConfig | undefined {
   if (!raw) {
     return undefined;
   }
   const normalizedAssistant = normalizeTaktAssistantProvider(raw.assistant);
-  if (!normalizedAssistant) {
+  const normalizedSelector = normalizeTaktSelectorProvider(raw.selector, options);
+  if (!normalizedAssistant && !normalizedSelector) {
     return undefined;
   }
-  return { assistant: normalizedAssistant };
+  return {
+    ...(normalizedAssistant ? { assistant: normalizedAssistant } : {}),
+    ...(normalizedSelector ? { selector: normalizedSelector } : {}),
+  };
+}
+
+export function normalizeTaktSelectorProvider(
+  selector: { provider?: TaktProviderConfigEntry['provider']; model?: string; provider_options?: Record<string, unknown> } | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): TaktSelectorProviderConfigEntry | undefined {
+  if (!selector) return undefined;
+  const providerOptions = normalizeProviderOptions(selector.provider_options, options);
+  const model = selector.model === undefined
+    ? undefined
+    : ConfiguredModelSchema.parse(selector.model);
+  if (selector.provider === undefined && model === undefined && providerOptions === undefined) {
+    throw new Error("Configuration error: 'takt_providers.selector' must include provider, model, or provider_options.");
+  }
+  return {
+    ...(selector.provider !== undefined ? { provider: selector.provider } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(providerOptions !== undefined ? { providerOptions } : {}),
+  };
 }
 
 export function normalizeTaktAssistantProvider(
@@ -439,7 +608,7 @@ export function normalizeTaktAssistantProvider(
   if (provider === undefined && model === undefined) {
     throw new Error("Configuration error: 'takt_providers.assistant' must include provider or model.");
   }
-  validateProviderModelCompatibility(
+  validateProviderModelRequirements(
     provider,
     model,
     {
@@ -460,18 +629,29 @@ export function normalizeTaktAssistantProvider(
 
 export function buildRawTaktProvidersOrThrow(
   taktProviders: TaktProvidersConfig | undefined,
-): { assistant: TaktProviderConfigEntry } | undefined {
+  options: NormalizeProviderOptionsOptions = {},
+): { assistant?: TaktProviderConfigEntry; selector?: { provider?: TaktSelectorProviderConfigEntry['provider']; model?: string; provider_options?: Record<string, unknown> } } | undefined {
   if (taktProviders === undefined) {
     return undefined;
   }
-  if (taktProviders.assistant === undefined) {
-    throw new Error("Configuration error: 'takt_providers.assistant' is required when takt_providers is set.");
-  }
   const assistant = normalizeTaktAssistantProvider(taktProviders.assistant);
-  if (!assistant) {
-    throw new Error("Configuration error: 'takt_providers.assistant' must include provider or model.");
+  const selector = taktProviders.selector === undefined
+    ? undefined
+    : NormalizedTaktSelectorProviderEntrySchema.parse(taktProviders.selector);
+  assertAllowedNormalizedProviderBaseUrls(selector?.providerOptions, options);
+  if (!assistant && !selector) {
+    throw new Error("Configuration error: 'takt_providers' must include assistant or selector.");
   }
-  return { assistant };
+  return {
+    ...(assistant ? { assistant } : {}),
+    ...(selector ? {
+      selector: {
+        ...(selector.provider !== undefined ? { provider: selector.provider } : {}),
+        ...(selector.model !== undefined ? { model: selector.model } : {}),
+        ...(selector.providerOptions !== undefined ? { provider_options: denormalizeProviderOptions(selector.providerOptions) } : {}),
+      },
+    } : {}),
+  };
 }
 
 export function denormalizeProviderOptions(
@@ -480,18 +660,46 @@ export function denormalizeProviderOptions(
   if (!providerOptions) {
     return undefined;
   }
+  assertValidCodexProviderOptions(providerOptions);
 
   const raw: Record<string, unknown> = {};
   if (
-    providerOptions.codex?.networkAccess !== undefined
+    providerOptions.codex?.baseUrl !== undefined
+    || providerOptions.codex?.networkAccess !== undefined
+    || providerOptions.codex?.permissionControl !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
+    || providerOptions.codex?.fastMode !== undefined
+    || providerOptions.codex?.guards?.callTimeoutMs !== undefined
+    || providerOptions.codex?.skills?.repo !== undefined
+    || providerOptions.codex?.skills?.user !== undefined
   ) {
     raw.codex = {
+      ...(providerOptions.codex.baseUrl !== undefined
+        ? { base_url: providerOptions.codex.baseUrl }
+        : {}),
       ...(providerOptions.codex.networkAccess !== undefined
         ? { network_access: providerOptions.codex.networkAccess }
         : {}),
+      ...(providerOptions.codex.permissionControl !== undefined
+        ? { permission_control: providerOptions.codex.permissionControl }
+        : {}),
       ...(providerOptions.codex.reasoningEffort !== undefined
         ? { reasoning_effort: providerOptions.codex.reasoningEffort }
+        : {}),
+      ...(providerOptions.codex.fastMode !== undefined
+        ? { fast_mode: providerOptions.codex.fastMode }
+        : {}),
+      ...(providerOptions.codex.skills?.repo !== undefined || providerOptions.codex.skills?.user !== undefined
+        ? {
+            skills: {
+              ...(providerOptions.codex.skills.repo !== undefined
+                ? { repo: providerOptions.codex.skills.repo }
+                : {}),
+              ...(providerOptions.codex.skills.user !== undefined
+                ? { user: providerOptions.codex.skills.user }
+                : {}),
+            },
+          }
         : {}),
     };
   }
@@ -499,6 +707,7 @@ export function denormalizeProviderOptions(
     providerOptions.opencode?.networkAccess !== undefined
     || providerOptions.opencode?.variant !== undefined
     || providerOptions.opencode?.allowedTools !== undefined
+    || providerOptions.opencode?.guards !== undefined
   ) {
     raw.opencode = {
       ...(providerOptions.opencode.networkAccess !== undefined
@@ -510,15 +719,54 @@ export function denormalizeProviderOptions(
       ...(providerOptions.opencode.allowedTools !== undefined
         ? { allowed_tools: providerOptions.opencode.allowedTools }
         : {}),
+      ...(providerOptions.opencode.guards !== undefined
+        ? {
+            guards: {
+              ...(providerOptions.opencode.guards.profile !== undefined
+                ? { profile: providerOptions.opencode.guards.profile }
+                : {}),
+              ...(providerOptions.opencode.guards.modelProfiles !== undefined
+                ? { model_profiles: { ...providerOptions.opencode.guards.modelProfiles } }
+                : {}),
+              ...(providerOptions.opencode.guards.callTimeoutMs !== undefined
+                ? { call_timeout_ms: providerOptions.opencode.guards.callTimeoutMs }
+                : {}),
+              ...(providerOptions.opencode.guards.eventLimit !== undefined
+                ? { event_limit: providerOptions.opencode.guards.eventLimit }
+                : {}),
+              ...(providerOptions.opencode.guards.textByteLimit !== undefined
+                ? { text_byte_limit: providerOptions.opencode.guards.textByteLimit }
+                : {}),
+              ...(providerOptions.opencode.guards.reasoningByteLimit !== undefined
+                ? { reasoning_byte_limit: providerOptions.opencode.guards.reasoningByteLimit }
+                : {}),
+            },
+          }
+        : {}),
+    };
+  }
+  if (providerOptions.codex?.guards?.callTimeoutMs !== undefined) {
+    raw.codex = {
+      ...(raw.codex ?? {}),
+      guards: { call_timeout_ms: providerOptions.codex.guards.callTimeoutMs },
     };
   }
   if (providerOptions.claude) {
     const claude: Record<string, unknown> = {};
+    if (providerOptions.claude.baseUrl !== undefined) {
+      claude.base_url = providerOptions.claude.baseUrl;
+    }
     if (providerOptions.claude.allowedTools !== undefined) {
       claude.allowed_tools = providerOptions.claude.allowedTools;
     }
     if (providerOptions.claude.effort !== undefined) {
       claude.effort = providerOptions.claude.effort;
+    }
+    if (providerOptions.claude.guards?.callTimeoutMs !== undefined) {
+      claude.guards = { call_timeout_ms: providerOptions.claude.guards.callTimeoutMs };
+    }
+    if (providerOptions.claude.skills?.enabled !== undefined) {
+      claude.skills = { enabled: providerOptions.claude.skills.enabled };
     }
     const sandbox: Record<string, unknown> = {};
     if (providerOptions.claude.sandbox?.allowUnsandboxedCommands !== undefined) {
@@ -534,16 +782,89 @@ export function denormalizeProviderOptions(
       raw.claude = claude;
     }
   }
-  if (providerOptions.copilot?.effort !== undefined) {
-    raw.copilot = { effort: providerOptions.copilot.effort };
+  if (providerOptions.copilot?.effort !== undefined || providerOptions.copilot?.guards?.callTimeoutMs !== undefined) {
+    raw.copilot = {
+      ...(providerOptions.copilot.effort !== undefined ? { effort: providerOptions.copilot.effort } : {}),
+      ...(providerOptions.copilot.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.copilot.guards.callTimeoutMs } }
+        : {}),
+    };
   }
-  if (providerOptions.kiro?.agent !== undefined) {
-    raw.kiro = { agent: providerOptions.kiro.agent };
+  if (providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.guards?.callTimeoutMs !== undefined) {
+    raw.kiro = {
+      ...(providerOptions.kiro.agent !== undefined ? { agent: providerOptions.kiro.agent } : {}),
+      ...(providerOptions.kiro.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.kiro.guards.callTimeoutMs } }
+        : {}),
+    };
+  }
+  if (providerOptions.cursor?.guards?.callTimeoutMs !== undefined) {
+    raw.cursor = {
+      guards: {
+        ...(providerOptions.cursor.guards.callTimeoutMs !== undefined
+          ? { call_timeout_ms: providerOptions.cursor.guards.callTimeoutMs }
+          : {}),
+      },
+    };
+  }
+  if (providerOptions.deepseekHarness !== undefined) {
+    const deepseekHarness = {
+      ...(providerOptions.deepseekHarness.pythonPath !== undefined
+        ? { python_path: providerOptions.deepseekHarness.pythonPath }
+        : {}),
+      ...(providerOptions.deepseekHarness.baseUrl !== undefined
+        ? { base_url: providerOptions.deepseekHarness.baseUrl }
+        : {}),
+      ...(providerOptions.deepseekHarness.sessionRoot !== undefined
+        ? { session_root: providerOptions.deepseekHarness.sessionRoot }
+        : {}),
+      ...(providerOptions.deepseekHarness.cordis !== undefined
+        ? { cordis: providerOptions.deepseekHarness.cordis }
+        : {}),
+      ...(providerOptions.deepseekHarness.maxTokens !== undefined
+        ? { max_tokens: providerOptions.deepseekHarness.maxTokens }
+        : {}),
+      ...(providerOptions.deepseekHarness.requestTimeoutMs !== undefined
+        ? { request_timeout_ms: providerOptions.deepseekHarness.requestTimeoutMs }
+        : {}),
+      ...(providerOptions.deepseekHarness.shutdownTimeoutMs !== undefined
+        ? { shutdown_timeout_ms: providerOptions.deepseekHarness.shutdownTimeoutMs }
+        : {}),
+      ...(providerOptions.deepseekHarness.runtimeMode !== undefined
+        ? { runtime_mode: providerOptions.deepseekHarness.runtimeMode }
+        : {}),
+    };
+    if (Object.keys(deepseekHarness).length > 0) {
+      raw.deepseek_harness = deepseekHarness;
+    }
+  }
+  if (providerOptions.pi !== undefined) {
+    const pi = {
+      ...(providerOptions.pi.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.pi.guards.callTimeoutMs } }
+        : {}),
+      ...(providerOptions.pi.extensions !== undefined ? { extensions: [...providerOptions.pi.extensions] } : {}),
+      ...(providerOptions.pi.noExtensions !== undefined ? { no_extensions: providerOptions.pi.noExtensions } : {}),
+      ...(providerOptions.pi.noSkills !== undefined ? { no_skills: providerOptions.pi.noSkills } : {}),
+      ...(providerOptions.pi.noPromptTemplates !== undefined
+        ? { no_prompt_templates: providerOptions.pi.noPromptTemplates }
+        : {}),
+      ...(providerOptions.pi.noThemes !== undefined ? { no_themes: providerOptions.pi.noThemes } : {}),
+      ...(providerOptions.pi.noContextFiles !== undefined
+        ? { no_context_files: providerOptions.pi.noContextFiles }
+        : {}),
+    };
+    if (Object.keys(pi).length > 0) {
+      raw.pi = pi;
+    }
   }
   if (providerOptions.claudeTerminal) {
     const claudeTerminal: Record<string, unknown> = {};
     if (providerOptions.claudeTerminal.backend !== undefined) {
       claudeTerminal.backend = providerOptions.claudeTerminal.backend;
+    }
+    if (providerOptions.claudeTerminal.guards?.callTimeoutMs !== undefined) {
+      claudeTerminal.guards = { call_timeout_ms: providerOptions.claudeTerminal.guards.callTimeoutMs };
     }
     if (providerOptions.claudeTerminal.timeoutMs !== undefined) {
       claudeTerminal.timeout_ms = providerOptions.claudeTerminal.timeoutMs;

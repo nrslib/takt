@@ -2,16 +2,26 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { z } from 'zod/v4';
 import type {
+  CompanionSelection,
   WorkflowCallArgValue,
 } from '../../../core/models/index.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
-import { isResourcePath, resolveFacetPath, resolveSectionMap } from './resource-resolver.js';
+import {
+  isResourcePath,
+  resolveFacetPath,
+  resolvePersona,
+  resolveSectionMapWithSource,
+  unwrapResolvedSectionMap,
+} from './resource-resolver.js';
 import { isWorkflowParamReference, type WorkflowParamReference } from './workflowCallableParamRef.js';
 import { assertNoParamReferences, validateReturnRules } from './workflowCallableRuleValidation.js';
+import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
+import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 type RawWorkflowStep = RawWorkflowConfig['steps'][number];
+type RawSelectorGuidance = NonNullable<NonNullable<RawWorkflowStep['dynamic_facets']>['selector']>;
 type WorkflowParamType = NonNullable<NonNullable<RawWorkflowConfig['subworkflow']>['params']>[string]['type'];
 
 export interface WorkflowCallArgResolutionPolicy {
@@ -25,20 +35,97 @@ interface ExpandCallableWorkflowOptions {
   argPolicy?: WorkflowCallArgResolutionPolicy;
 }
 
-type WorkflowFacetKind = 'knowledge' | 'policy' | 'instruction' | 'report_format';
+type WorkflowFacetKind = 'knowledge' | 'policy' | 'instruction' | 'persona' | 'report_format';
 export { isWorkflowParamReference } from './workflowCallableParamRef.js';
+
+export function collectSelectorInstructionRefs(
+  steps: RawWorkflowConfig['steps'],
+  params?: NonNullable<RawWorkflowConfig['subworkflow']>['params'],
+  resolvedArgs?: Record<string, WorkflowCallArgValue>,
+): ReadonlySet<string> {
+  const refs = new Set<string>();
+
+  const collectSelectorInstruction = (selector: { instruction?: unknown } | undefined): void => {
+    const rawInstruction = selector?.instruction;
+    if (typeof rawInstruction === 'string') {
+      refs.add(rawInstruction);
+      return;
+    }
+    if (!isWorkflowParamReference(rawInstruction)) {
+      return;
+    }
+    const suppliedValue = resolvedArgs?.[rawInstruction.$param];
+    const defaultValue = params?.[rawInstruction.$param]?.default;
+    const resolvedValue = typeof suppliedValue === 'string'
+      ? suppliedValue
+      : typeof defaultValue === 'string'
+        ? defaultValue
+        : undefined;
+    if (resolvedValue !== undefined) {
+      refs.add(resolvedValue);
+    }
+  };
+
+  const collectStep = (step: RawWorkflowStep): void => {
+    collectSelectorInstruction(step.dynamic_facets?.selector);
+    if (step.parallel === undefined) {
+      return;
+    }
+    if (Array.isArray(step.parallel)) {
+      for (const substep of step.parallel) {
+        collectStep(substep as RawWorkflowStep);
+      }
+      return;
+    }
+    collectSelectorInstruction(step.parallel.selection.selector);
+    for (const substep of [...step.parallel.fixed, ...step.parallel.pool]) {
+      collectStep(substep as RawWorkflowStep);
+    }
+  };
+
+  for (const step of steps) {
+    collectStep(step);
+  }
+  return refs;
+}
 
 export function isMissingWorkflowCallArgError(error: unknown): boolean {
   return error instanceof Error
     && /^Step ".+" requires workflow_call arg ".+" for .+$/.test(error.message);
 }
 
-function createWorkflowSections(raw: RawWorkflowConfig, workflowDir: string): WorkflowSections {
+function createWorkflowSections(
+  raw: RawWorkflowConfig,
+  workflowDir: string,
+  context: FacetResolutionContext | undefined,
+  selectorInstructionRefs: ReadonlySet<string>,
+): WorkflowSections {
+  const resolvedPoliciesWithSource = resolveSectionMapWithSource(raw.policies, workflowDir, 'policies', context);
+  const resolvedKnowledgeWithSource = resolveSectionMapWithSource(raw.knowledge, workflowDir, 'knowledge', context);
+  const resolvedInstructionsWithSource = resolveSectionMapWithSource(
+    raw.instructions,
+    workflowDir,
+    'instructions',
+    context,
+    undefined,
+    selectorInstructionRefs,
+  );
+  const resolvedReportFormatsWithSource = resolveSectionMapWithSource(
+    raw.report_formats,
+    workflowDir,
+    'output-contracts',
+    context,
+  );
   return {
-    resolvedPolicies: resolveSectionMap(raw.policies, workflowDir),
-    resolvedKnowledge: resolveSectionMap(raw.knowledge, workflowDir),
-    resolvedInstructions: resolveSectionMap(raw.instructions, workflowDir),
-    resolvedReportFormats: resolveSectionMap(raw.report_formats, workflowDir),
+    personas: raw.personas,
+    resolvedPolicies: unwrapResolvedSectionMap(resolvedPoliciesWithSource),
+    resolvedPoliciesWithSource,
+    resolvedKnowledge: unwrapResolvedSectionMap(resolvedKnowledgeWithSource),
+    resolvedKnowledgeWithSource,
+    resolvedInstructions: unwrapResolvedSectionMap(resolvedInstructionsWithSource),
+    resolvedInstructionsWithSource,
+    resolvedReportFormats: unwrapResolvedSectionMap(resolvedReportFormatsWithSource),
+    resolvedReportFormatsWithSource,
   };
 }
 
@@ -55,6 +142,8 @@ function getFacetResolver(kind: WorkflowFacetKind): {
       return { resolvedMapKey: 'resolvedInstructions', facetType: 'instructions' };
     case 'report_format':
       return { resolvedMapKey: 'resolvedReportFormats', facetType: 'output-contracts' };
+    case 'persona':
+      throw new Error('persona references use the persona resolver');
   }
 }
 
@@ -67,6 +156,20 @@ function validateFacetReferenceExists(
   context?: FacetResolutionContext,
   argPolicy?: WorkflowCallArgResolutionPolicy,
 ): void {
+  if (kind === 'persona') {
+    if (sections.personas?.[ref] !== undefined) {
+      return;
+    }
+    if (argPolicy?.allowExternalFacetRefs === false) {
+      throw new Error(
+        `workflow_call arg "${paramName}" must reference child-local persona facet "${ref}" across trust boundary`,
+      );
+    }
+    if (resolvePersona(ref, sections, workflowDir, context).personaPath !== undefined) {
+      return;
+    }
+    throw new Error(`workflow_call arg "${paramName}" references unknown persona facet "${ref}"`);
+  }
   const resolver = getFacetResolver(kind);
   const resolvedMap = sections[resolver.resolvedMapKey] as Record<string, string> | undefined;
   if (resolvedMap?.[ref]) {
@@ -97,21 +200,78 @@ function validateWorkflowCallArgValue(
   value: WorkflowCallArgValue,
   workflowDir: string,
   sections: WorkflowSections,
+  facetPools: RawWorkflowConfig['facet_pools'],
   context?: FacetResolutionContext,
   argPolicy?: WorkflowCallArgResolutionPolicy,
 ): void {
   const isArrayValue = Array.isArray(value);
-  if (definition.type === 'facet_ref' && isArrayValue) {
-    throw new Error(`workflow_call arg "${paramName}" must be a scalar facet_ref`);
+  if (definition.type === 'companion_ref[]') {
+    if (isArrayValue) {
+      if (value.some((ref) => typeof ref !== 'string' || ref.trim().length === 0)) {
+        throw new Error(`workflow_call arg "${paramName}" must be a companion_ref[] array`);
+      }
+      return;
+    }
+    if (!isCompanionSelectionObject(value)) {
+      throw new Error(
+        `workflow_call arg "${paramName}" must be a companion_ref[] array or selection object`,
+      );
+    }
+    if (value.fixed.length === 0 && value.pool.length === 0) {
+      throw new Error(`workflow_call arg "${paramName}" companion selection requires a fixed or pool reference`);
+    }
+    if (
+      value.moderator !== undefined
+      && (value.fixed.includes(value.moderator) || value.pool.includes(value.moderator))
+    ) {
+      throw new Error(`workflow_call arg "${paramName}" companion moderator cannot also be a reviewer`);
+    }
+    return;
   }
-  if (definition.type === 'facet_ref[]' && !isArrayValue) {
+  if (definition.type === 'workflow_ref' || definition.type === 'facet_pool_ref') {
+    if (typeof value !== 'string') {
+      if (definition.type === 'facet_pool_ref' && value === null) {
+        throw new Error(`workflow_call arg "${paramName}" references unknown facet pool "null"`);
+      }
+      throw new Error(
+        `workflow_call arg "${paramName}" must be a scalar ${definition.type === 'workflow_ref' ? 'workflow_ref' : 'facet_pool_ref'}`,
+      );
+    }
+    if (definition.type === 'facet_pool_ref' && !hasOwnFacetPool(facetPools, value)) {
+      throw new Error(`workflow_call arg "${paramName}" references unknown facet pool "${value}"`);
+    }
+    return;
+  }
+  if (definition.type === 'facet_ref') {
+    if (typeof value !== 'string') {
+      throw new Error(`workflow_call arg "${paramName}" must be a scalar facet_ref`);
+    }
+    validateFacetReferenceExists(paramName, value, definition.facet_kind, workflowDir, sections, context, argPolicy);
+    return;
+  }
+  if (!isArrayValue) {
     throw new Error(`workflow_call arg "${paramName}" must be a facet_ref[] array`);
   }
-
-  const refs = isArrayValue ? value : [value];
-  for (const ref of refs) {
+  for (const ref of value) {
     validateFacetReferenceExists(paramName, ref, definition.facet_kind, workflowDir, sections, context, argPolicy);
   }
+}
+
+function isCompanionSelectionObject(value: unknown): value is CompanionSelection {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  const keys = Object.keys(candidate);
+  if (keys.some((key) => key !== 'fixed' && key !== 'pool' && key !== 'moderator')) return false;
+  if (!isCompanionReferenceList(candidate.fixed) || !isCompanionReferenceList(candidate.pool)) {
+    return false;
+  }
+  return candidate.moderator === undefined
+    || (typeof candidate.moderator === 'string' && candidate.moderator.trim().length > 0);
+}
+
+function isCompanionReferenceList(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.every((ref) => typeof ref === 'string' && ref.trim().length > 0);
 }
 
 function resolveCallableArgs(
@@ -122,15 +282,24 @@ function resolveCallableArgs(
   argPolicy: WorkflowCallArgResolutionPolicy | undefined,
 ): Record<string, WorkflowCallArgValue> {
   const params = raw.subworkflow?.params ?? {};
-  const sections = createWorkflowSections(raw, workflowDir);
+  const sections = createWorkflowSections(
+    raw,
+    workflowDir,
+    context,
+    collectSelectorInstructionRefs(raw.steps, params, args),
+  );
   const resolvedArgs = new Map<string, WorkflowCallArgValue>();
 
   for (const [name, value] of Object.entries(args ?? {})) {
-    const definition = params[name];
-    if (!definition) {
-      throw new Error(`workflow_call arg "${name}" is not declared by child workflow "${raw.name}"`);
+    try {
+      const definition = params[name];
+      if (!definition) {
+        throw new Error(`workflow_call arg "${name}" is not declared by child workflow "${raw.name}"`);
+      }
+      validateWorkflowCallArgValue(name, definition, value, workflowDir, sections, raw.facet_pools, context, argPolicy);
+    } catch (error) {
+      throw withWorkflowStepErrorPath(error, ['callableArgs', name]);
     }
-    validateWorkflowCallArgValue(name, definition, value, workflowDir, sections, context, argPolicy);
     resolvedArgs.set(name, value);
   }
 
@@ -138,7 +307,7 @@ function resolveCallableArgs(
     if (resolvedArgs.has(name) || definition.default === undefined) {
       continue;
     }
-    validateWorkflowCallArgValue(name, definition, definition.default, workflowDir, sections, context);
+    validateWorkflowCallArgValue(name, definition, definition.default, workflowDir, sections, raw.facet_pools, context);
     resolvedArgs.set(name, definition.default);
   }
 
@@ -153,70 +322,444 @@ function resolveExpandedParamValue(
   expectedKind: WorkflowFacetKind,
   params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
   resolvedArgs: Record<string, WorkflowCallArgValue>,
+  errorPath: readonly PropertyKey[],
 ): WorkflowCallArgValue {
   const definition = params?.[paramRef.$param];
   if (!definition) {
-    throw new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in ${fieldName}`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in ${fieldName}`), errorPath);
   }
-  if (!expectedTypes.includes(definition.type)) {
+  if (
+    definition.type === 'workflow_ref'
+    || definition.type === 'facet_pool_ref'
+    || definition.type === 'companion_ref[]'
+    || !expectedTypes.includes(definition.type)
+  ) {
     const expectedTypeLabel = expectedTypes.join(' or ');
-    throw new Error(`Step "${stepName}" expects ${fieldName} to use ${expectedTypeLabel} param "${paramRef.$param}"`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" expects ${fieldName} to use ${expectedTypeLabel} param "${paramRef.$param}"`), errorPath);
   }
   if (definition.facet_kind !== expectedKind) {
-    throw new Error(`Step "${stepName}" expects ${fieldName} to use ${expectedKind} param "${paramRef.$param}"`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" expects ${fieldName} to use ${expectedKind} param "${paramRef.$param}"`), errorPath);
   }
   const value = resolvedArgs[paramRef.$param];
   if (value === undefined) {
-    throw new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for ${fieldName}`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for ${fieldName}`), errorPath);
+  }
+  return Array.isArray(value) ? [...value] : value;
+}
+
+function expandSelectorGuidance(
+  step: RawWorkflowStep,
+  selector: RawSelectorGuidance | undefined,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  selectorPath: readonly PropertyKey[],
+): RawSelectorGuidance | undefined {
+  if (selector === undefined) {
+    return undefined;
+  }
+  return {
+    ...selector,
+    ...(isWorkflowParamReference(selector.persona)
+      ? {
+          persona: resolveExpandedParamValue(
+            step.name,
+            'selector.persona',
+            selector.persona,
+            ['facet_ref'],
+            'persona',
+            params,
+            resolvedArgs,
+            [...selectorPath, 'persona'],
+          ) as string,
+        }
+      : {}),
+    ...(isWorkflowParamReference(selector.instruction)
+      ? {
+          instruction: resolveExpandedParamValue(
+            step.name,
+            'selector.instruction',
+            selector.instruction,
+            ['facet_ref'],
+            'instruction',
+            params,
+            resolvedArgs,
+            [...selectorPath, 'instruction'],
+          ) as string,
+        }
+      : {}),
+  };
+}
+
+function resolveExpandedFacetPoolValue(
+  stepName: string,
+  paramRef: WorkflowParamReference,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  facetPools: RawWorkflowConfig['facet_pools'],
+  errorPath: readonly PropertyKey[],
+): string {
+  const definition = params?.[paramRef.$param];
+  if (!definition) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in dynamic_facets.pool`),
+      errorPath,
+    );
+  }
+  if (definition.type !== 'facet_pool_ref') {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" expects dynamic_facets.pool to use facet_pool_ref param "${paramRef.$param}"`),
+      errorPath,
+    );
+  }
+  const value = resolvedArgs[paramRef.$param];
+  if (value === undefined) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for dynamic_facets.pool`),
+      errorPath,
+    );
+  }
+  if (typeof value !== 'string') {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" expects dynamic_facets.pool to resolve to a scalar facet_pool_ref`),
+      errorPath,
+    );
+  }
+  if (!hasOwnFacetPool(facetPools, value)) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" references unknown facet pool "${value}"`),
+      errorPath,
+    );
   }
   return value;
+}
+
+function resolveExpandedCompanionValue(
+  stepName: string,
+  paramRef: WorkflowParamReference,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  errorPath: readonly PropertyKey[],
+): string[] | CompanionSelection {
+  const definition = params?.[paramRef.$param];
+  if (!definition) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in companion`),
+      errorPath,
+    );
+  }
+  if (definition.type !== 'companion_ref[]') {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" expects companion to use companion_ref[] param "${paramRef.$param}"`),
+      errorPath,
+    );
+  }
+  const value = resolvedArgs[paramRef.$param];
+  if (value === undefined) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for companion`),
+      errorPath,
+    );
+  }
+  if (Array.isArray(value)) {
+    return [...value];
+  }
+  if (!isCompanionSelectionObject(value)) {
+    throw withWorkflowStepErrorPath(
+      new Error(
+        `Step "${stepName}" expects companion param "${paramRef.$param}" to resolve to a companion_ref[] array or selection object`,
+      ),
+      errorPath,
+    );
+  }
+  return {
+    fixed: [...value.fixed],
+    pool: [...value.pool],
+    ...(value.moderator === undefined ? {} : { moderator: value.moderator }),
+  };
+}
+
+function resolveExpandedWorkflowCallArgValue(
+  stepName: string,
+  argName: string,
+  paramRef: WorkflowParamReference,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  errorPath: readonly PropertyKey[],
+): WorkflowCallArgValue {
+  const definition = params?.[paramRef.$param];
+  if (!definition) {
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in args.${argName}`), errorPath);
+  }
+  const value = resolvedArgs[paramRef.$param];
+  if (value === undefined) {
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for args.${argName}`), errorPath);
+  }
+  return value;
+}
+
+function expandFacetListField(
+  stepName: string,
+  fieldName: 'policy' | 'knowledge',
+  value: RawWorkflowStep['policy'] | RawWorkflowStep['knowledge'],
+  expectedKind: 'policy' | 'knowledge',
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  fieldPath: readonly PropertyKey[],
+): RawWorkflowStep['policy'] | RawWorkflowStep['knowledge'] {
+  if (isWorkflowParamReference(value)) {
+    return resolveExpandedParamValue(
+      stepName,
+      fieldName,
+      value,
+      ['facet_ref', 'facet_ref[]'],
+      expectedKind,
+      params,
+      resolvedArgs,
+      fieldPath,
+    ) as RawWorkflowStep['policy'];
+  }
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  return value.flatMap((entry, index) => {
+    if (!isWorkflowParamReference(entry)) {
+      return [entry];
+    }
+    const expanded = resolveExpandedParamValue(
+      stepName,
+      fieldName,
+      entry,
+      ['facet_ref', 'facet_ref[]'],
+      expectedKind,
+      params,
+      resolvedArgs,
+      [...fieldPath, index],
+    ) as string | string[];
+    return Array.isArray(expanded) ? expanded : [expanded];
+  });
+}
+
+function expandInstructionField(
+  stepName: string,
+  value: RawWorkflowStep['instruction'],
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  fieldPath: readonly PropertyKey[],
+): RawWorkflowStep['instruction'] {
+  if (value === undefined || isWorkflowParamReference(value)) {
+    return value === undefined
+      ? undefined
+      : resolveExpandedParamValue(
+        stepName,
+        'instruction',
+        value,
+        ['facet_ref', 'facet_ref[]'],
+        'instruction',
+        params,
+        resolvedArgs,
+        fieldPath,
+      ) as RawWorkflowStep['instruction'];
+  }
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  return value.flatMap((entry, index) => {
+    if (!isWorkflowParamReference(entry)) {
+      return [entry];
+    }
+    const expanded = resolveExpandedParamValue(
+      stepName,
+      'instruction',
+      entry,
+      ['facet_ref', 'facet_ref[]'],
+      'instruction',
+      params,
+      resolvedArgs,
+      [...fieldPath, index],
+    ) as string | string[];
+    return Array.isArray(expanded) ? expanded : [expanded];
+  });
+}
+
+function expandWorkflowCallReference(
+  step: RawWorkflowStep,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  stepPath: readonly PropertyKey[],
+): RawWorkflowStep['call'] {
+  if (!isWorkflowParamReference(step.call)) {
+    return step.call;
+  }
+  const definition = params?.[step.call.$param];
+  const errorPath = [...stepPath, 'call'];
+  if (!definition) {
+    throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" references undeclared param "${step.call.$param}" in call`), errorPath);
+  }
+  if (definition.type !== 'workflow_ref') {
+    throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" expects call to use workflow_ref param "${step.call.$param}"`), errorPath);
+  }
+  const value = resolvedArgs[step.call.$param];
+  if (value === undefined) {
+    throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" requires workflow_call arg "${step.call.$param}" for call`), errorPath);
+  }
+  if (typeof value !== 'string') {
+    throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" expects call param "${step.call.$param}" to resolve to a scalar workflow_ref`), errorPath);
+  }
+  return value;
+}
+
+function expandWorkflowCallArgs(
+  step: RawWorkflowStep,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  stepPath: readonly PropertyKey[],
+): RawWorkflowStep['args'] {
+  if (!step.args) {
+    return undefined;
+  }
+
+  const expandedArgs: Record<string, WorkflowCallArgValue> = {};
+  for (const [argName, value] of Object.entries(step.args)) {
+    expandedArgs[argName] = isWorkflowParamReference(value)
+      ? resolveExpandedWorkflowCallArgValue(step.name, argName, value, params, resolvedArgs, [...stepPath, 'args', argName])
+      : value;
+  }
+  return expandedArgs as RawWorkflowStep['args'];
 }
 
 function expandStepFields(
   step: RawWorkflowStep,
   params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
   resolvedArgs: Record<string, WorkflowCallArgValue>,
+  facetPools: RawWorkflowConfig['facet_pools'],
+  stepPath: readonly PropertyKey[],
 ): RawWorkflowStep {
   const expandedStep: RawWorkflowStep = structuredClone(step);
 
-  if (isWorkflowParamReference(step.policy)) {
-    expandedStep.policy = resolveExpandedParamValue(
-      step.name,
-      'policy',
-      step.policy,
-      ['facet_ref', 'facet_ref[]'],
-      'policy',
-      params,
-      resolvedArgs,
-    ) as RawWorkflowStep['policy'];
-  }
+  expandedStep.call = expandWorkflowCallReference(step, params, resolvedArgs, stepPath);
 
-  if (isWorkflowParamReference(step.knowledge)) {
-    expandedStep.knowledge = resolveExpandedParamValue(
+  if (isWorkflowParamReference(step.persona)) {
+    expandedStep.persona = resolveExpandedParamValue(
       step.name,
-      'knowledge',
-      step.knowledge,
-      ['facet_ref', 'facet_ref[]'],
-      'knowledge',
-      params,
-      resolvedArgs,
-    ) as RawWorkflowStep['knowledge'];
-  }
-
-  if (isWorkflowParamReference(step.instruction)) {
-    expandedStep.instruction = resolveExpandedParamValue(
-      step.name,
-      'instruction',
-      step.instruction,
+      'persona',
+      step.persona,
       ['facet_ref'],
-      'instruction',
+      'persona',
       params,
       resolvedArgs,
-    ) as RawWorkflowStep['instruction'];
+      [...stepPath, 'persona'],
+    ) as RawWorkflowStep['persona'];
+  }
+
+  expandedStep.policy = expandFacetListField(
+    step.name,
+    'policy',
+    step.policy,
+    'policy',
+    params,
+    resolvedArgs,
+    [...stepPath, 'policy'],
+  );
+
+  expandedStep.knowledge = expandFacetListField(
+    step.name,
+    'knowledge',
+    step.knowledge,
+    'knowledge',
+    params,
+    resolvedArgs,
+    [...stepPath, 'knowledge'],
+  );
+
+  if (isWorkflowParamReference(step.dynamic_facets?.pool)) {
+    const selector = expandSelectorGuidance(
+      step,
+      step.dynamic_facets?.selector,
+      params,
+      resolvedArgs,
+      [...stepPath, 'dynamic_facets', 'selector'],
+    );
+    expandedStep.dynamic_facets = {
+      ...step.dynamic_facets,
+      pool: resolveExpandedFacetPoolValue(
+        step.name,
+        step.dynamic_facets.pool,
+        params,
+        resolvedArgs,
+        facetPools,
+        [...stepPath, 'dynamic_facets', 'pool'],
+      ),
+      ...(selector === undefined ? {} : { selector }),
+    };
+  } else if (step.dynamic_facets?.selector !== undefined) {
+    expandedStep.dynamic_facets = {
+      ...step.dynamic_facets,
+      selector: expandSelectorGuidance(
+        step,
+        step.dynamic_facets.selector,
+        params,
+        resolvedArgs,
+        [...stepPath, 'dynamic_facets', 'selector'],
+      ),
+    };
+  }
+
+  if (isWorkflowParamReference(step.companion)) {
+    const companions = resolveExpandedCompanionValue(
+      step.name,
+      step.companion,
+      params,
+      resolvedArgs,
+      [...stepPath, 'companion'],
+    );
+    if (Array.isArray(companions) && companions.length === 0) {
+      delete expandedStep.companion;
+    } else if (Array.isArray(companions)) {
+      expandedStep.companion = {
+        fixed: [...companions],
+        pool: [],
+      };
+    } else {
+      expandedStep.companion = {
+        fixed: [...companions.fixed],
+        pool: [...companions.pool],
+        ...(companions.moderator === undefined ? {} : { moderator: companions.moderator }),
+      };
+    }
+  }
+
+  expandedStep.instruction = expandInstructionField(
+    step.name,
+    step.instruction,
+    params,
+    resolvedArgs,
+    [...stepPath, 'instruction'],
+  );
+
+  if (
+    expandedStep.completion_retry !== null
+    && typeof expandedStep.completion_retry === 'object'
+    && isWorkflowParamReference(expandedStep.completion_retry.retry_instruction)
+  ) {
+    expandedStep.completion_retry = {
+      ...expandedStep.completion_retry,
+      retry_instruction: resolveExpandedParamValue(
+        step.name,
+        'completion_retry.retry_instruction',
+        expandedStep.completion_retry.retry_instruction,
+        ['facet_ref'],
+        'instruction',
+        params,
+        resolvedArgs,
+        [...stepPath, 'completion_retry', 'retry_instruction'],
+      ) as string,
+    };
   }
 
   if (expandedStep.output_contracts?.report) {
-    expandedStep.output_contracts.report = expandedStep.output_contracts.report.map((report) => {
+    expandedStep.output_contracts.report = expandedStep.output_contracts.report.map((report, index) => {
       if (!isWorkflowParamReference(report.format)) {
         return report;
       }
@@ -230,15 +773,40 @@ function expandStepFields(
           'report_format',
           params,
           resolvedArgs,
+          [...stepPath, 'output_contracts', 'report', index, 'format'],
         ) as string,
       };
     });
   }
 
-  if (expandedStep.parallel) {
-    expandedStep.parallel = expandedStep.parallel.map((substep) =>
-      expandStepFields(substep as RawWorkflowStep, params, resolvedArgs),
+  expandedStep.args = expandWorkflowCallArgs(step, params, resolvedArgs, stepPath);
+
+  if (Array.isArray(expandedStep.parallel)) {
+    expandedStep.parallel = expandedStep.parallel.map((substep, index) =>
+      expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, facetPools, [...stepPath, 'parallel', index]),
     ) as RawWorkflowStep['parallel'];
+  } else if (step.parallel !== undefined && !Array.isArray(step.parallel)) {
+    const dynamicParallel = step.parallel;
+    const selector = expandSelectorGuidance(
+      step,
+      dynamicParallel.selection.selector,
+      params,
+      resolvedArgs,
+      [...stepPath, 'parallel', 'selection', 'selector'],
+    );
+    expandedStep.parallel = {
+      ...dynamicParallel,
+      selection: {
+        ...dynamicParallel.selection,
+        ...(selector === undefined ? {} : { selector }),
+      },
+      fixed: dynamicParallel.fixed.map((substep, index) =>
+        expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, facetPools, [...stepPath, 'parallel', 'fixed', index]),
+      ),
+      pool: dynamicParallel.pool.map((substep, index) =>
+        expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, facetPools, [...stepPath, 'parallel', 'pool', index]),
+      ),
+    } as RawWorkflowStep['parallel'];
   }
 
   return expandedStep;
@@ -266,6 +834,6 @@ export function expandCallableSubworkflowRaw(
     options.argPolicy,
   );
   const expanded: RawWorkflowConfig = structuredClone(raw);
-  expanded.steps = expanded.steps.map((step) => expandStepFields(step, params, resolvedArgs));
+  expanded.steps = expanded.steps.map((step, index) => expandStepFields(step, params, resolvedArgs, raw.facet_pools, ['steps', index]));
   return WorkflowConfigRawSchema.parse(expanded);
 }

@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { isRegexSafe } from '../infra/claude/utils.js';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
+import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
 
 describe('isRegexSafe', () => {
   it('should accept simple patterns', () => {
@@ -25,52 +25,57 @@ describe('isRegexSafe', () => {
   });
 });
 
-describe('detectRuleIndex', () => {
+describe('detectCandidateIndex', () => {
   it('should detect [PLAN:1] as index 0', () => {
-    expect(detectRuleIndex('Analysis complete.\n[PLAN:1]', 'plan')).toBe(0);
+    expect(detectCandidateIndex('Analysis complete.\n[PLAN:1]', 'plan')).toBe(0);
   });
 
   it('should detect [PLAN:2] as index 1', () => {
-    expect(detectRuleIndex('Question answered.\n[PLAN:2]', 'plan')).toBe(1);
+    expect(detectCandidateIndex('Question answered.\n[PLAN:2]', 'plan')).toBe(1);
   });
 
   it('should detect [PLAN:3] as index 2', () => {
-    expect(detectRuleIndex('[PLAN:3]\n\nBlocked.', 'plan')).toBe(2);
+    expect(detectCandidateIndex('[PLAN:3]\n\nBlocked.', 'plan')).toBe(2);
   });
 
   it('should be case insensitive', () => {
-    expect(detectRuleIndex('[plan:1]', 'plan')).toBe(0);
-    expect(detectRuleIndex('[Plan:2]', 'plan')).toBe(1);
+    expect(detectCandidateIndex('[plan:1]', 'plan')).toBe(0);
+    expect(detectCandidateIndex('[Plan:2]', 'plan')).toBe(1);
   });
 
   it('should match step name case-insensitively', () => {
-    expect(detectRuleIndex('[IMPLEMENT:1]', 'implement')).toBe(0);
-    expect(detectRuleIndex('[REVIEW:2]', 'review')).toBe(1);
+    expect(detectCandidateIndex('[IMPLEMENT:1]', 'implement')).toBe(0);
+    expect(detectCandidateIndex('[REVIEW:2]', 'review')).toBe(1);
   });
 
   it('should return -1 when no match', () => {
-    expect(detectRuleIndex('No tags here.', 'plan')).toBe(-1);
+    expect(detectCandidateIndex('No tags here.', 'plan')).toBe(-1);
   });
 
   it('should return -1 for [PLAN:0] (invalid)', () => {
-    expect(detectRuleIndex('[PLAN:0]', 'plan')).toBe(-1);
+    expect(detectCandidateIndex('[PLAN:0]', 'plan')).toBe(-1);
   });
 
   it('should return -1 for wrong step name', () => {
-    expect(detectRuleIndex('[REVIEW:1]', 'plan')).toBe(-1);
+    expect(detectCandidateIndex('[REVIEW:1]', 'plan')).toBe(-1);
   });
 
   it('should handle step names with hyphens', () => {
-    expect(detectRuleIndex('[AI_REVIEW:1]', 'ai_review')).toBe(0);
-    expect(detectRuleIndex('[SECURITY_FIX:2]', 'security_fix')).toBe(1);
+    expect(detectCandidateIndex('[AI_REVIEW:1]', 'ai_review')).toBe(0);
+    expect(detectCandidateIndex('[SECURITY_FIX:2]', 'security_fix')).toBe(1);
   });
 
   it('should detect last occurrence when multiple tags exist', () => {
     const content = 'Previous: [AI_REVIEW:1]\n\nActual result:\n[AI_REVIEW:2]';
-    expect(detectRuleIndex(content, 'ai_review')).toBe(1);
+    expect(detectCandidateIndex(content, 'ai_review')).toBe(1);
   });
 
   it('should detect last match with multiple occurrences', () => {
-    expect(detectRuleIndex('[PLAN:1] then [PLAN:2] finally [PLAN:3]', 'plan')).toBe(2);
+    expect(detectCandidateIndex('[PLAN:1] then [PLAN:2] finally [PLAN:3]', 'plan')).toBe(2);
+  });
+
+  it('should treat regular expression metacharacters in step names literally', () => {
+    expect(detectCandidateIndex('[REVIEWXV2:2]', 'review.v2')).toBe(-1);
+    expect(detectCandidateIndex('[A[B:1]', 'a[b')).toBe(0);
   });
 });

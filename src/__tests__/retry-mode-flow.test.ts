@@ -1,0 +1,477 @@
+/**
+ * E2E test: Retry mode with failure context and run session injection.
+ *
+ * Simulates the retry assistant flow:
+ * 1. Create .takt/runs/ fixtures (logs, reports)
+ * 2. Build RetryContext with failure info + run session
+ * 3. Run retry mode with stdin simulation (user types message → /go)
+ * 4. Mock provider captures the system prompt sent to AI
+ * 5. Verify failure info AND run session data appear in the system prompt
+ *
+ * Real: buildRetryTemplateVars, loadTemplate, runConversationLoop,
+ *       loadRunSessionContext, formatRunSessionForPrompt, getRunPaths
+ * Mocked: provider (captures system prompt), config, UI, session persistence
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  setupRawStdin,
+  restoreStdin,
+  toRawInputs,
+  createMockProvider,
+  type MockProviderCapture,
+} from './helpers/stdinSimulator.js';
+import { makeFileRunMetaPathFields } from './test-helpers.js';
+
+// --- Mocks (infrastructure only) ---
+
+vi.mock('../infra/fs/session.js', () => ({
+  loadNdjsonLog: vi.fn(),
+}));
+
+vi.mock('../infra/config/global/globalConfig.js', () => ({
+  loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock('../infra/providers/index.js', () => ({
+  getProvider: vi.fn(),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: () => ({
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+vi.mock('../shared/context.js', () => ({
+  isQuietMode: vi.fn(() => false),
+}));
+
+vi.mock('../infra/config/paths.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadPersonaSessions: vi.fn(() => ({})),
+  updatePersonaSession: vi.fn(),
+  getProjectConfigDir: vi.fn(() => '/tmp'),
+  takeSessionState: vi.fn(() => null),
+}));
+
+vi.mock('../shared/ui/index.js', () => ({
+  info: vi.fn(),
+  error: vi.fn(),
+  blankLine: vi.fn(),
+  StreamDisplay: vi.fn().mockImplementation(() => ({
+    createHandler: vi.fn(() => vi.fn()),
+    flush: vi.fn(),
+  })),
+}));
+
+vi.mock('../shared/prompt/index.js', () => ({
+  selectOption: vi.fn().mockResolvedValue('execute'),
+}));
+
+vi.mock('../shared/prompt/confirm.js', () => ({
+  confirm: vi.fn(),
+}));
+
+vi.mock('../shared/i18n/index.js', () => ({
+  getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
+  getLabelObject: vi.fn(() => ({
+    intro: 'Retry intro',
+    resume: 'Resume',
+    noConversation: 'No conversation',
+    summarizeFailed: 'Summarize failed',
+    continuePrompt: 'Continue?',
+    proposed: 'Proposed:',
+    actionPrompt: 'What next?',
+    cancelled: 'Cancelled',
+    actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
+  })),
+}));
+
+// --- Imports (after mocks) ---
+
+import { getProvider } from '../infra/providers/index.js';
+import { loadNdjsonLog } from '../infra/fs/session.js';
+import {
+  loadRunSessionContext,
+  formatRunSessionForPrompt,
+  getRunPaths,
+} from '../features/interactive/runSessionReader.js';
+import { runTaskRetryMode, type RetryContext } from '../features/interactive/retryMode.js';
+import { confirm } from '../shared/prompt/confirm.js';
+
+const mockGetProvider = vi.mocked(getProvider);
+const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
+const mockConfirm = vi.mocked(confirm);
+
+// --- Fixture helpers ---
+
+function createTmpDir(): string {
+  const dir = join(tmpdir(), `takt-retry-e2e-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function createRunFixture(
+  cwd: string,
+  slug: string,
+  overrides?: {
+    meta?: Record<string, unknown>;
+    reports?: Array<{ name: string; content: string }>;
+  },
+): void {
+  const runDir = join(cwd, '.takt', 'runs', slug);
+  mkdirSync(join(runDir, 'logs'), { recursive: true });
+  mkdirSync(join(runDir, 'reports'), { recursive: true });
+  mkdirSync(join(runDir, 'context'), { recursive: true });
+
+  const meta = {
+    task: `Task for ${slug}`,
+    workflow: 'default',
+    status: 'completed',
+    startTime: '2026-02-01T00:00:00.000Z',
+    ...makeFileRunMetaPathFields(cwd, slug),
+    ...overrides?.meta,
+  };
+  writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
+  writeFileSync(join(runDir, 'logs', 'session-001.jsonl'), '{}', 'utf-8');
+
+  for (const report of overrides?.reports ?? []) {
+    writeFileSync(join(runDir, 'reports', report.name), report.content, 'utf-8');
+  }
+}
+
+function setupMockNdjsonLog(history: Array<{ step: string; persona: string; status: string; content: string }>): void {
+  mockLoadNdjsonLog.mockReturnValue({
+    task: 'mock',
+    projectDir: '',
+    workflowName: 'default',
+    iterations: history.length,
+    startTime: '2026-02-01T00:00:00.000Z',
+    status: 'completed',
+    history: history.map((h) => ({
+      ...h,
+      instruction: '',
+      timestamp: '2026-02-01T00:00:00.000Z',
+    })),
+  });
+}
+
+function setupProvider(responses: string[]): MockProviderCapture {
+  const { provider, capture } = createMockProvider(responses);
+  mockGetProvider.mockReturnValue(provider);
+  return capture;
+}
+
+// --- Tests ---
+
+describe('E2E: Retry mode with failure context injection', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = createTmpDir();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    restoreStdin();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should execute retry mode after assistant response', async () => {
+    setupRawStdin(toRawInputs(['what went wrong?', '/go']));
+    const capture = setupProvider([
+      'The review step failed due to a timeout.',
+      'Fix review timeout by increasing the limit.',
+    ]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'implement-auth',
+        taskContent: 'Implement authentication feature',
+        createdAt: '2026-02-15T10:00:00Z',
+        failedStep: 'review',
+        error: 'Timeout after 300s',
+        lastMessage: 'Agent stopped responding',
+        retryNote: '',
+      },
+      subject: {
+        kind: 'branch',
+        value: 'takt/implement-auth',
+      },
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      previousOrderContent: null,
+    };
+
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Fix review timeout by increasing the limit.');
+    expect(capture.callCount).toBe(2);
+  });
+
+  it('should summarize inline /go task without prior conversation', async () => {
+    setupRawStdin(toRawInputs(['/go inspect the failing logs', '/cancel']));
+    const capture = setupProvider([
+      'Inspect the failing logs and summarize the timeout root cause.',
+    ]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'implement-auth',
+        taskContent: 'Implement authentication feature',
+        createdAt: '2026-02-15T10:00:00Z',
+        failedStep: 'review',
+        error: 'Timeout after 300s',
+        lastMessage: 'Agent stopped responding',
+        retryNote: '',
+      },
+      subject: {
+        kind: 'branch',
+        value: 'takt/implement-auth',
+      },
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      previousOrderContent: null,
+    };
+
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Inspect the failing logs and summarize the timeout root cause.');
+    expect(capture.callCount).toBe(1);
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(capture.prompts[0]).toMatch(/Gherkin/);
+    expect(capture.prompts[0]).not.toMatch(/\bQuint\b|\bAlloy\b/);
+  });
+
+  it('should summarize suffix /go task without prior conversation', async () => {
+    setupRawStdin(toRawInputs(['inspect the failing logs /go', '/cancel']));
+    const capture = setupProvider([
+      'Inspect the failing logs from the retry context and summarize the timeout root cause.',
+    ]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'implement-auth',
+        taskContent: 'Implement authentication feature',
+        createdAt: '2026-02-15T10:00:00Z',
+        failedStep: 'review',
+        error: 'Timeout after 300s',
+        lastMessage: 'Agent stopped responding',
+        retryNote: '',
+      },
+      subject: {
+        kind: 'branch',
+        value: 'takt/implement-auth',
+      },
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      previousOrderContent: null,
+    };
+
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Inspect the failing logs from the retry context and summarize the timeout root cause.');
+    expect(capture.callCount).toBe(1);
+  });
+
+  it('should execute retry mode with run session context', async () => {
+    // Create run fixture with logs and reports
+    createRunFixture(tmpDir, 'run-failed', {
+      meta: { task: 'Build login page', status: 'failed' },
+      reports: [
+        { name: '00-plan.md', content: '# Plan\n\nLogin form with OAuth2.' },
+      ],
+    });
+    setupMockNdjsonLog([
+      { step: 'plan', persona: 'architect', status: 'completed', content: 'Planned OAuth2 login flow' },
+      { step: 'implement', persona: 'coder', status: 'failed', content: 'Failed at CSS compilation' },
+    ]);
+
+    // Load real run session data
+    const sessionContext = loadRunSessionContext(tmpDir, 'run-failed');
+    const formatted = formatRunSessionForPrompt(sessionContext);
+    const paths = getRunPaths(tmpDir, 'run-failed');
+
+    setupRawStdin(toRawInputs(['fix the CSS issue', '/go']));
+    setupProvider([
+      'The CSS compilation error is likely due to missing imports.',
+      'Fix CSS imports in login component.',
+    ]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'build-login',
+        taskContent: 'Build login page with OAuth2',
+        createdAt: '2026-02-15T14:00:00Z',
+        failedStep: 'implement',
+        error: 'CSS compilation failed',
+        lastMessage: 'PostCSS error: unknown property',
+        retryNote: '',
+      },
+      subject: {
+        kind: 'branch',
+        value: 'takt/build-login',
+      },
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: {
+        logsDir: paths.logsDir,
+        reportsDir: paths.reportsDir,
+        task: formatted.runTask,
+        workflow: formatted.runWorkflow,
+        status: formatted.runStatus,
+        stepLogs: formatted.runStepLogs,
+        reports: formatted.runReports,
+      },
+      previousOrderContent: null,
+    };
+
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Fix CSS imports in login component.');
+  });
+
+  it('should cancel cleanly and not crash', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupProvider([]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'some-task',
+        taskContent: 'Complete some task',
+        createdAt: '2026-02-15T12:00:00Z',
+        failedStep: 'plan',
+        error: 'Unknown error',
+        lastMessage: '',
+        retryNote: '',
+      },
+      subject: {
+        kind: 'branch',
+        value: 'takt/some-task',
+      },
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      previousOrderContent: null,
+    };
+
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('cancel');
+    expect(result.task).toBe('');
+  });
+
+  it('should refuse /replay and /retry when the previous order is empty', async () => {
+    setupRawStdin(toRawInputs(['/replay', '/retry', '/cancel']));
+    const capture = setupProvider([]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'some-task',
+        taskContent: 'Complete some task',
+        createdAt: '2026-02-15T12:00:00Z',
+        failedStep: 'plan',
+        error: 'Unknown error',
+        lastMessage: '',
+        retryNote: '',
+      },
+      subject: {
+        kind: 'branch',
+        value: 'takt/some-task',
+      },
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      // An order file that exists but holds nothing is no order to resubmit.
+      previousOrderContent: '',
+    };
+
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('cancel');
+    expect(result.task).toBe('');
+    expect(capture.callCount).toBe(0);
+  });
+
+  it('should handle conversation before /go with failure context', async () => {
+    setupRawStdin(toRawInputs([
+      'what was the error?',
+      'can you suggest a fix?',
+      '/go',
+    ]));
+    const capture = setupProvider([
+      'The error was a timeout in the review step.',
+      'You could increase the timeout limit or optimize the review.',
+      'Increase review timeout to 600s and add retry logic.',
+    ]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'optimize-review',
+        taskContent: 'Optimize the review step',
+        createdAt: '2026-02-15T18:00:00Z',
+        failedStep: 'review',
+        error: 'Timeout',
+        lastMessage: '',
+        retryNote: '',
+      },
+      subject: {
+        kind: 'branch',
+        value: 'takt/optimize-review',
+      },
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      previousOrderContent: null,
+    };
+
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Increase review timeout to 600s and add retry logic.');
+    expect(capture.callCount).toBe(3);
+  });
+});

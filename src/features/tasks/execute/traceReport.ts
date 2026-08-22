@@ -1,4 +1,4 @@
-import type { NdjsonRecord, PromptLogRecord } from '../../../shared/utils/index.js';
+import type { NdjsonRecord } from '../../../shared/utils/index.js';
 import type {
   TraceReportMode,
   TraceReportParams,
@@ -8,6 +8,7 @@ import type {
 import { parseJsonl, buildTraceFromRecords, type PromptRecord } from './traceReportParser.js';
 import { cloneStepsForMode, sanitizeTraceParamsForMode } from './traceReportRedaction.js';
 import { assertTraceParams, renderTraceReportMarkdown } from './traceReportRenderer.js';
+import type { PromptLogRecord } from './promptLog.js';
 
 export type {
   TraceReportMode,
@@ -29,7 +30,7 @@ export function renderTraceReportFromLogs(
   }
   const records = parseJsonl<NdjsonRecord>(ndjsonLogPath);
   if (records.length === 0) {
-    throw new Error(`No session records found for trace report: ${ndjsonLogPath}`);
+    return undefined;
   }
   const promptRecords = promptLogPath ? parseJsonl<PromptRecord>(promptLogPath) : [];
   return renderTraceReportFromRecords(params, records, promptRecords, mode);
@@ -45,7 +46,7 @@ export function renderTraceReportFromRecords(
     return undefined;
   }
   if (records.length === 0) {
-    throw new Error('No session records found for trace report from records');
+    return undefined;
   }
 
   const trace = buildTraceFromRecords(records, promptRecords as PromptRecord[], params.endTime);

@@ -1,186 +1,227 @@
-/**
- * Session state management tests
- */
-
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
 import {
-  loadSessionState,
-  saveSessionState,
-  clearSessionState,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'vitest';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
   getSessionStatePath,
+  saveSessionState,
+  takeSessionState,
   type SessionState,
 } from '../infra/config/project/sessionState.js';
 
-describe('sessionState', () => {
-  const testDir = join(__dirname, '__temp_session_state_test__');
+describe('session state envelope', () => {
+  let testDir: string;
 
   beforeEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-session-state-'));
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
-  describe('getSessionStatePath', () => {
-    it('should return correct path', () => {
-      const path = getSessionStatePath(testDir);
-      expect(path).toContain('.takt');
-      expect(path).toContain('session-state.json');
-    });
-  });
+  function state(timestamp: string, taskResult: string): SessionState {
+    return {
+      status: 'success',
+      taskResult,
+      timestamp,
+      workflowName: 'coding',
+    };
+  }
 
-  describe('loadSessionState', () => {
-    it('should return null when file does not exist', () => {
-      const state = loadSessionState(testDir);
-      expect(state).toBeNull();
-    });
+  function writeSerializedSessionState(serialized: string): void {
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    writeFileSync(getSessionStatePath(testDir), serialized, 'utf-8');
+  }
 
-    it('should load saved state', () => {
-      const savedState: SessionState = {
-        status: 'success',
-        taskResult: 'Task completed successfully',
-        timestamp: new Date().toISOString(),
-        workflowName: 'coding',
-        taskContent: 'Implement feature X',
-        lastStep: 'implement',
-      };
+  it('pending stateを一度だけ取得してconsumed envelopeを残す', () => {
+    const saved = state('2026-07-28T00:00:00.000Z', 'done');
+    saveSessionState(testDir, 'publication-a', saved);
 
-      saveSessionState(testDir, savedState);
-      const loadedState = loadSessionState(testDir);
-
-      expect(loadedState).toEqual(savedState);
-    });
-
-    it('should return null when JSON parsing fails', () => {
-      const path = getSessionStatePath(testDir);
-      const configDir = join(testDir, '.takt');
-      mkdirSync(configDir, { recursive: true });
-
-      // Write invalid JSON
-      const fs = require('node:fs');
-      fs.writeFileSync(path, 'invalid json', 'utf-8');
-
-      const state = loadSessionState(testDir);
-      expect(state).toBeNull();
+    expect(takeSessionState(testDir)).toEqual(saved);
+    expect(takeSessionState(testDir)).toBeNull();
+    expect(existsSync(getSessionStatePath(testDir))).toBe(true);
+    expect(JSON.parse(readFileSync(
+      getSessionStatePath(testDir),
+      'utf-8',
+    ))).toMatchObject({
+      version: 1,
+      publicationId: 'publication-a',
+      status: 'consumed',
+      state: saved,
+      consumedAt: expect.any(String),
     });
   });
 
-  describe('saveSessionState', () => {
-    it('should save state correctly', () => {
-      const state: SessionState = {
-        status: 'success',
-        taskResult: 'Task completed',
-        timestamp: new Date().toISOString(),
-        workflowName: 'minimal',
-        taskContent: 'Test task',
-        lastStep: 'test-step',
-      };
+  it('consumed済みpublicationの再saveでpendingへ戻さない', () => {
+    const saved = state('2026-07-28T00:00:00.000Z', 'done');
+    saveSessionState(testDir, 'publication-a', saved);
+    expect(takeSessionState(testDir)).toEqual(saved);
 
-      saveSessionState(testDir, state);
+    saveSessionState(testDir, 'publication-a', saved);
 
-      const path = getSessionStatePath(testDir);
-      expect(existsSync(path)).toBe(true);
+    expect(takeSessionState(testDir)).toBeNull();
+  });
 
-      const loaded = loadSessionState(testDir);
-      expect(loaded).toEqual(state);
-    });
+  it('同一時刻ではpublicationIdを使った全順序で新旧を決める', () => {
+    const timestamp = '2026-07-28T00:00:00.000Z';
+    saveSessionState(testDir, 'publication-b', state(timestamp, 'newer'));
+    saveSessionState(testDir, 'publication-a', state(timestamp, 'older'));
 
-    it('should save error state', () => {
-      const state: SessionState = {
-        status: 'error',
-        errorMessage: 'Something went wrong',
-        timestamp: new Date().toISOString(),
-        workflowName: 'coding',
-        taskContent: 'Failed task',
-      };
-
-      saveSessionState(testDir, state);
-      const loaded = loadSessionState(testDir);
-
-      expect(loaded).toEqual(state);
-    });
-
-    it('should save user_stopped state', () => {
-      const state: SessionState = {
-        status: 'user_stopped',
-        timestamp: new Date().toISOString(),
-        workflowName: 'coding',
-        taskContent: 'Interrupted task',
-      };
-
-      saveSessionState(testDir, state);
-      const loaded = loadSessionState(testDir);
-
-      expect(loaded).toEqual(state);
+    expect(takeSessionState(testDir)).toMatchObject({
+      taskResult: 'newer',
     });
   });
 
-  describe('clearSessionState', () => {
-    it('should delete state file', () => {
-      const state: SessionState = {
-        status: 'success',
-        timestamp: new Date().toISOString(),
-        workflowName: 'coding',
-      };
+  it('take後に保存されたnewer stateを旧takeが削除しない', () => {
+    saveSessionState(
+      testDir,
+      'publication-a',
+      state('2026-07-28T00:00:00.000Z', 'first'),
+    );
+    expect(takeSessionState(testDir)).toMatchObject({ taskResult: 'first' });
 
-      saveSessionState(testDir, state);
-      const path = getSessionStatePath(testDir);
-      expect(existsSync(path)).toBe(true);
+    saveSessionState(
+      testDir,
+      'publication-b',
+      state('2026-07-28T00:00:01.000Z', 'second'),
+    );
 
-      clearSessionState(testDir);
-      expect(existsSync(path)).toBe(false);
-    });
-
-    it('should not throw when file does not exist', () => {
-      expect(() => clearSessionState(testDir)).not.toThrow();
-    });
+    expect(takeSessionState(testDir)).toMatchObject({ taskResult: 'second' });
   });
 
-  describe('integration', () => {
-    it('should support one-time notification pattern', () => {
-      // Save state
-      const state: SessionState = {
-        status: 'success',
-        taskResult: 'Done',
-        timestamp: new Date().toISOString(),
-        workflowName: 'coding',
-      };
-      saveSessionState(testDir, state);
+  it('should migrate a legacy session state to a consumed envelope when it includes errorMessage', () => {
+    const legacyState: SessionState = {
+      status: 'error',
+      errorMessage: 'user_interrupted',
+      timestamp: '2026-07-28T00:00:00.000Z',
+      workflowName: 'coding',
+      taskContent: 'Interrupted task',
+      lastStep: 'implement',
+    };
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    writeFileSync(
+      getSessionStatePath(testDir),
+      JSON.stringify(legacyState, null, 2),
+      'utf-8',
+    );
 
-      // Load once
-      const loaded1 = loadSessionState(testDir);
-      expect(loaded1).toEqual(state);
-
-      // Clear immediately
-      clearSessionState(testDir);
-
-      // Load again - should be null
-      const loaded2 = loadSessionState(testDir);
-      expect(loaded2).toBeNull();
+    expect(takeSessionState(testDir)).toEqual(legacyState);
+    expect(JSON.parse(readFileSync(
+      getSessionStatePath(testDir),
+      'utf-8',
+    ))).toMatchObject({
+      version: 1,
+      publicationId: 'legacy-session-state',
+      status: 'consumed',
+      state: legacyState,
+      consumedAt: expect.any(String),
     });
+    expect(takeSessionState(testDir)).toBeNull();
+  });
 
-    it('should handle truncated strings', () => {
-      const longString = 'a'.repeat(2000);
-      const state: SessionState = {
-        status: 'success',
-        taskResult: longString,
-        timestamp: new Date().toISOString(),
-        workflowName: 'coding',
-        taskContent: longString,
-      };
+  it('should reject a v1 envelope when it contains an unknown field', () => {
+    const serialized = JSON.stringify({
+      version: 1,
+      publicationId: 'publication-a',
+      status: 'pending',
+      state: state('2026-07-28T00:00:00.000Z', 'done'),
+      unknownField: true,
+    }, null, 2);
+    writeSerializedSessionState(serialized);
 
-      saveSessionState(testDir, state);
-      const loaded = loadSessionState(testDir);
+    expect(() => takeSessionState(testDir)).toThrow(
+      'Session state envelope contains unknown field "unknownField"',
+    );
+    expect(readFileSync(getSessionStatePath(testDir), 'utf-8')).toBe(serialized);
+  });
 
-      expect(loaded).toEqual(state);
-    });
+  const validLegacyState: SessionState = {
+    status: 'error',
+    taskResult: 'partial result',
+    errorMessage: 'user_interrupted',
+    timestamp: '2026-07-28T00:00:00.000Z',
+    workflowName: 'coding',
+    taskContent: 'Interrupted task',
+    lastStep: 'implement',
+  };
+
+  it.each([
+    [
+      'status is missing',
+      ({ status: _status, ...legacyState }: SessionState) => legacyState,
+      'Session state status is invalid',
+    ],
+    [
+      'timestamp is missing',
+      ({ timestamp: _timestamp, ...legacyState }: SessionState) => legacyState,
+      'Session state timestamp must be a non-empty string',
+    ],
+    [
+      'workflowName is missing',
+      ({
+        workflowName: _workflowName,
+        ...legacyState
+      }: SessionState) => legacyState,
+      'Session state workflowName must be a non-empty string',
+    ],
+    [
+      'status is invalid',
+      (legacyState: SessionState) => ({ ...legacyState, status: 'failed' }),
+      'Session state status is invalid',
+    ],
+    [
+      'timestamp is invalid',
+      (legacyState: SessionState) => ({
+        ...legacyState,
+        timestamp: 'not-a-timestamp',
+      }),
+      'Session state timestamp is invalid: not-a-timestamp',
+    ],
+    [
+      'workflowName is empty',
+      (legacyState: SessionState) => ({ ...legacyState, workflowName: '' }),
+      'Session state workflowName must be a non-empty string',
+    ],
+  ] as const)(
+    'should reject a legacy session state when %s',
+    (_condition, makeInvalidLegacyState, expectedError) => {
+      const legacyState = makeInvalidLegacyState(validLegacyState);
+      const serialized = JSON.stringify(legacyState, null, 2);
+      writeSerializedSessionState(serialized);
+
+      expect(() => takeSessionState(testDir)).toThrow(expectedError);
+      expect(readFileSync(getSessionStatePath(testDir), 'utf-8')).toBe(serialized);
+    },
+  );
+
+  it('malformed envelopeを通知なしとして握りつぶさない', () => {
+    saveSessionState(
+      testDir,
+      'publication-a',
+      state('2026-07-28T00:00:00.000Z', 'first'),
+    );
+    const malformedEnvelope = '{"version":1}';
+    writeFileSync(getSessionStatePath(testDir), malformedEnvelope);
+
+    expect(() => takeSessionState(testDir)).toThrow(
+      'Session state envelope version or status is invalid',
+    );
+    expect(readFileSync(getSessionStatePath(testDir), 'utf-8')).toBe(
+      malformedEnvelope,
+    );
   });
 });

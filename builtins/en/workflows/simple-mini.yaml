@@ -1,0 +1,110 @@
+name: simple-mini
+description: A lightweight development workflow that trusts a capable model's judgment (plan → implement → review ⇄ fix → COMPLETE). It omits dedicated test writing and the final requirement check while letting the model select relevant available skills.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+capabilities: [readonly, enable-skills]
+max_steps: 20
+initial_step: plan
+steps:
+  - name: plan
+    capabilities: [readonly, enable-skills]
+    uses: development-core-plan
+    with:
+      plan_policy: [design-planning, architecture]
+      plan_knowledge: [architecture]
+      plan_instruction: simple-plan
+      plan_report_format: plan
+    rules:
+      - condition: Requirements are clear and implementation is feasible
+        next: implement
+      - condition: The user is asking a question rather than requesting implementation
+        next: COMPLETE
+      - condition: Requirements are unclear or information is insufficient
+        next: ABORT
+        appendix: |
+          Questions:
+          - {Question 1}
+          - {Question 2}
+
+  - name: implement
+    capabilities: [edit, enable-skills]
+    uses: development-core-implement
+    with:
+      development_policy: [coding, testing, architecture]
+      development_knowledge: [architecture]
+      implementation_instruction: simple-implement
+      scope_report_format: coder-scope
+    rules:
+      - condition: Implementation completed
+        next: review
+      - condition: The plan needs revision
+        next: plan
+      - condition: Unable to proceed with implementation
+        next: ABORT
+      - condition: User input is required to resolve a question
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: review
+    tags:
+      - review
+    edit: false
+    persona: coding-reviewer
+    policy:
+      - contract-change
+      - review
+      - coding
+      - testing
+      - architecture
+    knowledge:
+      - architecture
+      - unit-testing
+      - e2e-testing
+    pass_previous_response: false
+    instruction: simple-review-coding
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: needs_fix
+        next: remediation
+
+  - name: remediation
+    uses: review-remediation
+    with:
+      plan_policy:
+        - coding
+        - testing
+        - review
+      fix_policy:
+        - coding
+        - testing
+        - architecture
+      verification_policy:
+        - coding
+        - testing
+        - review
+      fix_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+    rules:
+      - condition: COMPLETE
+        next: review
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT

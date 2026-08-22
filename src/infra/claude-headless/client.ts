@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
+import { assertClaudeSkillsDisableSupported } from '../claude/cli-capability.js';
 import {
   type ClaudePermissionExpression,
   taktPermissionModeToClaudeExpression,
@@ -20,6 +21,43 @@ import type { ClaudeHeadlessCallOptions } from './types.js';
 import { buildRateLimitedResponseFields, containsRateLimitError, containsRateLimitMarker } from '../rate-limit/detection.js';
 
 const log = createLogger('claude-headless');
+
+type HeadlessRateLimitOutcome = {
+  text: string;
+  source: 'sdk_error' | 'stream_marker';
+};
+
+function findRateLimitText(
+  text: string | undefined,
+  predicate: (candidate: string) => boolean,
+): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+
+  const parsed = aggregateResultFromStdout(text);
+  return [parsed.error, parsed.content, parsed.displayText, text.trim()].find(
+    (candidate): candidate is string => candidate !== undefined && predicate(candidate),
+  );
+}
+
+function selectRateLimitOutcome(error: ExecError, message: string): HeadlessRateLimitOutcome | undefined {
+  const streamMarkerText = [error.stdout, error.stderr]
+    .map((text) => findRateLimitText(text, containsRateLimitMarker))
+    .find((text): text is string => text !== undefined);
+  if (streamMarkerText) {
+    return { text: streamMarkerText, source: 'stream_marker' };
+  }
+
+  const rateLimitText = [error.stderr, error.stdout, message]
+    .map((text) => findRateLimitText(text, containsRateLimitError))
+    .find((text): text is string => text !== undefined);
+  if (rateLimitText) {
+    return { text: rateLimitText, source: 'sdk_error' };
+  }
+
+  return undefined;
+}
 
 function resolveCliPermissionMode(
   mode: PermissionMode | undefined,
@@ -75,8 +113,16 @@ async function buildSpawnArgs(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
+  const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
   const session = resolveSessionArgs(options);
-  const preparedMcpConfig = await prepareClaudeMcpConfig(options.mcpServers);
+  // Runtime MCP adapter route (issue #1137): when the runner prepared MCP
+  // material, consume `preparedMcp.args` (`--strict-mcp-config`/`--mcp-config`)
+  // so temp-file ownership and cleanup live in the adapter. Fall back to the
+  // legacy `prepareClaudeMcpConfig` only when runtime MCP is not in use.
+  const preparedMcp = options.preparedMcp;
+  const legacyMcpConfig = preparedMcp === undefined
+    ? await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers)
+    : { path: undefined, cleanup: async () => {} };
   const args: string[] = [
     '-p',
     '--verbose',
@@ -86,17 +132,21 @@ async function buildSpawnArgs(
     '--permission-mode',
     resolveCliPermissionMode(options.permissionMode, options.bypassPermissions),
   ];
-
   if (options.model) {
     args.push('--model', options.model);
   }
 
-  if (options.allowedTools && options.allowedTools.length > 0) {
+  if (!isStrictReadonly && options.allowedTools && options.allowedTools.length > 0) {
     args.push('--allowed-tools', options.allowedTools.join(','));
   }
 
   if (options.effort) {
     args.push('--effort', options.effort);
+  }
+  if (isStrictReadonly) {
+    args.push('--tools', '', '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands');
+  } else if (options.skillsEnabled === false) {
+    args.push('--disable-slash-commands');
   }
 
   if (options.systemPrompt?.trim()) {
@@ -107,8 +157,10 @@ async function buildSpawnArgs(
     args.push('--json-schema', JSON.stringify(options.outputSchema));
   }
 
-  if (preparedMcpConfig.path) {
-    args.push('--mcp-config', preparedMcpConfig.path);
+  if (preparedMcp?.args && preparedMcp.args.length > 0) {
+    args.push(...preparedMcp.args);
+  } else if (legacyMcpConfig.path) {
+    args.push('--mcp-config', legacyMcpConfig.path);
   }
 
   const settings = buildSettingsArg(options);
@@ -118,28 +170,61 @@ async function buildSpawnArgs(
 
   args.push(...session.args);
   args.push('--', prompt);
+  const cleanup = async () => {
+    const results = await Promise.allSettled([
+      legacyMcpConfig.cleanup(),
+      ...(preparedMcp === undefined ? [] : [preparedMcp.dispose()]),
+    ]);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') {
+      throw failed.reason;
+    }
+  };
   return {
     args,
     expectedSessionId: session.sessionId,
-    cleanup: preparedMcpConfig.cleanup,
+    cleanup,
   };
 }
 
-function classifyError(error: ExecError, options: ClaudeHeadlessCallOptions): string {
+type ClassifiedHeadlessError = {
+  message: string;
+  allowRateLimitDetection: boolean;
+};
+
+function classifyError(
+  error: ExecError,
+  options: ClaudeHeadlessCallOptions,
+): ClassifiedHeadlessError {
   if (options.abortSignal?.aborted || error.name === 'AbortError') {
-    return HEADLESS_ABORTED_MESSAGE;
+    return {
+      message: HEADLESS_ABORTED_MESSAGE,
+      allowRateLimitDetection: false,
+    };
   }
   if (error.code === 'ENOENT') {
-    return 'claude CLI not found. Install Claude Code and ensure `claude` is in PATH, or set claude_cli_path in config.';
+    return {
+      message: 'claude CLI not found. Install Claude Code and ensure `claude` is in PATH, or set claude_cli_path in config.',
+      allowRateLimitDetection: false,
+    };
   }
   if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-    return getErrorMessage(error);
+    return {
+      message: getErrorMessage(error),
+      allowRateLimitDetection: false,
+    };
   }
   if (typeof error.code === 'number') {
     const detail = (error.stderr ?? error.stdout ?? '').trim() || getErrorMessage(error);
-    return `Claude CLI failed (${error.code}): ${detail}`;
+    return {
+      message: `Claude CLI failed (${error.code}): ${detail}`,
+      allowRateLimitDetection: true,
+    };
   }
-  return getErrorMessage(error);
+  return {
+    message: getErrorMessage(error),
+    allowRateLimitDetection: true,
+  };
 }
 
 export async function callClaudeHeadless(
@@ -147,13 +232,24 @@ export async function callClaudeHeadless(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<AgentResponse> {
-  let cleanup: (() => Promise<void>) | undefined;
+  // Keep adapter disposal reachable even when argument construction fails
+  // before buildSpawnArgs can return its combined cleanup callback.
+  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined
+    ? undefined
+    : () => options.preparedMcp!.dispose();
   let response: AgentResponse;
 
   try {
+    if (options.skillsEnabled === false) {
+      await assertClaudeSkillsDisableSupported(
+        options.claudeCliPath ?? 'claude',
+        options.abortSignal,
+      );
+    }
     const prepared = await buildSpawnArgs(prompt, options);
     cleanup = prepared.cleanup;
     const { args, expectedSessionId } = prepared;
+    options.onActivity?.({ kind: 'attempt_started' });
     const { stdout, stderr } = await runHeadlessCli(args, options);
     const parsed = aggregateResultFromStdout(stdout);
     const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
@@ -168,16 +264,17 @@ export async function callClaudeHeadless(
     });
   } catch (raw) {
     const error = raw as ExecError;
-    const message = classifyError(error, options);
-    const hasStreamMarker = containsRateLimitMarker(error.stdout) || containsRateLimitMarker(error.stderr);
-    const isRateLimited = containsRateLimitError(message) || containsRateLimitError(error.stderr) || hasStreamMarker;
+    const classifiedError = classifyError(error, options);
+    const rateLimitOutcome = classifiedError.allowRateLimitDetection
+      ? selectRateLimitOutcome(error, classifiedError.message)
+      : undefined;
     if (options.onStream) {
       options.onStream({
         type: 'result',
         data: {
           result: '',
           success: false,
-          error: message,
+          error: rateLimitOutcome?.text ?? classifiedError.message,
           sessionId: options.sessionId ?? '',
         },
       });
@@ -186,12 +283,12 @@ export async function callClaudeHeadless(
       persona: agentName,
       timestamp: new Date(),
       sessionId: options.sessionId,
-      ...(isRateLimited
-        ? buildRateLimitedResponseFields('claude', hasStreamMarker ? 'stream_marker' : 'sdk_error', error.stdout ?? error.stderr ?? message)
+      ...(rateLimitOutcome
+        ? buildRateLimitedResponseFields('claude', rateLimitOutcome.source, rateLimitOutcome.text)
         : {
           status: 'error' as const,
-          content: message,
-          error: message,
+          content: classifiedError.message,
+          error: classifiedError.message,
         }),
     };
   }

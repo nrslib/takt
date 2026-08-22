@@ -10,6 +10,8 @@ vi.mock('../infra/providers/index.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: vi.fn(),
+  resolveNonWorkflowProviderModel: vi.fn(),
+  resolveNonWorkflowProviderOptions: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -22,11 +24,17 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
-import { resolveConfigValues } from '../infra/config/index.js';
+import {
+  resolveConfigValues,
+  resolveNonWorkflowProviderModel,
+  resolveNonWorkflowProviderOptions,
+} from '../infra/config/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
+const mockResolveNonWorkflowProviderModel = vi.mocked(resolveNonWorkflowProviderModel);
+const mockResolveNonWorkflowProviderOptions = vi.mocked(resolveNonWorkflowProviderOptions);
 
 const mockProviderCall = vi.fn();
 const mockGetRuntimeInstructions = vi.fn(() => null);
@@ -45,6 +53,14 @@ beforeEach(() => {
     provider: 'claude',
     model: undefined,
     branchNameStrategy: 'ai',
+  });
+  mockResolveNonWorkflowProviderModel.mockReturnValue({
+    provider: 'claude',
+    model: undefined,
+    runtimeManaged: false,
+  });
+  mockResolveNonWorkflowProviderOptions.mockReturnValue({
+    codex: { skills: { repo: true, user: false } },
   });
 });
 
@@ -65,15 +81,13 @@ describe('summarizeTaskName', () => {
     expect(result).toBe('add-auth');
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     const callPrompt = mockProviderCall.mock.calls[0]?.[0];
-    expect(callPrompt).toContain('Generate a slug from the task description below.');
-    expect(callPrompt).toContain('<task_description>');
     expect(callPrompt).toContain('long task name for testing');
-    expect(callPrompt).toContain('</task_description>');
     expect(mockProviderCall).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
         cwd: '/project',
         permissionMode: 'readonly',
+        providerOptions: { codex: { skills: { repo: true, user: false } } },
       })
     );
   });
@@ -168,9 +182,12 @@ describe('summarizeTaskName', () => {
   it('should use provider from config.yaml', async () => {
     // Given: config has codex provider with branchNameStrategy: 'ai'
     mockResolveConfigValues.mockReturnValue({
+      branchNameStrategy: 'ai',
+    });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
       provider: 'codex',
       model: 'gpt-4',
-      branchNameStrategy: 'ai',
+      runtimeManaged: false,
     });
     mockProviderCall.mockResolvedValue({
       persona: 'summarizer',
@@ -192,26 +209,83 @@ describe('summarizeTaskName', () => {
     );
   });
 
-  it('should wrap OpenCode summarizer system prompt with provider runtime instructions', async () => {
+  it('should use the concrete top-level provider and model for AI summarization', async () => {
     mockResolveConfigValues.mockReturnValue({
-      provider: 'opencode',
-      model: 'opencode/big-pickle',
+      provider: 'mock',
       branchNameStrategy: 'ai',
     });
-    mockGetRuntimeInstructions.mockReturnValue('OpenCode tool names are lowercase.');
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'mock',
+      model: 'default-summary-model',
+      runtimeManaged: false,
+    });
     mockProviderCall.mockResolvedValue({
       persona: 'summarizer',
       status: 'done',
-      content: 'opencode-task',
+      content: 'auto-default-slug',
       timestamp: new Date(),
     });
 
-    await summarizeTaskName('test', { cwd: '/project' });
+    const result = await summarizeTaskName('test auto provider', { cwd: '/project' });
 
-    const setupArg = mockProviderSetup.mock.calls[0]?.[0] as { systemPrompt: string };
-    expect(setupArg.systemPrompt).toContain('## Provider Runtime Instructions');
-    expect(setupArg.systemPrompt).toContain('OpenCode tool names are lowercase.');
-    expect(setupArg.systemPrompt).toContain('You are a slug generator.');
+    expect(result).toBe('auto-default-slug');
+    expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith('/project');
+    expect(mockGetProvider).toHaveBeenCalledWith('mock');
+    expect(mockProviderCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ model: 'default-summary-model' }),
+    );
+  });
+
+  it('should propagate a runtime-v1 managed provider/model/options to the provider call', async () => {
+    // Given: an active runtime.yaml defaults profile owns provider/model/options.
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'codex',
+      model: 'gpt-runtime',
+      providerOptions: { codex: { reasoningEffort: 'high' } },
+      runtimeManaged: true,
+    });
+    mockProviderCall.mockResolvedValue({
+      persona: 'summarizer',
+      status: 'done',
+      content: 'runtime-managed-slug',
+      timestamp: new Date(),
+    });
+
+    const result = await summarizeTaskName('test runtime profile', { cwd: '/project' });
+
+    expect(result).toBe('runtime-managed-slug');
+    expect(mockGetProvider).toHaveBeenCalledWith('codex');
+    expect(mockProviderCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        model: 'gpt-runtime',
+        providerOptions: { codex: { reasoningEffort: 'high' } },
+      }),
+    );
+    // The runtime profile owns its options; the legacy provider_options path must not run.
+    expect(mockResolveNonWorkflowProviderOptions).not.toHaveBeenCalled();
+  });
+
+  it('should leave model undefined when the selected default provider omits it', async () => {
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'mock',
+      model: undefined,
+      runtimeManaged: false,
+    });
+    mockProviderCall.mockResolvedValue({
+      persona: 'summarizer',
+      status: 'done',
+      content: 'provider-default-model',
+      timestamp: new Date(),
+    });
+
+    await summarizeTaskName('test provider default model', { cwd: '/project' });
+
+    expect(mockProviderCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ model: undefined }),
+    );
   });
 
   it('should remove consecutive hyphens', async () => {
@@ -262,6 +336,7 @@ describe('summarizeTaskName', () => {
 
     // Then: should not call provider, should return romaji
     expect(mockProviderCall).not.toHaveBeenCalled();
+    expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
     expect(result).toMatch(/^[a-z0-9-]+$/);
     expect(result.length).toBeLessThanOrEqual(30);
   });

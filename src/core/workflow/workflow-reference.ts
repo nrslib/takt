@@ -1,4 +1,10 @@
-import type { WorkflowConfig, WorkflowResumePointEntry, WorkflowStepKind } from '../models/types.js';
+import type {
+  WorkflowConfig,
+  WorkflowRestartPointEntry,
+  WorkflowResumeFrameKind,
+  WorkflowResumePointEntry,
+  WorkflowStepKind,
+} from '../models/types.js';
 
 const WORKFLOW_OPAQUE_REF = Symbol.for('takt.workflowOpaqueRef');
 
@@ -13,37 +19,82 @@ export function getWorkflowReference(workflow: WorkflowConfig): string {
 export function buildWorkflowResumePointEntry(
   workflow: WorkflowConfig,
   step: string,
-  kind: WorkflowStepKind,
+  kind: WorkflowResumeFrameKind,
+  occurrence: number,
+  stepIterations?: ReadonlyMap<string, number>,
+  callInstance?: number,
 ): WorkflowResumePointEntry {
+  if (!Number.isSafeInteger(occurrence) || occurrence <= 0) {
+    throw new Error(`Workflow resume frame "${workflow.name}/${step}" occurrence is invalid`);
+  }
   const workflowRef = getWorkflowReference(workflow);
   return {
     workflow: workflow.name,
-    ...(workflowRef !== workflow.name ? { workflow_ref: workflowRef } : {}),
+    workflow_ref: workflowRef,
     step,
     kind,
+    occurrence,
+    ...(stepIterations !== undefined
+      ? { step_iterations: Object.fromEntries(stepIterations) }
+      : {}),
+    ...(callInstance === undefined ? {} : { call_instance: callInstance }),
+  };
+}
+
+export function buildWorkflowRestartPointEntry(
+  workflow: WorkflowConfig,
+  step: string,
+  kind: WorkflowStepKind,
+  callInstance?: 1,
+): WorkflowRestartPointEntry {
+  return {
+    workflow: workflow.name,
+    workflow_ref: getWorkflowReference(workflow),
+    step,
+    kind,
+    ...(callInstance === undefined ? {} : { call_instance: callInstance }),
   };
 }
 
 export function getResumePointWorkflowReference(entry: WorkflowResumePointEntry): string {
-  return entry.workflow_ref ?? entry.workflow;
+  return entry.workflow_ref;
+}
+
+export function normalizeWorkflowResumePointEntry(
+  entry: WorkflowResumePointEntry,
+): WorkflowResumePointEntry {
+  if (entry.kind !== 'workflow_call' || entry.call_instance !== undefined) {
+    return entry;
+  }
+  const callInstance = entry.step_iterations?.[entry.step];
+  if (callInstance === undefined) {
+    return entry;
+  }
+  return { ...entry, call_instance: callInstance };
 }
 
 export function workflowEntryMatchesWorkflow(
   entry: WorkflowResumePointEntry,
   workflow: WorkflowConfig,
 ): boolean {
-  if (entry.workflow_ref !== undefined) {
-    return entry.workflow_ref === getWorkflowReference(workflow);
-  }
-  return entry.workflow === workflow.name;
+  return entry.workflow_ref === getWorkflowReference(workflow);
+}
+
+export function workflowRestartEntryMatchesWorkflow(
+  entry: WorkflowRestartPointEntry,
+  workflow: WorkflowConfig,
+): boolean {
+  return entry.workflow_ref === getWorkflowReference(workflow);
 }
 
 export function workflowEntriesMatch(
   left: WorkflowResumePointEntry,
   right: WorkflowResumePointEntry,
 ): boolean {
-  if (left.workflow_ref !== undefined && right.workflow_ref !== undefined) {
-    return left.workflow_ref === right.workflow_ref;
+  const normalizedLeft = normalizeWorkflowResumePointEntry(left);
+  const normalizedRight = normalizeWorkflowResumePointEntry(right);
+  if (normalizedLeft.call_instance !== normalizedRight.call_instance) {
+    return false;
   }
-  return left.workflow === right.workflow;
+  return normalizedLeft.workflow_ref === normalizedRight.workflow_ref;
 }

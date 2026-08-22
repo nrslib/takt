@@ -1,0 +1,54 @@
+name: simple-cqrs
+description: A simple development workflow that trusts a capable model's judgment and injects backend and CQRS+ES knowledge and policies into simple-core.
+max_steps: 30
+initial_step: develop
+steps:
+  - name: develop
+    kind: workflow_call
+    call: simple-core
+    args:
+      plan_policy:
+        - design-planning
+        - cqrs-es
+      testing_policy:
+        - coding
+        - testing
+        - cqrs-es
+        - architecture
+        - backend
+      development_policy:
+        - coding
+        - testing
+        - cqrs-es
+        - architecture
+        - backend
+      review_policy:
+        - review
+        - coding
+        - testing
+        - cqrs-es
+        - architecture
+        - backend
+      development_knowledge:
+        - backend
+        - cqrs-es
+        - security
+        - architecture
+      testing_knowledge:
+        - backend
+        - cqrs-es
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_knowledge:
+        - backend
+        - cqrs-es
+        - security
+        - architecture
+        - unit-testing
+        - e2e-testing
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

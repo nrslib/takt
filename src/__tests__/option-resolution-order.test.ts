@@ -9,20 +9,22 @@ const {
   loadGlobalConfigMock,
   resolveConfigValueMock,
   resolveProviderOptionsWithTraceMock,
-  loadTemplateMock,
   providerSetupMock,
   providerCallMock,
   getRuntimeInstructionsMock,
+  supportsPermissionControlsMock,
 } = vi.hoisted(() => {
   const providerCall = vi.fn();
   const providerSetup = vi.fn(() => ({ call: providerCall }));
   const getRuntimeInstructions = vi.fn(() => null);
+  const supportsPermissionControls = vi.fn(() => true);
 
   return {
     getProviderMock: vi.fn(() => ({
       supportsStructuredOutput: true,
       supportsNativeImageInput: false,
       getRuntimeInstructions,
+      supportsPermissionControls,
       setup: providerSetup,
     })),
     loadCustomAgentsMock: vi.fn(),
@@ -32,10 +34,10 @@ const {
     loadGlobalConfigMock: vi.fn(),
     resolveConfigValueMock: vi.fn(),
     resolveProviderOptionsWithTraceMock: vi.fn(),
-    loadTemplateMock: vi.fn(),
     providerSetupMock: providerSetup,
     providerCallMock: providerCall,
     getRuntimeInstructionsMock: getRuntimeInstructions,
+    supportsPermissionControlsMock: supportsPermissionControls,
   };
 });
 
@@ -54,10 +56,6 @@ vi.mock('../infra/config/index.js', () => ({
 vi.mock('../infra/config/resolveConfigValue.js', () => ({
   resolveConfigValue: resolveConfigValueMock,
   resolveProviderOptionsWithTrace: resolveProviderOptionsWithTraceMock,
-}));
-
-vi.mock('../shared/prompts/index.js', () => ({
-  loadTemplate: loadTemplateMock,
 }));
 
 import { runAgent } from '../agents/runner.js';
@@ -83,8 +81,19 @@ describe('option resolution order', () => {
     loadCustomAgentsMock.mockReturnValue(new Map());
     loadAgentPromptMock.mockReturnValue('prompt');
     loadPersonaPromptFromPathMock.mockReturnValue('persona prompt from path');
-    loadTemplateMock.mockReturnValue('template');
     getRuntimeInstructionsMock.mockReturnValue(null);
+    supportsPermissionControlsMock.mockReturnValue(true);
+  });
+
+  it('records an attempt-boundary activity before provider dispatch', async () => {
+    const onActivity = vi.fn();
+
+    await runAgent(undefined, 'task', { cwd: '/repo', provider: 'mock', onActivity });
+
+    expect(onActivity).toHaveBeenCalledOnce();
+    expect(onActivity.mock.invocationCallOrder[0]).toBeLessThan(
+      providerCallMock.mock.invocationCallOrder[0]!,
+    );
   });
 
   it('should resolve provider in order: CLI > local config > global config', async () => {
@@ -308,6 +317,119 @@ describe('option resolution order', () => {
       'task',
       expect.objectContaining({ childProcessEnv }),
     );
+  });
+
+  it('should pass workflow language through runAgent to provider call options', async () => {
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      provider: 'opencode',
+      language: 'ja',
+    });
+
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ language: 'ja' }),
+    );
+  });
+
+  it('should execute a complete resolved handoff without reading config or persona resolvers', async () => {
+    loadProjectConfigMock.mockImplementation(() => {
+      throw new Error('project config must not be read');
+    });
+    loadGlobalConfigMock.mockImplementation(() => {
+      throw new Error('global config must not be read');
+    });
+    resolveConfigValueMock.mockImplementation(() => {
+      throw new Error('persona config must not be read');
+    });
+    resolveProviderOptionsWithTraceMock.mockImplementation(() => {
+      throw new Error('provider options must not be resolved');
+    });
+    const providerOptions = {
+      codex: {
+        reasoningEffort: 'high' as const,
+      },
+    };
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      internalSystemPrompt: 'internal',
+      resolvedExecution: {
+        provider: 'codex',
+        model: 'gpt-resolved',
+        providerOptions,
+        permissionMode: 'readonly',
+      },
+    });
+
+    expect(loadProjectConfigMock).not.toHaveBeenCalled();
+    expect(loadGlobalConfigMock).not.toHaveBeenCalled();
+    expect(resolveConfigValueMock).not.toHaveBeenCalled();
+    expect(resolveProviderOptionsWithTraceMock).not.toHaveBeenCalled();
+    expect(loadCustomAgentsMock).not.toHaveBeenCalled();
+    expect(loadAgentPromptMock).not.toHaveBeenCalled();
+    expect(loadPersonaPromptFromPathMock).not.toHaveBeenCalled();
+    expect(getProviderMock).toHaveBeenCalledWith('codex');
+    expect(providerCallMock).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({
+        model: 'gpt-resolved',
+        providerOptions,
+        permissionMode: 'readonly',
+      }),
+    );
+  });
+
+  it('should preserve omitted resolved options without reloading project or persona config', async () => {
+    loadProjectConfigMock.mockImplementation(() => {
+      throw new Error('project config must not be read');
+    });
+    loadGlobalConfigMock.mockImplementation(() => {
+      throw new Error('global config must not be read');
+    });
+    resolveConfigValueMock.mockImplementation(() => {
+      throw new Error('persona config must not be read');
+    });
+    resolveProviderOptionsWithTraceMock.mockImplementation(() => {
+      throw new Error('provider options must not be resolved');
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      internalSystemPrompt: 'internal',
+      resolvedExecution: {
+        provider: 'mock',
+        model: undefined,
+        providerOptions: undefined,
+        permissionMode: undefined,
+      },
+    });
+
+    expect(loadProjectConfigMock).not.toHaveBeenCalled();
+    expect(loadGlobalConfigMock).not.toHaveBeenCalled();
+    expect(resolveConfigValueMock).not.toHaveBeenCalled();
+    expect(resolveProviderOptionsWithTraceMock).not.toHaveBeenCalled();
+    expect(providerCallMock).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ providerOptions: undefined, permissionMode: undefined }),
+    );
+  });
+
+  it('should reject a resolved handoff mixed with unresolved resolution inputs', async () => {
+    await expect(runAgent(undefined, 'task', {
+      cwd: '/repo',
+      provider: 'mock',
+      resolvedExecution: {
+        provider: 'codex',
+        model: undefined,
+        providerOptions: {},
+        permissionMode: 'readonly',
+      },
+    })).rejects.toThrow('resolvedExecution cannot be mixed');
+
+    expect(loadProjectConfigMock).not.toHaveBeenCalled();
+    expect(loadGlobalConfigMock).not.toHaveBeenCalled();
+    expect(getProviderMock).not.toHaveBeenCalled();
   });
 
   it('should merge persona providerOptions into standalone runAgent calls', async () => {
@@ -708,269 +830,38 @@ describe('option resolution order', () => {
     );
   });
 
-  it('should wrap inline persona prompt when workflowMeta has process safety', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
-
-    await runAgent('inline persona', 'task', {
-      cwd: '/repo',
-      language: 'en',
-      workflowMeta: {
-        workflowName: 'takt-default',
-        currentStep: 'implement',
-        stepsList: [{ name: 'plan' }, { name: 'implement' }],
-        currentPosition: '2/2',
-        processSafety: { protectedParentRunPid: 4242 },
-      },
-    });
-
-    expect(loadTemplateMock).toHaveBeenCalledWith(
-      'perform_agent_system_prompt',
-      'en',
-      expect.objectContaining({
-        agentDefinition: 'inline persona',
-        workflowName: 'takt-default',
-        currentStep: 'implement',
-        hasProcessSafety: true,
-        protectedParentRunPid: '4242',
-      }),
-    );
-    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: 'template',
-    }));
-  });
-
-  it('should pass provider runtime instructions to the runtime-only system prompt without workflow context', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'opencode' });
-    getRuntimeInstructionsMock.mockReturnValue('OpenCode tool names are lowercase.');
-
-    await runAgent('inline persona', 'task', {
-      cwd: '/repo',
-      language: 'en',
-    });
-
-    expect(loadTemplateMock).toHaveBeenCalledWith(
-      'provider_runtime_system_prompt',
-      'en',
-      expect.objectContaining({
-        agentDefinition: 'inline persona',
-        providerRuntimeInstructions: 'OpenCode tool names are lowercase.',
-      }),
-    );
-    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: 'template',
-    }));
-  });
-
-  it('should use runtime-only system prompt for default persona provider runtime instructions', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'opencode' });
-    getRuntimeInstructionsMock.mockReturnValue('OpenCode tool names are lowercase.');
-
-    await runAgent(undefined, 'task', {
-      cwd: '/repo',
-      language: 'en',
-    });
-
-    expect(loadTemplateMock).toHaveBeenCalledWith(
-      'provider_runtime_system_prompt',
-      'en',
-      expect.objectContaining({
-        agentDefinition: '',
-        providerRuntimeInstructions: 'OpenCode tool names are lowercase.',
-      }),
-    );
-    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'default',
-      systemPrompt: 'template',
-    }));
-  });
-
-  it('should not wrap default persona only because outputSchema is present', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'opencode' });
-    const outputSchema = {
-      type: 'object',
-      properties: {
-        matched_index: { type: 'number' },
-      },
-      required: ['matched_index'],
-    };
-
-    await runAgent(undefined, 'task', {
-      cwd: '/repo',
-      language: 'en',
-      outputSchema,
-    });
-
-    expect(loadTemplateMock).not.toHaveBeenCalled();
-    expect(providerSetupMock).toHaveBeenCalledWith({
-      name: 'default',
-    });
-  });
-
-  it('should not wrap inline persona prompt when provider runtime instructions are null', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
-    getRuntimeInstructionsMock.mockReturnValue(null);
-
-    await runAgent('inline persona', 'task', {
-      cwd: '/repo',
-      language: 'en',
-    });
-
-    expect(loadTemplateMock).not.toHaveBeenCalled();
-    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: 'inline persona',
-    }));
-  });
-
-  it('should wrap personaPath prompt when workflowMeta has process safety', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
-
-    await runAgent(undefined, 'task', {
-      cwd: '/repo',
-      projectCwd: '/project',
-      personaPath: '/project/.takt/personas/coder.md',
-      language: 'en',
-      workflowMeta: {
-        workflowName: 'takt-default',
-        currentStep: 'implement',
-        stepsList: [{ name: 'plan' }, { name: 'implement' }],
-        currentPosition: '2/2',
-        processSafety: { protectedParentRunPid: 4242 },
-      },
-    });
-
-    expect(loadPersonaPromptFromPathMock).toHaveBeenCalledWith(
-      '/project/.takt/personas/coder.md',
-      '/project',
-    );
-    expect(loadTemplateMock).toHaveBeenCalledWith(
-      'perform_agent_system_prompt',
-      'en',
-      expect.objectContaining({
-        agentDefinition: 'persona prompt from path',
-        workflowName: 'takt-default',
-        currentStep: 'implement',
-        hasProcessSafety: true,
-        protectedParentRunPid: '4242',
-      }),
-    );
-    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: 'template',
-    }));
-  });
-
-  it('should wrap personaPath prompt when workflowMeta has no process safety', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
-
-    await runAgent(undefined, 'task', {
-      cwd: '/repo',
-      projectCwd: '/project',
-      personaPath: '/project/.takt/personas/coder.md',
-      language: 'en',
-      workflowMeta: {
-        workflowName: 'takt-default',
-        currentStep: 'implement',
-        stepsList: [{ name: 'plan' }, { name: 'implement' }],
-        currentPosition: '2/2',
-      },
-    });
-
-    expect(loadTemplateMock).toHaveBeenCalledWith(
-      'perform_agent_system_prompt',
-      'en',
-      expect.objectContaining({
-        agentDefinition: 'persona prompt from path',
-        workflowName: 'takt-default',
-        currentStep: 'implement',
-        hasProcessSafety: false,
-      }),
-    );
-    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: 'template',
-    }));
-  });
-
-  it('should not wrap inline persona prompt when workflowMeta has no process safety', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
-
-    await runAgent('inline persona', 'task', {
-      cwd: '/repo',
-      language: 'en',
-      workflowMeta: {
-        workflowName: 'custom-workflow',
-        currentStep: 'review',
-        stepsList: [{ name: 'plan' }, { name: 'review' }],
-        currentPosition: '2/2',
-      },
-    });
-
-    expect(loadTemplateMock).not.toHaveBeenCalled();
-    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: 'inline persona',
-    }));
-  });
-
-  it('should wrap custom agent prompt when workflowMeta has process safety', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
-    loadCustomAgentsMock.mockReturnValue(new Map([
-      ['custom', { name: 'custom', prompt: 'agent prompt' }],
-    ]));
-    loadAgentPromptMock.mockReturnValue('custom prompt');
-
-    await runAgent('custom', 'task', {
-      cwd: '/repo',
-      language: 'en',
-      workflowMeta: {
-        workflowName: 'takt-default',
-        currentStep: 'implement',
-        stepsList: [{ name: 'plan' }, { name: 'implement' }],
-        currentPosition: '2/2',
-        processSafety: { protectedParentRunPid: 4242 },
-      },
-    });
-
-    expect(loadTemplateMock).toHaveBeenCalledWith(
-      'perform_agent_system_prompt',
-      'en',
-      expect.objectContaining({
-        agentDefinition: 'custom prompt',
-        workflowName: 'takt-default',
-        currentStep: 'implement',
-        hasProcessSafety: true,
-        protectedParentRunPid: '4242',
-      }),
-    );
-    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'custom',
-      systemPrompt: 'template',
-    }));
-  });
-
-  it('should not wrap custom agent prompt when workflowMeta has no process safety', async () => {
-    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
-    loadCustomAgentsMock.mockReturnValue(new Map([
-      ['custom', { name: 'custom', prompt: 'agent prompt' }],
-    ]));
-    loadAgentPromptMock.mockReturnValue('custom prompt');
-
-    await runAgent('custom', 'task', {
-      cwd: '/repo',
-      language: 'en',
-      workflowMeta: {
-        workflowName: 'custom-workflow',
-        currentStep: 'review',
-        stepsList: [{ name: 'plan' }, { name: 'review' }],
-        currentPosition: '2/2',
-      },
-    });
-
-    expect(loadTemplateMock).not.toHaveBeenCalled();
-    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'custom',
-      systemPrompt: 'custom prompt',
-    }));
-  });
-
   it('should resolve permission mode after provider resolution using provider profiles', async () => {
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'codex',
+      providerProfiles: {
+        codex: { defaultPermissionMode: 'full' },
+      },
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    const onDispatch = vi.fn(() => {
+      expect(providerCallMock).not.toHaveBeenCalled();
+    });
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionResolution: {
+        stepName: 'supervise',
+      },
+      onDispatch,
+    });
+
+    expect(getProviderMock).toHaveBeenLastCalledWith('codex');
+    expect(onDispatch).toHaveBeenCalledExactlyOnceWith('full');
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ permissionMode: 'full' }),
+    );
+  });
+
+  it('should pass step permission overrides to the provider call', async () => {
     loadProjectConfigMock.mockReturnValue({});
     loadGlobalConfigMock.mockReturnValue({
       provider: 'codex',
@@ -985,14 +876,83 @@ describe('option resolution order', () => {
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       permissionResolution: {
-        stepName: 'supervise',
+        stepName: 'judge-1',
+        providerProfiles: {
+          codex: {
+            defaultPermissionMode: 'edit',
+            stepPermissionOverrides: {
+              'judge-1': 'readonly',
+            },
+          },
+        },
       },
     });
 
-    expect(getProviderMock).toHaveBeenLastCalledWith('codex');
     expect(providerCallMock).toHaveBeenLastCalledWith(
       'task',
-      expect.objectContaining({ permissionMode: 'full' }),
+      expect.objectContaining({ permissionMode: 'readonly' }),
+    );
+  });
+
+  it('should reject mixed explicit permission mode and permission resolution inputs', async () => {
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'deepseek-harness',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    await expect(runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+      permissionResolution: { stepName: 'implement' },
+    })).rejects.toThrow('permissionMode cannot be combined with permissionResolution');
+    expect(providerCallMock).not.toHaveBeenCalled();
+  });
+
+  it('should omit synthesized permission modes from a provider that does not support them', async () => {
+    supportsPermissionControlsMock.mockReturnValue(false);
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'deepseek-harness',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionResolution: { stepName: 'implement' },
+    });
+
+    const callOptions = providerCallMock.mock.calls.at(-1)?.[1];
+    expect(callOptions?.permissionMode).toBeUndefined();
+  });
+
+  it('should preserve an explicit permission constraint for a provider without permission-control support', async () => {
+    supportsPermissionControlsMock.mockReturnValue(false);
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'deepseek-harness',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionResolution: {
+        stepName: 'implement',
+        providerProfiles: {
+          'deepseek-harness': { defaultPermissionMode: 'readonly' },
+        },
+      },
+    });
+
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ permissionMode: 'readonly' }),
     );
   });
 

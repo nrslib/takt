@@ -11,18 +11,18 @@ export const DEFAULT_WORKFLOW_NAME = 'default';
 /** Default language for new installations */
 export const DEFAULT_LANGUAGE: Language = 'en';
 
-export const DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS = 20;
-export const MAX_TEAM_LEADER_MAX_TOTAL_PARTS = 20;
+/** Companion reviewers are opt-in unless runtime.yaml explicitly enables them. */
+export const DEFAULT_COMPANION_ENABLED = false;
 
 /** Slash commands recognized in interactive mode */
 export const SlashCommand = {
   Accept: '/accept',
-  Play: '/play',
   Go: '/go',
   Retry: '/retry',
   Replay: '/replay',
   Cancel: '/cancel',
   Resume: '/resume',
   PasteImage: '/paste-image',
+  Setup: '/setup',
 } as const;
 export type SlashCommand = typeof SlashCommand[keyof typeof SlashCommand];

@@ -26,6 +26,11 @@ steps:
     tags:
       - plan
     persona: planner
+    policy:
+      - contract-change
+      - architecture
+      - frontend
+      - react
     knowledge:
       - frontend
       - react
@@ -46,7 +51,12 @@ steps:
     tags:
       - review
     persona: frontend-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - architecture
+      - frontend
+      - react
     knowledge:
       - frontend
       - react
@@ -68,8 +78,14 @@ steps:
   - name: supervise
     tags:
       - review
+      - supervise
     persona: supervisor
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - architecture
+      - frontend
+      - react
     knowledge:
       - frontend
       - react
@@ -87,7 +103,12 @@ steps:
     tags:
       - review
     persona: frontend-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - architecture
+      - frontend
+      - react
     knowledge:
       - frontend
       - react

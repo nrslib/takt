@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
@@ -21,12 +21,16 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
 
 const {
   resolveProviderOptionsWithTrace,
+  resolveNonWorkflowProviderOptions,
   invalidateAllResolvedConfigCache,
 } = await import('../infra/config/resolveConfigValue.js');
 const { invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
+const { resolveEffectiveProviderOptions } = await import('../infra/config/providerOptions.js');
 
 let taktEnvSnapshot: TaktEnvSnapshot;
+const defaultCodexSkills = { repo: false, user: false } as const;
+const defaultClaudeSkills = { enabled: false } as const;
 
 describe('resolveProviderOptionsWithTrace', () => {
   let projectDir: string;
@@ -48,6 +52,92 @@ describe('resolveProviderOptionsWithTrace', () => {
     restoreTaktEnv(taktEnvSnapshot);
   });
 
+  it('未指定の Codex と Claude Skill 設定を false として解決する', () => {
+    const result = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(result.value).toEqual({
+      codex: { skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
+    });
+    expect(result.source).toBe('default');
+    expect(result.originResolver('codex.skills.repo')).toBe('default');
+    expect(result.originResolver('codex.skills.user')).toBe('default');
+    expect(result.originResolver('claude.skills.enabled')).toBe('default');
+  });
+
+  it('非 workflow の global 設定から相対 DeepSeek path を実行ディレクトリ基準へ解決する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  deepseek_harness:',
+        '    session_root: deepseek-sessions',
+        '    cordis: cordis.yml',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const result = resolveNonWorkflowProviderOptions(projectDir);
+
+    expect(result?.deepseekHarness).toMatchObject({
+      sessionRoot: resolve(projectDir, 'deepseek-sessions'),
+      cordis: resolve(projectDir, 'cordis.yml'),
+    });
+  });
+
+  it('非 workflow の environment override から相対 DeepSeek path を解決する', () => {
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_SESSION_ROOT = 'env-deepseek-sessions';
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS = 'env-cordis.yml';
+
+    const result = resolveNonWorkflowProviderOptions(projectDir);
+
+    expect(result?.deepseekHarness).toMatchObject({
+      sessionRoot: resolve(projectDir, 'env-deepseek-sessions'),
+      cordis: resolve(projectDir, 'env-cordis.yml'),
+    });
+  });
+
+  it('既定の Skill 設定を解決結果ごとに分離する', () => {
+    const first = resolveProviderOptionsWithTrace(projectDir);
+    const firstCodexSkills = first.value?.codex?.skills;
+    const firstClaudeSkills = first.value?.claude?.skills;
+    expect(firstCodexSkills).toBeDefined();
+    expect(firstClaudeSkills).toBeDefined();
+    firstCodexSkills!.repo = true;
+    firstClaudeSkills!.enabled = true;
+
+    invalidateAllResolvedConfigCache();
+
+    const second = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(second.value?.codex?.skills).toEqual(defaultCodexSkills);
+    expect(second.value?.claude?.skills).toEqual(defaultClaudeSkills);
+  });
+
+  it('呼び出し固有の default を明示設定より低い優先度で解決する', () => {
+    const execDefaults = { repo: true, user: true };
+    expect(resolveNonWorkflowProviderOptions(projectDir, undefined, execDefaults)).toEqual({
+      codex: { skills: execDefaults },
+      claude: { skills: defaultClaudeSkills },
+    });
+
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    skills:', '      repo: false'].join('\n'),
+      'utf-8',
+    );
+    invalidateAllResolvedConfigCache();
+
+    expect(resolveNonWorkflowProviderOptions(projectDir, undefined, execDefaults)).toEqual({
+      codex: { skills: { repo: false, user: true } },
+      claude: { skills: defaultClaudeSkills },
+    });
+  });
+
   it('project provider_options の env override を source=env として返す', () => {
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
@@ -61,7 +151,10 @@ describe('resolveProviderOptionsWithTrace', () => {
     const result = resolveProviderOptionsWithTrace(projectDir);
 
     expect(result.source).toBe('env');
-    expect(result.value).toEqual({ codex: { networkAccess: true } });
+    expect(result.value).toEqual({
+      codex: { networkAccess: true, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
+    });
     expect(result.originResolver('codex.networkAccess')).toBe('env');
     expect(result.originResolver('claude.allowedTools')).toBe('local');
   });
@@ -77,7 +170,10 @@ describe('resolveProviderOptionsWithTrace', () => {
     const result = resolveProviderOptionsWithTrace(projectDir);
 
     expect(result.source).toBe('global');
-    expect(result.value).toEqual({ claude: { allowedTools: ['Read'] } });
+    expect(result.value).toEqual({
+      codex: { skills: defaultCodexSkills },
+      claude: { allowedTools: ['Read'], skills: defaultClaudeSkills },
+    });
     expect(result.originResolver('claude.allowedTools')).toBe('global');
   });
 
@@ -101,8 +197,8 @@ describe('resolveProviderOptionsWithTrace', () => {
 
     expect(result.source).toBe('project');
     expect(result.value).toEqual({
-      claude: { allowedTools: ['Read'] },
-      codex: { networkAccess: false },
+      claude: { allowedTools: ['Read'], skills: defaultClaudeSkills },
+      codex: { networkAccess: false, skills: defaultCodexSkills },
     });
     expect(result.originResolver('claude.allowedTools')).toBe('global');
     expect(result.originResolver('codex.networkAccess')).toBe('local');
@@ -136,8 +232,8 @@ describe('resolveProviderOptionsWithTrace', () => {
     const result = resolveProviderOptionsWithTrace(projectDir);
 
     expect(result.value).toEqual({
-      codex: { reasoningEffort: 'medium' },
-      claude: { effort: 'high' },
+      codex: { reasoningEffort: 'medium', skills: defaultCodexSkills },
+      claude: { effort: 'high', skills: defaultClaudeSkills },
     });
     expect(result.originResolver('codex.reasoningEffort')).toBe('global');
     expect(result.originResolver('claude.effort')).toBe('local');
@@ -164,8 +260,8 @@ describe('resolveProviderOptionsWithTrace', () => {
 
     expect(result.source).toBe('env');
     expect(result.value).toEqual({
-      codex: { reasoningEffort: 'high' },
-      claude: { effort: 'max' },
+      codex: { reasoningEffort: 'high', skills: defaultCodexSkills },
+      claude: { effort: 'max', skills: defaultClaudeSkills },
     });
     expect(result.originResolver('codex.reasoningEffort')).toBe('env');
     expect(result.originResolver('claude.effort')).toBe('env');
@@ -190,6 +286,8 @@ describe('resolveProviderOptionsWithTrace', () => {
 
     expect(result.source).toBe('env');
     expect(result.value).toEqual({
+      codex: { skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
       opencode: {
         networkAccess: true,
         variant: 'high',
@@ -212,7 +310,10 @@ describe('resolveProviderOptionsWithTrace', () => {
     const result = resolveProviderOptionsWithTrace(projectDir);
 
     expect(result.source).toBe('env');
-    expect(result.value).toEqual({ codex: { reasoningEffort: 'high' } });
+    expect(result.value).toEqual({
+      codex: { reasoningEffort: 'high', skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
+    });
     expect(result.originResolver('codex.reasoningEffort')).toBe('env');
   });
 
@@ -229,7 +330,10 @@ describe('resolveProviderOptionsWithTrace', () => {
     const result = resolveProviderOptionsWithTrace(projectDir);
 
     expect(result.source).toBe('env');
-    expect(result.value).toEqual({ claude: { effort: 'max' } });
+    expect(result.value).toEqual({
+      codex: { skills: defaultCodexSkills },
+      claude: { effort: 'max', skills: defaultClaudeSkills },
+    });
     expect(result.originResolver('claude.effort')).toBe('env');
   });
 
@@ -257,8 +361,100 @@ describe('resolveProviderOptionsWithTrace', () => {
     const result = resolveProviderOptionsWithTrace(projectDir);
 
     expect(result.source).toBe('env');
-    expect(result.value).toEqual({ claude: { allowedTools: ['Bash'] } });
+    expect(result.value).toEqual({
+      codex: { skills: defaultCodexSkills },
+      claude: { allowedTools: ['Bash'], skills: defaultClaudeSkills },
+    });
     expect(result.originResolver('claude.allowedTools')).toBe('env');
     expect(result.originResolver('codex.networkAccess')).toBe('env');
+  });
+
+  it('global/project provider_options の解決後に Codex permission control の競合を拒否する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  codex:',
+        '    permission_control: codex',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: true'].join('\n'),
+      'utf-8',
+    );
+
+    expect(() => resolveProviderOptionsWithTrace(projectDir)).toThrow();
+  });
+
+  it('片方だけ指定した Codex Skill scope の未指定値を default のまま保つ', () => {
+    process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
+      codex: { skills: { repo: true } },
+    });
+
+    const resolved = resolveProviderOptionsWithTrace(projectDir);
+    const effective = resolveEffectiveProviderOptions(
+      resolved.source,
+      resolved.originResolver,
+      resolved.value,
+      { codex: { skills: { user: true } } },
+    );
+
+    expect(resolved.originResolver('codex.skills.repo')).toBe('env');
+    expect(resolved.originResolver('codex.skills.user')).toBe('default');
+    expect(effective?.codex?.skills).toEqual({ repo: true, user: true });
+  });
+
+  it('global config の base_url 明示値を project env fallback より優先する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  codex:',
+        '    base_url: http://global.example.test/v1',
+        '  claude:',
+        '    base_url: http://global.example.test',
+        '  deepseek_harness:',
+        '    base_url: http://global.example.test/deepseek',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL = 'http://env.example.test/v1';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL = 'http://env.example.test';
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL = 'http://env.example.test/deepseek';
+
+    const result = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(result.value).toEqual({
+      codex: {
+        baseUrl: 'http://global.example.test/v1',
+        networkAccess: false,
+        skills: defaultCodexSkills,
+      },
+      claude: { baseUrl: 'http://global.example.test', skills: defaultClaudeSkills },
+      deepseekHarness: {
+        baseUrl: 'http://global.example.test/deepseek',
+      },
+    });
+    expect(result.originResolver('codex.baseUrl')).toBe('global');
+    expect(result.originResolver('claude.baseUrl')).toBe('global');
+    expect(result.originResolver('deepseekHarness.baseUrl')).toBe('global');
+    expect(result.originResolver('codex.networkAccess')).toBe('local');
   });
 });

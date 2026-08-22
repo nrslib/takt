@@ -1,53 +1,39 @@
 /**
- * File filtering for repertoire package copy operations.
+ * Filters repertoire package content before copy operations.
  *
- * Security constraints:
- * - Only .md, .yaml, .yml files are copied
- * - Only files under facets/, workflows/, or provider-options/ top-level directories are copied
- * - Symbolic links are skipped (lstat check)
- * - Files exceeding MAX_FILE_SIZE (1 MB) are skipped
- * - Packages with more than MAX_FILE_COUNT files throw an error
+ * Only supported file types under approved roots are copied. Symbolic links
+ * are excluded, oversized step fragments are rejected, and the package-wide
+ * file limit is enforced.
  */
-
 import { lstatSync, readdirSync, type Stats } from 'node:fs';
-import { join, extname, relative } from 'node:path';
-import { createLogger } from '../../shared/utils/debug.js';
+import { join, extname, relative, sep } from 'node:path';
 
-const log = createLogger('repertoire-file-filter');
+export const ALLOWED_EXTENSIONS = Object.freeze(['.md', '.yaml', '.yml'] as const);
+export const STEP_FRAGMENT_EXTENSIONS = Object.freeze(['.yaml', '.yml'] as const);
 
-/** Allowed file extensions for repertoire package files. */
-export const ALLOWED_EXTENSIONS = ['.md', '.yaml', '.yml'] as const;
+/** Top-level package directories that can be copied. */
+export const ALLOWED_DIRS = Object.freeze(['facets', 'workflows', 'provider-options', 'steps', 'facet-pools'] as const);
 
-/** Top-level directories that are copied from a package. */
-export const ALLOWED_DIRS = ['facets', 'workflows', 'provider-options'] as const;
-
-/** Maximum single file size in bytes (1 MB). */
 export const MAX_FILE_SIZE = 1024 * 1024;
 
-/** Maximum total file count per package. */
 export const MAX_FILE_COUNT = 500;
 
 export interface CopyTarget {
   /** Absolute path to the source file. */
   absolutePath: string;
-  /** Relative path from the package root (e.g. "facets/personas/coder.md"). */
+  /** Relative path from the package root. */
   relativePath: string;
 }
 
-/**
- * Check if a filename has an allowed extension.
- */
 export function isAllowedExtension(filename: string): boolean {
   const ext = extname(filename);
   return (ALLOWED_EXTENSIONS as readonly string[]).includes(ext);
 }
 
-/**
- * Determine whether a single file should be copied.
- *
- * @param filePath - absolute path to the file
- * @param stats    - result of lstat(filePath)
- */
+export function isStepFragmentExtension(filename: string): boolean {
+  return (STEP_FRAGMENT_EXTENSIONS as readonly string[]).includes(extname(filename));
+}
+
 function shouldCopyFile(
   filePath: string,
   stats: Stats,
@@ -57,32 +43,43 @@ function shouldCopyFile(
   return true;
 }
 
-/**
- * Recursively collect files eligible for copying from within a directory.
- * Used internally by collectCopyTargets.
- */
+function appendCopyTarget(targets: CopyTarget[], target: CopyTarget): void {
+  if (targets.length >= MAX_FILE_COUNT) {
+    throw new Error(`Package exceeds maximum file count of ${MAX_FILE_COUNT}`);
+  }
+  targets.push(target);
+}
+
+function packageRelativePath(packageRoot: string, absolutePath: string): string {
+  return relative(packageRoot, absolutePath).split(sep).join('/');
+}
+
+function readPackageDirectory(dir: string): string[] {
+  try {
+    return readdirSync(dir, 'utf-8');
+  } catch (error) {
+    throw new Error(`Failed to read package directory: ${dir}`, { cause: error });
+  }
+}
+
+function inspectPackageEntry(path: string): Stats {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    throw new Error(`Failed to inspect package entry: ${path}`, { cause: error });
+  }
+}
+
 function collectFromDir(
   dir: string,
   packageRoot: string,
   targets: CopyTarget[],
 ): void {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir, 'utf-8');
-  } catch (err) {
-    log.debug('Failed to read directory', { dir, err });
-    return;
-  }
+  const entries = readPackageDirectory(dir);
 
   for (const entry of entries) {
-    if (targets.length >= MAX_FILE_COUNT) {
-      throw new Error(
-        `Package exceeds maximum file count of ${MAX_FILE_COUNT}`,
-      );
-    }
-
     const absolutePath = join(dir, entry);
-    const stats = lstatSync(absolutePath);
+    const stats = inspectPackageEntry(absolutePath);
 
     if (stats.isSymbolicLink()) continue;
 
@@ -93,44 +90,61 @@ function collectFromDir(
 
     if (!shouldCopyFile(absolutePath, stats)) continue;
 
-    targets.push({
+    appendCopyTarget(targets, {
       absolutePath,
-      relativePath: relative(packageRoot, absolutePath),
+      relativePath: packageRelativePath(packageRoot, absolutePath),
     });
   }
 }
 
-/**
- * Collect all files to copy from a package root directory.
- *
- * Only files under allowed top-level directories are included.
- * Symbolic links are skipped. Files over MAX_FILE_SIZE are skipped.
- * Throws if total file count exceeds MAX_FILE_COUNT.
- *
- * @param packageRoot - absolute path to the package root (respects takt-repertoire.yaml path)
- */
+function collectStepFragments(
+  stepsDir: string,
+  packageRoot: string,
+  targets: CopyTarget[],
+): void {
+  const entries = readPackageDirectory(stepsDir);
+
+  for (const entry of entries) {
+    const absolutePath = join(stepsDir, entry);
+    const stats = inspectPackageEntry(absolutePath);
+    if (stats.isSymbolicLink() || !stats.isFile() || !isStepFragmentExtension(entry)) {
+      continue;
+    }
+    if (stats.size > MAX_FILE_SIZE) {
+      throw new Error(`Step fragment exceeds maximum size of ${MAX_FILE_SIZE} bytes: ${packageRelativePath(packageRoot, absolutePath)}`);
+    }
+    appendCopyTarget(targets, {
+      absolutePath,
+      relativePath: packageRelativePath(packageRoot, absolutePath),
+    });
+  }
+}
+
+/** Collects copyable package files while applying package safety limits. */
 export function collectCopyTargets(packageRoot: string): CopyTarget[] {
   const targets: CopyTarget[] = [];
 
   for (const allowedDir of ALLOWED_DIRS) {
     const dirPath = join(packageRoot, allowedDir);
-    let stats: Stats | undefined;
+    let stats: Stats;
     try {
       stats = lstatSync(dirPath);
     } catch (err) {
-      log.debug('Directory not accessible, skipping', { dirPath, err });
-      continue;
+      if (isNotFoundError(err)) continue;
+      throw new Error(`Failed to inspect package directory: ${dirPath}`, { cause: err });
     }
-    if (!stats?.isDirectory()) continue;
+    if (!stats.isDirectory()) continue;
 
-    collectFromDir(dirPath, packageRoot, targets);
-
-    if (targets.length >= MAX_FILE_COUNT) {
-      throw new Error(
-        `Package exceeds maximum file count of ${MAX_FILE_COUNT}`,
-      );
+    if (allowedDir === 'steps') {
+      collectStepFragments(dirPath, packageRoot, targets);
+    } else {
+      collectFromDir(dirPath, packageRoot, targets);
     }
   }
 
   return targets;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }

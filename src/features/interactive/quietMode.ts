@@ -7,10 +7,10 @@
  */
 
 import chalk from 'chalk';
-import { createLogger } from '../../shared/utils/index.js';
+import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { readMultilineInput } from './lineEditor.js';
+import { readPipedLine } from './lineEditor.js';
 import {
   type WorkflowContext,
   type InteractiveModeResult,
@@ -27,12 +27,11 @@ import {
 import { initializeSession } from './sessionInitialization.js';
 import {
   buildInteractiveResultWithAttachments,
-  createClipboardImagePasteHandler,
-  createImagePasteHandler,
+  cleanupImageAttachmentStore,
   createSessionImageAttachmentStore,
   resolvePromptImageAttachments,
 } from './imageAttachments.js';
-import { reportClipboardImagePasteError } from './clipboardImageFeedback.js';
+import { resolveFormalSpecMode } from './taskInstructionFormat.js';
 
 const log = createLogger('quiet-mode');
 
@@ -56,21 +55,20 @@ export async function quietMode(
   workflowContext?: WorkflowContext,
 ): Promise<InteractiveModeResult> {
   const ctx = initializeSession(cwd, 'interactive');
+  const formalSpec = await resolveFormalSpecMode(cwd);
   const sourceContext = initialInput?.sourceContext;
-  const attachmentStore = createSessionImageAttachmentStore();
+  const attachmentStore = createSessionImageAttachmentStore(cwd, initialInput?.attachments);
   const history: ConversationMessage[] = initialInput?.userMessage
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
 
+  try {
   if (history.length === 0 && !sourceContext) {
     info(getLabel('interactive.ui.introQuiet', ctx.lang));
     blankLine();
 
-    const input = await readMultilineInput(chalk.green('> '), {
-      onImagePaste: createImagePasteHandler(attachmentStore),
-      onClipboardImagePaste: createClipboardImagePasteHandler(attachmentStore),
-      onClipboardImagePasteError: reportClipboardImagePasteError,
-    });
+    // Piped input carries no paste gestures; a terminal takes the TUI instead.
+    const input = await readPipedLine(chalk.green('> '));
     if (input === null) {
       blankLine();
       info(getLabel('interactive.ui.cancelled', ctx.lang));
@@ -89,6 +87,8 @@ export async function quietMode(
 
   const summaryPrompt = buildSummaryPrompt(
     history, !!ctx.sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext, sourceContext,
+    undefined,
+    formalSpec,
   );
 
   if (!summaryPrompt) {
@@ -96,10 +96,19 @@ export async function quietMode(
     return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
   }
 
+  let imageAttachments: ReturnType<typeof resolvePromptImageAttachments>;
+  try {
+    imageAttachments = resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments());
+  } catch (caught) {
+    error(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
+    blankLine();
+    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+  }
+
   const { result } = await callAIWithRetry(
     summaryPrompt, summaryPrompt, DEFAULT_INTERACTIVE_TOOLS, cwd,
     { ...ctx, sessionId: undefined },
-    { imageAttachments: resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments()) },
+    { imageAttachments, persistSession: false },
   );
 
   if (!result) {
@@ -122,4 +131,8 @@ export async function quietMode(
 
   log.info('Quiet mode action selected', { action: selectedAction });
   return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
+  } catch (caught) {
+    cleanupImageAttachmentStore(attachmentStore);
+    throw caught;
+  }
 }

@@ -1,11 +1,34 @@
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import type { ResolvedObservabilityConfig } from '../../../core/models/config-types.js';
+import type {
+  InternalAgentSeats,
+  ProviderRoutingEntry,
+  ProviderLadderConfig,
+  ResolvedObservabilityConfig,
+  TagRoutingConflictPolicy,
+} from '../../../core/models/config-types.js';
+import type { RateLimitFallbackConfig } from '../../../core/models/workflow-types.js';
+import type { PermissionMode } from '../../../core/models/types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
+import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
+import {
+  OperationLineageUnavailableError,
+  OperationRecoveryError,
+} from '../../../core/workflow/operations/operation-recovery-error.js';
+import type { WorkflowOperationJournalContext } from '../../../core/workflow/types.js';
+import {
+  inheritResumeReportSnapshot,
+  RESUME_ARTIFACTS_FILE_NAME,
+  ResumeReportSnapshotSourceError,
+} from '../../../core/workflow/run/resume-report-snapshot.js';
+import { buildResumeReportSnapshotConsumerEntry } from '../../../core/workflow/run/resume-report-reference-snapshot.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
+  loadGlobalConfig,
   loadPersonaSessions,
+  loadProjectConfig,
   loadWorktreeSessions,
   resolveWorkflowConfigValues,
   updatePersonaSession,
@@ -13,7 +36,7 @@ import {
 } from '../../../infra/config/index.js';
 import {
   resolveConfigValueWithSource,
-  type ConfigValueSource,
+  toProviderResolutionSource,
 } from '../../../infra/config/resolveConfigValue.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
@@ -21,26 +44,55 @@ import {
   type WorkflowTraceDiscovery,
 } from '../../../core/workflow/observability/traceDiscovery.js';
 import { getGlobalConfigDir } from '../../../infra/config/paths.js';
-import { createSessionLog, generateSessionId, initNdjsonLog, type SessionLog } from '../../../infra/fs/index.js';
+import { createSessionLog, initNdjsonLog, type SessionLog } from '../../../infra/fs/index.js';
 import { isQuietMode } from '../../../shared/context.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
-import { createLogger, generateReportDir, getDebugPromptsLogFile, isValidReportDirName, preventSleep } from '../../../shared/utils/index.js';
-import { createProviderEventLogger, isProviderEventsEnabled } from '../../../shared/utils/providerEventLogger.js';
+import { getErrorMessage } from '../../../shared/utils/error.js';
+import {
+  createLogger,
+  isDebugEnabled,
+  isValidReportDirName,
+  preventSleep,
+} from '../../../shared/utils/index.js';
+import { createProviderEventLogger, isProviderEventsEnabled } from '../../../core/logging/providerEventLogger.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
-import { createUsageEventLogger, isUsageEventsEnabled } from '../../../shared/utils/usageEventLogger.js';
+import { createUsageEventLogger, isUsageEventsEnabled } from '../../../core/logging/usageEventLogger.js';
 import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../infra/observability/otelFoundation.js';
-import { PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX } from '../../../core/logging/contracts.js';
+import {
+  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+} from '../../../core/logging/contracts.js';
+import {
+  resolveEffectiveAutoRouting,
+} from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
-import { ensureWorktreeTaktGitignore } from '../../../infra/task/projectLocalTaktSync.js';
+import { ensureWorktreeTaktRuntimeProtection } from '../../../infra/task/projectLocalTaktSync.js';
+import { createOperationJournalStore } from '../../../infra/workflow/operation-journal-store.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
-import { RunMetaManager } from './runMeta.js';
+import type { RunMetaManager } from './runMeta.js';
 import { SessionLogger } from './sessionLogger.js';
-import { createTraceReportWriter } from './traceReportWriter.js';
+import type { TraceReportMode } from './traceReport.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import type { WorkflowExecutionOptions } from './types.js';
+import {
+  resolveRuntimeEnvironment,
+} from '../../../infra/config/runtime-provider/provider-environment.js';
+import type { CompanionReviewMode } from '../../../core/models/companion-types.js';
+import {
+  assertNoMixedWorkflowMcpConfiguration,
+  collectLegacyProviderSignals,
+  selectConfigTaktProviders,
+} from '../../../infra/config/runtime-provider/legacy-signals.js';
+import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
+import type { McpAssignmentSection } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
+import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
+import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
+import { validateWorkflowCallContracts } from '../../../infra/config/loaders/workflowResolver.js';
+import { resolveWorkflowCompanions } from '../../../infra/config/workflowCompanionResolution.js';
+import { resolveWorkflowSelector } from '../../../infra/config/workflowSelectorResolution.js';
 
 const log = createLogger('workflow');
 
@@ -64,22 +116,235 @@ export interface WorkflowExecutionBootstrap {
   sessionLogger: SessionLogger;
   sanitizeObservabilityText: (text: string) => string;
   shouldNotifyIterationLimit: boolean;
+  shouldNotifyRateLimit: boolean;
   shouldNotifyWorkflowComplete: boolean;
   shouldNotifyWorkflowAbort: boolean;
   currentProvider: WorkflowExecutionOptions['provider'];
   currentProviderSource: ProviderResolutionSource;
   configuredModel: string | undefined;
   configuredModelSource: ProviderResolutionSource;
+  personaProviders: WorkflowExecutionOptions['personaProviders'];
+  providerRouting: WorkflowExecutionOptions['providerRouting'];
+  providerLadders: ProviderLadderConfig | undefined;
+  internalAgentSeats: InternalAgentSeats | undefined;
+  selectorProvider: WorkflowExecutionOptions['selectorProvider'];
+  companionEnabled: boolean;
+  companionReviewMode: CompanionReviewMode;
+  companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
+  providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
+  providerOptions: WorkflowExecutionOptions['providerOptions'];
+  configProviderOptions: WorkflowExecutionOptions['providerOptions'];
+  providerOptionsProviderSource: ProviderResolutionSource | undefined;
+  providerPermissionMode: PermissionMode | undefined;
+  autoRouting: WorkflowExecutionOptions['autoRouting'];
+  rateLimitFallback: RateLimitFallbackConfig | undefined;
   effectiveWorkflowConfig: WorkflowConfig;
+  autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
+  onEffectiveAutoRoutingReached: () => void;
+  warnIfAutoStrategyUnused: () => void;
   providerEventLogger: ReturnType<typeof createProviderEventLogger>;
   usageEventLogger: ReturnType<typeof createUsageEventLogger>;
   observability: ResolvedObservabilityConfig;
   observabilityHandle: OtelFoundationHandle;
   analyticsEmitter: AnalyticsEmitter;
-  structuredCaller: CapabilityAwareStructuredCaller;
+  structuredCaller: ProviderNeutralStructuredCaller;
   savedSessions: Record<string, string>;
-  sessionUpdateHandler: (persona: string, sessionId: string) => void;
-  writeTraceReportOnce: ReturnType<typeof createTraceReportWriter>;
+  sessionUpdateHandler: (persona: string, sessionId: string | undefined) => void;
+  traceReportMode: TraceReportMode;
+  promptLogPath?: string;
+  operationJournal: WorkflowOperationJournalContext;
+  /**
+   * Runtime MCP assignment section (runtime-v1 only, issue #1137). Passed to
+   * the workflow engine so `OptionsBuilder` can resolve effective MCP servers
+   * per agent step.
+   */
+  mcpAssignment: McpAssignmentSection | undefined;
+}
+
+export interface WorkflowExecutionResumeLineage {
+  /** Best-effort report/artifact inheritance source, not operation ancestry. */
+  readonly sourceRunSlug?: string;
+  /** Runtime-only resume source for report/artifact fallback in the engine. */
+  readonly artifactResumeSource?: WorkflowExecutionOptions['resumeSource'];
+  /** Verified operation ancestry source to persist in run metadata. */
+  readonly publishedResumeSource?: WorkflowExecutionOptions['resumeSource'];
+  readonly operationJournalRunSlug: string;
+  readonly operationClaimToken: string;
+  readonly sourceOperationClaimTokens?: ReadonlySet<string>;
+}
+
+class AutoRoutingReachTracker {
+  private reached = false;
+
+  markReached(): void {
+    this.reached = true;
+  }
+
+  hasReached(): boolean {
+    return this.reached;
+  }
+}
+
+function resolveMaxStepsForRestoredIteration(
+  currentMaxSteps: WorkflowConfig['maxSteps'],
+  workflowMaxSteps: WorkflowConfig['maxSteps'],
+  initialIteration: number | undefined,
+): WorkflowConfig['maxSteps'] {
+  if (
+    currentMaxSteps === 'infinite'
+    || initialIteration === undefined
+    || initialIteration < currentMaxSteps
+  ) {
+    return currentMaxSteps;
+  }
+
+  if (workflowMaxSteps === 'infinite') {
+    let resumedMaxSteps = currentMaxSteps;
+    while (initialIteration >= resumedMaxSteps) {
+      const nextMaxSteps = resumedMaxSteps * 2;
+      if (!Number.isSafeInteger(nextMaxSteps)) {
+        throw new Error('Cannot resume workflow because the next max steps limit exceeds the safe integer range');
+      }
+      resumedMaxSteps = nextMaxSteps;
+    }
+    return resumedMaxSteps;
+  }
+
+  const requiredIncrements = Math.floor(
+    (initialIteration - currentMaxSteps) / workflowMaxSteps,
+  ) + 1;
+  const resumedMaxSteps = currentMaxSteps + requiredIncrements * workflowMaxSteps;
+  if (!Number.isSafeInteger(resumedMaxSteps)) {
+    throw new Error('Cannot resume workflow because the next max steps limit exceeds the safe integer range');
+  }
+  return resumedMaxSteps;
+}
+
+function resolveOperationJournalSourceClaims(
+  cwd: string,
+  immediateSourceRunSlug: string,
+): {
+  readonly journalRunSlug: string;
+  readonly claimTokens: ReadonlySet<string>;
+} {
+  const visited = new Set<string>();
+  const claimTokens = new Set<string>();
+  let journalRunSlug: string | undefined;
+  let sourceRunSlug: string | undefined = immediateSourceRunSlug;
+  while (sourceRunSlug !== undefined) {
+    if (!isValidReportDirName(sourceRunSlug)) {
+      throw new OperationRecoveryError(
+        `Resume source run slug "${sourceRunSlug}" is invalid`,
+      );
+    }
+    if (visited.has(sourceRunSlug)) {
+      throw new OperationRecoveryError(
+        `Resume source run ancestry contains a cycle at "${sourceRunSlug}"`,
+      );
+    }
+    visited.add(sourceRunSlug);
+    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug);
+    if (sourceMeta === null) {
+      throw new OperationLineageUnavailableError(
+        `Resume source run "${sourceRunSlug}" is missing`,
+      );
+    }
+    if (
+      sourceMeta.operationJournalRunSlug === undefined
+      || sourceMeta.operationClaimToken === undefined
+    ) {
+      throw new OperationLineageUnavailableError(
+        `Source run "${sourceRunSlug}" has incomplete operation journal ownership metadata`,
+      );
+    }
+    if (!isValidReportDirName(sourceMeta.operationJournalRunSlug)) {
+      throw new OperationRecoveryError(
+        `Source run "${sourceRunSlug}" has an invalid operation journal run slug`,
+      );
+    }
+    if (
+      journalRunSlug !== undefined
+      && sourceMeta.operationJournalRunSlug !== journalRunSlug
+    ) {
+      throw new OperationRecoveryError(
+        `Source run "${sourceRunSlug}" belongs to a different operation journal`,
+      );
+    }
+    journalRunSlug = sourceMeta.operationJournalRunSlug;
+    claimTokens.add(sourceMeta.operationClaimToken);
+    sourceRunSlug = sourceMeta.sourceRunSlug;
+  }
+  if (journalRunSlug === undefined) {
+    throw new OperationLineageUnavailableError(
+      'Resume source ancestry has no operation journal',
+    );
+  }
+  return {
+    journalRunSlug,
+    claimTokens,
+  };
+}
+
+export function resolveWorkflowExecutionResumeLineage(
+  cwd: string,
+  runSlug: string,
+  resumeSource: WorkflowExecutionOptions['resumeSource'],
+): WorkflowExecutionResumeLineage {
+  const sourceRunSlug = resumeSource?.sourceRunSlug;
+  if (resumeSource === undefined || sourceRunSlug === undefined) {
+    return {
+      operationJournalRunSlug: runSlug,
+      operationClaimToken: randomUUID(),
+      ...(resumeSource === undefined ? {} : {
+        artifactResumeSource: resumeSource,
+        publishedResumeSource: resumeSource,
+      }),
+    };
+  }
+
+  try {
+    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+  } catch (error) {
+    if (!(error instanceof OperationLineageUnavailableError)) {
+      throw error;
+    }
+    log.warn(
+      'Resume source operation lineage is unavailable; starting a new operation journal',
+      {
+        sourceRunSlug,
+        targetRunSlug: runSlug,
+        reason: getErrorMessage(error),
+      },
+    );
+    return {
+      sourceRunSlug,
+      artifactResumeSource: resumeSource,
+      operationJournalRunSlug: runSlug,
+      operationClaimToken: randomUUID(),
+    };
+  }
+}
+
+export function resolveWorkflowExecutionResumeSourceLineage(
+  cwd: string,
+  resumeSource: NonNullable<WorkflowExecutionOptions['resumeSource']>,
+): WorkflowExecutionResumeLineage {
+  const sourceRunSlug = resumeSource.sourceRunSlug;
+  if (sourceRunSlug === undefined) {
+    throw new OperationRecoveryError(
+      'Workflow resume requires a source run slug with operation lineage',
+    );
+  }
+
+  const sourceClaims = resolveOperationJournalSourceClaims(cwd, sourceRunSlug);
+  return {
+    sourceRunSlug,
+    artifactResumeSource: resumeSource,
+    publishedResumeSource: resumeSource,
+    operationJournalRunSlug: sourceClaims.journalRunSlug,
+    operationClaimToken: randomUUID(),
+    sourceOperationClaimTokens: sourceClaims.claimTokens,
+  };
 }
 
 export async function createWorkflowExecutionBootstrap(
@@ -87,8 +352,15 @@ export async function createWorkflowExecutionBootstrap(
   task: string,
   cwd: string,
   options: WorkflowExecutionOptions,
+  runBootstrap: WorkflowRunBootstrap,
+  resumeLineage: WorkflowExecutionResumeLineage,
 ): Promise<WorkflowExecutionBootstrap> {
-  const { headerPrefix = 'Running Workflow:', interactiveUserInput = false } = options;
+  const effectiveMaxSteps = resolveMaxStepsForRestoredIteration(
+    options.maxStepsOverride ?? workflowConfig.maxSteps,
+    workflowConfig.maxSteps,
+    options.initialIterationOverride,
+  );
+  const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
   const projectCwd = options.projectCwd;
   const safeWorkflowName = sanitizeTerminalText(workflowConfig.name);
 
@@ -101,12 +373,14 @@ export async function createWorkflowExecutionBootstrap(
         displayLabel: options.taskDisplayLabel,
       })
     : undefined;
-  const out = createOutputFns(prefixWriter);
+  const out = createOutputFns(prefixWriter, outputMode);
   out.header(`${headerPrefix} ${safeWorkflowName}`);
 
   const displayRef = { current: null as StreamDisplay | null };
   const handlerRef = { current: null as ReturnType<StreamDisplay['createHandler']> | null };
-  const streamHandler = prefixWriter
+  const streamHandler = outputMode === 'silent'
+    ? (): void => {}
+    : prefixWriter
     ? createPrefixedStreamHandler(prefixWriter)
     : (event: DisplayStreamEvent): void => {
         if (!displayRef.current || event.type === 'result') {
@@ -118,31 +392,103 @@ export async function createWorkflowExecutionBootstrap(
         handlerRef.current(event);
       };
 
-  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint);
+  const isRetry = Boolean(
+    options.resumeSource?.resumeMode
+      || options.startStep
+      || options.retryNote
+      || options.resumePoint
+      || options.restartPoint,
+  );
+  const shouldLoadSavedSessions = isRetry && options.restartPoint === undefined;
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
 
-  const runSlug = options.reportDirName ?? generateReportDir(task);
-  if (!isValidReportDirName(runSlug)) {
-    throw new Error(`Invalid reportDirName: ${runSlug}`);
-  }
+  const { runSlug, runPaths } = runBootstrap;
   if (isWorktree) {
-    ensureWorktreeTaktGitignore(cwd);
+    ensureWorktreeTaktRuntimeProtection(cwd);
   }
 
-  const runPaths = buildRunPaths(cwd, runSlug);
-  const sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
+  // resume（requeue / retry / instruct、attachment 有無を問わず）は source と
+  // 異なる run slug を使う。旧 run の reports/ を継承しないと {report:X}
+  // 参照が壊れるため、bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug
+  // 決定 → target 安全検証 → source 検証 → snapshot 作成 → manifest 保存
+  // → RunMetaManager 作成 → logs/engine 初期化。source が取得不能な場合だけは
+  // fix 側の選択的な best-effort 継承へ委ね、target の不整合や公開競合は
+  // ここで失敗させる。
+  const {
+    sourceRunSlug,
+    publishedResumeSource,
+    operationClaimToken,
+    operationJournalRunSlug,
+    sourceOperationClaimTokens,
+  } = resumeLineage;
+  const operationJournalPaths = buildRunPaths(cwd, operationJournalRunSlug);
+  const operationJournal: WorkflowOperationJournalContext = {
+    store: createOperationJournalStore(operationJournalPaths.operationJournalAbs),
+    journalRunSlug: operationJournalRunSlug,
+    claimToken: operationClaimToken,
+    ...(sourceOperationClaimTokens === undefined
+      ? {}
+      : { sourceClaimTokens: sourceOperationClaimTokens }),
+  };
+  let resumeArtifactsManifest: ReturnType<typeof inheritResumeReportSnapshot> | undefined;
+  if (sourceRunSlug && sourceRunSlug !== runSlug) {
+    try {
+      const resumeReportConsumer = options.resumePoint === undefined
+        ? undefined
+        : buildResumeReportSnapshotConsumerEntry({
+          cwd,
+          projectCwd,
+          sourceRunSlug,
+          workflow: workflowConfig,
+          resumePoint: options.resumePoint,
+          workflowCallResolver: options.workflowCallResolver,
+        });
+      resumeArtifactsManifest = inheritResumeReportSnapshot({
+        cwd,
+        sourceRunSlug,
+        targetRunSlug: runSlug,
+        ...(resumeReportConsumer === undefined
+          ? {}
+          : { resumeReportConsumers: [resumeReportConsumer] }),
+      });
+    } catch (error) {
+      if (!(error instanceof ResumeReportSnapshotSourceError)) {
+        throw error;
+      }
+      log.warn('Resume report snapshot source unavailable; continuing without inherited snapshot', {
+        sourceRunSlug,
+        targetRunSlug: runSlug,
+        reason: getErrorMessage(error),
+        fallbackUsed: true,
+      });
+    }
+  }
+  if (resumeArtifactsManifest) {
+    log.debug('Inherited resume report snapshot', {
+      sourceRunSlug: resumeArtifactsManifest.sourceRunSlug,
+      targetRunSlug: resumeArtifactsManifest.targetRunSlug,
+      files: resumeArtifactsManifest.files.length,
+    });
+  }
+  const sessionLog = createSessionLog(
+    task,
+    projectCwd,
+    workflowConfig.name,
+    { startTime: runBootstrap.startedAt },
+  );
   const globalConfig = resolveWorkflowConfigValues(projectCwd, [
     'notificationSound',
     'notificationSoundEvents',
-    'provider',
     'rateLimitFallback',
     'runtime',
     'preventSleep',
-    'model',
     'logging',
     'analytics',
+    'telemetry',
     'observability',
+    'autoRouting',
+    'workflowMcpServers',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
@@ -158,103 +504,218 @@ export async function createWorkflowExecutionBootstrap(
         sanitizeText: sanitizeObservabilityText,
       })
     : undefined;
-  const runMetaManager = new RunMetaManager(
+  const runMetaManager = runBootstrap.publishRunMeta({
     runPaths,
     task,
-    workflowConfig.name,
-    options.directResume,
-    traceDiscovery ? { traceDiscovery } : undefined,
-  );
-  const workflowSessionId = generateSessionId();
+    workflowName: workflowConfig.name,
+    ...(publishedResumeSource === undefined
+      ? {}
+      : { resumeSource: publishedResumeSource }),
+    options: {
+      ...(traceDiscovery ? { traceDiscovery } : {}),
+      // manifest（ファイル一覧と hash の SSOT）への参照のみを meta.json に残す。
+      // manifest は reports スナップショットの内側の予約名（公開を単一 rename に
+      // 集約するため）。
+      ...(resumeArtifactsManifest
+        ? { resumeArtifactsRel: `${runPaths.reportsRel}/${RESUME_ARTIFACTS_FILE_NAME}` }
+        : {}),
+      operationJournalRunSlug,
+      operationClaimToken,
+      ...(options.prContext ? { prContext: options.prContext } : {}),
+    },
+  });
+  const workflowSessionId = runBootstrap.sessionId;
   const ndjsonLogPath = initNdjsonLog(
     workflowSessionId,
-    sanitizeTextForStorage(task, allowSensitiveData),
+    task,
     workflowConfig.name,
-    { logsDir: runPaths.logsAbs },
+    {
+      logsDir: runPaths.logsAbs,
+      startTime: runBootstrap.startedAt,
+    },
   );
-  const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);
+  const promptLogPath = isDebugEnabled()
+    ? join(runPaths.logsAbs, `${workflowSessionId}-prompts.jsonl`)
+    : undefined;
+  const sessionLogger = new SessionLogger(
+    ndjsonLogPath,
+    allowSensitiveData,
+    promptLogPath,
+  );
   if (options.interactiveMetadata) {
     sessionLogger.writeInteractiveMetadata(options.interactiveMetadata);
   }
 
-  const shouldNotify = globalConfig.notificationSound !== false;
+  const shouldNotify = outputMode === 'terminal' && globalConfig.notificationSound !== false;
   const shouldNotifyIterationLimit = shouldNotify && globalConfig.notificationSoundEvents?.iterationLimit !== false;
+  const shouldNotifyRateLimit = shouldNotify;
   const shouldNotifyWorkflowComplete = shouldNotify && globalConfig.notificationSoundEvents?.workflowComplete !== false;
   const shouldNotifyWorkflowAbort = shouldNotify && globalConfig.notificationSoundEvents?.workflowAbort !== false;
-  const currentProvider = options.provider ?? globalConfig.provider;
-  if (!currentProvider) {
-    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
-  }
-  const currentProviderSource = resolveProviderFieldSource(
-    projectCwd,
-    'provider',
-    options.provider,
-    options.providerSource,
-  );
+  const resolvedProvider = options.provider !== undefined
+    ? {
+        value: options.provider,
+        source: options.providerSource ?? 'cli' as ProviderResolutionSource,
+      }
+    : (() => {
+        const resolved = resolveConfigValueWithSource(projectCwd, 'provider');
+        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
+      })();
+  const resolvedModel = options.model !== undefined
+    ? {
+        value: options.model,
+        source: options.modelSource ?? 'cli' as ProviderResolutionSource,
+      }
+    : (() => {
+        const resolved = resolveConfigValueWithSource(projectCwd, 'model');
+        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
+      })();
+  const inheritedAutoRouting = resolveEffectiveAutoRouting(globalConfig.autoRouting);
 
-  const configuredModel = options.model ?? globalConfig.model;
-  const configuredModelSource = resolveProviderFieldSource(
+  // Configuration-format anti-corruption boundary (issue #1136): compile either legacy
+  // config or an active runtime.yaml provider section into the shared engine-options bundle.
+  // In legacy mode this passes the resolved legacy values through unchanged.
+  const legacyProviderEnvironment: LegacyProviderEnvironmentInput = {
+    provider: resolvedProvider.value,
+    providerSource: resolvedProvider.source,
+    model: resolvedModel.value,
+    modelSource: resolvedModel.source,
+    personaProviders: options.personaProviders,
+    providerRouting: options.providerRouting,
+    autoRouting: inheritedAutoRouting,
+    providerOptions: options.providerOptions,
+    taktProviders: selectConfigTaktProviders(
+      loadProjectConfig(projectCwd).taktProviders,
+      loadGlobalConfig().taktProviders,
+    ),
+  };
+  const resolvedRuntimeEnvironment = resolveRuntimeEnvironment({
     projectCwd,
-    'model',
-    options.model,
-    options.modelSource,
-  );
+    executionCwd: cwd,
+    legacy: legacyProviderEnvironment,
+    legacySignals: collectLegacyProviderSignals(
+      legacyProviderEnvironment,
+      options.providerOptionsSource,
+    ),
+  });
+  const providerEnvironment = resolvedRuntimeEnvironment.providerEnvironment;
+  const companionEnabled = resolvedRuntimeEnvironment.companionEnabled;
+  // Legacy workflow MCP mode (`mcp_servers` / `workflow_mcp_servers`) must not
+  // coexist with an active `mcp` section in `runtime.yaml` (order.md:112-118).
+  // Collect legacy MCP signals from the reachable workflow graph and fail-fast on mix
+  // before any agent starts.
+  if (providerEnvironment.mcpAssignment !== undefined) {
+    assertNoMixedWorkflowMcpConfiguration(
+      providerEnvironment.mcpAssignment,
+      workflowConfig,
+      globalConfig.workflowMcpServers,
+      {
+        workflowCallResolver: options.workflowCallResolver,
+        projectCwd,
+        lookupCwd: cwd,
+      },
+    );
+  }
+  const currentProvider = providerEnvironment.provider;
+  // Fail fast when neither the legacy config nor a runtime.yaml profile resolves a provider.
+  // A runtime-v1 pool default legitimately leaves the fixed provider unset (auto routing
+  // selects the candidate per step), so only an environment without auto routing is an error.
+  if (currentProvider === undefined && providerEnvironment.autoRouting === undefined) {
+    // Keep the guidance format-agnostic: in runtime-v1 mode, pointing at config.yaml would
+    // steer the user into a mixed configuration on the next run.
+    throw new Error(
+      'No provider configured. Set `provider.defaults` in runtime.yaml or "provider" in ~/.takt/config.yaml',
+    );
+  }
+  const currentProviderSource = providerEnvironment.providerSource;
+  const configuredModel = providerEnvironment.model;
+  const configuredModelSource = providerEnvironment.modelSource;
+  const effectivePersonaProviders = providerEnvironment.personaProviders;
+  const effectiveProviderRouting = providerEnvironment.providerRouting;
+  const effectiveProviderLadders = providerEnvironment.providerLadders;
+  const effectiveProviderOptions = providerEnvironment.providerOptions;
+  const providerRoutingTagConflictPolicy = providerEnvironment.tagConflictPolicy;
+  const autoRoutingReachTracker = new AutoRoutingReachTracker();
+  const onEffectiveAutoRoutingReached = (): void => {
+    autoRoutingReachTracker.markReached();
+  };
+  const warnIfAutoStrategyUnused = (): void => {
+    if (options.autoStrategy !== undefined && !autoRoutingReachTracker.hasReached()) {
+      log.warn('--auto-strategy was ignored because execution did not reach a workflow with effective auto_routing');
+    }
+  };
+  const autoStrategyOverride = options.autoStrategy;
   const effectiveWorkflowConfig: WorkflowConfig = {
     ...workflowConfig,
-    rateLimitFallback: workflowConfig.rateLimitFallback ?? globalConfig.rateLimitFallback,
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
-    ...(options.maxStepsOverride !== undefined ? { maxSteps: options.maxStepsOverride } : {}),
+    maxSteps: effectiveMaxSteps,
   };
+  inheritWorkflowConfigMetadata(workflowConfig, effectiveWorkflowConfig);
+  let selectorProvider = options.selectorProvider;
+  if (selectorProvider === undefined) {
+    const selectorResolution = resolveWorkflowSelector(effectiveWorkflowConfig, {
+      projectCwd,
+      lookupCwd: cwd,
+      overrides: options.selectorProviderOverrides,
+      companionEnabled,
+      workflowCallResolver: options.workflowCallResolver,
+      providerEnvironment,
+      providerConfigMode: resolvedRuntimeEnvironment.providerConfigMode,
+    });
+    selectorProvider = selectorResolution.applies
+      ? selectorResolution.selectorProvider
+      : undefined;
+  }
+  const companionProviders = Object.fromEntries(
+    companionEnabled
+      ? resolveWorkflowCompanions(effectiveWorkflowConfig, providerEnvironment, {
+          projectCwd,
+          lookupCwd: cwd,
+          workflowCallResolver: options.workflowCallResolver,
+        })
+      : [],
+  );
+  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd);
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,
     runId: runSlug,
-    provider: currentProvider,
-    step: options.startStep ?? workflowConfig.initialStep,
     enabled: isProviderEventsEnabled(globalConfig),
   });
   const usageEventLogger = createUsageEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,
     runId: runSlug,
-    provider: currentProvider,
-    providerModel: configuredModel ?? '(default)',
-    step: options.startStep ?? workflowConfig.initialStep,
-    stepType: 'normal',
     enabled: isUsageEventsEnabled(globalConfig),
   });
 
+  const analyticsWriterOptions = globalConfig.telemetry?.routingDecisions === true
+    ? { routingEventsDir: join(projectCwd, '.takt', 'events') }
+    : undefined;
   initAnalyticsWriter(
     globalConfig.analytics?.enabled === true,
     globalConfig.analytics?.eventsPath ?? join(getGlobalConfigDir(), 'analytics', 'events'),
+    analyticsWriterOptions,
   );
   if (globalConfig.preventSleep) {
     preventSleep();
   }
 
-  const analyticsEmitter = new AnalyticsEmitter(runSlug, currentProvider, configuredModel ?? '(default)');
-  const structuredCaller = new CapabilityAwareStructuredCaller();
-  const savedSessions = isRetry
+  const analyticsEmitter = new AnalyticsEmitter(
+    runSlug,
+    interactiveUserInput,
+    workflowSessionId,
+  );
+  const structuredCaller = new ProviderNeutralStructuredCaller();
+  const savedSessions = shouldLoadSavedSessions
     ? (isWorktree
       ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
       : loadPersonaSessions(projectCwd, currentProvider))
     : {};
   const sessionUpdateHandler = isWorktree
-    ? (personaName: string, personaSessionId: string) =>
+    ? (personaName: string, personaSessionId: string | undefined) =>
         updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
-    : (persona: string, personaSessionId: string) =>
+    : (persona: string, personaSessionId: string | undefined) =>
         updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
-  const writeTraceReportOnce = createTraceReportWriter({
-    sessionLogger,
-    ndjsonLogPath,
-    tracePath: join(runPaths.runRootAbs, 'trace.md'),
-    workflowName: workflowConfig.name,
-    task,
-    runSlug,
-    promptLogPath: getDebugPromptsLogFile() ?? undefined,
-    mode: traceReportMode,
-    logger: log,
-  });
   const observabilityOptions = globalConfig.observability.enabled
     && (
       globalConfig.observability.sessionLogExporter
@@ -266,7 +727,10 @@ export async function createWorkflowExecutionBootstrap(
           ? {
               sessionLogExporter: {
                 runId: runSlug,
-                shadowLogPath: join(runPaths.logsAbs, `${workflowSessionId}-otel-session-shadow.jsonl`),
+                shadowLogPath: join(
+                  runPaths.logsAbs,
+                  `${workflowSessionId}${OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX}`,
+                ),
                 sanitizedTask: sanitizeTextForStorage(task, allowSensitiveData),
                 workflowName: workflowConfig.name,
               },
@@ -309,13 +773,34 @@ export async function createWorkflowExecutionBootstrap(
     sessionLogger,
     sanitizeObservabilityText,
     shouldNotifyIterationLimit,
+    shouldNotifyRateLimit,
     shouldNotifyWorkflowComplete,
     shouldNotifyWorkflowAbort,
     currentProvider,
     currentProviderSource,
     configuredModel,
     configuredModelSource,
+    autoRouting: providerEnvironment.autoRouting,
+    rateLimitFallback: globalConfig.rateLimitFallback,
+    personaProviders: effectivePersonaProviders,
+    providerRouting: effectiveProviderRouting,
+    providerLadders: effectiveProviderLadders,
+    internalAgentSeats: providerEnvironment.internalAgents,
+    selectorProvider,
+    companionEnabled,
+    companionReviewMode: resolvedRuntimeEnvironment.companionReviewMode,
+    companionProviders,
+    providerRoutingTagConflictPolicy,
+    providerOptions: effectiveProviderOptions,
+    configProviderOptions: resolvedRuntimeEnvironment.configProviderOptions,
+    providerOptionsProviderSource: resolvedRuntimeEnvironment.providerConfigMode === 'runtime-v1'
+      ? currentProviderSource
+      : undefined,
+    providerPermissionMode: providerEnvironment.permissionMode,
     effectiveWorkflowConfig,
+    autoStrategyOverride,
+    onEffectiveAutoRoutingReached,
+    warnIfAutoStrategyUnused,
     providerEventLogger,
     usageEventLogger,
     observability: globalConfig.observability,
@@ -324,44 +809,11 @@ export async function createWorkflowExecutionBootstrap(
     structuredCaller,
     savedSessions,
     sessionUpdateHandler,
-    writeTraceReportOnce,
+    traceReportMode,
+    ...(promptLogPath === undefined ? {} : { promptLogPath }),
+    operationJournal,
+    mcpAssignment: providerEnvironment.mcpAssignment,
   };
-}
-
-function mapConfigSourceToResolutionSource(source: ConfigValueSource): ProviderResolutionSource {
-  switch (source) {
-    case 'project':
-      return 'project';
-    case 'global':
-      return 'global';
-    case 'default':
-      return 'default';
-    default:
-      // 'env' / 'workflow' do not occur for provider/model in bootstrap context.
-      return 'default';
-  }
-}
-
-function resolveProviderFieldSource(
-  projectCwd: string,
-  key: 'provider' | 'model',
-  cliValue: string | undefined,
-  cliSource: ProviderResolutionSource | undefined,
-): ProviderResolutionSource {
-  if (cliValue !== undefined) {
-    return cliSource ?? 'cli';
-  }
-  try {
-    const resolved = resolveConfigValueWithSource(projectCwd, key);
-    if (resolved.value !== undefined) {
-      return mapConfigSourceToResolutionSource(resolved.source);
-    }
-  } catch {
-    // Config resolution may fail in test contexts where paths are synthetic;
-    // fall back to 'global' as a reasonable default since the value itself
-    // was loaded successfully via resolveWorkflowConfigValues.
-  }
-  return 'global';
 }
 
 export { detectStepType, isQuietMode };

@@ -9,7 +9,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -42,25 +48,10 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 
 import { loadWorkflow } from '../infra/config/loaders/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
-import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 
 const loadWorkflowConfig = loadWorkflow;
-const listBuiltinWorkflowLabels = listBuiltinWorkflowNames;
-const taktManagedPrRouteFilter = {
-  head_branch: 'takt/*',
-  managed_by_takt: true,
-  same_repository: true,
-  draft: false,
-};
-const autoImprovementLoopBaseBranch = {
-  name: 'improve',
-  create_if_missing: {
-    from: 'main',
-    push: true,
-  },
-};
-
 // --- Test helpers ---
 
 function createTestDir(): string {
@@ -69,249 +60,28 @@ function createTestDir(): string {
   return dir;
 }
 
-function expectAutoImprovementLoopRouteContext(config: NonNullable<ReturnType<typeof loadWorkflowConfig>>) {
-  const routeContext = config.steps.find((step) => step.name === 'route_context');
-  expect(routeContext?.kind).toBe('system');
-  expect(routeContext?.systemInputs).toHaveLength(6);
-  expect(routeContext?.systemInputs).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'task_context', as: 'task' }),
-    expect.objectContaining({ type: 'branch_context', as: 'branch' }),
-    expect.objectContaining({
-      type: 'pr_list',
-      as: 'prs',
-      where: taktManagedPrRouteFilter,
-    }),
-    expect.objectContaining({
-      type: 'issue_list',
-      as: 'tracked_issues',
-      exclude_selected_from: 'selected_issue',
-    }),
-    expect.objectContaining({
-      type: 'pr_selection',
-      as: 'selected_pr',
-      where: taktManagedPrRouteFilter,
-    }),
-    expect.objectContaining({
-      type: 'issue_selection',
-      as: 'selected_issue',
-    }),
-  ]));
-  expect(routeContext?.rules).toEqual(expect.arrayContaining([
-    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == true', next: 'plan_from_existing_pr' }),
-    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true', next: 'plan_from_issue' }),
-  ]));
-}
-
-function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnType<typeof loadWorkflowConfig>>) {
-  const planFromExistingPr = config.steps.find((step) => step.name === 'plan_from_existing_pr') as Record<string, unknown> | undefined;
-  const planFromIssue = config.steps.find((step) => step.name === 'plan_from_issue') as Record<string, unknown> | undefined;
-  const planFreshImprovement = config.steps.find((step) => step.name === 'plan_fresh_improvement') as Record<string, unknown> | undefined;
-  const enqueueFromPr = config.steps.find((step) => step.name === 'enqueue_from_pr') as Record<string, unknown> | undefined;
-  const prepareMerge = config.steps.find((step) => step.name === 'prepare_merge') as Record<string, unknown> | undefined;
-  const resolveConflicts = config.steps.find((step) => step.name === 'resolve_conflicts') as Record<string, unknown> | undefined;
-  const enqueueConflictResolutionTask = config.steps.find((step) => step.name === 'enqueue_conflict_resolution_task') as Record<string, unknown> | undefined;
-  const mergePr = config.steps.find((step) => step.name === 'merge_pr') as Record<string, unknown> | undefined;
-  const rejectPr = config.steps.find((step) => step.name === 'reject_pr') as Record<string, unknown> | undefined;
-  const planFromExistingPrStructuredOutput = planFromExistingPr?.structuredOutput as
-    | { schemaRef: string; schema: { properties?: Record<string, unknown> } }
-    | undefined;
-  const planFromIssueStructuredOutput = planFromIssue?.structuredOutput as
-    | { schemaRef: string; schema: { properties?: Record<string, unknown> } }
-    | undefined;
-  const planFreshImprovementStructuredOutput = planFreshImprovement?.structuredOutput as
-    | { schemaRef: string; schema: { properties?: Record<string, unknown> } }
-    | undefined;
-
-  expect(String(planFromExistingPr?.instruction)).toContain('{context:route_context.selected_pr.number}');
-  expect(String(planFromExistingPr?.instruction)).toContain('reject_pr');
-  expect(String(planFromExistingPr?.instruction)).toContain('enqueue_from_pr');
-  expect(String(planFromExistingPr?.instruction)).toContain('prepare_merge');
-  expect(String(planFromExistingPr?.instruction)).not.toContain('comment_on_pr');
-  expect(String(planFromExistingPr?.instruction)).not.toContain('pr_comment_markdown');
-  expect(String(planFromExistingPr?.instruction)).not.toContain('- noop');
-  expect(planFromExistingPr?.rules).toEqual([
-    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "enqueue_from_pr"', next: 'enqueue_from_pr' }),
-    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "prepare_merge"', next: 'prepare_merge' }),
-    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "reject_pr"', next: 'reject_pr' }),
-    expect.objectContaining({ condition: 'true', next: 'ABORT' }),
-  ]);
-  expect(planFromExistingPrStructuredOutput?.schemaRef).toBe('pr-followup-task');
-  expect(planFromExistingPrStructuredOutput?.schema).toEqual(expect.objectContaining({
-    type: 'object',
-    required: ['action', 'task_markdown'],
-    additionalProperties: false,
-    properties: expect.objectContaining({
-      action: {
-        type: 'string',
-        enum: ['enqueue_from_pr', 'prepare_merge', 'reject_pr'],
-      },
-      task_markdown: {
-        type: 'string',
-      },
-    }),
-  }));
-  expect(rejectPr?.effects).toEqual([
-    expect.objectContaining({
-      type: 'close_pr',
-      pr: '{context:route_context.selected_pr.number}',
-    }),
-  ]);
-  expect(enqueueFromPr?.effects).toEqual([
-    expect.objectContaining({
-      type: 'enqueue_task',
-      mode: 'from_pr',
-      pr: '{context:route_context.selected_pr.number}',
-      workflow: 'takt-default',
-      base_branch: autoImprovementLoopBaseBranch,
-    }),
-  ]);
-  expect(prepareMerge?.effects).toEqual([
-    expect.objectContaining({
-      type: 'sync_with_root',
-      pr: '{context:route_context.selected_pr.number}',
-    }),
-  ]);
-  expect(resolveConflicts?.effects).toEqual([
-    expect.objectContaining({
-      type: 'resolve_conflicts_with_ai',
-      pr: '{context:route_context.selected_pr.number}',
-    }),
-  ]);
-  expect(enqueueConflictResolutionTask?.effects).toEqual([
-    expect.objectContaining({
-      type: 'enqueue_task',
-      mode: 'from_pr',
-      pr: '{context:route_context.selected_pr.number}',
-      workflow: 'takt-default',
-      base_branch: autoImprovementLoopBaseBranch,
-    }),
-  ]);
-  expect(mergePr?.effects).toEqual([
-    expect.objectContaining({
-      type: 'merge_pr',
-      pr: '{context:route_context.selected_pr.number}',
-    }),
-  ]);
-  expect(planFromIssue?.rules).toEqual(expect.arrayContaining([
-    expect.objectContaining({ condition: 'structured.plan_from_issue.action == "enqueue_new_task"', next: 'enqueue_from_issue' }),
-    expect.objectContaining({ condition: 'structured.plan_from_issue.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
-  ]));
-  expect((planFromIssueStructuredOutput?.schema.properties?.action as { enum?: string[] } | undefined)?.enum).toEqual([
-    'enqueue_new_task',
-    'wait_before_next_scan',
-  ]);
-  expect(planFromIssueStructuredOutput?.schema).toEqual(expect.objectContaining({
-      required: expect.arrayContaining([
-        'action',
-        'title',
-        'type',
-        'scope',
-        'summary',
-      'goals',
-      'acceptance_criteria',
-      'issue',
-    ]),
-      properties: expect.objectContaining({
-        title: { type: 'string' },
-        type: expect.objectContaining({
-          enum: ['feature', 'bug', 'chore', 'docs'],
+function expectWorkflowLoadIssue(
+  workflowName: string,
+  projectDir: string,
+  expectedPath: readonly PropertyKey[],
+): void {
+  try {
+    loadWorkflow(workflowName, projectDir);
+    expect.fail(`Expected ${workflowName} to fail workflow validation`);
+  } catch (error) {
+    expect(error).toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: expectedPath,
+          message: expect.stringContaining('runtime.yaml'),
         }),
-        summary: { type: 'string' },
-        goals: expect.objectContaining({ type: 'array' }),
-        acceptance_criteria: expect.objectContaining({ type: 'array' }),
-        labels: expect.objectContaining({ type: 'array' }),
-        issue: expect.objectContaining({
-          properties: expect.objectContaining({
-            create: { type: 'boolean' },
-          }),
-          required: ['create'],
-        }),
-    }),
-    allOf: expect.arrayContaining([
-      expect.objectContaining({
-        then: expect.objectContaining({
-          properties: expect.objectContaining({
-            goals: expect.objectContaining({ minItems: 1 }),
-            acceptance_criteria: expect.objectContaining({ minItems: 2 }),
-          }),
-        }),
-      }),
-    ]),
-  }));
-  expect(planFreshImprovement?.rules).toEqual(expect.arrayContaining([
-    expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' }),
-    expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
-  ]));
-  expect((planFreshImprovementStructuredOutput?.schema.properties?.action as { enum?: string[] } | undefined)?.enum).toEqual([
-    'enqueue_new_task',
-    'wait_before_next_scan',
-  ]);
-  expect(config.steps.find((step) => step.name === 'comment_on_existing_pr')).toBeUndefined();
-  expect(config.steps.find((step) => step.name === 'confirm_issue_enqueue')).toBeUndefined();
-}
-
-function expectAutoImprovementLoopPlanningGuidance(
-  config: NonNullable<ReturnType<typeof loadWorkflowConfig>>,
-  language: 'en' | 'ja',
-) {
-  const planFromIssue = config.steps.find((step) => step.name === 'plan_from_issue') as Record<string, unknown> | undefined;
-  const planFreshImprovement = config.steps.find((step) => step.name === 'plan_fresh_improvement') as Record<string, unknown> | undefined;
-  const expectations = language === 'en'
-    ? {
-        oneTask: 'exactly one next improvement task',
-        userValue: 'user value',
-        completion: 'completion criteria',
-        duplicate: /duplicate|overlap/,
-        cosmetic: 'cosmetic-only',
-        waitAction: 'wait_before_next_scan',
-        priority: 'bug fix',
-        prSnapshot: '{context:route_context.prs}',
-        issueSnapshot: '{context:route_context.tracked_issues}',
-        issueCount: '{context:route_context.tracked_issues.length}',
-        issueTitle: 'title',
-        issueType: 'type',
-        taskTemplate: 'TAKT renders summary',
-        titleGuard: 'Task Order',
-      }
-    : {
-        oneTask: '改善 task を 1 件だけ計画してください',
-        userValue: 'ユーザー価値',
-        completion: '完了条件',
-        duplicate: '重複',
-        cosmetic: 'cosmetic-only',
-        waitAction: 'wait_before_next_scan',
-        priority: 'バグ修正',
-        prSnapshot: '{context:route_context.prs}',
-        issueSnapshot: '{context:route_context.tracked_issues}',
-        issueCount: '{context:route_context.tracked_issues.length}',
-        issueTitle: 'title',
-        issueType: 'type',
-        taskTemplate: 'TAKT が summary',
-        titleGuard: 'タスク指示書',
-      };
-
-  for (const instruction of [String(planFromIssue?.instruction), String(planFreshImprovement?.instruction)]) {
-    expect(instruction).toContain(expectations.oneTask);
-    expect(instruction).toContain(expectations.userValue);
-    expect(instruction).toContain(expectations.completion);
-    expect(instruction).toContain(expectations.cosmetic);
-    expect(instruction).toContain(expectations.waitAction);
-    expect(instruction).toContain(expectations.priority);
-    expect(instruction).toContain(expectations.prSnapshot);
-    expect(instruction).toContain(expectations.issueSnapshot);
-    expect(instruction).toContain(expectations.issueCount);
-    expect(instruction).toContain(expectations.issueTitle);
-    expect(instruction).toContain(expectations.issueType);
-    expect(instruction).toContain(expectations.taskTemplate);
-    expect(instruction).toContain(expectations.titleGuard);
-    expect(instruction).toMatch(expectations.duplicate);
-    expect(instruction).not.toContain('- noop');
+      ]),
+    });
   }
 }
 
-describe('Workflow Loader IT: builtin workflow loading', () => {
+describe('Workflow Loader IT: workflow validation', () => {
   let testDir: string;
-  const builtinNames = listBuiltinWorkflowLabels(process.cwd(), { includeDisabled: true });
 
   beforeEach(() => {
     testDir = createTestDir();
@@ -322,259 +92,9 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  for (const name of builtinNames) {
-    it(`should load builtin workflow: ${name}`, () => {
-      const config = loadWorkflow(name, testDir);
-
-      expect(config).not.toBeNull();
-      expect(config!.name).toBe(name);
-      expect(config!.steps.length).toBeGreaterThan(0);
-      expect(config!.initialStep).toBeDefined();
-      const maxSteps = (config as Record<string, unknown>).maxSteps;
-      expect(maxSteps === 'infinite' || typeof maxSteps === 'number').toBe(true);
-      if (typeof maxSteps === 'number') {
-        expect(maxSteps).toBeGreaterThan(0);
-      }
-    });
-  }
-
   it('should return null for non-existent workflow', () => {
     const config = loadWorkflow('non-existent-workflow-xyz', testDir);
     expect(config).toBeNull();
-  });
-
-  it('should include and load audit-e2e as a builtin workflow', () => {
-    expect(builtinNames).toContain('audit-e2e');
-
-    const config = loadWorkflowConfig('audit-e2e', testDir);
-    expect(config).not.toBeNull();
-
-    const planStep = config!.steps.find((step) => step.name === 'plan');
-    const auditStep = config!.steps.find((step) => step.name === 'audit');
-
-    expect(planStep).toBeDefined();
-    expect(auditStep).toBeDefined();
-  });
-
-  it('should include and load auto-improvement-loop as a builtin workflow', () => {
-    expect(builtinNames).toContain('auto-improvement-loop');
-
-    const config = loadWorkflowConfig('auto-improvement-loop', testDir);
-    expect(config).not.toBeNull();
-    expect((config as Record<string, unknown>).maxSteps).toBe('infinite');
-    expect(config!.schemas).toEqual(expect.objectContaining({
-      'followup-task': 'followup-task',
-      'pr-followup-task': 'pr-followup-task',
-    }));
-    expectAutoImprovementLoopRouteContext(config!);
-    expectAutoImprovementLoopDownstreamContract(config!);
-  });
-
-  it('should keep repo-wide issue routing and managed PR contract aligned across builtin auto-improvement-loop workflows', () => {
-    for (const language of ['en', 'ja'] as const) {
-      const config = loadWorkflowFromFile(
-        join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),
-        testDir,
-      );
-      expectAutoImprovementLoopRouteContext(config);
-      expectAutoImprovementLoopDownstreamContract(config);
-      expectAutoImprovementLoopPlanningGuidance(config, language);
-    }
-  });
-
-  it('should opt in managed_pr only for new auto-pr tasks in builtin auto-improvement-loop workflows', () => {
-    for (const language of ['en', 'ja'] as const) {
-      const config = loadWorkflowFromFile(
-        join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),
-        testDir,
-      );
-      const enqueueFromIssue = config.steps.find((step) => step.name === 'enqueue_from_issue') as Record<string, unknown> | undefined;
-      const enqueueFresh = config.steps.find((step) => step.name === 'enqueue_fresh') as Record<string, unknown> | undefined;
-      const enqueueFromPr = config.steps.find((step) => step.name === 'enqueue_from_pr') as Record<string, unknown> | undefined;
-
-      expect(enqueueFromIssue?.effects).toEqual([
-        expect.objectContaining({
-          type: 'enqueue_task',
-          worktree: expect.objectContaining({
-            enabled: true,
-            auto_pr: true,
-            draft_pr: true,
-            managed_pr: true,
-          }),
-        }),
-      ]);
-      expect(enqueueFresh?.effects).toEqual([
-        expect.objectContaining({
-          type: 'enqueue_task',
-          worktree: expect.objectContaining({
-            enabled: true,
-            auto_pr: true,
-            draft_pr: true,
-            managed_pr: true,
-          }),
-        }),
-      ]);
-      expect(enqueueFromPr?.effects).toEqual([
-        expect.not.objectContaining({
-          worktree: expect.anything(),
-        }),
-      ]);
-    }
-  });
-
-  it('should opt in base branch creation for improve-based enqueue effects in builtin auto-improvement-loop workflows', () => {
-    for (const language of ['en', 'ja'] as const) {
-      const config = loadWorkflowFromFile(
-        join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),
-        testDir,
-      );
-
-      for (const stepName of [
-        'enqueue_from_issue',
-        'enqueue_fresh',
-        'enqueue_from_pr',
-        'enqueue_conflict_resolution_task',
-      ]) {
-        const step = config.steps.find((workflowStep) => workflowStep.name === stepName) as Record<string, unknown> | undefined;
-
-        expect(step?.effects).toEqual([
-          expect.objectContaining({
-            type: 'enqueue_task',
-            base_branch: autoImprovementLoopBaseBranch,
-          }),
-        ]);
-      }
-    }
-  });
-
-  it('should preserve the legacy issue_context comment in both builtin auto-improvement-loop YAML files', () => {
-    for (const language of ['en', 'ja'] as const) {
-      const workflowSource = readFileSync(
-        join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),
-        'utf-8',
-      );
-      expect(workflowSource).toContain('issue_context');
-      expect(workflowSource).toContain(
-        language === 'en'
-          ? 'repo-wide open Issue observation'
-          : 'repo 全体の open Issue 観測',
-      );
-    }
-  });
-
-  it('should preserve the north-star orchestration contract in the builtin workflow', () => {
-    const config = loadWorkflowConfig('auto-improvement-loop', testDir);
-    expect(config).not.toBeNull();
-
-    const planFromIssue = config!.steps.find((step) => step.name === 'plan_from_issue') as Record<string, unknown> | undefined;
-    const planFreshImprovement = config!.steps.find((step) => step.name === 'plan_fresh_improvement') as Record<string, unknown> | undefined;
-    const enqueueFromIssue = config!.steps.find((step) => step.name === 'enqueue_from_issue') as Record<string, unknown> | undefined;
-    const planFromExistingPr = config!.steps.find((step) => step.name === 'plan_from_existing_pr') as Record<string, unknown> | undefined;
-    const enqueueFromPr = config!.steps.find((step) => step.name === 'enqueue_from_pr') as Record<string, unknown> | undefined;
-    const prepareMerge = config!.steps.find((step) => step.name === 'prepare_merge') as Record<string, unknown> | undefined;
-    const resolveConflicts = config!.steps.find((step) => step.name === 'resolve_conflicts') as Record<string, unknown> | undefined;
-    const enqueueConflictResolutionTask = config!.steps.find((step) => step.name === 'enqueue_conflict_resolution_task') as Record<string, unknown> | undefined;
-    const mergePr = config!.steps.find((step) => step.name === 'merge_pr') as Record<string, unknown> | undefined;
-    const rejectPr = config!.steps.find((step) => step.name === 'reject_pr') as Record<string, unknown> | undefined;
-    const waitBeforeNextScan = config!.steps.find((step) => step.name === 'wait_before_next_scan') as Record<string, unknown> | undefined;
-
-    expect(planFromIssue?.delayBeforeMs).toBe(60000);
-    expect(String(planFromIssue?.instruction)).toContain('{context:route_context.selected_issue.number}');
-    expect(String(planFromIssue?.instruction)).toContain('{context:route_context.selected_issue.title}');
-    expect(String(planFromIssue?.instruction)).toContain('{context:route_context.prs}');
-    expect(String(planFromIssue?.instruction)).toContain('{context:route_context.tracked_issues}');
-    expect(String(planFromIssue?.instruction)).toContain('{context:route_context.tracked_issues.length}');
-    expect(String(planFreshImprovement?.instruction)).toContain('{context:route_context.prs}');
-    expect(String(planFreshImprovement?.instruction)).toContain('{context:route_context.tracked_issues}');
-    expect(String(planFreshImprovement?.instruction)).toContain('{context:route_context.tracked_issues.length}');
-    expect(planFromIssue?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_issue.action == "enqueue_new_task"', next: 'enqueue_from_issue' }),
-      expect.objectContaining({ condition: 'structured.plan_from_issue.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
-      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
-    ]));
-    expect(planFreshImprovement?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' }),
-      expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
-      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
-    ]));
-    expect(enqueueFromIssue?.effects).toEqual([
-      expect.objectContaining({
-        type: 'enqueue_task',
-        mode: 'new',
-        workflow: 'takt-default',
-        base_branch: autoImprovementLoopBaseBranch,
-        issue: '{structured:plan_from_issue.issue}',
-      }),
-    ]);
-    expect(planFromExistingPr?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "enqueue_from_pr"', next: 'enqueue_from_pr' }),
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "prepare_merge"', next: 'prepare_merge' }),
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "reject_pr"', next: 'reject_pr' }),
-      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
-    ]));
-    expect(planFromExistingPr?.rules).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "comment_on_pr"', next: 'comment_on_existing_pr' }),
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "noop"', next: 'wait_before_next_scan' }),
-    ]));
-    expect(rejectPr?.effects).toEqual([
-      expect.objectContaining({
-        type: 'close_pr',
-        pr: '{context:route_context.selected_pr.number}',
-      }),
-    ]);
-    expectAutoImprovementLoopDownstreamContract(config!);
-    expect(prepareMerge?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.success == true', next: 'merge_pr' }),
-      expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.conflicted == true', next: 'resolve_conflicts' }),
-    ]));
-    expect(resolveConflicts?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.success == true', next: 'merge_pr' }),
-      expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true', next: 'enqueue_conflict_resolution_task' }),
-    ]));
-    expect(waitBeforeNextScan?.systemInputs).toEqual([
-      expect.objectContaining({
-        type: 'task_queue_context',
-        as: 'queue',
-        exclude_current_task: true,
-      }),
-    ]);
-    expect(waitBeforeNextScan?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        condition: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running")',
-        next: 'wait_before_next_scan',
-      }),
-    ]));
-    expectAutoImprovementLoopPlanningGuidance(config!, 'en');
-  });
-
-  it('should load audit-e2e as a builtin workflow in ja locale', () => {
-    languageState.value = 'ja';
-
-    const jaBuiltinNames = listBuiltinWorkflowNames(testDir, { includeDisabled: true });
-    expect(jaBuiltinNames).toContain('audit-e2e');
-
-    const config = loadWorkflowConfig('audit-e2e', testDir);
-    expect(config).not.toBeNull();
-
-    const planStep = config!.steps.find((step) => step.name === 'plan');
-    const auditStep = config!.steps.find((step) => step.name === 'audit');
-
-    expect(planStep).toBeDefined();
-    expect(auditStep).toBeDefined();
-  });
-
-  it('should load auto-improvement-loop as a builtin workflow in ja locale', () => {
-    languageState.value = 'ja';
-
-    const jaBuiltinNames = listBuiltinWorkflowNames(testDir, { includeDisabled: true });
-    expect(jaBuiltinNames).toContain('auto-improvement-loop');
-
-    const config = loadWorkflowConfig('auto-improvement-loop', testDir);
-    expect(config).not.toBeNull();
-    expect((config as Record<string, unknown>).maxSteps).toBe('infinite');
-    expectAutoImprovementLoopRouteContext(config!);
-    expectAutoImprovementLoopDownstreamContract(config!);
-    expectAutoImprovementLoopPlanningGuidance(config!, 'ja');
   });
 
   it('should reject workflow files when pr_selection.where does not match pr_list.where', () => {
@@ -603,7 +123,7 @@ steps:
           head_branch: feature/*
           draft: false
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `, 'utf-8');
 
@@ -633,7 +153,7 @@ steps:
         as: tracked_issues
         exclude_selected_from: missing_issue_selection
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `, 'utf-8');
 
@@ -728,7 +248,7 @@ loop_monitors:
     expect(judge.instruction).toBe('Judge instruction');
   });
 
-  it('should load loop monitor judge provider and model overrides', () => {
+  it('should reject loop monitor judge provider and model overrides', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -762,19 +282,14 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-provider-model', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors).toHaveLength(1);
-    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
-      persona: 'supervisor',
-      provider: 'opencode',
-      model: 'opencode/big-pickle',
-      instruction: 'Judge instruction',
-    });
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-provider-model',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'provider'],
+    );
   });
 
-  it('should load loop monitor judge provider block overrides', () => {
+  it('should reject loop monitor judge provider block overrides', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -809,23 +324,14 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-provider-block', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors).toHaveLength(1);
-    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5.2-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-      instruction: 'Judge instruction',
-    });
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-provider-block',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'provider'],
+    );
   });
 
-  it('should load loop monitor judge model-only override without changing provider', () => {
+  it('should reject loop monitor judge model-only overrides', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -836,8 +342,6 @@ initial_step: step1
 
 steps:
   - name: step1
-    provider: opencode
-    model: opencode/big-pickle
     instruction: "Step 1 instruction"
     rules:
       - condition: next
@@ -859,16 +363,14 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-model-only', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
-      model: 'opencode/model-b',
-      instruction: 'Judge instruction',
-    });
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-model-only',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'model'],
+    );
   });
 
-  it('should reject bare OpenCode models in loop monitor judge config', () => {
+  it('should reject bare OpenCode loop judge model at the workflow boundary', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -901,11 +403,14 @@ loop_monitors:
           next: step2
 `);
 
-    expect(() => loadWorkflow('loop-monitor-judge-opencode-bare-model', testDir))
-      .toThrow("Configuration error: loop_monitors.judge.model");
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-opencode-bare-model',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'provider'],
+    );
   });
 
-  it('should reject bare OpenCode judge models inherited from the triggering step provider', () => {
+  it('should reject inherited bare OpenCode loop judge model at the workflow boundary', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -921,8 +426,6 @@ steps:
       - condition: next
         next: step2
   - name: step2
-    provider: opencode
-    model: opencode/big-pickle
     instruction: "Step 2 instruction"
     rules:
       - condition: done
@@ -939,8 +442,11 @@ loop_monitors:
           next: step2
 `);
 
-    expect(() => loadWorkflow('loop-monitor-judge-inherited-opencode-bare-model', testDir))
-      .toThrow("Configuration error: loop_monitors.judge.model");
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-inherited-opencode-bare-model',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'model'],
+    );
   });
 });
 
@@ -975,221 +481,6 @@ describe('Workflow Loader IT: agent path resolution', () => {
         }
       }
     }
-  });
-});
-
-describe('Workflow Loader IT: rule syntax parsing', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = createTestDir();
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('should parse all() multi-condition aggregate from the default-peer-review workflow', () => {
-    const config = loadWorkflowConfig('default-peer-review', testDir);
-    expect(config).not.toBeNull();
-
-    // Find the parallel reviewers step
-    const reviewersStep = config!.steps.find(
-      (s) => s.parallel && s.parallel.length > 0,
-    );
-    expect(reviewersStep).toBeDefined();
-
-    // Should have aggregate rules with multi-condition (array)
-    const allRule = reviewersStep!.rules?.find(
-      (r) => r.isAggregateCondition && r.aggregateType === 'all',
-    );
-    expect(allRule).toBeDefined();
-    // Multi-condition aggregate: all("approved", "All checks passed")
-    expect(Array.isArray(allRule!.aggregateConditionText)).toBe(true);
-    expect((allRule!.aggregateConditionText as string[])[0]).toBe('approved');
-  });
-
-  it('should parse any() multi-condition aggregate from the default-peer-review workflow', () => {
-    const config = loadWorkflowConfig('default-peer-review', testDir);
-    expect(config).not.toBeNull();
-
-    const reviewersStep = config!.steps.find(
-      (s) => s.parallel && s.parallel.length > 0,
-    );
-
-    const anyRule = reviewersStep!.rules?.find(
-      (r) => r.isAggregateCondition && r.aggregateType === 'any',
-    );
-    expect(anyRule).toBeDefined();
-    // Multi-condition aggregate: any("needs_fix", "...")
-    expect(Array.isArray(anyRule!.aggregateConditionText)).toBe(true);
-    expect((anyRule!.aggregateConditionText as string[])[0]).toBe('needs_fix');
-  });
-
-  it('should parse standard rules with next step', () => {
-    const config = loadWorkflowConfig('default-draft', testDir);
-    expect(config).not.toBeNull();
-
-    const implementStep = config!.steps.find((s) => s.name === 'implement');
-    expect(implementStep).toBeDefined();
-    expect(implementStep!.rules).toBeDefined();
-    expect(implementStep!.rules!.length).toBeGreaterThan(0);
-
-    // Each rule should have condition and next
-    for (const rule of implementStep!.rules!) {
-      expect(typeof rule.condition).toBe('string');
-      expect(rule.condition.length).toBeGreaterThan(0);
-    }
-  });
-});
-
-describe('Workflow Loader IT: workflow config validation', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = createTestDir();
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('should set max_steps from YAML', () => {
-    const config = loadWorkflowConfig('default', testDir);
-    expect(config).not.toBeNull();
-    expect(typeof config!.maxSteps).toBe('number');
-    expect(config!.maxSteps).toBeGreaterThan(0);
-
-    const infiniteConfig = loadWorkflowConfig('auto-improvement-loop', testDir);
-    expect(infiniteConfig).not.toBeNull();
-    expect((infiniteConfig as Record<string, unknown>).maxSteps).toBe('infinite');
-  });
-
-  it('should set initial_step from YAML', () => {
-    const config = loadWorkflowConfig('default', testDir);
-    expect(config).not.toBeNull();
-    expect(typeof config!.initialStep).toBe('string');
-
-    const stepNames = config!.steps.map((s) => s.name);
-    expect(stepNames).toContain(config!.initialStep);
-  });
-
-  it('should preserve edit property on steps (review has no edit: true)', () => {
-    const config = loadWorkflowConfig('review-default', testDir);
-    expect(config).not.toBeNull();
-
-    // review: no step should have edit: true
-    for (const step of config!.steps) {
-      expect(step.edit).not.toBe(true);
-      if (step.parallel) {
-        for (const sub of step.parallel) {
-          expect(sub.edit).not.toBe(true);
-        }
-      }
-    }
-
-    // dual: implement step should have edit: true
-    const dualConfig = loadWorkflowConfig('dual', testDir);
-    expect(dualConfig).not.toBeNull();
-    const implementStep = dualConfig!.steps.find((s) => s.name === 'implement');
-    expect(implementStep).toBeDefined();
-    expect(implementStep!.edit).toBe(true);
-  });
-
-  it('should set passPreviousResponse from YAML', () => {
-    const config = loadWorkflowConfig('default', testDir);
-    expect(config).not.toBeNull();
-
-    // At least some steps should have passPreviousResponse set
-    const stepsWithPassPrev = config!.steps.filter((s) => s.passPreviousResponse === true);
-    expect(stepsWithPassPrev.length).toBeGreaterThan(0);
-  });
-});
-
-describe('Workflow Loader IT: parallel step loading', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = createTestDir();
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('should load parallel sub-steps from default-peer-review workflow', () => {
-    const config = loadWorkflowConfig('default-peer-review', testDir);
-    expect(config).not.toBeNull();
-
-    const parallelStep = config!.steps.find(
-      (s) => s.parallel && s.parallel.length > 0,
-    );
-    expect(parallelStep).toBeDefined();
-    expect(parallelStep!.parallel!.length).toBeGreaterThanOrEqual(2);
-
-    // Each sub-step should have required fields
-    for (const sub of parallelStep!.parallel!) {
-      expect(sub.name).toBeDefined();
-      expect(sub.persona).toBeDefined();
-      expect(sub.rules).toBeDefined();
-    }
-  });
-
-  it('should load 2-stage parallel reviewers from the dual workflow', () => {
-    const config = loadWorkflowConfig('dual', testDir);
-    expect(config).not.toBeNull();
-
-    const reviewers1 = config!.steps.find((s) => s.name === 'reviewers_1');
-    expect(reviewers1).toBeDefined();
-    expect(reviewers1!.parallel!.length).toBe(4);
-    const stage1Names = reviewers1!.parallel!.map((s) => s.name);
-    expect(stage1Names).toContain('arch-review');
-    expect(stage1Names).toContain('frontend-review');
-    expect(stage1Names).toContain('testing-review');
-    expect(stage1Names).toContain('ai-antipattern-review-2nd');
-
-    const reviewers2 = config!.steps.find((s) => s.name === 'reviewers_2');
-    expect(reviewers2).toBeDefined();
-    expect(reviewers2!.parallel!.length).toBe(4);
-    const stage2Names = reviewers2!.parallel!.map((s) => s.name);
-    expect(stage2Names).toContain('security-review');
-    expect(stage2Names).toContain('qa-review');
-    expect(stage2Names).toContain('pure-review');
-    expect(stage2Names).toContain('coding-review');
-  });
-});
-
-describe('Workflow Loader IT: report config loading', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = createTestDir();
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('should load single report config', () => {
-    const config = loadWorkflowConfig('default', testDir);
-    expect(config).not.toBeNull();
-
-    // default workflow: plan step has output contracts
-    const planStep = config!.steps.find((s) => s.name === 'plan');
-    expect(planStep).toBeDefined();
-    expect(planStep!.outputContracts).toBeDefined();
-  });
-
-  it('should load multi-report config from the dual workflow', () => {
-    const config = loadWorkflowConfig('dual', testDir);
-    expect(config).not.toBeNull();
-
-    // implement step has multi-output contracts: [Scope, Decisions]
-    const implementStep = config!.steps.find((s) => s.name === 'implement');
-    expect(implementStep).toBeDefined();
-    expect(implementStep!.outputContracts).toBeDefined();
-    expect(Array.isArray(implementStep!.outputContracts)).toBe(true);
-    expect((implementStep!.outputContracts as unknown[]).length).toBe(2);
   });
 });
 
@@ -1343,441 +634,49 @@ steps:
     ]);
   });
 
-  it('rejects workflow command quality gates by default', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-
-    writeFileSync(join(workflowsDir, 'command-gate.yaml'), `
-name: command-gate
-description: Workflow with command quality gate
-max_steps: 5
-initial_step: implement
-
-steps:
-  - name: implement
-    persona: coder
-    quality_gates:
-      - type: command
-        name: quality-check
-        command: "./.takt/quality-gates/check.sh"
-    rules:
-      - condition: Done
-        next: COMPLETE
-    instruction: "Implement the feature"
-`);
-
-    expect(() => loadWorkflowConfig('command-gate', testDir)).toThrow(/workflow_command_gates\.custom_scripts/);
-  });
-
-  it('rejects workflow command quality gates when project config explicitly overrides global true with false', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    loadGlobalConfigMock.mockReturnValue({
-      workflowCommandGates: { customScripts: true },
-    });
-    writeFileSync(
-      join(testDir, '.takt', 'config.yaml'),
-      'workflow_command_gates:\n  custom_scripts: false\n',
-    );
-
-    writeFileSync(join(workflowsDir, 'command-gate-denied.yaml'), `
-name: command-gate-denied
-description: Workflow with command quality gate denied by project
-max_steps: 5
-initial_step: implement
-
-steps:
-  - name: implement
-    persona: coder
-    quality_gates:
-      - type: command
-        name: quality-check
-        command: "./.takt/quality-gates/check.sh"
-    rules:
-      - condition: Done
-        next: COMPLETE
-    instruction: "Implement the feature"
-`);
-
-    expect(() => loadWorkflowConfig('command-gate-denied', testDir))
-      .toThrow(/workflow_command_gates\.custom_scripts/);
-  });
-
-  it('preserves globally allowed workflow command quality gates when project config sets an empty policy block', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    loadGlobalConfigMock.mockReturnValue({
-      workflowCommandGates: { customScripts: true },
-    });
-    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_command_gates: {}\n');
-
-    writeFileSync(join(workflowsDir, 'command-gate-allowed-by-global.yaml'), `
-name: command-gate-allowed-by-global
-description: Workflow with command quality gate allowed by global config
-max_steps: 5
-initial_step: implement
-
-steps:
-  - name: implement
-    persona: coder
-    quality_gates:
-      - type: command
-        name: quality-check
-        command: "./.takt/quality-gates/check.sh"
-    rules:
-      - condition: Done
-        next: COMPLETE
-    instruction: "Implement the feature"
-`);
-
-    const config = loadWorkflowConfig('command-gate-allowed-by-global', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.steps.find((s) => s.name === 'implement')?.qualityGates).toEqual([
-      {
-        type: 'command',
-        name: 'quality-check',
-        command: './.takt/quality-gates/check.sh',
-      },
-    ]);
-  });
-
-  it('rejects parallel sub-step command quality gates by default', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-
-    writeFileSync(join(workflowsDir, 'parallel-command-gate.yaml'), `
-name: parallel-command-gate
-description: Workflow with parallel command quality gate
-max_steps: 5
-initial_step: reviewers
-
-steps:
-  - name: reviewers
-    persona: reviewers
-    parallel:
-      - name: arch-review
-        persona: reviewer
-        quality_gates:
-          - type: command
-            name: arch-quality-check
-            command: "./.takt/quality-gates/check.sh"
-        rules:
-          - condition: approved
-    rules:
-      - condition: all("approved")
-        next: COMPLETE
-    instruction: "Run reviews"
-`);
-
-    expect(() => loadWorkflowConfig('parallel-command-gate', testDir))
-      .toThrow(/Step "reviewers\.arch-review" uses command quality gate/);
-  });
-
-  it('allows parallel sub-step command quality gates when workflow command gates are enabled', () => {
+  it('should load a callable command quality gate with timeout_ms from YAML', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
     writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_command_gates:\n  custom_scripts: true\n');
 
-    writeFileSync(join(workflowsDir, 'parallel-command-gate-allowed.yaml'), `
-name: parallel-command-gate-allowed
-description: Workflow with allowed parallel command quality gate
-max_steps: 5
-initial_step: reviewers
-
-steps:
-  - name: reviewers
-    persona: reviewers
-    parallel:
-      - name: arch-review
-        persona: reviewer
-        quality_gates:
-          - type: command
-            name: arch-quality-check
-            command: "./.takt/quality-gates/check.sh"
-        rules:
-          - condition: approved
-    rules:
-      - condition: all("approved")
-        next: COMPLETE
-    instruction: "Run reviews"
-`);
-
-    const config = loadWorkflowConfig('parallel-command-gate-allowed', testDir);
-
-    expect(config).not.toBeNull();
-    const reviewersStep = config!.steps.find((s) => s.name === 'reviewers');
-    expect(reviewersStep?.parallel?.[0]?.qualityGates).toEqual([
-      {
-        type: 'command',
-        name: 'arch-quality-check',
-        command: './.takt/quality-gates/check.sh',
-      },
-    ]);
-  });
-});
-
-describe('Workflow Loader IT: mcp_servers parsing', () => {
-  let testDir: string;
-  const loadGlobalConfigMock = vi.mocked(loadGlobalConfig);
-
-  beforeEach(() => {
-    testDir = createTestDir();
-    loadGlobalConfigMock.mockReturnValue({});
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('should reject stdio mcp_servers from workflow YAML by default', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-
-    writeFileSync(join(workflowsDir, 'with-mcp.yaml'), `
-name: with-mcp
-description: Workflow with MCP servers
-max_steps: 5
-initial_step: e2e-test
-
-steps:
-  - name: e2e-test
-    persona: coder
-    mcp_servers:
-      playwright:
-        command: npx
-        args: ["-y", "@anthropic-ai/mcp-server-playwright"]
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Bash
-          - mcp__playwright__*
-    rules:
-      - condition: Done
-        next: COMPLETE
-    instruction: "Run E2E tests"
-`);
-
-    expect(() => loadWorkflowConfig('with-mcp', testDir)).toThrow(/workflow_mcp_servers/);
-  });
-
-  it('should allow step without mcp_servers', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-
-    writeFileSync(join(workflowsDir, 'no-mcp.yaml'), `
-name: no-mcp
-description: Workflow without MCP servers
+    writeFileSync(join(workflowsDir, 'callable-command-gate.yaml'), `
+name: callable-command-gate
+description: Callable workflow with a command quality gate timeout
+subworkflow:
+  callable: true
+  visibility: internal
 max_steps: 5
 initial_step: implement
 
 steps:
   - name: implement
     persona: coder
+    edit: true
+    quality_gates:
+      - type: command
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+        timeout_ms: 900000
     rules:
       - condition: Done
         next: COMPLETE
     instruction: "Implement the feature"
 `);
 
-    const config = loadWorkflowConfig('no-mcp', testDir);
+    const config = loadWorkflowConfig('callable-command-gate', testDir);
 
     expect(config).not.toBeNull();
-    const implementStep = config!.steps.find((s) => s.name === 'implement');
-    expect(implementStep).toBeDefined();
-    expect(implementStep!.mcpServers).toBeUndefined();
-  });
-
-  it('should reject mcp_servers with multiple transports by default', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-
-    writeFileSync(join(workflowsDir, 'multi-mcp.yaml'), `
-name: multi-mcp
-description: Workflow with multiple MCP servers
-max_steps: 5
-initial_step: test
-
-steps:
-  - name: test
-    persona: coder
-    mcp_servers:
-      playwright:
-        command: npx
-        args: ["-y", "@anthropic-ai/mcp-server-playwright"]
-      remote-api:
-        type: http
-        url: http://localhost:3000/mcp
-        headers:
-          Authorization: "Bearer token123"
-    rules:
-      - condition: Done
-        next: COMPLETE
-    instruction: "Run tests"
-`);
-
-    expect(() => loadWorkflowConfig('multi-mcp', testDir)).toThrow(/workflow_mcp_servers/);
-  });
-
-  it('should allow http/sse mcp_servers only when project config enables them', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    writeFileSync(
-      join(testDir, '.takt', 'config.yaml'),
-      ['workflow_mcp_servers:', '  http: true', '  sse: true'].join('\n'),
-      'utf-8',
-    );
-
-    writeFileSync(join(workflowsDir, 'remote-mcp.yaml'), `
-name: remote-mcp
-description: Workflow with remote MCP servers
-max_steps: 5
-initial_step: test
-
-steps:
-  - name: test
-    persona: coder
-    mcp_servers:
-      remote-api:
-        type: http
-        url: https://example.com/mcp
-      stream-api:
-        type: sse
-        url: https://example.com/sse
-    rules:
-      - condition: Done
-        next: COMPLETE
-    instruction: "Run tests"
-`);
-
-    const config = loadWorkflowConfig('remote-mcp', testDir);
-
-    expect(config).not.toBeNull();
-    const testStep = config!.steps.find((s) => s.name === 'test');
-    expect(testStep?.mcpServers).toEqual({
-      'remote-api': {
-        type: 'http',
-        url: 'https://example.com/mcp',
+    expect(config!.steps.find((step) => step.name === 'implement')?.qualityGates).toEqual([
+      {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+        timeoutMs: 900000,
       },
-      'stream-api': {
-        type: 'sse',
-        url: 'https://example.com/sse',
-      },
-    });
+    ]);
   });
 
-  it('should allow stdio mcp_servers only when project config enables them', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_mcp_servers:\n  stdio: true\n');
-
-    writeFileSync(join(workflowsDir, 'with-mcp.yaml'), `
-name: with-mcp
-description: Workflow with MCP servers
-max_steps: 5
-initial_step: e2e-test
-
-steps:
-  - name: e2e-test
-    persona: coder
-    mcp_servers:
-      playwright:
-        command: npx
-        args: ["-y", "@anthropic-ai/mcp-server-playwright"]
-    rules:
-      - condition: Done
-        next: COMPLETE
-    instruction: "Run E2E tests"
-`);
-
-    const config = loadWorkflowConfig('with-mcp', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.steps.find((s) => s.name === 'e2e-test')?.mcpServers).toEqual({
-      playwright: {
-        command: 'npx',
-        args: ['-y', '@anthropic-ai/mcp-server-playwright'],
-      },
-    });
-  });
-
-  it('should deny transport when project config explicitly overrides global true with false', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    loadGlobalConfigMock.mockReturnValue({
-      workflowMcpServers: { stdio: true },
-    });
-    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_mcp_servers:\n  stdio: false\n');
-
-    writeFileSync(join(workflowsDir, 'denied-mcp.yaml'), `
-name: denied-mcp
-description: Workflow with stdio MCP denied by project
-max_steps: 5
-initial_step: test
-
-steps:
-  - name: test
-    persona: coder
-    mcp_servers:
-      playwright:
-        command: npx
-        args: ["-y", "@anthropic-ai/mcp-server-playwright"]
-    rules:
-      - condition: Done
-        next: COMPLETE
-    instruction: "Run tests"
-`);
-
-    expect(() => loadWorkflowConfig('denied-mcp', testDir)).toThrow(/workflow_mcp_servers/);
-  });
-
-  it('should preserve globally allowed transports when project config enables another transport', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    loadGlobalConfigMock.mockReturnValue({
-      workflowMcpServers: { stdio: true },
-    });
-    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_mcp_servers:\n  sse: true\n');
-
-    writeFileSync(join(workflowsDir, 'mixed-mcp.yaml'), `
-name: mixed-mcp
-description: Workflow with stdio and sse MCP servers
-max_steps: 5
-initial_step: test
-
-steps:
-  - name: test
-    persona: coder
-    mcp_servers:
-      playwright:
-        command: npx
-        args: ["-y", "@anthropic-ai/mcp-server-playwright"]
-      stream-api:
-        type: sse
-        url: https://example.com/sse
-    rules:
-      - condition: Done
-        next: COMPLETE
-    instruction: "Run tests"
-`);
-
-    const config = loadWorkflowConfig('mixed-mcp', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.steps.find((s) => s.name === 'test')?.mcpServers).toEqual({
-      playwright: {
-        command: 'npx',
-        args: ['-y', '@anthropic-ai/mcp-server-playwright'],
-      },
-      'stream-api': {
-        type: 'sse',
-        url: 'https://example.com/sse',
-      },
-    });
-  });
 });
-
 
 describe('Workflow Loader IT: invalid YAML handling', () => {
   let testDir: string;
@@ -1813,285 +712,5 @@ description: Missing steps
 `);
 
     expect(() => loadWorkflowConfig('incomplete', testDir)).toThrow();
-  });
-});
-
-
-describe('Workflow Loader IT: workflow runtime.prepare policy', () => {
-  let testDir: string;
-  const loadGlobalConfigMock = vi.mocked(loadGlobalConfig);
-
-  beforeEach(() => {
-    testDir = createTestDir();
-    loadGlobalConfigMock.mockReturnValue({});
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('rejects workflow runtime.prepare custom scripts by default', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-
-    writeFileSync(join(workflowsDir, 'runtime-custom.yaml'), `
-name: runtime-custom
-workflow_config:
-  runtime:
-    prepare:
-      - ./setup.sh
-steps:
-  - name: implement
-    instruction: "Do the work"
-`);
-
-    expect(() => loadWorkflowConfig('runtime-custom', testDir)).toThrow(/workflow_runtime_prepare\.custom_scripts/);
-  });
-
-  it('allows workflow runtime.prepare gradle preset by default', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-
-    writeFileSync(join(workflowsDir, 'runtime-gradle.yaml'), `
-name: runtime-gradle
-workflow_config:
-  runtime:
-    prepare:
-      - gradle
-steps:
-  - name: implement
-    instruction: "Do the work"
-`);
-
-    const config = loadWorkflowConfig('runtime-gradle', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.runtime).toEqual({ prepare: ['gradle'] });
-  });
-
-  it('allows workflow runtime.prepare node preset by default', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-
-    writeFileSync(join(workflowsDir, 'runtime-node.yaml'), `
-name: runtime-node
-workflow_config:
-  runtime:
-    prepare:
-      - node
-steps:
-  - name: implement
-    instruction: "Do the work"
-`);
-
-    const config = loadWorkflowConfig('runtime-node', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.runtime).toEqual({ prepare: ['node'] });
-  });
-
-  it('allows workflow runtime.prepare custom scripts when project config enables them', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-
-    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_runtime_prepare:\n  custom_scripts: true\n');
-    writeFileSync(join(workflowsDir, 'runtime-custom.yaml'), `
-name: runtime-custom
-workflow_config:
-  runtime:
-    prepare:
-      - ./setup.sh
-steps:
-  - name: implement
-    instruction: "Do the work"
-`);
-
-    const config = loadWorkflowConfig('runtime-custom', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.runtime).toEqual({ prepare: ['./setup.sh'] });
-  });
-
-  it('rejects workflow runtime.prepare custom scripts when global allows and project explicitly denies', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    loadGlobalConfigMock.mockReturnValue({
-      workflowRuntimePrepare: { customScripts: true },
-    });
-    writeFileSync(
-      join(testDir, '.takt', 'config.yaml'),
-      'workflow_runtime_prepare:\n  custom_scripts: false\n',
-    );
-    writeFileSync(join(workflowsDir, 'runtime-custom.yaml'), `
-name: runtime-custom
-workflow_config:
-  runtime:
-    prepare:
-      - ./setup.sh
-steps:
-  - name: implement
-    instruction: "Do the work"
-`);
-
-    expect(() => loadWorkflowConfig('runtime-custom', testDir)).toThrow(/workflow_runtime_prepare\.custom_scripts/);
-  });
-
-  it('allows workflow runtime.prepare custom scripts when global denies and project explicitly allows', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    loadGlobalConfigMock.mockReturnValue({
-      workflowRuntimePrepare: { customScripts: false },
-    });
-    writeFileSync(
-      join(testDir, '.takt', 'config.yaml'),
-      'workflow_runtime_prepare:\n  custom_scripts: true\n',
-    );
-    writeFileSync(join(workflowsDir, 'runtime-custom.yaml'), `
-name: runtime-custom
-workflow_config:
-  runtime:
-    prepare:
-      - ./setup.sh
-steps:
-  - name: implement
-    instruction: "Do the work"
-`);
-
-    const config = loadWorkflowConfig('runtime-custom', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.runtime).toEqual({ prepare: ['./setup.sh'] });
-  });
-
-  it('preserves globally allowed runtime.prepare custom scripts when project config sets the policy block', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    loadGlobalConfigMock.mockReturnValue({
-      workflowRuntimePrepare: { customScripts: true },
-    });
-    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_runtime_prepare: {}\n');
-    writeFileSync(join(workflowsDir, 'runtime-custom.yaml'), `
-name: runtime-custom
-workflow_config:
-  runtime:
-    prepare:
-      - ./setup.sh
-steps:
-  - name: implement
-    instruction: "Do the work"
-`);
-
-    const config = loadWorkflowConfig('runtime-custom', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.runtime).toEqual({ prepare: ['./setup.sh'] });
-  });
-});
-
-describe('Workflow Loader IT: workflow Arpeggio policy', () => {
-  let testDir: string;
-  const loadGlobalConfigMock = vi.mocked(loadGlobalConfig);
-
-  beforeEach(() => {
-    testDir = createTestDir();
-    loadGlobalConfigMock.mockReturnValue({});
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('rejects custom Arpeggio capabilities by default', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    writeFileSync(join(testDir, 'rows.csv'), 'value\nhello\n');
-    writeFileSync(join(testDir, 'prompt.md'), 'Summarize {{rows}}');
-
-    writeFileSync(join(workflowsDir, 'arpeggio-custom.yaml'), `
-name: arpeggio-custom
-steps:
-  - name: summarize
-    instruction: "unused"
-    arpeggio:
-      source: csv
-      source_path: ../../rows.csv
-      template: ../../prompt.md
-      merge:
-        strategy: custom
-        inline_js: 'return results.map(r => r.content).join(\"\\n\");'
-`);
-
-    expect(() => loadWorkflowConfig('arpeggio-custom', testDir)).toThrow(/workflow_arpeggio\.custom_merge_inline_js/);
-  });
-
-  it('allows custom Arpeggio capabilities when project config enables them', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    writeFileSync(
-      join(testDir, '.takt', 'config.yaml'),
-      [
-        'workflow_arpeggio:',
-        '  custom_data_source_modules: true',
-        '  custom_merge_inline_js: true',
-      ].join('\n'),
-      'utf-8',
-    );
-    writeFileSync(join(testDir, 'rows.csv'), 'value\nhello\n');
-    writeFileSync(join(testDir, 'prompt.md'), 'Summarize {{rows}}');
-
-    writeFileSync(join(workflowsDir, 'arpeggio-custom.yaml'), `
-name: arpeggio-custom
-steps:
-  - name: summarize
-    instruction: "unused"
-    arpeggio:
-      source: custom-source
-      source_path: ../../rows.csv
-      template: ../../prompt.md
-      merge:
-        strategy: custom
-        inline_js: 'return results.map(r => r.content).join(\"\\n\");'
-`);
-
-    const config = loadWorkflowConfig('arpeggio-custom', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.steps[0]?.arpeggio?.source).toBe('custom-source');
-    expect(config!.steps[0]?.arpeggio?.merge.inlineJs).toContain('join');
-  });
-
-  it('preserves globally allowed Arpeggio capabilities when project config enables another one', () => {
-    const workflowsDir = join(testDir, '.takt', 'workflows');
-    mkdirSync(workflowsDir, { recursive: true });
-    loadGlobalConfigMock.mockReturnValue({
-      workflowArpeggio: { customDataSourceModules: true },
-    });
-    writeFileSync(
-      join(testDir, '.takt', 'config.yaml'),
-      ['workflow_arpeggio:', '  custom_merge_inline_js: true'].join('\n'),
-      'utf-8',
-    );
-    writeFileSync(join(testDir, 'rows.csv'), 'value\nhello\n');
-    writeFileSync(join(testDir, 'prompt.md'), 'Summarize {{rows}}');
-
-    writeFileSync(join(workflowsDir, 'arpeggio-precedence.yaml'), `
-name: arpeggio-precedence
-steps:
-  - name: summarize
-    instruction: "unused"
-    arpeggio:
-      source: custom-source
-      source_path: ../../rows.csv
-      template: ../../prompt.md
-      merge:
-        strategy: custom
-        inline_js: 'return results.map(r => r.content).join(\"\\n\");'
-`);
-
-    const config = loadWorkflowConfig('arpeggio-precedence', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.steps[0]?.arpeggio?.source).toBe('custom-source');
-    expect(config!.steps[0]?.arpeggio?.merge.inlineJs).toContain('join');
   });
 });

@@ -2,21 +2,25 @@
  * Tests for prompt module (cursor-based interactive menu)
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { Readable } from 'node:stream';
 import chalk from 'chalk';
 import { setupRawStdin, restoreStdin } from './helpers/stdinSimulator.js';
-import type { SelectOptionItem, KeyInputResult } from '../shared/prompt/index.js';
+import type { SelectOptionItem } from '../shared/prompt/index.js';
 import {
   renderMenu,
   countRenderedLines,
   handleKeyInput,
+  firstSelectableIndex,
   readMultilineFromStream,
 } from '../shared/prompt/index.js';
-import { isFullWidth, getDisplayWidth, truncateText } from '../shared/utils/index.js';
 
 // Disable chalk colors for predictable test output
+const originalChalkLevel = chalk.level;
 chalk.level = 0;
+afterAll(() => {
+  chalk.level = originalChalkLevel;
+});
 
 describe('prompt', () => {
   describe('renderMenu', () => {
@@ -55,6 +59,21 @@ describe('prompt', () => {
       expect(lines[1]).not.toContain('❯');
       expect(lines[2]).toContain('❯');
       expect(lines[2]).toContain('Option C');
+    });
+
+    it('should render a non-selectable heading without a cursor even if index matches', () => {
+      const treeOptions: SelectOptionItem<string>[] = [
+        { label: 'group:', value: 'h', selectable: false },
+        { label: 'plan', value: 'p' },
+      ];
+      const lines = renderMenu(treeOptions, 0, false);
+
+      expect(lines).toHaveLength(2);
+      // Heading never carries the cursor marker.
+      expect(lines[0]).not.toContain('❯');
+      expect(lines[0]).toContain('group:');
+      // Leaves still render normally.
+      expect(lines[1]).toContain('plan');
     });
 
     it('should include Cancel option when hasCancelOption is true', () => {
@@ -186,6 +205,81 @@ describe('prompt', () => {
 
     it('should return 1 for empty options with cancel', () => {
       expect(countRenderedLines([], true)).toBe(1);
+    });
+  });
+
+  describe('non-selectable heading rows', () => {
+    // index 0 = heading, 1 = leaf, 2 = heading, 3 = leaf, plus cancel (index 4)
+    const options: SelectOptionItem<string>[] = [
+      { label: 'group-a', value: 'ha', selectable: false },
+      { label: 'plan', value: 'la' },
+      { label: 'group-b', value: 'hb', selectable: false },
+      { label: 'review', value: 'lb' },
+    ];
+    const totalItems = options.length + 1; // includes Cancel
+    const optionCount = options.length;
+
+    it('should keep line counting aligned when a heading has details', () => {
+      const optionsWithDetails: SelectOptionItem<string>[] = [
+        {
+          label: 'group-a',
+          value: 'ha',
+          selectable: false,
+          description: 'heading note',
+          details: ['not rendered for headings'],
+        },
+        { label: 'plan', value: 'la' },
+      ];
+
+      const renderedLines = renderMenu(optionsWithDetails, 1, false);
+      expect(renderedLines).toHaveLength(3);
+      const renderedText = renderedLines.join('\n');
+      expect(renderedText).toContain('heading note');
+      expect(renderedText).not.toContain('not rendered for headings');
+      expect(countRenderedLines(optionsWithDetails, false)).toBe(3);
+    });
+
+    it('should skip a heading when moving down', () => {
+      // From leaf index 1, down should skip heading index 2 and land on leaf 3.
+      const result = handleKeyInput('\x1B[B', 1, totalItems, true, optionCount, options);
+      expect(result).toEqual({ action: 'move', newIndex: 3 });
+    });
+
+    it('should skip a heading when moving up', () => {
+      // From leaf index 1, up should skip heading index 0 and wrap to Cancel (4).
+      const result = handleKeyInput('\x1B[A', 1, totalItems, true, optionCount, options);
+      expect(result).toEqual({ action: 'move', newIndex: 4 });
+    });
+
+    it('should land on the Cancel row, which is always selectable', () => {
+      const result = handleKeyInput('\x1B[B', 3, totalItems, true, optionCount, options);
+      expect(result).toEqual({ action: 'move', newIndex: 4 });
+    });
+
+    it('should ignore Enter on a heading row', () => {
+      const result = handleKeyInput('\r', 0, totalItems, true, optionCount, options);
+      expect(result).toEqual({ action: 'none' });
+    });
+
+    it('should confirm Enter on a leaf row', () => {
+      const result = handleKeyInput('\r', 1, totalItems, true, optionCount, options);
+      expect(result).toEqual({ action: 'confirm', selectedIndex: 1 });
+    });
+
+    it('firstSelectableIndex should advance past a leading heading', () => {
+      expect(firstSelectableIndex(options, 0, true)).toBe(1);
+    });
+
+    it('firstSelectableIndex should keep an already-selectable start', () => {
+      expect(firstSelectableIndex(options, 3, true)).toBe(3);
+    });
+
+    it('firstSelectableIndex should fall back to Cancel when no option is selectable', () => {
+      const allHeadings: SelectOptionItem<string>[] = [
+        { label: 'group-a', value: 'ha', selectable: false },
+        { label: 'group-b', value: 'hb', selectable: false },
+      ];
+      expect(firstSelectableIndex(allHeadings, 0, true)).toBe(allHeadings.length);
     });
   });
 
@@ -398,100 +492,35 @@ describe('prompt', () => {
       // defaultValue not found → falls back to index 0
       expect(result).toBe('plan');
     });
-  });
 
-  describe('isFullWidth', () => {
-    it('should return true for CJK ideographs', () => {
-      expect(isFullWidth('漢'.codePointAt(0)!)).toBe(true);
-      expect(isFullWidth('字'.codePointAt(0)!)).toBe(true);
-    });
+    it('should scroll the initial viewport to a deep default leaf', async () => {
+      const rowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'rows');
+      Object.defineProperty(process.stdout, 'rows', { value: 8, configurable: true });
 
-    it('should return true for Hangul syllables', () => {
-      expect(isFullWidth('한'.codePointAt(0)!)).toBe(true);
-    });
+      try {
+        setupRawStdin(['\r']);
 
-    it('should return true for fullwidth ASCII variants', () => {
-      // Ａ = U+FF21 (fullwidth A)
-      expect(isFullWidth(0xFF21)).toBe(true);
-    });
+        const { selectOptionWithDefault } = await import('../shared/prompt/index.js');
+        const options = Array.from({ length: 20 }, (_, index) => ({
+          label: `leaf-${index}`,
+          value: `leaf-${index}`,
+        }));
 
-    it('should return false for ASCII characters', () => {
-      expect(isFullWidth('A'.codePointAt(0)!)).toBe(false);
-      expect(isFullWidth('z'.codePointAt(0)!)).toBe(false);
-      expect(isFullWidth(' '.codePointAt(0)!)).toBe(false);
-    });
+        const result = await selectOptionWithDefault('Start position:', options, 'leaf-19');
+        const writes = (process.stdout.write as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+        const output = writes.map((call) => String(call[0] ?? '')).join('');
+        const defaultLine = output.split('\n').find((line) => line.includes('leaf-19'));
 
-    it('should return false for basic Latin punctuation', () => {
-      expect(isFullWidth('-'.codePointAt(0)!)).toBe(false);
-      expect(isFullWidth('/'.codePointAt(0)!)).toBe(false);
-    });
-  });
-
-  describe('getDisplayWidth', () => {
-    it('should return length for ASCII-only string', () => {
-      expect(getDisplayWidth('hello')).toBe(5);
-    });
-
-    it('should count CJK characters as 2 columns each', () => {
-      expect(getDisplayWidth('漢字')).toBe(4);
-    });
-
-    it('should handle mixed ASCII and CJK', () => {
-      // 'ab' = 2 + '漢' = 2 + 'c' = 1 = 5
-      expect(getDisplayWidth('ab漢c')).toBe(5);
-    });
-
-    it('should return 0 for empty string', () => {
-      expect(getDisplayWidth('')).toBe(0);
-    });
-  });
-
-  describe('truncateText', () => {
-    it('should return text as-is when it fits within maxWidth', () => {
-      expect(truncateText('hello', 10)).toBe('hello');
-    });
-
-    it('should truncate ASCII text and add ellipsis', () => {
-      const result = truncateText('abcdefghij', 6);
-      // maxWidth=6, ellipsis takes 1, so 5 chars fit + '…'
-      expect(result).toBe('abcde…');
-      expect(getDisplayWidth(result)).toBeLessThanOrEqual(6);
-    });
-
-    it('should truncate CJK text and add ellipsis', () => {
-      // '漢字テスト' = 10 columns, maxWidth=7
-      const result = truncateText('漢字テスト', 7);
-      // 漢(2)+字(2)+テ(2) = 6, next ス(2) would be 8 > 7-1=6, so truncate at 6
-      expect(result).toBe('漢字テ…');
-      expect(getDisplayWidth(result)).toBeLessThanOrEqual(7);
-    });
-
-    it('should handle mixed ASCII and CJK truncation', () => {
-      // 'abc漢字def' = 3+2+2+3 = 10 columns, maxWidth=8
-      const result = truncateText('abc漢字def', 8);
-      // a(1)+b(1)+c(1)+漢(2)+字(2) = 7, next d(1) would be 8 > 8-1=7, truncate
-      expect(result).toBe('abc漢字…');
-      expect(getDisplayWidth(result)).toBeLessThanOrEqual(8);
-    });
-
-    it('should return empty string when maxWidth is 0', () => {
-      expect(truncateText('hello', 0)).toBe('');
-    });
-
-    it('should return empty string when maxWidth is negative', () => {
-      expect(truncateText('hello', -5)).toBe('');
-    });
-
-    it('should not truncate text that exactly fits maxWidth', () => {
-      // 'abc' = 3 columns, maxWidth=3
-      // width(0)+a(1)=1 > 3-1=2? no. width(1)+b(1)=2 > 2? no. width(2)+c(1)=3 > 2? yes → truncate
-      // Actually truncateText adds ellipsis when width + charWidth > maxWidth - 1
-      // For 'abc' maxWidth=3: a(1)>2? no; b(2)>2? no; c(3)>2? yes → 'ab…'
-      // So text exactly at maxWidth still gets truncated because ellipsis needs space
-      // To avoid truncation, the full text display width must be <= maxWidth - 1...
-      // Wait, let's re-read: if width+charWidth > maxWidth-1, truncate.
-      // For 'abc' maxWidth=4: a(1)>3? no; b(2)>3? no; c(3)>3? no; returns 'abc'
-      expect(truncateText('abc', 4)).toBe('abc');
+        expect(defaultLine).toContain('❯');
+        expect(defaultLine).toContain('(default)');
+        expect(result).toBe('leaf-19');
+      } finally {
+        if (rowsDescriptor) {
+          Object.defineProperty(process.stdout, 'rows', rowsDescriptor);
+        } else {
+          Reflect.deleteProperty(process.stdout, 'rows');
+        }
+      }
     });
   });
 

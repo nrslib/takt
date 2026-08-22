@@ -7,13 +7,23 @@
  */
 
 import type { StreamCallback, StreamEvent } from '../types.js';
-import { stripAnsi } from '../../../shared/utils/text.js';
+import {
+  getDisplayWidth,
+  sanitizeTerminalText,
+  stripAnsi,
+  truncateText,
+} from '../../../shared/utils/text.js';
 import { LineTimeSliceBuffer } from './stream-buffer.js';
 import type { WorkflowMaxSteps } from '../../models/types.js';
 
 /** ANSI color codes for sub-step prefixes (cycled in order) */
 const COLORS = ['\x1b[36m', '\x1b[33m', '\x1b[35m', '\x1b[32m'] as const; // cyan, yellow, magenta, green
 const RESET = '\x1b[0m';
+const MAX_SUB_STEP_DISPLAY_WIDTH = 80;
+
+function normalizeSubStepDisplayName(name: string): string {
+  return truncateText(sanitizeTerminalText(name), MAX_SUB_STEP_DISPLAY_WIDTH);
+}
 
 /** Progress information for parallel logger */
 export interface ParallelProgressInfo {
@@ -58,7 +68,7 @@ export interface ParallelLoggerOptions {
  */
 export class ParallelLogger {
   private static readonly DEFAULT_FLUSH_INTERVAL_MS = 300;
-  private maxNameLength: number;
+  private maxNameDisplayWidth: number;
   private readonly subStepNames: string[];
   private readonly lineBuffer: LineTimeSliceBuffer;
   private readonly parentOnStream?: StreamCallback;
@@ -73,14 +83,21 @@ export class ParallelLogger {
 
   constructor(options: ParallelLoggerOptions) {
     this.subStepNames = [...options.subStepNames];
-    this.maxNameLength = Math.max(...this.subStepNames.map((n) => n.length));
+    this.maxNameDisplayWidth = Math.max(
+      0,
+      ...this.subStepNames.map((name) => getDisplayWidth(normalizeSubStepDisplayName(name))),
+    );
     this.parentOnStream = options.parentOnStream;
     this.writeFn = options.writeFn ?? ((text: string) => process.stdout.write(text));
     this.progressInfo = options.progressInfo;
     this.totalSubSteps = this.subStepNames.length;
-    this.taskLabel = options.taskLabel ? options.taskLabel.slice(0, 4) : undefined;
+    this.taskLabel = options.taskLabel
+      ? sanitizeTerminalText(options.taskLabel).slice(0, 4)
+      : undefined;
     this.taskColorIndex = options.taskColorIndex;
-    this.parentStepName = options.parentStepName;
+    this.parentStepName = options.parentStepName
+      ? normalizeSubStepDisplayName(options.parentStepName)
+      : undefined;
     this.stepIteration = options.stepIteration;
     this.flushIntervalMs = options.flushIntervalMs ?? ParallelLogger.DEFAULT_FLUSH_INTERVAL_MS;
     this.lineBuffer = new LineTimeSliceBuffer({
@@ -103,7 +120,10 @@ export class ParallelLogger {
 
     this.subStepNames.push(name);
     this.totalSubSteps = this.subStepNames.length;
-    this.maxNameLength = Math.max(this.maxNameLength, name.length);
+    this.maxNameDisplayWidth = Math.max(
+      this.maxNameDisplayWidth,
+      getDisplayWidth(normalizeSubStepDisplayName(name)),
+    );
     this.lineBuffer.addKey(name);
     return this.subStepNames.length - 1;
   }
@@ -113,14 +133,15 @@ export class ParallelLogger {
    * Format: `\x1b[COLORm[name](iteration/max) step index/total\x1b[0m` + padding spaces
    */
   buildPrefix(name: string, index: number): string {
+    const displayName = normalizeSubStepDisplayName(name);
     if (this.taskLabel && this.parentStepName && this.progressInfo && this.stepIteration != null && this.taskColorIndex != null) {
       const taskColor = COLORS[this.taskColorIndex % COLORS.length];
       const { iteration, maxSteps } = this.progressInfo;
-      return `${taskColor}[${this.taskLabel}]${RESET}[${this.parentStepName}][${name}](${iteration}/${maxSteps})(${this.stepIteration}) `;
+      return `${taskColor}[${this.taskLabel}]${RESET}[${this.parentStepName}][${displayName}](${iteration}/${maxSteps})(${this.stepIteration}) `;
     }
 
     const color = COLORS[index % COLORS.length];
-    const padding = ' '.repeat(this.maxNameLength - name.length);
+    const padding = ' '.repeat(this.maxNameDisplayWidth - getDisplayWidth(displayName));
 
     let progressPart = '';
     if (this.progressInfo) {
@@ -129,7 +150,7 @@ export class ParallelLogger {
       progressPart = `(${iteration}/${maxSteps}) step ${index + 1}/${this.totalSubSteps} `;
     }
 
-    return `${color}[${name}]${RESET}${padding} ${progressPart}`;
+    return `${color}[${displayName}]${RESET}${padding} ${progressPart}`;
   }
 
   /**
@@ -266,16 +287,23 @@ export class ParallelLogger {
   ): void {
     this.flush();
 
-    const maxResultNameLength = Math.max(...results.map((r) => r.name.length));
+    const displayResults = results.map((result) => ({
+      ...result,
+      displayName: normalizeSubStepDisplayName(result.name),
+    }));
+    const maxResultNameWidth = Math.max(
+      0,
+      ...displayResults.map((result) => getDisplayWidth(result.displayName)),
+    );
 
-    const resultLines = results.map((r) => {
-      const padding = ' '.repeat(maxResultNameLength - r.name.length);
-      const condition = r.condition ?? '(no result)';
-      return `  ${r.name}:${padding} ${condition}`;
+    const resultLines = displayResults.map((result) => {
+      const padding = ' '.repeat(maxResultNameWidth - getDisplayWidth(result.displayName));
+      const condition = result.condition ?? '(no result)';
+      return `  ${result.displayName}:${padding} ${condition}`;
     });
 
     // Header line: ── name results ──
-    const headerText = ` ${parentStepName} results `;
+    const headerText = ` ${normalizeSubStepDisplayName(parentStepName)} results `;
     const maxLineLength = Math.max(
       headerText.length + 4, // 4 for "── " + " ──"
       ...resultLines.map((l) => l.length),

@@ -2,26 +2,38 @@ import { callClaudeHeadless } from '../claude-headless/client.js';
 import type { ClaudeHeadlessCallOptions } from '../claude-headless/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
-import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
-import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
+import {
+  assertOutputSchema,
+  type AgentSetup,
+  type Provider,
+  type ProviderAgent,
+  type ProviderCallOptions,
+} from './types.js';
 
 function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOptions {
   const claudeOptions = options.providerOptions?.claude;
-  validateClaudeEffortCompatibility(options.model, claudeOptions?.effort);
+  const skillsEnabled = options.internalAgentIsolation === 'strict-readonly'
+    ? false
+    : claudeOptions?.skills?.enabled;
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    internalAgentIsolation: options.internalAgentIsolation,
     model: options.model,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
+    baseUrl: claudeOptions?.baseUrl,
     effort: claudeOptions?.effort,
+    skillsEnabled,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
+    preparedMcp: options.preparedMcp,
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
     sandbox: claudeOptions?.sandbox,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     claudeCliPath: resolveClaudeCliPath() ?? undefined,
     outputSchema: options.outputSchema,
     childProcessEnv: options.childProcessEnv,
@@ -30,9 +42,12 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
 
 export class ClaudeHeadlessProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'sse', 'http']);
+  readonly supportsStrictMcpConfig = true;
 
-  getRuntimeInstructions(): string | null {
+  getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
   }
 
@@ -50,5 +65,27 @@ export class ClaudeHeadlessProvider implements Provider {
           systemPrompt: systemPrompt ?? undefined,
         }),
     };
+  }
+
+  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
+    const { name, systemPrompt } = config;
+    const call = (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
+      const isolatedOptions: ProviderCallOptions = {
+        ...options,
+        sessionId: undefined,
+        internalAgentIsolation: 'strict-readonly',
+        allowedTools: [],
+        mcpServers: undefined,
+        preparedMcp: undefined,
+        imageAttachments: undefined,
+        outputSchema: assertOutputSchema(options.outputSchema, 'claude-headless'),
+      };
+      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+      return callClaudeHeadless(name, fullPrompt, {
+        ...toHeadlessOptions(isolatedOptions),
+        systemPrompt: '',
+      });
+    };
+    return { call };
   }
 }

@@ -2,13 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { WorkflowConfig } from '../core/models/index.js';
+import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
+import type { ProviderType } from '../shared/types/provider.js';
+import type { resolveWorkflowConfigValues } from '../infra/config/index.js';
 import {
-  CapabilityAwareStructuredCaller,
-  DefaultStructuredCaller,
+  ProviderNeutralStructuredCaller,
   type StructuredCaller,
 } from '../agents/structured-caller.js';
-import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 const {
   MockWorkflowEngine,
@@ -16,6 +18,7 @@ const {
   mockEnsureCurrentTmpDirExists,
   mockGetProvider,
   mockRunAgent,
+  mockResolveConfigValueWithSource,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
@@ -75,14 +78,56 @@ const {
     mockEnsureCurrentTmpDirExists: vi.fn(() => getTmpdir()),
     mockGetProvider: vi.fn(),
     mockRunAgent: vi.fn(),
+    mockResolveConfigValueWithSource: vi.fn(),
   };
 });
+
+function resolvedWorkflowConfigValues(
+  provider: ProviderType,
+  autoRouting: AutoRoutingConfig | undefined,
+): ReturnType<typeof resolveWorkflowConfigValues> {
+  return {
+    notificationSound: true,
+    notificationSoundEvents: {},
+    provider,
+    runtime: undefined,
+    preventSleep: false,
+    model: undefined,
+    logging: undefined,
+    analytics: undefined,
+    observability: disabledObservability,
+    autoRouting,
+  };
+}
 
 vi.mock('../core/workflow/index.js', async () => {
   const errorModule = await import('../core/workflow/ask-user-question-error.js');
   return {
     WorkflowEngine: MockWorkflowEngine,
     createDenyAskUserQuestionHandler: errorModule.createDenyAskUserQuestionHandler,
+  };
+});
+
+vi.mock('../features/tasks/execute/workflowRunLifecycle.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunLifecycle.js')
+  >();
+  const { createWorkflowRunLifecycleCompositionTestDouble } = await import(
+    './helpers/run-lifecycle.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunLifecycle: (
+      input: Parameters<typeof actual.createWorkflowRunLifecycle>[0],
+    ) => createWorkflowRunLifecycleCompositionTestDouble(
+      actual.createWorkflowRunLifecycle,
+      input,
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-04-01T00:00:00.000Z',
+        projectTerminalArtifacts: false,
+      },
+    ),
   };
 });
 
@@ -120,6 +165,11 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   writeFileAtomic: vi.fn(),
 }));
 
+vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveConfigValueWithSource: mockResolveConfigValueWithSource,
+}));
+
 vi.mock('../shared/context.js', () => ({
   isQuietMode: vi.fn().mockReturnValue(true),
 }));
@@ -140,20 +190,36 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../infra/fs/index.js', () => ({
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
     iterations: 0,
-  }),
+    status: 'running',
+    history: [],
+  })),
   finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({
     ...log,
     status,
     endTime: new Date().toISOString(),
   })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
+  initNdjsonLog: vi.fn((
+    sessionId: string,
+    _task: string,
+    _workflowName: string,
+    options: { logsDir: string },
+  ) => join(options.logsDir, `${sessionId}.jsonl`)),
   appendNdjsonLine: vi.fn(),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn().mockReturnValue({
     debug: vi.fn(),
     info: vi.fn(),
@@ -164,30 +230,24 @@ vi.mock('../shared/utils/index.js', () => ({
   notifyError: vi.fn(),
   preventSleep: vi.fn(),
   isDebugEnabled: vi.fn().mockReturnValue(false),
-  writePromptLog: vi.fn(),
-  getDebugPromptsLogFile: vi.fn().mockReturnValue(null),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
   ensureCurrentTmpDirExists: mockEnsureCurrentTmpDirExists,
   isValidReportDirName: vi.fn().mockReturnValue(true),
   playWarningSound: vi.fn(),
 }));
 
-vi.mock('../shared/utils/providerEventLogger.js', () => ({
+vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn().mockReturnValue({
     filepath: '/tmp/provider-events.jsonl',
-    wrapCallback: vi.fn((callback) => callback),
-    setStep: vi.fn(),
-    setProvider: vi.fn(),
+    logEvent: vi.fn(),
   }),
   isProviderEventsEnabled: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock('../shared/utils/usageEventLogger.js', () => ({
+vi.mock('../core/logging/usageEventLogger.js', () => ({
   createUsageEventLogger: vi.fn().mockReturnValue({
     filepath: '/tmp/usage-events.jsonl',
-    setStep: vi.fn(),
-    setProvider: vi.fn(),
-    logUsage: vi.fn(),
+    logUsageFor: vi.fn(),
   }),
   isUsageEventsEnabled: vi.fn().mockReturnValue(false),
 }));
@@ -213,7 +273,7 @@ function makeConfig(): WorkflowConfig {
         personaDisplayName: 'coder',
         instruction: 'Implement task',
         passPreviousResponse: true,
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       },
     ],
   };
@@ -223,6 +283,22 @@ function writeWorkflow(baseDir: string, relativePath: string, content: string): 
   const filePath = join(baseDir, relativePath);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content, 'utf-8');
+}
+
+function writeResumeChildWorkflow(projectCwd: string): void {
+  writeWorkflow(projectCwd, '.takt/workflows/resume-child.yaml', `name: resume-child
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 1
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
 }
 
 function expectStructuredCallerShape(value: unknown): void {
@@ -242,16 +318,27 @@ function getInjectedStructuredCaller(): StructuredCaller {
   return structuredCaller as StructuredCaller;
 }
 
+function mockResolvedProviderModel(provider: string, model: string | undefined): void {
+  mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
+    ? { value: provider, source: 'global' }
+    : { value: model, source: model === undefined ? 'default' : 'global' });
+}
+
 describe('executeWorkflow structuredCaller injection', () => {
   const originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
   let cleanupDirs: string[];
+  let projectCwd: string;
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
-  MockWorkflowEngine.nextRunImpl = undefined;
-  cleanupDirs = [];
-});
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
+    mockResolvedProviderModel('cursor', undefined);
+    MockWorkflowEngine.nextRunImpl = undefined;
+    cleanupDirs = [];
+    projectCwd = mkdtempSync(join(tmpdir(), 'takt-structured-caller-project-'));
+    cleanupDirs.push(projectCwd);
+    process.env.TAKT_CONFIG_DIR = join(projectCwd, 'global-config');
+  });
 
   afterEach(() => {
     if (originalTaktConfigDir === undefined) {
@@ -280,25 +367,25 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    mockResolvedProviderModel('cursor', undefined);
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
     mockRunAgent.mockResolvedValue({
       persona: 'default',
       status: 'done',
-      content: '[JUDGE:6]',
+      content: '[JUDGE:1]',
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
     const structuredCaller = getInjectedStructuredCaller();
-    expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
-    expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
     const result = await structuredCaller.evaluateCondition(
       'agent output',
       [{ index: 5, text: 'approved' }],
-      { cwd: '/tmp/project', provider: MockWorkflowEngine.lastInstance.receivedOptions.provider as 'cursor' },
+      { cwd: projectCwd, provider: MockWorkflowEngine.lastInstance.receivedOptions.provider as 'cursor' },
     );
 
     expect(result).toBe(5);
@@ -306,11 +393,10 @@ beforeEach(() => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.callAiJudge).toBeUndefined();
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('cursor');
     expect(MockWorkflowEngine.lastInstance.receivedOptions.model).toBeUndefined();
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      provider: 'cursor',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -329,29 +415,29 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
+    mockResolvedProviderModel('claude', undefined);
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     mockRunAgent.mockResolvedValue({
       persona: 'default',
       status: 'done',
       content: '[JUDGE:1]',
-      structuredOutput: { matched_index: 2 },
+      structuredOutput: { matched_index: 2, reason: 'needs_fix matched' },
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
     const structuredCaller = getInjectedStructuredCaller();
-    expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
-    expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
     const result = await structuredCaller.evaluateCondition(
       'agent output',
       [
         { index: 2, text: 'approved' },
         { index: 5, text: 'needs_fix' },
       ],
-      { cwd: '/tmp/project', provider: MockWorkflowEngine.lastInstance.receivedOptions.provider as 'claude' },
+      { cwd: projectCwd, provider: MockWorkflowEngine.lastInstance.receivedOptions.provider as 'claude' },
     );
 
     expect(result).toBe(5);
@@ -359,10 +445,10 @@ beforeEach(() => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.callAiJudge).toBeUndefined();
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('claude');
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    expect(prompt).toContain('needs_fix');
     expect(runOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      provider: 'claude',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'claude' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -383,9 +469,10 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
+    mockResolvedProviderModel('cursor', undefined);
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     mockRunAgent
@@ -398,39 +485,40 @@ beforeEach(() => {
       .mockResolvedValueOnce({
         persona: 'conductor',
         status: 'done',
-        content: '[IMPLEMENT:1]',
+        content: '```json\n{"content":"[IMPLEMENT:1]"}\n```',
         timestamp: new Date('2026-04-01T00:00:01.000Z'),
       });
 
     const structuredCaller = getInjectedStructuredCaller();
+    const structuredPrompt = 'structured judge prompt';
+    const tagPrompt = 'tag judge prompt';
     const result = await structuredCaller.judgeStatus(
-      'structured judge prompt',
-      'tag judge prompt',
+      structuredPrompt,
+      tagPrompt,
       [
-        { condition: 'approved', next: 'COMPLETE' },
-        { condition: 'needs_fix', next: 'fix' },
+        { label: 'approved' },
+        { label: 'needs_fix' },
       ],
       {
-        cwd: '/tmp/project',
+        cwd: projectCwd,
         stepName: 'implement',
         provider: 'cursor',
         resolvedProvider: 'cursor',
       },
     );
 
-    expect(result).toEqual({ ruleIndex: 0, method: 'phase3_tag' });
+    expect(result).toEqual({ candidateIndex: 0, method: 'phase3_tag' });
     expect(mockGetProvider).toHaveBeenCalledWith('cursor');
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
     const [, firstPrompt, firstRunOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(firstPrompt).toContain('structured judge prompt');
+    expect(firstPrompt).toContain(structuredPrompt);
     expect(firstRunOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      provider: 'cursor',
-      resolvedProvider: 'cursor',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(firstRunOptions).not.toHaveProperty('outputSchema');
     const [, secondPrompt, secondRunOptions] = mockRunAgent.mock.calls[1] ?? [];
-    expect(secondPrompt).toContain('tag judge prompt');
+    expect(secondPrompt).toContain(tagPrompt);
     expect(secondRunOptions).not.toHaveProperty('outputSchema');
   });
 
@@ -450,29 +538,32 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
+    mockResolvedProviderModel('claude', 'sonnet');
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     mockRunAgent.mockResolvedValue({
       persona: 'conductor',
       status: 'done',
       content: '{"step":1}',
-      structuredOutput: { step: 1 },
+      structuredOutput: { step: 1, reason: 'approved matched' },
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
     const structuredCaller = getInjectedStructuredCaller();
+    const structuredPrompt = 'structured judge prompt';
+    const tagPrompt = 'tag judge prompt';
     const result = await structuredCaller.judgeStatus(
-      'structured judge prompt',
-      'tag judge prompt',
+      structuredPrompt,
+      tagPrompt,
       [
-        { condition: 'approved', next: 'COMPLETE' },
-        { condition: 'needs_fix', next: 'fix' },
+        { label: 'approved' },
+        { label: 'needs_fix' },
       ],
       {
-        cwd: '/tmp/project',
+        cwd: projectCwd,
         stepName: 'implement',
         provider: 'claude',
         resolvedProvider: 'claude',
@@ -480,15 +571,13 @@ beforeEach(() => {
       },
     );
 
-    expect(result).toEqual({ ruleIndex: 0, method: 'structured_output' });
+    expect(result).toEqual({ candidateIndex: 0, method: 'structured_output' });
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('structured judge prompt');
+    expect(prompt).toContain(structuredPrompt);
     expect(runOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      provider: 'claude',
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -506,9 +595,10 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
+    mockResolvedProviderModel('cursor', 'cursor-fast');
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('cursor');
@@ -516,8 +606,8 @@ beforeEach(() => {
   });
 
   it('should pass resolved phase 1 process safety to WorkflowEngine', async () => {
-    await executeWorkflow({ ...makeConfig(), name: 'takt-default' }, 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow({ ...makeConfig(), name: 'takt-default' }, 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.phase1ProcessSafetyByStep).toEqual({
@@ -526,8 +616,8 @@ beforeEach(() => {
   });
 
   it('should not pass phase 1 process safety to WorkflowEngine for non target workflows', async () => {
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.phase1ProcessSafetyByStep).toBeUndefined();
@@ -594,15 +684,13 @@ steps:
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
         parentWorkflow: WorkflowConfig;
-        identifier: string;
-        stepName: string;
+        step: WorkflowCallStep;
         projectCwd: string;
         lookupCwd: string;
       }) => WorkflowConfig | null
     )({
       parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
-      identifier: 'takt/coding',
-      stepName: 'delegate',
+      step: MockWorkflowEngine.lastInstance.receivedConfig.steps[0] as WorkflowCallStep,
       projectCwd: projectDir,
       lookupCwd: projectDir,
     });
@@ -649,15 +737,13 @@ steps:
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
         parentWorkflow: WorkflowConfig;
-        identifier: string;
-        stepName: string;
+        step: WorkflowCallStep;
         projectCwd: string;
         lookupCwd: string;
       }) => WorkflowConfig | null
     )({
       parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
-      identifier: 'default',
-      stepName: 'delegate',
+      step: MockWorkflowEngine.lastInstance.receivedConfig.steps[0] as WorkflowCallStep,
       projectCwd: projectDir,
       lookupCwd: projectDir,
     });
@@ -666,7 +752,7 @@ steps:
     expect(childWorkflow?.name).toBe('default');
   });
 
-  it('should resolve workflow_call relative path from explicit execution context even when spread config drops loader metadata', async () => {
+  it('should resolve a relative workflow_call from the bundled workflow identity', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-project-'));
     const externalDir = mkdtempSync(join(tmpdir(), 'takt-external-'));
     cleanupDirs.push(projectDir, externalDir);
@@ -706,20 +792,20 @@ steps:
       projectCwd: projectDir,
     });
 
-    expect(getWorkflowSourcePath(MockWorkflowEngine.lastInstance.receivedConfig)).toBeUndefined();
+    expect(getWorkflowReference(MockWorkflowEngine.lastInstance.receivedConfig)).toBe(
+      getWorkflowReference(externalParent!),
+    );
 
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
         parentWorkflow: WorkflowConfig;
-        identifier: string;
-        stepName: string;
+        step: WorkflowCallStep;
         projectCwd: string;
         lookupCwd: string;
       }) => WorkflowConfig | null
     )({
       parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
-      identifier: './child.yaml',
-      stepName: 'delegate',
+      step: MockWorkflowEngine.lastInstance.receivedConfig.steps[0] as WorkflowCallStep,
       projectCwd: projectDir,
       lookupCwd: projectDir,
     });
@@ -733,31 +819,56 @@ steps:
 
   it('should persist the latest parent resume_point when workflow aborts after a workflow_call step completes', async () => {
     const { writeFileAtomic } = await import('../infra/config/index.js');
+    writeResumeChildWorkflow(projectCwd);
     const workflowCallStep: WorkflowConfig['steps'][number] = {
       name: 'delegate',
       kind: 'workflow_call',
-      call: 'takt/coding',
+      call: 'resume-child',
       instruction: '',
       personaDisplayName: 'delegate',
       passPreviousResponse: true,
-      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
     };
     const childResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'resume-child',
+          workflow_ref: 'resume-child',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const parentResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183900,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {
@@ -770,7 +881,18 @@ steps:
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
       }, workflowCallStep.instruction);
       instance.currentResumePoint = parentResumePoint;
-      instance.emit('workflow:abort', { status: 'aborted', iteration: 7 }, 'post child failure');
+      instance.emit(
+        'workflow:abort',
+        { status: 'aborted', iteration: 7 },
+        'post child failure',
+        'runtime_error',
+        {
+          kind: 'runtime_error',
+          step: workflowCallStep.name,
+          reason: 'post child failure',
+          error: 'post child failure',
+        },
+      );
       return { status: 'aborted', iteration: 7 };
     };
 
@@ -779,8 +901,8 @@ steps:
       maxSteps: 10,
       initialStep: 'delegate',
       steps: [workflowCallStep],
-    }, 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    }, 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(result.success).toBe(false);
@@ -789,37 +911,62 @@ steps:
     const lastWrite = metaWrites.at(-1);
     expect(lastWrite).toBeDefined();
     const serialized = JSON.parse(String(lastWrite?.[1]));
-    expect(serialized.status).toBe('aborted');
+    expect(serialized.status).toBe('failed');
     expect(serialized.resume_point).toEqual(parentResumePoint);
   });
 
   it('should persist the latest parent resume_point when workflow engine throws after a workflow_call step completes', async () => {
     const { writeFileAtomic } = await import('../infra/config/index.js');
+    writeResumeChildWorkflow(projectCwd);
     const workflowCallStep: WorkflowConfig['steps'][number] = {
       name: 'delegate',
       kind: 'workflow_call',
-      call: 'takt/coding',
+      call: 'resume-child',
       instruction: '',
       personaDisplayName: 'delegate',
       passPreviousResponse: true,
-      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
     };
     const childResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'resume-child',
+          workflow_ref: 'resume-child',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const parentResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183900,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {
@@ -840,15 +987,15 @@ steps:
       maxSteps: 10,
       initialStep: 'delegate',
       steps: [workflowCallStep],
-    }, 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    }, 'task', projectCwd, {
+      projectCwd,
     })).rejects.toThrow('engine crashed after child completion');
     const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([filePath]) =>
       String(filePath).endsWith('/meta.json'));
     const lastWrite = metaWrites.at(-1);
     expect(lastWrite).toBeDefined();
     const serialized = JSON.parse(String(lastWrite?.[1]));
-    expect(serialized.status).toBe('aborted');
+    expect(serialized.status).toBe('failed');
     expect(serialized.resume_point).toEqual(parentResumePoint);
   });
 
@@ -869,15 +1016,94 @@ steps:
       observability: disabledObservability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       provider: 'mock',
     });
 
     const structuredCaller = getInjectedStructuredCaller();
-    expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
-    expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('mock');
+  });
+
+  it('should pass effective auto_routing and its strategy override separately to WorkflowEngine', async () => {
+    const autoRouting = {
+      strategy: 'cost',
+      router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+      candidates: [
+        {
+          name: 'reasoning',
+          description: 'Reasoning',
+          provider: 'claude-sdk',
+          model: 'claude-opus-4-20250514',
+          routingTier: 'high',
+        },
+        {
+          name: 'coding',
+          description: 'Implementation',
+          provider: 'codex',
+          model: 'gpt-5',
+          routingTier: 'medium',
+        },
+      ],
+      defaultPool: 'general',
+      candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
+    } satisfies AutoRoutingConfig;
+    const config = makeConfig();
+    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+      resolvedWorkflowConfigValues('cursor', autoRouting),
+    );
+
+    await executeWorkflow(config, 'task', projectCwd, {
+      projectCwd,
+      autoStrategy: 'performance',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoRouting).toEqual(autoRouting);
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoStrategyOverride).toBe('performance');
+  });
+
+  it('should delegate autoStrategy override application to WorkflowEngine', async () => {
+    const config = makeConfig();
+    const autoRouting = {
+        strategy: 'cost',
+        router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+        candidates: [
+          {
+            name: 'reasoning',
+            description: 'Reasoning',
+            provider: 'claude-sdk',
+            model: 'claude-opus-4-20250514',
+            routingTier: 'high',
+          },
+          {
+            name: 'coding',
+            description: 'Implementation',
+            provider: 'codex',
+            model: 'gpt-5',
+            routingTier: 'medium',
+          },
+        ],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
+      } satisfies AutoRoutingConfig;
+    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+      resolvedWorkflowConfigValues('mock', autoRouting),
+    );
+
+    await executeWorkflow(config, 'task', projectCwd, {
+      projectCwd,
+      provider: 'mock',
+      autoStrategy: 'performance',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoStrategyOverride).toBe('performance');
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoRouting).toEqual(expect.objectContaining({
+      strategy: 'cost',
+    }));
   });
 
   it('should avoid native structured output judge calls when the step provider override is unsupported', async () => {
@@ -903,8 +1129,8 @@ steps:
       provider: 'cursor',
     };
 
-    await executeWorkflow(config, 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(config, 'task', projectCwd, {
+      projectCwd,
     });
 
     mockRunAgent.mockResolvedValue({
@@ -918,16 +1144,14 @@ steps:
     const result = await structuredCaller.evaluateCondition(
       'agent output',
       [{ index: 0, text: 'approved' }],
-      { cwd: '/tmp/project', provider: 'cursor', resolvedProvider: 'cursor' },
+      { cwd: projectCwd, provider: 'cursor', resolvedProvider: 'cursor' },
     );
 
     expect(result).toBe(0);
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      provider: 'cursor',
-      resolvedProvider: 'cursor',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -955,15 +1179,15 @@ steps:
       provider: 'claude',
     };
 
-    await executeWorkflow(config, 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(config, 'task', projectCwd, {
+      projectCwd,
     });
 
     mockRunAgent.mockResolvedValue({
       persona: 'default',
       status: 'done',
       content: '[JUDGE:1]',
-      structuredOutput: { matched_index: 1 },
+      structuredOutput: { matched_index: 1, reason: 'approved matched' },
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
@@ -971,16 +1195,14 @@ steps:
     const result = await structuredCaller.evaluateCondition(
       'agent output',
       [{ index: 0, text: 'approved' }],
-      { cwd: '/tmp/project', provider: 'claude', resolvedProvider: 'claude' },
+      { cwd: projectCwd, provider: 'claude', resolvedProvider: 'claude' },
     );
 
     expect(result).toBe(0);
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      provider: 'claude',
-      resolvedProvider: 'claude',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'claude' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1002,8 +1224,8 @@ steps:
       observability: disabledObservability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     mockRunAgent.mockResolvedValue({
@@ -1017,18 +1239,16 @@ steps:
     const result = await structuredCaller.decomposeTask(
       'break down the work',
       2,
-      { cwd: '/tmp/project', resolvedProvider: 'cursor', resolvedModel: 'cursor-fast', persona: 'team-leader' },
+      { cwd: projectCwd, resolvedProvider: 'cursor', resolvedModel: 'cursor-fast', persona: 'team-leader' },
     );
 
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'part-1', title: 'API', instruction: 'Implement API' },
     ]);
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('```json');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      resolvedProvider: 'cursor',
-      resolvedModel: 'cursor-fast',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1050,8 +1270,8 @@ steps:
       observability: disabledObservability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     mockRunAgent.mockResolvedValue({
@@ -1068,17 +1288,16 @@ steps:
     const result = await structuredCaller.decomposeTask(
       'break down the work',
       2,
-      { cwd: '/tmp/project', resolvedProvider: 'claude', resolvedModel: 'sonnet', persona: 'team-leader' },
+      { cwd: projectCwd, resolvedProvider: 'claude', resolvedModel: 'sonnet', persona: 'team-leader' },
     );
 
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'part-1', title: 'API', instruction: 'Implement API' },
     ]);
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1088,14 +1307,14 @@ steps:
       supportsStructuredOutput: provider === 'claude',
     }));
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     mockRunAgent.mockResolvedValue({
       persona: 'team-leader',
       status: 'done',
-      content: '```json\n{\"done\":false,\"reasoning\":\"need tests\",\"parts\":[{\"id\":\"part-2\",\"title\":\"Tests\",\"instruction\":\"Add tests\"}]}\n```',
+      content: '```json\n{\"done\":false,\"reasoning\":\"need tests\",\"cancelPartIds\":[],\"parts\":[{\"id\":\"part-2\",\"title\":\"Tests\",\"instruction\":\"Add tests\"}]}\n```',
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
@@ -1104,21 +1323,25 @@ steps:
       'break down the work',
       [{ id: 'part-1', title: 'API', status: 'done', content: 'Implemented API' }],
       ['part-1'],
-      2,
-      { cwd: '/tmp/project', resolvedProvider: 'cursor', resolvedModel: 'cursor-fast', persona: 'team-leader' },
+      {
+        cwd: projectCwd,
+        resolvedProvider: 'cursor',
+        resolvedModel: 'cursor-fast',
+        persona: 'team-leader',
+        cancellablePartIds: [],
+      },
     );
 
     expect(result).toEqual({
       done: false,
       reasoning: 'need tests',
+      cancelPartIds: [],
       parts: [{ id: 'part-2', title: 'Tests', instruction: 'Add tests' }],
     });
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('```json');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      resolvedProvider: 'cursor',
-      resolvedModel: 'cursor-fast',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1128,8 +1351,8 @@ steps:
       supportsStructuredOutput: provider === 'claude',
     }));
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     mockRunAgent.mockResolvedValue({
@@ -1139,6 +1362,7 @@ steps:
       structuredOutput: {
         done: false,
         reasoning: 'need tests',
+        cancelPartIds: [],
         parts: [{ id: 'part-2', title: 'Tests', instruction: 'Add tests' }],
       },
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
@@ -1149,20 +1373,25 @@ steps:
       'break down the work',
       [{ id: 'part-1', title: 'API', status: 'done', content: 'Implemented API' }],
       ['part-1'],
-      2,
-      { cwd: '/tmp/project', resolvedProvider: 'claude', resolvedModel: 'sonnet', persona: 'team-leader' },
+      {
+        cwd: projectCwd,
+        resolvedProvider: 'claude',
+        resolvedModel: 'sonnet',
+        persona: 'team-leader',
+        cancellablePartIds: [],
+      },
     );
 
     expect(result).toEqual({
       done: false,
       reasoning: 'need tests',
+      cancelPartIds: [],
       parts: [{ id: 'part-2', title: 'Tests', instruction: 'Add tests' }],
     });
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
-      cwd: '/tmp/project',
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      cwd: projectCwd,
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });

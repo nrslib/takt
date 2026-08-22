@@ -3,11 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { unexpectedConfigEnv } from '../../test/helpers/unknown-contract-test-keys.js';
 import { envVarNameFromPath } from '../infra/config/env/config-env-overrides.js';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
-const removedConfigEnv = unexpectedConfigEnv;
 
 const testRoot = join(tmpdir(), `takt-config-env-${randomUUID()}`);
 const globalTaktDir = join(testRoot, 'global');
@@ -51,6 +49,8 @@ describe('config traced env overrides', () => {
   it('dotted path から traced-config 用の env 名を生成する', () => {
     expect(envVarNameFromPath('provider_options.claude.sandbox.allow_unsandboxed_commands'))
       .toBe('TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS');
+    expect(envVarNameFromPath('provider_options.codex.fast_mode'))
+      .toBe('TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE');
   });
 
   it('global config はホワイトリストされた env のみを反映する', () => {
@@ -63,6 +63,30 @@ describe('config traced env overrides', () => {
 
     expect(config.provider).toBe('codex');
     expect(config.vcsProvider).toBeUndefined();
+  });
+
+  it('global config の base_url 明示値は env override より優先される', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      [
+        'provider_options:',
+        '  codex:',
+        '    base_url: http://global.example.test/v1',
+        '  claude:',
+        '    base_url: http://global.example.test',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL = 'http://env.example.test/v1';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL = 'http://env.example.test';
+
+    const config = loadGlobalConfig();
+
+    expect(config.providerOptions).toEqual({
+      codex: { baseUrl: 'http://global.example.test/v1' },
+      claude: { baseUrl: 'http://global.example.test' },
+    });
   });
 
   it('project config は provider_options の leaf env override を反映する', () => {
@@ -81,6 +105,126 @@ describe('config traced env overrides', () => {
     expect(config.providerOptions).toEqual({
       codex: { networkAccess: true },
     });
+  });
+
+  it.each([
+    { configValue: true, envValue: 'false', expectedValue: false },
+    { configValue: false, envValue: 'true', expectedValue: true },
+  ])('project config は Codex fast_mode の boolean env override を反映する', ({ configValue, envValue, expectedValue }) => {
+    const projectDir = join(testRoot, `project-codex-fast-mode-${envValue}`);
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', `    fast_mode: ${configValue}`].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = envValue;
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { fastMode: expectedValue },
+    });
+  });
+
+  it('global config は Codex fast_mode の明示値を読み込む', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      ['provider_options:', '  codex:', '    fast_mode: false'].join('\n'),
+      'utf-8',
+    );
+
+    expect(loadGlobalConfig().providerOptions).toEqual({
+      codex: { fastMode: false },
+    });
+  });
+
+  it('project config は Codex permission control の env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-codex-permission-control-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = 'codex';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { permissionControl: 'codex' },
+    });
+  });
+
+  it('project config と env の解決後に競合する Codex options を拒否する', () => {
+    const projectDir = join(testRoot, 'project-codex-permission-control-conflict-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: true'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = 'codex';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow();
+  });
+
+  it('project config は Codex Skill scope ごとの env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-codex-skills-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    skills:',
+        '      repo: false',
+        '      user: true',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO = 'true';
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER = 'false';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { skills: { repo: true, user: false } },
+    });
+  });
+
+  it('project config は Claude Skills の boolean env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-claude-skills-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  claude:',
+        '    skills:',
+        '      enabled: false',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      claude: { skills: { enabled: true } },
+    });
+  });
+
+  it('project config は Claude Skills の不正な env override を拒否する', () => {
+    const projectDir = join(testRoot, 'project-claude-skills-invalid-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED = 'enabled';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/boolean|enabled/i);
   });
 
   it('project config は effort 系の env override を traced-config 経由で反映する', () => {
@@ -106,6 +250,73 @@ describe('config traced env overrides', () => {
     expect(config.providerOptions).toEqual({
       codex: { reasoningEffort: 'xhigh' },
       claude: { effort: 'max' },
+    });
+  });
+
+  it('project config の base_url 明示値は env override より優先される', () => {
+    const projectDir = join(testRoot, 'project-base-url-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    base_url: http://127.0.0.1:8787/v1',
+        '  claude:',
+        '    base_url: http://localhost:8787',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL = 'http://env.example.test/v1';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL = 'http://env.example.test';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { baseUrl: 'http://127.0.0.1:8787/v1' },
+      claude: { baseUrl: 'http://localhost:8787' },
+    });
+  });
+
+  it('project config はファイル由来の非 loopback base_url を拒否する', () => {
+    const projectDir = join(testRoot, 'project-base-url-external-file');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    base_url: https://attacker.example.test/v1',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    expect(() => loadProjectConfig(projectDir))
+      .toThrow(/provider_options\.codex\.base_url must use a loopback base_url/);
+  });
+
+  it('project config に base_url がない場合は env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-base-url-env-fallback');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL = 'http://env.example.test/v1';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL = 'http://env.example.test';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: {
+        baseUrl: 'http://env.example.test/v1',
+        networkAccess: false,
+      },
+      claude: { baseUrl: 'http://env.example.test' },
     });
   });
 
@@ -156,6 +367,79 @@ describe('config traced env overrides', () => {
       kiro: { agent: 'env-agent' },
     });
   });
+
+  it('project config は pi.extensions の JSON env override を traced-config 経由で反映する', () => {
+    const projectDir = join(testRoot, 'project-pi-extensions-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  pi:',
+        '    extensions:',
+        '      - npm:old-extension',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS = JSON.stringify(['npm:example-extension']);
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      pi: { extensions: ['npm:example-extension'] },
+    });
+  });
+
+  it.each([
+    {
+      envName: 'TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS',
+      rawKey: 'no_extensions',
+      internalKey: 'noExtensions',
+    },
+    {
+      envName: 'TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS',
+      rawKey: 'no_skills',
+      internalKey: 'noSkills',
+    },
+    {
+      envName: 'TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES',
+      rawKey: 'no_prompt_templates',
+      internalKey: 'noPromptTemplates',
+    },
+    {
+      envName: 'TAKT_PROVIDER_OPTIONS_PI_NO_THEMES',
+      rawKey: 'no_themes',
+      internalKey: 'noThemes',
+    },
+    {
+      envName: 'TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES',
+      rawKey: 'no_context_files',
+      internalKey: 'noContextFiles',
+    },
+  ].flatMap((option) => [
+    { ...option, configValue: false, envValue: 'true', expectedValue: true },
+    { ...option, configValue: true, envValue: 'false', expectedValue: false },
+  ]))(
+    'project config は $envName=$envValue の boolean override を反映する',
+    ({ envName, rawKey, internalKey, configValue, envValue, expectedValue }) => {
+      const projectDir = join(testRoot, `project-pi-${rawKey}-${envValue}`);
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'config.yaml'),
+        ['provider_options:', '  pi:', `    ${rawKey}: ${configValue}`].join('\n'),
+        'utf-8',
+      );
+      process.env[envName] = envValue;
+
+      const config = loadProjectConfig(projectDir);
+
+      expect(config.providerOptions).toEqual({
+        pi: { [internalKey]: expectedValue },
+      });
+    },
+  );
 
   it('global config は provider_options.kiro.agent を読み込む', () => {
     mkdirSync(globalTaktDir, { recursive: true });
@@ -353,20 +637,6 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('project config は removed runtime_prepare env を無視する', () => {
-    const projectDir = join(testRoot, 'project-removed-runtime-prepare-root-and-leaf');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepare] = JSON.stringify({
-      custom_scripts: false,
-    });
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'true';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-  });
 
   it('project config は workflow_runtime_prepare の新 env 名を反映する', () => {
     const projectDir = join(testRoot, 'project-workflow-runtime-prepare-env');
@@ -428,20 +698,6 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('project config は removed runtime_prepare env と canonical env が同時指定でも canonical env を優先する', () => {
-    const projectDir = join(testRoot, 'project-workflow-runtime-prepare-env-priority');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'false';
-    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toEqual({
-      customScripts: true,
-    });
-  });
 
   it('project config は workflow_arpeggio の新 env 名を反映する', () => {
     const projectDir = join(testRoot, 'project-workflow-arpeggio-env');
@@ -535,6 +791,24 @@ describe('config traced env overrides', () => {
     expect(config.syncProjectLocalTaktOnRetry).toBe(true);
   });
 
+  it('project config は auto_requeue_max_attempts と ignore_exceed の env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-run-retry-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['auto_requeue_max_attempts: 1', 'ignore_exceed: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_AUTO_REQUEUE_MAX_ATTEMPTS = '2';
+    process.env.TAKT_IGNORE_EXCEED = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.autoRequeueMaxAttempts).toBe(2);
+    expect(config.ignoreExceed).toBe(true);
+  });
+
   it('global config は enable_builtin_workflows の新 env 名を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
@@ -545,16 +819,6 @@ describe('config traced env overrides', () => {
     expect(config.enableBuiltinWorkflows).toBe(true);
   });
 
-  it('global config は removed enable_builtin env と canonical env が同時指定でも canonical env を優先する', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
-    process.env[removedConfigEnv.enableBuiltinWorkflows] = 'false';
-    process.env.TAKT_ENABLE_BUILTIN_WORKFLOWS = 'true';
-
-    const config = loadGlobalConfig();
-
-    expect(config.enableBuiltinWorkflows).toBe(true);
-  });
 
   it('global config は workflow notification の新 env 名を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
@@ -570,18 +834,6 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('global config は removed workflow notification env と canonical env が同時指定でも canonical env を優先する', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
-    process.env[removedConfigEnv.notificationWorkflowComplete] = 'false';
-    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_COMPLETE = 'true';
-
-    const config = loadGlobalConfig();
-
-    expect(config.notificationSoundEvents).toEqual({
-      workflowComplete: true,
-    });
-  });
 
   it('global config は workflow_categories_file の新 env 名を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
@@ -593,16 +845,6 @@ describe('config traced env overrides', () => {
     expect(config.workflowCategoriesFile).toBe('/tmp/workflow-categories.yaml');
   });
 
-  it('global config は removed workflow_categories_file env と canonical env が同時指定でも canonical env を優先する', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
-    process.env[removedConfigEnv.workflowCategoriesFile] = '/tmp/removed-workflow-categories.yaml';
-    process.env.TAKT_WORKFLOW_CATEGORIES_FILE = '/tmp/workflow-categories.yaml';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowCategoriesFile).toBe('/tmp/workflow-categories.yaml');
-  });
 
   it('global config は workflow_runtime_prepare の root JSON env を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
@@ -656,6 +898,22 @@ describe('config traced env overrides', () => {
     const config = loadGlobalConfig();
 
     expect(config.syncProjectLocalTaktOnRetry).toBe(false);
+  });
+
+  it('global config は auto_requeue_max_attempts と ignore_exceed の env override を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      ['language: ja', 'auto_requeue_max_attempts: 1', 'ignore_exceed: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_AUTO_REQUEUE_MAX_ATTEMPTS = '4';
+    process.env.TAKT_IGNORE_EXCEED = 'true';
+
+    const config = loadGlobalConfig();
+
+    expect(config.autoRequeueMaxAttempts).toBe(4);
+    expect(config.ignoreExceed).toBe(true);
   });
 
   it('global config は workflow 系 leaf env を反映する', () => {
@@ -745,24 +1003,40 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('project config は不正な codex reasoning_effort env override を拒否する', () => {
-    const projectDir = join(testRoot, 'project-invalid-codex-effort-env');
+  it('project config は任意の codex reasoning_effort env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-custom-codex-effort-env');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
     process.env.TAKT_PROVIDER_OPTIONS_CODEX_REASONING_EFFORT = 'extreme';
 
-    expect(() => loadProjectConfig(projectDir)).toThrow(/reasoning_effort/);
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      codex: { reasoningEffort: 'extreme' },
+    });
   });
 
-  it('project config は不正な claude effort env override を拒否する', () => {
-    const projectDir = join(testRoot, 'project-invalid-claude-effort-env');
+  it('project config は任意の claude effort env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-custom-claude-effort-env');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
     process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_EFFORT = 'impossible';
 
-    expect(() => loadProjectConfig(projectDir)).toThrow(/effort/);
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      claude: { effort: 'impossible' },
+    });
+  });
+
+  it('project config は任意の copilot effort env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-custom-copilot-effort-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: copilot\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_COPILOT_EFFORT = 'experimental';
+
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      copilot: { effort: 'experimental' },
+    });
   });
 
   it('current logging env は global logging に反映する', () => {
@@ -779,184 +1053,6 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('removed builtins env は global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.enableBuiltinWorkflows] = 'true';
-
-    const config = loadGlobalConfig();
-
-    expect(config.enableBuiltinWorkflows).toBeUndefined();
-  });
-
-  it('removed categories env は global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.workflowCategoriesFile] = '/tmp/removed-workflow-categories.yaml';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowCategoriesFile).toBeUndefined();
-  });
-
-  it('removed workflow notification env は global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.notificationWorkflowComplete] = 'true';
-    process.env[removedConfigEnv.notificationWorkflowAbort] = 'false';
-
-    const config = loadGlobalConfig();
-
-    expect(config.notificationSoundEvents).toBeUndefined();
-  });
-
-  it('removed leaf env は global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomDataSourceModules] = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeInlineJs] = 'false';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeFiles] = 'true';
-    process.env[removedConfigEnv.workflowMcpServersStdio] = 'true';
-    process.env[removedConfigEnv.workflowMcpServersHttp] = 'false';
-    process.env[removedConfigEnv.workflowMcpServersSse] = 'true';
-    process.env[removedConfigEnv.notificationWorkflowComplete] = 'true';
-    process.env[removedConfigEnv.notificationWorkflowAbort] = 'false';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-    expect(config.workflowArpeggio).toBeUndefined();
-    expect(config.workflowMcpServers).toBeUndefined();
-    expect(config.notificationSoundEvents).toBeUndefined();
-  });
-
-  it('removed runtime_prepare env は project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-runtime-prepare-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepare] = JSON.stringify({
-      custom_scripts: true,
-    });
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-  });
-
-  it('removed runtime_prepare env が不正な JSON でも global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepare] = '{';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-  });
-
-  it('removed runtime_prepare env が不正な JSON でも project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-runtime-prepare-invalid-json-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepare] = '{';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-  });
-
-  it('removed arpeggio env は project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-arpeggio-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowArpeggio] = JSON.stringify({
-      custom_data_source_modules: true,
-      custom_merge_inline_js: false,
-      custom_merge_files: true,
-    });
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowArpeggio).toBeUndefined();
-  });
-
-  it('removed mcp_servers env は project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-mcp-servers-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowMcpServers] = JSON.stringify({
-      stdio: true,
-      http: false,
-      sse: true,
-    });
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowMcpServers).toBeUndefined();
-  });
-
-  it('removed leaf env は project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-leaf-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomDataSourceModules] = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeInlineJs] = 'false';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeFiles] = 'true';
-    process.env[removedConfigEnv.workflowMcpServersStdio] = 'true';
-    process.env[removedConfigEnv.workflowMcpServersHttp] = 'false';
-    process.env[removedConfigEnv.workflowMcpServersSse] = 'true';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-    expect(config.workflowArpeggio).toBeUndefined();
-    expect(config.workflowMcpServers).toBeUndefined();
-  });
-
-  it('project config では removed leaf env と canonical env が同時指定でも canonical env を優先する', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-leaf-env-blocked-by-workflow-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'false';
-    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeFiles] = 'false';
-    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
-    process.env[removedConfigEnv.workflowMcpServersHttp] = 'false';
-    process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'true';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toEqual({ customScripts: true });
-    expect(config.workflowArpeggio).toEqual({ customMergeFiles: true });
-    expect(config.workflowMcpServers).toEqual({ http: true });
-  });
-
-  it('global config では removed leaf env と canonical env が同時指定でも canonical env を優先する', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'false';
-    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeFiles] = 'false';
-    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
-    process.env[removedConfigEnv.workflowMcpServersHttp] = 'false';
-    process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'true';
-    process.env[removedConfigEnv.notificationWorkflowAbort] = 'false';
-    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_ABORT = 'true';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowRuntimePrepare).toEqual({ customScripts: true });
-    expect(config.workflowArpeggio).toEqual({ customMergeFiles: true });
-    expect(config.workflowMcpServers).toEqual({ http: true });
-    expect(config.notificationSoundEvents).toEqual({ workflowAbort: true });
-  });
 
   it('current logging env がある場合も legacy logging env は current を優先する', () => {
     mkdirSync(globalTaktDir, { recursive: true });

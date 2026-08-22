@@ -10,8 +10,10 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Language } from '../../../core/models/index.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
-import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
+import { promptInput, selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
+import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
+import { getExecModelCandidates } from '../../providers/model-candidates.js';
 import {
   getGlobalConfigDir,
   getGlobalConfigPath,
@@ -19,7 +21,11 @@ import {
   ensureDir,
 } from '../paths.js';
 import { copyProjectResourcesToDir, getLanguageResourcesDir } from '../../resources/index.js';
-import { setLanguage, setProvider } from './globalConfig.js';
+import { RUNTIME_PROVIDER_FILENAME } from '../runtime-provider/constants.js';
+import {
+  generateGlobalRuntimeProviderFile,
+  type RuntimeProviderSelection,
+} from '../runtime-provider/initialization.js';
 
 type InitialSetupProvider = Exclude<ProviderType, 'mock'>;
 
@@ -72,6 +78,8 @@ export async function promptProviderSelection(): Promise<InitialSetupProvider> {
     { label: 'Cursor Agent', value: 'cursor' },
     { label: 'GitHub Copilot', value: 'copilot' },
     { label: 'Kiro CLI', value: 'kiro' },
+    { label: 'Pi SDK', value: 'pi' },
+    { label: 'DeepSeek Harness (official Python SDK, developer preview)', value: 'deepseek-harness' },
   ];
 
   const result = await selectOptionWithDefault(
@@ -85,6 +93,52 @@ export async function promptProviderSelection(): Promise<InitialSetupProvider> {
   }
 
   return result;
+}
+
+const CUSTOM_MODEL_VALUE = '__custom_model__';
+
+/**
+ * Prompt user to select the model for the chosen provider.
+ * The selected model is written to runtime.yaml `profiles.default`, whose referenced profile must
+ * define both provider and model, so the model must be consistent with the provider (e.g. opencode
+ * requires a `provider/model` value). We therefore offer the provider's known models and require an
+ * explicit value rather than defaulting to a Claude model name for every provider.
+ * Exits process if cancelled (initial setup is required).
+ */
+export async function promptModelSelection(provider: InitialSetupProvider): Promise<string> {
+  const candidates = getExecModelCandidates(provider);
+  const options: { label: string; value: string }[] = candidates.map((model) => ({
+    label: model,
+    value: model,
+  }));
+  options.push({ label: 'Custom model / モデルを直接入力', value: CUSTOM_MODEL_VALUE });
+
+  const selected = await selectOptionWithDefault(
+    'Select model / モデルを選択してください:',
+    options,
+    candidates[0] ?? CUSTOM_MODEL_VALUE
+  );
+
+  if (selected === null) {
+    process.exit(0);
+  }
+
+  const model = selected === CUSTOM_MODEL_VALUE
+    ? await promptCustomModel()
+    : selected;
+
+  // Fail fast so a provider that requires a model (e.g. opencode's `provider/model` format) never
+  // produces an invalid runtime.yaml default profile on the next run.
+  validateProviderModelRequirements(provider, model);
+  return model;
+}
+
+async function promptCustomModel(): Promise<string> {
+  const model = await promptInput('Enter model (e.g. opencode/big-pickle)');
+  if (model === null) {
+    process.exit(0);
+  }
+  return model;
 }
 
 /** Options for global directory initialization */
@@ -104,23 +158,41 @@ export interface InitGlobalDirsOptions {
 export async function initGlobalDirs(options?: InitGlobalDirsOptions): Promise<void> {
   ensureDir(getGlobalConfigDir());
 
-  if (needsLanguageSetup()) {
+  // Existing environments (config.yaml already present) keep legacy provider resolution and
+  // only get an inactive runtime.yaml; fresh environments generate an active runtime.yaml from
+  // the first-run selection (issue #1136).
+  const isExistingEnvironment = !needsLanguageSetup();
+  let selection: RuntimeProviderSelection | undefined;
+
+  if (!isExistingEnvironment) {
     const isInteractive = !options?.nonInteractive && process.stdin.isTTY === true;
 
     if (!isInteractive) {
-      // Pipeline / non-interactive: skip prompts, use defaults via loadGlobalConfig() fallback
+      // Pipeline / non-interactive: skip prompts, use defaults via loadGlobalConfig() fallback.
+      // Defer runtime.yaml generation until a real setup selects a provider.
       return;
     }
 
     const lang = await promptLanguageSelection();
     const provider = await promptProviderSelection();
+    const model = await promptModelSelection(provider);
 
-    // Copy only config.yaml from language resources
+    // The language template already carries `language: <lang>`, so copying it fully persists the
+    // language. We deliberately do NOT run a load→save cycle on the global config here: the global
+    // config load injects a default `provider: claude`, and saving it would leave a legacy provider
+    // signal in config.yaml that conflicts with the active runtime.yaml on the next override-free
+    // run. The provider/model selection is the sole source of truth in runtime.yaml
+    // `profiles.default` (issue #1136).
     copyLanguageConfigYaml(lang);
 
-    setLanguage(lang);
-    setProvider(provider);
+    selection = { provider, model };
   }
+
+  generateGlobalRuntimeProviderFile({
+    runtimeFilePath: join(getGlobalConfigDir(), RUNTIME_PROVIDER_FILENAME),
+    selection,
+    hasLegacyProviderConfig: isExistingEnvironment,
+  });
 }
 
 /** Copy config.yaml from language resources to ~/.takt/ (if not already present) */

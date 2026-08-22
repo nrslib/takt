@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 import { generateReportDir } from '../shared/utils/reportDir.js';
+import type { ProviderPermissionProfiles } from '../core/models/provider-profiles.js';
 
 const {
   mockAddTask,
@@ -163,6 +164,29 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     });
   });
 
+  it('skipTaskList: true の直接実行では providerProfileOverrides を executeTask に転送する', async () => {
+    const providerProfileOverrides = {
+      claude: {
+        defaultPermissionMode: 'edit',
+        stepPermissionOverrides: {
+          judge: 'readonly',
+          replan: 'readonly',
+        },
+      },
+    } satisfies ProviderPermissionProfiles;
+
+    await selectAndExecuteTask('/project', 'Run exec workflow', {
+      workflow: 'default',
+      skipTaskList: true,
+      providerProfileOverrides,
+    });
+
+    const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+      providerProfileOverrides?: ProviderPermissionProfiles;
+    };
+    expect(executeArg.providerProfileOverrides).toEqual(providerProfileOverrides);
+  });
+
   it('skipTaskList: false の場合はタスクリストに追加する', async () => {
     await selectAndExecuteTask('/project', 'test task', {
       workflow: 'default',
@@ -199,7 +223,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     expect(mockPersistTaskError).not.toHaveBeenCalled();
   });
 
-  it('attachments 付き skipTaskList: true では run context の order.md と添付を executeTask に渡す', async () => {
+  it('attachments 付き skipTaskList: true では予約前の task spec を executeTask に渡す', async () => {
     const projectCwd = createTempProject();
     const tempAttachmentDir = path.join(projectCwd, 'tmp-attachments');
     fs.mkdirSync(tempAttachmentDir, { recursive: true });
@@ -207,12 +231,21 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     fs.writeFileSync(tempPath, 'png-data', 'utf-8');
     mockExecuteTask.mockImplementationOnce(async (arg: {
       reportDirName: string;
+      taskSpec: {
+        stagedOrderContent: string;
+        sourceTaskDir: string;
+      };
     }) => {
-      const runContextTaskDir = path.join(projectCwd, '.takt', 'runs', arg.reportDirName, 'context', 'task');
-      expect(fs.readFileSync(path.join(runContextTaskDir, 'order.md'), 'utf-8')).toContain(
+      expect(arg.taskSpec.stagedOrderContent).toContain(
         `- [Image #1]: \`.takt/runs/${arg.reportDirName}/context/task/attachments/image-1.png\``,
       );
-      expect(fs.readFileSync(path.join(runContextTaskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
+      expect(fs.readFileSync(
+        path.join(arg.taskSpec.sourceTaskDir, 'attachments', 'image-1.png'),
+        'utf-8',
+      )).toBe('png-data');
+      expect(fs.existsSync(
+        path.join(projectCwd, '.takt', 'runs', arg.reportDirName),
+      )).toBe(false);
       return true;
     });
 
@@ -236,7 +269,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     expect(executeArg.reportDirName).toBeDefined();
 
     const runContextTaskDir = path.join(projectCwd, '.takt', 'runs', executeArg.reportDirName, 'context', 'task');
-    expect(fs.existsSync(runContextTaskDir)).toBe(true);
+    expect(fs.existsSync(runContextTaskDir)).toBe(false);
     expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks'))).toBe(false);
   });
 
@@ -259,6 +292,10 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
 
     const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
       reportDirName: string;
+      taskSpec: {
+        stagedOrderContent: string;
+        sourceTaskDir: string;
+      };
     };
     const addTaskOptions = mockAddTask.mock.calls[0]?.[1] as {
       task_dir: string;
@@ -271,10 +308,11 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
       '- [Image #1]: `attachments/image-1.png`',
     );
     expect(fs.readFileSync(path.join(taskSpecDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
-    expect(fs.readFileSync(path.join(runContextTaskDir, 'order.md'), 'utf-8')).toContain(
+    expect(executeArg.taskSpec.stagedOrderContent).toContain(
       `- [Image #1]: \`.takt/runs/${executeArg.reportDirName}/context/task/attachments/image-1.png\``,
     );
-    expect(fs.readFileSync(path.join(runContextTaskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
+    expect(executeArg.taskSpec.sourceTaskDir).toBe(taskSpecDir);
+    expect(fs.existsSync(runContextTaskDir)).toBe(false);
     expect(mockPersistTaskResult).toHaveBeenCalled();
   });
 
@@ -304,19 +342,26 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     await selectAndExecuteTask(projectCwd, task, options);
     await selectAndExecuteTask(projectCwd, task, options);
 
-    const firstExecuteArg = mockExecuteTask.mock.calls[0]?.[0] as { reportDirName: string };
-    const secondExecuteArg = mockExecuteTask.mock.calls[1]?.[0] as { reportDirName: string };
+    const firstExecuteArg = mockExecuteTask.mock.calls[0]?.[0] as {
+      reportDirName: string;
+      taskSpec: { runSlug: string };
+    };
+    const secondExecuteArg = mockExecuteTask.mock.calls[1]?.[0] as {
+      reportDirName: string;
+      taskSpec: { runSlug: string };
+    };
     const firstTaskOptions = mockAddTask.mock.calls[0]?.[1] as { task_dir: string };
     const secondTaskOptions = mockAddTask.mock.calls[1]?.[1] as { task_dir: string };
 
     expect(firstExecuteArg.reportDirName).not.toBe(secondExecuteArg.reportDirName);
     expect(firstTaskOptions.task_dir).not.toBe(`.takt/tasks/${firstExecuteArg.reportDirName}`);
     expect(secondTaskOptions.task_dir).not.toBe(`.takt/tasks/${secondExecuteArg.reportDirName}`);
-    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', firstExecuteArg.reportDirName, 'context', 'task', 'order.md'))).toBe(true);
-    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', secondExecuteArg.reportDirName, 'context', 'task', 'order.md'))).toBe(true);
+    expect(firstExecuteArg.taskSpec.runSlug).toBe(firstExecuteArg.reportDirName);
+    expect(secondExecuteArg.taskSpec.runSlug).toBe(secondExecuteArg.reportDirName);
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs'))).toBe(false);
   });
 
-  it('attachments 付き skipTaskList: true で executeTask が失敗しても prepared task spec を削除し、run context は残す', async () => {
+  it('attachments 付き skipTaskList: true で executeTask が失敗しても prepared task spec を削除する', async () => {
     const projectCwd = createTempProject();
     const tempAttachmentDir = path.join(projectCwd, 'tmp-attachments');
     fs.mkdirSync(tempAttachmentDir, { recursive: true });
@@ -338,11 +383,11 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
 
     const executeArg = mockExecuteTask.mock.calls[0]?.[0] as { reportDirName: string };
     expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks'))).toBe(false);
-    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', executeArg.reportDirName, 'context', 'task'))).toBe(true);
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', executeArg.reportDirName))).toBe(false);
     expect(mockPersistTaskError).not.toHaveBeenCalled();
   });
 
-  it('attachments 付き skipTaskList: true で taskSuccess が false でも prepared task spec を削除し、run context は残す', async () => {
+  it('attachments 付き skipTaskList: true で taskSuccess が false でも prepared task spec を削除する', async () => {
     const projectCwd = createTempProject();
     const tempAttachmentDir = path.join(projectCwd, 'tmp-attachments');
     fs.mkdirSync(tempAttachmentDir, { recursive: true });
@@ -371,11 +416,11 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
 
     const executeArg = mockExecuteTask.mock.calls[0]?.[0] as { reportDirName: string };
     expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks'))).toBe(false);
-    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', executeArg.reportDirName, 'context', 'task'))).toBe(true);
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', executeArg.reportDirName))).toBe(false);
     expect(mockPersistTaskResult).not.toHaveBeenCalled();
   });
 
-  it('attachments 付き skipTaskList: false で addTask が失敗した場合は prepared spec と staged spec を削除する', async () => {
+  it('attachments 付き skipTaskList: false で addTask が失敗した場合は prepared spec を削除する', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-02-16T01:02:03.000Z'));
 
@@ -406,37 +451,6 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
 
     expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks', taskSpecSlug))).toBe(false);
     expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', reportDirName))).toBe(false);
-    expect(mockExecuteTask).not.toHaveBeenCalled();
-  });
-
-  it('attachments の staging に失敗した場合は prepared task spec を削除する', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-02-16T01:02:03.000Z'));
-
-    const projectCwd = createTempProject();
-    const task = 'Use [Image #1] as reference.';
-    const taskSpecSlug = generateReportDir(task);
-    const blockedRunsPath = path.join(projectCwd, '.takt', 'runs');
-    const tempAttachmentDir = path.join(projectCwd, 'tmp-attachments');
-    const tempPath = path.join(tempAttachmentDir, 'image-1.png');
-    fs.mkdirSync(path.dirname(blockedRunsPath), { recursive: true });
-    fs.writeFileSync(blockedRunsPath, 'not-a-directory', 'utf-8');
-    fs.mkdirSync(tempAttachmentDir, { recursive: true });
-    fs.writeFileSync(tempPath, 'png-data', 'utf-8');
-
-    await expect(
-      selectAndExecuteTask(projectCwd, task, {
-        workflow: 'default',
-        skipTaskList: true,
-        attachments: [{
-          placeholder: '[Image #1]',
-          tempPath,
-          fileName: 'image-1.png',
-        }],
-      }),
-    ).rejects.toThrow();
-
-    expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks', taskSpecSlug))).toBe(false);
     expect(mockExecuteTask).not.toHaveBeenCalled();
   });
 

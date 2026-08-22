@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: development-remediation fix ループの収束規則。
+# 同一不変条件の別経路反例への局所パッチ反復（#1223 の非収束）を止める
+# 決定規則・台帳持ち回り・一度確認済みとなった別経路での再発を未確認へ戻さない規則が、モデルの判断として働くかを測る。
+# claude / codex 両 CLI のログインが必要。デフォルトスイートからは除外。
+# Run via npm run eval:prompts:fix-loop-convergence
+
+description: 'TAKT facet eval: fix ループ収束規則の挙動（Claude Opus / Codex Luna Max / Codex Sol High）'
+
+prompts:
+  - file://fix-loop-convergence-prompt.mjs
+
+providers:
+  - id: 'exec: bash providers/claude-judge.sh claude-opus-5'
+    label: claude-opus
+  - id: 'exec: bash providers/codex-judge.sh gpt-5.6-luna max'
+    label: codex-luna-max
+  - id: 'exec: bash providers/codex-judge.sh gpt-5.6-sol high'
+    label: codex-sol-high
+
+evaluateOptions:
+  maxConcurrency: 3
+
+tests:
+  - description: E01 別経路での再発が確認済みなら局所修正を拒否し強制点方向を選ぶ
+    vars: { role: fix-retry, scenario: E01 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: recurrence_confirmed=確認済み; approach=(強制点|状態統合|計画見直し)'
+  - description: E02 初回 incomplete では通常修正（誤発火なし）
+    vars: { role: fix-retry, scenario: E02 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: recurrence_confirmed=未確認; approach=通常修正; result=修正完了'
+  - description: E03 同じ検証の中の複数経路は2回目と数えない
+    vars: { role: fix-retry, scenario: E03 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: recurrence_confirmed=未確認'
+      - type: regex
+        value: 'result=修正完了'
+  - description: E04 別不変条件の 2 回目では誤発火しない
+    vars: { role: fix-retry, scenario: E04 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: recurrence_confirmed=未確認'
+      - type: regex
+        value: 'result=修正完了'
+  - description: E05 再発記録の欠落を非再発として扱わない
+    vars: { role: fix-retry, scenario: E05 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: recurrence_confirmed=判定できない; approach=(強制点|状態統合|計画見直し)'
+      - type: icontains
+        value: '引き継ぎ元の欠落'
+  - description: E06 verifier が再発を全台帳行つきで記録する
+    vars: { role: verifier, scenario: E06 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: result=(incomplete|plan_invalid); recurrence=(再発|同一・再発|別); recurrence_confirmed=確認済み; cumulative=2\s*$'
+      - type: javascript
+        metric: invariant-record-rows
+        value: file://asserts/fix-loop-convergence.mjs
+  - description: E07a 同一不変条件の反復かつ計画に強制点なしなら再計画
+    vars: { role: monitor, scenario: E07a }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: choice=3'
+  - description: E07b 計画に強制点があり実装漏れが減少中なら継続
+    vars: { role: monitor, scenario: E07b }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: choice=2'
+  - description: E08 確立済み不変条件走査が持ち込み違反を検出する
+    vars: { role: fix, scenario: E08 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: introduced_violation=検出'
+      - type: icontains
+        value: 'INV-BUDGET-50'
+  - description: E09 初回 fix-verifier は台帳の検証回数を1へ進める
+    vars: { role: verifier, scenario: E09 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: result=incomplete; recurrence=判定できない（初回）; recurrence_confirmed=未確認; cumulative=1\s*$'
+  - description: E10 一度確認済みとなった別経路での再発は同一経路の再失敗でも確認済みのまま維持される
+    vars: { role: verifier, scenario: E10 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: result=incomplete; recurrence=非再発; recurrence_confirmed=確認済み; cumulative=3\s*$'
+  - description: E12 fix-plan が裁定の引き継ぎ表から台帳を継承し非 actionable を修正対象にしない
+    vars: { role: fix-plan, scenario: E12 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: bw2_inherited=継承; bw2_recurrence_confirmed=確認済み; bw2_cumulative=3; nonactionable_in_work=含まない\s*$'
+      - type: javascript
+        metric: carry-forward-and-work-boundary
+        value: file://asserts/fix-loop-convergence.mjs

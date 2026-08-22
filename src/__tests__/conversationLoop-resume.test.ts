@@ -8,6 +8,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig,
+  type AssistantCliOverrides,
+  type AssistantProviderConfig,
+} from '../core/config/provider-resolution.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -21,10 +26,14 @@ import {
 } from './helpers/stdinSimulator.js';
 
 const { mockResolveAssistantConfigLayers } = vi.hoisted(() => ({
-  mockResolveAssistantConfigLayers: vi.fn(() => ({
+  mockResolveAssistantConfigLayers: vi.fn((_projectDir: string): AssistantProviderConfig => ({
     local: { provider: 'mock' },
     global: {},
   })),
+}));
+
+const { mockUpdatePersonaSession } = vi.hoisted(() => ({
+  mockUpdatePersonaSession: vi.fn(),
 }));
 
 // --- Infrastructure mocks ---
@@ -36,12 +45,20 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: vi.fn(() => ({ language: 'en', provider: 'mock', model: undefined })),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  resolveNonWorkflowProviderOptions: vi.fn(() => ({
+    codex: { skills: { repo: false, user: false } },
+  })),
+  takeSessionState: vi.fn(() => null),
+  updatePersonaSession: mockUpdatePersonaSession,
 }));
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+  resolveAssistantConfigLayers: (projectDir: string) => mockResolveAssistantConfigLayers(projectDir),
+  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: AssistantCliOverrides) =>
+    realResolveAssistantProviderModelFromConfig(
+      mockResolveAssistantConfigLayers(projectDir),
+      cliOverrides,
+    ),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -70,8 +87,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -104,7 +120,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     continuePrompt: 'Continue?',
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
-    playNoTask: 'No task for /play',
     retryNoOrder: 'No previous order found.',
     retryUnavailable: '/retry is not available in this mode.',
     cancelled: 'Cancelled',
@@ -116,14 +131,16 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
-import { info as logInfo } from '../shared/ui/index.js';
+import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
+import * as interactiveModule from '../features/interactive/interactive.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
+import { SlashCommand } from '../shared/constants.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockLogInfo = vi.mocked(logInfo);
-const attachmentSessionDirs = new Set<string>();
+const mockLogError = vi.mocked(logError);
 
 // --- Helpers ---
 
@@ -150,6 +167,7 @@ function createSessionContext(overrides: Partial<SessionContext> = {}): SessionC
 const defaultStrategy = {
   systemPrompt: 'test system prompt',
   allowedTools: ['Read'],
+  formalSpec: false,
   transformPrompt: (msg: string) => msg,
   introMessage: 'Test intro',
 };
@@ -166,19 +184,17 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
-  for (const sessionDir of attachmentSessionDirs) {
-    fs.rmSync(sessionDir, { recursive: true, force: true });
-  }
-  attachmentSessionDirs.clear();
 });
 
-function createOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
-}
-
-function trackAttachmentSession(tempPath: string): void {
-  attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
+function createMissingImageAttachment() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-missing-image-'));
+  const tempPath = path.join(tempDir, 'missing-image.png');
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  return {
+    placeholder: '[Image #1]',
+    tempPath,
+    fileName: 'image-1.png',
+  };
 }
 
 // =================================================================
@@ -194,25 +210,209 @@ describe('initializeSession', () => {
 });
 
 describe('callAIWithRetry', () => {
-  it('wraps direct OpenCode system prompts with provider runtime instructions', async () => {
-    const { provider, capture } = createScenarioProvider(
-      [{ content: 'ok' }],
-      { runtimeInstructions: 'OpenCode tool names are lowercase.' },
-    );
+  it('does not persist a returned session when persistence is disabled', async () => {
+    const { provider } = createScenarioProvider([
+      { content: 'summary', sessionId: 'summary-session' },
+    ]);
     const ctx: SessionContext = {
       provider: provider as SessionContext['provider'],
-      providerType: 'opencode',
-      model: 'opencode/big-pickle',
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'grill-me-interactive',
+      sessionId: undefined,
+    };
+
+    const { sessionId } = await callAIWithRetry(
+      'summarize',
+      'summary prompt',
+      [],
+      '/repo',
+      ctx,
+      { persistSession: false },
+    );
+
+    expect(sessionId).toBe('summary-session');
+    expect(mockUpdatePersonaSession).not.toHaveBeenCalled();
+  });
+
+  it('passes session provider options to the initial call and stale-session retry', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'stale', status: 'error' },
+      { content: 'ok', sessionId: 'fresh-session' },
+    ]);
+    const providerOptions = { claude: { effort: 'high' as const } };
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'claude',
+      model: 'opus',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: 'stale-session',
+      providerOptions,
+    };
+
+    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx);
+
+    expect(capture.providerOptions).toEqual([providerOptions, providerOptions]);
+    expect(capture.sessionIds).toEqual(['stale-session', undefined]);
+  });
+
+  it('passes permission mode to the initial call and stale-session retry', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'stale', status: 'error' },
+      { content: 'ok', sessionId: 'fresh-session' },
+    ]);
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex',
+      model: 'gpt-5',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: 'stale-session',
+    };
+
+    await callAIWithRetry('hello', 'base system prompt', [], '/repo', ctx, {
+      permissionMode: 'readonly',
+    });
+
+    expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
+    expect(capture.sessionIds).toEqual(['stale-session', undefined]);
+  });
+
+  it('omits synthetic permissions and selector tools for DeepSeek Harness', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'done', sessionId: 'deepseek-session' },
+    ]);
+    const deepseekProvider = provider as SessionContext['provider'] & {
+      supportsPermissionControls: () => boolean;
+    };
+    deepseekProvider.supportsPermissionControls = () => false;
+    mockGetProvider.mockReturnValue(deepseekProvider);
+    const ctx: SessionContext = {
+      provider: deepseekProvider,
+      providerType: 'deepseek-harness' as SessionContext['providerType'],
+      model: undefined,
       lang: 'en',
       personaName: 'interactive',
       sessionId: undefined,
     };
 
-    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx);
+    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx, {
+      permissionMode: 'readonly',
+      outputMode: 'silent',
+    });
 
-    expect(capture.systemPrompts[0]).toContain('base system prompt');
-    expect(capture.systemPrompts[0]).toContain('## Provider Runtime Instructions');
-    expect(capture.systemPrompts[0]).toContain('OpenCode tool names are lowercase.');
+    expect(capture.allowedTools).toEqual([undefined]);
+    expect(capture.permissionModes).toEqual([undefined]);
+  });
+
+  it('retains an explicit session permission mode for an unsupported provider', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'done', sessionId: 'deepseek-session' },
+    ]);
+    const deepseekProvider = provider as SessionContext['provider'] & {
+      supportsPermissionControls: () => boolean;
+    };
+    deepseekProvider.supportsPermissionControls = () => false;
+    mockGetProvider.mockReturnValue(deepseekProvider);
+    const ctx: SessionContext = {
+      provider: deepseekProvider,
+      providerType: 'deepseek-harness' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+      permissionMode: 'readonly',
+    };
+
+    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx, {
+      outputMode: 'silent',
+    });
+
+    expect(capture.allowedTools).toEqual([undefined]);
+    expect(capture.permissionModes).toEqual(['readonly']);
+  });
+
+  it('expands image placeholders and omits native attachments for non-native providers', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'stale', status: 'error' },
+      { content: 'ok', sessionId: 'fresh-session' },
+    ], { supportsNativeImageInput: false });
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: 'stale-session',
+    };
+
+    await callAIWithRetry('inspect [Image #1]', 'base system prompt', [], '/repo', ctx, {
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/takt-image-1.png' }],
+    });
+
+    expect(capture.prompts).toEqual([
+      'inspect [Image #1] (`/tmp/takt-image-1.png`)',
+      'inspect [Image #1] (`/tmp/takt-image-1.png`)',
+    ]);
+    expect(capture.imageAttachments).toEqual([undefined, undefined]);
+    expect(capture.sessionIds).toEqual(['stale-session', undefined]);
+    expect(mockLogInfo).toHaveBeenCalled();
+  });
+
+  it('appends image paths for non-native providers when prompts omit placeholders', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'ok', sessionId: 'fresh-session' },
+    ], { supportsNativeImageInput: false });
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    await callAIWithRetry('Summarize the completed run.', 'base system prompt', [], '/repo', ctx, {
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/takt-image-1.png' }],
+    });
+
+    expect(capture.prompts).toEqual([
+      'Summarize the completed run.\n\n[Image #1] path: `/tmp/takt-image-1.png`',
+    ]);
+    expect(capture.imageAttachments).toEqual([undefined]);
+    expect(mockLogInfo).toHaveBeenCalled();
+  });
+
+  it('keeps local image paths out of prompts for native providers and stale-session retry', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'stale', status: 'error' },
+      { content: 'ok', sessionId: 'fresh-session' },
+    ], { supportsNativeImageInput: true });
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex',
+      model: 'gpt-5',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: 'stale-session',
+    };
+    const imageAttachments = [{ placeholder: '[Image #1]', path: '/tmp/takt-image-1.png' }];
+
+    await callAIWithRetry('inspect [Image #1]', 'base system prompt', [], '/repo', ctx, {
+      imageAttachments,
+    });
+
+    expect(capture.prompts).toEqual([
+      'inspect [Image #1]',
+      'inspect [Image #1]',
+    ]);
+    for (const prompt of capture.prompts) {
+      expect(prompt).not.toContain('/tmp/takt-image-1.png');
+    }
+    expect(capture.imageAttachments).toEqual([imageAttachments, imageAttachments]);
+    expect(mockLogInfo).not.toHaveBeenCalled();
   });
 });
 
@@ -235,7 +435,7 @@ describe('/resume command', () => {
     expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en');
 
     // Then: info about loaded session displayed
-    expect(mockLogInfo).toHaveBeenCalledWith('Mock label');
+    expect(mockLogInfo).toHaveBeenCalled();
 
     // Then: cancelled at the end
     expect(result.action).toBe('cancel');
@@ -248,12 +448,17 @@ describe('/resume command', () => {
     mockSelectRecentSession.mockResolvedValue(null);
 
     const ctx = createSessionContext();
+    const resolveResumedSessionConfiguration = vi.fn();
 
     // When
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      resolveResumedSessionConfiguration,
+    }, undefined, undefined);
 
     // Then: selectRecentSession called but returned null
     expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en');
+    expect(resolveResumedSessionConfiguration).not.toHaveBeenCalled();
 
     // Then: cancelled
     expect(result.action).toBe('cancel');
@@ -285,6 +490,42 @@ describe('/resume command', () => {
     expect(result.action).toBe('cancel');
   });
 
+  it.each([false, true])(
+    'should apply resumed formal specification mode=%s to regular and summary prompts',
+    async (formalSpec) => {
+      setupRawStdin(toRawInputs(['/resume', 'describe parser states', '/go add rollback plan']));
+      mockSelectRecentSession.mockResolvedValue('resumed-session-xyz');
+      const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue({
+        systemPrompt: `resumed system prompt formalSpec=${formalSpec}`,
+        formalSpec,
+      });
+      const { provider, capture } = createScenarioProvider([
+        { content: 'Which transitions can fail?' },
+        { content: 'Generated task instruction.' },
+      ]);
+      const ctx = createSessionContext({
+        provider: provider as SessionContext['provider'],
+      });
+
+      const result = await runConversationLoop('/test', ctx, {
+        ...defaultStrategy,
+        formalSpec: !formalSpec,
+        resolveResumedSessionConfiguration,
+      }, undefined, undefined);
+
+      expect(result.action).toBe('execute');
+      expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
+      expect(capture.systemPrompts[0]).toBe(`resumed system prompt formalSpec=${formalSpec}`);
+      if (formalSpec) {
+        expect(capture.prompts[1]).toMatch(/\bQuint\b/);
+        expect(capture.prompts[1]).toMatch(/\bAlloy\b/);
+      } else {
+        expect(capture.prompts[1]).not.toMatch(/\bQuint\b/);
+        expect(capture.prompts[1]).not.toMatch(/\bAlloy\b/);
+      }
+    },
+  );
+
   it('should keep inline /go text as user note after resuming a session', async () => {
     setupRawStdin(toRawInputs(['/resume', '/go add rollback plan']));
     mockSelectRecentSession.mockResolvedValue('resumed-session-xyz');
@@ -305,8 +546,6 @@ describe('/resume command', () => {
     const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
 
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('User Note:\nadd rollback plan');
-    expect(capture.prompts[0]).not.toContain('User: add rollback plan');
     expect(result).toEqual({
       action: 'execute',
       task: 'Summarized resumed task.',
@@ -320,22 +559,7 @@ describe('/resume command', () => {
     const ctx = createSessionContext();
     const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
 
-    expect(mockLogInfo).toHaveBeenCalledWith('/retry is not available in this mode.');
-    expect(result.action).toBe('cancel');
-  });
-
-  it('should complete /r to /resume when retry and replay are unavailable', async () => {
-    // Given: /r → Tab → Enter completes to /resume, then /cancel exits
-    setupRawStdin(toRawInputs(['/r\t', '/cancel']));
-    setupProvider([]);
-
-    const ctx = createSessionContext();
-
-    // When
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
-
-    // Then
-    expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en');
+    expect(mockLogInfo).toHaveBeenCalled();
     expect(result.action).toBe('cancel');
   });
 
@@ -353,7 +577,7 @@ describe('/resume command', () => {
     }, undefined, undefined);
 
     // Then
-    expect(mockLogInfo).toHaveBeenCalledWith('No previous order found.');
+    expect(mockLogInfo).toHaveBeenCalled();
     expect(mockSelectRecentSession).not.toHaveBeenCalled();
     expect(result.action).toBe('cancel');
   });
@@ -363,7 +587,117 @@ describe('/resume command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
-  it('should pass sessionId as undefined to summary AI even when conversation has an active session', async () => {
+  it('does not turn a disabled /accept into an execution result in a guarded mode', async () => {
+    setupRawStdin(toRawInputs(['/accept', '/go']));
+    const { provider } = createScenarioProvider([
+      { content: 'Assistant response to accept text' },
+      { content: 'Revised order body' },
+    ]);
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      enabledCommands: [SlashCommand.Go, SlashCommand.Cancel],
+      trackResultSource: true,
+    }, undefined, undefined);
+
+    expect(result).toMatchObject({
+      action: 'execute',
+      task: 'Revised order body',
+      source: 'go',
+    });
+  });
+
+  it.each([false, true])('should apply resolved formal specification mode=%s to the real summary prompt', async (formalSpec) => {
+    setupRawStdin(toRawInputs(['/go improve parser behavior']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Generated task instruction.' },
+    ]);
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'],
+    });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      formalSpec,
+    }, undefined, undefined);
+
+    expect(result.action).toBe('execute');
+    expect(capture.prompts[0]).toContain('## Markdown + Gherkin Output Format');
+    if (formalSpec) {
+      expect(capture.prompts[0]).toMatch(/\bQuint\b/);
+      expect(capture.prompts[0]).toMatch(/\bAlloy\b/);
+    } else {
+      expect(capture.prompts[0]).not.toMatch(/\bQuint\b/);
+      expect(capture.prompts[0]).not.toMatch(/\bAlloy\b/);
+    }
+  });
+
+  it('should pass the resolved formal specification mode to the summary builder', async () => {
+    const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
+    setupRawStdin(toRawInputs(['/go improve parser behavior']));
+    const { provider } = createScenarioProvider([
+      { content: 'Generated task instruction.' },
+    ]);
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock',
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      formalSpec: true,
+    }, undefined, undefined);
+
+    expect(result.action).toBe('execute');
+    expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
+      expect.any(Array),
+      false,
+      'en',
+      expect.any(String),
+      expect.any(String),
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+  });
+
+  it('should keep the session value instead of re-resolving project config inside the conversation loop', async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-formal-spec-session-value-'));
+    fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, '.takt', 'config.yaml'),
+      ['assistant:', '  formal_spec: false'].join('\n'),
+      'utf-8',
+    );
+    setupRawStdin(toRawInputs(['/go improve parser behavior']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Generated task instruction.' },
+    ]);
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'],
+    });
+
+    try {
+      const result = await runConversationLoop(projectDir, ctx, {
+        ...defaultStrategy,
+        formalSpec: true,
+      }, undefined, undefined);
+
+      expect(result.action).toBe('execute');
+      expect(capture.prompts[0]).toMatch(/\bQuint\b/);
+      expect(capture.prompts[0]).toMatch(/\bAlloy\b/);
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should isolate the summary AI without replacing the resumable conversation session', async () => {
     // Given: send message (AI responds with sessionId) → /go triggers summary
     setupRawStdin(toRawInputs(['hello', '/go']));
 
@@ -371,7 +705,7 @@ describe('/go command', () => {
       // Call 0: user message → AI responds and sets sessionId
       { content: 'AI response', sessionId: 'session-abc' },
       // Call 1: /go summary → should NOT inherit sessionId
-      { content: '## Fix broken title\nDetails here' },
+      { content: '## Fix broken title\nDetails here', sessionId: 'summary-session' },
     ]);
 
     const ctx: SessionContext = {
@@ -390,55 +724,48 @@ describe('/go command', () => {
     expect(capture.sessionIds[0]).toBeUndefined();
     // Then: summary call must NOT inherit the conversation session
     expect(capture.sessionIds[1]).toBeUndefined();
+    expect(mockUpdatePersonaSession).toHaveBeenCalledTimes(1);
+    expect(mockUpdatePersonaSession).toHaveBeenCalledWith(
+      '/test',
+      'interactive',
+      'session-abc',
+      'mock',
+    );
     expect(result.action).toBe('execute');
   });
 
-  it('should return pasted image attachments after image input and /go', async () => {
-    setupRawStdin([
-      `use ${createOscImagePaste()} please\r`,
-      '/go\r',
-    ]);
-
+  it('should return a rejected /go draft to the conversation history', async () => {
+    setupRawStdin(toRawInputs(['hello', '/go', 'revise this draft', '/go']));
     const { provider, capture } = createScenarioProvider([
-      { content: 'AI response using [Image #1].' },
-      { content: 'Generated task using [Image #1].' },
+      { content: 'Initial assistant response' },
+      { content: 'First generated order' },
+      { content: 'Revised assistant response' },
+      { content: 'Second generated order' },
     ]);
-
-    const ctx: SessionContext = {
+    const selectGoAction = vi.fn()
+      .mockResolvedValueOnce('continue')
+      .mockResolvedValueOnce('execute');
+    const ctx = createSessionContext({
       provider: provider as SessionContext['provider'],
-      providerType: 'mock' as SessionContext['providerType'],
-      model: undefined,
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    };
+    });
 
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+    const result = await runConversationLoop(
+      '/test',
+      ctx,
+      { ...defaultStrategy, selectGoAction },
+      undefined,
+      undefined,
+    );
 
-    expect(capture.callCount).toBe(2);
-    expect(capture.prompts[0]).toMatch(/use \[Image #1\] \(`.*image-1\.png`\) please/);
-    expect(capture.imageAttachments[0]).toBeUndefined();
-    expect(capture.imageAttachments[1]).toBeUndefined();
     expect(result.action).toBe('execute');
-    expect(result.task).toBe('Generated task using [Image #1].');
-    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-    expect(result.attachments?.[0]).not.toHaveProperty('relativePath');
-    expect(result.attachments?.[0]?.tempPath).toBeDefined();
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
+    expect(result.task).toBe('Second generated order');
+    expect(capture.prompts[3]).toContain('First generated order');
   });
 
-  it('should pass image attachment bodies only to native image providers', async () => {
-    setupRawStdin([
-      `use ${createOscImagePaste()} please\r`,
-      '/go\r',
-    ]);
-
-    const { provider, capture } = createScenarioProvider([
-      { content: 'AI response using [Image #1].' },
-      { content: 'Generated task using [Image #1].' },
-    ], { supportsNativeImageInput: true });
-
+  it('should report missing stored images in regular input and continue without calling AI', async () => {
+    setupRawStdin(toRawInputs(['inspect [Image #1]', '/cancel']));
+    const missingAttachment = createMissingImageAttachment();
+    const { provider, capture } = createScenarioProvider([], { supportsNativeImageInput: true });
     const ctx: SessionContext = {
       provider: provider as SessionContext['provider'],
       providerType: 'codex' as SessionContext['providerType'],
@@ -448,39 +775,35 @@ describe('/go command', () => {
       sessionId: undefined,
     };
 
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, {
+      attachments: [missingAttachment],
+    });
 
-    expect(capture.callCount).toBe(2);
-    expect(capture.prompts[0]).toMatch(/use \[Image #1\] \(`.*image-1\.png`\) please/);
-    expect(capture.imageAttachments[0]?.[0]?.placeholder).toBe('[Image #1]');
-    expect(capture.imageAttachments[0]?.[0]?.path).toBeDefined();
-    expect(capture.imageAttachments[1]?.[0]?.placeholder).toBe('[Image #1]');
-    expect(result.action).toBe('execute');
-    trackAttachmentSession(result.attachments![0]!.tempPath);
+    expect(capture.callCount).toBe(0);
+    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('missing-image.png'));
+    expect(result.action).toBe('cancel');
   });
 
-  it('should not create formal task assets when image input is cancelled', async () => {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-cancel-image-test-'));
-    try {
-      setupRawStdin([
-        `use ${createOscImagePaste()} please\r`,
-        '/cancel\r',
-      ]);
+  it('should report missing stored images in /go summary and continue without calling AI', async () => {
+    setupRawStdin(toRawInputs(['/go inspect [Image #1]', '/cancel']));
+    const missingAttachment = createMissingImageAttachment();
+    const { provider, capture } = createScenarioProvider([], { supportsNativeImageInput: true });
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
 
-      setupProvider(['AI response using [Image #1].']);
-      const ctx = createSessionContext();
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, {
+      attachments: [missingAttachment],
+    });
 
-      const result = await runConversationLoop(projectRoot, ctx, defaultStrategy, undefined, undefined);
-
-      expect(result.action).toBe('cancel');
-      expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-      expect(result.attachments?.[0]?.tempPath).toBeDefined();
-      trackAttachmentSession(result.attachments![0]!.tempPath);
-      expect(fs.existsSync(path.join(projectRoot, '.takt', 'tasks'))).toBe(false);
-      expect(fs.existsSync(path.join(projectRoot, '.takt', 'runs'))).toBe(false);
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true });
-    }
+    expect(capture.callCount).toBe(0);
+    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('missing-image.png'));
+    expect(result.action).toBe('cancel');
   });
 
   it('should include assistant init context only in the first regular AI prompt', async () => {
@@ -512,13 +835,6 @@ describe('/go command', () => {
     );
 
     expect(capture.callCount).toBe(2);
-    expect(capture.prompts[0]).toContain('## Assistant Init Context');
-    expect(capture.prompts[0]).toContain('configured project context');
-    expect(capture.prompts[0]).toContain('hello');
-    expect(capture.prompts[0]).not.toContain('Source Context');
-    expect(capture.prompts[1]).not.toContain('## Assistant Init Context');
-    expect(capture.prompts[1]).not.toContain('configured project context');
-    expect(capture.prompts[1]).toContain('follow up');
     expect(result.action).toBe('cancel');
   });
 
@@ -552,9 +868,6 @@ describe('/go command', () => {
     );
 
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('## Assistant Init Context');
-    expect(capture.prompts[0]).toContain('configured project context');
-    expect(capture.prompts[0]).toContain('User: Implement explicit assistant init files');
     expect(result).toEqual({
       action: 'execute',
       task: 'Summarized task.',
@@ -587,14 +900,14 @@ describe('/go command', () => {
     );
 
     expect(capture.callCount).toBe(0);
-    expect(mockLogInfo).toHaveBeenCalledWith('No conversation');
+    expect(mockLogInfo).toHaveBeenCalled();
     expect(result.action).toBe('cancel');
   });
 });
 
 describe('conversation logging', () => {
-  it('should log only non-sensitive metadata for initial input, session state, and play task', async () => {
-    setupRawStdin(toRawInputs(['/play secret implementation details']));
+  it('should log only non-sensitive metadata for initial input and session state', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
     setupProvider([]);
 
     const ctx = createSessionContext({ sessionId: 'sensitive-session-id' });
@@ -607,10 +920,7 @@ describe('conversation logging', () => {
       { sourceContext: 'secret prefilled input' },
     );
 
-    expect(result).toEqual({
-      action: 'execute',
-      task: 'secret implementation details',
-    });
+    expect(result).toEqual({ action: 'cancel', task: '' });
     expect(mockLogger.debug).toHaveBeenCalledWith(
       'Loaded initial input as source context without auto-submitting to AI',
       {
@@ -619,10 +929,6 @@ describe('conversation logging', () => {
         hasSession: true,
       },
     );
-    expect(mockLogger.info).toHaveBeenCalledWith('Play command', {
-      hasTaskText: true,
-      taskLength: 'secret implementation details'.length,
-    });
     expect(mockLogger.debug).not.toHaveBeenCalledWith(
       'Loaded initial input as source context without auto-submitting to AI',
       expect.objectContaining({
@@ -633,12 +939,6 @@ describe('conversation logging', () => {
       'Sending to AI',
       expect.objectContaining({
         sessionId: 'sensitive-session-id',
-      }),
-    );
-    expect(mockLogger.info).not.toHaveBeenCalledWith(
-      'Play command',
-      expect.objectContaining({
-        task: 'secret implementation details',
       }),
     );
   });

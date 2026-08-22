@@ -14,6 +14,12 @@ export interface SelectOptionItem<T extends string> {
   value: T;
   description?: string;
   details?: string[];
+  /**
+   * When false the row is a non-interactive heading: the cursor skips it,
+   * Enter is ignored, and it renders without a selection marker. Absent or
+   * true keeps the row selectable (the default for every existing caller).
+   */
+  selectable?: boolean;
 }
 
 export type KeyInputResult =
@@ -43,8 +49,18 @@ export function renderSingleOption<T extends string>(
   maxWidth: number,
 ): string[] {
   const lines: string[] = [];
-  const cursor = isSelected ? chalk.cyan('❯') : ' ';
   const truncatedLabel = truncateText(opt.label, maxWidth - LABEL_PREFIX);
+  if (opt.selectable === false) {
+    // Heading rows never carry the cursor: align their text under the label
+    // column and dim them so authored leaves stand out as the selectable rows.
+    lines.push(chalk.gray(`    ${truncatedLabel}`));
+    if (opt.description) {
+      const truncatedDesc = truncateText(opt.description, maxWidth - DESC_PREFIX);
+      lines.push(chalk.gray(`     ${truncatedDesc}`));
+    }
+    return lines;
+  }
+  const cursor = isSelected ? chalk.cyan('❯') : ' ';
   const label = isSelected ? chalk.cyan.bold(truncatedLabel) : truncatedLabel;
   lines.push(`  ${cursor} ${label}`);
 
@@ -73,7 +89,7 @@ export function renderCancelOption(isSelected: boolean, cancelLabel: string): st
 export function countItemLines<T extends string>(opt: SelectOptionItem<T>): number {
   let lines = 1;
   if (opt.description) lines++;
-  if (opt.details) lines += opt.details.length;
+  if (opt.selectable !== false && opt.details) lines += opt.details.length;
   return lines;
 }
 
@@ -113,20 +129,78 @@ export function countRenderedLines<T extends string>(
   return count;
 }
 
-export function handleKeyInput(
+/**
+ * An option row is non-selectable only when it explicitly declares
+ * `selectable: false`. Indices without a backing option (the trailing Cancel
+ * row) are always selectable.
+ */
+function isSelectableIndex<T extends string>(
+  index: number,
+  options?: readonly SelectOptionItem<T>[],
+): boolean {
+  return options?.[index]?.selectable !== false;
+}
+
+/**
+ * Find the first selectable row at or after `start`, scanning forward and
+ * wrapping. Returns the Cancel row when no option is selectable and a Cancel
+ * row exists, otherwise `start` unchanged.
+ */
+export function firstSelectableIndex<T extends string>(
+  options: readonly SelectOptionItem<T>[],
+  start: number,
+  hasCancelOption: boolean,
+): number {
+  const total = options.length;
+  if (total === 0) {
+    return hasCancelOption ? 0 : start;
+  }
+  for (let offset = 0; offset < total; offset += 1) {
+    const index = (start + offset) % total;
+    if (isSelectableIndex(index, options)) {
+      return index;
+    }
+  }
+  return hasCancelOption ? total : start;
+}
+
+function nextSelectableIndex<T extends string>(
+  currentIndex: number,
+  step: number,
+  totalItems: number,
+  options?: readonly SelectOptionItem<T>[],
+): number {
+  let index = currentIndex;
+  for (let visited = 0; visited < totalItems; visited += 1) {
+    index = (index + step + totalItems) % totalItems;
+    if (index === currentIndex) {
+      break;
+    }
+    if (isSelectableIndex(index, options)) {
+      return index;
+    }
+  }
+  return currentIndex;
+}
+
+export function handleKeyInput<T extends string>(
   key: string,
   currentIndex: number,
   totalItems: number,
   hasCancelOption: boolean,
   optionCount: number,
+  options?: readonly SelectOptionItem<T>[],
 ): KeyInputResult {
-  if (key === '\x1B[A' || key === 'k') {
-    return { action: 'move', newIndex: (currentIndex - 1 + totalItems) % totalItems };
+  if (key === '\x1B[A' || key === '\x1BOA' || key === 'k') {
+    return { action: 'move', newIndex: nextSelectableIndex(currentIndex, -1, totalItems, options) };
   }
-  if (key === '\x1B[B' || key === 'j') {
-    return { action: 'move', newIndex: (currentIndex + 1) % totalItems };
+  if (key === '\x1B[B' || key === '\x1BOB' || key === 'j') {
+    return { action: 'move', newIndex: nextSelectableIndex(currentIndex, 1, totalItems, options) };
   }
   if (key === '\r' || key === '\n') {
+    if (!isSelectableIndex(currentIndex, options)) {
+      return { action: 'none' };
+    }
     return { action: 'confirm', selectedIndex: currentIndex };
   }
   if (key === '\x03') {

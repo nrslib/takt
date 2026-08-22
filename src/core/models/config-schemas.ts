@@ -8,6 +8,7 @@ import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import {
   AnalyticsConfigSchema,
+  AutoRoutingSchema,
   LanguageSchema,
   LoggingConfigSchema,
   ObservabilityConfigSchema,
@@ -21,6 +22,7 @@ import {
   RateLimitFallbackSchema,
   RuntimeConfigSchema,
   TaktProvidersSchema,
+  TelemetryConfigSchema,
 } from './schema-base.js';
 
 /** Workflow overrides schema for config-level overrides */
@@ -55,8 +57,19 @@ export const WorkflowMcpServersConfigSchema = z.object({
   http: z.boolean().optional(),
 }).strict();
 
+export const FormalSpecSettingSchema = z.union([
+  z.boolean(),
+  z.literal('Y/n'),
+  z.literal('y/N'),
+]);
+
 export const AssistantConfigSchema = z.object({
   init_files: z.array(z.string().min(1)).max(MAX_ASSISTANT_INIT_FILES).optional(),
+  formal_spec: FormalSpecSettingSchema.optional(),
+}).strict();
+
+export const GlobalAssistantConfigSchema = z.object({
+  formal_spec: FormalSpecSettingSchema.optional(),
 }).strict();
 
 export const ProviderRoutingSchema = z.object({
@@ -65,15 +78,15 @@ export const ProviderRoutingSchema = z.object({
   steps: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
 }).strict().optional();
 
-/** Workflow category config schema (recursive) */
+/** Workflow category config schema (recursive). A workflows entry is a plain name or a `{ name: description }` pair. */
 export type WorkflowCategoryConfigNode = {
-  workflows?: string[];
-  [key: string]: WorkflowCategoryConfigNode | string[] | undefined;
+  workflows?: (string | Record<string, string>)[];
+  [key: string]: WorkflowCategoryConfigNode | (string | Record<string, string>)[] | undefined;
 };
 
 export const WorkflowCategoryConfigNodeSchema: z.ZodType<WorkflowCategoryConfigNode> = z.lazy(() =>
   z.object({
-    workflows: z.array(z.string()).optional(),
+    workflows: z.array(z.union([z.string(), z.record(z.string(), z.string())])).optional(),
   }).catchall(WorkflowCategoryConfigNodeSchema)
 );
 
@@ -86,11 +99,13 @@ export const WorkflowCategoryOverlaySchema = z.object({
 }).strict();
 
 /** Project config schema */
-const ProjectConfigObjectSchema = z.object({
+const ProjectConfigObjectBaseSchema = z.object({
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
+  auto_routing: AutoRoutingSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
+  telemetry: TelemetryConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
   allow_git_hooks: z.boolean().optional(),
   allow_git_filters: z.boolean().optional(),
@@ -116,6 +131,8 @@ const ProjectConfigObjectSchema = z.object({
   task_poll_interval_ms: z.number().int().min(100).max(5000).optional(),
   interactive_preview_steps: z.number().int().min(0).max(10).optional(),
   sync_project_local_takt_on_retry: z.boolean().optional(),
+  auto_requeue_max_attempts: z.number().int().min(0).optional(),
+  ignore_exceed: z.boolean().optional(),
   base_branch: z.string().optional(),
   workflow_overrides: WorkflowOverridesSchema,
   vcs_provider: z.enum(VCS_PROVIDER_TYPES).optional(),
@@ -129,6 +146,8 @@ const ProjectConfigObjectSchema = z.object({
   ]).optional(),
   with_submodules: z.boolean().optional(),
 }).strict();
+
+const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema;
 
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
@@ -168,10 +187,11 @@ const GlobalOnlyConfigSchema = z.object({
 });
 
 /** Global config schema = ProjectConfig + global-only fields. */
-export const GlobalConfigSchema = ProjectConfigObjectSchema
+export const GlobalConfigSchema = ProjectConfigObjectBaseSchema
   .omit({ submodules: true, with_submodules: true, assistant: true })
   .merge(GlobalOnlyConfigSchema)
   .extend({
+    assistant: GlobalAssistantConfigSchema.optional(),
     provider: ProviderReferenceSchema.optional().default('claude'),
   })
   .strict();

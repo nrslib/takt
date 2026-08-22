@@ -1,7 +1,7 @@
 ```markdown
 # コーディングレビュー
 
-## 結果: APPROVE / REJECT
+{{include:output-contracts/base-review-result}}
 
 ## サマリー
 {1-2文でレビュー結果を要約}
@@ -13,14 +13,19 @@ ID、名前、メタデータ、設定、環境変数、出力契約の追加・
 |-----------|--------|----------|------------|------|-------------------|
 | {通常入口 / 派生条件 / 検証 / 評価 / 出力 / 再注入など} | {要件} | `src/file.ts:42` | `src/file.test.ts:10` | ✅/❌/⚠️ | {なし / 根拠} |
 
-## 今回の指摘（new）
-| # | finding_id | family_tag | 重大度 | 場所 | 問題 | 影響 | 修正案 |
-|---|------------|------------|--------|------|------|------|--------|
-| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {問題} | {影響} | {修正案} |
+{{include:output-contracts/base-review-non-finding-concerns}}
 
-## 継続指摘（persists）
-| # | finding_id | family_tag | 前回根拠 | 今回根拠 | 問題 | 修正案 |
-|---|------------|------------|----------|----------|------|--------|
+{{include:output-contracts/base-review-problem-family-completion-sweep}}
+
+## 今回の指摘（new）
+| # | finding_id | family_tag | 重大度 | 場所 | 問題 | 影響 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
+|---|------------|------------|--------|------|------|------|---------------------|------------------------------|--------|
+| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {問題} | {影響} | {follow-upでは accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration のいずれか。初回は該当なし。その他の値は無効} | {follow-up findingが初回レビューに含まれなかった独立した証拠。初回は該当なし} | {修正案} |
+
+follow-up finding の `Authorization basis` は列挙した4つの正確な値だけを許可し、その他の値を拒否する。「初回に含まれなかった理由」はauthorization値ではなく、独立した事実説明にする。
+
+{{include:output-contracts/base-review-persists}}
+{{include:output-contracts/base-review-carry-over-findings}}
 | 1 | CODE-PERSIST-src-file-L77 | regression | `src/file.ts:77` | `src/file.ts:77` | {未解消の問題} | {修正案} |
 
 ## 解消済み（resolved）
@@ -28,21 +33,24 @@ ID、名前、メタデータ、設定、環境変数、出力契約の追加・
 |------------|--------------|----------|
 | CODE-RESOLVED-src-file-L10 | {元 finding の受入条件} | `src/file.ts:10` で解消 |
 
-## 再開指摘（reopened）
-| # | finding_id | family_tag | 解消根拠（前回） | 再発根拠 | 問題 | 修正案 |
-|---|------------|------------|----------------|---------|------|--------|
-| 1 | CODE-REOPENED-src-file-L55 | bug | `前回: src/file.ts:10` | `src/file.ts:55` | {再発した問題} | {修正案} |
+{{include:output-contracts/base-review-adjudicated-out-of-scope}}
+{{include:output-contracts/base-review-reopened-findings}}
+| 1 | CODE-REOPENED-src-file-L55 | bug | `review-resolution.md`: 解消済み | d | `src/file.ts:55` | {再発した問題} | {修正案} |
 
+{{include:output-contracts/base-review-reopened}}
 ## 検証証跡
 - 差分確認: {確認内容}
 - ビルド: {結果。未確認ならその旨}
 - テスト: {結果。未確認ならその旨}
 
+{{include:output-contracts/base-review-rescan-evidence}}
+
 ## REJECT判定条件
-- `new`、`persists`、または `reopened` が1件以上ある場合のみ REJECT
+{{include:output-contracts/base-review-rejection-gate-only-when}}
 - `finding_id` なしの指摘は無効
 ```
 
 **認知負荷軽減ルール:**
-- APPROVE → サマリーと、必要な場合のみ契約入口チェック（合計10行以内）
-- REJECT → 該当指摘のみ表で記載（30行以内）
+- APPROVE → サマリー + 検証証跡 + 再走査証跡（2回目以降）と、必要な場合のみ契約入口チェック・非finding化した懸念
+- REJECT → 確認済みの指摘をすべて表で記載し、同じ原因の場所は集約
+{{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

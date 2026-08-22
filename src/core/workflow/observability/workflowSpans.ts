@@ -11,13 +11,17 @@ import type {
   WorkflowStepFailureSummary,
   WorkflowTraceTaskMetadata,
 } from '../types.js';
+import {
+  parseCanonicalWorkflowResumeFrame,
+} from '../../../shared/types/workflow-resume.js';
 import { getWorkflowStepKind } from '../step-kind.js';
-import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
+import { toJudgmentMatchMethod, USAGE_MISSING_REASONS } from '../../logging/contracts.js';
 import {
   sanitizeTraceTaskMetadataText,
   sanitizeTraceTaskSummary,
 } from './traceDiscovery.js';
 import { recordStepProviderErrorMetrics } from './workflowMetrics.js';
+import { redactProviderOptions } from '../providerOptionsRedaction.js';
 
 const tracer = trace.getTracer('takt.workflow');
 const WORKFLOW_RUN_COUNTER_OPTIONS = {
@@ -45,7 +49,7 @@ const JUDGE_STAGE_COUNTER_OPTIONS = {
   description: 'Workflow judge stage executions by status',
 };
 
-type AttributeInput = Record<string, string | number | boolean | undefined>;
+type AttributeInput = Record<string, string | number | boolean | string[] | undefined>;
 
 export interface WorkflowSpanParams {
   enabled: boolean;
@@ -122,6 +126,42 @@ export interface JudgeStageSpanParams {
   providerInfo?: StepProviderInfo;
 }
 
+export interface CompletionRetryJudgeSpanParams {
+  enabled: boolean;
+  runId?: string;
+  workflowName: string;
+  reviewerStep: string;
+  attempt: number;
+  providerInfo: StepProviderInfo;
+}
+
+export async function runWithCompletionRetryJudgeSpan<T>(
+  params: CompletionRetryJudgeSpanParams,
+  execute: () => Promise<T>,
+  outcome: (result: T) => { status: string; gapCount: number },
+): Promise<T> {
+  if (!params.enabled) return execute();
+  return runInSpan(
+    'takt.review_completion.judge',
+    compactAttributes({
+      'takt.workflow.name': params.workflowName,
+      'takt.run.id': params.runId,
+      'takt.review_completion.reviewer': params.reviewerStep,
+      'takt.review_completion.attempt': params.attempt,
+      ...providerAttributes(params.providerInfo),
+    }),
+    async (span) => {
+      const result = await execute();
+      const value = outcome(result);
+      span.setAttributes({
+        'takt.review_completion.status': value.status,
+        'takt.review_completion.gap_count': value.gapCount,
+      });
+      return result;
+    },
+  );
+}
+
 export async function runWithWorkflowSpan<T>(
   params: WorkflowSpanParams,
   execute: () => Promise<T>,
@@ -187,36 +227,47 @@ export async function runWithPhaseSpan<T>(
   params: PhaseSpanParams,
   execute: () => Promise<T>,
   getOutcome: (result: T) => PhaseSpanOutcome,
+  getErrorOutcome?: (error: unknown) => PhaseSpanOutcome | undefined,
 ): Promise<T> {
   if (!params.enabled) {
     return execute();
   }
 
   const startedAt = Date.now();
+  const executeWithSpan = async (span: Span): Promise<T> => {
+    try {
+      const result = await execute();
+      const outcome = getOutcome(result);
+      recordPhaseOutcome(span, params, outcome);
+      recordPhaseMetrics(params, outcome, Date.now() - startedAt);
+      return result;
+    } catch (error) {
+      const outcome = getErrorOutcome?.(error) ?? {
+        status: 'error',
+        error: getErrorMessage(error),
+        providerUsage: {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      };
+      recordPhaseOutcome(span, params, outcome);
+      recordPhaseMetrics(params, outcome, Date.now() - startedAt);
+      throw error;
+    }
+  };
+  if (getErrorOutcome === undefined) {
+    return runInSpan(
+      buildPhaseSpanName(params),
+      buildPhaseAttributes(params),
+      executeWithSpan,
+    );
+  }
   return runInSpan(
     buildPhaseSpanName(params),
     buildPhaseAttributes(params),
-    async (span) => {
-      try {
-        const result = await execute();
-        const outcome = getOutcome(result);
-        recordPhaseOutcome(span, params, outcome);
-        recordPhaseMetrics(params, outcome, Date.now() - startedAt);
-        return result;
-      } catch (error) {
-        const outcome = {
-          status: 'error',
-          error: getErrorMessage(error),
-          providerUsage: {
-            usageMissing: true,
-            reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
-          },
-        };
-        recordPhaseOutcome(span, params, outcome);
-        recordPhaseMetrics(params, outcome, Date.now() - startedAt);
-        throw error;
-      }
-    },
+    executeWithSpan,
+    context.active(),
+    (error) => getErrorOutcome(error)?.status !== 'cancelled',
   );
 }
 
@@ -274,6 +325,7 @@ function buildStepAttributes(params: StepSpanParams): Attributes {
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.tags': params.step.tags,
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.step.local_iteration': params.stepIteration,
@@ -312,6 +364,7 @@ function buildPhaseAttributes(params: PhaseSpanParams): Attributes {
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.tags': params.step.tags,
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.phase.number': params.phase,
@@ -329,6 +382,7 @@ function buildJudgeStageAttributes(params: JudgeStageSpanParams): Attributes {
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.tags': params.step.tags,
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.phase.number': 3,
@@ -347,13 +401,16 @@ async function runInSpan<T>(
   attributes: Attributes,
   execute: (span: Span) => Promise<T>,
   parentContext = context.active(),
+  shouldRecordError: (error: unknown) => boolean = () => true,
 ): Promise<T> {
   const span = tracer.startSpan(name, { attributes }, parentContext);
   return context.with(trace.setSpan(parentContext, span), async () => {
     try {
       return await execute(span);
     } catch (error) {
-      recordSpanError(span, error);
+      if (shouldRecordError(error)) {
+        recordSpanError(span, error);
+      }
       throw error;
     } finally {
       span.end();
@@ -367,6 +424,7 @@ function recordWorkflowOutcome(span: Span, params: WorkflowSpanParams, outcome: 
     'takt.workflow.abort.kind': outcome.abortKind,
     'takt.workflow.abort.reason': sanitizeSpanText(params.sanitizeText, outcome.abortReason),
     'takt.failure.kind': outcome.failure?.kind,
+    'takt.failure.category': outcome.failure?.failureCategory,
     'takt.failure.step': sanitizeSpanText(params.sanitizeText, outcome.failure?.step),
     'takt.failure.reason': sanitizeSpanText(params.sanitizeText, outcome.failure?.reason),
     'takt.workflow.next_step': outcome.nextStep,
@@ -516,12 +574,12 @@ function workflowStackAttributes(stack: WorkflowResumePointEntry[] | undefined):
   }
   return {
     'takt.workflow.current_name': stack[stack.length - 1]?.workflow,
-    'takt.workflow.stack': JSON.stringify(stack.map((entry) => ({
-      workflow: entry.workflow,
-      ...(entry.workflow_ref ? { workflow_ref: entry.workflow_ref } : {}),
-      step: entry.step,
-      kind: entry.kind,
-    }))),
+    'takt.workflow.stack': JSON.stringify(stack.map((entry, index) => (
+      parseCanonicalWorkflowResumeFrame(
+        entry,
+        `workflow span stack[${index}]`,
+      )
+    ))),
   };
 }
 
@@ -562,30 +620,12 @@ function usageAttributes(usage: ProviderUsageSnapshot | undefined): AttributeInp
 function providerOptionsAttributes(providerInfo: StepProviderInfo | undefined): AttributeInput {
   return {
     'takt.provider.options': providerInfo?.providerOptions !== undefined
-      ? JSON.stringify(providerInfo.providerOptions)
+      ? JSON.stringify(redactProviderOptions(providerInfo.providerOptions))
       : undefined,
     'takt.provider.options_sources': providerInfo?.providerOptionsSources !== undefined
       ? JSON.stringify(providerInfo.providerOptionsSources)
       : undefined,
   };
-}
-
-function toJudgmentMatchMethod(
-  matchedRuleMethod: string | undefined,
-): string | undefined {
-  if (!matchedRuleMethod) {
-    return undefined;
-  }
-  if (matchedRuleMethod === 'structured_output') {
-    return 'structured_output';
-  }
-  if (matchedRuleMethod === 'ai_judge' || matchedRuleMethod === 'ai_judge_fallback') {
-    return 'ai_judge';
-  }
-  if (matchedRuleMethod === 'phase3_tag' || matchedRuleMethod === 'phase1_tag') {
-    return 'tag_fallback';
-  }
-  return undefined;
 }
 
 function recordSpanError(span: Span, error: unknown): void {

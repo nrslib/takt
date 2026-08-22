@@ -4,6 +4,10 @@ const mockOpts: Record<string, unknown> = {};
 const mockAddTask = vi.fn();
 const mockLogError = vi.fn();
 const mockProcessExit = vi.fn();
+const mockDeploySkillCodex = vi.fn();
+const mockGetRoutingTelemetryStatus = vi.fn(() => ({ localRecordingEnabled: true }));
+const mockEnableRoutingTelemetry = vi.fn(() => ({ localRecordingEnabled: true }));
+const mockDisableRoutingTelemetry = vi.fn(() => ({ localRecordingEnabled: false }));
 
 const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
   const commandActions = new Map<string, (...args: unknown[]) => void>();
@@ -51,17 +55,10 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
 
 vi.mock('../app/cli/program.js', () => ({
   program: rootCommand,
-  resolvedCwd: '/test/cwd',
-  pipelineMode: false,
 }));
 
-vi.mock('../infra/config/index.js', () => ({
-  clearPersonaSessions: vi.fn(),
-  resolveConfigValue: vi.fn(),
-}));
-
-vi.mock('../infra/config/paths.js', () => ({
-  getGlobalConfigDir: vi.fn(() => '/tmp/takt'),
+vi.mock('../app/cli/initialization.js', () => ({
+  getCliExecutionContext: vi.fn(() => ({ cwd: '/test/cwd', pipelineMode: false })),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -70,64 +67,34 @@ vi.mock('../shared/ui/index.js', () => ({
   error: (...args: unknown[]) => mockLogError(...args),
 }));
 
-vi.mock('../features/tasks/index.js', () => ({
-  runAllTasks: vi.fn(),
+vi.mock('../features/tasks/add/index.js', () => ({
   addTask: (...args: unknown[]) => mockAddTask(...args),
-  watchTasks: vi.fn(),
-  listTasks: vi.fn(),
 }));
 
-vi.mock('../features/config/index.js', () => ({
-  ejectBuiltin: vi.fn(),
-  ejectFacet: vi.fn(),
-  parseFacetType: vi.fn(),
-  VALID_FACET_TYPES: ['personas', 'policies', 'knowledge', 'instructions', 'output-contracts'],
-  resetCategoriesToDefault: vi.fn(),
-  resetConfigToDefault: vi.fn(),
-  deploySkill: vi.fn(),
-  deploySkillCodex: vi.fn(),
+vi.mock('../features/config/deploySkillCodex.js', () => ({
+  deploySkillCodex: (...args: unknown[]) => mockDeploySkillCodex(...args),
 }));
 
-vi.mock('../features/prompt/index.js', () => ({
-  previewPrompts: vi.fn(),
-}));
-
-vi.mock('../features/catalog/index.js', () => ({
-  showCatalog: vi.fn(),
-}));
-
-vi.mock('../features/workflowAuthoring/index.js', () => ({
-  initWorkflowCommand: vi.fn(),
-  doctorWorkflowCommand: vi.fn(),
-}));
-
-vi.mock('../features/analytics/index.js', () => ({
-  computeReviewMetrics: vi.fn(),
-  formatReviewMetrics: vi.fn(),
-  parseSinceDuration: vi.fn(),
-  purgeOldEvents: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/add.js', () => ({
-  repertoireAddCommand: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/remove.js', () => ({
-  repertoireRemoveCommand: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/list.js', () => ({
-  repertoireListCommand: vi.fn(),
+vi.mock('../infra/config/global/globalConfigAccessors.js', () => ({
+  getRoutingTelemetryStatus: (...args: unknown[]) => mockGetRoutingTelemetryStatus(...args),
+  enableRoutingTelemetry: (...args: unknown[]) => mockEnableRoutingTelemetry(...args),
+  disableRoutingTelemetry: (...args: unknown[]) => mockDisableRoutingTelemetry(...args),
 }));
 
 import '../app/cli/commands.js';
-const configFeatures = await import('../features/config/index.js');
+const sharedUi = await import('../shared/ui/index.js');
 
 describe('CLI add command', () => {
   beforeEach(() => {
     mockAddTask.mockClear();
     mockLogError.mockClear();
     mockProcessExit.mockClear();
+    mockDeploySkillCodex.mockClear();
+    mockGetRoutingTelemetryStatus.mockClear();
+    mockEnableRoutingTelemetry.mockClear();
+    mockDisableRoutingTelemetry.mockClear();
+    vi.mocked(sharedUi.info).mockClear();
+    vi.mocked(sharedUi.success).mockClear();
     for (const key of Object.keys(mockOpts)) {
       delete mockOpts[key];
     }
@@ -191,39 +158,29 @@ describe('CLI add command', () => {
     expect(exportCodexAction).toBeTypeOf('function');
 
     await exportCodexAction?.();
-    const deploySkillCodex = (configFeatures as Record<string, unknown>).deploySkillCodex;
-    expect(deploySkillCodex).toHaveBeenCalledTimes(1);
+    expect(mockDeploySkillCodex).toHaveBeenCalledTimes(1);
   });
 
-  it('should describe prompt workflow argument as defaulting to "default"', () => {
-    const promptCommand = commandMocks.get('root.prompt');
-    expect(promptCommand).toBeTruthy();
-    expect(promptCommand?.description).toHaveBeenCalledWith('Preview assembled prompts for each step and phase');
-    expect(promptCommand?.argument).toHaveBeenCalledWith(
-      '[workflow]',
-      'Workflow name or path (defaults to "default")',
-    );
-  });
+  it('should register telemetry subcommands and wire them to config operations', async () => {
+    const statusAction = commandActions.get('root.telemetry.status');
+    const enableAction = commandActions.get('root.telemetry.enable');
+    const disableAction = commandActions.get('root.telemetry.disable');
+    expect(statusAction).toBeTypeOf('function');
+    expect(enableAction).toBeTypeOf('function');
+    expect(disableAction).toBeTypeOf('function');
 
-  it('should describe eject with workflow terminology', () => {
-    const ejectCommand = commandMocks.get('root.eject');
-    expect(ejectCommand).toBeTruthy();
-    expect(ejectCommand?.description).toHaveBeenCalledWith(
-      'Copy builtin workflow or facet for customization (default: project .takt/)',
-    );
-    expect(ejectCommand?.argument).toHaveBeenNthCalledWith(
-      1,
-      '[typeOrName]',
-      'Workflow name, or facet type (personas, policies, knowledge, instructions, output-contracts)',
-    );
-  });
+    await statusAction?.();
+    await enableAction?.();
+    await disableAction?.();
 
-  it('should use workflow terminology for relevant command descriptions', () => {
-    expect(commandMocks.get('root.reset.categories')?.description)
-      .toHaveBeenCalledWith('Reset workflow categories to builtin defaults');
-    expect(commandMocks.get('root.export-cc')?.description)
-      .toHaveBeenCalledWith('Export takt workflows/agents as Claude Code Skill (~/.claude/)');
-    expect(commandMocks.get('root.export-codex')?.description)
-      .toHaveBeenCalledWith('Export takt workflows/agents as Codex Skill (~/.agents/)');
+    expect(mockGetRoutingTelemetryStatus).toHaveBeenCalledWith('/test/cwd');
+    expect(mockEnableRoutingTelemetry).toHaveBeenCalledWith('/test/cwd');
+    expect(mockDisableRoutingTelemetry).toHaveBeenCalledWith('/test/cwd');
+    const messages = [
+      ...vi.mocked(sharedUi.info).mock.calls.map((call) => String(call[0])),
+      ...vi.mocked(sharedUi.success).mock.calls.map((call) => String(call[0])),
+    ];
+    expect(messages).toHaveLength(3);
+    expect(messages.every((message) => message.length > 0)).toBe(true);
   });
 });

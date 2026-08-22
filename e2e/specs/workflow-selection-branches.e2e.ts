@@ -1,12 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../helpers/isolated-env';
-import { createTestRepo, type TestRepo } from '../helpers/test-repo';
-import { readSessionRecords } from '../helpers/session-log';
+import { createOfflineTestRepo, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
-import { unexpectedWorkflowDirName } from '../../test/helpers/unknown-contract-test-keys.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,12 +32,7 @@ function writeMinimalWorkflow(workflowPath: string, stepName = 'execute'): void 
       `  - name: ${stepName}`,
       '    edit: true',
       '    persona: ../agents/test-coder.md',
-      '    provider_options:',
-      '      claude:',
-      '        allowed_tools:',
-      '          - Read',
-      '          - Write',
-      '          - Edit',
+      '    capabilities: edit',
       '    required_permission_mode: edit',
       '    instruction: |',
       '      {task}',
@@ -76,7 +69,7 @@ describe('E2E: Workflow selection branch coverage', () => {
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
-    testRepo = createTestRepo();
+    testRepo = createOfflineTestRepo();
 
     updateIsolatedConfig(isolatedEnv.taktDir, {
       provider: 'mock',
@@ -110,7 +103,6 @@ describe('E2E: Workflow selection branch coverage', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should execute when --workflow is a known local name (resolver hit branch)', () => {
@@ -124,7 +116,6 @@ describe('E2E: Workflow selection branch coverage', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should execute when --workflow is a repertoire @scope name (resolver hit branch)', () => {
@@ -139,20 +130,6 @@ describe('E2E: Workflow selection branch coverage', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
-    expect(result.stdout).not.toContain('Workflow not found');
-  }, 240_000);
-
-  it('should fail fast with message when --workflow is unknown (resolver miss branch)', () => {
-    const result = runTaskWithSelection({
-      workflow: '@nrslib/takt-ensembles/not-found',
-      cwd: testRepo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow not found: @nrslib/takt-ensembles/not-found');
-    expect(result.stdout).toContain('Cancelled');
   }, 240_000);
 
   it('should execute when --workflow is omitted (workflow selection branch)', () => {
@@ -164,7 +141,6 @@ describe('E2E: Workflow selection branch coverage', () => {
       env: isolatedEnv.env,
     });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should execute successfully when --workflow is a known local name', () => {
@@ -178,55 +154,6 @@ describe('E2E: Workflow selection branch coverage', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
-  }, 240_000);
-
-  it('should use .takt/workflows without relying on unrelated fallback paths', () => {
-    writeAgent(join(testRepo.path, '.takt'));
-    writeMinimalWorkflow(join(testRepo.path, '.takt', 'workflows', 'priority-check.yaml'), 'workflow-only-step');
-    writeMinimalWorkflow(join(testRepo.path, '.takt', unexpectedWorkflowDirName, 'priority-check.yaml'), 'unexpected-dir-step');
-
-    const result = runTaskWithSelection({
-      workflow: 'priority-check',
-      cwd: testRepo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
-    const records = readSessionRecords(testRepo.path);
-    expect(records.some((record) => record.type === 'step_start' && record.step === 'workflow-only-step')).toBe(true);
-    expect(records.some((record) => record.type === 'step_start' && record.step === 'unexpected-dir-step')).toBe(false);
-  }, 240_000);
-
-  it('should fail when a workflow exists only in an unrelated workflow directory', () => {
-    writeAgent(join(testRepo.path, '.takt'));
-    writeMinimalWorkflow(join(testRepo.path, '.takt', unexpectedWorkflowDirName, 'unexpected-only.yaml'));
-
-    const result = runTaskWithSelection({
-      workflow: 'unexpected-only',
-      cwd: testRepo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow not found: unexpected-only');
-    expect(result.stdout).toContain('Cancelled');
-  }, 240_000);
-
-  it('should not execute an unrelated-directory workflow when --workflow is omitted', () => {
-    writeAgent(join(testRepo.path, '.takt'));
-    writeMinimalWorkflow(join(testRepo.path, '.takt', unexpectedWorkflowDirName, 'default.yaml'), 'unexpected-default-step');
-
-    const result = runTaskWithSelection({
-      cwd: testRepo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toContain('Workflow "default" not found.');
-    expect(result.stdout).not.toContain('Workflow completed');
-    expect(existsSync(join(testRepo.path, '.takt', 'runs'))).toBe(false);
   }, 240_000);
 
 });

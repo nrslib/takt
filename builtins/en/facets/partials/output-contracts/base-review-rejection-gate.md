@@ -1,0 +1,3 @@
+- REJECT is valid only when at least one finding exists in `new` with a valid `Authorization Basis`, `persists` under its adjudication-bound definition, or `reopened` with a valid basis (a-d)
+- Findings adjudicated out of scope do not count toward REJECT unless they satisfy the conditions for a valid `reopened`
+- A valid `reopened` counts toward REJECT even when its immediately preceding adjudication was out of scope; `reopened` is the re-review path, and the latest determination is governed by the validity of `reopened`

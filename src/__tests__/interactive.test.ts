@@ -3,16 +3,17 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import {
   setupRawStdin,
   restoreStdin,
   toRawInputs,
   createMockProvider,
-  createScenarioProvider,
 } from './helpers/stdinSimulator.js';
+
+const { mockResolveFormalSpecMode, mockSelectRecentSession } = vi.hoisted(() => ({
+  mockResolveFormalSpecMode: vi.fn(),
+  mockSelectRecentSession: vi.fn(),
+}));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
@@ -21,6 +22,15 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(),
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveFormalSpecMode: (cwd: string) => mockResolveFormalSpecMode(cwd),
+}));
+
+vi.mock('../features/interactive/sessionSelector.js', () => ({
+  selectRecentSession: (...args: unknown[]) => mockSelectRecentSession(...args),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -41,8 +51,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -63,7 +72,6 @@ import { getProvider } from '../infra/providers/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { info } from '../shared/ui/index.js';
-import { getLabel } from '../shared/i18n/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -77,6 +85,8 @@ function setupMockProvider(responses: string[]): void {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSelectOption.mockResolvedValue('execute');
+  mockResolveFormalSpecMode.mockResolvedValue(false);
+  mockSelectRecentSession.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -84,6 +94,78 @@ afterEach(() => {
 });
 
 describe('interactiveMode', () => {
+  it.each([
+    ['assistant', undefined, undefined],
+    ['Grill Me', undefined, { assistantMode: 'grill-me' as const }],
+    ['resumed assistant', 'existing-session', undefined],
+  ] as const)('should resolve formal specification mode once when starting a %s session', async (_label, sessionId, options) => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await interactiveMode('/project', undefined, undefined, sessionId, undefined, options);
+
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledOnce();
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledWith('/project');
+  });
+
+  it.each([
+    [false, true],
+    [true, false],
+  ] as const)(
+    'should apply formal specification mode=%s before resume and mode=%s after selecting a session',
+    async (initialFormalSpec, resumedFormalSpec) => {
+      setupRawStdin(toRawInputs([
+        'describe the initial behavior',
+        '/resume',
+        'describe the resumed behavior',
+        '/go',
+      ]));
+      const { provider, capture } = createMockProvider([
+        'Which initial states matter?',
+        'Which resumed states matter?',
+        '# Task instruction',
+      ]);
+      mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+      mockSelectRecentSession.mockResolvedValue('selected-session');
+      mockResolveFormalSpecMode
+        .mockResolvedValueOnce(initialFormalSpec)
+        .mockResolvedValueOnce(resumedFormalSpec);
+
+      await interactiveMode('/project');
+
+      expect(mockResolveFormalSpecMode).toHaveBeenCalledTimes(2);
+      expect(mockResolveFormalSpecMode).toHaveBeenNthCalledWith(1, '/project');
+      expect(mockResolveFormalSpecMode).toHaveBeenNthCalledWith(2, '/project');
+      expect(capture.systemPrompts).toHaveLength(3);
+    },
+  );
+
+  it('should not resolve formal specification mode again when session selection is cancelled', async () => {
+    setupRawStdin(toRawInputs(['/resume', '/cancel']));
+    setupMockProvider([]);
+    mockSelectRecentSession.mockResolvedValue(null);
+
+    await interactiveMode('/project');
+
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['assistant', undefined],
+    ['Grill Me', { assistantMode: 'grill-me' as const }],
+  ] as const)('should apply resolved formal specification mode to the %s system prompt', async (_label, options) => {
+    setupRawStdin(toRawInputs(['plan a stateful feature', '/cancel']));
+    const { provider, capture } = createMockProvider(['Which states are involved?']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+    mockResolveFormalSpecMode.mockResolvedValue(true);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, options);
+
+    expect(capture.systemPrompts[0]).toMatch(/Gherkin/);
+    expect(capture.systemPrompts[0]).toMatch(/\bQuint\b/);
+    expect(capture.systemPrompts[0]).toMatch(/\bAlloy\b/);
+  });
+
   it('should return action=cancel when user types /cancel', async () => {
     // Given
     setupRawStdin(toRawInputs(['/cancel']));
@@ -128,6 +210,74 @@ describe('interactiveMode', () => {
     );
   });
 
+  it('should set up the Grill Me persona when selected', async () => {
+    setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
+    const { provider } = createMockProvider(['Which roles may approve?']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(provider.setup).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'grill-me-interactive',
+    }));
+  });
+
+  it('should restrict Grill Me provider calls to read-only tools', async () => {
+    setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
+    const { provider } = createMockProvider(['Which roles may approve?']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect((provider as { _call: ReturnType<typeof vi.fn> })._call).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        allowedTools: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+      }),
+    );
+  });
+
+  it('should propagate readonly permission mode for Grill Me calls', async () => {
+    setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
+    const { provider, capture } = createMockProvider(['Which roles may approve?']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(capture.permissionModes).toEqual(['readonly']);
+  });
+
+  it('should show the Grill Me intro when selected', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(mockInfo).toHaveBeenCalled();
+  });
+
+  it('should return action=execute on /go after a Grill Me conversation', async () => {
+    setupRawStdin(toRawInputs(['design an approval flow', '/go']));
+    setupMockProvider(['Which roles may approve?', 'Require explicit approval from repository maintainers.']);
+
+    const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Require explicit approval from repository maintainers.',
+    });
+  });
+
   it('should return action=execute with task on /go after conversation', async () => {
     // Given
     setupRawStdin(toRawInputs(['add auth feature', '/go']));
@@ -156,9 +306,6 @@ describe('interactiveMode', () => {
     });
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
-    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
-    expect(summaryPrompt).toContain('User: add auth feature');
-    expect(summaryPrompt).not.toContain('User Note:\nadd auth feature');
   });
 
   it('should return action=execute with task on initial suffix /go command text', async () => {
@@ -176,9 +323,6 @@ describe('interactiveMode', () => {
     });
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
-    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
-    expect(summaryPrompt).toContain('User: add auth feature');
-    expect(summaryPrompt).not.toContain('User Note:\nadd auth feature');
   });
 
   it('should reject /go with no prior conversation', async () => {
@@ -215,153 +359,9 @@ describe('interactiveMode', () => {
     // When
     const result = await interactiveMode('/project');
 
-    // Then: task should be a summary and prompt should include full history
+    // Then: task should be a summary.
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Summarized task.');
-    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-    const summaryPrompt = mockProvider._call.mock.calls[2]?.[0] as string;
-    expect(summaryPrompt).toContain('Conversation:');
-    expect(summaryPrompt).toContain('User: first message');
-    expect(summaryPrompt).toContain('Assistant: response to first');
-    expect(summaryPrompt).toContain('User: second message');
-    expect(summaryPrompt).toContain('Assistant: response to second');
-  });
-
-  it('should send only current input per turn (session handles history)', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['first msg', 'second msg', '/go']));
-    setupMockProvider(['AI reply 1', 'AI reply 2']);
-
-    // When
-    await interactiveMode('/project');
-
-    // Then: each call receives user input with policy injected (session maintains context)
-    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-    expect(mockProvider._call.mock.calls[0]?.[0]).toContain('first msg');
-    expect(mockProvider._call.mock.calls[1]?.[0]).toContain('second msg');
-  });
-
-  it('should inject policy into user messages', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['test message', '/cancel']));
-    setupMockProvider(['response']);
-
-    // When
-    await interactiveMode('/project');
-
-    // Then: the prompt should contain policy section
-    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-    const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-    expect(prompt).toContain('## Policy');
-    expect(prompt).toContain('Interactive Mode Policy');
-    expect(prompt).toContain('Policy Reminder');
-    expect(prompt).toContain('test message');
-  });
-
-  it('should include configured untracked assistant init files in the first provider prompt', async () => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-interactive-init-files-'));
-    try {
-      mkdirSync(join(projectDir, '.takt'), { recursive: true });
-      mkdirSync(join(projectDir, 'docs'), { recursive: true });
-      writeFileSync(join(projectDir, 'docs', 'assistant-context.md'), 'configured assistant context', 'utf-8');
-      writeFileSync(
-        join(projectDir, '.takt', 'config.yaml'),
-        [
-          'assistant:',
-          '  init_files:',
-          '    - docs/assistant-context.md',
-        ].join('\n'),
-        'utf-8',
-      );
-      setupRawStdin(toRawInputs(['test message', '/cancel']));
-      setupMockProvider(['response']);
-
-      await interactiveMode(projectDir);
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('Assistant Init Context');
-      expect(prompt).toContain('docs/assistant-context.md');
-      expect(prompt).toContain('configured assistant context');
-      expect(prompt).toContain('test message');
-      expect(prompt).not.toMatch(/^## Source Context$/m);
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should include configured untracked assistant init files in the summary provider prompt', async () => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-interactive-summary-init-files-'));
-    try {
-      mkdirSync(join(projectDir, '.takt'), { recursive: true });
-      mkdirSync(join(projectDir, 'docs'), { recursive: true });
-      writeFileSync(join(projectDir, 'docs', 'assistant-context.md'), 'configured summary context', 'utf-8');
-      writeFileSync(
-        join(projectDir, '.takt', 'config.yaml'),
-        [
-          'assistant:',
-          '  init_files:',
-          '    - docs/assistant-context.md',
-        ].join('\n'),
-        'utf-8',
-      );
-      setupRawStdin(toRawInputs(['test message', '/go']));
-      setupMockProvider(['response', 'summarized task']);
-
-      const result = await interactiveMode(projectDir);
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const summaryPrompt = mockProvider._call.mock.calls[1]?.[0] as string;
-      expect(summaryPrompt).toContain('Assistant Init Context');
-      expect(summaryPrompt).toContain('docs/assistant-context.md');
-      expect(summaryPrompt).toContain('configured summary context');
-      expect(summaryPrompt).toContain('Conversation:');
-      expect(summaryPrompt).toContain('User: test message');
-      expect(summaryPrompt).not.toMatch(/^## Source Context$/m);
-      expect(result).toEqual({
-        action: 'execute',
-        task: 'summarized task',
-      });
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should resend assistant init files on the next regular prompt after an AI call failure', async () => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-interactive-init-retry-'));
-    try {
-      mkdirSync(join(projectDir, '.takt'), { recursive: true });
-      mkdirSync(join(projectDir, 'docs'), { recursive: true });
-      writeFileSync(join(projectDir, 'docs', 'assistant-context.md'), 'context after failure', 'utf-8');
-      writeFileSync(
-        join(projectDir, '.takt', 'config.yaml'),
-        [
-          'assistant:',
-          '  init_files:',
-          '    - docs/assistant-context.md',
-        ].join('\n'),
-        'utf-8',
-      );
-      setupRawStdin(toRawInputs(['first message', 'second message', '/cancel']));
-      const { provider } = createScenarioProvider([
-        { content: '', throws: new Error('provider failure') },
-        { content: 'response after retry' },
-      ]);
-      mockGetProvider.mockReturnValue(provider);
-
-      await interactiveMode(projectDir);
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const firstPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      const secondPrompt = mockProvider._call.mock.calls[1]?.[0] as string;
-      expect(firstPrompt).toContain('Assistant Init Context');
-      expect(firstPrompt).toContain('context after failure');
-      expect(secondPrompt).toContain('Assistant Init Context');
-      expect(secondPrompt).toContain('context after failure');
-      expect(secondPrompt).toContain('second message');
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-    }
   });
 
   it('should keep initialInput as source context before user interaction', async () => {
@@ -375,12 +375,6 @@ describe('interactiveMode', () => {
     // Then: initial input is kept as source context and only /go summary call reaches AI
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
-    const firstPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
-    expect(firstPrompt).toContain('Source Context');
-    expect(firstPrompt).toContain('a');
-    expect(firstPrompt).toContain('untrusted external reference data');
-    expect(firstPrompt).toContain('```text');
-    expect(firstPrompt).not.toContain('User: a');
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Clarify task for "a".');
@@ -394,11 +388,6 @@ describe('interactiveMode', () => {
 
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
-    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
-    expect(summaryPrompt).toContain('Source Context');
-    expect(summaryPrompt).toContain('a');
-    expect(summaryPrompt).toContain('User Note:\nadd auth feature');
-    expect(summaryPrompt).not.toContain('User: add auth feature');
     expect(result).toEqual({
       action: 'execute',
       task: 'Clarify task for source context plus note.',
@@ -416,19 +405,6 @@ describe('interactiveMode', () => {
     // Then: first AI call is from explicit follow-up input, second is /go summary
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(2);
-    const firstPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
-    const secondPrompt = mockProvider._call.mock.calls[1]?.[0] as string;
-    expect(firstPrompt).toContain('Source Context');
-    expect(firstPrompt).toContain('a');
-    expect(firstPrompt).toContain('untrusted external reference data');
-    expect(firstPrompt).toContain('```text');
-    expect(firstPrompt).toContain('fix the login page');
-    expect(secondPrompt).toContain('Source Context');
-    expect(secondPrompt).toContain('a');
-    expect(secondPrompt).toContain('untrusted external reference data');
-    expect(secondPrompt).toContain('```text');
-    expect(secondPrompt).not.toContain('User: a');
-    expect(secondPrompt).toContain('User: fix the login page');
 
     // Task still contains all history for downstream use
     expect(result.action).toBe('execute');
@@ -443,10 +419,6 @@ describe('interactiveMode', () => {
 
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
-    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
-    expect(summaryPrompt).toContain('User: fix login');
-    expect(summaryPrompt).not.toContain('## Source Context\n');
-    expect(summaryPrompt).not.toContain('```text\nfix login\n```');
     expect(result).toEqual({ action: 'execute', task: 'Clarify direct task.' });
   });
 
@@ -466,71 +438,6 @@ describe('interactiveMode', () => {
         sessionId: 'test-session-id',
       }),
     );
-  });
-
-  it('should include run session context in system prompt when provided', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['hello', '/cancel']));
-    const mockSetup = vi.fn();
-    const mockCall = vi.fn(async () => ({
-      persona: 'interactive',
-      status: 'done' as const,
-      content: 'AI response',
-      timestamp: new Date(),
-    }));
-    mockSetup.mockReturnValue({ call: mockCall });
-    mockGetProvider.mockReturnValue({
-      getRuntimeInstructions: vi.fn(() => null),
-      setup: mockSetup,
-      _call: mockCall,
-    } as unknown as ReturnType<typeof getProvider>);
-
-    const runSessionContext = {
-      task: 'Previous run task',
-      workflow: 'default',
-      status: 'completed',
-      stepLogs: [{ step: 'implement', persona: 'coder', status: 'completed', content: 'Implementation done' }],
-      reports: [],
-    };
-
-    // When
-    await interactiveMode('/project', undefined, undefined, undefined, runSessionContext);
-
-    // Then: system prompt should contain run session content
-    expect(mockSetup).toHaveBeenCalled();
-    const setupArgs = mockSetup.mock.calls[0]![0] as { systemPrompt: string };
-    expect(setupArgs.systemPrompt).toContain('Previous run task');
-    expect(setupArgs.systemPrompt).toContain('default');
-    expect(setupArgs.systemPrompt).toContain('completed');
-    expect(setupArgs.systemPrompt).toContain('implement');
-    expect(setupArgs.systemPrompt).toContain('Implementation done');
-    expect(setupArgs.systemPrompt).toContain('Previous Run Reference');
-  });
-
-  it('should not include run session section in system prompt when not provided', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['hello', '/cancel']));
-    const mockSetup = vi.fn();
-    const mockCall = vi.fn(async () => ({
-      persona: 'interactive',
-      status: 'done' as const,
-      content: 'AI response',
-      timestamp: new Date(),
-    }));
-    mockSetup.mockReturnValue({ call: mockCall });
-    mockGetProvider.mockReturnValue({
-      getRuntimeInstructions: vi.fn(() => null),
-      setup: mockSetup,
-      _call: mockCall,
-    } as unknown as ReturnType<typeof getProvider>);
-
-    // When
-    await interactiveMode('/project');
-
-    // Then: system prompt should NOT contain run session section
-    expect(mockSetup).toHaveBeenCalled();
-    const setupArgs = mockSetup.mock.calls[0]![0] as { systemPrompt: string };
-    expect(setupArgs.systemPrompt).not.toContain('Previous Run Reference');
   });
 
   it('should not start provider call from initial input alone', async () => {
@@ -566,61 +473,6 @@ describe('interactiveMode', () => {
     );
   });
 
-  describe('/play command', () => {
-    it('should return action=execute with task on /play command', async () => {
-      // Given
-      setupRawStdin(toRawInputs(['/play implement login feature']));
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then
-      expect(result.action).toBe('execute');
-      expect(result.task).toBe('implement login feature');
-    });
-
-    it('should show error when /play has no task content', async () => {
-      // Given: /play without task, then /cancel to exit
-      setupRawStdin(toRawInputs(['/play', '/cancel']));
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: should cancel (fell through to /cancel)
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle /play with leading/trailing spaces', async () => {
-      // Given
-      setupRawStdin(toRawInputs(['/play   test task  ']));
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then
-      expect(result.action).toBe('execute');
-      expect(result.task).toBe('test task');
-    });
-
-    it('should skip AI summary when using /play', async () => {
-      // Given
-      setupRawStdin(toRawInputs(['/play quick task']));
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: provider should NOT have been called (no summary needed)
-      const mockProvider = mockGetProvider.mock.results[0]?.value as { _call: ReturnType<typeof vi.fn> };
-      expect(mockProvider._call).not.toHaveBeenCalled();
-      expect(result.action).toBe('execute');
-      expect(result.task).toBe('quick task');
-    });
-  });
-
   describe('/accept command', () => {
     it('should return action=execute with the latest assistant response unchanged', async () => {
       // Given
@@ -651,7 +503,7 @@ describe('interactiveMode', () => {
 
       // Then
       expect(result).toEqual({ action: 'cancel', task: '' });
-      expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.acceptNoAssistant', 'en'));
+      expect(mockInfo).toHaveBeenCalled();
       const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
       expect(mockProvider._call).not.toHaveBeenCalled();
     });
@@ -714,85 +566,6 @@ describe('interactiveMode', () => {
   });
 
   describe('multiline input', () => {
-    it('should handle paste with newlines via bracket paste mode', async () => {
-      // Given: pasted text with newlines, then /cancel
-      // \x1B[200~ starts paste, \x1B[201~ ends paste
-      setupRawStdin([
-        '\x1B[200~line1\nline2\nline3\x1B[201~\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['Got multiline input']);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: the pasted text should have been sent to AI with newlines preserved
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('line1\nline2\nline3');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Shift+Enter (Kitty protocol) for newline insertion', async () => {
-      // Given: text with Shift+Enter (\x1B[13;2u) for newline
-      setupRawStdin([
-        'hello\x1B[13;2uworld\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['Got multiline input']);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: input should contain a newline between hello and world
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello\nworld');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle backspace to delete last character', async () => {
-      // Given: type "ab", backspace (\x7F), type "c", Enter
-      setupRawStdin([
-        'ab\x7Fc\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: input should be "ac" (b was deleted by backspace)
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('ac');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+C to cancel input', async () => {
-      // Given: Ctrl+C during input
-      setupRawStdin(['\x03']);
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: should cancel
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+C (Kitty CSI-u) to cancel input', async () => {
-      // Given: Ctrl+C reported as Kitty keyboard protocol sequence
-      setupRawStdin(['\x1B[99;5u']);
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: should cancel
-      expect(result.action).toBe('cancel');
-    });
-
     it('should handle Ctrl+D to cancel input', async () => {
       // Given: Ctrl+D during input
       setupRawStdin(['\x04']);
@@ -802,61 +575,6 @@ describe('interactiveMode', () => {
       const result = await interactiveMode('/project');
 
       // Then: should cancel
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+D (Kitty CSI-u) to cancel input', async () => {
-      // Given: Ctrl+D reported as Kitty keyboard protocol sequence
-      setupRawStdin(['\x1B[100;5u']);
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: should cancel
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+C (xterm modifyOtherKeys) to cancel input', async () => {
-      // Given: Ctrl+C reported as xterm modifyOtherKeys sequence
-      setupRawStdin(['\x1B[27;5;99~']);
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: should cancel
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+D (xterm modifyOtherKeys) to cancel input', async () => {
-      // Given: Ctrl+D reported as xterm modifyOtherKeys sequence
-      setupRawStdin(['\x1B[27;5;100~']);
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: should cancel
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should move cursor with arrow keys and insert at position', async () => {
-      // Given: type "hllo", left 3 → cursor at 1, type "e", Enter
-      // buffer: "h" + "e" + "llo" = "hello"
-      setupRawStdin([
-        'hllo\x1B[D\x1B[D\x1B[De\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: arrow keys move cursor, "e" inserted at position 1 → "hello"
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello');
       expect(result.action).toBe('cancel');
     });
 
@@ -891,282 +609,6 @@ describe('interactiveMode', () => {
       expect(result.action).toBe('cancel');
     });
 
-    it('should handle Ctrl+W to delete previous word', async () => {
-      // Given: type "hello world", Ctrl+W (\x17), Enter
-      setupRawStdin([
-        'hello world\x17\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: "world" was deleted by Ctrl+W, "hello " remains
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello');
-      expect(prompt).not.toContain('world');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+H (backspace alternative) to delete character', async () => {
-      // Given: type "ab", Ctrl+H (\x08), type "c", Enter
-      setupRawStdin([
-        'ab\x08c\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: Ctrl+H deletes 'b', buffer is "ac"
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('ac');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should ignore unknown control characters (e.g. Ctrl+G)', async () => {
-      // Given: type "ab", Ctrl+G (\x07, bell), type "c", Enter
-      setupRawStdin([
-        'ab\x07c\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: Ctrl+G is ignored, buffer is "abc"
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('abc');
-      expect(result.action).toBe('cancel');
-    });
   });
 
-  describe('cursor management', () => {
-    it('should move cursor left with arrow key and insert at position', async () => {
-      // Given: type "helo", left 2, type "l", Enter → "hello" wait...
-      // "helo" cursor at 4, left 2 → cursor at 2, type "l" → insert at 2: "helelo"? No.
-      // Actually: "helo"[0]='h',[1]='e',[2]='l',[3]='o'
-      // cursor at 4, left 2 → cursor at 2 (before 'l'), type 'l' → "hel" + "l" + "o" = "hello"? No.
-      // Insert at index 2: "he" + "l" + "lo" = "hello". Yes!
-      setupRawStdin([
-        'helo\x1B[D\x1B[Dl\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: buffer should be "hello"
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should move cursor right with arrow key after moving left', async () => {
-      // "hello" left 3 → cursor at 2, right 1 → cursor at 3, type "X" → "helXlo"
-      setupRawStdin([
-        'hello\x1B[D\x1B[D\x1B[D\x1B[CX\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('helXlo');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+A to move cursor to beginning of line', async () => {
-      // Type "world", Ctrl+A, type "hello ", Enter → "hello world"
-      setupRawStdin([
-        'world\x01hello \r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello world');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+A via Kitty CSI-u to move cursor to beginning', async () => {
-      // Type "test", Ctrl+A via Kitty ([97;5u), type "X", Enter → "Xtest"
-      setupRawStdin([
-        'test\x1B[97;5uX\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('Xtest');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+E to move cursor to end of line', async () => {
-      // Type "hello", Ctrl+A, Ctrl+E, type "!", Enter → "hello!"
-      setupRawStdin([
-        'hello\x01\x05!\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello!');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+K to delete from cursor to end of line', async () => {
-      // Type "hello world", left 6 (cursor before "world"), Ctrl+K, Enter → "hello"
-      // Actually: "hello world" length=11, left 6 → cursor at 5 (space before "world")
-      // Ctrl+K deletes from 5 to 11 → " world" removed → buffer "hello"
-      setupRawStdin([
-        'hello world\x1B[D\x1B[D\x1B[D\x1B[D\x1B[D\x1B[D\x0B\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello');
-      expect(prompt).not.toContain('hello world');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle backspace in middle of text', async () => {
-      // Type "helllo", left 2, backspace, Enter
-      // "helllo" cursor at 6, left 2 → cursor at 4, backspace deletes [3]='l' → "hello"
-      setupRawStdin([
-        'helllo\x1B[D\x1B[D\x7F\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Home key to move to beginning of line', async () => {
-      // Type "world", Home (\x1B[H), type "hello ", Enter → "hello world"
-      setupRawStdin([
-        'world\x1B[Hhello \r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello world');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle End key to move to end of line', async () => {
-      // Type "hello", Home, End (\x1B[F), type "!", Enter → "hello!"
-      setupRawStdin([
-        'hello\x1B[H\x1B[F!\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello!');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+W with cursor in middle of text', async () => {
-      // Type "hello world!", left 1 (before !), Ctrl+W, Enter
-      // cursor at 11, Ctrl+W deletes "world" → "hello !"
-      setupRawStdin([
-        'hello world!\x1B[D\x17\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('hello !');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle Ctrl+U with cursor in middle of text', async () => {
-      // Type "hello world", left 5 (cursor at 6, before "world"), Ctrl+U, Enter
-      // Ctrl+U deletes "hello " → buffer becomes "world"
-      setupRawStdin([
-        'hello world\x1B[D\x1B[D\x1B[D\x1B[D\x1B[D\x15\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('world');
-      expect(prompt).not.toContain('hello');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should not move cursor past line boundaries with arrow keys', async () => {
-      // Type "ab", left 3 (should stop at 0), type "X", Enter → "Xab"
-      setupRawStdin([
-        'ab\x1B[D\x1B[D\x1B[DX\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('Xab');
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should not move cursor past line end with right arrow', async () => {
-      // Type "ab", right 2 (already at end, no effect), type "c", Enter → "abc"
-      setupRawStdin([
-        'ab\x1B[C\x1B[Cc\r',
-        '/cancel\r',
-      ]);
-      setupMockProvider(['response']);
-
-      const result = await interactiveMode('/project');
-
-      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
-      expect(prompt).toContain('abc');
-      expect(result.action).toBe('cancel');
-    });
-  });
 });

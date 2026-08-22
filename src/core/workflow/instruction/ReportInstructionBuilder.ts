@@ -14,7 +14,6 @@ import {
   renderReportContext,
   renderReportOutputInstruction,
 } from './InstructionBuilder.js';
-import { renderFencedJsonBlock } from './fenced-json.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
 /**
@@ -23,6 +22,8 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 export interface ReportInstructionContext {
   /** Working directory */
   cwd: string;
+  /** Original workflow task. */
+  task?: string;
   /** Report directory path */
   reportDir: string;
   /** Step iteration (for {step_iteration} replacement) */
@@ -33,8 +34,10 @@ export interface ReportInstructionContext {
   targetFile?: string;
   /** Last response from Phase 1 (used when report phase retries in a new session) */
   lastResponse?: string;
-  /** Finding Contract context available in tool-less report phase. */
-  findingContract?: InstructionContext['findingContract'];
+  /** Advisory diagnostics emitted by the reviewer completion check. */
+  completionRetryDiagnostic?: string;
+  /** Engine-computed changed file set for `{review_scope}` in output contracts. */
+  reviewScope?: InstructionContext['reviewScope'];
 }
 
 /**
@@ -67,7 +70,7 @@ export class ReportInstructionBuilder {
     let reportOutput = '';
     let hasReportOutput = false;
     const instrContext: InstructionContext = {
-      task: '',
+      task: this.context.task ?? '',
       iteration: 0,
       maxSteps: 0,
       stepIteration: this.context.stepIteration,
@@ -76,7 +79,11 @@ export class ReportInstructionBuilder {
       userInputs: [],
       reportDir: this.context.reportDir,
       language,
-      findingContract: this.context.findingContract,
+      reviewScope: this.context.reviewScope,
+      // phase 2 は「これから書く」フェーズ。契約テンプレート内の {report:X} が
+      // 自分自身（未作成）を指す構成を存在検証で落とさない。consumer 保護
+      // （実行前の欠落検出）は phase 1 のインストラクション側で行われる。
+      validateReportReferences: false,
     };
 
     const targetContract = this.context.targetFile
@@ -100,16 +107,18 @@ export class ReportInstructionBuilder {
       outputContract = replaceTemplatePlaceholders(targetContract.format.trimEnd(), this.step, instrContext);
       hasOutputContract = true;
     }
-    reportOutput = this.appendFindingContractReportInstruction(reportOutput);
-    hasReportOutput = hasReportOutput || this.context.findingContract !== undefined;
-
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
+      hasTask: this.context.task != null && this.context.task.trim().length > 0,
+      task: this.context.task ?? '',
       hasGitRules,
       gitRules,
       reportContext,
       hasLastResponse: this.context.lastResponse != null && this.context.lastResponse.trim().length > 0,
       lastResponse: this.context.lastResponse ?? '',
+      hasCompletionRetryDiagnostic:
+        this.context.completionRetryDiagnostic !== undefined,
+      completionRetryDiagnostic: this.context.completionRetryDiagnostic ?? '',
       hasReportOutput,
       reportOutput,
       hasOutputContract,
@@ -117,23 +126,4 @@ export class ReportInstructionBuilder {
     });
   }
 
-  private appendFindingContractReportInstruction(reportOutput: string): string {
-    if (!this.context.findingContract) {
-      return reportOutput;
-    }
-
-    const findingContractInstruction = [
-      '## Finding Contract',
-      `- Consolidated ledger copy: ${this.context.findingContract.ledgerCopyPath}`,
-      '- Use existing finding IDs from the inline ledger summary when referring to tracked findings.',
-      '- Do not assign final finding IDs.',
-      '',
-      'Current finding ledger IDs:',
-      renderFencedJsonBlock(this.context.findingContract.reportLedgerSummary),
-    ].join('\n');
-
-    return reportOutput.length > 0
-      ? [reportOutput, '', findingContractInstruction].join('\n')
-      : findingContractInstruction;
-  }
 }

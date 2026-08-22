@@ -27,15 +27,14 @@ function makeOptions(overrides: Partial<WorkflowEngineOptions> = {}): WorkflowEn
 }
 
 describe('handleBlocked', () => {
-  it('should return shouldContinue=false when no onUserInput callback', async () => {
+  it('should distinguish unavailable input from cancellation', async () => {
     const result = await handleBlocked(
       makeStep(),
       makeResponse('blocked message'),
       makeOptions(),
     );
 
-    expect(result.shouldContinue).toBe(false);
-    expect(result.userInput).toBeUndefined();
+    expect(result).toEqual({ kind: 'unavailable' });
   });
 
   it('should call onUserInput and return user input', async () => {
@@ -46,12 +45,14 @@ describe('handleBlocked', () => {
       makeOptions({ onUserInput }),
     );
 
-    expect(result.shouldContinue).toBe(true);
-    expect(result.userInput).toBe('user response');
+    expect(result).toEqual({
+      kind: 'continued',
+      userInput: 'user response',
+    });
     expect(onUserInput).toHaveBeenCalledOnce();
   });
 
-  it('should return shouldContinue=false when user cancels (returns null)', async () => {
+  it('should classify an explicit user cancellation', async () => {
     const onUserInput = vi.fn().mockResolvedValue(null);
     const result = await handleBlocked(
       makeStep(),
@@ -59,20 +60,20 @@ describe('handleBlocked', () => {
       makeOptions({ onUserInput }),
     );
 
-    expect(result.shouldContinue).toBe(false);
-    expect(result.userInput).toBeUndefined();
+    expect(result).toEqual({ kind: 'cancelled' });
   });
 
   it('should pass extracted prompt in the request', async () => {
     const onUserInput = vi.fn().mockResolvedValue('answer');
+    const question = 'environment question';
     await handleBlocked(
       makeStep(),
-      makeResponse('質問: 環境は何ですか？'),
+      makeResponse(`質問: ${question}`),
       makeOptions({ onUserInput }),
     );
 
     const request = onUserInput.mock.calls[0]![0];
-    expect(request.prompt).toBe('環境は何ですか？');
+    expect(request.prompt).toBe(question);
   });
 
   it('should pass the full content as prompt when no pattern matches', async () => {

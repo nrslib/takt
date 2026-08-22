@@ -1,0 +1,338 @@
+/**
+ * {report:X} 参照の構文解釈と実行時解決。
+ *
+ * 従来は reportDir との単純な文字列連結（存在チェックなし）だったため、
+ * resume 境界（producer 実行後に resume を挟むと旧 run の reports/ が
+ * 引き継がれない）で consumer の参照が黙って壊れ、エージェントが実在しない
+ * パスを探して詰んでいた（v3-r4）。ここでは path containment / 存在 /
+ * 通常ファイル（symlink 拒否）を検証する。欠落は実行を止めず、明示的な
+ * 欠落文に置換する。
+ *
+ * doctor の静的解析（{report:X} 抽出）もこの parser を共用し、静的解析と
+ * 実行時の構文解釈を揃える。
+ */
+
+import { lstatSync, realpathSync, type Stats } from 'node:fs';
+import { relative, resolve, sep } from 'node:path';
+import {
+  classifyReportRelativePath,
+  reportPathRejectionMessage,
+} from '../../models/reserved-report-names.js';
+import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
+import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
+
+export const REPORT_REFERENCE_PATTERN = /\{report:([^}]+)\}/g;
+
+/** テキストから {report:X} の参照名を抽出する（doctor と実行時で共用）。 */
+export function extractReportReferences(text: string | undefined): string[] {
+  if (!text) {
+    return [];
+  }
+  return [...text.matchAll(REPORT_REFERENCE_PATTERN)]
+    .map((match) => match[1] ?? '')
+    .filter((name) => name.length > 0);
+}
+
+export interface ResolveReportReferenceContext {
+  /** 参照しているステップ名（エラーメッセージ用） */
+  readonly stepName: string;
+  /**
+   * run の reports ルート（engine から明示的に渡す — パス文字列からの推測は
+   * しない）。workflow_call の子（`reports/subworkflows/<segment>/` の
+   * 名前空間付き reportDir）に限り、親成果物への read-only フォールバック
+   * 解決に使う。
+   */
+  readonly reportsRootDir?: string;
+  /** 元 run 座標で解決済みの resume snapshot 対応を引く論理 consumer key。 */
+  readonly resumeReportConsumerKey?: string;
+  /**
+   * 存在検証を無効化する（`takt prompt` のプレビューなど、実 run が存在しない
+   * 文脈のみ）。containment 検証は常に行う。
+   */
+  readonly validateExistence?: boolean;
+}
+
+/**
+ * 解決結果のスコープ。`parent-run-readonly` は workflow_call の子が親 run の
+ * 成果物を参照した場合で、**読み取り専用参照**である — レポートの書き込み
+ * （phase 2 / writeReportFile）はこのリゾルバを通らず、常に自分の名前空間付き
+ * reportDir へ書くため、親レポートが書き込み対象になることはない。
+ */
+export type ResolvedReportReferenceScope =
+  | 'step'
+  | 'parent-run-readonly'
+  | 'resume-snapshot-readonly'
+  | 'missing';
+
+export interface ResolvedReportReference {
+  readonly content: string;
+  readonly scope: ResolvedReportReferenceScope;
+}
+
+export interface ResolvedReportReferencePath {
+  readonly path: string;
+  readonly scope: Exclude<ResolvedReportReferenceScope, 'missing'>;
+}
+
+/** サブワークフロー名前空間のディレクトリ名（run-paths.ts の構造と対）。 */
+const SUBWORKFLOWS_NAMESPACE_DIR = 'subworkflows';
+
+/** reportDir の絶対パスから run slug を導出する。 */
+function deriveRunInfoFromReportDir(reportDir: string): { cwd: string; runSlug: string } | undefined {
+  const marker = `${sep}.takt${sep}runs${sep}`;
+  const markerIndex = reportDir.lastIndexOf(marker);
+  if (markerIndex < 0) {
+    return undefined;
+  }
+  const cwd = reportDir.slice(0, markerIndex);
+  const remainder = reportDir.slice(markerIndex + marker.length);
+  const runSlug = remainder.split(sep)[0];
+  if (!runSlug) {
+    return undefined;
+  }
+  return { cwd, runSlug };
+}
+
+export function formatMissingReportReference(reference: string): string {
+  return `（参照先の報告 ${reference} はこの run に存在しない）`;
+}
+
+/**
+ * 実在する通常ファイルかどうか。symlink は lstat で **リンク自体を拒否**する
+ * （statSync はリンク先を追うため、reportDir 外を指す symlink の参照を
+ * 受理してしまう — boundary requirement）。
+ */
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+function readPathValueOrUndefined<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function readRegularReportFile(
+  trustedRootDir: string,
+  pathAbs: string,
+  reference: string,
+  stepName: string,
+): { readonly path: string; readonly content: string } | undefined {
+  const baseAbs = resolve(trustedRootDir);
+  const relativeTarget = relative(baseAbs, pathAbs);
+  const components = relativeTarget.split(sep).filter((component) => component.length > 0);
+  let current = baseAbs;
+  let targetStat: Stats | undefined;
+
+  for (const component of ['', ...components]) {
+    current = component.length > 0 ? resolve(current, component) : current;
+    targetStat = readPathValueOrUndefined(() => lstatSync(current));
+    if (targetStat === undefined) {
+      return undefined;
+    }
+    if (targetStat.isSymbolicLink()) {
+      throw new Error(
+        `Report reference "${reference}" for step "${stepName}" resolves to a symlink at "${current}" or traverses a symlinked parent; refusing to follow it`,
+      );
+    }
+  }
+
+  const realBase = readPathValueOrUndefined(() => realpathSync(baseAbs));
+  const realTarget = readPathValueOrUndefined(() => realpathSync(pathAbs));
+  if (realBase === undefined || realTarget === undefined) {
+    return undefined;
+  }
+  const realBasePrefix = realBase.endsWith(sep) ? realBase : realBase + sep;
+  if (realTarget !== realBase && !realTarget.startsWith(realBasePrefix)) {
+    throw new Error(
+      `Report reference "${reference}" escapes the report directory for step "${stepName}" through its real path`,
+    );
+  }
+  if (targetStat?.isFile() !== true) {
+    throw new Error(
+      `Report reference "${reference}" for step "${stepName}" is not a regular file: "${pathAbs}"`,
+    );
+  }
+  const content = readPathValueOrUndefined(
+    () => readRegularFileNoFollow(pathAbs, targetStat).toString('utf-8'),
+  );
+  return content === undefined ? undefined : { path: pathAbs, content };
+}
+
+function assertContained(reportDir: string, reference: string, stepName: string): string {
+  const baseAbs = resolve(reportDir);
+  const targetAbs = resolve(reportDir, reference);
+  const basePrefix = baseAbs.endsWith(sep) ? baseAbs : baseAbs + sep;
+  if (targetAbs !== baseAbs && !targetAbs.startsWith(basePrefix)) {
+    throw new Error(
+      `Report reference "${reference}" escapes the report directory for step "${stepName}"`,
+    );
+  }
+  return targetAbs;
+}
+
+/** workflow_call の名前空間構造を検証し、直近の親から reports root までを返す。 */
+function getParentWorkflowReportDirs(reportDir: string, reportsRootDir: string): string[] {
+  const rootAbs = resolve(reportsRootDir);
+  const dirAbs = resolve(reportDir);
+  const components = relative(rootAbs, dirAbs)
+    .split(sep)
+    .filter((component) => component.length > 0);
+  if (
+    components.length < 2
+    || components.length % 2 !== 0
+    || components.some((component, index) => (
+      index % 2 === 0 && component !== SUBWORKFLOWS_NAMESPACE_DIR
+    ))
+  ) {
+    return [];
+  }
+
+  const parents: string[] = [];
+  for (let length = components.length - 2; length >= 0; length -= 2) {
+    parents.push(resolve(rootAbs, ...components.slice(0, length)));
+  }
+  return parents;
+}
+
+interface ExistingReportReferenceResolution extends ResolvedReportReferencePath {
+  readonly content: string;
+}
+
+function resolveExistingReportReference(
+  reportDir: string,
+  normalizedReference: string,
+  reference: string,
+  targetAbs: string,
+  context: ResolveReportReferenceContext,
+): ExistingReportReferenceResolution | undefined {
+  const reportsRoot = context.reportsRootDir;
+  const trustedRoot = reportsRoot ?? reportDir;
+  const stepFile = readRegularReportFile(trustedRoot, targetAbs, reference, context.stepName);
+  if (stepFile !== undefined) {
+    return { ...stepFile, scope: 'step' };
+  }
+  const runInfo = deriveRunInfoFromReportDir(reportDir);
+  if (runInfo !== undefined && reportsRoot !== undefined && context.resumeReportConsumerKey !== undefined) {
+    const manifest = readPathValueOrUndefined(
+      () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug),
+    );
+    const snapshotReference = manifest?.resumeReportConsumers
+      ?.find((consumer) => consumer.consumerKey === context.resumeReportConsumerKey)
+      ?.references.find((entry) => entry.reference === normalizedReference);
+    if (snapshotReference !== undefined) {
+      const snapshotTargetAbs = assertContained(reportsRoot, snapshotReference.path, context.stepName);
+      const snapshotFile = readRegularReportFile(
+        reportsRoot,
+        snapshotTargetAbs,
+        reference,
+        context.stepName,
+      );
+      if (snapshotFile !== undefined) {
+        return { ...snapshotFile, scope: 'resume-snapshot-readonly' };
+      }
+    }
+  }
+  if (reportsRoot !== undefined) {
+    for (const parentReportDir of getParentWorkflowReportDirs(reportDir, reportsRoot)) {
+      const parentTargetAbs = assertContained(parentReportDir, normalizedReference, context.stepName);
+      const parentFile = readRegularReportFile(
+        reportsRoot,
+        parentTargetAbs,
+        reference,
+        context.stepName,
+      );
+      if (parentFile !== undefined) {
+        return { ...parentFile, scope: 'parent-run-readonly' };
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * {report:X} を実パスへ解決する。containment / 存在 / 通常ファイル
+ * （symlink 拒否）を検証する。無いファイルだけは欠落文に置換する。
+ * `path` は従来と同じ `${dir}/${reference}` 形式（プロンプト本文の互換性維持）。
+ *
+ * 探索順は、現在の workflow 名前空間、resume snapshot の consumer exact mapping、
+ * 直近の親 workflow から run の reports ルート。親候補は
+ * `context.reportsRootDir` から構造検証した名前空間だけを使う。その場合 `scope` は
+ * `parent-run-readonly` — 親成果物の読み取り専用参照であり、書き込みは常に自分の
+ * reportDir に対して行われる。
+ */
+export function resolveReportReferenceDetailed(
+  reportDir: string,
+  reference: string,
+  context: ResolveReportReferenceContext,
+): ResolvedReportReference {
+  const classification = classifyReportRelativePath(reference);
+  if (classification.kind !== 'public') {
+    throw new Error(
+      `Report reference for step "${context.stepName}" is invalid: ${reportPathRejectionMessage(reference)}`,
+    );
+  }
+  const normalizedReference = classification.normalizedPath;
+  const targetAbs = assertContained(reportDir, normalizedReference, context.stepName);
+  if (context.validateExistence === false) {
+    return { content: `${reportDir}/${normalizedReference}`, scope: 'step' };
+  }
+  const reportsRoot = context.reportsRootDir;
+  const trustedRoot = reportsRoot ?? reportDir;
+  assertContained(trustedRoot, relative(resolve(trustedRoot), resolve(reportDir)), context.stepName);
+  const resolved = resolveExistingReportReference(
+    reportDir,
+    normalizedReference,
+    reference,
+    targetAbs,
+    context,
+  );
+  return resolved === undefined
+    ? { content: formatMissingReportReference(normalizedReference), scope: 'missing' }
+    : { content: resolved.content, scope: resolved.scope };
+}
+
+export function resolveReportReferencePath(
+  reportDir: string,
+  reference: string,
+  context: ResolveReportReferenceContext,
+): ResolvedReportReferencePath | undefined {
+  const classification = classifyReportRelativePath(reference);
+  if (classification.kind !== 'public') {
+    throw new Error(
+      `Report reference for step "${context.stepName}" is invalid: ${reportPathRejectionMessage(reference)}`,
+    );
+  }
+  const normalizedReference = classification.normalizedPath;
+  const targetAbs = assertContained(reportDir, normalizedReference, context.stepName);
+  if (context.validateExistence === false) {
+    return { path: targetAbs, scope: 'step' };
+  }
+  const reportsRoot = context.reportsRootDir;
+  const trustedRoot = reportsRoot ?? reportDir;
+  assertContained(trustedRoot, relative(resolve(trustedRoot), resolve(reportDir)), context.stepName);
+  const resolved = resolveExistingReportReference(
+    reportDir,
+    normalizedReference,
+    reference,
+    targetAbs,
+    context,
+  );
+  return resolved === undefined
+    ? undefined
+    : { path: resolved.path, scope: resolved.scope };
+}
+
+export function resolveReportReference(
+  reportDir: string,
+  reference: string,
+  context: ResolveReportReferenceContext,
+): string {
+  return resolveReportReferenceDetailed(reportDir, reference, context).content;
+}

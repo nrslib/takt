@@ -1,0 +1,25 @@
+params:
+  verification_policy:
+    type: facet_ref[]
+    facet_kind: policy
+  fix_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+name: fix-verifier
+capabilities: readonly
+tags:
+  - verification
+edit: false
+persona: coding-reviewer
+policy:
+  - contract-change
+  - $param: verification_policy
+knowledge:
+  $param: fix_knowledge
+pass_previous_response: false
+instruction: verify-fix
+output_contracts:
+  report:
+    - name: fix-verification.md
+      format: fix-verification
+      use_judge: false

@@ -48,7 +48,7 @@ const nodeFileAccess: ProviderOptionsFileAccess = {
   exists: (path) => fs.existsSync(path),
   readText: (path) => fs.readFileSync(path, 'utf-8'),
   realpath: (path) => fs.realpathSync(path),
-  isSymlink: (path) => fs.lstatSync(path).isSymbolicLink(),
+  isSymlink: (path) => fs.lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ?? false,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -230,7 +230,13 @@ function resolveWorkflowProviderOptionsFromDir(
   const parsedRaw = ProviderOptionsWithExtendsSchema.parse(raw) as RawWorkflowProviderOptions;
   const ref = parsedRaw.extends;
   if (ref === undefined) {
-    return normalizeProviderOptions(parsedRaw);
+    return normalizeProviderOptions(parsedRaw, {
+      baseUrlTrust: 'loopback-only',
+      pythonPathTrust: 'untrusted',
+      pathTrust: 'untrusted',
+      cordisTrust: 'untrusted',
+      pathPrefix: 'provider_options',
+    });
   }
 
   const refPath = resolveProviderOptionsExtendsPath(ref, currentDir, rootDir, scope, fileAccess);
@@ -258,6 +264,12 @@ function resolveWorkflowProviderOptionsFromDir(
     fileAccess,
     nextSeenRefs,
   );
-  const inlineOptions = normalizeProviderOptions(removeProviderOptionsExtends(parsedRaw));
+  const inlineOptions = normalizeProviderOptions(removeProviderOptionsExtends(parsedRaw), {
+    baseUrlTrust: 'loopback-only',
+    pythonPathTrust: 'untrusted',
+    pathTrust: 'untrusted',
+    cordisTrust: 'untrusted',
+    pathPrefix: 'provider_options',
+  });
   return mergeProviderOptions(referencedOptions, inlineOptions);
 }

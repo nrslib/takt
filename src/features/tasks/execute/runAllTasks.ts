@@ -13,8 +13,22 @@ import {
 } from '../../../shared/utils/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
-import { runWithWorkerPool } from './parallelExecution.js';
+import { attemptAutoRequeueTask, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
+
+function requeueExistingFailedTasks(taskRunner: TaskRunner, maxAttempts: number | undefined): number {
+  if (maxAttempts === undefined || maxAttempts <= 0) {
+    return 0;
+  }
+
+  let requeuedCount = 0;
+  for (const task of taskRunner.listFailedTasks()) {
+    if (attemptAutoRequeueTask(taskRunner, task.name, maxAttempts)) {
+      requeuedCount++;
+    }
+  }
+  return requeuedCount;
+}
 
 export async function runAllTasks(
   cwd: string,
@@ -23,17 +37,30 @@ export async function runAllTasks(
   const agentOverrides: TaskExecutionOptions | undefined = options
     ? {
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
+        ...(options.providerSource !== undefined ? { providerSource: options.providerSource } : {}),
         ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
+        ...(options.autoStrategy !== undefined ? { autoStrategy: options.autoStrategy } : {}),
       }
-    : undefined;
-  const runOptions = options?.ignoreExceed === true
-    ? { ignoreIterationLimit: true }
     : undefined;
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   const globalConfig = resolveWorkflowConfigValues(
     cwd,
-    ['notificationSound', 'notificationSoundEvents', 'concurrency', 'taskPollIntervalMs'],
+    [
+      'notificationSound',
+      'notificationSoundEvents',
+      'concurrency',
+      'taskPollIntervalMs',
+      'ignoreExceed',
+      'autoRequeueMaxAttempts',
+    ],
   );
+  const runOptions = {
+    ...(options?.ignoreExceed === true || globalConfig.ignoreExceed === true
+      ? { ignoreIterationLimit: true }
+      : {}),
+    autoRequeueMaxAttempts: globalConfig.autoRequeueMaxAttempts,
+  };
   const shouldNotifyRunComplete = globalConfig.notificationSound !== false
     && globalConfig.notificationSoundEvents?.runComplete !== false;
   const shouldNotifyRunAbort = globalConfig.notificationSound !== false
@@ -43,6 +70,10 @@ export async function runAllTasks(
   const failedInterrupted = taskRunner.failInterruptedRunningTasks();
   if (failedInterrupted > 0) {
     info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
+  }
+  const requeuedExistingFailed = requeueExistingFailedTasks(taskRunner, runOptions.autoRequeueMaxAttempts);
+  if (requeuedExistingFailed > 0) {
+    info(`Auto-requeued ${requeuedExistingFailed} existing failed task(s).`);
   }
 
   const initialTasks = taskRunner.claimNextTasks(concurrency);

@@ -70,6 +70,7 @@ import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.
 import { TaskRunner } from '../infra/task/runner.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import type { WorkflowExecutionOptions } from '../features/tasks/execute/types.js';
+import { buildWorkflowCallInvocationRecordsFixture } from './helpers/workflow-resume-fixture.js';
 
 // --- Helpers ---
 
@@ -180,13 +181,34 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
 
   it('scenario 2: exceeded metadata is recorded in tasks.yaml for resumption', async () => {
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'test-workflow',
+          workflow_ref: 'test-workflow',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 30,
       elapsed_ms: 183245,
+      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+        workflowReference: 'test-workflow',
+        step: 'delegate',
+        ownerPath: [],
+        callInstance: 1,
+        childWorkflowReference: 'takt/coding',
+      }]),
+      workflow_step_participations: {},
     };
     runner.addTask('Do work', { workflow: 'test-workflow' });
     const [task] = runner.claimNextTasks(1);
@@ -208,8 +230,7 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
     const file = loadTasksFile(testDir);
     const exceededRecord = file.tasks[0];
     expect(exceededRecord?.status).toBe('exceeded');
-    expect(exceededRecord?.start_movement).toBe('implement');
-    expect(exceededRecord?.start_step).toBeUndefined();
+    expect(exceededRecord?.start_step).toBe('implement');
     expect(exceededRecord?.exceeded_max_steps).toBe(60);
     expect(exceededRecord?.exceeded_current_iteration).toBe(30);
     expect(exceededRecord?.resume_point).toEqual(resumePoint);
@@ -316,6 +337,51 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     expect(capturedOptions.startStep).toBe('implement');
   });
 
+  it('scenario 7: worktree requeue forwards source run provenance to workflow execution', async () => {
+    // Given
+    writeExceededRecord(testDir, {
+      worktree: true,
+      worktree_path: cloneDir,
+      run_slug: '20260717-source-run',
+      start_step: 'implement',
+    });
+    runner.requeueExceededTask('task-a');
+    const [task] = runner.claimNextTasks(1);
+    if (!task) throw new Error('No task claimed');
+    vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true });
+
+    // When
+    await executeAndCompleteTask(task, runner, testDir);
+
+    // Then
+    const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
+    expect(capturedOptions.resumeSource).toEqual({
+      sourceRunSlug: '20260717-source-run',
+      resumeMode: 'requeue',
+    });
+    expect(vi.mocked(executeWorkflow).mock.calls[0]![2]).toBe(cloneDir);
+  });
+
+  it('scenario 8: worktree requeue preserves requeue mode when the source run is unavailable', async () => {
+    // Given
+    writeExceededRecord(testDir, {
+      worktree: true,
+      worktree_path: cloneDir,
+      start_step: 'implement',
+    });
+    runner.requeueExceededTask('task-a');
+    const [task] = runner.claimNextTasks(1);
+    if (!task) throw new Error('No task claimed');
+    vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true });
+
+    // When
+    await executeAndCompleteTask(task, runner, testDir);
+
+    // Then
+    const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
+    expect(capturedOptions.resumeSource).toEqual({ resumeMode: 'requeue' });
+  });
+
   it('scenario 6: re-execution trims workflow_call resume_point to the root step when the child no longer resolves', async () => {
     vi.mocked(loadWorkflowByIdentifier).mockReturnValue({
       name: 'test-workflow',
@@ -338,13 +404,34 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
       worktree_path: cloneDir,
       start_step: 'delegate',
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          {
+            workflow: 'test-workflow',
+            workflow_ref: 'test-workflow',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+            call_instance: 1,
+          },
+          {
+            workflow: 'takt/coding',
+            workflow_ref: 'takt/coding',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         iteration: 30,
         elapsed_ms: 183245,
+        workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+          workflowReference: 'test-workflow',
+          step: 'delegate',
+          ownerPath: [],
+          callInstance: 1,
+          childWorkflowReference: 'takt/coding',
+        }]),
+        workflow_step_participations: {},
       },
     });
 
@@ -360,12 +447,27 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
     expect(capturedOptions.startStep).toBe('delegate');
     expect(capturedOptions.resumePoint).toEqual({
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' },
+        {
+          workflow: 'test-workflow',
+          workflow_ref: 'test-workflow',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+          call_instance: 1,
+        },
       ],
       iteration: 30,
       elapsed_ms: 183245,
+      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+        workflowReference: 'test-workflow',
+        step: 'delegate',
+        ownerPath: [],
+        callInstance: 1,
+        childWorkflowReference: 'takt/coding',
+      }]),
+      workflow_step_participations: {},
     });
   });
 });

@@ -1,15 +1,15 @@
-reviewers → fix のループが {cycle_count} 回繰り返されました。
+レビューと修正のループが {cycle_count} 回繰り返されました。
 
-Finding Contract の ledger summary / `findings-ledger.json` がある場合は統合 ledger を一次情報として確認し、
-ledger がない場合は Report Directory 内の最新レビューレポートを確認し、
-このループが健全（収束傾向）か非生産的（発散・振動）かを判断してください。
+Report Directory 内の最新レビュー報告、裁定結果、修正報告、検証報告、現在のコードを調べ、このループが収束しているか、停滞または発散しているかを判断してください。
 
-**判断基準:**
-- 同一 finding_id が複数サイクルにわたって persists しているか
-  - 同一 finding_id が繰り返し persists → 非生産的（スタックしている）
-  - 前回の finding が resolved され、新しい finding が new → 健全（収束傾向）
-- parse 可能な Finding Contract ledger / `findings-ledger.json` がある場合は、tracked ledger `findings` / `conflicts` を正本とし、個別レポートは補助証跡として扱う
-- ledger は存在するが incomplete な場合は、mapped findings は ledger に従い、unmapped raw findings は findings-manager reconciliation 待ちの potential new entries として扱う
-- ledger がない、unreadable、または unparseable の場合は、Report Directory 内の最新レビューレポートを primary evidence として扱う
-- 修正が実際にコードに反映されているか
-- new / reopened の指摘件数が全体として減少傾向にあるか
+{{include:instructions/fix-plan-validity}}
+
+最初に、最新の修正後に検証またはレビューが実行済みかを時系列で確認してください。未実行の場合は、修正報告に記録された完了条件と未完了事項から、検証待ちなのか修正途中なのかを区別してください。
+
+各反復について、前回から満たされた受入条件、残っている同じ根本原因、変化したコードと証拠、新たに確認された構造上または契約上の問題を比較してください。件数や識別子の変化だけで進捗を判断せず、実装と証拠が実際に変わったかを確認してください。
+
+同じ原因と同じ証拠のまま結果が繰り返される場合、修正後の報告が現在のコードと一致しない場合、または未確認領域が減らず構造上の問題が追加され続ける場合は、停滞または発散として扱ってください。一方、必要な修正が進み、残作業が具体的で実行可能な場合は、未完了でも収束中として扱えます。
+
+再計画が必要なのは、計画の前提、修正境界、方法、または検証能力に不足や矛盾があり、計画変更で解消できる証拠がある場合だけです。実装不足や証拠不足だけを再計画の理由にしないでください。
+
+出力契約が用意する選択肢から、現在の証拠に合う結果を選んでください。未充足の完了条件が残る間は収束完了とせず、同じレビューまたは修正を繰り返しても解消できない証拠がある場合は、その反復を続けない選択肢を選んでください。

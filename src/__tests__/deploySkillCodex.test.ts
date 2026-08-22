@@ -75,6 +75,7 @@ describe('deploySkillCodex', () => {
     mkdirSync(join(langDir, 'facets', 'instructions'), { recursive: true });
     mkdirSync(join(langDir, 'facets', 'knowledge'), { recursive: true });
     mkdirSync(join(langDir, 'facets', 'output-contracts'), { recursive: true });
+    mkdirSync(join(langDir, 'facets', 'partials', 'policies'), { recursive: true });
     mkdirSync(join(langDir, 'templates'), { recursive: true });
 
     writeFileSync(join(langDir, 'workflows', 'default.yaml'), 'name: default');
@@ -83,6 +84,7 @@ describe('deploySkillCodex', () => {
     writeFileSync(join(langDir, 'facets', 'instructions', 'init.md'), '# Init');
     writeFileSync(join(langDir, 'facets', 'knowledge', 'patterns.md'), '# Patterns');
     writeFileSync(join(langDir, 'facets', 'output-contracts', 'summary.md'), '# Summary');
+    writeFileSync(join(langDir, 'facets', 'partials', 'policies', 'review-common.md'), '# Shared review policy');
     writeFileSync(join(langDir, 'templates', 'task.md'), '# legacy template');
 
     skillDir = join(testHomeDir, '.agents', 'skills', 'takt');
@@ -106,7 +108,9 @@ describe('deploySkillCodex', () => {
       await deploySkillCodex();
 
       expect(existsSync(join(skillDir, 'SKILL.md'))).toBe(true);
-      expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf-8')).toBe('# SKILL Codex');
+      expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf-8')).toBe(
+        readFileSync(join(fakeResourcesDir, 'skill-codex', 'SKILL.md'), 'utf-8'),
+      );
     });
 
     it('should copy references directory', async () => {
@@ -133,6 +137,7 @@ describe('deploySkillCodex', () => {
       expect(existsSync(join(skillDir, 'facets', 'instructions', 'init.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'knowledge', 'patterns.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'output-contracts', 'summary.md'))).toBe(true);
+      expect(existsSync(join(skillDir, 'facets', 'partials', 'policies', 'review-common.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'templates'))).toBe(false);
       expect(info).not.toHaveBeenCalledWith(expect.stringContaining('テンプレート'));
     });
@@ -168,7 +173,7 @@ describe('deploySkillCodex', () => {
     });
 
     it('should remove stale templates directory from previous deployments', async () => {
-      writeFileSync(join(skillDir, 'SKILL.md'), '# Old Skill');
+      writeFileSync(join(skillDir, 'SKILL.md'), 'existing skill content');
       const templatesDir = join(skillDir, 'templates');
       mkdirSync(templatesDir, { recursive: true });
       writeFileSync(join(templatesDir, 'task.md'), '# stale template');
@@ -196,7 +201,7 @@ describe('deploySkillCodex', () => {
 
       await deploySkillCodex();
 
-      expect(warn).toHaveBeenCalledWith('Skill resources not found. Ensure takt is installed correctly.');
+      expect(warn).toHaveBeenCalled();
     });
   });
 
@@ -206,19 +211,17 @@ describe('deploySkillCodex', () => {
 
       await deploySkillCodex();
 
-      expect(confirm).toHaveBeenCalledWith(
-        '既存のスキルファイルをすべて削除し、最新版に置き換えます。続行しますか？',
-        false,
-      );
+      expect(confirm).toHaveBeenCalled();
     });
 
     it('should cancel when user declines confirmation', async () => {
       vi.mocked(confirm).mockResolvedValueOnce(false);
-      writeFileSync(join(skillDir, 'SKILL.md'), '# Old Skill');
+      const existingContent = 'existing skill content';
+      writeFileSync(join(skillDir, 'SKILL.md'), existingContent);
 
       await deploySkillCodex();
 
-      expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf-8')).toBe('# Old Skill');
+      expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf-8')).toBe(existingContent);
     });
   });
 

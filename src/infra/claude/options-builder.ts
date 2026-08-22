@@ -30,6 +30,9 @@ function buildSdkEnv(options: ClaudeSpawnOptions): Record<string, string> {
   if (options.anthropicApiKey) {
     env.ANTHROPIC_API_KEY = options.anthropicApiKey;
   }
+  if (options.baseUrl !== undefined) {
+    env.ANTHROPIC_BASE_URL = options.baseUrl;
+  }
 
   const existingPathEntries = (env.PATH ?? '')
     .split(delimiter)
@@ -68,21 +71,46 @@ export class SdkOptionsBuilder {
     const hooks = SdkOptionsBuilder.createAskUserQuestionHooks(askHandler);
 
     const permissionMode = this.resolvePermissionMode();
-
+    const isStrictReadonly = this.options.internalAgentIsolation === 'strict-readonly';
     // Only include defined values — the SDK treats key-present-but-undefined
     // differently from key-absent for some options (e.g. model), causing hangs.
     const sdkOptions: Options = {
       cwd: this.options.cwd,
       permissionMode,
-      settingSources: ['project'],
+      settingSources: isStrictReadonly ? [] : ['project'],
     };
 
+    if (isStrictReadonly) {
+      sdkOptions.tools = [];
+      sdkOptions.skills = [];
+      sdkOptions.strictMcpConfig = true;
+    }
+
     if (this.options.model) sdkOptions.model = this.options.model;
-    if (this.options.effort) sdkOptions.effort = this.options.effort;
+    // The SDK's TypeScript union can lag values accepted by the Claude CLI runtime.
+    if (this.options.effort) sdkOptions.effort = this.options.effort as Options['effort'];
+    if (!isStrictReadonly && this.options.skillsEnabled === false) {
+      sdkOptions.skills = [];
+    }
     if (this.options.maxTurns != null) sdkOptions.maxTurns = this.options.maxTurns;
-    if (this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
+    if (!isStrictReadonly && this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
     if (this.options.agents) sdkOptions.agents = this.options.agents;
-    if (this.options.mcpServers) sdkOptions.mcpServers = this.options.mcpServers;
+    if (!isStrictReadonly && this.options.mcpServers) sdkOptions.mcpServers = this.options.mcpServers;
+    // Runtime MCP assignment (issue #1137): when the runner prepared MCP
+    // material, merge `mcpServers`/`strictMcpConfig` so a normal agent step
+    // with a non-empty server set also isolates ambient MCP config
+    // (order.md:159-167). Applied after the legacy `mcpServers` field so
+    // the prepared values win over the legacy field.
+    if (this.options.preparedMcp?.sdkOptions !== undefined) {
+      if (this.options.preparedMcp.sdkOptions.mcpServers !== undefined) {
+        // The adapter materializes the SDK-native MCP server shape; cast to
+        // the SDK's `Record<string, McpServerConfig>` union.
+        sdkOptions.mcpServers = this.options.preparedMcp.sdkOptions.mcpServers as typeof sdkOptions.mcpServers;
+      }
+      if (this.options.preparedMcp.sdkOptions.strictMcpConfig !== undefined) {
+        sdkOptions.strictMcpConfig = this.options.preparedMcp.sdkOptions.strictMcpConfig;
+      }
+    }
     if (this.options.systemPrompt) sdkOptions.systemPrompt = this.options.systemPrompt;
     if (this.options.outputSchema) {
       sdkOptions.outputFormat = {

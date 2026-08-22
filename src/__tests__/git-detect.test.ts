@@ -11,7 +11,12 @@ vi.mock('node:child_process', () => ({
   execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
 
-import { detectVcsProvider, getRemoteHostname, VCS_PROVIDER_TYPES } from '../infra/git/detect.js';
+import {
+  detectVcsProvider,
+  getRemoteHostname,
+  getRemoteRepositoryIdentifiers,
+  VCS_PROVIDER_TYPES,
+} from '../infra/git/detect.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -149,6 +154,31 @@ describe('getRemoteHostname', () => {
 
     // Then
     expect(result).toBeUndefined();
+  });
+});
+
+describe('getRemoteRepositoryIdentifiers', () => {
+  it.each([
+    ['https://github.com/nrslib/takt.git\n', ['nrslib/takt', 'takt']],
+    ['git@gitlab.com:group/subgroup/private-repo.git\n', ['group/subgroup/private-repo', 'private-repo']],
+    ['ssh://git@gitlab.example.com/group/private-repo.git\n', ['group/private-repo', 'private-repo']],
+    ['git@example.com:private-repo.git\n', ['private-repo']],
+  ])('remote %s からリポジトリ識別子を返す', (remote, expected) => {
+    mockExecFileSync.mockReturnValue(remote);
+
+    expect(getRemoteRepositoryIdentifiers('/project')).toEqual(expected);
+  });
+
+  it('remote を取得できない場合は空配列を返す', () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error('not a repository'); });
+
+    expect(getRemoteRepositoryIdentifiers('/project')).toEqual([]);
+  });
+
+  it('remote URL がパース不能な場合は空配列を返す', () => {
+    mockExecFileSync.mockReturnValue('not-a-url\n');
+
+    expect(getRemoteRepositoryIdentifiers('/project')).toEqual([]);
   });
 });
 

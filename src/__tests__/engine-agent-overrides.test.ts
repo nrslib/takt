@@ -11,12 +11,16 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn(),
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
 }));
@@ -34,7 +38,7 @@ import {
   makeRule,
   makeStep,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
 
@@ -44,7 +48,7 @@ describe('WorkflowEngine agent overrides', () => {
     applyDefaultMocks();
   });
 
-  it('passes resolved step provider/model to AgentRunner', async () => {
+  it('ignores workflow step provider/model and passes engine-level values to AgentRunner', async () => {
     const step = makeStep('plan', {
       provider: 'claude',
       model: 'claude-step',
@@ -60,38 +64,7 @@ describe('WorkflowEngine agent overrides', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
-
-    const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
-      projectCwd: '/tmp/project',
-      provider: 'codex',
-      model: 'cli-model',
-    });
-
-    await engine.run();
-
-    const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.provider).toBeUndefined();
-    expect(options.model).toBeUndefined();
-    expect(options.resolvedProvider).toBe('claude');
-    expect(options.resolvedModel).toBe('claude-step');
-  });
-
-  it('uses engine-level provider/model as resolved values when step provider/model is undefined', async () => {
-    const step = makeStep('plan', {
-      rules: [makeRule('done', 'COMPLETE')],
-    });
-    const config: WorkflowConfig = {
-      name: 'override-fallback',
-      steps: [step],
-      initialStep: 'plan',
-      maxSteps: 1,
-    };
-
-    mockRunAgentSequence([
-      makeResponse({ persona: step.persona, content: 'done' }),
-    ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
       projectCwd: '/tmp/project',
@@ -108,7 +81,38 @@ describe('WorkflowEngine agent overrides', () => {
     expect(options.resolvedModel).toBe('cli-model');
   });
 
-  it('sets step provider/model to resolved fields when no engine-level overrides are supplied', async () => {
+  it('uses engine-level provider/model as resolved values when step provider/model is undefined', async () => {
+    const step = makeStep('plan', {
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'override-fallback',
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
+      projectCwd: '/tmp/project',
+      provider: 'codex',
+      model: 'cli-model',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options.provider).toBeUndefined();
+    expect(options.model).toBeUndefined();
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
+  });
+
+  it('does not resolve provider/model from workflow step fields', async () => {
     const step = makeStep('plan', {
       provider: 'claude',
       model: 'step-model',
@@ -124,7 +128,7 @@ describe('WorkflowEngine agent overrides', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'step task', { projectCwd: '/tmp/project' });
     await engine.run();
@@ -132,8 +136,8 @@ describe('WorkflowEngine agent overrides', () => {
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBeUndefined();
     expect(options.model).toBeUndefined();
-    expect(options.resolvedProvider).toBe('claude');
-    expect(options.resolvedModel).toBe('step-model');
+    expect(options.resolvedProvider).toBeUndefined();
+    expect(options.resolvedModel).toBeUndefined();
   });
 
   it('passes engine childProcessEnv to normal step AgentRunner options', async () => {
@@ -151,7 +155,7 @@ describe('WorkflowEngine agent overrides', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'child env task', {
       projectCwd: '/tmp/project',
@@ -162,5 +166,34 @@ describe('WorkflowEngine agent overrides', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.childProcessEnv).toEqual(childProcessEnv);
+  });
+
+  it('passes the current run failure directory to normal step AgentRunner options', async () => {
+    const step = makeStep('plan', {
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'failure-directory-test',
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const engine = new WorkflowEngine(config, '/tmp/project', 'failure directory task', {
+      projectCwd: '/tmp/project',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options).toHaveProperty(
+      'failureDir',
+      '/tmp/project/.takt/runs/test-report-dir/failures',
+    );
   });
 });

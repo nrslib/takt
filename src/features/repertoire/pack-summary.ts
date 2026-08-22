@@ -3,11 +3,11 @@
  *
  * Extracted to keep install summary parsing testable.
  */
-
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { dirname, resolve } from 'node:path';
 import { createLogger, getErrorMessage, isPathInside } from '../../shared/utils/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import { mergeProviderOptions } from '../../infra/config/providerOptions.js';
 import type { FacetResolutionContext } from '../../infra/config/loaders/workflowPackageScope.js';
@@ -16,6 +16,9 @@ import {
   resolveWorkflowProviderOptionsWithHost,
 } from '../../infra/config/loaders/workflowProviderOptionsResolver.js';
 import type { ScopedProviderOptionsCandidateDirs } from '../../infra/config/loaders/providerOptionsLookupDirectories.js';
+import { resolveWorkflowStepFragments } from '../../infra/config/loaders/workflowStepFragmentResolver.js';
+import type { ScopedStepFragmentCandidateDirs } from '../../infra/config/loaders/stepFragmentLookupDirectories.js';
+import { enumerateRawParallelSubSteps } from '../../infra/config/loaders/workflowParallelTraversal.js';
 
 const log = createLogger('pack-summary');
 const PACKAGE_ROOT = '/__takt_repertoire_package__';
@@ -37,6 +40,8 @@ interface PackageYaml {
 export interface DetectEditWorkflowsOptions {
   providerOptionsCandidateDirs?: readonly string[];
   providerOptionsScopedCandidateDirs?: ScopedProviderOptionsCandidateDirs;
+  stepFragmentCandidateDirs?: readonly string[];
+  stepFragmentScopedCandidateDirs?: ScopedStepFragmentCandidateDirs;
   fileAccess?: ProviderOptionsFileAccess;
   context?: FacetResolutionContext;
 }
@@ -45,12 +50,8 @@ type YamlRecord = Record<string, unknown>;
 
 interface RawSummaryStep {
   edit?: boolean;
-  provider_options?: unknown;
+  capabilities?: unknown;
   required_permission_mode?: string;
-  promotion?: unknown;
-  overrides?: {
-    provider_options?: unknown;
-  };
   parallel?: unknown;
 }
 
@@ -79,10 +80,10 @@ function normalizeSummarySteps(value: unknown): RawSummaryStep[] {
     : [];
 }
 
-function normalizePromotionEntries(value: unknown): { provider_options?: unknown }[] {
-  return Array.isArray(value)
-    ? value.filter(isRecord) as { provider_options?: unknown }[]
-    : [];
+function normalizeParallelSummarySteps(value: unknown): RawSummaryStep[] {
+  return enumerateRawParallelSubSteps(value, ['parallel'])
+    .map(({ subStep }) => subStep)
+    .filter(isRecord) as RawSummaryStep[];
 }
 
 function normalizePackagePath(path: string): string {
@@ -97,7 +98,7 @@ const nodeFileAccess: ProviderOptionsFileAccess = {
   exists: (path) => existsSync(path),
   readText: (path) => readFileSync(path, 'utf-8'),
   realpath: (path) => realpathSync(path),
-  isSymlink: (path) => lstatSync(path).isSymbolicLink(),
+  isSymlink: (path) => lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ?? false,
 };
 
 function isPackageVirtualPath(path: string): boolean {
@@ -185,6 +186,46 @@ function resolveProviderOptionsRecord(
   );
 }
 
+function resolveCapabilityOptions(
+  rawCapabilities: unknown,
+  workflowPath: string,
+  fileAccess: ProviderOptionsFileAccess,
+  candidateDirs: readonly string[],
+  scopedCandidateDirs: ScopedProviderOptionsCandidateDirs | undefined,
+  context: FacetResolutionContext | undefined,
+): StepProviderOptions | undefined {
+  if (rawCapabilities === undefined) {
+    return undefined;
+  }
+  const names = typeof rawCapabilities === 'string'
+    ? [rawCapabilities]
+    : Array.isArray(rawCapabilities) && rawCapabilities.every((name): name is string => typeof name === 'string')
+      ? rawCapabilities
+      : undefined;
+  if (names === undefined) {
+    throw new Error(
+      `Configuration error: capabilities must be a name or list of names (${workflowPath})`,
+    );
+  }
+  try {
+    return mergeProviderOptions(
+      ...names.map((name) => resolveProviderOptionsRecord(
+        { extends: name },
+        workflowPath,
+        fileAccess,
+        candidateDirs,
+        scopedCandidateDirs,
+        context,
+      ) ?? {}),
+    );
+  } catch (error) {
+    throw new Error(
+      `Failed to resolve capabilities for workflow ${workflowPath}: ${getErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
 function getAllowedTools(providerOptions: StepProviderOptions | undefined): string[] {
   return [
     providerOptions?.claude?.allowedTools,
@@ -196,17 +237,16 @@ function getAllowedTools(providerOptions: StepProviderOptions | undefined): stri
 
 function collectPermissionSteps(
   steps: RawSummaryStep[],
-  inheritedProviderOptions: StepProviderOptions | undefined,
-  resolveStepProviderOptions: (rawProviderOptions: unknown) => StepProviderOptions | undefined,
+  inheritedCapabilityOptions: StepProviderOptions | undefined,
+  resolveStepCapabilities: (rawCapabilities: unknown) => StepProviderOptions | undefined,
 ): PermissionStep[] {
   return steps.flatMap((step) => {
-    const providerOptions = mergeProviderOptions(
-      inheritedProviderOptions,
-      resolveStepProviderOptions(step.provider_options),
-    );
+    const capabilityOptions = step.capabilities === undefined
+      ? inheritedCapabilityOptions
+      : resolveStepCapabilities(step.capabilities);
     return [
-      { step, providerOptions },
-      ...collectPermissionSteps(normalizeSummarySteps(step.parallel), providerOptions, resolveStepProviderOptions),
+      { step, providerOptions: capabilityOptions },
+      ...collectPermissionSteps(normalizeParallelSummarySteps(step.parallel), capabilityOptions, resolveStepCapabilities),
     ];
   });
 }
@@ -232,15 +272,16 @@ export function summarizeFacetsByType(facetRelativePaths: string[]): string {
 }
 
 /**
- * Detect workflows that require permissions in any step.
+ * Detect workflows that require permissions in any step after expanding their
+ * step fragments.
  *
  * A step is considered permission-relevant when any of:
  * - `edit: true` is set
- * - `provider_options` has at least one provider allowed_tools entry
+ * - `capabilities` has at least one provider allowed_tools entry
  * - `required_permission_mode` is set
  *
  * @param workflowYamls - Pre-read YAML content pairs. Invalid YAML is skipped (debug-logged).
- * @param providerOptionsYamls - Pre-read package provider-options YAML files used by provider_options.extends.
+ * @param providerOptionsYamls - Pre-read package provider-options YAML files used by capabilities references.
  */
 export function detectEditWorkflows(
   workflowYamls: PackageYaml[],
@@ -255,51 +296,53 @@ export function detectEditWorkflows(
   const providerOptionsCandidateDirs = buildProviderOptionsCandidateDirs(options);
   for (const { name, content, relativePath } of workflowYamls) {
     const raw = parseYamlRecord(content, `workflow ${name}`) as {
-      workflow_config?: {
-        provider_options?: unknown;
-      };
+      capabilities?: unknown;
       steps?: unknown;
     } | undefined;
     if (!raw) continue;
 
-    const steps = normalizeSummarySteps(raw.steps);
     const workflowPath = toPackageAbsolutePath(relativePath ?? `workflows/${name}`);
-    const workflowProviderOptions = resolveProviderOptionsRecord(
-      raw?.workflow_config?.provider_options,
+    const expanded = resolveWorkflowStepFragments(raw, {
+      candidateDirs: options?.stepFragmentCandidateDirs,
+      scopedCandidateDirs: options?.stepFragmentScopedCandidateDirs,
+      context: options?.context,
       workflowPath,
-      providerOptionsFileAccess,
-      providerOptionsCandidateDirs,
-      options?.providerOptionsScopedCandidateDirs,
-      options?.context,
-    );
-    const resolveStepProviderOptions = (providerOptions: unknown): StepProviderOptions | undefined =>
-      resolveProviderOptionsRecord(
-        providerOptions,
+    }).raw as { steps?: unknown };
+    const steps = normalizeSummarySteps(expanded.steps);
+    const resolveStepCapabilities = (capabilities: unknown): StepProviderOptions | undefined =>
+      resolveCapabilityOptions(
+        capabilities,
         workflowPath,
         providerOptionsFileAccess,
         providerOptionsCandidateDirs,
         options?.providerOptionsScopedCandidateDirs,
         options?.context,
       );
-    const permissionSteps = collectPermissionSteps(
-      steps,
-      workflowProviderOptions,
-      resolveStepProviderOptions,
-    );
+    let permissionSteps: PermissionStep[];
+    try {
+      const workflowCapabilityOptions = resolveCapabilityOptions(
+        raw?.capabilities,
+        workflowPath,
+        providerOptionsFileAccess,
+        providerOptionsCandidateDirs,
+        options?.providerOptionsScopedCandidateDirs,
+        options?.context,
+      );
+      permissionSteps = collectPermissionSteps(
+        steps,
+        workflowCapabilityOptions,
+        resolveStepCapabilities,
+      );
+    } catch (error) {
+      log.debug(`Capabilities resolution failed for workflow ${name}: ${getErrorMessage(error)}`);
+      continue;
+    }
     const resolveAllowedTools = (entry: PermissionStep): string[] =>
       getAllowedTools(entry.providerOptions);
-    const resolveRawAllowedTools = (providerOptions: unknown): string[] =>
-      getAllowedTools(resolveStepProviderOptions(providerOptions));
-    const resolvePromotionAllowedTools = (step: RawSummaryStep): string[] =>
-      normalizePromotionEntries(step.promotion).flatMap((entry) => resolveRawAllowedTools(entry.provider_options));
-    const resolveOverrideAllowedTools = (step: RawSummaryStep): string[] =>
-      resolveRawAllowedTools(step.overrides?.provider_options);
 
     const hasEditableStep = permissionSteps.some(({ step }) => step.edit === true);
     const hasToolUsingStep = permissionSteps.some(entry =>
-      resolveAllowedTools(entry).length > 0
-      || resolvePromotionAllowedTools(entry.step).length > 0
-      || resolveOverrideAllowedTools(entry.step).length > 0,
+      resolveAllowedTools(entry).length > 0,
     );
     const hasPermissionControlledStep = permissionSteps.some(({ step }) => step.required_permission_mode != null);
     if (!hasEditableStep && !hasToolUsingStep && !hasPermissionControlledStep) continue;
@@ -308,8 +351,6 @@ export function detectEditWorkflows(
     for (const entry of permissionSteps) {
       const stepTools = [
         ...resolveAllowedTools(entry),
-        ...resolvePromotionAllowedTools(entry.step),
-        ...resolveOverrideAllowedTools(entry.step),
       ];
       for (const tool of stepTools) {
         allTools.add(tool);
@@ -336,20 +377,20 @@ export function detectEditWorkflows(
 
 /**
  * Format warning lines for a single permission-relevant workflow.
- * Returns one line per warning (edit, provider_options allowed_tools, required_permission_mode).
+ * Returns one line per warning (edit, capabilities allowed_tools, required_permission_mode).
  */
 export function formatEditWorkflowWarnings(workflow: EditWorkflowInfo): string[] {
   const warnings: string[] = [];
   if (workflow.hasEdit) {
     const toolStr = workflow.allowedTools.length > 0
-      ? `, provider_options.allowed_tools: [${workflow.allowedTools.join(', ')}]`
+      ? `, capabilities.allowed_tools: [${workflow.allowedTools.map(sanitizeTerminalText).join(', ')}]`
       : '';
-    warnings.push(`\n   ⚠ ${workflow.name}: edit: true${toolStr}`);
+    warnings.push(`\n   ⚠ ${sanitizeTerminalText(workflow.name)}: edit: true${toolStr}`);
   } else if (workflow.allowedTools.length > 0) {
-    warnings.push(`\n   ⚠ ${workflow.name}: provider_options.allowed_tools: [${workflow.allowedTools.join(', ')}]`);
+    warnings.push(`\n   ⚠ ${sanitizeTerminalText(workflow.name)}: capabilities.allowed_tools: [${workflow.allowedTools.map(sanitizeTerminalText).join(', ')}]`);
   }
   for (const mode of workflow.requiredPermissionModes) {
-    warnings.push(`\n   ⚠ ${workflow.name}: required_permission_mode: ${mode}`);
+    warnings.push(`\n   ⚠ ${sanitizeTerminalText(workflow.name)}: required_permission_mode: ${sanitizeTerminalText(mode)}`);
   }
   return warnings;
 }

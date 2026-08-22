@@ -5,24 +5,43 @@
 import { callMock, callMockCustom, type MockCallOptions } from '../mock/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
-import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
+import { createLogger } from '../../shared/utils/index.js';
+import {
+  assertOutputSchema,
+  type AgentSetup,
+  type Provider,
+  type ProviderAgent,
+  type ProviderCallOptions,
+} from './types.js';
+
+const log = createLogger('mock-provider');
 
 function toMockOptions(options: ProviderCallOptions): MockCallOptions {
+  if (options.imageAttachments && options.imageAttachments.length > 0) {
+    log.info('Mock provider does not support imageAttachments; ignoring');
+  }
+
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    model: options.model,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     allowedTools: options.allowedTools,
+    preparedMcp: options.preparedMcp,
+    outputSchema: options.outputSchema,
   };
 }
 
 /** Mock provider — deterministic responses for testing */
 export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio']);
 
-  getRuntimeInstructions(): string | null {
+  getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
   }
 
@@ -43,5 +62,25 @@ export class MockProvider implements Provider {
       call: (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> =>
         callMock(name, prompt, toMockOptions(options)),
     };
+  }
+
+  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
+    const { name, systemPrompt } = config;
+    const call = (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
+      const isolatedOptions: ProviderCallOptions = {
+        ...options,
+        sessionId: undefined,
+        internalAgentIsolation: 'strict-readonly',
+        permissionMode: 'readonly',
+        allowedTools: [],
+        mcpServers: undefined,
+        preparedMcp: undefined,
+        imageAttachments: undefined,
+        outputSchema: assertOutputSchema(options.outputSchema, 'mock'),
+      };
+      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+      return callMockCustom(name, fullPrompt, '', toMockOptions(isolatedOptions));
+    };
+    return { call };
   }
 }

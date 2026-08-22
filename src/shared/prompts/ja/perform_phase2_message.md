@@ -1,7 +1,8 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: perform_phase2_message
   phase: 2 (report output)
-  vars: workingDirectory, hasGitRules, gitRules, reportContext, hasLastResponse, lastResponse,
+  vars: workingDirectory, hasTask, task, hasGitRules, gitRules, reportContext, hasLastResponse, lastResponse,
         hasReportOutput, reportOutput, hasOutputContract, outputContract
   builder: ReportInstructionBuilder
 -->
@@ -12,12 +13,21 @@
 {{#if hasGitRules}}{{gitRules}}
 {{/if}}
 - **Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。
-- **プロジェクトのソースファイルを変更しないでください。** レポート内容のみを回答してください。
+- **プロジェクトのソースファイルを変更しないでください。**
+- **レポート内容のみを回答してください。**
 - **TAKT があなたの回答本文をレポートファイルに保存します。** 自分でレポートファイルを書き込まないでください。
 - **Report Directory内のファイルのみ使用してください。** 他のレポートディレクトリは検索/参照しないでください。
 
 ## Workflow Context
 {{reportContext}}
+{{#if hasTask}}
+
+## Original Task Context
+
+以下はこのワークフローに与えられた元のタスクです。要求の正本として使用してください:
+
+{{task}}
+{{/if}}
 {{#if hasLastResponse}}
 
 ## Previous Work Context
@@ -25,8 +35,17 @@
 
 {{lastResponse}}
 {{/if}}
+{{#if hasCompletionRetryDiagnostic}}
+
+## レビュー網羅性診断
+
+この診断はPhase 2レポートだけの補助文脈です。findingやstatusへ変換せず、レビュアー応答の一部だったとも記載しないでください:
+
+{{completionRetryDiagnostic}}
+{{/if}}
 
 ## Instructions
+
 あなたが今行った作業の結果をレポートとして回答してください。**このフェーズではツールは使えません。レポート内容をテキストとして直接回答してください。**
 **レポート本文のみを回答してください（ステータスタグやコメントは禁止）。Writeツールやその他のツールは使用できません。**
 {{#if hasReportOutput}}

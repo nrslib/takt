@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildInteractiveResultWithAttachments,
+  cleanupInteractiveResultAttachments,
   createImageAttachmentStore,
   createImagePasteHandler,
   createSessionImageAttachmentStore,
@@ -25,6 +26,12 @@ function createTempRoot(): string {
   return root;
 }
 
+function createTempImage(root: string, fileName: string): string {
+  const filePath = path.join(root, fileName);
+  fs.writeFileSync(filePath, Buffer.from('image-data'));
+  return filePath;
+}
+
 describe('createImageAttachmentStore', () => {
   it('should save pasted images under the session tmp attachment directory', async () => {
     const tmpRoot = createTempRoot();
@@ -38,7 +45,7 @@ describe('createImageAttachmentStore', () => {
 
     expect(attachment).toEqual({
       placeholder: '[Image #1]',
-      tempPath: path.join(tmpRoot, 'takt', 'session-abc', 'attachments', 'image-1.png'),
+      tempPath: path.join(tmpRoot, 'session-abc', 'attachments', 'image-1.png'),
       fileName: 'image-1.png',
     });
     expect(fs.readFileSync(attachment.tempPath)).toEqual(imageData);
@@ -61,6 +68,38 @@ describe('createImageAttachmentStore', () => {
     expect(store.listAttachments()).toEqual([first, second]);
   });
 
+  it('should start after the highest existing file name index', async () => {
+    const tmpRoot = createTempRoot();
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-existing-index',
+      initialAttachments: [{
+        placeholder: '[Image #3]',
+        tempPath: path.join(tmpRoot, 'existing-image.png'),
+        fileName: 'image-10.png',
+      }],
+    });
+
+    const attachment = await store.saveImage(Buffer.from('new'), 'image/png');
+
+    expect(attachment.placeholder).toBe('[Image #11]');
+    expect(attachment.fileName).toBe('image-11.png');
+  });
+
+  it('should start after an explicit index even when initial attachments are lower', async () => {
+    const tmpRoot = createTempRoot();
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-explicit-index',
+      initialAttachmentIndex: 20,
+    });
+
+    const attachment = await store.saveImage(Buffer.from('new'), 'image/png');
+
+    expect(attachment.placeholder).toBe('[Image #21]');
+    expect(attachment.fileName).toBe('image-21.png');
+  });
+
   it('should create session attachment directories and pasted files with private permissions', async () => {
     const tmpRoot = createTempRoot();
     const store = createImageAttachmentStore({
@@ -70,23 +109,76 @@ describe('createImageAttachmentStore', () => {
 
     const attachment = await store.saveImage(Buffer.from('private'), 'image/png');
 
-    const sessionDir = path.join(tmpRoot, 'takt', 'session-private');
+    const sessionDir = path.join(tmpRoot, 'session-private');
     const attachmentDir = path.join(sessionDir, 'attachments');
     expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
     expect(fs.statSync(attachmentDir).mode & 0o777).toBe(0o700);
     expect(fs.statSync(attachment.tempPath).mode & 0o777).toBe(0o600);
   });
 
-  it('should create a process session store in the OS tmp directory', async () => {
-    const store = createSessionImageAttachmentStore();
+  it('should reject an existing attachment path without changing its content', async () => {
+    const tmpRoot = createTempRoot();
+    const attachmentDir = path.join(tmpRoot, 'session-collision', 'attachments');
+    const existingPath = path.join(attachmentDir, 'image-1.png');
+    fs.mkdirSync(attachmentDir, { recursive: true });
+    fs.writeFileSync(existingPath, 'existing');
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-collision',
+    });
+
+    await expect(store.saveImage(Buffer.from('replacement'), 'image/png')).rejects.toThrow(/already exists/);
+
+    expect(fs.readFileSync(existingPath, 'utf-8')).toBe('existing');
+  });
+
+  it('should remove the session image attachment directory on cleanup', async () => {
+    const tmpRoot = createTempRoot();
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-cleanup',
+    });
+    const attachment = await store.saveImage(Buffer.from('cleanup'), 'image/png');
+    const sessionDir = path.join(tmpRoot, 'session-cleanup');
+
+    expect(fs.existsSync(attachment.tempPath)).toBe(true);
+
+    store.cleanup();
+
+    expect(fs.existsSync(sessionDir)).toBe(false);
+  });
+
+  it('should reject unsafe session ids before cleanup can target the tmp root', () => {
+    const tmpRoot = createTempRoot();
+    const sentinelPath = path.join(tmpRoot, 'sentinel.txt');
+    fs.writeFileSync(sentinelPath, 'keep');
+
+    for (const sessionId of ['.', '..', 'nested/session', 'nested\\session', '/absolute', 'C:\\absolute']) {
+      expect(() => createImageAttachmentStore({
+        tmpRoot,
+        sessionId,
+      })).toThrow('Image attachment sessionId must be a single path segment.');
+      expect(fs.existsSync(tmpRoot)).toBe(true);
+      expect(fs.existsSync(sentinelPath)).toBe(true);
+    }
+  });
+
+  it('should keep a process session store inside the project', async () => {
+    // A provider that sandboxes file access can read the project it was pointed
+    // at and nothing else, so a pasted image has to live there.
+    const projectDir = createTempRoot();
+    const store = createSessionImageAttachmentStore(projectDir);
 
     const attachment = await store.saveImage(Buffer.from('session'), 'image/png');
-    tempRoots.add(path.dirname(path.dirname(attachment.tempPath)));
 
     expect(attachment.placeholder).toBe('[Image #1]');
     expect(attachment.fileName).toBe('image-1.png');
-    expect(attachment.tempPath.startsWith(path.join(os.tmpdir(), 'takt') + path.sep)).toBe(true);
+    expect(attachment.tempPath.startsWith(path.join(projectDir, '.takt', 'tmp', 'images') + path.sep))
+      .toBe(true);
     expect(fs.readFileSync(attachment.tempPath)).toEqual(Buffer.from('session'));
+
+    store.cleanup();
+    expect(fs.existsSync(attachment.tempPath)).toBe(false);
   });
 
   it('should create a paste handler that stores images and returns placeholders', async () => {
@@ -104,48 +196,68 @@ describe('createImageAttachmentStore', () => {
 
     expect(placeholder).toBe('[Image #1]');
     const [attachment] = store.listAttachments();
-    expect(attachment?.tempPath).toBe(path.join(tmpRoot, 'takt', 'session-paste', 'attachments', 'image-1.png'));
+    expect(attachment?.tempPath).toBe(path.join(tmpRoot, 'session-paste', 'attachments', 'image-1.png'));
     expect(fs.readFileSync(attachment!.tempPath)).toEqual(Buffer.from('paste'));
   });
 });
 
 describe('resolvePromptImageAttachments', () => {
   it('should return only attachments referenced by placeholders in the prompt', () => {
+    const tmpRoot = createTempRoot();
     const first = {
       placeholder: '[Image #1]',
-      tempPath: '/tmp/image-1.png',
+      tempPath: createTempImage(tmpRoot, 'image-1.png'),
       fileName: 'image-1.png',
     };
     const second = {
       placeholder: '[Image #2]',
-      tempPath: '/tmp/image-2.png',
+      tempPath: createTempImage(tmpRoot, 'image-2.png'),
       fileName: 'image-2.png',
     };
 
     const result = resolvePromptImageAttachments('Please inspect [Image #2].', [first, second]);
 
     expect(result).toEqual([
-      { placeholder: '[Image #2]', path: '/tmp/image-2.png' },
+      { placeholder: '[Image #2]', path: second.tempPath },
     ]);
   });
 
   it('should not match a prefix placeholder when only a later image is referenced', () => {
+    const tmpRoot = createTempRoot();
     const first = {
       placeholder: '[Image #1]',
-      tempPath: '/tmp/image-1.png',
+      tempPath: createTempImage(tmpRoot, 'image-1.png'),
       fileName: 'image-1.png',
     };
     const tenth = {
       placeholder: '[Image #10]',
-      tempPath: '/tmp/image-10.png',
+      tempPath: createTempImage(tmpRoot, 'image-10.png'),
       fileName: 'image-10.png',
     };
 
     const result = resolvePromptImageAttachments('Please inspect [Image #10].', [first, tenth]);
 
     expect(result).toEqual([
-      { placeholder: '[Image #10]', path: '/tmp/image-10.png' },
+      { placeholder: '[Image #10]', path: tenth.tempPath },
     ]);
+  });
+
+  it('should leave unknown image placeholder text unresolved', () => {
+    const result = resolvePromptImageAttachments('Please inspect [Image #1].', []);
+
+    expect(result).toEqual([]);
+  });
+
+  it('should reject referenced images whose tempPath is not a regular file', () => {
+    const tmpRoot = createTempRoot();
+    const directoryPath = path.join(tmpRoot, 'not-a-file.png');
+    fs.mkdirSync(directoryPath);
+
+    expect(() => resolvePromptImageAttachments('Please inspect [Image #1].', [{
+      placeholder: '[Image #1]',
+      tempPath: directoryPath,
+      fileName: 'image-1.png',
+    }])).toThrow(`Image attachment source must be a regular file: ${directoryPath}`);
   });
 });
 
@@ -176,6 +288,27 @@ describe('buildInteractiveResultWithAttachments', () => {
       action: 'execute',
       task: 'Use [Image #1].',
       attachments: [attachment],
+      cleanupAttachments: expect.any(Function),
     });
+    expect(result.cleanupAttachments).toEqual(expect.any(Function));
+    expect(Object.keys(result)).toEqual(['action', 'task', 'attachments', 'cleanupAttachments']);
+  });
+
+  it('should cleanup pasted image attachments from the interactive result owner', async () => {
+    const tmpRoot = createTempRoot();
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-result-cleanup',
+    });
+    const attachment = await store.saveImage(Buffer.from('result-cleanup-image'), 'image/png');
+    const sessionDir = path.join(tmpRoot, 'session-result-cleanup');
+    const result = buildInteractiveResultWithAttachments({ action: 'execute', task: 'Use [Image #1].' }, store);
+
+    expect(fs.existsSync(attachment.tempPath)).toBe(true);
+
+    cleanupInteractiveResultAttachments(result);
+    cleanupInteractiveResultAttachments(result);
+
+    expect(fs.existsSync(sessionDir)).toBe(false);
   });
 });

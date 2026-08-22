@@ -63,4 +63,9 @@ export interface AgentResponse {
   providerUsage?: ProviderUsageSnapshot;
   /** Number of provider-level retry attempts performed before this response */
   retryCount?: number;
+  /**
+   * Provider 内部のデバッグスナップショット（例: OpenCode の tool health
+   * メトリクス）。閾値校正・調査用の観測データであり、制御フローには使わない。
+   */
+  debugInfo?: Record<string, unknown>;
 }

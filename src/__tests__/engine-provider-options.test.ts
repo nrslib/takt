@@ -5,12 +5,16 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn(),
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
 }));
@@ -29,7 +33,7 @@ import {
   makeStep,
   makeResponse,
   makeRule,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -55,7 +59,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     }
   });
 
-  it('should let step provider_options override project source without origin trace', async () => {
+  it('should ignore workflow step provider_options and keep project source values', async () => {
     const step = makeStep('implement', {
       providerOptions: {
         codex: { networkAccess: false },
@@ -74,7 +78,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -91,12 +95,11 @@ describe('WorkflowEngine provider_options resolution', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: false },
+      codex: { networkAccess: true },
       opencode: { networkAccess: true },
       claude: {
         sandbox: {
           allowUnsandboxedCommands: false,
-          excludedCommands: ['./gradlew'],
         },
       },
     });
@@ -117,7 +120,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -137,9 +140,6 @@ describe('WorkflowEngine provider_options resolution', () => {
 
   it('should propagate merged claude allowedTools to runAgent options.allowedTools', async () => {
     const step = makeStep('implement', {
-      providerOptions: {
-        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
-      },
       rules: [makeRule('done', 'COMPLETE')],
     });
 
@@ -153,13 +153,13 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
       providerOptions: {
-        claude: { allowedTools: ['Read', 'Glob'] },
+        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
       },
     });
 
@@ -169,12 +169,40 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(options?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
+  it('should propagate the Pi read-only ceiling when edit is false without allowed tools', async () => {
+    const step = makeStep('review', {
+      edit: false,
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-pi-readonly-tools',
+      steps: [step],
+      initialStep: 'review',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'pi',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options).toEqual(expect.objectContaining({
+      resolvedProvider: 'pi',
+      allowedTools: ['read', 'grep', 'find', 'ls'],
+    }));
+  });
+
   it('should silently ignore claude allowedTools when configured for a non-claude provider', async () => {
     const step = makeStep('implement', {
-      provider: 'codex',
-      providerOptions: {
-        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
-      },
       rules: [makeRule('done', 'COMPLETE')],
     });
 
@@ -188,11 +216,14 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
-      provider: 'claude',
+      provider: 'codex',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
+      },
     });
 
     await engine.run();
@@ -204,9 +235,6 @@ describe('WorkflowEngine provider_options resolution', () => {
   it('should silently ignore claude allowedTools on a step resolved to opencode via personaProviders', async () => {
     const step = makeStep('implement', {
       personaDisplayName: 'coder',
-      providerOptions: {
-        claude: { allowedTools: ['Read', 'Edit'] },
-      },
       rules: [makeRule('done', 'COMPLETE')],
     });
 
@@ -220,11 +248,14 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
       personaProviders: {
         coder: {
           provider: 'opencode',
@@ -241,12 +272,6 @@ describe('WorkflowEngine provider_options resolution', () => {
 
   it('should propagate opencode allowedTools when the resolved provider is opencode', async () => {
     const step = makeStep('implement', {
-      provider: 'opencode',
-      model: 'opencode/zai-coding-plan/glm-5.1',
-      providerOptions: {
-        claude: { allowedTools: ['Read', 'Edit'] },
-        opencode: { allowedTools: ['read', 'grep', 'bash'] },
-      } as never,
       rules: [makeRule('done', 'COMPLETE')],
     });
 
@@ -260,11 +285,16 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
-      provider: 'claude',
+      provider: 'opencode',
+      model: 'opencode/zai-coding-plan/glm-5.1',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit'] },
+        opencode: { allowedTools: ['read', 'grep', 'bash'] },
+      } as never,
     });
 
     await engine.run();
@@ -307,8 +337,50 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(result).toBeUndefined();
   });
 
-  it('should remove opencode edit permission aliases from phase 1 allowedTools when outputContracts exist and edit is not true', async () => {
+  it('Given empty inspect tools and an allowlist-capable provider, When resolving tools, Then it keeps an empty allowlist instead of the default', () => {
+    expect(resolveInspectToolsForProvider([], 'opencode')).toEqual([]);
+    expect(resolveInspectToolsForProvider([], 'claude')).toEqual([]);
+  });
+
+  it('Given no inspect tools and OpenCode provider, When resolving tools, Then it applies the read/glob/grep default', () => {
+    const result = resolveInspectToolsForProvider(undefined, 'opencode');
+
+    expect(result).toEqual(['read', 'glob', 'grep']);
+  });
+
+  it('Given no inspect tools and Claude-compatible provider, When resolving tools, Then it applies the default with Claude tool names', () => {
+    const result = resolveInspectToolsForProvider(undefined, 'claude');
+
+    expect(result).toEqual(['Read', 'Glob', 'Grep']);
+  });
+
+  it('Given no inspect tools and a provider without allowedTools support, When resolving tools, Then it returns undefined without throwing', () => {
+    const result = resolveInspectToolsForProvider(undefined, 'codex');
+
+    expect(result).toBeUndefined();
+  });
+
+  it('should remove opencode edit and command permissions from phase 1 allowedTools when outputContracts exist and edit is not true', async () => {
     const step = makeStep('review', {
+      outputContracts: [{ name: 'review.md', format: 'markdown' }],
+      edit: false,
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-opencode-output-contract-tools',
+      steps: [step],
+      initialStep: 'review',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
       provider: 'opencode',
       model: 'opencode/zai-coding-plan/glm-5.1',
       providerOptions: {
@@ -325,26 +397,6 @@ describe('WorkflowEngine provider_options resolution', () => {
           ],
         },
       } as never,
-      outputContracts: [{ name: 'review.md', format: 'markdown' }],
-      edit: false,
-      rules: [makeRule('done', 'COMPLETE')],
-    });
-
-    const config: WorkflowConfig = {
-      name: 'provider-options-opencode-output-contract-tools',
-      steps: [step],
-      initialStep: 'review',
-      maxSteps: 1,
-    };
-
-    mockRunAgentSequence([
-      makeResponse({ persona: step.persona, content: 'done' }),
-    ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
-
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'claude',
     });
 
     await engine.run();
@@ -355,10 +407,6 @@ describe('WorkflowEngine provider_options resolution', () => {
 
   it('should keep claude allowedTools when the provider is mock', async () => {
     const step = makeStep('implement', {
-      provider: 'mock',
-      providerOptions: {
-        claude: { allowedTools: ['Read', 'Edit'] },
-      },
       rules: [makeRule('done', 'COMPLETE')],
     });
 
@@ -372,11 +420,14 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
-      provider: 'claude',
+      provider: 'mock',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
     });
 
     await engine.run();
@@ -395,9 +446,6 @@ describe('WorkflowEngine provider_options resolution', () => {
       additionalProperties: false,
     } as const;
     const step = makeStep('implement', {
-      providerOptions: {
-        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
-      },
       mcpServers: {
         docs: { type: 'stdio', command: 'docs-mcp' },
       },
@@ -415,12 +463,15 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
       model: 'sonnet',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
+      },
     });
 
     await engine.run();
@@ -441,21 +492,7 @@ describe('WorkflowEngine provider_options resolution', () => {
       required: ['decision'],
       additionalProperties: false,
     } as const;
-    const provider = 'claude-terminal' as WorkflowConfig['steps'][number]['provider'];
     const step = makeStep('implement', {
-      provider,
-      providerOptions: {
-        claude: {
-          effort: 'high',
-          allowedTools: ['Read', 'Edit', 'Bash'],
-        },
-        claudeTerminal: {
-          backend: 'tmux',
-          timeoutMs: 900000,
-          keepSession: false,
-          transcriptPollIntervalMs: 500,
-        },
-      } as never,
       mcpServers: {
         docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
       },
@@ -473,12 +510,24 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
-      provider: 'claude',
+      provider: 'claude-terminal',
       model: 'sonnet',
+      providerOptions: {
+        claude: {
+          effort: 'high',
+          allowedTools: ['Read', 'Edit', 'Bash'],
+        },
+        claudeTerminal: {
+          backend: 'tmux',
+          timeoutMs: 900000,
+          keepSession: false,
+          transcriptPollIntervalMs: 500,
+        },
+      } as never,
     });
 
     await engine.run();
@@ -530,7 +579,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: '```json\n{"result":"done"}\n```' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -540,8 +589,7 @@ describe('WorkflowEngine provider_options resolution', () => {
 
     await engine.run();
 
-    const [, instruction, options] = vi.mocked(runAgent).mock.calls[0] ?? [];
-    expect(instruction).toContain('Return exactly one fenced JSON block');
+    const [, , options] = vi.mocked(runAgent).mock.calls[0] ?? [];
     expect(options?.resolvedProvider).toBe('cursor');
     expect(options?.resolvedModel).toBe('cursor-fast');
     expect(options?.outputSchema).toBeUndefined();

@@ -1,7 +1,7 @@
 ```markdown
 # AI-Generated Code Review
 
-## Result: APPROVE / REJECT
+{{include:output-contracts/base-review-result}}
 
 ## Summary
 {Summarize the result in one sentence}
@@ -14,31 +14,35 @@
 | Context fit | ✅ | - |
 | Scope | ✅ | - |
 
-## Current Iteration Findings (new)
-| # | finding_id | family_tag | Category | Location | Issue | Fix Suggestion |
-|---|------------|------------|----------|----------|-------|----------------|
-| 1 | AI-NEW-src-file-L23 | hallucination | Hallucinated API | `src/file.ts:23` | Non-existent method | Replace with existing API |
+{{include:output-contracts/base-review-non-finding-concerns}}
 
-## Carry-over Findings (persists)
-| # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |
-|---|------------|------------|-------------------|------------------|-------|----------------|
+{{include:output-contracts/base-review-problem-family-completion-sweep}}
+
+{{include:output-contracts/base-review-new-findings-category}}
+| 1 | AI-NEW-src-file-L23 | hallucination | Hallucinated API | `src/file.ts:23` | Non-existent method | direct_acceptance_criterion_violation | The initial review evidence did not inspect this acceptance criterion | Replace with existing API |
+
+{{include:output-contracts/base-review-follow-up-authorization}}
+
+{{include:output-contracts/base-review-persists}}
+{{include:output-contracts/base-review-carry-over-findings}}
 | 1 | AI-PERSIST-src-file-L42 | hallucination | `src/file.ts:42` | `src/file.ts:42` | Still unresolved | Apply prior fix plan |
 
-## Resolved Findings (resolved)
-| finding_id | Resolution Evidence |
-|------------|---------------------|
+{{include:output-contracts/base-review-resolved-findings}}
 | AI-RESOLVED-src-file-L10 | `src/file.ts:10` no longer contains the issue |
 
-## Reopened Findings (reopened)
-| # | finding_id | family_tag | Prior Resolution Evidence | Recurrence Evidence | Issue | Fix Suggestion |
-|---|------------|------------|--------------------------|---------------------|-------|----------------|
-| 1 | AI-REOPENED-src-file-L55 | hallucination | `Previously fixed at src/file.ts:10` | `Recurred at src/file.ts:55` | Issue description | Fix approach |
+{{include:output-contracts/base-review-adjudicated-out-of-scope}}
+{{include:output-contracts/base-review-reopened-findings}}
+| 1 | AI-REOPENED-src-file-L55 | hallucination | `review-resolution.md`: previously resolved | d | `Recurred at src/file.ts:55` | Issue description | Fix approach |
+
+{{include:output-contracts/base-review-reopened}}
+{{include:output-contracts/base-review-rescan-evidence}}
 
 ## Rejection Gate
-- REJECT is valid only when at least one finding exists in `new`, `persists`, or `reopened`
+{{include:output-contracts/base-review-rejection-gate}}
 - Findings without `finding_id` are invalid
 ```
 
 **Cognitive load reduction rules:**
-- No issues → Summary sentence + checklist + empty finding sections (10 lines or fewer)
-- Issues found → include table rows only for impacted sections (30 lines or fewer)
+- No issues → Summary sentence + checklist + Re-scan Evidence (from the second iteration onward) + Non-Finding Concerns when needed
+- Issues found → include every verified finding in the impacted sections and aggregate locations with the same cause
+{{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

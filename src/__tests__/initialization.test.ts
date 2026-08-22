@@ -67,6 +67,7 @@ describe('initialization', () => {
         expect.arrayContaining([
           { label: 'Claude Code terminal (experimental)', value: 'claude-terminal' },
           { label: 'Kiro CLI', value: 'kiro' },
+          { label: 'DeepSeek Harness (official Python SDK, developer preview)', value: 'deepseek-harness' },
         ]),
         'claude',
       );
@@ -104,11 +105,11 @@ describe('copyProjectResourcesToDir', () => {
 describe('getLanguageResourcesDir', () => {
   it('should return correct path for English', () => {
     const path = getLanguageResourcesDir('en');
-    expect(path).toContain('builtins/en');
+    expect(path).toContain(join('builtins', 'en'));
   });
 
   it('should return correct path for Japanese', () => {
     const path = getLanguageResourcesDir('ja');
-    expect(path).toContain('builtins/ja');
+    expect(path).toContain(join('builtins', 'ja'));
   });
 });

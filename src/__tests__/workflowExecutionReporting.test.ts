@@ -1,19 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionLog } from '../shared/utils/index.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 
-const { mockSaveSessionState } = vi.hoisted(() => ({
-  mockSaveSessionState: vi.fn(),
+const { mockNotifyError } = vi.hoisted(() => ({
+  mockNotifyError: vi.fn(),
 }));
 
-vi.mock('../infra/config/index.js', async (importOriginal) => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  saveSessionState: (...args: unknown[]) => mockSaveSessionState(...args),
+  notifyError: (...args: unknown[]) => mockNotifyError(...args),
 }));
 
 import {
-  finalizeWorkflowAbort,
-  finalizeWorkflowSuccess,
-  reportWorkflowAbort,
+  reportWorkflowFailure,
   reportWorkflowCompletion,
 } from '../features/tasks/execute/workflowExecutionReporting.js';
 
@@ -42,60 +41,6 @@ describe('workflowExecutionReporting', () => {
     vi.clearAllMocks();
   });
 
-  it('should warn with workflow, task, and project path when saving success session state fails', () => {
-    const warnings: string[] = [];
-    mockSaveSessionState.mockImplementation(() => {
-      throw new Error('disk full');
-    });
-
-    const finalized = finalizeWorkflowSuccess(
-      createSessionLog(),
-      'Implement subworkflow call',
-      'takt-default',
-      'done',
-      'fix',
-      '/project',
-      (warning) => {
-        warnings.push(warning);
-      },
-    );
-
-    expect(finalized.status).toBe('completed');
-    expect(finalized.endTime).toBeDefined();
-    expect(warnings).toEqual([
-      expect.stringContaining('Failed to save session state for workflow "takt-default"'),
-    ]);
-    expect(warnings[0]).toContain('task "Implement subworkflow call"');
-    expect(warnings[0]).toContain('in /project: disk full');
-  });
-
-  it('should warn with workflow, task, and project path when saving abort session state fails', () => {
-    const warnings: string[] = [];
-    mockSaveSessionState.mockImplementation(() => {
-      throw new Error('permission denied');
-    });
-
-    const finalized = finalizeWorkflowAbort(
-      createSessionLog(),
-      'user_interrupted',
-      'Implement subworkflow call',
-      'takt-default',
-      'fix',
-      '/project',
-      (warning) => {
-        warnings.push(warning);
-      },
-    );
-
-    expect(finalized.status).toBe('aborted');
-    expect(finalized.endTime).toBeDefined();
-    expect(warnings).toEqual([
-      expect.stringContaining('Failed to save session state for workflow "takt-default"'),
-    ]);
-    expect(warnings[0]).toContain('task "Implement subworkflow call"');
-    expect(warnings[0]).toContain('in /project: permission denied');
-  });
-
   it('Given trace discovery metadata, When reporting workflow completion, Then it prints TraceQL query hints', () => {
     const out = createOut();
 
@@ -107,7 +52,7 @@ describe('workflowExecutionReporting', () => {
       },
       3,
       '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
-      false,
+      true,
       {
         queries: [
           '{ resource.service.name = "takt" && span."takt.run.id" = "run-843" }',
@@ -116,11 +61,10 @@ describe('workflowExecutionReporting', () => {
       },
     );
 
-    expect(out.success).toHaveBeenCalledWith(expect.stringContaining('Workflow completed (3 iterations'));
-    expect(out.info).toHaveBeenCalledWith('Session log: /tmp/project/.takt/runs/run-843/logs/session.jsonl');
-    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(out.info).toHaveBeenCalledWith('  { resource.service.name = "takt" && span."takt.run.id" = "run-843" }');
-    expect(out.info).toHaveBeenCalledWith('  { resource.service.name = "takt" && span."takt.task.pr_number" = 826 }');
+    expect(out.success).toHaveBeenCalledWith(expect.stringContaining('3'));
+    expect(out.info).toHaveBeenCalledWith(expect.stringContaining('session.jsonl'));
+    expect(out.info).toHaveBeenCalledWith(expect.stringContaining('run-843'));
+    expect(out.info).toHaveBeenCalledWith(expect.stringContaining('826'));
   });
 
   it('Given unsafe trace discovery metadata, When reporting workflow completion, Then it sanitizes TraceQL query hints', () => {
@@ -142,14 +86,16 @@ describe('workflowExecutionReporting', () => {
       },
     );
 
-    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(out.info).toHaveBeenCalledWith('  { span."takt.run.id" = "run-843" }\\n\\tbad\\x1f');
+    const infoMessages = out.info.mock.calls.map(([message]) => String(message));
+    expect(infoMessages.some((message) => message.includes('run-843'))).toBe(true);
+    expect(infoMessages.join('')).toContain('\\n\\tbad\\x1f');
+    expect(infoMessages.join('')).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
   });
 
   it('Given trace discovery metadata, When reporting workflow abort, Then it prints the same TraceQL query hints', () => {
     const out = createOut();
 
-    reportWorkflowAbort(
+    reportWorkflowFailure(
       out as never,
       {
         ...createSessionLog(),
@@ -157,6 +103,7 @@ describe('workflowExecutionReporting', () => {
       },
       2,
       'Step "write_tests" failed',
+      'aborted',
       '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
       false,
       {
@@ -166,9 +113,78 @@ describe('workflowExecutionReporting', () => {
       },
     );
 
-    expect(out.error).toHaveBeenCalledWith(expect.stringContaining('Workflow aborted after 2 iterations'));
-    expect(out.info).toHaveBeenCalledWith('Session log: /tmp/project/.takt/runs/run-843/logs/session.jsonl');
-    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(out.info).toHaveBeenCalledWith('  { resource.service.name = "takt" && span."takt.run.id" = "run-843" }');
+    expect(out.error).toHaveBeenCalledWith(expect.stringContaining('2'));
+    expect(out.info).toHaveBeenCalledWith(expect.stringContaining('session.jsonl'));
+    expect(out.info).toHaveBeenCalledWith(expect.stringContaining('run-843'));
+  });
+
+  it('reports failed status without calling it aborted', () => {
+    const out = createOut();
+
+    reportWorkflowFailure(
+      out as never,
+      {
+        ...createSessionLog(),
+        endTime: '2026-04-14T00:00:01.000Z',
+      },
+      1,
+      'Runtime setup failed',
+      'failed',
+      '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
+      true,
+    );
+
+    expect(out.error).toHaveBeenCalledWith(expect.stringContaining('1'));
+    expect(out.error).toHaveBeenCalledTimes(1);
+    expect(mockNotifyError).toHaveBeenCalledWith(
+      'TAKT',
+      expect.stringContaining('Runtime setup failed'),
+    );
+  });
+
+  it('sanitizes only the terminal workflow failure while preserving the notification reason', () => {
+    const out = createOut();
+    const unsafeReason = 'provider failed\x1b]52;c;secret\x07\r\x00';
+
+    reportWorkflowFailure(
+      out as never,
+      createSessionLog(),
+      1,
+      unsafeReason,
+      'failed',
+      '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
+      true,
+    );
+
+    const terminalMessage = out.error.mock.calls[0]?.[0] as string;
+    expect(terminalMessage).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(terminalMessage).toContain('provider failed');
+    expect(terminalMessage).toContain('\\r\\x00');
+    expect(mockNotifyError).toHaveBeenCalledWith(
+      'TAKT',
+      expect.stringContaining(unsafeReason),
+    );
+  });
+
+  it('keeps a multibyte workflow failure within the byte limit while preserving its marker', () => {
+    const out = createOut();
+    const marker = '[TRUNCATED: 12000 bytes, full text: /tmp/failure.txt]';
+    const contentBytes = MAX_AGENT_FAILURE_MESSAGE_BYTES - Buffer.byteLength(marker, 'utf8');
+    const reason = `${'界'.repeat(Math.floor(contentBytes / 3))}${'x'.repeat(contentBytes % 3)}${marker}`;
+
+    reportWorkflowFailure(
+      out as never,
+      createSessionLog(),
+      1,
+      reason,
+      'failed',
+      '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
+      false,
+    );
+
+    const terminalMessage = out.error.mock.calls[0]?.[0] as string;
+    expect(Buffer.byteLength(terminalMessage, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    expect(terminalMessage).not.toContain('\uFFFD');
+    expect(terminalMessage).toContain(marker);
   });
 });

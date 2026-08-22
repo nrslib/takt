@@ -1,8 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
-import type { GlobalConfig } from '../../../core/models/config-types.js';
-import type { QualityGate } from '../../../core/models/workflow-types.js';
+import type { GlobalConfig, TaktProviderConfigEntry } from '../../../core/models/config-types.js';
 import {
   normalizeConfigProviderReference,
   type ConfigProviderReference,
@@ -17,6 +16,9 @@ import {
   buildRawTaktProvidersOrThrow,
   normalizeRuntime,
   normalizeRateLimitFallback,
+  normalizeAutoRoutingConfig,
+  normalizeTelemetryConfig,
+  normalizeAssistantConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -24,11 +26,16 @@ import {
 import { normalizeObservabilityConfig } from '../observabilityConfig.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
-import { validateProviderModelCompatibility } from '../providerModelCompatibility.js';
+import { validateProviderModelRequirements } from '../providerModelRequirements.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
 import { loadGlobalConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
+import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
+import {
+  omitDeprecatedAssistantGherkin,
+  warnDeprecatedAssistantGherkin,
+} from '../deprecatedAssistantConfig.js';
 export { validateCliPath } from './cliPathValidator.js';
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
@@ -99,7 +106,7 @@ export class GlobalConfigManager {
     }
     const configPath = getGlobalConfigPath();
 
-    const { parsedConfig, rawConfig, trace } = loadGlobalConfigTrace(
+    const loadedTrace = loadGlobalConfigTrace(
       configPath,
       (value: unknown) => {
         if (value == null) {
@@ -111,7 +118,16 @@ export class GlobalConfigManager {
         }
         return sanitized;
       },
+      PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
     );
+    const parsedWithoutLegacy = omitDeprecatedAssistantGherkin(loadedTrace.parsedConfig);
+    const rawWithoutLegacy = omitDeprecatedAssistantGherkin(loadedTrace.rawConfig);
+    if (parsedWithoutLegacy.ignored || rawWithoutLegacy.ignored) {
+      warnDeprecatedAssistantGherkin();
+    }
+    const parsedConfig = parsedWithoutLegacy.config;
+    const rawConfig = rawWithoutLegacy.config;
+    const { trace } = loadedTrace;
     assertValidGlobalConfig(parsedConfig, configPath, true);
     assertNoUnknownGlobalConfigKeys(rawConfig);
     const parsed = GlobalConfigSchema.parse(rawConfig);
@@ -124,6 +140,7 @@ export class GlobalConfigManager {
       language: parsed.language,
       provider: normalizedProvider.provider,
       model: normalizedProvider.model,
+      autoRouting: normalizeAutoRoutingConfig(parsed.auto_routing),
       logging: parsed.logging ? {
         level: parsed.logging.level,
         trace: parsed.logging.trace,
@@ -136,6 +153,7 @@ export class GlobalConfigManager {
         eventsPath: expandOptionalHomePath(parsed.analytics.events_path),
         retentionDays: parsed.analytics.retention_days,
       } : undefined,
+      telemetry: normalizeTelemetryConfig(parsed.telemetry),
       observability: normalizeObservabilityConfig(parsed.observability),
       worktreeDir: expandOptionalHomePath(parsed.worktree_dir),
       allowGitHooks: parsed.allow_git_hooks,
@@ -201,21 +219,22 @@ export class GlobalConfigManager {
       } : undefined,
       autoFetch: parsed.auto_fetch,
       baseBranch: parsed.base_branch,
-      workflowOverrides: normalizeWorkflowOverrides(parsed.workflow_overrides as {
-        quality_gates?: QualityGate[];
-        quality_gates_edit_only?: boolean;
-        steps?: Record<string, { quality_gates?: QualityGate[] }>;
-        personas?: Record<string, { quality_gates?: QualityGate[] }>;
-      } | undefined),
+      workflowOverrides: normalizeWorkflowOverrides(parsed.workflow_overrides),
       // Project-local keys (also accepted in global config)
       pipeline: normalizePipelineConfig(
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
       ),
+      assistant: normalizeAssistantConfig(parsed.assistant),
       taktProviders: normalizeTaktProviders(
         parsed.takt_providers as {
           assistant?: {
-            provider?: GlobalConfig['provider'];
+            provider?: TaktProviderConfigEntry['provider'];
             model?: string;
+          };
+          selector?: {
+            provider?: TaktProviderConfigEntry['provider'];
+            model?: string;
+            provider_options?: Record<string, unknown>;
           };
         } | undefined,
       ),
@@ -240,8 +259,10 @@ export class GlobalConfigManager {
       taskPollIntervalMs: parsed.task_poll_interval_ms as number | undefined,
       interactivePreviewSteps: resolveAliasedPreviewCount(parsed as Record<string, unknown>),
       syncProjectLocalTaktOnRetry: parsed.sync_project_local_takt_on_retry as boolean | undefined,
+      autoRequeueMaxAttempts: parsed.auto_requeue_max_attempts as number | undefined,
+      ignoreExceed: parsed.ignore_exceed as boolean | undefined,
     };
-    validateProviderModelCompatibility(config.provider, config.model);
+    validateProviderModelRequirements(config.provider, config.model);
     this.cachedConfig = config;
     this.cachedTrace = trace;
     return config;

@@ -18,7 +18,11 @@ concurrency:
 jobs:
   flake:
     name: Build and test Nix flake
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -29,10 +33,15 @@ jobs:
       - run: |
           claude_runtime="$(find result/lib/node_modules/takt/node_modules -type f -path '*/@anthropic-ai/claude-agent-sdk-*/claude' -print -quit)"
           codex_runtime="$(find result/lib/node_modules/takt/node_modules -type f -path '*/@openai/codex-*/vendor/*/bin/codex' -print -quit)"
+          pi_sdk="$(find result/lib/node_modules/takt/node_modules -type f -path '*/@earendil-works/pi-coding-agent/dist/index.js' -print -quit)"
+          node_runtime="$(sed -n '1s/^#!//p' result/lib/node_modules/takt/bin/takt)"
           test -n "$claude_runtime"
           test -x "$claude_runtime"
           test -n "$codex_runtime"
           test -x "$codex_runtime"
+          test -n "$pi_sdk"
+          test -x "$node_runtime"
+          "$node_runtime" --input-type=module -e "await import('./$pi_sdk')"
       - run: NO_UPDATE_NOTIFIER=1 ./result/bin/takt --version
       - run: NO_UPDATE_NOTIFIER=1 nix run .#default -- --version
       - run: |

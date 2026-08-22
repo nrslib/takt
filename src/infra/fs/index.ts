@@ -5,6 +5,8 @@
 export type {
   SessionLog,
   NdjsonWorkflowStart,
+  NdjsonWorkflowCallStart,
+  NdjsonWorkflowCallComplete,
   NdjsonStepStart,
   NdjsonStepComplete,
   NdjsonWorkflowComplete,
@@ -14,6 +16,12 @@ export type {
   NdjsonPhaseJudgeStage,
   NdjsonInteractiveStart,
   NdjsonInteractiveEnd,
+  NdjsonCompanionReviewRound,
+  NdjsonCompanionQueueCoalesced,
+  NdjsonCompanionCall,
+  NdjsonCompanionReviewSkipped,
+  NdjsonCompanionReviewMode,
+  NdjsonCompanionReviewTrigger,
   NdjsonRecord,
 } from './session.js';
 
@@ -31,4 +39,5 @@ export {
   createSessionLog,
   finalizeSessionLog,
   loadSessionLog,
+  parseNdjsonRecord,
 } from './session.js';

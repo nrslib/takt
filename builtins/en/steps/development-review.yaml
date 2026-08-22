@@ -1,0 +1,10 @@
+name: review
+tags: [review]
+parallel:
+  fixed: []
+  pool: []
+  selection:
+    reports:
+      - review-resolution.md
+    selector:
+      instruction: select-applicable-candidates

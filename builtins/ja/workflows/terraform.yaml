@@ -1,29 +1,29 @@
 name: terraform
-description: Terraform IaC 開発ワークフロー（plan → implement → 並列レビュー → 監督検証 → 修正 → 完了）
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+description: Terraform IaC 開発ワークフロー（plan → implement → 並列レビュー → 最終ゲート → 修正 → 完了）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    capabilities: readonly
     tags:
       - plan
     edit: false
     persona: planner
+    policy:
+      - contract-change
+      - terraform
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
     rules:
       - condition: 要件が明確で実装可能
         next: implement
@@ -37,24 +37,15 @@ steps:
         - name: plan.md
           format: plan
   - name: implement
+    capabilities: edit
     tags:
       - coding
     edit: true
     persona: terraform-coder
     policy:
+      - contract-change
       - terraform
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     quality_gates:
       - terraform fmt -check がエラーなし
       - terraform validate が成功
@@ -73,30 +64,25 @@ steps:
       report:
         - name: coder-scope.md
           format: coder-scope
+          use_judge: false
         - name: coder-decisions.md
           format: coder-decisions
+          use_judge: false
   - name: reviewers
     tags:
       - review
     parallel:
       - name: tf_review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: terraform-reviewer
         policy:
+          - contract-change
           - review
           - terraform
         knowledge: terraform-aws
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-terraform
         rules:
           - condition: Terraform規約に準拠
@@ -106,21 +92,15 @@ steps:
             - name: terraform-review.md
               format: terraform-review
       - name: ai-antipattern-review-2nd
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
+          - contract-change
           - review
           - ai-antipattern
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: ai-antipattern-review
         rules:
           - condition: AI特有の問題なし
@@ -129,46 +109,16 @@ steps:
           report:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: coding-reviewer
         policy:
+          - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:
@@ -178,90 +128,96 @@ steps:
           - condition: approved
           - condition: needs_fix
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: all("Terraform規約に準拠", "AI特有の問題なし", "approved")
-        next: supervise
+        next: final-supervise
       - condition: any("規約違反あり", "AI特有の問題あり", "needs_fix")
         next: supervise
-  - name: supervise
+  - name: final-supervise
+    capabilities: readonly
     tags:
       - review
     edit: false
     persona: supervisor
-    policy: review
+    policy: [contract-change, terraform]
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
     instruction: supervise
     rules:
-      - condition: レビュアー全員承認かつマージ可能な品質
-        next: COMPLETE
-      - condition: AI特有の問題のみ要修正
-        next: ai-antipattern-fix
-      - condition: 規約違反または要件未達のみ要修正
-        next: supervise_fix
-      - condition: 複数種別の問題あり
-        next: fix_both
-      - condition: 要件矛盾で収束不能、ユーザー判断が必要
+      - condition: BLOCKED
         next: ABORT
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: supervise_fix
     output_contracts:
       report:
         - name: supervisor-validation.md
           format: supervisor-validation
         - name: summary.md
-          format: summary
+          format: supervisor-summary
+          use_judge: false
+
+  - name: supervise
+    capabilities: readonly
+    tags:
+      - review
+      - supervise
+    edit: &terraform_supervise_edit false
+    persona: &terraform_supervise_persona supervisor
+    policy: &terraform_supervise_policy [contract-change, review, terraform]
+    knowledge: &terraform_supervise_knowledge terraform-aws
+    instruction: &terraform_supervise_instruction supervise
+    rules:
+      - condition: BLOCKED
+        next: ABORT
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: supervise_fix
+    output_contracts: &terraform_supervise_output_contracts
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: supervisor-summary
           use_judge: false
   - name: fix_both
     tags:
       - coding
     parallel:
       - name: ai-antipattern-fix-parallel
+        capabilities: edit
         tags:
           - coding
         edit: true
         persona: terraform-coder
         policy:
+          - contract-change
           - terraform
+          - testing
         knowledge: terraform-aws
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Edit
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: AI問題の修正完了
           - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
           - condition: 判断できない、情報不足
         instruction: ai-antipattern-fix
+        output_contracts:
+          report:
+            - name: ai-antipattern-fix-report.md
+              format: fix-report
+              use_judge: false
       - name: supervise_fix_parallel
+        capabilities: edit
         tags:
           - coding
         edit: true
         persona: terraform-coder
         policy:
+          - contract-change
           - terraform
+          - testing
         knowledge: terraform-aws
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Edit
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: 監督者の指摘に対する修正が完了した
           - condition: 修正を進行できない
@@ -272,24 +228,16 @@ steps:
       - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
         next: implement
   - name: ai-antipattern-fix
+    capabilities: edit
     tags:
       - coding
     edit: true
     persona: terraform-coder
     policy:
+      - contract-change
       - terraform
+      - testing
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
       - condition: AI問題の修正完了
@@ -299,25 +247,22 @@ steps:
       - condition: 判断できない、情報不足
         next: implement
     instruction: ai-antipattern-fix
+    output_contracts:
+      report:
+        - name: ai-antipattern-fix-report.md
+          format: fix-report
+          use_judge: false
   - name: supervise_fix
+    capabilities: edit
     tags:
       - coding
     edit: true
     persona: terraform-coder
     policy:
+      - contract-change
       - terraform
+      - testing
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
       - condition: 監督者の指摘に対する修正が完了した
@@ -334,12 +279,13 @@ loop_monitors:
         レビュー → 修正のサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
-        **非生産的の兆候:**
-        - 同じ finding_id が resolved → new を繰り返している
-        - 前の修正の副作用で新しい issue が生まれ続けている
-        - レビュアーの指摘とタスク要件が矛盾しており解消不能
+        - 修正進捗: 報告された問題の受入条件が満たされたか
+        - 報告の収束: 正しい構造・契約上の問題がレビュー回ごとに追加され続けていないか
+        - 異なる問題であること自体は進捗の根拠にせず、件数は補助情報に留める
       rules:
-        - condition: 健全（新しい問題が減少傾向）
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: fix_both
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: fix_both
         - condition: 非生産的（振動または要件矛盾）
           next: ABORT
@@ -351,12 +297,13 @@ loop_monitors:
         AI修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
-        **非生産的の兆候:**
-        - 同じ finding_id が resolved → new を繰り返している
-        - 前の修正の副作用で新しい issue が生まれ続けている
-        - レビュアーの指摘とタスク要件が矛盾しており解消不能
+        - 修正進捗: 報告された問題の受入条件が満たされたか
+        - 報告の収束: 正しい構造・契約上の問題がレビュー回ごとに追加され続けていないか
+        - 異なる問題であること自体は進捗の根拠にせず、件数は補助情報に留める
       rules:
-        - condition: 健全（新しい問題が減少傾向）
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: ai-antipattern-fix
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: ai-antipattern-fix
         - condition: 非生産的（振動または要件矛盾）
           next: ABORT
@@ -368,12 +315,13 @@ loop_monitors:
         監督修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
-        **非生産的の兆候:**
-        - 同じ finding_id が resolved → new を繰り返している
-        - 前の修正の副作用で新しい issue が生まれ続けている
-        - レビュアーの指摘とタスク要件が矛盾しており解消不能
+        - 修正進捗: 報告された問題の受入条件が満たされたか
+        - 報告の収束: 正しい構造・契約上の問題がレビュー回ごとに追加され続けていないか
+        - 異なる問題であること自体は進捗の根拠にせず、件数は補助情報に留める
       rules:
-        - condition: 健全（新しい問題が減少傾向）
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: supervise_fix
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: supervise_fix
         - condition: 非生産的（振動または要件矛盾）
           next: ABORT

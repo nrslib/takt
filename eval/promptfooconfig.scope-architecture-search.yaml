@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: architecture review explores same-contract paths without unrelated audit'
+
+prompts:
+  - file://prompts/scope-architecture-search.phase1.md
+
+providers:
+  - id: file://providers/takt-codex.mjs
+    label: codex
+    config:
+      working_dir: fixtures/scope-architecture-search
+      model_reasoning_effort: low
+
+tests:
+  - description: 'discovers an unhinted second implementation of the changed safety contract'
+    vars:
+      task: file://cases/scope-architecture-search.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: scope/search-related-facets
+        value: file://asserts/scope-architecture-search.mjs

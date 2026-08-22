@@ -16,6 +16,7 @@ export interface JsonTaskData {
   should_publish_branch_to_origin?: boolean;
   exceeded_max_steps?: number;
   exceeded_current_iteration?: number;
+  context_pr_number?: number;
 }
 
 export interface JsonTaskFailure {
@@ -64,6 +65,7 @@ function serializeTaskData(data: TaskFileData | undefined): JsonTaskData | undef
     should_publish_branch_to_origin: data.should_publish_branch_to_origin,
     exceeded_max_steps: data.exceeded_max_steps,
     exceeded_current_iteration: data.exceeded_current_iteration,
+    context_pr_number: data.context_pr_number,
   };
 }
 

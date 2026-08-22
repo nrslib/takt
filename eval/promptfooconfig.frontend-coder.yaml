@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: frontend / implement (coder, codex writes files).
+# Runs in the disposable copy eval/.work/frontend-implement (recreated by
+# prepare on every run); scoring inspects the written artifacts.
+# Run via npm run eval:prompts -- frontend-coder
+
+description: 'TAKT facet eval: frontend / implement (coder)'
+
+prompts:
+  - file://prompts/frontend-implement.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: .work/frontend-implement
+      sandbox_mode: workspace-write
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'coder: SearchBox extraction implemented correctly'
+    vars:
+      task: file://cases/frontend-implement-task.md
+      previous_response: file://cases/prev-plan-frontend-implement.md
+    assert:
+      - type: javascript
+        metric: coder/frontend-artifacts
+        value: file://asserts/frontend-implement.mjs

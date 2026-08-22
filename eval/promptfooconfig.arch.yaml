@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Prompt quality eval for TAKT facets: peer-review / arch-review (codex).
+# See promptfooconfig.yaml for the shared conventions; run via
+#   npm run eval:prompts
+
+description: 'TAKT facet eval: peer-review / arch-review'
+
+prompts:
+  - file://prompts/arch-review.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/sample-project
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      # Token saver (user decision): trades some fidelity vs production
+      # runs. Compare scores only against runs with the same effort.
+      model_reasoning_effort: low
+
+tests:
+  - description: 'recall: planted architecture violations must be flagged'
+    vars:
+      task: file://cases/arch-shared-format.md
+      previous_response: file://cases/prev-gather-arch.md
+    assert:
+      - type: javascript
+        metric: recall/generic-layer-depends-on-feature
+        value: |
+          return /(shared\/format|format\.ts)/i.test(output) &&
+            /(user-?store|依存|レイヤ|layer|汎用|特定|feature)/i.test(output);
+      - type: javascript
+        metric: recall/infra-exported-from-public-api
+        value: |
+          return /(writeRawFile|index\.ts)/i.test(output) &&
+            /(公開|エクスポート|export|パブリック|public|インフラ|infra|内部)/i.test(output);
+      - type: javascript
+        metric: recall/mixed-responsibilities
+        value: |
+          return /(shared\/format|format\.ts)/i.test(output) &&
+            /(責務|凝集|responsibilit|cohesion|混在|同居)/i.test(output);

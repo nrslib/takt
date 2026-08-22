@@ -1,13 +1,61 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { cleanupResources } from '../../e2e/helpers/cleanup.js';
 import { injectProviderArgs } from '../../e2e/helpers/takt-runner.js';
 import { cleanupChildProcess, cleanupTestResource, waitForClose } from '../../e2e/helpers/wait.js';
 import {
   createIsolatedEnv,
   updateIsolatedConfig,
 } from '../../e2e/helpers/isolated-env.js';
+import { createOfflineTestRepo } from '../../e2e/helpers/test-repo.js';
+
+describe('cleanupResources', () => {
+  it('runs callbacks registered before a later setup failure', () => {
+    const cleanups: Array<() => void> = [];
+    const isolated = createIsolatedEnv();
+    const isolatedBaseDir = dirname(isolated.taktDir);
+    const setupError = new Error('repository setup failed');
+
+    cleanups.unshift(isolated.cleanup);
+
+    expect(() => {
+      try {
+        throw setupError;
+      } finally {
+        cleanupResources(...cleanups);
+      }
+    }).toThrow(setupError);
+    expect(existsSync(isolatedBaseDir)).toBe(false);
+  });
+
+  it('attempts every cleanup and aggregates all failures', () => {
+    const firstError = new Error('first cleanup failed');
+    const secondError = new Error('second cleanup failed');
+    const successfulCleanup = vi.fn();
+    const firstFailingCleanup = vi.fn(() => {
+      throw firstError;
+    });
+    const secondFailingCleanup = vi.fn(() => {
+      throw secondError;
+    });
+
+    expect(() => cleanupResources(
+      firstFailingCleanup,
+      successfulCleanup,
+      secondFailingCleanup,
+    )).toThrow(expect.objectContaining({
+      name: 'AggregateError',
+      errors: [firstError, secondError],
+    }));
+    expect(firstFailingCleanup).toHaveBeenCalledOnce();
+    expect(successfulCleanup).toHaveBeenCalledOnce();
+    expect(secondFailingCleanup).toHaveBeenCalledOnce();
+  });
+});
 
 describe('injectProviderArgs', () => {
   it('should prepend --provider when provider is specified', () => {
@@ -63,6 +111,158 @@ describe('createIsolatedEnv', () => {
     expect(isolated.env.TAKT_OPENAI_API_KEY).toBeUndefined();
   });
 
+  it('should exclude Claude Skills env override from isolated environments', () => {
+    process.env = {
+      ...originalEnv,
+      TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED: 'true',
+    };
+    const isolated = createIsolatedEnv();
+    cleanups.push(isolated.cleanup);
+
+    expect(isolated.env).not.toHaveProperty('TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED');
+    expect(process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED).toBe('true');
+  });
+
+  it('should preserve malformed generic provider options for normal config validation', () => {
+    const providerOptions = '{"claude":';
+    process.env = {
+      ...originalEnv,
+      TAKT_PROVIDER_OPTIONS: providerOptions,
+    };
+    const isolated = createIsolatedEnv();
+    cleanups.push(isolated.cleanup);
+
+    expect(isolated.env.TAKT_PROVIDER_OPTIONS).toBe(providerOptions);
+  });
+
+  it('should preserve a top-level array in generic provider options', () => {
+    const providerOptions = JSON.stringify([
+      { claude: { skills: { enabled: true } } },
+    ]);
+    process.env = {
+      ...originalEnv,
+      TAKT_PROVIDER_OPTIONS: providerOptions,
+    };
+    const isolated = createIsolatedEnv();
+    cleanups.push(isolated.cleanup);
+
+    expect(isolated.env.TAKT_PROVIDER_OPTIONS).toBe(providerOptions);
+  });
+
+  it.each([
+    ['null Claude options', { claude: null }],
+    ['array Claude options', { claude: [] }],
+    ['scalar Claude options', { claude: 'invalid' }],
+    ['null Skills options', { claude: { skills: null } }],
+    ['array Skills options', { claude: { skills: [] } }],
+    ['scalar Skills options', { claude: { skills: 'invalid' } }],
+  ])(
+    'should preserve generic provider options with %s',
+    (_caseName, value) => {
+      const providerOptions = JSON.stringify(value);
+      process.env = {
+        ...originalEnv,
+        TAKT_PROVIDER_OPTIONS: providerOptions,
+      };
+      const isolated = createIsolatedEnv();
+      cleanups.push(isolated.cleanup);
+
+      expect(isolated.env.TAKT_PROVIDER_OPTIONS).toBe(providerOptions);
+    },
+  );
+
+  it('should preserve generic provider options when Claude Skills enabled is missing', () => {
+    const providerOptions = JSON.stringify({
+      claude: {
+        skills: { source: 'project' },
+      },
+    });
+    process.env = {
+      ...originalEnv,
+      TAKT_PROVIDER_OPTIONS: providerOptions,
+    };
+    const isolated = createIsolatedEnv();
+    cleanups.push(isolated.cleanup);
+
+    expect(isolated.env.TAKT_PROVIDER_OPTIONS).toBe(providerOptions);
+  });
+
+  it.each([true, false])(
+    'should exclude Claude Skills enabled=%s from generic provider options',
+    (enabled) => {
+      process.env = {
+        ...originalEnv,
+        TAKT_PROVIDER_OPTIONS: JSON.stringify({
+          claude: {
+            allowed_tools: ['Read'],
+            skills: { enabled },
+          },
+          codex: { network_access: true },
+        }),
+      };
+      const isolated = createIsolatedEnv();
+      cleanups.push(isolated.cleanup);
+
+      expect(JSON.parse(isolated.env.TAKT_PROVIDER_OPTIONS ?? '{}')).toEqual({
+        claude: { allowed_tools: ['Read'] },
+        codex: { network_access: true },
+      });
+    },
+  );
+
+  it.each([true, false])(
+    'should remove only Claude Skills enabled=%s and preserve sibling keys',
+    (enabled) => {
+      const providerOptions = JSON.stringify({
+        claude: {
+          skills: {
+            enabled,
+            source: 'project',
+          },
+        },
+      });
+      process.env = {
+        ...originalEnv,
+        TAKT_PROVIDER_OPTIONS: providerOptions,
+      };
+      const isolated = createIsolatedEnv();
+      cleanups.push(isolated.cleanup);
+
+      expect(JSON.parse(isolated.env.TAKT_PROVIDER_OPTIONS ?? '{}')).toEqual({
+        claude: {
+          skills: {
+            source: 'project',
+          },
+        },
+      });
+      expect(process.env.TAKT_PROVIDER_OPTIONS).toBe(providerOptions);
+    },
+  );
+
+  it.each([
+    ['string', 'false'],
+    ['null', null],
+    ['object', { nested: false }],
+    ['array', []],
+  ])(
+    'should preserve invalid Claude Skills enabled %s in generic provider options',
+    (_caseName, enabled) => {
+      const providerOptions = {
+        claude: {
+          skills: { enabled },
+        },
+      };
+      process.env = {
+        ...originalEnv,
+        TAKT_PROVIDER_OPTIONS: JSON.stringify(providerOptions),
+      };
+      const isolated = createIsolatedEnv();
+      cleanups.push(isolated.cleanup);
+
+      expect(JSON.parse(isolated.env.TAKT_PROVIDER_OPTIONS ?? '{}')).toEqual(providerOptions);
+    },
+  );
+
   it('should override TAKT_CONFIG_DIR with isolated directory', () => {
     const isolated = createIsolatedEnv();
     cleanups.push(isolated.cleanup);
@@ -74,8 +274,7 @@ describe('createIsolatedEnv', () => {
     const isolated = createIsolatedEnv();
     cleanups.push(isolated.cleanup);
 
-    expect(isolated.env.GIT_CONFIG_GLOBAL).toBeDefined();
-    expect(isolated.env.GIT_CONFIG_GLOBAL).toContain('takt-e2e-');
+    expect(isolated.env.GIT_CONFIG_GLOBAL).toBe(join(isolated.taktDir, '..', '.gitconfig'));
   });
 
   it('should create config.yaml from E2E fixture with notification_sound disabled', () => {
@@ -187,6 +386,39 @@ describe('createIsolatedEnv', () => {
     expect(() => {
       updateIsolatedConfig(isolated.taktDir, { provider: 'mock' });
     }).toThrow('Invalid notification_sound_events in current config: expected object');
+  });
+});
+
+describe('createOfflineTestRepo', () => {
+  const originalEnv = process.env;
+  let cleanups: Array<() => void> = [];
+
+  afterEach(() => {
+    process.env = originalEnv;
+    for (const cleanup of cleanups) {
+      cleanup();
+    }
+    cleanups = [];
+  });
+
+  it('should create an offline repository without probing GitHub', () => {
+    const fakeBinDir = mkdtempSync(join(tmpdir(), 'takt-fake-gh-'));
+    cleanups.push(() => rmSync(fakeBinDir, { recursive: true, force: true }));
+    const markerPath = join(fakeBinDir, 'gh-called');
+    const ghPath = join(fakeBinDir, 'gh');
+    writeFileSync(ghPath, `#!/bin/sh\ntouch "${markerPath}"\nexit 42\n`, 'utf-8');
+    chmodSync(ghPath, 0o755);
+    process.env = {
+      ...originalEnv,
+      PATH: `${fakeBinDir}:${originalEnv.PATH ?? ''}`,
+      TAKT_E2E_PROVIDER: 'mock',
+    };
+
+    const repo = createOfflineTestRepo();
+    cleanups.push(repo.cleanup);
+
+    expect(repo.repoName).toBe('local/takt-testing');
+    expect(existsSync(markerPath)).toBe(false);
   });
 });
 

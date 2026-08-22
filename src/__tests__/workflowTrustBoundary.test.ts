@@ -49,7 +49,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `, 'utf-8');
 

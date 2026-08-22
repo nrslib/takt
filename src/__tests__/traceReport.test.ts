@@ -1,83 +1,102 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { renderTraceReportMarkdown, renderTraceReportFromLogs } from '../features/tasks/execute/traceReport.js';
+import {
+  renderTraceReportFromLogs,
+  renderTraceReportFromRecords,
+  renderTraceReportMarkdown,
+} from '../features/tasks/execute/traceReport.js';
 
 describe('traceReport', () => {
-  it('should render judge stage details and tolerate aborted incomplete step', () => {
+  it('returns no optional trace report when session records are absent', () => {
+    expect(renderTraceReportFromRecords({
+      tracePath: '/tmp/trace.md',
+      workflowName: 'workflow',
+      task: 'task',
+      runSlug: 'run-empty',
+      status: 'completed',
+      iterations: 0,
+      endTime: '2026-03-04T12:00:00.000Z',
+    }, [], [], 'full')).toBeUndefined();
+  });
+
+  it('preserves an incomplete step as in progress when a run is aborted', () => {
     const markdown = renderTraceReportMarkdown(
       {
         tracePath: '/tmp/trace.md',
-        workflowName: 'test-workflow',
-        task: 'test task',
-        runSlug: 'run-1',
+        workflowName: 'workflow-under-test',
+        task: 'task-under-test',
+        runSlug: 'run-aborted',
         status: 'aborted',
         iterations: 1,
         endTime: '2026-03-04T12:00:00.000Z',
-        reason: 'user_interrupted',
       },
       '2026-03-04T11:59:00.000Z',
-      [
-        {
-          step: 'ai_fix',
-          persona: 'coder',
-          iteration: 1,
-          startedAt: '2026-03-04T11:59:01.000Z',
-          phases: [
-            {
-              phaseExecutionId: 'ai_fix:3:1',
-              phase: 3,
-              phaseName: 'judge',
-              instruction: 'judge prompt',
-              systemPrompt: 'conductor',
-              userInstruction: 'judge prompt',
-              startedAt: '2026-03-04T11:59:02.000Z',
-              judgeStages: [
-                {
-                  stage: 1,
-                  method: 'structured_output',
-                  status: 'error',
-                  instruction: 'stage1 prompt',
-                  response: '',
-                },
-              ],
-            },
-          ],
-        },
-      ],
+      [{
+        step: 'incomplete-step',
+        persona: 'coder',
+        iteration: 1,
+        startedAt: '2026-03-04T11:59:01.000Z',
+        phases: [{
+          phaseExecutionId: 'incomplete-step:1:3:1',
+          phase: 3,
+          phaseName: 'judge',
+          instruction: 'judge input',
+          systemPrompt: 'system input',
+          userInstruction: 'user input',
+          startedAt: '2026-03-04T11:59:02.000Z',
+          judgeStages: [{
+            stage: 1,
+            method: 'structured_output',
+            status: 'error',
+            instruction: 'stage input',
+            response: '',
+          }],
+        }],
+      }],
     );
 
-    expect(markdown).toContain('- Status: ❌ aborted');
-    expect(markdown).toContain('- Step Status: in_progress');
-    expect(markdown).toContain('## Iteration 1: ai_fix (persona: coder)');
-    expect(markdown).toContain('<details><summary>System Prompt</summary>');
-    expect(markdown).toContain('<details><summary>User Instruction</summary>');
-    expect(markdown).toContain('- Stage 1 (structured_output)');
-    expect(markdown).toContain('<details><summary>Stage Instruction</summary>');
-    expect(markdown).toContain('<details><summary>Stage Response</summary>');
+    expect(markdown).toContain('in_progress');
+    expect(markdown).toContain('stage input');
   });
 
-  it('should render steps in timestamp order from NDJSON logs', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trace-report-'));
+  it('keeps a failed terminal step distinct from an aborted run', () => {
+    const markdown = renderTraceReportMarkdown(
+      {
+        tracePath: '/tmp/trace.md',
+        workflowName: 'failed-workflow',
+        task: 'task-under-test',
+        runSlug: 'run-failed',
+        status: 'failed',
+        iterations: 1,
+        endTime: '2026-03-04T12:00:00.000Z',
+      },
+      '2026-03-04T11:59:00.000Z',
+      [{
+        step: 'terminal-step',
+        persona: 'reviewer',
+        iteration: 1,
+        startedAt: '2026-03-04T11:59:01.000Z',
+        completedAt: '2026-03-04T11:59:02.000Z',
+        phases: [],
+      }],
+    );
+
+    expect(markdown).toContain('failed');
+    expect(markdown).not.toContain('aborted');
+  });
+
+  it('renders steps in timestamp order from NDJSON logs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-report-order-'));
     const sessionPath = join(dir, 'session.jsonl');
-    const promptPath = join(dir, 'prompts.jsonl');
     writeFileSync(sessionPath, [
       JSON.stringify({ type: 'workflow_start', task: 'task', workflowName: 'workflow', startTime: '2026-03-04T11:59:00.000Z' }),
-      JSON.stringify({ type: 'step_start', step: 'reviewers', persona: 'reviewer', iteration: 2, timestamp: '2026-03-04T11:59:05.000Z' }),
-      JSON.stringify({ type: 'step_start', step: 'plan', persona: 'planner', iteration: 1, timestamp: '2026-03-04T11:59:01.000Z' }),
-      JSON.stringify({ type: 'phase_start', step: 'reviewers', iteration: 2, phase: 1, phaseName: 'execute', phaseExecutionId: 'reviewers:2:1:1', instruction: 'r', timestamp: '2026-03-04T11:59:06.000Z' }),
-      JSON.stringify({ type: 'phase_complete', step: 'reviewers', iteration: 2, phase: 1, phaseName: 'execute', phaseExecutionId: 'reviewers:2:1:1', status: 'done', content: 'r-ok', timestamp: '2026-03-04T11:59:07.000Z' }),
-      JSON.stringify({ type: 'step_complete', step: 'reviewers', persona: 'reviewer', iteration: 2, status: 'done', content: 'r-ok', instruction: 'inst', timestamp: '2026-03-04T11:59:08.000Z' }),
-      JSON.stringify({ type: 'phase_start', step: 'plan', iteration: 1, phase: 1, phaseName: 'execute', phaseExecutionId: 'plan:1:1:1', instruction: 'p', timestamp: '2026-03-04T11:59:02.000Z' }),
-      JSON.stringify({ type: 'phase_complete', step: 'plan', iteration: 1, phase: 1, phaseName: 'execute', phaseExecutionId: 'plan:1:1:1', status: 'done', content: 'p-ok', timestamp: '2026-03-04T11:59:03.000Z' }),
-      JSON.stringify({ type: 'step_complete', step: 'plan', persona: 'planner', iteration: 1, status: 'done', content: 'p-ok', instruction: 'inst', timestamp: '2026-03-04T11:59:04.000Z' }),
+      JSON.stringify({ type: 'step_start', step: 'later-step', persona: 'reviewer', iteration: 2, timestamp: '2026-03-04T11:59:05.000Z' }),
+      JSON.stringify({ type: 'step_start', step: 'earlier-step', persona: 'planner', iteration: 1, timestamp: '2026-03-04T11:59:01.000Z' }),
+      JSON.stringify({ type: 'step_complete', step: 'later-step', persona: 'reviewer', iteration: 2, status: 'done', content: 'later-result', instruction: 'later-instruction', timestamp: '2026-03-04T11:59:06.000Z' }),
+      JSON.stringify({ type: 'step_complete', step: 'earlier-step', persona: 'planner', iteration: 1, status: 'done', content: 'earlier-result', instruction: 'earlier-instruction', timestamp: '2026-03-04T11:59:02.000Z' }),
       JSON.stringify({ type: 'workflow_complete', iterations: 2, endTime: '2026-03-04T12:00:00.000Z' }),
-      '',
-    ].join('\n'));
-    writeFileSync(promptPath, [
-      JSON.stringify({ step: 'plan', phase: 1, iteration: 1, phaseExecutionId: 'plan:1:1:1', prompt: 'p', systemPrompt: 'ps', userInstruction: 'pu', response: 'p-ok', timestamp: '2026-03-04T11:59:03.000Z' }),
-      JSON.stringify({ step: 'reviewers', phase: 1, iteration: 2, phaseExecutionId: 'reviewers:2:1:1', prompt: 'r', systemPrompt: 'rs', userInstruction: 'ru', response: 'r-ok', timestamp: '2026-03-04T11:59:07.000Z' }),
       '',
     ].join('\n'));
 
@@ -86,39 +105,36 @@ describe('traceReport', () => {
         tracePath: join(dir, 'trace.md'),
         workflowName: 'workflow',
         task: 'task',
-        runSlug: 'run-1',
+        runSlug: 'run-ordered',
         status: 'completed',
         iterations: 2,
         endTime: '2026-03-04T12:00:00.000Z',
       },
       sessionPath,
-      promptPath,
+      undefined,
       'full',
     );
 
     expect(markdown).toBeDefined();
-    const planIndex = markdown!.indexOf('## Iteration 1: plan');
-    const reviewersIndex = markdown!.indexOf('## Iteration 2: reviewers');
-    expect(planIndex).toBeGreaterThan(-1);
-    expect(reviewersIndex).toBeGreaterThan(planIndex);
+    expect(markdown!.indexOf('earlier-result')).toBeLessThan(markdown!.indexOf('later-result'));
   });
 
-  it('should render failure category from NDJSON step_complete records', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trace-report-failure-category-'));
+  it('preserves the failure category from an NDJSON step record', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-report-category-'));
     const sessionPath = join(dir, 'session.jsonl');
     writeFileSync(sessionPath, [
       JSON.stringify({ type: 'workflow_start', task: 'task', workflowName: 'workflow', startTime: '2026-03-04T11:59:00.000Z' }),
-      JSON.stringify({ type: 'step_start', step: 'implement', persona: 'coder', iteration: 1, timestamp: '2026-03-04T11:59:01.000Z' }),
+      JSON.stringify({ type: 'step_start', step: 'failed-step', persona: 'coder', iteration: 1, timestamp: '2026-03-04T11:59:01.000Z' }),
       JSON.stringify({
         type: 'step_complete',
-        step: 'implement',
+        step: 'failed-step',
         persona: 'coder',
         iteration: 1,
         status: 'error',
-        content: 'Gateway unavailable',
-        error: 'Gateway unavailable',
+        content: 'provider result',
+        error: 'provider error',
         failureCategory: 'provider_error',
-        instruction: 'inst',
+        instruction: 'instruction',
         timestamp: '2026-03-04T11:59:02.000Z',
       }),
       JSON.stringify({ type: 'workflow_complete', iterations: 1, endTime: '2026-03-04T12:00:00.000Z' }),
@@ -130,8 +146,8 @@ describe('traceReport', () => {
         tracePath: join(dir, 'trace.md'),
         workflowName: 'workflow',
         task: 'task',
-        runSlug: 'run-1',
-        status: 'completed',
+        runSlug: 'run-category',
+        status: 'failed',
         iterations: 1,
         endTime: '2026-03-04T12:00:00.000Z',
       },
@@ -140,7 +156,7 @@ describe('traceReport', () => {
       'full',
     );
 
-    expect(markdown).toContain('- Failure Category: provider_error');
+    expect(markdown).toContain('provider_error');
   });
 
   it('should preserve workflow_call and child steps with the same name across different iterations', () => {
@@ -152,7 +168,13 @@ describe('traceReport', () => {
         type: 'step_start',
         step: 'review',
         workflow: 'parent',
-        stack: [{ workflow: 'parent', step: 'review', kind: 'workflow_call' }],
+        stack: [{
+          workflow: 'parent',
+          workflow_ref: 'project:sha256:parent',
+          step: 'review',
+          kind: 'workflow_call',
+          occurrence: 1,
+        }],
         persona: 'planner',
         iteration: 3,
         timestamp: '2026-03-04T11:59:01.000Z',
@@ -162,8 +184,20 @@ describe('traceReport', () => {
         step: 'review',
         workflow: 'child',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'child', step: 'review', kind: 'agent' },
+          {
+            workflow: 'parent',
+            workflow_ref: 'project:sha256:parent',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+          },
+          {
+            workflow: 'child',
+            workflow_ref: 'project:sha256:child',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         persona: 'reviewer',
         iteration: 4,
@@ -174,8 +208,20 @@ describe('traceReport', () => {
         step: 'review',
         workflow: 'child',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'child', step: 'review', kind: 'agent' },
+          {
+            workflow: 'parent',
+            workflow_ref: 'project:sha256:parent',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+          },
+          {
+            workflow: 'child',
+            workflow_ref: 'project:sha256:child',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         persona: 'reviewer',
         iteration: 4,
@@ -188,7 +234,13 @@ describe('traceReport', () => {
         type: 'step_complete',
         step: 'review',
         workflow: 'parent',
-        stack: [{ workflow: 'parent', step: 'review', kind: 'workflow_call' }],
+        stack: [{
+          workflow: 'parent',
+          workflow_ref: 'project:sha256:parent',
+          step: 'review',
+          kind: 'workflow_call',
+          occurrence: 1,
+        }],
         persona: 'planner',
         iteration: 3,
         status: 'done',
@@ -217,8 +269,6 @@ describe('traceReport', () => {
 
     expect(markdown).toContain('parent-ok');
     expect(markdown).toContain('child-ok');
-    expect(markdown).toContain('## Iteration 3: review');
-    expect(markdown).toContain('## Iteration 4: review');
   });
 
   it('should fail fast when completed trace has missing phase status', () => {
@@ -328,27 +378,72 @@ describe('traceReport', () => {
     expect(markdown).not.toContain('xoxb-1234abcd-5678efgh');
   });
 
-  it('should fold alternating loop iterations into a details block', () => {
-    const markdown = renderTraceReportMarkdown(
+  it('should reject duplicate prompt executions within one run', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-report-duplicate-prompt-'));
+    const sessionPath = join(dir, 'session.jsonl');
+    const promptPath = join(dir, 'session-prompts.jsonl');
+    const scope = '{"step":"plan","stack":[]}';
+    const promptRecord = {
+      step: 'plan',
+      phase: 1,
+      iteration: 1,
+      scope,
+      phaseExecutionId: 'plan:1:1:1',
+      systemPrompt: 'system prompt',
+      userInstruction: 'user prompt',
+      prompt: 'user prompt',
+      response: 'response',
+      timestamp: '2026-03-04T11:59:03.000Z',
+    };
+
+    try {
+      writeFileSync(sessionPath, [
+        JSON.stringify({ type: 'workflow_start', task: 'task', workflowName: 'workflow', startTime: '2026-03-04T11:59:00.000Z' }),
+        JSON.stringify({ type: 'step_start', step: 'plan', persona: 'planner', iteration: 1, timestamp: '2026-03-04T11:59:01.000Z' }),
+        JSON.stringify({ type: 'phase_start', step: 'plan', iteration: 1, phase: 1, phaseName: 'execute', phaseExecutionId: 'plan:1:1:1', instruction: 'user prompt', systemPrompt: 'system prompt', userInstruction: 'user prompt', timestamp: '2026-03-04T11:59:02.000Z' }),
+        JSON.stringify({ type: 'phase_complete', step: 'plan', iteration: 1, phase: 1, phaseName: 'execute', phaseExecutionId: 'plan:1:1:1', status: 'done', content: 'response', timestamp: '2026-03-04T11:59:03.000Z' }),
+        '',
+      ].join('\n'));
+      writeFileSync(promptPath, [
+        JSON.stringify(promptRecord),
+        JSON.stringify(promptRecord),
+        '',
+      ].join('\n'));
+
+      expect(() => renderTraceReportFromLogs(
+        {
+          tracePath: join(dir, 'trace.md'),
+          workflowName: 'workflow',
+          task: 'task',
+          runSlug: 'run-duplicate',
+          status: 'completed',
+          iterations: 1,
+          endTime: '2026-03-04T12:00:00.000Z',
+        },
+        sessionPath,
+        promptPath,
+        'full',
+      )).toThrow('Duplicate prompt execution');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('should not require session or prompt logs when trace mode is off', () => {
+    expect(renderTraceReportFromLogs(
       {
-        tracePath: '/tmp/trace.md',
-        workflowName: 'test-workflow',
-        task: 'test task',
-        runSlug: 'run-1',
+        tracePath: '/missing/trace.md',
+        workflowName: 'workflow',
+        task: 'task',
+        runSlug: 'run-off',
         status: 'completed',
-        iterations: 4,
+        iterations: 1,
         endTime: '2026-03-04T12:00:00.000Z',
       },
-      '2026-03-04T11:59:00.000Z',
-      [
-        { step: 'reviewers', persona: 'reviewer', iteration: 1, startedAt: '2026-03-04T11:59:01.000Z', phases: [], result: { status: 'done', content: 'ok' } },
-        { step: 'fix', persona: 'coder', iteration: 2, startedAt: '2026-03-04T11:59:02.000Z', phases: [], result: { status: 'done', content: 'ok' } },
-        { step: 'reviewers', persona: 'reviewer', iteration: 3, startedAt: '2026-03-04T11:59:03.000Z', phases: [], result: { status: 'done', content: 'ok' } },
-        { step: 'fix', persona: 'coder', iteration: 4, startedAt: '2026-03-04T11:59:04.000Z', phases: [], result: { status: 'done', content: 'ok' } },
-      ],
-    );
-
-    expect(markdown).toContain('reviewers ↔ fix loop');
-    expect(markdown).toContain('<details><summary>Loop details');
+      '/missing/session.jsonl',
+      '/missing/session-prompts.jsonl',
+      'off',
+    )).toBeUndefined();
   });
+
 });

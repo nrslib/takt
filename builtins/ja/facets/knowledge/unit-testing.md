@@ -18,17 +18,31 @@
 - 純粋関数は依存がないのでモック不要
 
 ```typescript
-// NG - 内部実装をモック（振る舞いではなく実装を検証している）
+// 避ける例: 内部実装をモック（振る舞いではなく実装を検証している）
 vi.spyOn(service, 'privateMethod')
 service.execute()
 expect(service.privateMethod).toHaveBeenCalled()
 
-// OK - 外部依存をモックし、振る舞いを検証
+// 例: 外部依存をモックし、振る舞いを検証
 const repository = { findById: vi.fn().mockResolvedValue(user) }
 const service = new UserService(repository)
 const result = await service.getUser('id')
 expect(result).toEqual(user)
 ```
+
+## テストダブルの契約一致
+
+builder、runner、adapter、provider などをテストダブルに置き換える場合、型だけでなく本番実装の意味契約を揃える。テストダブルが簡略化してよいのは、対象テストで観測しない責務に限る。
+
+| 観点 | 確認内容 |
+|------|----------|
+| 戻り値 | 必須値、任意値、欠落値、部分成功の shape が本番と一致している |
+| 入力伝播 | override、context、options など、本番が分岐に使う入力を受け取り検証できる |
+| 制約 | 権限、能力、tool 制限、上限値などが本番と同じ意味で渡る |
+| 副作用 | セッション更新、イベント発行、保存、破棄などの有無を観測できる |
+| 簡略化範囲 | テストダブルで証明できない挙動を、テスト名や期待値で主張しない |
+
+テストダブルが本番契約の一部を省略する場合、テストはその省略範囲に依存しない振る舞いだけを検証する。権限伝播、状態遷移、欠落値処理を確認するテストでは、省略されたフィールド自体がバグの温床になる。
 
 ## 境界値分析
 
@@ -40,12 +54,12 @@ expect(result).toEqual(user)
 | 境界値分析 | 同値クラスの境界でテスト（境界、境界±1） |
 
 ```typescript
-// NG - 正常系のみ
+// 避ける例: 正常系のみ
 test('validates age', () => {
   expect(validateAge(25)).toBe(true)
 })
 
-// OK - 境界値を含む
+// 例: 境界値を含む
 test('validates age at boundaries', () => {
   expect(validateAge(0)).toBe(true)    // 下限
   expect(validateAge(-1)).toBe(false)  // 下限-1
@@ -58,12 +72,29 @@ test('validates age at boundaries', () => {
 
 ユニットテストは設定値や内部状態のスナップショットだけでなく、公開された契約が期待どおりに振る舞うことを検証する。拒否、許可、隔離、解放のような境界変更は、主要な成功/失敗ケースを deterministic に確認する。
 
-| 基準 | 判定 |
-|------|------|
-| 期待する戻り値・例外・副作用が直接検証されている | OK |
-| 境界変更の成功/失敗、許可/拒否の両側が検証されている | OK |
-| 設定値や最後の内部状態だけを確認している | REJECT |
-| 外部環境がないと主要な境界条件を再現できない | Fake や Stub による deterministic test を検討 |
+
+## 自然言語・宣言的資産の検証レイヤー
+
+プロンプトや instruction の文字列、ワークフローなどの宣言的定義は入力データである。定義の保存状態、parser・loader の構造契約、実行時の振る舞いは、それぞれ別の検証対象として扱う。
+
+| 検証対象 | 適切な方法 |
+|----------|------------|
+| parser・loader の参照解決、schema、rule 解釈 | 必要最小限の専用 fixture を使った構造テスト |
+| 配布される宣言的資産群 | 全件 load と schema 適合の smoke test |
+| 状態遷移や副作用 | 代表的な最小シナリオを使った実行結果のテスト |
+| 文字列自体が外部公開契約である値 | 完全一致テスト |
+| 自然言語による分類・判断 | 代表例と反例を含むモデル評価 |
+| 決定的に定義できる判定 | 自然言語からコードへ分離したユニットテスト |
+
+```typescript
+// 避ける例: 配布定義を期待値へ複製し、定義差分だけを検出する
+expect(shippedWorkflow.steps.map((step) => step.name)).toEqual(['plan', 'review', 'fix'])
+
+// 例: 最小 fixture で parser の構造契約を検証する
+expect(parsedFixture.rules[0]?.next).toBe('fix')
+```
+
+個別の配布資産に含まれる step 名、rule、遷移先、設定値を期待値へ丸写しすると、実装とは独立した契約ではなく、同じ定義の複製になる。配布資産は全件 load・schema 適合で破損を検出し、遷移や副作用は最小シナリオの実行結果で検証する。
 
 ## テストフィクスチャ設計
 
@@ -74,10 +105,10 @@ test('validates age at boundaries', () => {
 - 共有フィクスチャを変更して使い回さない（テスト間の独立性を保つ）
 
 ```typescript
-// NG - 全フィールドを毎回定義
+// 避ける例: 全フィールドを毎回定義
 const user = { id: '1', name: 'test', email: 'test@example.com', role: 'admin', createdAt: new Date() }
 
-// OK - ファクトリ関数で必要最小限
+// 例: ファクトリ関数で必要最小限
 const createUser = (overrides: Partial<User> = {}): User => ({
   id: 'test-id',
   name: 'test-user',
@@ -105,13 +136,13 @@ test('admin can delete', () => {
 | モジュール差し替え | テスト時にモジュール全体を差し替える |
 
 ```typescript
-// NG - 直接依存を生成（テストでモック不可）
+// 避ける例: 直接依存を生成（テストでモック不可）
 class OrderService {
   private repo = new OrderRepository()
   async create(order: Order) { return this.repo.save(order) }
 }
 
-// OK - コンストラクタ注入（テストでモック可能）
+// 例: コンストラクタ注入（テストでモック可能）
 class OrderService {
   constructor(private readonly repo: OrderRepository) {}
   async create(order: Order) { return this.repo.save(order) }

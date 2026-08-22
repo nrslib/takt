@@ -1,0 +1,135 @@
+import type {
+  CompanionQueueAuditEntry,
+  CompanionCallPurpose,
+  CompanionCallStatus,
+  CompanionModeratorAudit,
+  CompanionAcceptedFindingAudit,
+  CompanionReviewTrigger,
+  CompanionReviewPhase,
+  CompanionReviewSkipReason,
+  CompanionReviewZeroReason,
+  WorkflowEvents,
+} from '../types.js';
+import type { AgentResponse } from '../../models/index.js';
+import type { CompanionFinding, CompanionReviewMode } from '../../models/companion-types.js';
+import type { ProviderType } from '../../../shared/types/provider.js';
+
+type CompanionEventName = Extract<keyof WorkflowEvents, `companion:${string}`>;
+type CompanionEventArguments<TEvent extends CompanionEventName> = Parameters<WorkflowEvents[TEvent]>;
+export type CompanionEventEmitter = <TEvent extends CompanionEventName>(
+  event: TEvent,
+  ...args: CompanionEventArguments<TEvent>
+) => void;
+
+export class CompanionEventPublisher {
+  private completed = false;
+
+  constructor(
+    private readonly step: string,
+    private readonly emit: CompanionEventEmitter,
+    private readonly reviewMode: CompanionReviewMode,
+    private readonly runPathNamespace: readonly string[] = [],
+  ) {}
+
+  start(companion: string): void {
+    this.emit('companion:start', { step: this.step, companion, reviewMode: this.reviewMode });
+  }
+
+  poolSelected(selected: readonly string[], rationale: string): void {
+    this.emit('companion:pool_selected', {
+      step: this.step,
+      selected: [...selected],
+      rationale,
+    });
+  }
+
+  finding(finding: CompanionFinding): void {
+    this.emit('companion:finding', {
+      step: this.step,
+      companion: finding.companion,
+      severity: finding.severity,
+    });
+  }
+
+  fixRound(sequence: number, findingCount: number): void {
+    this.emit('companion:fix_round', { step: this.step, sequence, findingCount });
+  }
+
+  complete(input: {
+    completionSettled: boolean;
+    completionFailure: boolean;
+    followUpRounds: number;
+    reason?: string;
+  }): void {
+    if (this.completed) throw new Error(`Companion completion already published for "${this.step}"`);
+    this.completed = true;
+    this.emit('companion:complete', { step: this.step, ...input });
+  }
+
+  beginAttempt(): void {
+    this.completed = false;
+  }
+
+  reviewRound(input: {
+    companion: string;
+    trigger: CompanionReviewTrigger;
+    digest: string;
+    changedLines: number;
+    findingCount: number;
+    reviewerFindings: readonly CompanionAcceptedFindingAudit[];
+    moderator?: CompanionModeratorAudit;
+    acceptedFindings: readonly CompanionAcceptedFindingAudit[];
+    zeroReason?: CompanionReviewZeroReason;
+  }): void {
+    this.emit('companion:review_round', {
+      step: this.step,
+      reviewMode: this.reviewMode,
+      ...input,
+      ...this.scopePayload(),
+    });
+  }
+
+  queueCoalesced(input: {
+    companion: string;
+    replaced: CompanionQueueAuditEntry;
+    replacement: CompanionQueueAuditEntry;
+  }): void {
+    this.emit('companion:queue_coalesced', {
+      step: this.step,
+      ...input,
+      ...this.scopePayload(),
+    });
+  }
+
+  call(input: {
+    agent: string;
+    purpose: CompanionCallPurpose;
+    attempt: number;
+    status: CompanionCallStatus;
+    provider: ProviderType;
+    model?: string;
+    systemPrompt?: string;
+    prompt?: string;
+    promptResolved: boolean;
+    response?: AgentResponse;
+    error?: string;
+  }): void {
+    this.emit('companion:call', { step: this.step, ...input, ...this.scopePayload() });
+  }
+
+  reviewSkipped(input: {
+    companion?: string;
+    phase: CompanionReviewPhase;
+    reason: CompanionReviewSkipReason;
+    fixRound?: number;
+    observedGeneration?: number;
+  }): void {
+    this.emit('companion:review_skipped', { step: this.step, ...input, ...this.scopePayload() });
+  }
+
+  private scopePayload(): { runPathNamespace?: string[] } {
+    return this.runPathNamespace.length === 0
+      ? {}
+      : { runPathNamespace: [...this.runPathNamespace] };
+  }
+}

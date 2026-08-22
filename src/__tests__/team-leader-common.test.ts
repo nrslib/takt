@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { PartDefinition, WorkflowStep } from '../core/models/types.js';
 import { createPartStep, createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
+import {
+  summarizePartResultForFeedback,
+  TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS,
+} from '../core/workflow/engine/team-leader-part-report.js';
+import {
+  resolveDirectStepProviderOptions,
+  resolveStepCapabilityProviderOptions,
+} from '../infra/config/providerOptions.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { makeInstructionContext } from './test-helpers.js';
 
 describe('createPartStep', () => {
   it('Given teamLeader.partTags, When creating a part step, Then part tags replace parent tags', () => {
@@ -14,8 +24,6 @@ describe('createPartStep', () => {
       teamLeader: {
         persona: 'leader',
         maxConcurrency: 3,
-        maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 900000,
         partTags: ['coding'],
       },
@@ -42,8 +50,6 @@ describe('createPartStep', () => {
       teamLeader: {
         persona: 'leader',
         maxConcurrency: 3,
-        maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 900000,
       },
     };
@@ -58,7 +64,7 @@ describe('createPartStep', () => {
     expect(partStep.tags).toEqual(['leader']);
   });
 
-  it('keeps parent providerOptions intact so part option resolution stays in OptionsBuilder', () => {
+  it('keeps engine-owned providerOptions intact so part option resolution stays in OptionsBuilder', () => {
     // Given
     const step: WorkflowStep = {
       name: 'implement',
@@ -66,6 +72,7 @@ describe('createPartStep', () => {
       personaDisplayName: 'Coder',
       instruction: 'do work',
       passPreviousResponse: false,
+      engineSynthesized: true,
       providerOptions: {
         codex: {
           networkAccess: false,
@@ -85,8 +92,6 @@ describe('createPartStep', () => {
       teamLeader: {
         persona: 'leader',
         maxConcurrency: 3,
-        maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 900000,
       },
     };
@@ -103,6 +108,31 @@ describe('createPartStep', () => {
     expect(partStep.providerOptions).toEqual(step.providerOptions);
   });
 
+  it('should carry engine and capability provider options when creating a part step', () => {
+    // 通常 workflow step に provider execution options は存在しない。
+    // ただし engine が合成した part step と capabilities の options は保持する。
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'Coder',
+      instruction: 'do work',
+      passPreviousResponse: false,
+      engineSynthesized: true,
+      providerOptions: { codex: { networkAccess: true } },
+      capabilityProviderOptions: { claude: { allowedTools: ['Read'] } },
+      teamLeader: {
+        persona: 'leader',
+        maxConcurrency: 3,
+        timeoutMs: 900000,
+      },
+    };
+
+    const partStep = createPartStep(step, { id: 'part-1', title: 'API', instruction: 'implement api' });
+
+    expect(resolveDirectStepProviderOptions(partStep)).toEqual({ codex: { networkAccess: true } });
+    expect(resolveStepCapabilityProviderOptions(partStep)).toEqual({ claude: { allowedTools: ['Read'] } });
+  });
+
   it('keeps part personaDisplayName aligned with the part persona for personaProviders lookup', () => {
     const step: WorkflowStep = {
       name: 'implement',
@@ -114,8 +144,6 @@ describe('createPartStep', () => {
       teamLeader: {
         persona: 'leader',
         maxConcurrency: 3,
-        maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 600000,
         partPersona: 'coder',
       },
@@ -133,9 +161,102 @@ describe('createPartStep', () => {
     expect(partStep.personaDisplayName).toBe('coder');
     expect(partStep.allowGitCommit).toBe(true);
   });
+
+  it('inherits parent facets while keeping members isolated from previous responses', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'decompose work',
+      passPreviousResponse: true,
+      policyContents: [{ content: 'policy content' }],
+      knowledgeContents: [{ content: 'knowledge content' }],
+      qualityGates: ['run focused tests'],
+      teamLeader: {
+        maxConcurrency: 1,
+        timeoutMs: 900000,
+      },
+    };
+
+    const partStep = createPartStep(step, {
+      id: 'part-1',
+      title: 'API',
+      instruction: 'implement api',
+    });
+
+    expect(partStep).toEqual(expect.objectContaining({
+      session: 'refresh',
+      instruction: 'implement api',
+      passPreviousResponse: false,
+      policyContents: [{ content: 'policy content' }],
+      knowledgeContents: [{ content: 'knowledge content' }],
+      qualityGates: ['run focused tests'],
+    }));
+
+  });
+
+  it('does not copy dynamic facet or companion configuration to worker parts', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'decompose work',
+      passPreviousResponse: false,
+      dynamicFacets: { pool: 'team-facets', maxSelected: 1 },
+      companion: { fixed: ['reviewer'], pool: [] },
+      teamLeader: {
+        maxConcurrency: 1,
+        timeoutMs: 900000,
+      },
+    };
+
+    const partStep = createPartStep(step, {
+      id: 'part-1',
+      title: 'API',
+      instruction: 'implement api',
+    });
+
+    expect(partStep).not.toHaveProperty('dynamicFacets');
+    expect(partStep).not.toHaveProperty('companion');
+  });
 });
 
 describe('createTeamLeaderPlanningStep', () => {
+  it('adds mailbox pull guidance to the planning prompt without adding it to worker parts', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'plan the implementation',
+      passPreviousResponse: false,
+      teamLeader: {
+        persona: 'lead',
+        maxConcurrency: 2,
+        timeoutMs: 900000,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    };
+    const context = makeInstructionContext({
+      companion: { mailboxDirectory: '/tmp/takt-mailbox' },
+    });
+
+    const planningPrompt = new InstructionBuilder(
+      createTeamLeaderPlanningStep(step),
+      context,
+    ).build();
+    const partPrompt = new InstructionBuilder(
+      createPartStep(step, {
+        id: 'part-1',
+        title: 'Implementation',
+        instruction: 'Implement the change',
+      }),
+      context,
+    ).build();
+
+    expect(planningPrompt).toContain('/tmp/takt-mailbox');
+    expect(partPrompt).not.toContain('/tmp/takt-mailbox');
+  });
+
   it('uses team leader persona identity for provider resolution', () => {
     const step: WorkflowStep = {
       name: 'implement',
@@ -149,8 +270,6 @@ describe('createTeamLeaderPlanningStep', () => {
         personaDisplayName: 'lead',
         providerRoutingPersonaKey: 'lead',
         maxConcurrency: 3,
-        maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 900000,
       },
     };
@@ -161,6 +280,7 @@ describe('createTeamLeaderPlanningStep', () => {
       persona: 'lead',
       personaDisplayName: 'lead',
       providerRoutingPersonaKey: 'lead',
+      preserveFullPreviousResponse: true,
     }));
   });
 
@@ -174,8 +294,6 @@ describe('createTeamLeaderPlanningStep', () => {
       passPreviousResponse: false,
       teamLeader: {
         maxConcurrency: 3,
-        maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 900000,
       },
     };
@@ -183,5 +301,54 @@ describe('createTeamLeaderPlanningStep', () => {
     const planningStep = createTeamLeaderPlanningStep(step);
 
     expect(planningStep.providerRoutingPersonaKey).toBe('coder');
+  });
+
+  it('preserves the complete previous state output for the parent planning prompt only', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Plan from {previous_response}',
+      passPreviousResponse: true,
+      teamLeader: {
+        maxConcurrency: 2,
+        timeoutMs: 900000,
+      },
+    };
+    const previousOutput = `${'a'.repeat(2500)}\nTAIL_FINDING: preserve this`;
+    const context = makeInstructionContext({
+      previousOutput: {
+        persona: 'review',
+        status: 'done',
+        content: previousOutput,
+        timestamp: new Date(),
+      },
+    });
+
+    const parentPrompt = new InstructionBuilder(createTeamLeaderPlanningStep(step), context).build();
+    const memberPrompt = new InstructionBuilder(createPartStep(step, {
+      id: 'part-1',
+      title: 'Implementation',
+      instruction: 'Implement the change',
+    }), context).build();
+
+    expect(parentPrompt).toContain('TAIL_FINDING: preserve this');
+    expect(parentPrompt).toContain('a'.repeat(2500));
+    expect(memberPrompt).not.toContain('TAIL_FINDING: preserve this');
+  });
+});
+
+describe('summarizePartResultForFeedback', () => {
+  it('returns the full content when it does not exceed the max chars', () => {
+    const content = 'x'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS);
+    expect(summarizePartResultForFeedback(content)).toBe(content);
+  });
+
+  it('keeps the whole summary, including the truncation notice, within the max chars', () => {
+    const content = 'y'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS + 1234);
+    const result = summarizePartResultForFeedback(content);
+    expect(result.length).toBeLessThanOrEqual(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS);
+    expect(result.startsWith('yyyy')).toBe(true);
+    expect(result).toMatch(/\[truncated: \d+ chars; see report file for full content\]$/);
   });
 });

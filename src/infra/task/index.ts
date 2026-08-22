@@ -17,10 +17,15 @@ export type {
 // Classes
 export { CloneManager } from './clone.js';
 export { AutoCommitter } from './autoCommit.js';
-export { TaskSummarizer } from './summarize.js';
 export { BranchManager } from './branchList.js';
 
 export { TaskRunner } from './runner.js';
+export type {
+  AutoRequeueResult,
+  AutoRequeueSkipReason,
+  TaskRetryOptions,
+} from './taskRetryService.js';
+export { buildAutoRequeueNote } from './retryNote.js';
 
 export { showTaskList } from './display.js';
 export {
@@ -71,9 +76,22 @@ export {
   getOriginalInstruction,
   buildListItems,
 } from './branchList.js';
-export { stageAndCommit, getCurrentBranch, pushBranch, checkoutBranch, relayPushCloneToOrigin, materializeCloneHeadToRootBranch } from './git.js';
+export {
+  stageAndCommit,
+  getCurrentBranch,
+  pushBranch,
+  publishTaskBranch,
+  checkoutBranch,
+  materializePullRequestBase,
+  relayPushCloneToOrigin,
+  materializeCloneHeadToRootBranch,
+} from './git.js';
 export { buildTaskInstruction } from './instruction.js';
-export { autoCommitAndPush, type AutoCommitResult } from './autoCommit.js';
+export {
+  autoCommitAndPush,
+  resolveAutoCommitOptions,
+  type AutoCommitResult,
+} from './autoCommit.js';
 export { summarizeTaskName } from './summarize.js';
 export { TaskWatcher, type TaskWatcherOptions } from './watcher.js';
 export { isStaleRunningTask } from './process.js';

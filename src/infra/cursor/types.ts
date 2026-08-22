@@ -3,7 +3,7 @@
  */
 
 import type { PermissionMode } from '../../core/models/index.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for calling Cursor Agent CLI */
 export interface CursorCallOptions {
@@ -14,8 +14,11 @@ export interface CursorCallOptions {
   systemPrompt?: string;
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   cursorApiKey?: string;
   /** Custom path to cursor-agent executable */
   cursorCliPath?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
 }

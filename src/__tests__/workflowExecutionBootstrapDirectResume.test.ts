@@ -1,27 +1,42 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
+import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+
+const TEST_TMPDIR = realpathSync(tmpdir());
 
 const {
   mockWriteFileAtomic,
   mockResolveWorkflowConfigValues,
+  mockResolveConfigValueWithSource,
+  mockToProviderResolutionSource,
   mockCreateOutputFns,
   mockInitializeOtelFoundation,
-  mockEnsureWorktreeTaktGitignore,
+  mockEnsureWorktreeTaktRuntimeProtection,
+  mockIsValidReportDirName,
+  mockLogWarn,
+  mockValidateWorkflowCallContracts,
 } = vi.hoisted(() => ({
   mockWriteFileAtomic: vi.fn(),
   mockResolveWorkflowConfigValues: vi.fn(),
+  mockResolveConfigValueWithSource: vi.fn(),
+  mockToProviderResolutionSource: vi.fn((source: string | undefined) => source),
   mockCreateOutputFns: vi.fn(),
   mockInitializeOtelFoundation: vi.fn(),
-  mockEnsureWorktreeTaktGitignore: vi.fn(),
+  mockEnsureWorktreeTaktRuntimeProtection: vi.fn(),
+  mockIsValidReportDirName: vi.fn((_slug: string) => true),
+  mockLogWarn: vi.fn(),
+  mockValidateWorkflowCallContracts: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
   ensureDir: vi.fn(),
   loadPersonaSessions: vi.fn(() => ({})),
   loadWorktreeSessions: vi.fn(() => ({})),
+  loadProjectConfig: vi.fn(() => ({})),
+  loadGlobalConfig: vi.fn(() => ({})),
   resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
   updatePersonaSession: vi.fn(),
   updateWorktreeSession: vi.fn(),
@@ -29,7 +44,8 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 vi.mock('../infra/config/resolveConfigValue.js', () => ({
-  resolveConfigValueWithSource: vi.fn(() => ({ value: 'mock', source: 'global' })),
+  resolveConfigValueWithSource: mockResolveConfigValueWithSource,
+  toProviderResolutionSource: mockToProviderResolutionSource,
   resolveProviderOptionsWithTrace: vi.fn(() => ({
     value: undefined,
     source: 'default',
@@ -39,6 +55,7 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 
 vi.mock('../infra/config/paths.js', () => ({
   getGlobalConfigDir: vi.fn(() => '/tmp/.takt'),
+  getProjectConfigDir: vi.fn((projectDir: string) => `${projectDir}/.takt`),
 }));
 
 vi.mock('../infra/fs/index.js', () => ({
@@ -64,26 +81,28 @@ vi.mock('../shared/ui/TaskPrefixWriter.js', () => ({
   })),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn(() => ({
     debug: vi.fn(),
     info: vi.fn(),
     error: vi.fn(),
+    warn: mockLogWarn,
   })),
   generateReportDir: vi.fn(() => 'generated-run'),
-  getDebugPromptsLogFile: vi.fn(() => undefined),
-  isValidReportDirName: vi.fn(() => true),
+  isPathInside: vi.fn(() => true),
+  isValidReportDirName: mockIsValidReportDirName,
   preventSleep: vi.fn(),
 }));
 
-vi.mock('../shared/utils/providerEventLogger.js', () => ({
+vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn(() => ({
-    wrapCallback: (handler: unknown) => handler,
+    logEvent: vi.fn(),
   })),
   isProviderEventsEnabled: vi.fn(() => false),
 }));
 
-vi.mock('../shared/utils/usageEventLogger.js', () => ({
+vi.mock('../core/logging/usageEventLogger.js', () => ({
   createUsageEventLogger: vi.fn(() => ({})),
   isUsageEventsEnabled: vi.fn(() => false),
 }));
@@ -93,7 +112,7 @@ vi.mock('../infra/observability/otelFoundation.js', () => ({
 }));
 
 vi.mock('../infra/task/projectLocalTaktSync.js', () => ({
-  ensureWorktreeTaktGitignore: mockEnsureWorktreeTaktGitignore,
+  ensureWorktreeTaktRuntimeProtection: mockEnsureWorktreeTaktRuntimeProtection,
 }));
 
 vi.mock('../features/analytics/index.js', () => ({
@@ -105,16 +124,12 @@ vi.mock('../features/tasks/execute/analyticsEmitter.js', () => ({
 }));
 
 vi.mock('../agents/structured-caller.js', () => ({
-  CapabilityAwareStructuredCaller: vi.fn().mockImplementation(() => ({})),
+  ProviderNeutralStructuredCaller: vi.fn().mockImplementation(() => ({})),
 }));
 
 vi.mock('../features/tasks/execute/outputFns.js', () => ({
   createOutputFns: mockCreateOutputFns,
   createPrefixedStreamHandler: vi.fn(() => vi.fn()),
-}));
-
-vi.mock('../features/tasks/execute/traceReportWriter.js', () => ({
-  createTraceReportWriter: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('../features/tasks/execute/sessionLogger.js', () => ({
@@ -127,7 +142,99 @@ vi.mock('../core/runtime/runtime-environment.js', () => ({
   resolveRuntimeConfig: vi.fn(() => undefined),
 }));
 
-import { createWorkflowExecutionBootstrap } from '../features/tasks/execute/workflowExecutionBootstrap.js';
+vi.mock('../infra/config/loaders/workflowResolver.js', () => ({
+  validateWorkflowCallContracts: mockValidateWorkflowCallContracts,
+  isWorkflowPath: vi.fn(() => false),
+  loadWorkflowByIdentifierForWorkflowCall: vi.fn(() => null),
+}));
+
+import {
+  createWorkflowExecutionBootstrap as createWorkflowExecutionBootstrapImpl,
+  resolveWorkflowExecutionResumeLineage,
+} from '../features/tasks/execute/workflowExecutionBootstrap.js';
+import type {
+  WorkflowRunBootstrap,
+} from '../features/tasks/execute/workflowRunLifecycle.js';
+import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import type { RunMeta } from '../core/workflow/run/run-meta.js';
+import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
+import { createOperationJournalStore } from '../infra/workflow/operation-journal-store.js';
+import {
+  generateReportDir,
+  isValidReportDirName,
+} from '../shared/utils/index.js';
+
+async function createWorkflowExecutionBootstrap(
+  ...args: [
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[0],
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[1],
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[2],
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[3],
+  ]
+) {
+  const runBootstrap = createRunBootstrap({
+    cwd: args[2],
+    task: args[1],
+    requestedRunSlug: args[3].reportDirName,
+    resumeSource: args[3].resumeSource,
+  });
+  return await createWorkflowExecutionBootstrapImpl(
+    ...args,
+    runBootstrap,
+    resolveWorkflowExecutionResumeLineage(
+      args[2],
+      runBootstrap.runSlug,
+      args[3].resumeSource,
+    ),
+  );
+}
+
+function createRunBootstrap(setup: {
+  readonly cwd: string;
+  readonly task: string;
+  readonly requestedRunSlug?: string;
+  readonly resumeSource?: Parameters<typeof createWorkflowExecutionBootstrapImpl>[3]['resumeSource'];
+}): WorkflowRunBootstrap {
+  const runSlug = setup.requestedRunSlug
+    ?? (setup.resumeSource?.sourceRunSlug === undefined
+      ? generateReportDir(setup.task)
+      : generateExecutionReportDir(setup.cwd, setup.task));
+  if (!isValidReportDirName(runSlug)) {
+    throw new Error(`Invalid reportDirName: ${runSlug}`);
+  }
+  if (setup.resumeSource?.sourceRunSlug === runSlug) {
+    throw new Error(
+      `Workflow resume requires distinct source and target run slugs: `
+      + `"${runSlug}"`,
+    );
+  }
+  return {
+    runSlug,
+    runPaths: buildRunPaths(setup.cwd, runSlug),
+    startedAt: '2026-08-01T00:00:00.000Z',
+    sessionId: 'test-session-id',
+    publishRunMeta(input): RunMetaManager {
+      return new RunMetaManager(
+        input.runPaths,
+        input.task,
+        input.workflowName,
+        input.resumeSource,
+        input.options,
+      );
+    },
+  };
+}
+import { initAnalyticsWriter } from '../features/analytics/index.js';
+import {
+  attachWorkflowOpaqueRef,
+  attachWorkflowSourcePath,
+  attachWorkflowTrustInfo,
+  getAttachedWorkflowOpaqueRef,
+  getAttachedWorkflowTrustInfo,
+  getWorkflowSourcePath,
+  inheritWorkflowConfigMetadata,
+} from '../shared/workflowConfigMetadata.js';
 
 const workflowConfig: WorkflowConfig = {
   name: 'default',
@@ -138,12 +245,80 @@ const workflowConfig: WorkflowConfig = {
   ],
 };
 
+function createAutoRoutingConfig(): NonNullable<WorkflowConfig['autoRouting']> {
+  return {
+    strategy: 'cost',
+    router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+    candidates: [
+      {
+        name: 'reasoning',
+        description: 'Reasoning',
+        provider: 'claude-sdk',
+        model: 'claude-opus-4-20250514',
+        routingTier: 'high',
+      },
+      {
+        name: 'coding',
+        description: 'Implementation',
+        provider: 'codex',
+        model: 'gpt-5',
+        routingTier: 'medium',
+      },
+      {
+        name: 'lightweight',
+        description: 'Formatting',
+        provider: 'claude-sdk',
+        model: 'claude-haiku-4-5-20251001',
+        routingTier: 'low',
+      },
+    ],
+    defaultPool: 'general',
+    candidatePools: { general: { candidates: ['reasoning', 'coding', 'lightweight'], fallback: 'reasoning' } },
+  };
+}
+
 const temporaryDirs: string[] = [];
 
 function createTempProject(): string {
-  const projectDir = mkdtempSync(join(tmpdir(), 'takt-direct-resume-'));
+  const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-direct-resume-'));
   temporaryDirs.push(projectDir);
   return projectDir;
+}
+
+function seedResumeSourceRun(
+  projectDir: string,
+  slug = '20260524-source-run',
+  options?: {
+    readonly sourceRunSlug?: string;
+    readonly journalRunSlug?: string;
+    readonly claimToken?: string;
+    readonly status?: RunMeta['status'];
+  },
+): void {
+  mkdirSync(
+    join(projectDir, '.takt', 'runs', slug, 'reports'),
+    { recursive: true },
+  );
+  writeFileSync(
+    join(projectDir, '.takt', 'runs', slug, 'meta.json'),
+    JSON.stringify({
+      task: 'Resume source',
+      workflow: 'default',
+      runSlug: slug,
+      runRoot: `.takt/runs/${slug}`,
+      reportDirectory: `.takt/runs/${slug}/reports`,
+      contextDirectory: `.takt/runs/${slug}/context`,
+      logsDirectory: `.takt/runs/${slug}/logs`,
+      status: options?.status ?? 'failed',
+      startTime: '2026-05-24T00:00:00.000Z',
+      operation_journal_run_slug: options?.journalRunSlug ?? '20260524-source-run',
+      operation_claim_token: options?.claimToken ?? 'claim-a',
+      ...(options?.sourceRunSlug === undefined
+        ? {}
+        : { source_run_slug: options.sourceRunSlug, resume_mode: 'requeue' }),
+    }),
+    'utf-8',
+  );
 }
 
 function hasTasksYamlWrite(): boolean {
@@ -162,6 +337,23 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       result: vi.fn(),
     });
     mockInitializeOtelFoundation.mockResolvedValue({ shutdown: vi.fn() });
+    mockIsValidReportDirName.mockReset();
+    mockIsValidReportDirName.mockReturnValue(true);
+    mockLogWarn.mockReset();
+    mockResolveConfigValueWithSource.mockReset();
+    mockResolveConfigValueWithSource.mockImplementation((
+      _projectCwd: string,
+      key: 'provider' | 'model',
+      config?: { workflowContext?: { provider?: string; model?: string } },
+    ) => {
+      const workflowValue = config?.workflowContext?.[key];
+      if (workflowValue !== undefined) {
+        return { value: workflowValue, source: 'workflow' };
+      }
+      return key === 'provider'
+        ? { value: 'mock', source: 'global' }
+        : { value: undefined, source: 'default' };
+    });
     mockResolveWorkflowConfigValues.mockReturnValue({
       provider: 'mock',
       model: undefined,
@@ -185,19 +377,810 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     }
   });
 
-  it('Given directResume is passed, When bootstrap creates run meta, Then source metadata is persisted in meta.json', async () => {
-    await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', '/project', {
+  it('preserves workflow metadata on the effective execution config', async () => {
+    const projectDir = createTempProject();
+    const config = attachWorkflowOpaqueRef(
+      attachWorkflowTrustInfo(
+        attachWorkflowSourcePath({ ...workflowConfig }, join(projectDir, '.takt', 'workflows', 'default.yaml')),
+        { source: 'project' },
+      ),
+      'project:sha256:workflow',
+    );
+
+    const bootstrap = await createWorkflowExecutionBootstrap(config, 'Run metadata workflow', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+    });
+
+    expect(getWorkflowSourcePath(bootstrap.effectiveWorkflowConfig)).toBe(join(projectDir, '.takt', 'workflows', 'default.yaml'));
+    expect(getAttachedWorkflowTrustInfo(bootstrap.effectiveWorkflowConfig)).toEqual({ source: 'project' });
+    expect(getAttachedWorkflowOpaqueRef(bootstrap.effectiveWorkflowConfig)).toBe('project:sha256:workflow');
+  });
+
+  it('keeps workflow metadata absent when the source config has no metadata', async () => {
+    const projectDir = createTempProject();
+
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      { ...workflowConfig },
+      'Run workflow without metadata',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+      },
+    );
+
+    expect(getWorkflowSourcePath(bootstrap.effectiveWorkflowConfig)).toBeUndefined();
+    expect(getAttachedWorkflowTrustInfo(bootstrap.effectiveWorkflowConfig)).toBeUndefined();
+    expect(getAttachedWorkflowOpaqueRef(bootstrap.effectiveWorkflowConfig)).toBeUndefined();
+  });
+
+  it('root workflow と設定に provider がなければ fail-fast する', async () => {
+    const projectDir = createTempProject();
+    mockResolveConfigValueWithSource
+      .mockReturnValueOnce({ value: undefined, source: 'default' })
+      .mockReturnValueOnce({ value: undefined, source: 'default' });
+
+    await expect(createWorkflowExecutionBootstrap(
+      { ...workflowConfig, provider: undefined, model: undefined },
+      'Run provider-less wrapper',
+      projectDir,
+      { projectCwd: projectDir },
+    )).rejects.toThrow('No provider configured');
+  });
+
+  it.each([
+    { initialIterationOverride: 50, maxStepsOverride: undefined, expectedMaxSteps: 51 },
+    { initialIterationOverride: 56, maxStepsOverride: undefined, expectedMaxSteps: 102 },
+    { initialIterationOverride: 56, maxStepsOverride: 102, expectedMaxSteps: 102 },
+    { initialIterationOverride: 102, maxStepsOverride: 102, expectedMaxSteps: 153 },
+    { initialIterationOverride: 205, maxStepsOverride: undefined, expectedMaxSteps: 255 },
+  ])(
+    'resolves max steps to $expectedMaxSteps for restored iteration $initialIterationOverride',
+    async ({ initialIterationOverride, maxStepsOverride, expectedMaxSteps }) => {
+      const projectDir = createTempProject();
+      const bootstrap = await createWorkflowExecutionBootstrap(
+        { ...workflowConfig, maxSteps: 51 },
+        'Resume workflow iteration',
+        projectDir,
+        {
+          projectCwd: projectDir,
+          provider: 'mock',
+          initialIterationOverride,
+          ...(maxStepsOverride === undefined ? {} : { maxStepsOverride }),
+        },
+      );
+
+      expect(bootstrap.effectiveWorkflowConfig.maxSteps).toBe(expectedMaxSteps);
+    },
+  );
+
+  it('should use the latest workflow max steps when the workflow definition changes', async () => {
+    const projectDir = createTempProject();
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      { ...workflowConfig, maxSteps: 60 },
+      'Resume changed workflow iteration',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        initialIterationOverride: 102,
+        maxStepsOverride: 102,
+      },
+    );
+
+    expect(bootstrap.effectiveWorkflowConfig.maxSteps).toBe(162);
+  });
+
+  it('should allow an additive extension when it reaches the safe integer boundary exactly', async () => {
+    const projectDir = createTempProject();
+    const maxStepsOverride = Number.MAX_SAFE_INTEGER - 51;
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      { ...workflowConfig, maxSteps: 51 },
+      'Resume workflow at safe integer boundary',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        initialIterationOverride: maxStepsOverride,
+        maxStepsOverride,
+      },
+    );
+
+    expect(bootstrap.effectiveWorkflowConfig.maxSteps).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('keeps an infinite max steps limit when restoring an iteration', async () => {
+    const projectDir = createTempProject();
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      { ...workflowConfig, maxSteps: 'infinite' },
+      'Resume workflow iteration',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        initialIterationOverride: 56,
+      },
+    );
+
+    expect(bootstrap.effectiveWorkflowConfig.maxSteps).toBe('infinite');
+  });
+
+  it.each([
+    { initialIterationOverride: 7, expectedMaxSteps: 12 },
+    { initialIterationOverride: 12, expectedMaxSteps: 24 },
+  ])(
+    'should double a finite override to $expectedMaxSteps when an infinite workflow is restored at $initialIterationOverride',
+    async ({ initialIterationOverride, expectedMaxSteps }) => {
+      const projectDir = createTempProject();
+      const bootstrap = await createWorkflowExecutionBootstrap(
+        { ...workflowConfig, maxSteps: 'infinite' },
+        'Resume infinite workflow iteration',
+        projectDir,
+        {
+          projectCwd: projectDir,
+          provider: 'mock',
+          initialIterationOverride,
+          maxStepsOverride: 3,
+        },
+      );
+
+      expect(bootstrap.effectiveWorkflowConfig.maxSteps).toBe(expectedMaxSteps);
+    },
+  );
+
+  it('should reject an infinite workflow override when doubling exceeds the safe integer range', async () => {
+    const projectDir = createTempProject();
+    const maxStepsOverride = Math.floor(Number.MAX_SAFE_INTEGER / 2) + 1;
+
+    await expect(createWorkflowExecutionBootstrap(
+      { ...workflowConfig, maxSteps: 'infinite' },
+      'Resume infinite workflow beyond safe integer range',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        initialIterationOverride: maxStepsOverride,
+        maxStepsOverride,
+      },
+    )).rejects.toThrow();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    expect(mockCreateOutputFns).not.toHaveBeenCalled();
+  });
+
+  it('should reject a restored iteration when the next finite limit is not safely representable', async () => {
+    const projectDir = createTempProject();
+    const maxStepsOverride = Number.MAX_SAFE_INTEGER - 50;
+
+    await expect(createWorkflowExecutionBootstrap(
+      { ...workflowConfig, maxSteps: 51 },
+      'Resume workflow iteration',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        initialIterationOverride: maxStepsOverride,
+        maxStepsOverride,
+      },
+    )).rejects.toThrow();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    expect(mockCreateOutputFns).not.toHaveBeenCalled();
+  });
+
+  it('does not replace metadata already attached to the inheritance target', () => {
+    const source = attachWorkflowSourcePath({}, '/source/workflow.yaml');
+    const target = attachWorkflowSourcePath({}, '/target/workflow.yaml');
+
+    expect(() => inheritWorkflowConfigMetadata(source, target)).not.toThrow();
+    expect(getWorkflowSourcePath(target)).toBe('/target/workflow.yaml');
+  });
+
+  it('deeply freezes attached trust metadata and reuses its frozen instance', () => {
+    const workflow = attachWorkflowTrustInfo({}, {
+      source: 'project',
+      nested: { roots: ['/project'] },
+    });
+
+    const first = getAttachedWorkflowTrustInfo(workflow) as {
+      nested: { roots: string[] };
+    };
+    const second = getAttachedWorkflowTrustInfo(workflow);
+
+    expect(second).toBe(first);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first.nested)).toBe(true);
+    expect(Object.isFrozen(first.nested.roots)).toBe(true);
+  });
+
+  it('Given workflow auto_routing and a strategy override, When bootstrap resolves config, Then it delegates override application to the engine', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      provider: 'mock',
+      autoRouting: createAutoRoutingConfig(),
+    }, 'Run auto workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given a strategy override requires a missing tier, When bootstrap resolves config, Then it delegates validation to the engine', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      provider: 'mock',
+      autoRouting: {
+        strategy: 'cost',
+        router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+        candidates: [
+          {
+            name: 'coding',
+            description: 'Implementation',
+            provider: 'codex',
+            model: 'gpt-5',
+            routingTier: 'medium',
+          },
+        ],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
+      },
+    }, 'Run auto workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+  });
+
+  it('Given a workflow has no provider field, When bootstrap resolves provider, Then legacy config provider is used', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValueOnce({
+      provider: undefined,
+      model: undefined,
+      language: 'en',
+      notificationSound: false,
+      notificationSoundEvents: {},
+      rateLimitFallback: undefined,
+      runtime: undefined,
+      preventSleep: false,
+      logging: {},
+      analytics: { enabled: false },
+      observability: {},
+      personaProviders: {},
+      providerProfiles: undefined,
+    });
+
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+    }, 'Run workflow-level auto provider', '/project', {
+      projectCwd: '/project',
+    });
+
+    expect(bootstrap.currentProvider).toBe('mock');
+    expect(bootstrap.currentProviderSource).toBe('global');
+  });
+
+  it('provider と model の value/source を同じ traced resolution から保持する', async () => {
+    mockResolveConfigValueWithSource.mockImplementation((
+      _projectCwd: string,
+      key: 'provider' | 'model',
+    ) => key === 'provider'
+      ? { value: 'codex', source: 'project' }
+      : { value: 'project-model', source: 'project' });
+
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      provider: 'claude',
+      model: 'workflow-model',
+    }, 'Run traced provider resolution', '/project', {
+      projectCwd: '/project',
+    });
+
+    expect(bootstrap.currentProvider).toBe('codex');
+    expect(bootstrap.currentProviderSource).toBe('project');
+    expect(bootstrap.configuredModel).toBe('project-model');
+    expect(bootstrap.configuredModelSource).toBe('project');
+    expect(mockValidateWorkflowCallContracts).toHaveBeenCalledWith(
+      expect.objectContaining({ name: workflowConfig.name }),
+      '/project',
+      '/project',
+    );
+  });
+
+  it('traced provider resolution の設定エラーを握りつぶさない', async () => {
+    mockResolveConfigValueWithSource.mockImplementation(() => {
+      throw new Error('invalid traced config');
+    });
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Run invalid config', '/project', {
+      projectCwd: '/project',
+    })).rejects.toThrow('invalid traced config');
+  });
+
+  it('Given no effective auto_routing and autoStrategy, When bootstrap resolves config, Then strategy override is ignored with warning', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, 'Run concrete workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    bootstrap.warnIfAutoStrategyUnused();
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringMatching(/auto_routing/i));
+  });
+
+  it('Given CLI provider is concrete and config-level auto_routing exists, When bootstrap resolves config, Then autoStrategy applies', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValueOnce({
+      provider: 'mock',
+      model: undefined,
+      language: 'en',
+      notificationSound: false,
+      notificationSoundEvents: {},
+      rateLimitFallback: undefined,
+      runtime: undefined,
+      preventSleep: false,
+      logging: {},
+      analytics: { enabled: false },
+      observability: {},
+      autoRouting: createAutoRoutingConfig(),
+      personaProviders: {},
+      providerProfiles: undefined,
+    });
+
+    const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, 'Run concrete CLI provider', '/project', {
       projectCwd: '/project',
       provider: 'mock',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.currentProvider).toBe('mock');
+    expect(bootstrap.autoRouting?.strategy).toBe('cost');
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given CLI provider and workflow auto_routing coexist, When bootstrap resolves config, Then autoStrategy applies independently of provider', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      provider: 'mock',
+      autoRouting: createAutoRoutingConfig(),
+      steps: [
+        {
+          name: 'fix',
+          provider: 'mock',
+          providerSpecified: false,
+          personaDisplayName: 'Fixer',
+          instruction: 'Fix',
+          rules: [],
+        },
+      ],
+    }, 'Run workflow-level auto with concrete CLI provider', '/project', {
+      projectCwd: '/project',
+      provider: 'mock',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.currentProvider).toBe('mock');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given a parallel workflow and effective auto_routing, When bootstrap resolves config, Then autoStrategy applies', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      provider: 'mock',
+      initialStep: 'reviewers',
+      autoRouting: createAutoRoutingConfig(),
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'Reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'coding-review',
+              provider: 'mock',
+              providerSpecified: false,
+              persona: 'reviewer',
+              instruction: 'Review code',
+            },
+          ],
+          rules: [],
+        },
+      ],
+    }, 'Run inherited parallel auto with concrete CLI provider', '/project', {
+      projectCwd: '/project',
+      provider: 'mock',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.currentProvider).toBe('mock');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given a concrete step and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      autoRouting: createAutoRoutingConfig(),
+      steps: [
+        { name: 'fix', provider: 'mock', personaDisplayName: 'Fixer', instruction: 'Fix', rules: [] },
+      ],
+    }, 'Run step auto workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given a concrete parallel sub-step and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      initialStep: 'reviewers',
+      autoRouting: createAutoRoutingConfig(),
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'Reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            { name: 'coding-review', provider: 'mock', persona: 'reviewer', instruction: 'Review code' },
+          ],
+          rules: [],
+        },
+      ],
+    }, 'Run parallel auto workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given a concrete workflow_call override and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      initialStep: 'call-child',
+      autoRouting: createAutoRoutingConfig(),
+      steps: [
+        {
+          name: 'call-child',
+          kind: 'workflow_call',
+          call: 'child',
+          overrides: { provider: 'mock' },
+          rules: [],
+        },
+      ],
+    }, 'Run workflow call auto workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given autoStrategy and an unreachable workflow_call, When bootstrap resolves config, Then it does not resolve the child', async () => {
+    const workflowCallResolver = vi.fn(() => {
+      throw new Error('unreachable child resolver invoked');
+    });
+
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      steps: [
+        ...workflowConfig.steps,
+        {
+          name: 'unreachable-child',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [],
+        },
+      ],
+    }, 'Run workflow without strategy override', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+      workflowCallResolver,
+    });
+
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(workflowCallResolver).not.toHaveBeenCalled();
+    bootstrap.warnIfAutoStrategyUnused();
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringMatching(/auto_routing/i));
+  });
+
+  it('Given a child workflow has auto_routing and autoStrategy, When bootstrap resolves config, Then it does not warn', async () => {
+    const childWorkflow: WorkflowConfig = {
+      ...workflowConfig,
+      name: 'child',
+      provider: 'mock',
+      autoRouting: createAutoRoutingConfig(),
+    };
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      initialStep: 'call-child',
+      steps: [
+        {
+          name: 'call-child',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [],
+        },
+      ],
+    }, 'Run child auto workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+      workflowCallResolver: () => childWorkflow,
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given a parallel workflow_call child has auto_routing and autoStrategy, When bootstrap resolves config, Then strategy override applies', async () => {
+    const childWorkflow: WorkflowConfig = {
+      ...workflowConfig,
+      name: 'child',
+      provider: 'mock',
+      autoRouting: createAutoRoutingConfig(),
+    };
+    const parentWorkflow = {
+      ...workflowConfig,
+      initialStep: 'reviewers',
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'Reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'call-child',
+              personaDisplayName: 'Call child',
+              instruction: '',
+              kind: 'workflow_call',
+              call: 'child',
+              rules: [],
+            },
+          ],
+          rules: [],
+        },
+      ],
+    } as unknown as WorkflowConfig;
+
+    const bootstrap = await createWorkflowExecutionBootstrap(parentWorkflow, 'Run parallel child auto workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+      workflowCallResolver: () => childWorkflow,
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given workflow_call concrete provider override and effective auto_routing, When bootstrap resolves config, Then strategy override still applies', async () => {
+    const childWorkflow: WorkflowConfig = {
+      ...workflowConfig,
+      name: 'child',
+      provider: 'mock',
+      autoRouting: createAutoRoutingConfig(),
+    };
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      initialStep: 'call-child',
+      steps: [
+        {
+          name: 'call-child',
+          kind: 'workflow_call',
+          call: 'child',
+          overrides: { provider: 'mock' },
+          rules: [],
+        },
+      ],
+    }, 'Run child auto workflow with concrete override', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+      workflowCallResolver: () => childWorkflow,
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given workflow_call concrete provider override and child auto_routing, When bootstrap resolves config, Then strategy override applies', async () => {
+    const childWorkflow: WorkflowConfig = {
+      ...workflowConfig,
+      name: 'child',
+      initialStep: 'child-auto',
+      autoRouting: createAutoRoutingConfig(),
+      steps: [
+        { name: 'child-auto', provider: 'mock', personaDisplayName: 'Child', instruction: 'Run child auto', rules: [] },
+      ],
+    };
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      initialStep: 'call-child',
+      steps: [
+        {
+          name: 'call-child',
+          kind: 'workflow_call',
+          call: 'child',
+          overrides: { provider: 'mock' },
+          rules: [],
+        },
+      ],
+    }, 'Run child explicit step auto workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+      workflowCallResolver: () => childWorkflow,
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given a same-name child workflow has a different reference and auto_routing, When bootstrap resolves config, Then strategy override applies', async () => {
+    const parentWorkflow = attachWorkflowOpaqueRef({
+      ...workflowConfig,
+      initialStep: 'call-child',
+      steps: [
+        {
+          name: 'call-child',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [],
+        },
+      ],
+    }, 'project:sha256:parent');
+    const childWorkflow = attachWorkflowOpaqueRef({
+      ...workflowConfig,
+      name: parentWorkflow.name,
+      provider: 'mock',
+      autoRouting: createAutoRoutingConfig(),
+    }, 'project:sha256:child');
+
+    const bootstrap = await createWorkflowExecutionBootstrap(parentWorkflow, 'Run same-name child auto workflow', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+      workflowCallResolver: () => childWorkflow,
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given CLI provider override and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      autoRouting: createAutoRoutingConfig(),
+      steps: [
+        { name: 'fix', provider: 'mock', personaDisplayName: 'Fixer', instruction: 'Fix', rules: [] },
+      ],
+    }, 'Run CLI override workflow', '/project', {
+      projectCwd: '/project',
+      provider: 'mock',
+      autoStrategy: 'performance',
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('Given routing telemetry is enabled, When bootstrap initializes analytics, Then project .takt/events is passed for local routing decisions', async () => {
+    const projectDir = createTempProject();
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: 'mock',
+      model: undefined,
+      language: 'en',
+      notificationSound: false,
+      notificationSoundEvents: {},
+      rateLimitFallback: undefined,
+      runtime: undefined,
+      preventSleep: false,
+      logging: {},
+      analytics: { enabled: false },
+      telemetry: { routingDecisions: true },
+      observability: {},
+      personaProviders: {},
+      providerProfiles: undefined,
+    });
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Run with routing telemetry', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'routing-telemetry-enabled',
+    });
+
+    expect(initAnalyticsWriter).toHaveBeenCalledWith(
+      false,
+      '/tmp/.takt/analytics/events',
+      { routingEventsDir: join(projectDir, '.takt', 'events') },
+    );
+  });
+
+  it('Given telemetry config is omitted, When bootstrap initializes analytics, Then routing event directory is not passed by default', async () => {
+    const projectDir = createTempProject();
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: 'mock',
+      model: undefined,
+      language: 'en',
+      notificationSound: false,
+      notificationSoundEvents: {},
+      rateLimitFallback: undefined,
+      runtime: undefined,
+      preventSleep: false,
+      logging: {},
+      analytics: { enabled: false },
+      observability: {},
+      personaProviders: {},
+      providerProfiles: undefined,
+    });
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Run with default routing telemetry', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'routing-telemetry-default',
+    });
+
+    const options = vi.mocked(initAnalyticsWriter).mock.calls[0]?.[2];
+    expect(options ?? {}).not.toHaveProperty('routingEventsDir');
+  });
+
+  it('Given routing telemetry is disabled, When bootstrap initializes analytics, Then routing event directory is not passed', async () => {
+    const projectDir = createTempProject();
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: 'mock',
+      model: undefined,
+      language: 'en',
+      notificationSound: false,
+      notificationSoundEvents: {},
+      rateLimitFallback: undefined,
+      runtime: undefined,
+      preventSleep: false,
+      logging: {},
+      analytics: { enabled: false },
+      telemetry: { routingDecisions: false },
+      observability: {},
+      personaProviders: {},
+      providerProfiles: undefined,
+    });
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Run without routing telemetry', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'routing-telemetry-disabled',
+    });
+
+    const options = vi.mocked(initAnalyticsWriter).mock.calls[0]?.[2];
+    expect(options ?? {}).not.toHaveProperty('routingEventsDir');
+  });
+
+  it('Given resumeSource is passed, When bootstrap creates run meta, Then source metadata is persisted in meta.json', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
       reportDirName: 'direct-resume',
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-source-run',
         resumeMode: 'retry',
       },
     });
 
     const metaWrite = mockWriteFileAtomic.mock.calls.find((call) =>
-      call[0] === '/project/.takt/runs/direct-resume/meta.json'
+      call[0] === join(projectDir, '.takt', 'runs', 'direct-resume', 'meta.json')
     );
     expect(metaWrite).toBeDefined();
     const meta = JSON.parse(String(metaWrite![1])) as {
@@ -208,14 +1191,291 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(meta.resume_mode).toBe('retry');
   });
 
+  it('rejects a cycle in the direct source run ancestry', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir, 'run-a', {
+      sourceRunSlug: 'run-b',
+      journalRunSlug: 'run-a',
+      claimToken: 'claim-a',
+    });
+    seedResumeSourceRun(projectDir, 'run-b', {
+      sourceRunSlug: 'run-a',
+      journalRunSlug: 'run-a',
+      claimToken: 'claim-b',
+    });
+
+    await expect(createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume cycle',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'run-c',
+        resumeSource: { sourceRunSlug: 'run-b', resumeMode: 'retry' },
+      },
+    )).rejects.toThrow(/ancestry contains a cycle/);
+    expect(existsSync(join(projectDir, '.takt', 'runs', 'run-c'))).toBe(false);
+  });
+
+  it('rejects source ancestry that crosses operation journals', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir, 'journal-a-source', {
+      journalRunSlug: 'journal-a-source',
+      claimToken: 'claim-a',
+    });
+    seedResumeSourceRun(projectDir, 'journal-b-source', {
+      sourceRunSlug: 'journal-a-source',
+      journalRunSlug: 'journal-b-source',
+      claimToken: 'claim-b',
+    });
+
+    await expect(createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume different journal',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'different-journal-target',
+        resumeSource: {
+          sourceRunSlug: 'journal-b-source',
+          resumeMode: 'requeue',
+        },
+      },
+    )).rejects.toThrow(/belongs to a different operation journal/);
+  });
+
+  it('rejects a restored operation journal slug that traverses outside the runs directory', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
+    writeFileSync(
+      join(projectDir, '.takt', 'runs', '20260524-source-run', 'meta.json'),
+      JSON.stringify({
+        task: 'Resume tampered operation journal',
+        workflow: 'default',
+        runSlug: '20260524-source-run',
+        runRoot: '.takt/runs/20260524-source-run',
+        reportDirectory: '.takt/runs/20260524-source-run/reports',
+        contextDirectory: '.takt/runs/20260524-source-run/context',
+        logsDirectory: '.takt/runs/20260524-source-run/logs',
+        status: 'failed',
+        startTime: '2026-05-24T00:00:00.000Z',
+        operation_journal_run_slug: '../outside',
+        operation_claim_token: 'claim-a',
+      }),
+      'utf-8',
+    );
+    mockIsValidReportDirName.mockImplementation((slug: string) => slug !== '../outside');
+
+    await expect(createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume tampered operation journal',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'direct-resume',
+        resumeSource: {
+          sourceRunSlug: '20260524-source-run',
+          resumeMode: 'retry',
+        },
+      },
+    )).rejects.toThrow(
+      'Source run "20260524-source-run" has an invalid operation journal run slug',
+    );
+
+    expect(
+      existsSync(join(projectDir, '.takt', 'outside', 'operations', 'journal.json')),
+    ).toBe(false);
+  });
+
+  it('rejects a File resume whose explicit target slug equals the source slug', async () => {
+    const projectDir = createTempProject();
+    const sharedRunSlug = '20260524-shared-run';
+    seedResumeSourceRun(projectDir, sharedRunSlug, {
+      journalRunSlug: sharedRunSlug,
+      claimToken: 'claim-shared',
+    });
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume same run', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: sharedRunSlug,
+      resumeSource: {
+        sourceRunSlug: sharedRunSlug,
+        resumeMode: 'requeue',
+      },
+    })).rejects.toThrow(
+      `Workflow resume requires distinct source and target run slugs: "${sharedRunSlug}"`,
+    );
+  });
+
+  it('rejects a direct resume whose explicit target slug equals the source slug', async () => {
+    const projectDir = createTempProject();
+    const sharedRunSlug = '20260524-shared-direct-run';
+
+    await expect(async () => {
+      await createWorkflowExecutionBootstrapImpl(
+        workflowConfig,
+        'Resume same direct run',
+        projectDir,
+        {
+          projectCwd: projectDir,
+          provider: 'mock',
+          reportDirName: sharedRunSlug,
+          resumeSource: {
+            sourceRunSlug: sharedRunSlug,
+            resumeMode: 'retry',
+          },
+        },
+        createRunBootstrap({
+          cwd: projectDir,
+          task: 'Resume same direct run',
+          requestedRunSlug: sharedRunSlug,
+          resumeSource: {
+            sourceRunSlug: sharedRunSlug,
+            resumeMode: 'retry',
+          },
+        }),
+        {
+          operationJournalRunSlug: sharedRunSlug,
+          operationClaimToken: 'unreachable',
+        },
+      );
+    }).rejects.toThrow(
+      `Workflow resume requires distinct source and target run slugs: "${sharedRunSlug}"`,
+    );
+  });
+
+  it('starts a new operation journal when resume source lineage is unavailable', async () => {
+    const projectDir = createTempProject();
+
+    const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, 'Resume missing run', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'fallback-resume',
+      resumeSource: {
+        sourceRunSlug: '20260524-missing-run',
+        resumeMode: 'requeue',
+      },
+    });
+
+    expect(bootstrap.operationJournal.journalRunSlug).toBe('fallback-resume');
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Resume source operation lineage is unavailable; starting a new operation journal',
+      expect.objectContaining({
+        sourceRunSlug: '20260524-missing-run',
+        targetRunSlug: 'fallback-resume',
+      }),
+    );
+    expect(bootstrap.runSlug).toBe('fallback-resume');
+  });
+
+  it('starts a new operation journal when source lineage metadata is incomplete', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir, 'incomplete-source');
+    const sourceMetaPath = join(
+      projectDir,
+      '.takt',
+      'runs',
+      'incomplete-source',
+      'meta.json',
+    );
+    const sourceMeta = JSON.parse(
+      readFileSync(sourceMetaPath, 'utf-8'),
+    ) as Record<string, unknown>;
+    delete sourceMeta.operation_claim_token;
+    writeFileSync(sourceMetaPath, JSON.stringify(sourceMeta), 'utf-8');
+
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume incomplete lineage',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'incomplete-lineage-target',
+        resumeSource: {
+          sourceRunSlug: 'incomplete-source',
+          resumeMode: 'requeue',
+        },
+      },
+    );
+
+    expect(bootstrap.operationJournal.journalRunSlug)
+      .toBe('incomplete-lineage-target');
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Resume source operation lineage is unavailable; starting a new operation journal',
+      expect.objectContaining({ sourceRunSlug: 'incomplete-source' }),
+    );
+  });
+
+  it.each([
+    'running',
+    'completed',
+    'aborted',
+    'failed',
+  ] as const)('inherits operation lineage from a %s resume source', async (status) => {
+    const projectDir = createTempProject();
+    const sourceRunSlug = `${status}-source`;
+    seedResumeSourceRun(projectDir, sourceRunSlug, {
+      journalRunSlug: sourceRunSlug,
+      claimToken: `claim-${status}`,
+      status,
+    });
+
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      workflowConfig,
+      `Resume ${status} source`,
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: `${status}-target`,
+        resumeSource: {
+          sourceRunSlug,
+          resumeMode: 'requeue',
+        },
+      },
+    );
+
+    expect(bootstrap.operationJournal.journalRunSlug).toBe(sourceRunSlug);
+    expect(bootstrap.operationJournal.sourceClaimTokens).toEqual(
+      new Set([`claim-${status}`]),
+    );
+  });
+
+  it('fails fast on an invalid source slug before report inheritance', async () => {
+    const projectDir = createTempProject();
+    mockIsValidReportDirName.mockImplementation((slug: string) => slug !== '../invalid-source');
+    const targetReports = join(projectDir, '.takt', 'runs', 'conflicting-resume', 'reports');
+    mkdirSync(targetReports, { recursive: true });
+    writeFileSync(join(targetReports, 'existing.md'), 'existing report', 'utf-8');
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume conflicting run', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'conflicting-resume',
+      resumeSource: {
+        sourceRunSlug: '../invalid-source',
+        resumeMode: 'retry',
+      },
+    })).rejects.toThrow('Resume source run slug "../invalid-source" is invalid');
+
+    expect(mockLogWarn).not.toHaveBeenCalled();
+    expect(readFileSync(join(targetReports, 'existing.md'), 'utf-8')).toBe('existing report');
+  });
+
   it('Given no tasks.yaml exists, When direct resume bootstrap runs, Then tasks.yaml is not created', async () => {
     const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
 
     await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
       projectCwd: projectDir,
       provider: 'mock',
       reportDirName: 'direct-resume',
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-source-run',
         resumeMode: 'requeue',
       },
@@ -232,12 +1492,13 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     const initialTasks = 'tasks:\n  - name: keep-existing\n    status: pending\n';
     mkdirSync(tasksDir, { recursive: true });
     writeFileSync(tasksPath, initialTasks, 'utf-8');
+    seedResumeSourceRun(projectDir);
 
     await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
       projectCwd: projectDir,
       provider: 'mock',
       reportDirName: 'direct-resume',
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-source-run',
         resumeMode: 'instruct',
       },
@@ -257,8 +1518,8 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       reportDirName: 'worktree-run',
     });
 
-    expect(mockEnsureWorktreeTaktGitignore).toHaveBeenCalledTimes(1);
-    expect(mockEnsureWorktreeTaktGitignore).toHaveBeenCalledWith(worktreeDir);
+    expect(mockEnsureWorktreeTaktRuntimeProtection).toHaveBeenCalledTimes(1);
+    expect(mockEnsureWorktreeTaktRuntimeProtection).toHaveBeenCalledWith(worktreeDir);
   });
 
   it('Given cwd equals projectCwd, When bootstrap runs, Then worktree .takt/.gitignore is not ensured', async () => {
@@ -270,6 +1531,44 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       reportDirName: 'project-run',
     });
 
-    expect(mockEnsureWorktreeTaktGitignore).not.toHaveBeenCalled();
+    expect(mockEnsureWorktreeTaktRuntimeProtection).not.toHaveBeenCalled();
+  });
+
+  it('Given cwd differs from projectCwd, When bootstrap runs, Then worktree .takt/.gitignore is created from built-in template', async () => {
+    const actualProtection = await vi.importActual<typeof import('../infra/task/projectLocalTaktSync.js')>(
+      '../infra/task/projectLocalTaktSync.js',
+    );
+    mockEnsureWorktreeTaktRuntimeProtection.mockImplementation(actualProtection.ensureWorktreeTaktRuntimeProtection);
+    const projectDir = createTempProject();
+    const worktreeDir = createTempProject();
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Run in worktree', worktreeDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'worktree-run',
+    });
+
+    expect(readFileSync(join(worktreeDir, '.takt', '.gitignore'), 'utf-8')).toBe(
+      readFileSync(join(__dirname, '..', '..', 'builtins', 'project', 'dotgitignore'), 'utf-8'),
+    );
+  });
+
+  it('Given worktree cwd and invalid reportDirName, When bootstrap rejects, Then worktree .takt is not created', async () => {
+    const actualProtection = await vi.importActual<typeof import('../infra/task/projectLocalTaktSync.js')>(
+      '../infra/task/projectLocalTaktSync.js',
+    );
+    mockEnsureWorktreeTaktRuntimeProtection.mockImplementation(actualProtection.ensureWorktreeTaktRuntimeProtection);
+    mockIsValidReportDirName.mockReturnValue(false);
+    const projectDir = createTempProject();
+    const worktreeDir = createTempProject();
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Run in worktree', worktreeDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: '../invalid',
+    })).rejects.toThrow('Invalid reportDirName: ../invalid');
+
+    expect(mockEnsureWorktreeTaktRuntimeProtection).not.toHaveBeenCalled();
+    expect(existsSync(join(worktreeDir, '.takt'))).toBe(false);
   });
 });

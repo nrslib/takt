@@ -48,6 +48,16 @@ import {
 let isolatedGlobalConfigDir: string;
 let originalTaktConfigDirForFile: string | undefined;
 
+function disableBuiltinWorkflowsForFixtureTests(): void {
+  writeFileSync(
+    join(isolatedGlobalConfigDir, 'config.yaml'),
+    'language: en\nenable_builtin_workflows: false\n',
+    'utf-8',
+  );
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+}
+
 beforeEach(() => {
   originalTaktConfigDirForFile = process.env.TAKT_CONFIG_DIR;
   isolatedGlobalConfigDir = join(tmpdir(), `takt-config-test-global-${randomUUID()}`);
@@ -70,12 +80,6 @@ afterEach(() => {
 });
 
 describe('getBuiltinWorkflow', () => {
-  it('should return builtin workflow when it exists in resources', () => {
-    const workflow = getBuiltinWorkflow('default', process.cwd());
-    expect(workflow).not.toBeNull();
-    expect(workflow!.name).toBe('default');
-  });
-
   it('should preserve builtin trust for privileged builtin workflows inside the repo tree', () => {
     const workflow = getBuiltinWorkflow('auto-improvement-loop', process.cwd());
 
@@ -85,16 +89,6 @@ describe('getBuiltinWorkflow', () => {
       isProjectTrustRoot: false,
       isProjectWorkflowRoot: false,
     });
-    expect(workflow!.steps.some((step) => step.kind === 'system')).toBe(true);
-  });
-
-  it('should resolve builtin instruction without projectCwd', () => {
-    const workflow = getBuiltinWorkflow('default', process.cwd());
-    expect(workflow).not.toBeNull();
-
-    const planStep = workflow!.steps.find((step) => step.name === 'plan');
-    expect(planStep).toBeDefined();
-    expect(planStep!.instruction).not.toBe('plan');
   });
 
   it('should return null for non-existent workflow names', () => {
@@ -142,162 +136,11 @@ steps:
   });
 });
 
-describe('default-peer-review workflow parallel reviewers step', () => {
-  it('should have a reviewers step with parallel sub-steps', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    expect(workflow).not.toBeNull();
-
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers');
-    expect(reviewersStep).toBeDefined();
-    expect(reviewersStep!.parallel).toBeDefined();
-    expect(reviewersStep!.parallel).toHaveLength(5);
-  });
-
-  it('should have arch-review, pure-review, coding-review and supervise as parallel sub-steps', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
-    const subStepNames = reviewersStep.parallel!.map((s) => s.name);
-
-    expect(subStepNames).toContain('arch-review');
-    expect(subStepNames).toContain('pure-review');
-    expect(subStepNames).toContain('coding-review');
-    expect(subStepNames).toContain('supervise');
-  });
-
-  it('should have multi-condition aggregate rules on the reviewers parent step', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
-
-    expect(reviewersStep.rules).toBeDefined();
-    expect(reviewersStep.rules).toHaveLength(2);
-
-    const allRule = reviewersStep.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'all');
-    expect(allRule).toBeDefined();
-    // Multi-condition aggregate: first condition is always 'approved' (both en/ja)
-    expect(Array.isArray(allRule!.aggregateConditionText)).toBe(true);
-    expect((allRule!.aggregateConditionText as string[])[0]).toBe('approved');
-    expect(allRule!.next).toBe('COMPLETE');
-
-    const anyRule = reviewersStep.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'any');
-    expect(anyRule).toBeDefined();
-    // Multi-condition aggregate: first condition is always 'needs_fix' (both en/ja)
-    expect(Array.isArray(anyRule!.aggregateConditionText)).toBe(true);
-    expect((anyRule!.aggregateConditionText as string[])[0]).toBe('needs_fix');
-    expect(anyRule!.next).toBe('fix');
-  });
-
-  it('should have arch-review sub-step with approved/needs_fix conditions', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
-
-    const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
-    expect(archReview.rules).toBeDefined();
-    const conditions = archReview.rules!.map((r) => r.condition);
-    expect(conditions).toContain('approved');
-    expect(conditions).toContain('needs_fix');
-  });
-
-  it('should have supervise sub-step with 2 conditions', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
-
-    const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
-    expect(supervise.rules).toBeDefined();
-    expect(supervise.rules).toHaveLength(2);
-  });
-
-  it('should have coding-review sub-step with approved/needs_fix conditions', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
-
-    const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
-    expect(codingReview.rules).toBeDefined();
-    const conditions = codingReview.rules!.map((r) => r.condition);
-    expect(conditions).toContain('approved');
-    expect(conditions).toContain('needs_fix');
-  });
-
-  it('should run coding-review without previous response context', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
-
-    const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
-    expect(codingReview.passPreviousResponse).toBe(false);
-  });
-
-  it('should have ai-antipattern-review-1st (in default-draft) transitioning to COMPLETE on approval', () => {
-    const workflow = getBuiltinWorkflow('default-draft', process.cwd());
-    const aiReviewStep = workflow!.steps.find((s) => s.name === 'ai-antipattern-review-1st')!;
-
-    const approveRule = aiReviewStep.rules!.find((r) => r.next === 'COMPLETE');
-    expect(approveRule).toBeDefined();
-  });
-
-  it('should have ai-antipattern-fix (in default-draft) transitioning to ai-antipattern-review-1st step', () => {
-    const workflow = getBuiltinWorkflow('default-draft', process.cwd());
-    const aiFixStep = workflow!.steps.find((s) => s.name === 'ai-antipattern-fix')!;
-
-    const fixedRule = aiFixStep.rules!.find((r) => r.next === 'ai-antipattern-review-1st');
-    expect(fixedRule).toBeDefined();
-  });
-
-  it('should have fix step transitioning back to reviewers', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const fixStep = workflow!.steps.find((s) => s.name === 'fix')!;
-
-    const fixedRule = fixStep.rules!.find((r) => r.next === 'reviewers');
-    expect(fixedRule).toBeDefined();
-  });
-
-  it('should not have old separate review/security_review/improve steps', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const stepNames = workflow!.steps.map((s) => s.name);
-
-    expect(stepNames).not.toContain('review');
-    expect(stepNames).not.toContain('security_review');
-    expect(stepNames).not.toContain('improve');
-    expect(stepNames).not.toContain('security_fix');
-  });
-
-  it('should have sub-steps with correct agents', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
-
-    const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
-    expect(archReview.persona).toContain('architecture-reviewer');
-
-    const pureReview = reviewersStep.parallel!.find((s) => s.name === 'pure-review')!;
-    expect(pureReview.persona).toContain('pure-reviewer');
-
-    const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
-    expect(codingReview.persona).toContain('coding-reviewer');
-
-    const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
-    expect(supervise.persona).toContain('supervisor');
-  });
-
-  it('should have output contracts configured on sub-steps', () => {
-    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
-
-    const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
-    expect(archReview.outputContracts).toBeDefined();
-
-    const pureReview = reviewersStep.parallel!.find((s) => s.name === 'pure-review')!;
-    expect(pureReview.outputContracts).toBeDefined();
-
-    const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
-    expect(codingReview.outputContracts).toBeDefined();
-
-    const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
-    expect(supervise.outputContracts).toBeDefined();
-  });
-});
-
 describe('loadAllWorkflows', () => {
   let testDir: string;
 
   beforeEach(() => {
+    disableBuiltinWorkflowsForFixtureTests();
     testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
     mkdirSync(testDir, { recursive: true });
   });
@@ -329,33 +172,6 @@ steps:
     const workflows = loadAllWorkflows(testDir);
 
     expect(workflows.has('test')).toBe(true);
-  });
-});
-
-describe('loadWorkflow (builtin fallback)', () => {
-  it('should load builtin workflow when user workflow does not exist', () => {
-    const workflow = loadWorkflow('default', process.cwd());
-    expect(workflow).not.toBeNull();
-    expect(workflow!.name).toBe('default');
-  });
-
-  it('should return null for non-existent workflow', () => {
-    const workflow = loadWorkflow('does-not-exist', process.cwd());
-    expect(workflow).toBeNull();
-  });
-
-  it('should load builtin workflows like default, research, audit-e2e', () => {
-    const defaultWorkflow = loadWorkflow('default', process.cwd());
-    expect(defaultWorkflow).not.toBeNull();
-    expect(defaultWorkflow!.name).toBe('default');
-
-    const research = loadWorkflow('research', process.cwd());
-    expect(research).not.toBeNull();
-    expect(research!.name).toBe('research');
-
-    const auditE2e = loadWorkflow('audit-e2e', process.cwd());
-    expect(auditE2e).not.toBeNull();
-    expect(auditE2e!.name).toBe('audit-e2e');
   });
 });
 
@@ -692,12 +508,23 @@ describe('loadWorkflow workflow_overrides.personas integration', () => {
   });
 });
 
-describe('listWorkflows (builtin fallback)', () => {
+describe('listWorkflows', () => {
   let testDir: string;
 
   beforeEach(() => {
+    disableBuiltinWorkflowsForFixtureTests();
     testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    const workflow = [
+      'name: test-workflow',
+      'max_steps: 1',
+      'steps:',
+      '  - name: implement',
+      '    instruction: "{task}"',
+    ].join('\n');
+    writeFileSync(join(workflowsDir, 'zeta.yaml'), workflow, 'utf-8');
+    writeFileSync(join(workflowsDir, 'alpha.yaml'), workflow, 'utf-8');
   });
 
   afterEach(() => {
@@ -706,36 +533,16 @@ describe('listWorkflows (builtin fallback)', () => {
     }
   });
 
-  it('should include builtin workflows', () => {
+  it('should include project workflows', () => {
     const workflows = listWorkflows(testDir);
-    expect(workflows).toContain('default');
-    expect(workflows).toContain('audit-e2e');
+    expect(workflows).toContain('alpha');
+    expect(workflows).toContain('zeta');
   });
 
   it('should return sorted list', () => {
     const workflows = listWorkflows(testDir);
     const sorted = [...workflows].sort();
     expect(workflows).toEqual(sorted);
-  });
-});
-
-describe('loadAllWorkflows (builtin fallback)', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should include builtin workflows in the map', () => {
-    const workflows = loadAllWorkflows(testDir);
-    expect(workflows.has('default')).toBe(true);
   });
 });
 
@@ -1451,7 +1258,7 @@ describe('encodeWorktreePath', () => {
     const encoded = encodeWorktreePath('/project/.takt/worktrees/my-task');
 
     expect(encoded).not.toContain('/');
-    expect(encoded).toContain('-');
+    expect(encoded).toBe('-project-.takt-worktrees-my-task');
   });
 
   it('should handle Windows-style paths', () => {

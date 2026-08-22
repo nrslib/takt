@@ -1,6 +1,12 @@
 import type { PartDefinition, PartResult } from '../../models/types.js';
 import { resolvePartErrorDetail } from './team-leader-common.js';
 
+export interface TeamLeaderArtifactReference {
+  path: string;
+  sha256: string;
+  bytes: number;
+}
+
 export function buildTeamLeaderAggregatedContent(
   plannedParts: PartDefinition[],
   partResults: PartResult[],

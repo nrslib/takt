@@ -1,0 +1,1 @@
+Implement the finalized fix plan for the override-handling gaps. Preserve the public contracts the plan names, add the regression evidence it requires, and run the project's test suite as the quality gate.

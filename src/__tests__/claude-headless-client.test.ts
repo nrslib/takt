@@ -10,6 +10,14 @@ const { mkdtempMock, chmodMock, writeFileMock, rmMock } = vi.hoisted(() => ({
   rmMock: vi.fn(),
 }));
 
+const { assertClaudeSkillsDisableSupportedMock } = vi.hoisted(() => ({
+  assertClaudeSkillsDisableSupportedMock: vi.fn(),
+}));
+
+vi.mock('../infra/claude/cli-capability.js', () => ({
+  assertClaudeSkillsDisableSupported: assertClaudeSkillsDisableSupportedMock,
+}));
+
 vi.mock('node:crypto', () => ({
   randomUUID: vi.fn(),
 }));
@@ -32,6 +40,11 @@ vi.mock('node:child_process', () => ({
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { callClaudeHeadless } from '../infra/claude-headless/client.js';
+import {
+  HEADLESS_ABORTED_MESSAGE,
+  runHeadlessCli,
+} from '../infra/claude-headless/headless-spawn.js';
+import type { ClaudeHeadlessCallOptions } from '../infra/claude-headless/types.js';
 
 describe('callClaudeHeadless', () => {
   let lastArgv: string[] = [];
@@ -49,6 +62,8 @@ describe('callClaudeHeadless', () => {
     chmodMock.mockReset();
     writeFileMock.mockReset();
     rmMock.mockReset();
+    assertClaudeSkillsDisableSupportedMock.mockReset();
+    assertClaudeSkillsDisableSupportedMock.mockResolvedValue(undefined);
     mkdtempMock.mockImplementation(async (...args) => {
       const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
       return actual.mkdtemp(...args);
@@ -122,7 +137,74 @@ describe('callClaudeHeadless', () => {
     });
   }
 
+  it('passes --disable-slash-commands for disabled Skills on a new headless session', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`],
+    });
+
+    await callClaudeHeadless('agent', 'hi', {
+      cwd: '/tmp',
+      skillsEnabled: false,
+    });
+
+    expect(assertClaudeSkillsDisableSupportedMock).toHaveBeenCalledWith('claude', undefined);
+    expect(lastArgv).toContain('--disable-slash-commands');
+    expect(lastArgv).toContain('--session-id');
+  });
+
+  it('passes --disable-slash-commands for disabled Skills when resuming a headless session', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`],
+    });
+
+    await callClaudeHeadless('agent', 'hi', {
+      cwd: '/tmp',
+      sessionId: 'existing-session',
+      skillsEnabled: false,
+    });
+
+    expect(assertClaudeSkillsDisableSupportedMock).toHaveBeenCalledWith('claude', undefined);
+    expect(lastArgv).toEqual(expect.arrayContaining(['--disable-slash-commands', '--resume', 'existing-session']));
+  });
+
+  it('does not add a Skill flag when headless Skills are enabled', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`],
+    });
+
+    await callClaudeHeadless('agent', 'hi', {
+      cwd: '/tmp',
+      skillsEnabled: true,
+    });
+
+    expect(assertClaudeSkillsDisableSupportedMock).not.toHaveBeenCalled();
+    expect(lastArgv).not.toContain('--disable-slash-commands');
+  });
+
+  it('returns a provider error before spawning when Skills disable capability is unsupported', async () => {
+    assertClaudeSkillsDisableSupportedMock.mockRejectedValue(
+      new Error('Claude Code must support --disable-slash-commands.'),
+    );
+
+    const result = await callClaudeHeadless('agent', 'hi', {
+      cwd: '/tmp',
+      skillsEnabled: false,
+      claudeCliPath: 'claude-unsupported',
+    });
+
+    expect(assertClaudeSkillsDisableSupportedMock).toHaveBeenCalledWith(
+      'claude-unsupported',
+      undefined,
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: 'error',
+      error: 'Claude Code must support --disable-slash-commands.',
+    });
+  });
+
   it('returns done when stream-json yields text and process exits 0', async () => {
+    const onActivity = vi.fn();
     stubSpawn({
       stdoutChunks: [
         `${JSON.stringify({ type: 'text', text: 'ok' })}\n`,
@@ -130,9 +212,11 @@ describe('callClaudeHeadless', () => {
       ],
       closeCode: 0,
     });
-    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onActivity });
     expect(res.status).toBe('done');
     expect(res.content).toBe('ok');
+    expect(onActivity).toHaveBeenCalledOnce();
+    expect(onActivity).toHaveBeenCalledWith({ kind: 'attempt_started' });
   });
 
   it('passes only run-local observability snapshot to headless child env', async () => {
@@ -258,47 +342,6 @@ describe('callClaudeHeadless', () => {
     expect(res.content).toContain('partial answer');
   });
 
-  it('returns the explicit final result message when isError is true', async () => {
-    stubSpawn({
-      stdoutChunks: [
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'success',
-          isError: true,
-          message: 'explicit failure',
-          result: 'partial answer',
-        })}\n`,
-      ],
-      closeCode: 0,
-    });
-
-    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
-
-    expect(res.status).toBe('error');
-    expect(res.error).toBe('explicit failure');
-    expect(res.content).toBe('partial answer');
-  });
-
-  it('returns error when the final result subtype is error without is_error flags', async () => {
-    stubSpawn({
-      stdoutChunks: [
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'error',
-          message: 'explicit failure',
-          result: 'partial answer',
-        })}\n`,
-      ],
-      closeCode: 0,
-    });
-
-    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
-
-    expect(res.status).toBe('error');
-    expect(res.error).toBe('explicit failure');
-    expect(res.content).toBe('partial answer');
-  });
-
   it('CLI stderr が rate limit を示す場合は rate_limited を返す', async () => {
     stubSpawn({
       stderrChunks: ["You're out of extra usage · resets 2:30pm (Asia/Tokyo)"],
@@ -310,6 +353,223 @@ describe('callClaudeHeadless', () => {
     expect(res.status).toBe('rate_limited');
     expect(res.errorKind).toBe('rate_limit');
     expect(res.content).toBe('');
+  });
+
+  it('CLI stderr が subscription の weekly limit を示す場合は rate_limited を返す', async () => {
+    const limitText = "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)";
+    const onStream = vi.fn();
+    stubSpawn({
+      stdoutChunks: ['stdout diagnostic'],
+      stderrChunks: [limitText],
+      closeCode: 1,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onStream });
+
+    expect(res).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      content: '',
+      error: limitText,
+    });
+    expect(res.rateLimitInfo?.source).toBe('sdk_error');
+    expect(res.rateLimitInfo?.resetAtRaw).toBe('Aug 16 at 1am (Asia/Tokyo)');
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: limitText,
+        sessionId: '',
+      },
+    });
+  });
+
+  it('CLI stdout の subscription limit 本文を非ゼロ終了時にも rate_limited 応答へ保持する', async () => {
+    const limitText = "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)";
+    stubSpawn({
+      stdoutChunks: [limitText],
+      closeCode: 1,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      content: '',
+      error: limitText,
+    });
+    expect(res.rateLimitInfo?.source).toBe('sdk_error');
+    expect(res.rateLimitInfo?.resetAtRaw).toBe('Aug 16 at 1am (Asia/Tokyo)');
+  });
+
+  it('CLI stdout の subscription limit は stderr の通常診断と混在しても本文を保持する', async () => {
+    const limitText = "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)";
+    const onStream = vi.fn();
+    stubSpawn({
+      stdoutChunks: [limitText],
+      stderrChunks: ['stderr diagnostic'],
+      closeCode: 1,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onStream });
+
+    expect(res).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      content: '',
+      error: limitText,
+      rateLimitInfo: {
+        source: 'sdk_error',
+        resetAtRaw: 'Aug 16 at 1am (Asia/Tokyo)',
+      },
+    });
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: limitText,
+        sessionId: '',
+      },
+    });
+  });
+
+  it('構造化 result error の正規化済み本文を raw JSON より優先する', async () => {
+    const limitText = "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)";
+    const onStream = vi.fn();
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          errors: [limitText],
+          result: 'partial answer',
+        })}\n`,
+      ],
+      closeCode: 1,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onStream });
+
+    expect(res).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      content: '',
+      error: limitText,
+      rateLimitInfo: {
+        source: 'sdk_error',
+        resetAtRaw: 'Aug 16 at 1am (Asia/Tokyo)',
+      },
+    });
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: limitText,
+        sessionId: '',
+      },
+    });
+  });
+
+  it('CLI stdout の通常の weekly limit 言及は rate_limited に分類しない', async () => {
+    const ordinaryText = 'The documentation mentions a weekly limit.';
+    const onStream = vi.fn();
+    stubSpawn({
+      stdoutChunks: [ordinaryText],
+      closeCode: 1,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onStream });
+    const expectedError = 'Claude CLI failed (1): Claude CLI exited with code 1';
+
+    expect(res).toMatchObject({
+      status: 'error',
+      content: expectedError,
+      error: expectedError,
+    });
+    expect(res).not.toHaveProperty('errorKind');
+    expect(res).not.toHaveProperty('rateLimitInfo');
+    expect(res.error).not.toContain(ordinaryText);
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: expectedError,
+        sessionId: '',
+      },
+    });
+  });
+
+  it.each(['stdout', 'stderr'] as const)(
+    '%s の max-buffer error は weekly limit 本文より優先する',
+    async (stream) => {
+      const limitText = "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)";
+      const maxBufferBytes = 10 * 1024 * 1024;
+      const retainedText = `${limitText}${'x'.repeat(maxBufferBytes - Buffer.byteLength(limitText))}`;
+      const onStream = vi.fn();
+      stubSpawn(stream === 'stdout'
+        ? { stdoutChunks: [retainedText, 'x'] }
+        : { stderrChunks: [retainedText, 'x'] });
+
+      const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onStream });
+      const expectedError = `Claude CLI ${stream} exceeded buffer limit`;
+
+      expect(res).toMatchObject({
+        status: 'error',
+        content: expectedError,
+        error: expectedError,
+      });
+      expect(res).not.toHaveProperty('errorKind');
+      expect(res).not.toHaveProperty('rateLimitInfo');
+      expect(res.error).not.toContain(limitText);
+      expect(onStream).toHaveBeenLastCalledWith({
+        type: 'result',
+        data: {
+          result: '',
+          success: false,
+          error: expectedError,
+          sessionId: '',
+        },
+      });
+    },
+  );
+
+  it('abort error は収集済み stdout の weekly limit 本文より優先する', async () => {
+    const limitText = "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)";
+    const abortController = new AbortController();
+    const onStream = vi.fn();
+    abortController.abort();
+    stubSpawn({
+      stdoutChunks: [limitText],
+      closeCode: 1,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', {
+      cwd: '/tmp',
+      abortSignal: abortController.signal,
+      onStream,
+    });
+
+    expect(res).toMatchObject({
+      status: 'error',
+      content: HEADLESS_ABORTED_MESSAGE,
+      error: HEADLESS_ABORTED_MESSAGE,
+    });
+    expect(res).not.toHaveProperty('errorKind');
+    expect(res).not.toHaveProperty('rateLimitInfo');
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: HEADLESS_ABORTED_MESSAGE,
+        sessionId: '',
+      },
+    });
   });
 
   it('成功 result 本文が rate limit を示す場合は rate_limited を返す', async () => {
@@ -333,24 +593,74 @@ describe('callClaudeHeadless', () => {
   });
 
   it('ストリーム中の rate limit marker を検出した時点で child process を停止して返す', async () => {
+    const markerText = "You're out of extra usage · resets 2:30pm (Asia/Tokyo)";
+    const onStream = vi.fn();
     stubSpawn({
       stdoutChunks: [
         `${JSON.stringify({
           type: 'assistant',
-          message: {
-            content: [{ type: 'text', text: "You're out of extra usage · resets 2:30pm (Asia/Tokyo)" }],
-          },
+          message: { content: [{ type: 'text', text: markerText }] },
         })}\n`,
       ],
       keepOpen: true,
     });
 
-    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onStream });
 
     expect(res.status).toBe('rate_limited');
     expect(res.errorKind).toBe('rate_limit');
     expect(res.rateLimitInfo?.source).toBe('stream_marker');
+    expect(res.error).toBe(markerText);
+    expect(res.rateLimitInfo?.resetAtRaw).toBe('2:30pm (Asia/Tokyo)');
     expect(lastKill).toHaveBeenCalledWith('SIGTERM');
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: markerText,
+        sessionId: '',
+      },
+    });
+  });
+
+  it('stderr の rate limit marker を stdout より優先して stream_marker として返す', async () => {
+    const markerText = 'usage_limit_exceeded: resets 12:30pm';
+    stubSpawn({
+      stdoutChunks: ['stdout diagnostic'],
+      stderrChunks: [markerText],
+      keepOpen: true,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      error: markerText,
+      rateLimitInfo: {
+        source: 'stream_marker',
+        resetAtRaw: '12:30pm',
+      },
+    });
+  });
+
+  it('CLI の例外本文だけが rate limit を示す場合は sdk_error として返す', async () => {
+    const limitText = "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)";
+    const error = new Error(limitText) as NodeJS.ErrnoException;
+    stubSpawn({ error });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res).toMatchObject({
+      status: 'rate_limited',
+      errorKind: 'rate_limit',
+      error: limitText,
+      rateLimitInfo: {
+        source: 'sdk_error',
+        resetAtRaw: 'Aug 16 at 1am (Asia/Tokyo)',
+      },
+    });
   });
 
   it('失敗 result の一般的な rate limit / 429 記述は error_text source で返す', async () => {
@@ -553,13 +863,28 @@ describe('callClaudeHeadless', () => {
   });
 
   it('returns error when exit code is non-zero', async () => {
+    const onStream = vi.fn();
     stubSpawn({
-      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'partial' })}\n`],
+      stdoutChunks: ['ordinary provider output'],
       closeCode: 1,
     });
-    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
-    expect(res.status).toBe('error');
-    expect(res.error).toMatch(/Claude CLI failed \(1\)/);
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onStream });
+    const expectedError = 'Claude CLI failed (1): Claude CLI exited with code 1';
+    expect(res).toMatchObject({
+      status: 'error',
+      content: expectedError,
+      error: expectedError,
+    });
+    expect(res.error).not.toContain('ordinary provider output');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: expectedError,
+        sessionId: '',
+      },
+    });
   });
 
   it('does not use unknown placeholder when exit code is null', async () => {
@@ -929,295 +1254,40 @@ describe('callClaudeHeadless', () => {
     });
   });
 
-  it('emits a failed final result event when the final result is marked as error', async () => {
+  it('CT-COMP-12 streams assistant tool_use blocks before the final result', async () => {
     stubSpawn({
       stdoutChunks: [
         `${JSON.stringify({
           type: 'assistant',
           message: {
-            content: [{ type: 'text', text: 'partial answer' }],
+            content: [{
+              type: 'tool_use',
+              id: 'tool-1',
+              name: 'Edit',
+              input: { file_path: 'src/a.ts' },
+            }],
           },
         })}\n`,
         `${JSON.stringify({
           type: 'result',
           subtype: 'success',
-          is_error: true,
-          result: 'partial answer',
+          result: 'done',
         })}\n`,
       ],
       closeCode: 0,
     });
     const onStream = vi.fn();
 
-    const res = await callClaudeHeadless('agent', 'p', {
-      cwd: '/tmp',
-      onStream,
-    });
+    await callClaudeHeadless('agent', 'p', { cwd: '/tmp', onStream });
 
-    expect(res.status).toBe('error');
-    expect(onStream).toHaveBeenNthCalledWith(2, {
-      type: 'result',
-      data: {
-        result: 'partial answer',
-        success: false,
-        error: 'partial answer',
-        sessionId: '11111111-1111-4111-8111-111111111111',
-      },
-    });
-  });
-
-  it('emits the explicit final result message when isError is true', async () => {
-    stubSpawn({
-      stdoutChunks: [
-        `${JSON.stringify({
-          type: 'assistant',
-          message: {
-            content: [{ type: 'text', text: 'partial answer' }],
-          },
-        })}\n`,
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'success',
-          isError: true,
-          message: 'explicit failure',
-          result: 'partial answer',
-        })}\n`,
-      ],
-      closeCode: 0,
-    });
-    const onStream = vi.fn();
-
-    const res = await callClaudeHeadless('agent', 'p', {
-      cwd: '/tmp',
-      onStream,
-    });
-
-    expect(res.status).toBe('error');
-    expect(onStream).toHaveBeenNthCalledWith(2, {
-      type: 'result',
-      data: {
-        result: 'partial answer',
-        success: false,
-        error: 'explicit failure',
-        sessionId: '11111111-1111-4111-8111-111111111111',
-      },
-    });
-  });
-
-  it('emits an empty successful final result event even when assistant content was streamed earlier', async () => {
-    stubSpawn({
-      stdoutChunks: [
-        `${JSON.stringify({
-          type: 'assistant',
-          message: {
-            content: [{ type: 'text', text: 'partial answer' }],
-          },
-        })}\n`,
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'success',
-          result: '',
-        })}\n`,
-      ],
-      closeCode: 0,
-    });
-    const onStream = vi.fn();
-
-    const res = await callClaudeHeadless('agent', 'p', {
-      cwd: '/tmp',
-      onStream,
-    });
-
-    expect(res.status).toBe('done');
-    expect(onStream).toHaveBeenCalledTimes(2);
     expect(onStream).toHaveBeenNthCalledWith(1, {
-      type: 'text',
-      data: { text: 'partial answer' },
+      type: 'tool_use',
+      data: { tool: 'Edit', id: 'tool-1', input: { file_path: 'src/a.ts' } },
     });
     expect(onStream).toHaveBeenNthCalledWith(2, {
       type: 'result',
       data: {
-        result: '',
-        success: true,
-        sessionId: '11111111-1111-4111-8111-111111111111',
-      },
-    });
-  });
-
-  it('emits an empty successful final result event when result.result is missing', async () => {
-    stubSpawn({
-      stdoutChunks: [
-        `${JSON.stringify({
-          type: 'assistant',
-          message: {
-            content: [{ type: 'text', text: 'partial answer' }],
-          },
-        })}\n`,
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'success',
-        })}\n`,
-      ],
-      closeCode: 0,
-    });
-    const onStream = vi.fn();
-
-    const res = await callClaudeHeadless('agent', 'p', {
-      cwd: '/tmp',
-      onStream,
-    });
-
-    expect(res.status).toBe('done');
-    expect(onStream).toHaveBeenCalledTimes(2);
-    expect(onStream).toHaveBeenNthCalledWith(1, {
-      type: 'text',
-      data: { text: 'partial answer' },
-    });
-    expect(onStream).toHaveBeenNthCalledWith(2, {
-      type: 'result',
-      data: {
-        result: '',
-        success: true,
-        sessionId: '11111111-1111-4111-8111-111111111111',
-      },
-    });
-  });
-
-  it('emits a successful compatibility result event when assistant content is streamed without a result event', async () => {
-    stubSpawn({
-      stdoutChunks: [
-        `${JSON.stringify({
-          type: 'assistant',
-          message: {
-            content: [{ type: 'text', text: 'partial answer' }],
-          },
-        })}\n`,
-      ],
-      stderrChunks: ['missing final result'],
-      closeCode: 0,
-    });
-    const onStream = vi.fn();
-
-    const res = await callClaudeHeadless('agent', 'p', {
-      cwd: '/tmp',
-      onStream,
-    });
-
-    expect(res.status).toBe('done');
-    expect(onStream).toHaveBeenCalledTimes(2);
-    expect(onStream).toHaveBeenNthCalledWith(1, {
-      type: 'text',
-      data: { text: 'partial answer' },
-    });
-    expect(onStream).toHaveBeenNthCalledWith(2, {
-      type: 'result',
-      data: {
-        result: 'partial answer',
-        success: true,
-        sessionId: '11111111-1111-4111-8111-111111111111',
-      },
-    });
-  });
-
-  it('emits the final error result event when a success result is followed by an error result', async () => {
-    stubSpawn({
-      stdoutChunks: [
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'success',
-          result: 'first answer',
-        })}\n`,
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'success',
-          is_error: true,
-          result: 'final failure',
-        })}\n`,
-      ],
-      closeCode: 0,
-    });
-    const onStream = vi.fn();
-
-    const res = await callClaudeHeadless('agent', 'p', {
-      cwd: '/tmp',
-      onStream,
-    });
-
-    expect(res.status).toBe('error');
-    expect(onStream).toHaveBeenCalledTimes(1);
-    expect(onStream).toHaveBeenNthCalledWith(1, {
-      type: 'result',
-      data: {
-        result: 'final failure',
-        success: false,
-        error: 'final failure',
-        sessionId: '11111111-1111-4111-8111-111111111111',
-      },
-    });
-  });
-
-  it('emits the final error result event when subtype is error without is_error flags', async () => {
-    stubSpawn({
-      stdoutChunks: [
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'error',
-          message: 'explicit failure',
-          result: 'partial answer',
-        })}\n`,
-      ],
-      closeCode: 0,
-    });
-    const onStream = vi.fn();
-
-    const res = await callClaudeHeadless('agent', 'p', {
-      cwd: '/tmp',
-      onStream,
-    });
-
-    expect(res.status).toBe('error');
-    expect(onStream).toHaveBeenCalledTimes(1);
-    expect(onStream).toHaveBeenNthCalledWith(1, {
-      type: 'result',
-      data: {
-        result: 'partial answer',
-        success: false,
-        error: 'explicit failure',
-        sessionId: '11111111-1111-4111-8111-111111111111',
-      },
-    });
-  });
-
-  it('emits the final success result event when an error result is followed by a success result', async () => {
-    stubSpawn({
-      stdoutChunks: [
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'error',
-          message: 'first failure',
-          result: 'first failure',
-        })}\n`,
-        `${JSON.stringify({
-          type: 'result',
-          subtype: 'success',
-          result: 'final answer',
-        })}\n`,
-      ],
-      closeCode: 0,
-    });
-    const onStream = vi.fn();
-
-    const res = await callClaudeHeadless('agent', 'p', {
-      cwd: '/tmp',
-      onStream,
-    });
-
-    expect(res.status).toBe('done');
-    expect(onStream).toHaveBeenCalledTimes(1);
-    expect(onStream).toHaveBeenNthCalledWith(1, {
-      type: 'result',
-      data: {
-        result: 'final answer',
+        result: 'done',
         success: true,
         sessionId: '11111111-1111-4111-8111-111111111111',
       },
@@ -1320,6 +1390,25 @@ describe('callClaudeHeadless', () => {
     expect(lastSpawnEnv?.ANTHROPIC_API_KEY).toBe('sk-ant-from-config');
   });
 
+  it('baseUrl を ANTHROPIC_BASE_URL として subprocess env に注入し childProcessEnv より優先する', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`],
+      closeCode: 0,
+    });
+    const callOptions = {
+      cwd: '/tmp',
+      baseUrl: 'http://127.0.0.1:8787',
+      childProcessEnv: {
+        ANTHROPIC_BASE_URL: 'http://ambient.example.test',
+      },
+    } as unknown as ClaudeHeadlessCallOptions;
+
+    await runHeadlessCli(['-p', '--', 'prompt'], callOptions);
+
+    expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1);
+    expect(lastSpawnEnv?.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:8787');
+  });
+
   it('omits --allowed-tools and --effort when not configured', async () => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
@@ -1332,6 +1421,76 @@ describe('callClaudeHeadless', () => {
     const argv = lastSpawnArgv();
     expect(argv).not.toContain('--allowed-tools');
     expect(argv).not.toContain('--effort');
+  });
+
+  it('keeps explicitly enabled skills without adding unrelated restrictions', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('selector', 'p', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      skillsEnabled: true,
+    });
+
+    const argv = lastSpawnArgv();
+    expect(argv).not.toContain('--tools');
+    expect(argv).not.toContain('--setting-sources');
+    expect(argv).not.toContain('--strict-mcp-config');
+    expect(argv).not.toContain('--disable-slash-commands');
+    expect(argv).not.toContain('--allowed-tools');
+  });
+
+  it('does not add unrelated restrictions to an ordinary headless call', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+    });
+
+    const argv = lastSpawnArgv();
+    expect(argv).not.toContain('--tools');
+    expect(argv).not.toContain('--setting-sources');
+    expect(argv).not.toContain('--strict-mcp-config');
+  });
+
+  it('strict-readonly isolation passes explicit tool, settings, MCP, and Skills restrictions to Claude CLI', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('selector', 'p', {
+      cwd: '/tmp',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpServers: {
+        docs: { command: 'docs-mcp', args: ['serve'] },
+      },
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+    });
+
+    const argv = lastSpawnArgv();
+    expect(argv).toEqual(expect.arrayContaining([
+      '--tools',
+      '',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(argv).not.toContain('--allowed-tools');
+    expect(argv).not.toContain('--mcp-config');
   });
 
   it('passes --effort without --allowed-tools when tools list is empty', async () => {
@@ -1350,4 +1509,5 @@ describe('callClaudeHeadless', () => {
     expect(effortIdx).toBeGreaterThanOrEqual(0);
     expect(argv[effortIdx + 1]).toBe('low');
   });
+
 });

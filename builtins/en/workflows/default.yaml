@@ -1,104 +1,34 @@
 name: default
-description: Test-first development workflow (plan -> write tests -> draft (implement + AI self-review) -> peer-review (3 parallel) -> COMPLETE).
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
-max_steps: 30
-initial_step: plan
+description: Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met.
+max_steps: 51
+initial_step: develop
+
 steps:
-  - name: plan
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    knowledge: architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    rules:
-      - condition: Requirements are clear and implementable
-        next: write_tests
-      - condition: User is asking a question (not an implementation task)
-        next: COMPLETE
-      - condition: Requirements unclear, insufficient info
-        next: ABORT
-        appendix: |
-          Clarifications needed:
-          - {Question 1}
-          - {Question 2}
-    instruction: plan
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
-  - name: write_tests
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - architecture
-      - unit-testing
-      - e2e-testing
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    instruction: write-tests-first
-    rules:
-      - condition: Tests written successfully
-        next: draft
-      - condition: Cannot proceed because the test target is not implemented yet, so skip test writing
-        next: draft
-      - condition: Cannot proceed with test writing
-        next: ABORT
-      - condition: User input needed for clarification
-        next: write_tests
-        requires_user_input: true
-        interactive_only: true
-    output_contracts:
-      report:
-        - name: test-report.md
-          format: test-report
-  - name: draft
+  - name: develop
     kind: workflow_call
-    call: default-draft
+    call: development-core
     args:
-      impl_instruction: implement-after-tests
-    rules:
-      - condition: COMPLETE
-        next: peer-review
-      - condition: need_replan
-        next: plan
-      - condition: ABORT
-        next: ABORT
-  - name: peer-review
-    kind: workflow_call
-    call: default-peer-review
+      implementation_pool: coding-facets
+      implementation_workflow: development-implement-dynamic
+      remediation_workflow: development-remediation-dynamic
+      plan_instruction: scenario-based-plan
+      plan_report_format: scenario-based-plan
+      replan_instruction: scenario-based-replan-implementation
+      testing_instruction: scenario-based-write-tests-first
+      testing_report_format: scenario-based-test-report
+      fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
+      fix_plan_report_format: scenario-based-fix-plan
+      final_gate_instruction: scenario-based-supervise-review-resolution
+      implementation_companions:
+        fixed: [ai-antipattern-review-companion, testing-review-companion]
+        pool: []
+        moderator: review-companion-moderator
+      reviewer_suite: development-review
+      review_policy_additions: []
+      review_policy: [coding, testing, review, architecture]
+      review_knowledge: [architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE
         next: COMPLETE
-      - condition: need_replan
-        next: plan
       - condition: ABORT
         next: ABORT

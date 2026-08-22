@@ -6,7 +6,8 @@
       "enum": [
         "enqueue_from_pr",
         "prepare_merge",
-        "reject_pr"
+        "reject_pr",
+        "wait_before_next_scan"
       ]
     },
     "task_markdown": {

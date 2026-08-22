@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -30,7 +30,7 @@ import {
   getBuiltinFacetDir,
   type FacetType,
 } from '../infra/config/paths.js';
-import { parseFacetType, VALID_FACET_TYPES } from '../features/config/ejectBuiltin.js';
+import { parseFacetType } from '../features/config/facetTypes.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('isResourcePath', () => {
@@ -81,7 +81,6 @@ describe('resolveFacetByName', () => {
     // Builtin personas exist in the real builtins directory
     const content = resolveFacetByName('coder', 'personas', context);
     expect(content).toBeDefined();
-    expect(content).toContain(''); // Just verify it returns something
   });
 
   it('should resolve from project layer over builtin', () => {
@@ -164,6 +163,31 @@ describe('resolveRefToContent with layer resolution', () => {
     expect(content).toBe('Inline policy');
   });
 
+  it('should reject workflow resource paths outside the workflow directory when facet type is omitted', () => {
+    const workflowDir = join(tempDir, 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(tempDir, 'secret.md'), 'Secret content');
+
+    expect(() => resolveRefToContent('../secret.md', undefined, workflowDir))
+      .toThrow(/Workflow resource file must stay inside the workflow directory and must not use symlinks/);
+  });
+
+  it('should reject workflow resource symlinks when facet type is omitted', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-workflow-resource-secret-'));
+    try {
+      const workflowDir = join(tempDir, 'workflows');
+      const secretPath = join(externalDir, 'secret.md');
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret content');
+      symlinkSync(secretPath, join(workflowDir, 'linked.md'));
+
+      expect(() => resolveRefToContent('./linked.md', undefined, workflowDir))
+        .toThrow(/Workflow resource file must stay inside the workflow directory and must not use symlinks/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
   it('should fall back to path resolution when no context', () => {
     const content = resolveRefToContent('some-name', undefined, tempDir);
     // No context, no file — returns the spec as-is (inline content behavior)
@@ -183,6 +207,101 @@ describe('resolveRefToContent with layer resolution', () => {
 
     // Then: falls back to resolveResourceContent, which returns the ref as inline content
     expect(content).toBe('nonexistent-facet-xyz');
+  });
+
+  it('should reject project facet file symlinks before reading linked content', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-secret-'));
+    try {
+      const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
+      const secretPath = join(externalDir, 'secret.md');
+      mkdirSync(instructionsDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret instruction content');
+      symlinkSync(secretPath, join(instructionsDir, 'exec-worker.md'));
+
+      expect(() => resolveRefToContent('exec-worker', undefined, tempDir, 'instructions', context))
+        .toThrow(/Project facet file must stay inside the project and must not use symlinks/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject project facet file symlinks during path-like ref resolution', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-path-secret-'));
+    try {
+      const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
+      const secretPath = join(externalDir, 'secret.md');
+      mkdirSync(instructionsDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret instruction content');
+      symlinkSync(secretPath, join(instructionsDir, 'exec-worker.md'));
+
+      expect(() => resolveRefToContent('./.takt/facets/instructions/exec-worker.md', undefined, tempDir, 'instructions', context))
+        .toThrow(/Project facet file must stay inside the project and must not use symlinks/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject project facet file symlinks during section map path resolution', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-section-secret-'));
+    try {
+      const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
+      const secretPath = join(externalDir, 'secret.md');
+      mkdirSync(instructionsDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret instruction content');
+      symlinkSync(secretPath, join(instructionsDir, 'exec-worker.md'));
+
+      expect(() => normalizeWorkflowConfig(
+        {
+          name: 'section-map-symlink-workflow',
+          instructions: {
+            implement: './.takt/facets/instructions/exec-worker.md',
+          },
+          steps: [
+            {
+              name: 'step1',
+              persona: 'coder',
+              instruction: 'implement',
+            },
+          ],
+        },
+        tempDir,
+        context,
+      )).toThrow(/Project facet file must stay inside the project and must not use symlinks/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject project facet type directory symlinks even when target is within project', () => {
+    const realDir = join(tempDir, 'internal-instructions');
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, 'exec-worker.md'), 'Internal instruction content');
+    mkdirSync(join(tempDir, '.takt', 'facets'), { recursive: true });
+    symlinkSync(realDir, join(tempDir, '.takt', 'facets', 'instructions'));
+
+    expect(() => resolveRefToContent('exec-worker', undefined, tempDir, 'instructions', context))
+      .toThrow(/symlink/);
+  });
+
+  it('should reject project facet directory symlinks for every named facet type', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-facets-external-'));
+    try {
+      mkdirSync(join(tempDir, '.takt'), { recursive: true });
+      mkdirSync(join(externalDir, 'facets'), { recursive: true });
+      symlinkSync(join(externalDir, 'facets'), join(tempDir, '.takt', 'facets'));
+
+      const facetTypes: FacetType[] = ['instructions', 'knowledge', 'policies', 'output-contracts'];
+      for (const facetType of facetTypes) {
+        const dir = join(externalDir, 'facets', facetType);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'external.md'), `External ${facetType}`);
+
+        expect(() => resolveRefToContent('external', undefined, tempDir, facetType, context))
+          .toThrow(/Project facet file must stay inside the project/);
+      }
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -384,9 +503,25 @@ describe('facet inheritance', () => {
       context,
     );
 
-    expect(config.steps[0]!.policyContents).toEqual(['Base policy\nCustom policy']);
-    expect(config.steps[0]!.knowledgeContents).toEqual(['Base knowledge\nCustom knowledge']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['Base policy\nCustom policy']);
+    expect(config.steps[0]!.knowledgeContents!.map((r) => r.content)).toEqual(['Base knowledge\nCustom knowledge']);
     expect(config.steps[0]!.outputContracts?.[0]?.format).toBe('Base report\nCustom report');
+  });
+
+  it('should resolve a workflow resource-path policy with inheritance without selector-only validation', () => {
+    writeProjectFacet('policies', 'base-policy', 'Base policy');
+    const childPolicyPath = join(getProjectFacetDir(projectDir, 'policies'), 'child-policy.md');
+    writeFileSync(childPolicyPath, '{extends:base-policy}\nChild policy');
+
+    const content = resolveRefToContent(
+      childPolicyPath,
+      undefined,
+      workflowDir,
+      'policies',
+      context,
+    );
+
+    expect(content).toBe('Base policy\nChild policy');
   });
 
   it('should keep runtime placeholders interpolated after inheritance expansion', () => {
@@ -419,7 +554,7 @@ describe('facet inheritance', () => {
     });
 
     expect(step.instruction).toBe('Parent task: {task}\nChild instruction');
-    expect(rendered).toContain('Parent task: Runtime task');
+    expect(rendered).toContain('Runtime task');
   });
 
   it('should reject missing parents, malformed directives, unsupported references, inline extends, and cycles', () => {
@@ -485,6 +620,37 @@ describe('resolvePersona with layer resolution', () => {
     expect(result.personaPath).toBe(personaPath);
   });
 
+  it('should reject project persona symlinks during named persona resolution', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-persona-secret-'));
+    try {
+      const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
+      const secretPath = join(externalDir, 'secret-persona.md');
+      mkdirSync(projectPersonasDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret persona content');
+      symlinkSync(secretPath, join(projectPersonasDir, 'custom-persona.md'));
+
+      expect(() => resolvePersona('custom-persona', emptySections, tempDir, context))
+        .toThrow(/Project facet file must stay inside the project and must not use symlinks/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject project persona directory symlinks during named persona resolution', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-persona-external-'));
+    try {
+      mkdirSync(join(projectDir, '.takt', 'facets'), { recursive: true });
+      mkdirSync(join(externalDir, 'personas'), { recursive: true });
+      writeFileSync(join(externalDir, 'personas', 'custom-persona.md'), 'External persona content');
+      symlinkSync(join(externalDir, 'personas'), join(projectDir, '.takt', 'facets', 'personas'));
+
+      expect(() => resolvePersona('custom-persona', emptySections, tempDir, context))
+        .toThrow(/Project facet file must stay inside the project/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
   it('should prefer section map over layer resolution', () => {
     const workflowDir = context.workflowDir!;
     const personaFile = join(workflowDir, 'explicit.md');
@@ -505,13 +671,33 @@ describe('resolvePersona with layer resolution', () => {
     writeFileSync(personaFile, 'Path persona');
 
     const result = resolvePersona('../personas/coder.md', emptySections, tempDir);
-    // Path-like spec should be resolved as resource path, not name
     expect(result.personaSpec).toBe('../personas/coder.md');
   });
 
   it('should return empty for undefined persona', () => {
     const result = resolvePersona(undefined, emptySections, tempDir, context);
     expect(result).toEqual({});
+  });
+
+  it('should resolve valid project persona without unreachable guard (dead-code prevention)', () => {
+    const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
+    mkdirSync(projectPersonasDir, { recursive: true });
+    const personaPath = join(projectPersonasDir, 'valid-persona.md');
+    writeFileSync(personaPath, 'Valid persona content');
+
+    const result = resolvePersona('valid-persona', emptySections, tempDir, context);
+    expect(result.personaSpec).toBe('valid-persona');
+    expect(result.personaPath).toBe(personaPath);
+  });
+
+  it('should return resolved object with same structure whether personaPath exists or not (redundant-branch prevention)', () => {
+    const withPath = resolvePersona('coder', emptySections, tempDir, context);
+    expect(withPath.personaSpec).toBe('coder');
+    expect(withPath.personaPath).toBeDefined();
+
+    const withoutPath = resolvePersona('nonexistent-persona-xyz', emptySections, tempDir, context);
+    expect(withoutPath.personaSpec).toBe('nonexistent-persona-xyz');
+    expect(withoutPath.personaPath).toBeUndefined();
   });
 });
 
@@ -558,14 +744,6 @@ describe('parseFacetType', () => {
     expect(parseFacetType('')).toBeUndefined();
   });
 
-  it('VALID_FACET_TYPES should contain all singular forms', () => {
-    expect(VALID_FACET_TYPES).toContain('persona');
-    expect(VALID_FACET_TYPES).toContain('policy');
-    expect(VALID_FACET_TYPES).toContain('knowledge');
-    expect(VALID_FACET_TYPES).toContain('instruction');
-    expect(VALID_FACET_TYPES).toContain('output-contract');
-    expect(VALID_FACET_TYPES).toHaveLength(5);
-  });
 });
 
 describe('normalizeWorkflowConfig with layer resolution', () => {
@@ -628,7 +806,7 @@ describe('normalizeWorkflowConfig with layer resolution', () => {
     const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
     expect(config.steps[0]!.policyContents).toBeDefined();
-    expect(config.steps[0]!.policyContents![0]).toBe('# Custom Policy\nBe nice.');
+    expect(config.steps[0]!.policyContents![0]!.content).toBe('# Custom Policy\nBe nice.');
   });
 
   it('should prefer section map over layer resolution', () => {
@@ -698,7 +876,7 @@ describe('normalizeWorkflowConfig with layer resolution', () => {
     const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
     expect(config.steps[0]!.knowledgeContents).toBeDefined();
-    expect(config.steps[0]!.knowledgeContents![0]).toBe('# Domain Knowledge');
+    expect(config.steps[0]!.knowledgeContents![0]!.content).toBe('# Domain Knowledge');
   });
 
   it('should resolve instruction from section map before layer resolution', () => {

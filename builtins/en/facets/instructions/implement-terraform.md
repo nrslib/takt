@@ -43,6 +43,9 @@ Small / Medium / Large
 - **Cost impact**: {If applicable}
 ```
 
+{{include:instructions/implementation-path-check}}
+{{include:instructions/post-edit-self-scan}}
+
 **Required output (include headings)**
 ## Work results
 - {Summary of actions taken}

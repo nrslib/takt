@@ -69,6 +69,81 @@ describe('config resolution defaults and project-local priority', () => {
   describe('project-local priority', () => {
     it.each([
       {
+        label: 'provider only',
+        envProvider: 'mock',
+        envModel: undefined,
+        expectedProvider: { value: 'mock', source: 'env' },
+        expectedModel: { value: 'project-model', source: 'project' },
+      },
+      {
+        label: 'model only',
+        envProvider: undefined,
+        envModel: 'env-model',
+        expectedProvider: { value: 'codex', source: 'project' },
+        expectedModel: { value: 'env-model', source: 'env' },
+      },
+      {
+        label: 'provider and model',
+        envProvider: 'mock',
+        envModel: 'env-model',
+        expectedProvider: { value: 'mock', source: 'env' },
+        expectedModel: { value: 'env-model', source: 'env' },
+      },
+    ])('should preserve environment source for $label loaded through project config', ({
+      envProvider,
+      envModel,
+      expectedProvider,
+      expectedModel,
+    }) => {
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'config.yaml'), [
+        'provider: codex',
+        'model: project-model',
+      ].join('\n'), 'utf-8');
+      if (envProvider !== undefined) process.env['TAKT_PROVIDER'] = envProvider;
+      if (envModel !== undefined) process.env['TAKT_MODEL'] = envModel;
+      invalidateAllResolvedConfigCache();
+
+      expect(resolveConfigValueWithSource(projectDir, 'provider')).toEqual(expectedProvider);
+      expect(resolveConfigValueWithSource(projectDir, 'model')).toEqual(expectedModel);
+    });
+
+    it.each([
+      { key: 'provider' as const, workflowValue: 'mock', projectValue: 'codex' },
+      { key: 'model' as const, workflowValue: 'workflow-model', projectValue: 'project-model' },
+    ])('should resolve project $key before workflow config', ({ key, workflowValue, projectValue }) => {
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'config.yaml'), `${key}: ${projectValue}\n`, 'utf-8');
+
+      expect(resolveConfigValueWithSource(projectDir, key, {
+        workflowContext: { [key]: workflowValue },
+      })).toEqual({ value: projectValue, source: 'project' });
+    });
+
+    it.each([
+      { key: 'provider' as const, envName: 'TAKT_PROVIDER', envValue: 'mock', workflowValue: 'codex' },
+      { key: 'model' as const, envName: 'TAKT_MODEL', envValue: 'env-model', workflowValue: 'workflow-model' },
+    ])('should resolve environment $key before workflow config', ({
+      key,
+      envName,
+      envValue,
+      workflowValue,
+    }) => {
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'config.yaml'), `${key}: project-value\n`, 'utf-8');
+      process.env[envName] = envValue;
+      invalidateAllResolvedConfigCache();
+
+      expect(resolveConfigValueWithSource(projectDir, key, {
+        workflowContext: { [key]: workflowValue },
+      })).toEqual({ value: envValue, source: 'env' });
+    });
+
+    it.each([
+      {
         key: 'minimalOutput',
         projectYaml: 'minimal_output: true\n',
         expected: true,
@@ -98,6 +173,16 @@ describe('config resolution defaults and project-local priority', () => {
         projectYaml: 'sync_project_local_takt_on_retry: false\n',
         expected: false,
       },
+      {
+        key: 'autoRequeueMaxAttempts',
+        projectYaml: 'auto_requeue_max_attempts: 2\n',
+        expected: 2,
+      },
+      {
+        key: 'ignoreExceed',
+        projectYaml: 'ignore_exceed: true\n',
+        expected: true,
+      },
     ])('should resolve $key from project config', ({ key, projectYaml, expected }) => {
       writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
       invalidateGlobalConfigCache();
@@ -123,7 +208,7 @@ describe('config resolution defaults and project-local priority', () => {
           'persona_providers:',
           '  coder:',
           '    provider: opencode',
-          '    model: project-model',
+          '    model: opencode/project-model',
         ].join('\n'),
         'utf-8',
       );
@@ -133,8 +218,105 @@ describe('config resolution defaults and project-local priority', () => {
       expect(result.value).toEqual({
         coder: {
           provider: 'opencode',
-          model: 'project-model',
+          model: 'opencode/project-model',
         },
+      });
+    });
+
+    it('Given project and global auto_routing, When resolving effective config, Then the project block wins as a whole', () => {
+      writeFileSync(
+        globalConfigPath,
+        [
+          'language: en',
+          'auto_routing:',
+          '  strategy: cost',
+          '  router:',
+          '    provider: codex',
+          '    model: gpt-5-global-router',
+          '  candidates:',
+          '    - name: global-low',
+          '      description: Global low cost candidate',
+          '      provider: codex',
+          '      model: gpt-5-global-low',
+          '      routing_tier: low',
+          '  default_pool: general',
+          '  candidate_pools:',
+          '    general:',
+          '      candidates: [global-low]',
+          '      fallback: global-low',
+        ].join('\n'),
+        'utf-8',
+      );
+      invalidateGlobalConfigCache();
+
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'config.yaml'),
+        [
+          'auto_routing:',
+          '  strategy: balanced',
+          '  router:',
+          '    provider: codex',
+          '    model: gpt-5-project-router',
+          '  candidates:',
+          '    - name: project-medium',
+          '      description: Project balanced candidate',
+          '      provider: codex',
+          '      model: gpt-5-project-medium',
+          '      routing_tier: medium',
+          '  default_pool: general',
+          '  candidate_pools:',
+          '    general:',
+          '      candidates: [project-medium]',
+          '      fallback: project-medium',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const result = resolveConfigValueWithSource(projectDir, 'autoRouting' as ConfigParameterKey);
+
+      expect(result.source).toBe('project');
+      expect(result.value).toMatchObject({
+        strategy: 'balanced',
+        router: { provider: 'codex', model: 'gpt-5-project-router' },
+        candidates: [{ name: 'project-medium', model: 'gpt-5-project-medium' }],
+      });
+    });
+
+    it('Given only global auto_routing, When resolving effective config, Then the global block is used', () => {
+      writeFileSync(
+        globalConfigPath,
+        [
+          'language: en',
+          'auto_routing:',
+          '  strategy: cost',
+          '  router:',
+          '    provider: codex',
+          '    model: gpt-5-global-router',
+          '  candidates:',
+          '    - name: global-low',
+          '      description: Global low cost candidate',
+          '      provider: codex',
+          '      model: gpt-5-global-low',
+          '      routing_tier: low',
+          '  default_pool: general',
+          '  candidate_pools:',
+          '    general:',
+          '      candidates: [global-low]',
+          '      fallback: global-low',
+        ].join('\n'),
+        'utf-8',
+      );
+      invalidateGlobalConfigCache();
+
+      const result = resolveConfigValueWithSource(projectDir, 'autoRouting' as ConfigParameterKey);
+
+      expect(result.source).toBe('global');
+      expect(result.value).toMatchObject({
+        strategy: 'cost',
+        router: { provider: 'codex', model: 'gpt-5-global-router' },
+        candidates: [{ name: 'global-low', model: 'gpt-5-global-low' }],
       });
     });
 
@@ -191,6 +373,14 @@ describe('config resolution defaults and project-local priority', () => {
       expect(resolveConfigValueWithSource(projectDir, 'interactivePreviewSteps')).toEqual({ value: 3, source: 'default' });
       expect(resolveConfigValueWithSource(projectDir, 'syncProjectLocalTaktOnRetry' as ConfigParameterKey)).toEqual({
         value: true,
+        source: 'default',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'autoRequeueMaxAttempts' as ConfigParameterKey)).toEqual({
+        value: 0,
+        source: 'default',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'ignoreExceed' as ConfigParameterKey)).toEqual({
+        value: false,
         source: 'default',
       });
     });
@@ -291,6 +481,8 @@ describe('config resolution defaults and project-local priority', () => {
           'task_poll_interval_ms: 1200',
           'interactive_preview_steps: 2',
           'sync_project_local_takt_on_retry: false',
+          'auto_requeue_max_attempts: 3',
+          'ignore_exceed: true',
         ].join('\n'),
         'utf-8',
       );
@@ -318,6 +510,47 @@ describe('config resolution defaults and project-local priority', () => {
       expect(resolveConfigValueWithSource(projectDir, 'syncProjectLocalTaktOnRetry' as ConfigParameterKey)).toEqual({
         value: false,
         source: 'global',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'autoRequeueMaxAttempts' as ConfigParameterKey)).toEqual({
+        value: 3,
+        source: 'global',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'ignoreExceed' as ConfigParameterKey)).toEqual({
+        value: true,
+        source: 'global',
+      });
+    });
+
+    it('should let project auto requeue and ignore-exceed values override global values', () => {
+      writeFileSync(
+        globalConfigPath,
+        [
+          'language: en',
+          'auto_requeue_max_attempts: 3',
+          'ignore_exceed: true',
+        ].join('\n'),
+        'utf-8',
+      );
+      invalidateGlobalConfigCache();
+
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'config.yaml'),
+        [
+          'auto_requeue_max_attempts: 0',
+          'ignore_exceed: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(resolveConfigValueWithSource(projectDir, 'autoRequeueMaxAttempts' as ConfigParameterKey)).toEqual({
+        value: 0,
+        source: 'project',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'ignoreExceed' as ConfigParameterKey)).toEqual({
+        value: false,
+        source: 'project',
       });
     });
 

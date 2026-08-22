@@ -29,27 +29,21 @@ Normal steps execute in up to 3 phases. Sessions persist across phases.
 
 ## Rule Evaluation
 
-RuleEvaluator determines the next step via 5-stage fallback. Earlier match takes priority.
+RuleEvaluator evaluates every rule in YAML order and adopts the first matching rule. Semantic labels are selected once during Phase 3; `when(...)` and aggregate conditions are evaluated deterministically in that same ordered loop. If no rule matches, the workflow aborts with `rule_no_match`.
 
 | Priority | Method | Target |
 |----------|--------|--------|
-| 1 | aggregate | parallel parent (all/any) |
-| 2 | Phase 3 tag | `[STEP:N]` output |
-| 3 | Phase 1 tag | `[STEP:N]` output (fallback) |
-| 4 | ai() judge | ai("condition") rules |
-| 5 | AI fallback | AI evaluates all conditions |
-
-When multiple tags appear in output, the **last match** wins.
+| YAML order | condition | first true rule |
 
 ### Condition Syntax
 
 | Syntax | Parsing | Regex |
 |--------|---------|-------|
-| `ai("...")` | AI condition evaluation | `AI_CONDITION_REGEX` |
+| `when(...)` | Deterministic workflow-state predicate | `isWhenConditionExpression` |
 | `all("...")` / `any("...")` | Aggregate condition | `AGGREGATE_CONDITION_REGEX` |
-| Plain string | Tag or AI fallback | — |
+| Plain semantic label | Matches the single Phase 3 selection | — |
 
-Adding new special syntax requires updating both workflowParser.ts regex and RuleEvaluator.
+Semantic and aggregate conditions can be combined with `&& when(...)`. The condition parser and RuleEvaluator must be updated together for new syntax.
 
 ## Provider Integration
 
@@ -60,33 +54,33 @@ Provider.setup(AgentSetup) → ProviderAgent
 ProviderAgent.call(prompt, options) → AgentResponse
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| SDK-specific error handling leaking outside Provider | REJECT |
-| Errors not propagated to AgentResponse.error | REJECT |
-| Session key collision between providers | REJECT |
-| Session key format `{persona}:{provider}` | OK |
 
 ### Model Resolution
 
-Models resolve through 5-level priority. Higher takes precedence.
+Provider and model resolve independently per field. Higher takes precedence.
 
-1. persona_providers model specification
-2. Step model field
-3. CLI `--model` override
-4. config.yaml (when resolved provider matches)
-5. Provider default
+1. CLI / environment explicit override
+2. Matching promotion (normal agent steps only; parallel sub-steps disallow `promotion` at the schema level)
+3. Step / parallel sub-step direct provider / model
+4. workflow_call override
+5. provider_routing (steps → tags → personas)
+6. persona_providers (deprecated)
+7. Auto routing
+8. Workflow → project config.yaml → global config.yaml → provider default
 
 ## Auxiliary Entry Contracts
 
 In TAKT, workflow runtime is not the only user-visible contract entry. Preview, doctor, workflow summary, validation, and report paths are also contract entries. Auxiliary entries that display or validate config values, providers, models, tools, permissions, or output contracts should use the same normalized input, resolver, and override order as runtime.
 
-| Criteria | Judgment |
-|----------|----------|
-| Runtime and preview resolve provider, model, tool, or permission from different inputs | REJECT |
-| Preview only displays a value without verifying the same override conditions as runtime | REJECT |
-| Doctor or validation accepts config that fails at runtime due to different conditions | Warning |
-| Runtime and auxiliary entries share the same normalized input or resolver | OK |
+
+## Runtime Asset Consumption Boundaries
+
+TAKT runtime assets get their meaning from the entry point that consumes them, not only from their location or name. The same string can be an asset reference, session identifier, display name, or directly supplied body, and each is a separate contract.
+
+
+### Reference Names and Identity Names
+
+Strings such as `persona`, `session_key`, and `name` mean different things depending on whether they are reference names or identity names. A reference name causes the corresponding resolver to load an asset. An identity name is a key for sessions, logs, state, or display, and a same-named file is not used unless that entry reads it. When adding a new asset, trace the loader that reads it and the call site that consumes it.
 
 ## Facet Assembly
 
@@ -96,11 +90,6 @@ The faceted-prompting module is independent from TAKT core.
 compose(facets, options) → ComposedPrompt { systemPrompt, userMessage }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Import from faceted-prompting to TAKT core | REJECT |
-| TAKT core depending on faceted-prompting | OK |
-| Facet path resolution logic outside faceted-prompting | Warning |
 
 ### 3-Layer Facet Resolution Priority
 
@@ -108,25 +97,38 @@ Project `.takt/` → User `~/.takt/` → Builtin `builtins/{lang}/`
 
 Same-named facets are overridden by higher-priority layers. Customize builtins by overriding in upper layers.
 
-## Testing Patterns
+## Test Layers and Execution Gates
 
-Uses vitest. Test file naming conventions distinguish test types.
+TAKT classifies unit, light integration, heavy integration, and E2E tests by the boundaries they actually cross, not by filename or duration. A test that starts a real child process is still heavy integration rather than E2E when it calls a local fake CLI from an internal client instead of entering through a user-facing command.
 
-| Prefix | Type | Content |
-|--------|------|---------|
-| None | Unit test | Individual function/class verification |
-| `it-` | Integration test | Workflow execution simulation |
-| `engine-` | Engine test | WorkflowEngine scenario verification |
+| Layer | Boundary | Standard Gate |
+|-------|----------|---------------|
+| Unit | Individual function or class; direct dependencies are test doubles, with no real process, Git, filesystem, or workflow engine | `npm test` |
+| Light integration | Real filesystem, bounded storage, or multiple production components, without resource-heavy process or engine execution | `npm run test:it` |
+| Heavy integration | Real child process, Git, complete WorkflowEngine or TeamLeader execution, or a measured resource-heavy case requiring serial execution | `npm run test:it:heavy` |
+| E2E | Runs the application from a user-facing entry point such as the CLI and observes user-visible results | Provider-specific E2E gate |
+
+### Development Execution Order
+
+| State | Execution |
+|-------|-----------|
+| During implementation | Repeat the unit gate |
+| After implementation | Run the light integration gate after the unit gate |
+| Added or changed an integration test | Run the `releaseVerificationWiring.test.ts` classification contract by itself |
+| Added or changed a heavy integration test | Run the changed file yourself as a target instead of waiting for the full heavy suite |
+| Pull request or release | Run the complete light and heavy integration suites |
+
+Heavy integration runners use one worker to avoid process, Git, and synchronous I/O contention. Full local execution is serial, while pull-request CI splits heavy parallel integration across four isolated runners and isolates each serial group on its own runner. `npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy integration test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light integration, heavy integration, prompt evaluation, and E2E in order.
 
 ### Mock Provider
 
 `--provider mock` returns deterministic responses. Scenario queues compose multi-turn tests.
 
 ```typescript
-// NG - Calling real API in tests
+// Avoid: Calling real API in tests
 const response = await callClaude(prompt)
 
-// OK - Set up scenario with mock provider
+// Example: Set up scenario with mock provider
 setMockScenario([
   { persona: 'coder', status: 'done', content: '[STEP:1]\nDone.' },
   { persona: 'reviewer', status: 'done', content: '[STEP:1]\napproved' },
@@ -135,28 +137,27 @@ setMockScenario([
 
 ### Test Isolation
 
-| Criteria | Judgment |
-|----------|----------|
-| Tests sharing global state | REJECT |
-| Environment variables not cleared in test setup | Warning |
-| E2E tests assuming real API | Isolate via `provider` config |
+
+## Platform Priority
+
+TAKT treats Windows as a secondary platform.
 
 ## Error Propagation
 
 Provider errors propagate through: `AgentResponse.error` → session log → console output.
 
-| Criteria | Judgment |
-|----------|----------|
-| SDK error results in empty `blocked` status | REJECT |
-| Error details not recorded in session log | REJECT |
-| No ABORT transition defined for error cases | Warning |
 
 ## Session Management
 
-Agent sessions are stored per-cwd. Session resume is skipped during worktree/clone execution.
+Agent sessions are stored per-cwd and per-provider. Session resume is skipped during worktree/clone execution.
 
-| Criteria | Judgment |
-|----------|----------|
-| Session resuming when `cwd !== projectCwd` | REJECT (cross-project contamination) |
-| Session key missing provider identifier | REJECT (cross-provider contamination) |
-| Session broken between phases | REJECT (context loss) |
+When a normal Phase 1 response merely omits `sessionId`, that alone is not a reason to discard the existing session. Paths that are allowed to continue the existing resume context should preserve the old sessionId.
+
+However, when a retry or fallback explicitly runs as a new session and succeeds, a missing `sessionId` must not continue using the old resumed session. The storage layer must be told that the new run produced no sessionId, so the old session is cleared or isolated.
+
+The Report Phase is Phase 2 and reads Phase 1 outputs. Its execution contract is readonly and tool-free. Report retry/fallback must preserve `permissionMode: readonly`, empty tool permission, and provider capability overrides such as turn limits.
+
+
+## Termination-Path Completeness
+
+For features that create temporary files or external resources, verify that they are released not only on normal completion but at every terminal: failure, cancellation, and forced termination. `process.exit()` and forced termination (repeated SIGINT, an abort handler that exits immediately) do not run `finally` blocks. Cleanup that relies on `finally` is bypassed on any path that calls `process.exit` inside it and on forced-termination paths. For each entry point that creates resources, build the list of terminals (normal, failure, cancellation, forced termination) and enumerate the terminals where cleanup does not run.

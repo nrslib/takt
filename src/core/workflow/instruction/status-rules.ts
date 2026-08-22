@@ -8,7 +8,8 @@
  * that are passed as template variables to Phase 1/Phase 3 templates.
  */
 
-import type { WorkflowRule, Language } from '../../models/types.js';
+import type { Language } from '../../models/types.js';
+import type { SemanticRuleCandidate } from '../../models/workflow-rule-condition.js';
 
 /** Components of the generated status rules */
 export interface StatusRulesComponents {
@@ -27,15 +28,10 @@ export interface StatusRulesComponents {
  */
 export function generateStatusRulesComponents(
   stepName: string,
-  rules: WorkflowRule[],
+  candidates: SemanticRuleCandidate[],
   language: Language,
-  options?: { interactive?: boolean },
 ): StatusRulesComponents {
   const tag = stepName.toUpperCase();
-  const interactiveEnabled = options?.interactive;
-  const visibleRules = rules
-    .map((rule, index) => ({ rule, index }))
-    .filter(({ rule }) => interactiveEnabled !== false || !rule.interactiveOnly);
 
   // Build criteria table rows
   const headerNum = '#';
@@ -45,8 +41,8 @@ export function generateStatusRulesComponents(
   const tableLines = [
     `| ${headerNum} | ${headerCondition} | ${headerTag} |`,
     '|---|------|------|',
-    ...visibleRules.map(({ rule, index }) =>
-      `| ${index + 1} | ${rule.condition} | \`[${tag}:${index + 1}]\` |`,
+    ...candidates.map((candidate, index) =>
+      `| ${index + 1} | ${candidate.label} | \`[${tag}:${index + 1}]\` |`,
     ),
   ];
   const criteriaTable = tableLines.join('\n');
@@ -59,14 +55,14 @@ export function generateStatusRulesComponents(
   const outputLines = [
     outputInstruction,
     '',
-    ...visibleRules.map(({ rule, index }) =>
-      `- \`[${tag}:${index + 1}]\` — ${rule.condition}`,
+    ...candidates.map((candidate, index) =>
+      `- \`[${tag}:${index + 1}]\` — ${candidate.label}`,
     ),
   ];
   const outputList = outputLines.join('\n');
 
   // Build appendix content
-  const rulesWithAppendix = visibleRules.filter(({ rule }) => rule.appendix);
+  const rulesWithAppendix = candidates.filter((candidate) => candidate.appendix);
   const hasAppendix = rulesWithAppendix.length > 0;
   let appendixContent = '';
 
@@ -76,13 +72,13 @@ export function generateStatusRulesComponents(
       : 'When outputting `[{tag}]`, append the following:';
 
     const appendixBlocks: string[] = [];
-    for (const { rule, index } of visibleRules) {
-      if (!rule.appendix) continue;
+    for (const [index, candidate] of candidates.entries()) {
+      if (!candidate.appendix) continue;
       const tagStr = `[${tag}:${index + 1}]`;
       appendixBlocks.push('');
       appendixBlocks.push(appendixInstructionTemplate.replace('{tag}', tagStr));
       appendixBlocks.push('```');
-      appendixBlocks.push(rule.appendix.trimEnd());
+      appendixBlocks.push(candidate.appendix.trimEnd());
       appendixBlocks.push('```');
     }
     appendixContent = appendixBlocks.join('\n');

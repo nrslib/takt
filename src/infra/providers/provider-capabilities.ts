@@ -1,44 +1,26 @@
 import type { ProviderType } from './types.js';
 import { getProvider } from './index.js';
 
-const MCP_SERVER_PROVIDERS = new Set<ProviderType>([
-  'claude',
-  'claude-sdk',
-  'claude-terminal',
+const ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
+  'claude', 'claude-sdk', 'claude-terminal', 'opencode', 'pi', 'mock',
 ]);
 
-const ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
-  'claude',
-  'claude-sdk',
-  'claude-terminal',
-  'opencode',
-  'mock',
+const CLAUDE_ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
+  'claude', 'claude-sdk', 'claude-terminal', 'mock',
 ]);
 
-const CLAUDE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
-  'claude',
-  'claude-sdk',
-  'claude-terminal',
-  'mock',
-]);
+const OPENCODE_ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set(['opencode']);
 
-const OPENCODE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
-  'opencode',
-]);
-
-const MAX_TURNS_PROVIDERS = new Set<ProviderType>([
-  'claude',
-  'claude-sdk',
-  'codex',
-  'cursor',
-  'copilot',
-  'mock',
+const MAX_TURNS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
+  'claude', 'claude-sdk', 'codex', 'cursor', 'copilot', 'mock',
 ]);
 
 interface ProviderCapabilities {
   supportsStructuredOutput: boolean;
+  supportsIsolatedStructuredExecution: boolean;
   supportsNativeImageInput: boolean;
   supportsMcpServers: boolean;
+  supportsStrictMcpConfig: boolean;
   supportsAllowedTools: boolean;
   supportsClaudeAllowedTools: boolean;
   supportsOpenCodeAllowedTools: boolean;
@@ -53,11 +35,17 @@ function resolveProviderCapabilities(
   }
 
   const providerImpl = getProvider(provider);
+  if (providerImpl === undefined) {
+    return undefined;
+  }
+  const mcpTransports = providerImpl.supportedMcpTransports;
 
   return {
     supportsStructuredOutput: providerImpl.supportsStructuredOutput,
+    supportsIsolatedStructuredExecution: providerImpl.supportsIsolatedStructuredExecution === true,
     supportsNativeImageInput: providerImpl.supportsNativeImageInput,
-    supportsMcpServers: MCP_SERVER_PROVIDERS.has(provider),
+    supportsMcpServers: mcpTransports !== undefined && mcpTransports.size > 0,
+    supportsStrictMcpConfig: providerImpl.supportsStrictMcpConfig === true,
     supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsClaudeAllowedTools: CLAUDE_ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsOpenCodeAllowedTools: OPENCODE_ALLOWED_TOOLS_PROVIDERS.has(provider),
@@ -65,10 +53,39 @@ function resolveProviderCapabilities(
   };
 }
 
+export function providerSupportsIsolatedStructuredExecution(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsIsolatedStructuredExecution;
+}
+
+export function assertProviderSupportsIsolatedStructuredExecution(
+  provider: ProviderType,
+): void {
+  if (providerSupportsIsolatedStructuredExecution(provider) !== true) {
+    throw new Error(`Provider "${provider}" does not support isolated structured execution`);
+  }
+}
+
 export function providerSupportsStructuredOutput(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsStructuredOutput;
+}
+
+export function providerSupportsPermissionControls(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  if (provider === undefined) {
+    return undefined;
+  }
+  const providerImpl = getProvider(provider);
+  if (providerImpl === undefined) {
+    return undefined;
+  }
+  return providerImpl.supportsPermissionControls === undefined
+    ? undefined
+    : providerImpl.supportsPermissionControls();
 }
 
 export function providerSupportsNativeImageInput(
@@ -81,6 +98,12 @@ export function providerSupportsMcpServers(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsMcpServers;
+}
+
+export function providerSupportsStrictMcpConfig(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsStrictMcpConfig;
 }
 
 export function providerSupportsAllowedTools(
@@ -116,4 +139,15 @@ export function providerKeepsAllowedToolWithoutEdit(
   }
 
   return getProvider(provider).keepsAllowedToolWithoutEdit(tool);
+}
+
+export function providerDefaultAllowedToolsWithoutEdit(
+  provider: ProviderType | undefined,
+): string[] | undefined {
+  if (provider === undefined) {
+    return undefined;
+  }
+
+  const tools = getProvider(provider).getDefaultAllowedToolsWithoutEdit?.();
+  return tools === undefined ? undefined : [...tools];
 }

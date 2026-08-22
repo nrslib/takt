@@ -1,12 +1,18 @@
-import type { WorkflowRule, PartDefinition } from '../../core/models/types.js';
+import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-condition.js';
 import type { JudgeStatusOptions, JudgeStatusResult, EvaluateConditionOptions } from '../judge-status-usecase.js';
-import type { DecomposeTaskOptions, MorePartsOptions, MorePartsResponse } from '../decompose-task-usecase.js';
+import type {
+  DecomposeTaskOptions,
+  DecomposeTaskResponse,
+  MorePartsOptions,
+  MorePartsResponse,
+  TeamLeaderPartFeedbackResult,
+} from '../decompose-task-usecase.js';
 
 export interface StructuredCaller {
   judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,
-    rules: WorkflowRule[],
+    candidates: SemanticRuleCandidate[],
     options: JudgeStatusOptions,
   ): Promise<JudgeStatusResult>;
 
@@ -18,15 +24,15 @@ export interface StructuredCaller {
 
   decomposeTask(
     instruction: string,
-    maxTotalParts: number,
+    maxInitialParts: number | undefined,
     options: DecomposeTaskOptions,
-  ): Promise<PartDefinition[]>;
+  ): Promise<DecomposeTaskResponse>;
 
   requestMoreParts(
     originalInstruction: string,
-    allResults: Array<{ id: string; title: string; status: string; content: string }>,
+    allResults: TeamLeaderPartFeedbackResult[],
     existingIds: string[],
-    maxAdditionalParts: number,
     options: MorePartsOptions,
   ): Promise<MorePartsResponse>;
+
 }

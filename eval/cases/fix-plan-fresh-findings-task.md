@@ -1,0 +1,1 @@
+Cache keys are case-insensitive and ignore surrounding whitespace at the normalization boundary and throughout every reachable production use, including persisted round trips and externally visible representations. Preserve invalid-key behavior and do not change unrelated documentation. Discover the affected consumers from actual references, calls, and data flow.

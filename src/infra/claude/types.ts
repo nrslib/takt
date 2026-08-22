@@ -23,6 +23,8 @@ import type {
   StreamErrorEventData as SharedErrorEventData,
   StreamAssistantErrorEventData as SharedAssistantErrorEventData,
   StreamRateLimitEventData as SharedRateLimitEventData,
+  InternalAgentIsolation,
+  ProviderActivityCallback,
 } from '../../shared/types/provider.js';
 
 export type { SandboxSettings };
@@ -103,11 +105,15 @@ export interface ClaudeCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   model?: string;
   effort?: ClaudeEffort;
+  skillsEnabled?: boolean;
   maxTurns?: number;
   systemPrompt?: string;
   /** SDK agents to register for sub-agent execution */
@@ -116,6 +122,7 @@ export interface ClaudeCallOptions {
   permissionMode?: PermissionMode;
   /** Enable streaming mode with callback for real-time output */
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   /** Custom permission handler for interactive permission prompts */
   onPermissionRequest?: PermissionHandler;
   /** Custom handler for AskUserQuestion tool */
@@ -124,6 +131,8 @@ export interface ClaudeCallOptions {
   bypassPermissions?: boolean;
   /** Anthropic API key to inject via env (bypasses CLI auth) */
   anthropicApiKey?: string;
+  /** Anthropic-compatible API base URL */
+  baseUrl?: string;
   /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
   /** Sandbox settings for Claude SDK */
@@ -139,15 +148,25 @@ export interface ClaudeSpawnOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Provider-prepared MCP material (issue #1137). When present, the SDK
+   * options builder merges `sdkOptions.mcpServers`/`strictMcpConfig` on top
+   * of the legacy `mcpServers` field so runtime MCP assignment takes effect
+   * for normal agent steps (not only `strict-readonly`).
+   */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   model?: string;
   effort?: ClaudeEffort;
+  skillsEnabled?: boolean;
   maxTurns?: number;
   systemPrompt?: string;
   /** Enable streaming mode with callback */
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   /** Custom agents to register */
   agents?: Record<string, AgentDefinition>;
   /** Permission mode for tool execution (TAKT abstract value, mapped to SDK value in SdkOptionsBuilder) */
@@ -160,6 +179,8 @@ export interface ClaudeSpawnOptions {
   bypassPermissions?: boolean;
   /** Anthropic API key to inject via env (bypasses CLI auth) */
   anthropicApiKey?: string;
+  /** Anthropic-compatible API base URL */
+  baseUrl?: string;
   /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
   /** Callback for stderr output from the Claude Code process */

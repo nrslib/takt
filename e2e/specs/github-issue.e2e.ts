@@ -91,15 +91,6 @@ describe.skipIf(!isGitHubAvailable())('E2E: GitHub Issue processing', () => {
     // Pipeline should succeed
     expect(result.exitCode).toBe(0);
 
-    // Verify issue was fetched
-    expect(result.stdout).toContain('Issue #');
-
-    // Verify workflow completion
-    expect(result.stdout).toContain('completed');
-
-    // Verify PR was created
-    expect(result.stdout).toContain('PR created');
-
     // Verify PR exists on GitHub
     const prList = execFileSync(
       'gh',

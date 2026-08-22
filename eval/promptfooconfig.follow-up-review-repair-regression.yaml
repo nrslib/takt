@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: follow-up review independently falsifies remediation claims'
+
+prompts:
+  - file://prompts/follow-up-review-repair-regression.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/follow-up-review-repair-regression
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'follow-up review: distinguish an incomplete repair from repair-induced and adjacent contract defects'
+    vars:
+      task: file://cases/follow-up-review-repair-regression-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: review/remediation-falsification
+        value: |
+          Judge causal classification and code evidence, not headings, table shape, labels, or exact wording. Pass only if the review rejects and does all of the following:
+
+          - It identifies src/public-key.js as a collision defect introduced by the repair, and makes clear that the repair introduced this new finding.
+          - It separately keeps the original finding unresolved for src/retry-token.js and src/checkpoint.js.
+          - It starts from publishResource() in src/application.js and uses its call and returned-record data flow to identify src/resource-record.js as an existing but previously unvisited consumer of the accepted compound-resource-identity family. It must explain that the initial round omitted this consumer rather than dismissing it as a pre-existing or carryover issue.
+          - It records an authorization basis for each new finding: repair-induced regression for src/public-key.js, and accepted-family unvisited consumer plus required consumer migration for src/resource-record.js. Equivalent phrasing is acceptable.
+          - It explains from the same entry-point data flow why src/primary-key.js and src/structured-key.js are clean and why the separate presentation contract in src/resource-text.js is not actionable.
+
+          Merely listing paths or grouping all defects under the original persistent finding fails because it does not provide the connection and causal-classification evidence that distinguishes the repair-induced regression from the initially missed accepted-family consumer. Expanding into the neighboring text contract also fails.

@@ -87,6 +87,27 @@ describe('serializeTaskListItemForJson', () => {
     });
   });
 
+  it('maps context_pr_number into json data', () => {
+    const task: TaskListItem = {
+      kind: 'pending',
+      name: 'context-pr-task',
+      createdAt: '2026-04-03T00:00:00.000Z',
+      filePath: '/tmp/.takt/tasks/context.yaml',
+      content: 'body',
+      data: {
+        task: 'context work',
+        context_pr_number: 938,
+      },
+    };
+
+    const serialized = serializeTaskListItemForJson(task);
+
+    expect(serialized.data).toMatchObject({
+      task: 'context work',
+      context_pr_number: 938,
+    });
+  });
+
   it('maps managed_pr true into json data', () => {
     const task = {
       kind: 'pending',

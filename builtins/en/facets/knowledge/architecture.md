@@ -1,17 +1,38 @@
 # Architecture Knowledge
 
+## Boundaries That Aggregate Multiple Failures
+
+When a process combines multiple results, it selects one result using the rule defined for that process. Every control decision and external representation comes from that same result. Other results may remain recorded, but they do not replace the selected result through a priority rule that was not defined.
+
+
+A shared classification step converts each response or exception exactly once into a result with its classification, cause, and recovery method. Each parallel operation, parent-child operation, or batch selects one result using its own rule. The output step derives status, category, reason, retry, fallback, stop decisions, abort reasons, and external representations from the selected result. Do not replace these three steps with one universal priority rule.
+
+```typescript
+// Avoid: select different parent fields from different siblings
+const retryable = outcomes.find((outcome) => outcome.recovery === 'retry');
+const categorized = outcomes.find((outcome) => outcome.category !== undefined);
+return {
+  action: retryable ? 'retry' : 'stop',
+  category: categorized?.category,
+  abortReason: retryable?.detail,
+};
+
+// Example: select once through the boundary policy and project one primary
+const outcomes = responses.map(classifyOutcome);
+const primary = selectPrimaryOutcome(outcomes, boundaryPolicy);
+return {
+  action: decideRecovery(primary.recovery),
+  category: primary.category,
+  reason: primary.detail,
+  abortReason: primary.detail,
+};
+```
+
 ## Structure & Design
 
 **File Organization:**
 
-| Criteria | Judgment |
-|----------|----------|
-| Single file > 200 lines | Consider splitting |
-| Single file > 300 lines | Warning. Suggest splitting |
-| Single file with multiple responsibilities | REJECT |
-| Unrelated code coexisting | REJECT |
-
-Line count is a review or doctor warning signal, not a pass/fail condition for unit tests or snapshot tests.
+A file should group code with the same responsibility and reason to change. Line count can prompt a closer look, but it is neither a reason to split nor a quality gate. Separate responsibilities that change independently; small definitions that collaborate closely and change for the same reason may stay together.
 
 **Module Structure:**
 
@@ -22,28 +43,17 @@ Line count is a review or doctor warning signal, not a pass/fail condition for u
 
 **Operation Discoverability:**
 
-When calls to the same generic function are scattered across the codebase with different purposes, it becomes impossible to understand what the system does without grepping every call site. Group related operations into purpose-named functions within a single module. Reading that module should reveal the complete list of operations the system performs.
-
-| Judgment | Criteria |
-|----------|----------|
-| REJECT | Same generic function called directly from 3+ places with different purposes |
-| REJECT | Understanding all system operations requires grepping every call site |
-| OK | Purpose-named functions defined and collected in a single module |
+Domain operations and external side effects are easier to understand when their purpose and owner can be followed through named boundaries. Calls that reconstruct the same contract in multiple places are candidates for a common owner. Direct use of a generic API whose intent is already clear does not need a wrapper merely to create a catalog.
 
 **Public API Surface:**
 
 Public APIs should expose only domain-level functions and types. Do not export infrastructure internals (provider-specific functions, internal parsers, etc.).
 
-| Judgment | Criteria |
-|----------|----------|
-| REJECT | Infrastructure-layer functions exported from public API |
-| REJECT | Internal implementation functions callable from outside |
-| OK | External consumers interact only through domain-level abstractions |
 
 **Function Design:**
 
 - One responsibility per function
-- Consider splitting functions over 30 lines
+- Separate processing with an independent role or reason to change
 - Side effects clearly defined
 
 **Layer Design:**
@@ -81,45 +91,36 @@ src/
     └── middleware/
 ```
 
-Vertical Slice criteria:
+Vertical Slice selection factors:
 
-| Criteria | Judgment |
-|----------|----------|
-| Single feature spans 3+ layers | Consider slicing |
-| Minimal inter-feature dependencies | Recommend slicing |
-| Over 50% shared processing | Keep layered |
-| Team organized by features | Slicing required |
+| Condition | Meaning / options |
+|-----------|-------------------|
+| A feature has an independent business responsibility, reason to change, and data owner | Candidate for a slice |
+| The feature boundary aligns with existing dependency directions or deployment boundaries | Slicing can clarify ownership |
+| Multiple features share the same business rules and reason to change | Consider layered or hybrid structure that preserves a common owner |
+| Feature-specific responsibilities and cross-cutting infrastructure change for different reasons | Candidate for a hybrid of feature slices and shared infrastructure |
 
-Prohibited patterns:
-
-| Pattern | Problem |
-|---------|---------|
-| Bloated `utils/` | Becomes graveyard of unclear responsibilities |
-| Lazy placement in `common/` | Dependencies become unclear |
-| Excessive nesting (4+ levels) | Navigation difficulty |
-| Mixed features and layers | `features/services/` prohibited |
+`utils/` and `common/` tend to grow without expressing a responsibility or owner. When features and layers are represented in the same hierarchy, verify the dependency direction and change impact.
 
 **Separation of Concerns:**
 
 - Read and write responsibilities separated
 - Data fetching at root (View/Controller), passed to children
-- Error handling centralized (no try-catch scattered everywhere)
+- Exception translation for the same external contract is consolidated under its boundary owner, while different contracts remain at their respective boundaries
 - Business logic not leaking into Controller/View
+
+**Exception Translation at Protocol Boundaries:**
+
+Adapters such as HTTP, CLI, GraphQL, and message consumers are boundaries that translate internal exceptions into external protocol representations. Scattering the same try-catch / response translation across endpoints or handlers easily makes status codes, error shapes, logs, and authorization failures inconsistent. Centralize exception translation in a dedicated layer at the adapter boundary, and keep only truly cross-cutting translations in a global handler.
+
 
 ## Resolve at the Boundary
 
 Values such as config, options, providers, permissions, and paths should be resolved at the boundary before entering the core flow. Main processing should assume values are already resolved and should not keep asking config sources.
 
-| Criteria | Judgment |
-|----------|----------|
-| Create a resolved object such as `ExecutionContext` or `ResolvedOptions` at the entry point | OK |
-| Orchestration layers handle only resolved values | OK |
-| Lower layers reload global/project/env and resolve the same value again | REJECT |
-| Separate resolution functions exist for display and execution | REJECT |
-| Unresolved options are passed deep and later fixed with `??` | REJECT |
 
 ```typescript
-// REJECT - Execution layer knows config sources directly
+// Avoid: Execution layer knows config sources directly
 async function executeWorkflow(options) {
   const engine = new WorkflowEngine({
     provider: options.provider ?? globalConfig.provider,
@@ -133,7 +134,7 @@ class AgentRunner {
   }
 }
 
-// OK - Resolve at the boundary, use resolved values internally
+// Example: Resolve at the boundary, use resolved values internally
 async function executeWorkflow(options) {
   const context = resolveExecutionContext(options);
   const engine = new WorkflowEngine(context);
@@ -150,40 +151,22 @@ class AgentRunner {
 
 Do not make lower layers inspect config sources and decide for themselves. Upper layers should tell them what to use by passing resolved values. Separate value selection from execution.
 
-| Pattern | Judgment |
-|---------|----------|
-| Upper layer passes a value such as `resolvedProvider` | OK |
-| Lower layer inspects `options` and resolves on its own | REJECT |
-| Execution object exposes only `run()` after `setup(config)` | OK |
-| Runtime branches call `getGlobalConfig()` during execution | REJECT |
 
 ### Anti-Corruption Layer
 
 Precedence resolution and external config formats belong in a dedicated boundary layer. Pass only normalized internal values into the core model.
 
-| Pattern | Judgment |
-|---------|----------|
-| Encapsulate YAML/env/CLI differences in a resolver/adapter | OK |
-| Domain layer directly handles env var names or config key strings | REJECT |
-| Conversion from external form to internal form is centralized in one place | OK |
-| Same normalization logic is copied in multiple places | REJECT |
 
 ### Separating Candidate Resolution from Value Composition
 
 Selecting a referenced target from multiple candidates and composing the selected value are separate contracts. Mixing lookup order, override rules, and reference kinds makes display, validation, and execution drift.
 
-| Criteria | Judgment |
-|----------|----------|
-| Candidate lookup is first-match, but multiple candidates are implicitly composed because it is confused with value deep-merge | REJECT |
-| Nearer-scope candidates are searched after farther-scope candidates | REJECT |
-| Reference strings are classified only by the presence of a separator, confusing special references with explicit paths | REJECT |
-| Candidate lookup, reference-kind classification, and value composition are readable as separate responsibilities | OK |
 
 ```typescript
-// REJECT - Reference kind and lookup basis are mixed into one condition
+// Avoid: Reference kind and lookup basis are mixed into one condition
 const root = ref.includes('/') ? currentRoot : ownerRoot
 
-// OK - Classify first, then resolve according to that kind's contract
+// Example: Classify first, then resolve according to that kind's contract
 const kind = classifyReference(ref)
 const root = resolveRootForReference(kind, resolvedPath)
 ```
@@ -192,34 +175,21 @@ const root = resolveRootForReference(kind, resolvedPath)
 
 Values read from external files or configuration may be syntactically valid while not matching the expected shape. Treat them as unknown at the boundary, normalize into arrays, records, or scalars, and only then pass them into internal processing.
 
-| Criteria | Judgment |
-|----------|----------|
-| Calling array methods or accessing properties directly on parsed unknown values | REJECT |
-| Treating existence alone as satisfying file type or directory requirements | REJECT |
-| Boundary code normalizes unknown values into internal types and pins contract-invalid shapes to ignore, normalize, or explicit-error behavior | OK |
-| File and directory requirements are verified down to the actual entry kind | OK |
 
 ### Phase Separation
 
 Separate input, interpretation, execution, and output into distinct stages. Iterative processing should, as much as possible, receive already interpreted input in bulk and then repeat only execution.
 
-| Criteria | Judgment |
-|----------|----------|
-| Convert raw input into a `Resolved*` type at the boundary before entering the core flow | OK |
-| Loop body handles only execution on resolved data | OK |
-| Config/env/options are interpreted inside every iteration | REJECT |
-| Each iteration packs `input -> interpret -> execute -> output` into one function | REJECT |
-| Even when optimization requires incremental handling, interpretation is isolated in a dedicated method | OK |
 
 ```typescript
-// REJECT - Each iteration also interprets input
+// Avoid: Each iteration also interprets input
 for (const item of items) {
   const resolved = resolveItem(item, rawOptions, config);
   const result = execute(resolved);
   output(result);
 }
 
-// OK - Interpret first, iterations only execute
+// Example: Interpret first, iterations only execute
 const resolvedItems = items.map((item) => resolveItem(item, rawOptions, config));
 
 for (const item of resolvedItems) {
@@ -236,42 +206,33 @@ Even when interpretation must happen incrementally, keep `nextRawInput()`, `reso
 
 Detect comments that simply restate code behavior in natural language.
 
-| Judgment | Criteria |
-|----------|----------|
-| REJECT | Restates code behavior in natural language |
-| REJECT | Repeats what is already obvious from function/variable names |
-| REJECT | JSDoc that only paraphrases the function name without adding information |
-| OK | Explains why a particular implementation was chosen |
-| OK | Explains the reason behind seemingly unusual behavior |
-| OK | Explains the calculation basis or components of a constant or magic number |
-| Best | No comment needed — the code itself communicates intent |
 
 ```typescript
-// REJECT - Restates code (What)
+// Avoid: Restates code (What)
 // If interrupted, abort immediately
 if (status === 'interrupted') {
   return ABORT_STEP;
 }
 
-// REJECT - Restates the loop
+// Avoid: Restates the loop
 // Check transitions in order
 for (const transition of step.transitions) {
 
-// REJECT - Repeats the function name
+// Avoid: Repeats the function name
 /** Check if status matches transition condition. */
 export function matchesCondition(status: Status, condition: TransitionCondition): boolean {
 
-// OK - Design decision (Why)
+// Example: Design decision (Why)
 // User interruption takes priority over workflow-defined transitions
 if (status === 'interrupted') {
   return ABORT_STEP;
 }
 
-// OK - Reason behind seemingly odd behavior
+// Example: Reason behind seemingly odd behavior
 // stay can cause loops, but is only used when explicitly specified by the user
 return step.name;
 
-// OK - Calculation basis for a constant
+// Example: Calculation basis for a constant
 // paddingTop + paddingBottom + button height
 const footerHeight = 24 + 12 + 48;
 ```
@@ -281,27 +242,27 @@ const footerHeight = 24 + 12 + 48;
 Detect direct mutation of arrays or objects.
 
 ```typescript
-// REJECT - Direct array mutation
+// Avoid: Direct array mutation
 const steps: Step[] = getSteps();
 steps.push(newStep);           // Mutates original array
 steps.splice(index, 1);       // Mutates original array
 steps[0].status = 'done';     // Nested object also mutated directly
 
-// OK - Immutable operations
+// Example: Immutable operations
 const withNew = [...steps, newStep];
 const without = steps.filter((_, i) => i !== index);
 const updated = steps.map((s, i) =>
   i === 0 ? { ...s, status: 'done' } : s
 );
 
-// REJECT - Direct object mutation
+// Avoid: Direct object mutation
 function updateConfig(config: Config) {
   config.logLevel = 'debug';   // Mutates argument directly
   config.steps.push(newStep);  // Nested mutation too
   return config;
 }
 
-// OK - Returns new object
+// Example: Returns new object
 function updateConfig(config: Config): Config {
   return {
     ...config,
@@ -323,30 +284,11 @@ function updateConfig(config: Config): Config {
 - Mockable design
 - Tests are written
 
-## Anti-Pattern Detection
-
-REJECT when these patterns are found:
-
-| Anti-Pattern | Problem |
-|--------------|---------|
-| God Class/Component | Single class with too many responsibilities |
-| Feature Envy | Frequently accessing other modules' data |
-| Shotgun Surgery | Single change ripples across multiple files |
-| Over-generalization | Variants and extension points not currently needed |
-| Hidden Dependencies | Child components implicitly calling APIs etc. |
-| Non-idiomatic | Custom implementation ignoring language/FW conventions |
-
 ## Abstraction Level Evaluation
 
-**Conditional Branch Proliferation Detection:**
+**Conditionals and Abstraction:**
 
-| Pattern | Judgment |
-|---------|----------|
-| Same if-else pattern in 3+ places | Abstract with polymorphism → REJECT |
-| switch/case with 5+ branches | Consider Strategy/Map pattern |
-| Flag arguments changing behavior | Split into separate functions → REJECT |
-| Type-based branching (instanceof/typeof) | Replace with polymorphism → REJECT |
-| Nested conditionals (3+ levels) | Early return or extract → REJECT |
+Branch counts and syntax do not determine the right abstraction. Once two implementations with the same meaning, contract, and reason to change are observed, decide whether they belong under a common owner. A first implementation can still deserve an abstraction when it already crosses a real boundary such as external I/O versus domain logic, policy versus mechanism, or public contract versus internal implementation. Do not add Strategy or polymorphic variants based only on predicted future needs.
 
 **Abstraction Level Mismatch Detection:**
 
@@ -414,50 +356,9 @@ Don't overlook compromises made to "just make it work."
 
 Unfinished-code judgment follows the coding policy. In architecture review, check whether TODO/FIXME comments, empty implementations, or stubs are being used as substitutes for required boundaries, authorization, validation, or contract updates.
 
-TODO/FIXME without an issue number, external blocker, and removal condition is REJECT.
-
-```kotlin
-// REJECT - Authorization check deferred with TODO
-// TODO: Add authorization check by facility ID
-fun deleteCustomHoliday(@PathVariable id: String) {
-    deleteCustomHolidayInputPort.execute(input)
-}
-
-// APPROVE - Implement now
-fun deleteCustomHoliday(@PathVariable id: String) {
-    val currentUserFacilityId = getCurrentUserFacilityId()
-    val holiday = findHolidayById(id)
-    require(holiday.facilityId == currentUserFacilityId) {
-        "Cannot delete holiday from another facility"
-    }
-    deleteCustomHolidayInputPort.execute(input)
-}
-```
-
-Acceptable TODO/FIXME cases:
-
-| Condition | Example | Judgment |
-|-----------|---------|----------|
-| External dependency prevents implementation + issue exists + removal condition documented | `// TODO(#123): Implement after API key obtained` | Acceptable |
-| Technical constraint prevents implementation + issue exists + removal condition documented | `// TODO(#456): Waiting for library bug fix` | Acceptable |
-| "Future implementation", "add later" | `// TODO: Add validation` | REJECT |
-| "No time for now" | `// TODO: Refactor` | REJECT |
-
-Correct handling:
-- Needed now → Implement now
-- Not needed now → Delete the code
-- External blocker → Create issue and include ticket number in comment
-
 ## DRY Violation Detection
 
-Eliminate duplication by default. When logic is essentially the same and should be unified, apply DRY. Do not judge mechanically by count.
-
-| Pattern | Judgment |
-|---------|----------|
-| Essentially identical logic duplicated | REJECT - Extract to function/method |
-| Same validation duplicated | REJECT - Extract to validator function |
-| Essentially identical component structure | REJECT - Create shared component |
-| Copy-paste derived code | REJECT - Parameterize or abstract |
+DRY reduces duplicated knowledge, not merely similar code shapes. Once two implementations with the same meaning, contract, and reason to change are observed, decide whether they belong under a common owner. Choose the form that naturally owns the responsibility: a function, value object, component, policy, or another local abstraction.
 
 When NOT to apply DRY:
 - Different domains: Don't abstract (e.g., customer validation vs admin validation are different things)
@@ -465,43 +366,21 @@ When NOT to apply DRY:
 
 ## Spec Compliance Verification
 
-Contract-change consistency follows the coding policy. In architecture review, check whether changes contradict documented specifications, types, schemas, or config formats.
+Contract-change consistency follows the active contract replacement policy. In architecture review, check whether changes contradict documented specifications, types, schemas, or config formats.
 
-Verification targets:
+Conditions that require consistency:
 
-| Target | What to Check |
+| Change | Governing contracts |
 |--------|---------------|
-| CLAUDE.md / README.md | Conforms to schema definitions, design principles, constraints |
-| Type definitions / Zod schemas | New fields reflected in schemas |
-| YAML/JSON config files | Follows documented format |
-
-Specific checks:
-
-1. When config files (YAML, etc.) are modified or added:
-   - Cross-reference with schema definitions in CLAUDE.md, etc.
-   - No ignored or invalid fields present
-   - No required fields missing
-
-2. When type definitions or interfaces are modified:
-   - Documentation schema descriptions are updated
-   - Existing config files are compatible with new schema
-
-REJECT when these patterns are found:
-
-| Pattern | Problem |
-|---------|---------|
-| Fields not in the spec | Ignored or unexpected behavior |
-| Invalid values per spec | Runtime error or silently ignored |
-| Violation of documented constraints | Against design intent |
+| Added or changed configuration | Documented schema, required fields, and valid values |
+| Added or changed types or schemas | Producers, consumers, user-facing documentation, and valid configuration outside the changed contract |
+| Changes involving design constraints | The primary specification that owns the constraint and its implementation boundary |
 
 ## Call Chain Verification
 
 Missing wiring after contract changes follows the coding policy. In architecture review, check whether new parameters or fields actually reach callers, producers, and readers instead of staying local to the changed file.
 
-Verification steps:
-1. When finding new optional parameters or interface fields, search all callers
-2. Check if all callers pass the new parameter
-3. If fallback value (`?? default`) exists, verify if fallback is used as intended
+When a contract crosses a call chain, its definition alone is insufficient. The entry point that produces a value, callers that propagate it, and consumers that read it must share the same meaning; fallbacks must also match whether the contract truly permits omission.
 
 Danger patterns:
 
@@ -533,10 +412,24 @@ Call chain verification applies not only to "missing wiring" but also to the rev
 | Null guard when callers already check null | Redundant defense | Trace caller constraints |
 | Runtime type check when TypeScript types constrain | Not trusting type safety | Check TypeScript type constraints |
 
-Verification steps:
-1. When finding defensive branches (TTY check, null guard, etc.), check all callers
-2. If all callers already guarantee the condition, guard is unnecessary → REJECT
-3. If some callers don't guarantee it, keep the guard
+The need for a defensive condition depends on preconditions guaranteed by reachable entry points. If every real entry point guarantees the same condition, the internal guard is logically unreachable; if any entry point does not, the guard can be a meaningful boundary defense.
+
+## Immutability of Published State
+
+For shared state published by a module (initial state, singletons, configuration objects), consumer mutations must not leak to other consumers. The required property is observable isolation. Factories, defensive copies, persistent data structures, and freezing are implementation choices; do not require recursive freezing or reference identity unless the public contract specifies the mechanism.
+
+```typescript
+// Avoid: mutable published initial state; one consumer write poisons every replay
+export const initialState: State = { count: 0, entries: {} };
+
+// Option - frozen, including nested objects
+export const initialState: State = Object.freeze({ count: 0, entries: Object.freeze({}) });
+
+// Option - factory returning a fresh instance every time
+export function createInitialState(): State {
+  return { count: 0, entries: {} };
+}
+```
 
 ## Quality Attributes
 
@@ -550,28 +443,14 @@ Verification steps:
 
 Don't get lost in minor "clean code" nitpicks.
 
-Verify:
-- How will this code evolve in the future
-- Is scaling considered
-- Is technical debt being created
-- Does it align with business requirements
-- Is naming consistent with the domain
+Quality attributes become design constraints only when their need is supported by the request, current load, an existing operational contract, or a boundary changed now. Predictions that the code or scale may change do not by themselves justify extension points or extra layers. Domain naming and alignment with current business contracts remain present semantic concerns rather than future forecasts.
 
 ## Change Scope Assessment
 
-Check change scope and include in report (non-blocking).
+Assess scope by whether it forms a coherent set of requirements, root causes, and affected paths with the same contract, not by line count. A broad change may be indispensable, while a small unrelated edit is still scope expansion.
 
-| Scope Size | Lines Changed | Action |
-|------------|---------------|--------|
-| Small | ~200 lines | Review as-is |
-| Medium | 200-500 lines | Review as-is |
-| Large | 500+ lines | Continue review. Suggest splitting if possible |
+Logical cohesion can be explained by a shared requirement, root cause, contract, or real boundary. A coder's scope declaration is supporting evidence; when it differs from the actual change, evaluate against the request and affected paths as the authority.
 
-Note: Some tasks require large changes. Don't REJECT based on line count alone.
+## Termination-Path Completeness
 
-Verify:
-- Changes are logically cohesive (no unrelated changes mixed in)
-- Coder's scope declaration matches actual changes
-
-Include as suggestions (non-blocking):
-- If splittable, present splitting proposal
+For features that create temporary files or external resources, verify that they are released not only on normal completion but at every terminal: failure, cancellation, and forced termination. `process.exit()` and forced termination (repeated SIGINT, an abort handler that exits immediately) do not run `finally` blocks. Cleanup that relies on `finally` is bypassed on any path that calls `process.exit` inside it and on forced-termination paths. For each entry point that creates resources, build the list of terminals (normal, failure, cancellation, forced termination) and enumerate the terminals where cleanup does not run.

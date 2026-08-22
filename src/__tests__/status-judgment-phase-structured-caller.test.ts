@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowStep } from '../core/models/types.js';
 import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
+import { runAgent } from '../agents/runner.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+
+vi.mock('../agents/runner.js', () => ({
+  runAgent: vi.fn(),
+}));
 
 describe('runStatusJudgmentPhase with structuredCaller', () => {
   beforeEach(() => {
@@ -14,7 +21,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
           systemPrompt: 'judge-system',
           userInstruction: 'judge-instruction',
         });
-        return { ruleIndex: 1, method: 'phase3_tag' as const };
+        return { candidateIndex: 1, method: 'phase3_tag' as const };
       }),
     };
 
@@ -25,8 +32,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       instruction: 'Review',
       passPreviousResponse: true,
       rules: [
-        { condition: 'needs_fix', next: 'fix' },
-        { condition: 'approved', next: 'COMPLETE' },
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
       ],
     };
 
@@ -35,11 +42,6 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       reportDir: '/tmp/project/.takt/reports',
       lastResponse: 'response body',
       iteration: 2,
-      getSessionId: vi.fn(),
-      resolveSessionKey: vi.fn(),
-      buildResumeOptions: vi.fn(),
-      buildNewSessionReportOptions: vi.fn(),
-      updatePersonaSession: vi.fn(),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       structuredCaller,
     } as Parameters<typeof runStatusJudgmentPhase>[1] & {
@@ -47,14 +49,16 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     });
 
     expect(result).toEqual({
-      tag: '[REVIEW:2]',
-      ruleIndex: 1,
+      label: 'approved',
       method: 'phase3_tag',
     });
     expect(structuredCaller.judgeStatus).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      step.rules,
+      [
+        { label: 'needs_fix' },
+        { label: 'approved' },
+      ],
       expect.objectContaining({
         cwd: '/tmp/project',
         stepName: 'review',
@@ -70,7 +74,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
           systemPrompt: 'judge-system',
           userInstruction: 'judge-instruction',
         });
-        return { ruleIndex: 0, method: 'structured_output' as const };
+        return { candidateIndex: 0, method: 'structured_output' as const };
       }),
     };
 
@@ -81,8 +85,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       instruction: 'Review',
       passPreviousResponse: true,
       rules: [
-        { condition: 'needs_fix', next: 'fix' },
-        { condition: 'approved', next: 'COMPLETE' },
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
       ],
     };
 
@@ -95,11 +99,6 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       reportDir: '/tmp/project/.takt/reports',
       lastResponse: 'response body',
       iteration: 2,
-      getSessionId: vi.fn(),
-      resolveSessionKey: vi.fn(),
-      buildResumeOptions: vi.fn(),
-      buildNewSessionReportOptions: vi.fn(),
-      updatePersonaSession: vi.fn(),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5.2-codex' }),
       structuredCaller,
     } as PhaseCtx);
@@ -119,13 +118,14 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
 
   it('passes childProcessEnv to phase 3 structured caller judgment', async () => {
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    const failureDir = '/tmp/project/.takt/runs/sample/failures';
     const structuredCaller = {
       judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _rules, options) => {
         options.onStructuredPromptResolved?.({
           systemPrompt: 'judge-system',
           userInstruction: 'judge-instruction',
         });
-        return { ruleIndex: 0, method: 'structured_output' as const };
+        return { candidateIndex: 0, method: 'structured_output' as const };
       }),
     };
     const step: WorkflowStep = {
@@ -135,8 +135,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       instruction: 'Review',
       passPreviousResponse: true,
       rules: [
-        { condition: 'needs_fix', next: 'fix' },
-        { condition: 'approved', next: 'COMPLETE' },
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
       ],
     };
 
@@ -146,11 +146,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       lastResponse: 'response body',
       iteration: 2,
       childProcessEnv,
-      getSessionId: vi.fn(),
-      resolveSessionKey: vi.fn(),
-      buildResumeOptions: vi.fn(),
-      buildNewSessionReportOptions: vi.fn(),
-      updatePersonaSession: vi.fn(),
+      failureDir,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5.2-codex' }),
       structuredCaller,
     } as Parameters<typeof runStatusJudgmentPhase>[1] & {
@@ -160,8 +156,160 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     expect(structuredCaller.judgeStatus).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      step.rules,
-      expect.objectContaining({ childProcessEnv }),
+      [
+        { label: 'needs_fix' },
+        { label: 'approved' },
+      ],
+      expect.objectContaining({ childProcessEnv, failureDir }),
     );
+  });
+
+  it('records provider usage for every structured judgment stage', async () => {
+    const providerUsage = {
+      inputTokens: 9,
+      outputTokens: 2,
+      totalTokens: 11,
+      usageMissing: false,
+    };
+    const structuredCaller = {
+      judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _rules, options) => {
+        options.onStructuredPromptResolved?.({
+          systemPrompt: 'judge-system',
+          userInstruction: 'judge-instruction',
+        });
+        options.onJudgeStage?.({
+          stage: 1,
+          method: 'structured_output',
+          status: 'done',
+          instruction: 'judge-instruction',
+          response: '{"step":1}',
+          providerUsage,
+        });
+        return { candidateIndex: 0, method: 'structured_output' as const };
+      }),
+    };
+    const step: WorkflowStep = {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      passPreviousResponse: true,
+      rules: [
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+      ],
+    };
+    const onProviderAttempt = vi.fn();
+
+    await runStatusJudgmentPhase(step, {
+      cwd: '/tmp/project',
+      reportDir: '/tmp/project/.takt/reports',
+      lastResponse: 'response body',
+      iteration: 2,
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5' }),
+      structuredCaller,
+      onProviderAttempt,
+    } as Parameters<typeof runStatusJudgmentPhase>[1] & {
+      structuredCaller: { judgeStatus: typeof structuredCaller.judgeStatus };
+    });
+
+    expect(onProviderAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'codex', model: 'gpt-5' }),
+      true,
+      providerUsage,
+    );
+  });
+
+  it('records a rejected second provider attempt after the first judgment response', async () => {
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, _instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'judge-system',
+          userInstruction: 'judge-instruction',
+        });
+        return {
+          persona: 'conductor',
+          status: 'done',
+          content: 'not-json',
+          timestamp: new Date(),
+        };
+      })
+      .mockRejectedValueOnce(new Error('tag attempt rejected'));
+    const step: WorkflowStep = {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      passPreviousResponse: true,
+      rules: [
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+      ],
+    };
+    const onProviderAttempt = vi.fn();
+
+    await expect(runStatusJudgmentPhase(step, {
+      cwd: '/tmp/project',
+      reportDir: '/tmp/project/.takt/reports',
+      lastResponse: 'response body',
+      iteration: 2,
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+      structuredCaller: new ProviderNeutralStructuredCaller(),
+      onProviderAttempt,
+    } as Parameters<typeof runStatusJudgmentPhase>[1])).rejects.toThrow('tag attempt rejected');
+
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(onProviderAttempt).toHaveBeenCalledTimes(2);
+    expect(onProviderAttempt.mock.calls.map(([, success]) => success)).toEqual([true, false]);
+  });
+
+  it('records a rejected third provider attempt after two completed judgment responses', async () => {
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, _instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'judge-system',
+          userInstruction: 'judge-instruction',
+        });
+        return {
+          persona: 'conductor',
+          status: 'done',
+          content: 'not-json',
+          timestamp: new Date(),
+        };
+      })
+      .mockResolvedValueOnce({
+        persona: 'conductor',
+        status: 'done',
+        content: '',
+        structuredOutput: { content: 'no matching tag' },
+        timestamp: new Date(),
+      })
+      .mockRejectedValueOnce(new Error('ai judge attempt rejected'));
+    const step: WorkflowStep = {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      passPreviousResponse: true,
+      rules: [
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+      ],
+    };
+    const onProviderAttempt = vi.fn();
+
+    await expect(runStatusJudgmentPhase(step, {
+      cwd: '/tmp/project',
+      reportDir: '/tmp/project/.takt/reports',
+      lastResponse: 'response body',
+      iteration: 2,
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+      structuredCaller: new ProviderNeutralStructuredCaller(),
+      onProviderAttempt,
+    } as Parameters<typeof runStatusJudgmentPhase>[1])).rejects.toThrow('ai judge attempt rejected');
+
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(onProviderAttempt).toHaveBeenCalledTimes(3);
+    expect(onProviderAttempt.mock.calls.map(([, success]) => success)).toEqual([true, true, false]);
   });
 });

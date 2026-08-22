@@ -69,7 +69,11 @@ function mockSpawnWithScenarios(scenarios: SpawnScenario[]): void {
         return;
       }
 
-      child.emit('close', scenario.code ?? 0, scenario.signal ?? null);
+      child.emit(
+        'close',
+        scenario.code === undefined ? 0 : scenario.code,
+        scenario.signal === undefined ? null : scenario.signal,
+      );
     });
 
     return child;
@@ -269,8 +273,35 @@ describe('callCursor', () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
+  it('should distinguish signal termination from a numeric exit code', async () => {
+    mockSpawnWithScenario({
+      code: null,
+      signal: 'SIGTERM',
+    });
+
+    const result = await callCursor('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('signal SIGTERM');
+    expect(result.content).not.toContain('code 0');
+  });
+
+  it('should report a close event with neither code nor signal', async () => {
+    mockSpawnWithScenario({
+      code: null,
+      signal: null,
+    });
+
+    const result = await callCursor('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('no exit code or signal');
+    expect(result.content).not.toContain('unknown');
+  });
+
   it('should retry cli-config rename ENOENT and return successful retry result', async () => {
     vi.useFakeTimers();
+    const onActivity = vi.fn();
     mockSpawnWithScenarios([
       {
         code: 1,
@@ -285,6 +316,7 @@ describe('callCursor', () => {
     const resultPromise = callCursor('coding-review', 'review changes', {
       cwd: '/repo',
       sessionId: 'sess-before-retry',
+      onActivity,
     });
 
     await vi.advanceTimersByTimeAsync(999);
@@ -297,6 +329,11 @@ describe('callCursor', () => {
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
     expect(result.sessionId).toBe('sess-after-retry');
+    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+      mockSpawn.mock.invocationCallOrder[1]!,
+    );
   });
 
   it('should stop cli-config rename ENOENT retry when aborted during retry delay', async () => {

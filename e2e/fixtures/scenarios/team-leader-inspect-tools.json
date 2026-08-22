@@ -19,6 +19,7 @@
     "structured_output": {
       "done": true,
       "reasoning": "The single child part is enough",
+      "cancelPartIds": [],
       "parts": []
     }
   }

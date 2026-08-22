@@ -24,10 +24,23 @@ interface LoadConfigTraceOptions {
   parseErrorPrefix?: string;
   rootObjectError?: string;
   sanitize?: (value: unknown) => unknown;
+  filePreferredEnvPaths: readonly string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getNestedConfigValue(
+  value: Record<string, unknown>,
+  path: string,
+): unknown {
+  return path.split('.').reduce<unknown>((current, segment) => {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    return current[segment];
+  }, value);
 }
 
 function createYamlParser(options: LoadConfigTraceOptions): (content: string) => unknown {
@@ -110,6 +123,8 @@ function getBlockingAncestorTraceEntry(
 function buildRawConfig(
   schemaKeys: readonly string[],
   traceEntries: ReadonlyMap<string, TracedValue<unknown>>,
+  parsedConfig: Record<string, unknown>,
+  filePreferredEnvPaths: ReadonlySet<string>,
 ): Record<string, unknown> {
   const rawConfig: Record<string, unknown> = {};
   const keys = [...schemaKeys].sort(
@@ -127,6 +142,16 @@ function buildRawConfig(
     setNestedConfigValue(rawConfig, key, traced.value);
   }
 
+  for (const path of filePreferredEnvPaths) {
+    if (!schemaKeys.includes(path)) {
+      continue;
+    }
+    const parsedValue = getNestedConfigValue(parsedConfig, path);
+    if (parsedValue !== undefined) {
+      setNestedConfigValue(rawConfig, path, parsedValue);
+    }
+  }
+
   return rawConfig;
 }
 
@@ -136,14 +161,21 @@ export function loadConfigTrace(options: LoadConfigTraceOptions): {
   trace: ConfigTrace;
 } {
   const parser = createYamlParser(options);
+  const filePreferredEnvPaths = new Set(options.filePreferredEnvPaths);
   const parsedConfig = existsSync(options.configPath)
     ? (parser(readFileSync(options.configPath, 'utf-8')) as Record<string, unknown>)
     : {};
   const traceEntries = loadTraceEntriesViaRuntime(options.schema, options.fileOrigin, parsedConfig);
-  const rawConfig = buildRawConfig(Object.keys(options.schema), traceEntries);
+  const rawConfig = buildRawConfig(Object.keys(options.schema), traceEntries, parsedConfig, filePreferredEnvPaths);
 
   const trace: ConfigTrace = {
     getOrigin(path: string): TracedOrigin {
+      if (
+        filePreferredEnvPaths.has(path)
+        && getNestedConfigValue(parsedConfig, path) !== undefined
+      ) {
+        return options.fileOrigin;
+      }
       const blockingAncestor = getBlockingAncestorTraceEntry(traceEntries, path);
       if (blockingAncestor) {
         return blockingAncestor.traced.origin;
@@ -158,6 +190,7 @@ export function loadConfigTrace(options: LoadConfigTraceOptions): {
 export function loadGlobalConfigTrace(
   configPath: string,
   sanitize: (value: unknown) => unknown,
+  filePreferredEnvPaths: readonly string[],
 ): { parsedConfig: Record<string, unknown>; rawConfig: Record<string, unknown>; trace: ConfigTrace } {
   return loadConfigTrace({
     configPath,
@@ -165,11 +198,13 @@ export function loadGlobalConfigTrace(
     schema: getGlobalTracedSchema(),
     rootObjectError: 'Configuration error: ~/.takt/config.yaml must be a YAML object.',
     sanitize,
+    filePreferredEnvPaths,
   });
 }
 
 export function loadProjectConfigTrace(
   configPath: string,
+  filePreferredEnvPaths: readonly string[],
 ): { parsedConfig: Record<string, unknown>; rawConfig: Record<string, unknown>; trace: ConfigTrace } {
   return loadConfigTrace({
     configPath,
@@ -177,5 +212,6 @@ export function loadProjectConfigTrace(
     schema: getProjectTracedSchema(),
     parseErrorPrefix: `Configuration error: failed to parse ${configPath}`,
     rootObjectError: `Configuration error: ${configPath} must be a YAML object.`,
+    filePreferredEnvPaths,
   });
 }

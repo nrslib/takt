@@ -32,6 +32,12 @@ function makeExceededRecord(overrides: Record<string, unknown> = {}): Record<str
   };
 }
 
+function makeRestartPoint(): Record<string, unknown> {
+  return {
+    stack: [{ workflow: 'default', workflow_ref: 'default', step: 'review', kind: 'agent' }],
+  };
+}
+
 describe('TaskStatusSchema', () => {
   it('should accept exceeded as a valid status', () => {
     expect(() => TaskStatusSchema.parse('exceeded')).not.toThrow();
@@ -75,6 +81,20 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
       exceeded_max_steps: 60,
       exceeded_current_iteration: 30,
     })).not.toThrow();
+  });
+
+  it.each([
+    ['exceeded_current_iteration', { exceeded_current_iteration: 0 }],
+    ['exceeded_max_steps', { exceeded_max_steps: 1 }],
+    ['both exceeded fields', {
+      exceeded_current_iteration: 0,
+      exceeded_max_steps: 1,
+    }],
+  ])('should reject restart_point with %s', (_name, exceededFields) => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      restart_point: makeRestartPoint(),
+      ...exceededFields,
+    })).toThrow();
   });
 
   it('should accept config without exceeded fields (optional)', () => {

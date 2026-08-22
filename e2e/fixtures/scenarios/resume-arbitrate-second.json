@@ -1,0 +1,5 @@
+[
+  { "status": "done", "content": "Reviewer is right." },
+  { "persona": "conductor", "status": "done", "content": "[ARBITRATE:1]" },
+  { "persona": "conductor", "status": "done", "content": "[ARBITRATE:1]" }
+]

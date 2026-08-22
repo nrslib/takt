@@ -4,7 +4,6 @@
  * Tests workflow state initialization, user input management,
  * step iteration tracking, and output retrieval.
  */
-
 import { describe, it, expect } from 'vitest';
 import {
   StateManager,
@@ -88,6 +87,80 @@ describe('StateManager', () => {
       );
 
       expect(manager.state.userInputs).toEqual(['input1', 'input2']);
+    });
+
+    it('should continue step iterations from the matching resume workflow frame', () => {
+      const manager = new StateManager(
+        makeConfig(),
+        makeOptions({
+          startStep: 'review',
+          resumePoint: {
+            version: 2,
+            stack: [
+              {
+                workflow: 'parent',
+                workflow_ref: 'parent',
+                step: 'delegate',
+                kind: 'workflow_call',
+                occurrence: 1,
+                call_instance: 1,
+                step_iterations: { delegate: 3 },
+              },
+              {
+                workflow: 'test-workflow',
+                workflow_ref: 'test-workflow',
+                step: 'review',
+                kind: 'agent',
+                occurrence: 1,
+                step_iterations: { review: 6, fix: 2 },
+              },
+            ],
+            iteration: 12,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+          },
+          resumeStackPrefix: [
+            {
+              workflow: 'parent',
+              workflow_ref: 'parent',
+              step: 'delegate',
+              kind: 'workflow_call',
+              occurrence: 1,
+              call_instance: 1,
+            },
+          ],
+        }),
+      );
+
+      expect(manager.incrementStepIteration('review')).toBe(7);
+      expect(manager.state.stepIterations.get('fix')).toBe(2);
+    });
+
+    it('should not restore step iterations from a different resume target', () => {
+      const manager = new StateManager(
+        makeConfig(),
+        makeOptions({
+          startStep: 'implement',
+          resumePoint: {
+            version: 2,
+            stack: [{
+              workflow: 'test-workflow',
+              workflow_ref: 'test-workflow',
+              step: 'review',
+              kind: 'agent',
+              occurrence: 1,
+              step_iterations: { review: 6 },
+            }],
+            iteration: 12,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+          },
+        }),
+      );
+
+      expect(manager.state.stepIterations).toEqual(new Map());
     });
   });
 
@@ -227,4 +300,5 @@ describe('standalone functions', () => {
       expect(getPreviousOutput(state)).toBeUndefined();
     });
   });
+
 });

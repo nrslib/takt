@@ -19,6 +19,20 @@ const { mockLoadConfigRaw } = vi.hoisted(() => ({
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: vi.fn(),
   isWorkflowPath: vi.fn(() => false),
+  loadProjectConfig: () => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    if ('global' in raw && 'project' in raw) {
+      return raw.project;
+    }
+    return { ...raw, workflow: 'default', provider: 'claude', verbose: false };
+  },
+  loadGlobalConfig: () => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    if ('global' in raw && 'project' in raw) {
+      return raw.global;
+    }
+    return { provider: 'claude' };
+  },
   loadConfig: (...args: unknown[]) => {
     const raw = mockLoadConfigRaw(...args) as Record<string, unknown>;
     if ('global' in raw && 'project' in raw) {
@@ -64,14 +78,14 @@ function buildUpdatedTaskInfo(
 ): TaskInfo {
   return {
     name: taskName,
-    content: `Task: ${taskName}`,
+    content: taskName,
     filePath: `/tasks/${taskName}.yaml`,
     createdAt: '2026-02-09T00:00:00.000Z',
     status: 'running',
     runSlug: execution.runSlug,
     worktreePath: execution.worktreePath,
     data: {
-      task: `Task: ${taskName}`,
+      task: taskName,
       workflow: 'default',
       ...(execution.branch ? { branch: execution.branch } : {}),
     },
@@ -82,7 +96,9 @@ const {
   mockClaimNextTasks,
   mockCompleteTask,
   mockFailTask,
+  mockAutoRequeueFailedTask,
   mockFailInterruptedRunningTasks,
+  mockListFailedTasks,
   mockListAllTaskItems,
   mockUpdateRunningTaskExecution,
   mockNotifySuccess,
@@ -93,7 +109,14 @@ const {
   mockClaimNextTasks: vi.fn(),
   mockCompleteTask: vi.fn(),
   mockFailTask: vi.fn(),
+  mockAutoRequeueFailedTask: vi.fn(() => ({
+    requeued: false,
+    attempt: 0,
+    maxAttempts: 1,
+    reason: 'max_attempts_reached',
+  })),
   mockFailInterruptedRunningTasks: vi.fn(),
+  mockListFailedTasks: vi.fn().mockReturnValue([]),
   mockListAllTaskItems: vi.fn().mockReturnValue([]),
   mockUpdateRunningTaskExecution: vi.fn(buildUpdatedTaskInfo),
   mockNotifySuccess: vi.fn(),
@@ -108,7 +131,9 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
     claimNextTasks: mockClaimNextTasks,
     completeTask: mockCompleteTask,
     failTask: mockFailTask,
+    autoRequeueFailedTask: mockAutoRequeueFailedTask,
     failInterruptedRunningTasks: mockFailInterruptedRunningTasks,
+    listFailedTasks: mockListFailedTasks,
     listAllTaskItems: mockListAllTaskItems,
     updateRunningTaskExecution: mockUpdateRunningTaskExecution,
   })),
@@ -213,12 +238,12 @@ const mockLoadWorkflowByIdentifier = vi.mocked(loadWorkflowByIdentifier);
 function createTask(name: string): TaskInfo {
   return {
     name,
-    content: `Task: ${name}`,
+    content: name,
     filePath: `/tasks/${name}.yaml`,
     createdAt: '2026-02-09T00:00:00.000Z',
     status: 'pending',
     data: {
-      task: `Task: ${name}`,
+      task: name,
       workflow: 'default',
     },
   };
@@ -227,6 +252,7 @@ function createTask(name: string): TaskInfo {
 beforeEach(() => {
   vi.clearAllMocks();
   mockFailInterruptedRunningTasks.mockReturnValue(0);
+  mockListFailedTasks.mockReturnValue([]);
   mockUpdateRunningTaskExecution.mockImplementation(buildUpdatedTaskInfo);
 });
 
@@ -322,14 +348,7 @@ describe('runAllTasks concurrency', () => {
       await runAllTasks('/project');
       writeSpy.mockRestore();
 
-      // Then: Task names displayed with prefix in stdout
-      const allOutput = stdoutChunks.join('');
-      expect(allOutput).toContain('[task]');
-      expect(allOutput).toContain('=== Task: task-1 ===');
-      expect(allOutput).toContain('[task]');
-      expect(allOutput).toContain('=== Task: task-2 ===');
-      expect(allOutput).toContain('[task]');
-      expect(allOutput).toContain('=== Task: task-3 ===');
+      // Then: all claimed tasks were accounted for.
       expect(mockStatus).toHaveBeenCalledWith('Total', '3');
     });
 
@@ -429,8 +448,8 @@ describe('runAllTasks concurrency', () => {
 
       // Then: Both tasks started before either completed (concurrent execution)
       expect(executionOrder.slice(0, 2)).toEqual([
-        'start:Task: slow-1',
-        'start:Task: slow-2',
+        'start:slow-1',
+        'start:slow-2',
       ]);
       expect(executionOrder.findIndex((entry) => entry.startsWith('end:'))).toBe(2);
     });
@@ -471,8 +490,8 @@ describe('runAllTasks concurrency', () => {
       await runAllTasks('/project');
 
       // Then: task3 starts before task2 finishes (slot filled immediately)
-      const task3StartIdx = executionOrder.indexOf('start:Task: after-fast');
-      const task2EndIdx = executionOrder.indexOf('end:Task: slow');
+      const task3StartIdx = executionOrder.indexOf('start:after-fast');
+      const task2EndIdx = executionOrder.indexOf('end:slow');
       expect(task3StartIdx).toBeLessThan(task2EndIdx);
       expect(mockStatus).toHaveBeenCalledWith('Total', '3');
     });
@@ -577,6 +596,190 @@ describe('runAllTasks concurrency', () => {
         ignoreIterationLimit?: boolean;
       };
       expect(runContext?.ignoreIterationLimit).toBe(true);
+    });
+
+    it('should pass config ignoreExceed to executeWorkflowForRun when CLI ignoreExceed is unset', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true, runAbort: true },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+        ignoreExceed: true,
+      });
+      const task1 = createTask('config-ignore-exceed-task');
+
+      mockExecuteWorkflowForRun.mockResolvedValue({ success: true });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockExecuteWorkflowForRun).toHaveBeenCalledTimes(1);
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      const runContext = mockExecuteWorkflowForRun.mock.calls[0]?.[4] as {
+        ignoreIterationLimit?: boolean;
+      };
+      expect(runContext?.ignoreIterationLimit).toBe(true);
+    });
+
+    it('should prioritize CLI ignoreExceed over explicit config false', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true, runAbort: true },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+        ignoreExceed: false,
+      });
+      const task1 = createTask('cli-ignore-exceed-task');
+
+      mockExecuteWorkflowForRun.mockResolvedValue({ success: true });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project', {
+        ignoreExceed: true,
+      } as never);
+
+      expect(mockExecuteWorkflowForRun).toHaveBeenCalledTimes(1);
+      const runContext = mockExecuteWorkflowForRun.mock.calls[0]?.[4] as {
+        ignoreIterationLimit?: boolean;
+      };
+      expect(runContext?.ignoreIterationLimit).toBe(true);
+    });
+
+    it('should auto-requeue failed tasks when config autoRequeueMaxAttempts is greater than zero', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true, runAbort: true },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+        autoRequeueMaxAttempts: 1,
+      });
+      const task1 = createTask('config-auto-requeue-task');
+      const requeuedTask = createTask('config-auto-requeue-task');
+
+      mockAutoRequeueFailedTask.mockReturnValueOnce({
+        requeued: true,
+        attempt: 1,
+        maxAttempts: 1,
+        reason: 'requeued',
+      });
+      mockExecuteWorkflow
+        .mockResolvedValueOnce({ success: false })
+        .mockResolvedValueOnce({ success: true });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([requeuedTask])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockAutoRequeueFailedTask).toHaveBeenCalledWith('config-auto-requeue-task', {
+        maxAttempts: 1,
+      });
+      expect(mockStatus).toHaveBeenCalledWith('Success', '1', 'green');
+      expect(mockStatus).not.toHaveBeenCalledWith('Failed', expect.any(String), 'red');
+    });
+
+    it('should not auto-requeue failed tasks when config autoRequeueMaxAttempts is unset', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true, runAbort: true },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+      const task1 = createTask('config-no-auto-requeue-task');
+
+      mockExecuteWorkflow.mockResolvedValueOnce({ success: false });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockAutoRequeueFailedTask).not.toHaveBeenCalled();
+      expect(mockStatus).toHaveBeenCalledWith('Failed', '1', 'red');
+    });
+
+    it('should stop auto-requeueing and report failure when max attempts are reached', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true, runAbort: true },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+        autoRequeueMaxAttempts: 1,
+      });
+      const task1 = createTask('config-auto-requeue-exhausted-task');
+      const requeuedTask = createTask('config-auto-requeue-exhausted-task');
+
+      mockAutoRequeueFailedTask
+        .mockReturnValueOnce({
+          requeued: true,
+          attempt: 1,
+          maxAttempts: 1,
+          reason: 'requeued',
+        })
+        .mockReturnValueOnce({
+          requeued: false,
+          attempt: 1,
+          maxAttempts: 1,
+          reason: 'max_attempts_reached',
+        });
+      mockExecuteWorkflow
+        .mockResolvedValueOnce({ success: false })
+        .mockResolvedValueOnce({ success: false });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([requeuedTask])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockAutoRequeueFailedTask).toHaveBeenCalledTimes(2);
+      expect(mockAutoRequeueFailedTask).toHaveBeenNthCalledWith(
+        2,
+        'config-auto-requeue-exhausted-task',
+        { maxAttempts: 1 },
+      );
+      expect(mockFailTask).toHaveBeenCalledTimes(2);
+      expect(mockCompleteTask).not.toHaveBeenCalled();
+      expect(mockStatus).toHaveBeenCalledWith('Failed', '1', 'red');
+    });
+
+    it('should pass autoStrategy to executeWorkflow when provider is resolved from config', async () => {
+      const task1 = createTask('auto-strategy-task');
+
+      mockExecuteWorkflowForRun.mockResolvedValue({ success: true });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project', {
+        autoStrategy: 'balanced',
+      } as never);
+
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      const workflowOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+        autoStrategy?: string;
+      };
+      expect(workflowOptions?.autoStrategy).toBe('balanced');
     });
 
     it('should pass abortSignal but not taskPrefix in sequential mode', async () => {

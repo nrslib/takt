@@ -1,113 +1,191 @@
-/**
- * Repertoire package removal helpers.
- *
- * Provides:
- * - findScopeReferences: scan YAML files for @scope references (for pre-removal warning)
- * - shouldRemoveOwnerDir: determine if the @owner directory should be deleted
- */
-
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+/** Helpers for scanning scoped repertoire references before package removal. */
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { createLogger } from '../../shared/utils/debug.js';
+import { isPathInside } from '../../shared/utils/pathBoundary.js';
+import { isStepFragmentExtension } from './file-filter.js';
 
-const log = createLogger('repertoire-remove');
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+}
+
+function readDirectoryForReferenceScan(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch (error) {
+    throw new Error(`Failed to read directory while scanning references: ${dir}`, { cause: error });
+  }
+}
+
+function resolveDirectoryForReferenceScan(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch (error) {
+    throw new Error(`Failed to resolve directory while scanning references: ${dir}`, { cause: error });
+  }
+}
+
+function resolveStepDirectoryForReferenceScan(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch (error) {
+    throw new Error(`Failed to resolve steps directory while scanning references: ${dir}`, { cause: error });
+  }
+}
+
+function resolveStepFileForReferenceScan(filePath: string): string {
+  try {
+    return realpathSync(filePath);
+  } catch (error) {
+    throw new Error(`Failed to resolve step fragment while scanning references: ${filePath}`, { cause: error });
+  }
+}
 
 export interface ScopeReference {
   /** Absolute path to the file containing the @scope reference. */
   filePath: string;
 }
 
-/**
- * Recursively scan a directory for YAML files containing the given @scope substring.
- */
-function scanYamlFilesInDir(dir: string, scope: string, results: ScopeReference[]): void {
-  if (!existsSync(dir)) return;
+function scanYamlFilesInDir(
+  dir: string,
+  scope: string,
+  results: ScopeReference[],
+  visitedDirectories = new Set<string>(),
+): void {
+  let directoryStats: ReturnType<typeof statSync>;
+  try {
+    directoryStats = statSync(dir);
+  } catch (err) {
+    if (isNotFoundError(err)) return;
+    throw new Error(`Failed to inspect directory while scanning references: ${dir}`, { cause: err });
+  }
+  if (!directoryStats.isDirectory()) return;
+  const realDir = resolveDirectoryForReferenceScan(dir);
+  if (visitedDirectories.has(realDir)) return;
+  visitedDirectories.add(realDir);
 
-  for (const entry of readdirSync(dir)) {
+  for (const entry of readDirectoryForReferenceScan(dir)) {
     const filePath = join(dir, entry);
     let stats: ReturnType<typeof statSync>;
     try {
       stats = statSync(filePath);
     } catch (err) {
-      log.debug('Failed to stat file', { filePath, err });
-      continue;
+      throw new Error(`Failed to inspect YAML file while scanning references: ${filePath}`, { cause: err });
     }
 
     if (stats.isDirectory()) {
-      scanYamlFilesInDir(filePath, scope, results);
+      scanYamlFilesInDir(filePath, scope, results, visitedDirectories);
       continue;
     }
 
-    if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
+    if (!isStepFragmentExtension(entry)) continue;
 
-    let content: string;
-    try {
-      content = readFileSync(filePath, 'utf-8');
-    } catch (err) {
-      log.debug('Failed to read file', { filePath, err });
-      continue;
-    }
-
-    if (content.includes(scope)) {
-      results.push({ filePath });
-    }
+    addScopeReferenceIfPresent(filePath, scope, results, false);
   }
 }
 
-/**
- * Configuration for scope reference scanning.
- *
- * Separates the two kinds of scan targets to enable precise control over
- * which paths are scanned, avoiding unintended paths from root-based derivation.
- */
+/** Scans direct step fragment files while rejecting links that escape the steps root. */
+function scanStepFragmentFilesInDir(dir: string, scope: string, results: ScopeReference[]): void {
+  let directoryStats: ReturnType<typeof statSync>;
+  try {
+    directoryStats = statSync(dir);
+  } catch (err) {
+    if (isNotFoundError(err)) return;
+    throw new Error(`Failed to inspect steps directory while scanning references: ${dir}`, { cause: err });
+  }
+  if (!directoryStats.isDirectory()) return;
+  const realDir = resolveStepDirectoryForReferenceScan(dir);
+
+  for (const entry of readDirectoryForReferenceScan(dir)) {
+    if (!isStepFragmentExtension(entry)) continue;
+
+    const filePath = join(dir, entry);
+    let stats: ReturnType<typeof lstatSync>;
+    try {
+      stats = lstatSync(filePath);
+    } catch (err) {
+      throw new Error(`Failed to inspect step fragment while scanning references: ${filePath}`, { cause: err });
+    }
+    if (!stats.isFile() && !stats.isSymbolicLink()) continue;
+    if (stats.isSymbolicLink()) {
+      const realFilePath = resolveStepFileForReferenceScan(filePath);
+      if (!isPathInside(realDir, realFilePath)) continue;
+    }
+
+    addScopeReferenceIfPresent(filePath, scope, results, false);
+  }
+}
+
+function addScopeReferenceIfPresent(
+  filePath: string,
+  scope: string,
+  results: ScopeReference[],
+  allowNotFound: boolean,
+): void {
+  let content: string;
+  try {
+    content = readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    if (allowNotFound && isNotFoundError(err)) return;
+    throw new Error(`Failed to read YAML file while scanning references: ${filePath}`, { cause: err });
+  }
+  if (containsScopeReference(content, scope)) {
+    results.push({ filePath });
+  }
+}
+
+function containsScopeReference(content: string, scope: string): boolean {
+  const escapedScope = scope.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`${escapedScope}(?=/|$|[^A-Za-z0-9._-])`, 'm').test(content);
+}
+
 export interface ScanConfig {
-  /** Directories to recursively scan for YAML files containing the scope substring. */
+  /** Directories to recursively scan for workflow YAML files containing the scope substring. */
   workflowDirs: string[];
   /** Directories to recursively scan for provider_options YAML files containing the scope substring. */
   providerOptionsDirs: string[];
+  /** Directories containing direct YAML step fragments to scan for the scope substring. */
+  stepsDirs: string[];
+  /** Directories to recursively scan for facet-pool YAML files containing the scope substring. */
+  facetPoolsDirs: string[];
   /** Individual YAML files to check for the scope substring (e.g. workflow-categories.yaml). */
   categoriesFiles: string[];
 }
 
-/**
- * Find all files that reference a given @scope package.
- *
- * Scans the 3 spec-defined locations:
- * 1. workflowDirs entries recursively (e.g. ~/.takt/workflows, .takt/workflows)
- * 2. providerOptionsDirs entries recursively (e.g. ~/.takt/provider-options, .takt/provider-options)
- * 3. categoriesFiles entries individually (e.g. ~/.takt/preferences/workflow-categories.yaml)
- *
- * @param scope  - e.g. "@nrslib/takt-fullstack"
- * @param config - explicit scan targets (workflowDirs + providerOptionsDirs + categoriesFiles)
- */
 export function findScopeReferences(scope: string, config: ScanConfig): ScopeReference[] {
   const results: ScopeReference[] = [];
   const scannedDirs = new Set<string>();
+  const visitedDirectories = new Set<string>();
 
   for (const dir of config.workflowDirs) {
     if (!scannedDirs.has(dir)) {
-      scanYamlFilesInDir(dir, scope, results);
+      scanYamlFilesInDir(dir, scope, results, visitedDirectories);
       scannedDirs.add(dir);
     }
   }
 
   for (const dir of config.providerOptionsDirs) {
     if (!scannedDirs.has(dir)) {
-      scanYamlFilesInDir(dir, scope, results);
+      scanYamlFilesInDir(dir, scope, results, visitedDirectories);
+      scannedDirs.add(dir);
+    }
+  }
+
+  for (const dir of config.stepsDirs) {
+    if (!scannedDirs.has(dir)) {
+      scanStepFragmentFilesInDir(dir, scope, results);
+      scannedDirs.add(dir);
+    }
+  }
+
+  for (const dir of config.facetPoolsDirs) {
+    if (!scannedDirs.has(dir)) {
+      scanYamlFilesInDir(dir, scope, results, visitedDirectories);
       scannedDirs.add(dir);
     }
   }
 
   for (const filePath of config.categoriesFiles) {
-    if (!existsSync(filePath)) continue;
-    try {
-      const content = readFileSync(filePath, 'utf-8');
-      if (content.includes(scope)) {
-        results.push({ filePath });
-      }
-    } catch (err) {
-      log.debug('Failed to read categories file', { filePath, err });
-    }
+    addScopeReferenceIfPresent(filePath, scope, results, true);
   }
 
   return results;
@@ -125,14 +203,14 @@ export function findScopeReferences(scope: string, config: ScanConfig): ScopeRef
 export function shouldRemoveOwnerDir(ownerDir: string, repoBeingRemoved: string): boolean {
   if (!existsSync(ownerDir)) return false;
 
-  const remaining = readdirSync(ownerDir).filter((entry) => {
+  const remaining = readDirectoryForReferenceScan(ownerDir).filter((entry) => {
     if (entry === repoBeingRemoved) return false;
     const entryPath = join(ownerDir, entry);
     try {
       return statSync(entryPath).isDirectory();
-    } catch (err) {
-      log.debug('Failed to stat entry', { entryPath, err });
-      return false;
+    } catch (error) {
+      if (isNotFoundError(error)) return false;
+      throw new Error(`Failed to inspect owner directory entry while scanning references: ${entryPath}`, { cause: error });
     }
   });
 

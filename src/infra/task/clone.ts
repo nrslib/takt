@@ -16,15 +16,25 @@ import {
 import {
   cloneAndIsolate,
   cloneAndIsolateAbortable,
+  fetchPullRequestBaseIntoIsolatedClone,
+  fetchPullRequestBaseIntoIsolatedCloneAbortable,
   fetchRemoteBranchIntoIsolatedClone,
   fetchRemoteBranchIntoIsolatedCloneAbortable,
   fetchBaseBranchIntoIsolatedClone,
   fetchBaseBranchIntoIsolatedCloneAbortable,
+  REMOTE_BRANCH_FETCH_FAILED_MESSAGE,
   resolveCloneSubmoduleOptions,
   runGitCommandAbortable,
 } from './clone-exec.js';
 import { loadCloneMeta, removeCloneMeta as removeCloneMetaFile, saveCloneMeta as saveCloneMetaFile } from './clone-meta.js';
 import { syncProjectLocalTaktForRetry } from './projectLocalTaktSync.js';
+import {
+  toLocalBranchRef,
+  toPullRequestBaseRef,
+  toRemoteTrackingBranchRef,
+} from '../../shared/utils/gitBranchValidation.js';
+import { isTaskAbortError } from './clone-errors.js';
+import { createTaskClonePath, createTempClonePath } from './clone-path.js';
 
 export type { WorktreeOptions, WorktreeResult };
 export {
@@ -72,43 +82,18 @@ export class CloneManager {
 
   private static resolveClonePath(projectDir: string, options: WorktreeOptions): string {
     const timestamp = CloneManager.generateTimestamp();
-    const slug = options.taskSlug;
-
-    let dirName: string;
-    if (options.issueNumber !== undefined && slug) {
-      dirName = `${timestamp}-${options.issueNumber}-${slug}`;
-    } else if (slug) {
-      dirName = `${timestamp}-${slug}`;
-    } else {
-      dirName = timestamp;
-    }
-
     if (typeof options.worktree === 'string') {
       return path.isAbsolute(options.worktree)
         ? options.worktree
         : path.resolve(projectDir, options.worktree);
     }
 
-    return CloneManager.resolveAvailableClonePath(
+    return createTaskClonePath(
       CloneManager.resolveCloneBaseDir(projectDir),
-      dirName,
+      timestamp,
+      options.issueNumber,
+      options.taskSlug,
     );
-  }
-
-  private static resolveAvailableClonePath(baseDir: string, dirName: string): string {
-    const firstCandidate = path.join(baseDir, dirName);
-    if (!fs.existsSync(firstCandidate)) {
-      return firstCandidate;
-    }
-
-    for (let suffix = 2; suffix <= 100; suffix += 1) {
-      const candidate = path.join(baseDir, `${dirName}-${suffix}`);
-      if (!fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-
-    throw new Error(`Unable to allocate clone path in ${baseDir} for ${dirName}`);
   }
 
   private static resolveBranchName(options: WorktreeOptions): string {
@@ -151,20 +136,47 @@ export class CloneManager {
     );
 
     try {
-      execFileSync('git', ['fetch', 'origin', branch], {
+      execFileSync('git', [
+        'fetch',
+        '--force',
+        'origin',
+        `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
+      ], {
         cwd: projectDir,
         stdio: 'pipe',
       });
     } catch {
+      if (options.pullRequestBaseBranch !== undefined) {
+        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+      }
       log.info('Failed to prefetch branch from origin, continuing', {
         branch,
       });
     }
 
+    if (options.pullRequestBaseBranch !== undefined) {
+      try {
+        execFileSync('git', [
+          'fetch',
+          '--force',
+          'origin',
+          `${toLocalBranchRef(options.pullRequestBaseBranch)}:${toRemoteTrackingBranchRef(options.pullRequestBaseBranch)}`,
+        ], {
+          cwd: projectDir,
+          stdio: 'pipe',
+        });
+      } catch {
+        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+      }
+    }
+
     if (remoteBranchExists(projectDir, branch)) {
       cloneAndIsolate(projectDir, clonePath);
       fetchRemoteBranchIntoIsolatedClone(projectDir, clonePath, branch);
-      execFileSync('git', ['checkout', branch], { cwd: clonePath, stdio: 'pipe' });
+      execFileSync('git', ['checkout', '-B', branch, toLocalBranchRef(branch)], {
+        cwd: clonePath,
+        stdio: 'pipe',
+      });
     } else if (localBranchExists(projectDir, branch)) {
       cloneAndIsolate(projectDir, clonePath, branch);
     } else {
@@ -177,11 +189,24 @@ export class CloneManager {
       execFileSync('git', ['checkout', '-b', branch], { cwd: clonePath, stdio: 'pipe' });
     }
 
+    if (options.pullRequestBaseBranch !== undefined) {
+      fetchPullRequestBaseIntoIsolatedClone(projectDir, clonePath, options.pullRequestBaseBranch);
+    }
+
     syncProjectLocalTaktForRetry(projectDir, clonePath);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Clone created', { path: clonePath, branch });
 
-    return { path: clonePath, branch };
+    return {
+      path: clonePath,
+      branch,
+      ...(options.pullRequestBaseBranch === undefined
+        ? {}
+        : {
+          pullRequestBaseRef: toPullRequestBaseRef(options.pullRequestBaseBranch),
+          pullRequestHeadRef: toLocalBranchRef(branch),
+        }),
+    };
   }
 
   async createSharedCloneAbortable(
@@ -199,17 +224,48 @@ export class CloneManager {
     );
 
     try {
-      await runGitCommandAbortable(projectDir, ['fetch', 'origin', branch], abortSignal);
-    } catch {
+      await runGitCommandAbortable(projectDir, [
+        'fetch',
+        '--force',
+        'origin',
+        `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
+      ], abortSignal);
+    } catch (err) {
+      if (options.pullRequestBaseBranch !== undefined) {
+        if (isTaskAbortError(err)) {
+          throw err;
+        }
+        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+      }
       log.info('Failed to prefetch branch from origin, continuing', {
         branch,
       });
     }
 
+    if (options.pullRequestBaseBranch !== undefined) {
+      try {
+        await runGitCommandAbortable(projectDir, [
+          'fetch',
+          '--force',
+          'origin',
+          `${toLocalBranchRef(options.pullRequestBaseBranch)}:${toRemoteTrackingBranchRef(options.pullRequestBaseBranch)}`,
+        ], abortSignal);
+      } catch (err) {
+        if (isTaskAbortError(err)) {
+          throw err;
+        }
+        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+      }
+    }
+
     if (await remoteBranchExistsAbortable(projectDir, branch, abortSignal)) {
       await cloneAndIsolateAbortable(projectDir, clonePath, undefined, abortSignal);
       await fetchRemoteBranchIntoIsolatedCloneAbortable(projectDir, clonePath, branch, abortSignal);
-      await runGitCommandAbortable(clonePath, ['checkout', branch], abortSignal);
+      await runGitCommandAbortable(
+        clonePath,
+        ['checkout', '-B', branch, toLocalBranchRef(branch)],
+        abortSignal,
+      );
     } else if (await localBranchExistsAbortable(projectDir, branch, abortSignal)) {
       await cloneAndIsolateAbortable(projectDir, clonePath, branch, abortSignal);
     } else {
@@ -226,20 +282,38 @@ export class CloneManager {
       await runGitCommandAbortable(clonePath, ['checkout', '-b', branch], abortSignal);
     }
 
+    if (options.pullRequestBaseBranch !== undefined) {
+      await fetchPullRequestBaseIntoIsolatedCloneAbortable(
+        projectDir,
+        clonePath,
+        options.pullRequestBaseBranch,
+        abortSignal,
+      );
+    }
+
     syncProjectLocalTaktForRetry(projectDir, clonePath);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Clone created', { path: clonePath, branch });
 
-    return { path: clonePath, branch };
+    return {
+      path: clonePath,
+      branch,
+      ...(options.pullRequestBaseBranch === undefined
+        ? {}
+        : {
+          pullRequestBaseRef: toPullRequestBaseRef(options.pullRequestBaseBranch),
+          pullRequestHeadRef: toLocalBranchRef(branch),
+        }),
+    };
   }
 
   createTempCloneForBranch(projectDir: string, branch: string): WorktreeResult {
     CloneManager.resolveBaseBranch(projectDir);
 
     const timestamp = CloneManager.generateTimestamp();
-    const clonePath = CloneManager.resolveAvailableClonePath(
+    const clonePath = createTempClonePath(
       CloneManager.resolveCloneBaseDir(projectDir),
-      `tmp-${timestamp}`,
+      timestamp,
     );
 
     log.info('Creating temp clone for branch', { path: clonePath, branch });

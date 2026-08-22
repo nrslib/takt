@@ -112,14 +112,14 @@ function readSessionData(sessionPath: string, currentProvider?: string): Record<
  * @param sessionPath - Path to the session JSON file
  * @param ensureSessionDir - Function that ensures the session directory exists
  * @param persona - Persona (key) to update
- * @param sessionId - New session ID
+ * @param sessionId - New session ID, or undefined to clear the session
  * @param provider - Current provider (used to detect provider change)
  */
 function updateSessionData(
   sessionPath: string,
   ensureSessionDir: () => void,
   persona: string,
-  sessionId: string,
+  sessionId: string | undefined,
   provider?: string,
 ): void {
   ensureSessionDir();
@@ -142,9 +142,16 @@ function updateSessionData(
     }
   }
 
-  sessions[persona] = sessionId;
-  if (provider) {
-    sessions[`${persona}:${provider}`] = sessionId;
+  if (sessionId === undefined) {
+    delete sessions[persona];
+    if (provider) {
+      delete sessions[`${persona}:${provider}`];
+    }
+  } else {
+    sessions[persona] = sessionId;
+    if (provider) {
+      sessions[`${persona}:${provider}`] = sessionId;
+    }
   }
 
   const data: PersonaSessionData = {
@@ -210,7 +217,7 @@ export function savePersonaSessions(
 export function updatePersonaSession(
   projectDir: string,
   persona: string,
-  sessionId: string,
+  sessionId: string | undefined,
   provider?: string
 ): void {
   updateSessionData(
@@ -270,7 +277,7 @@ export function updateWorktreeSession(
   projectDir: string,
   worktreePath: string,
   personaName: string,
-  sessionId: string,
+  sessionId: string | undefined,
   provider?: string
 ): void {
   updateSessionData(

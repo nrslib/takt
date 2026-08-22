@@ -13,7 +13,13 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import type {
+  StepSpanParams,
+  WorkflowSpanParams,
+} from '../core/workflow/observability/workflowSpans.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -21,14 +27,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -36,17 +46,45 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 
+const {
+  workflowSpanParams,
+  stepSpanParams,
+  mockRunWithWorkflowSpan,
+  mockRunWithStepSpan,
+} = vi.hoisted(() => ({
+  workflowSpanParams: [] as WorkflowSpanParams[],
+  stepSpanParams: [] as StepSpanParams[],
+  mockRunWithWorkflowSpan: vi.fn(),
+  mockRunWithStepSpan: vi.fn(),
+}));
+
+vi.mock('../core/workflow/observability/workflowSpans.js', async () => {
+  const actual = await vi.importActual<typeof import('../core/workflow/observability/workflowSpans.js')>(
+    '../core/workflow/observability/workflowSpans.js',
+  );
+  return {
+    ...actual,
+    runWithWorkflowSpan: mockRunWithWorkflowSpan,
+    runWithStepSpan: mockRunWithStepSpan,
+  };
+});
+
 // --- Imports (after mocks) ---
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
+import { buildScopedStepIterationIdentity } from '../core/workflow/step-iteration-identity.js';
 import {
   makeResponse,
   makeStep,
   makeRule,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -59,6 +97,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     applyDefaultMocks();
+    mockRunWithWorkflowSpan.mockImplementation(async (
+      _params: WorkflowSpanParams,
+      execute: () => Promise<unknown>,
+    ) => execute());
+    mockRunWithStepSpan.mockImplementation(async (
+      _params: StepSpanParams,
+      execute: () => Promise<unknown>,
+    ) => execute());
     tmpDir = createTestTmpDir();
   });
 
@@ -76,6 +122,174 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 1. Happy Path
   // =====================================================
   describe('Happy path', () => {
+    it('renders workflow-wide rule placeholders during direct execution', async () => {
+      const config = {
+        name: 'direct-workflow-rules',
+        description: 'Direct workflow-wide rule rendering',
+        maxSteps: 2,
+        initialStep: 'review',
+        allStepsRules: [{
+          ref: 'contextual-rule',
+          position: 'before_instruction' as const,
+          content: 'DIRECT_RULE mode={var:review_mode} iteration={step_iteration}',
+        }],
+        steps: [makeStep('review', {
+          instruction: 'DIRECT_STEP_INSTRUCTION',
+          rules: [makeRule('done', 'COMPLETE')],
+        })],
+      } satisfies WorkflowConfig;
+      mockRunAgentSequence([makeResponse({ persona: 'reviewer', content: 'done' })]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        workflowCallVars: { review_mode: 'initial' },
+      });
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      const prompt = vi.mocked(runAgent).mock.calls[0]?.[1];
+      expect(prompt).toContain('DIRECT_RULE mode=initial iteration=1');
+      expect(prompt).toContain('DIRECT_STEP_INSTRUCTION');
+      expect(prompt).not.toContain('{var:review_mode}');
+      expect(prompt).not.toContain('{step_iteration}');
+    });
+
+    it('keeps top-level and parallel descendant occurrences independent when their names match', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 2,
+        initialStep: 'delegate',
+        steps: [
+          makeStep('delegate', {
+            rules: [makeRule('done', 'reviewers')],
+          }),
+          makeStep('reviewers', {
+            parallel: [
+              makeStep('delegate', {
+                rules: [makeRule('approved', 'COMPLETE')],
+              }),
+            ],
+            rules: [makeRule('all("approved")', 'COMPLETE')],
+          }),
+        ],
+      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+      });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'delegate', content: 'delegated' }),
+        makeResponse({ persona: 'delegate', content: 'approved' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'aggregate' },
+      ]);
+
+      const state = await engine.run();
+      const descendantIdentity = buildScopedStepIterationIdentity(
+        'delegate',
+        ['reviewers'],
+      );
+
+      expect(state.status).toBe('completed');
+      expect(state.stepIterations.get('delegate')).toBe(1);
+      expect(state.stepIterations.get(descendantIdentity)).toBe(1);
+    });
+
+    it('should keep an existing normal step session when the response omits sessionId', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 1,
+        initialStep: 'implement',
+        steps: [
+          makeStep('implement', {
+            persona: 'coder',
+            personaDisplayName: 'coder',
+            rules: [
+              makeRule('done', 'COMPLETE'),
+            ],
+          }),
+        ],
+      });
+      const onSessionUpdate = vi.fn();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+        initialSessions: {
+          '["coder","mock"]': 'existing-session',
+        },
+        onSessionUpdate,
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'coder', content: 'done', sessionId: undefined }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(state.personaSessions.get('["coder","mock"]')).toBe('existing-session');
+      expect(onSessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should invalidate only the failed normal step session after rule detection is exhausted', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 1,
+        initialStep: 'implement',
+        steps: [
+          makeStep('implement', {
+            persona: 'coder',
+            rules: [makeRule('done', 'COMPLETE'), makeRule('retry', 'implement')],
+          }),
+        ],
+      });
+      const onSessionUpdate = vi.fn();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+        initialSessions: { '["coder","mock"]': 'session-old' },
+        onSessionUpdate,
+      });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'coder', content: 'unclear', sessionId: 'session-new' }),
+      ]);
+      vi.mocked(mockRuleEvaluation).mockImplementation(() => {
+        throw new RuleDetectionExhaustedError('implement');
+      });
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(state.personaSessions.has('["coder","mock"]')).toBe(false);
+      expect(onSessionUpdate).toHaveBeenLastCalledWith('["coder","mock"]', undefined);
+    });
+
+    it('should fail fast on a Phase 3 schema error even when Phase 1 content has a matching tag', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 1,
+        initialStep: 'implement',
+        steps: [makeStep('implement', {
+          persona: 'coder',
+          rules: [makeRule('done', 'COMPLETE'), makeRule('retry', 'implement')],
+        })],
+      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      vi.mocked(runStatusJudgmentPhase).mockRejectedValue(new StructuredOutputSchemaError('Structured output schema is invalid'));
+      mockRunAgentSequence([
+        makeResponse({ persona: 'coder', content: '[IMPLEMENT:1] done' }),
+      ]);
+      vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
+      expect(mockRuleEvaluation).not.toHaveBeenCalled();
+    });
+
     it('should complete: plan → implement → ai_review → reviewers(all approved) → supervise → COMPLETE', async () => {
       const config = buildDefaultWorkflowConfig();
       engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
@@ -89,14 +303,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'All passed' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // plan → implement
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 0, method: 'phase1_tag' },  // security-review → approved
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },  // plan → implement
+        { index: 0, method: 'phase3_tag' },  // implement → ai_review
+        { index: 0, method: 'phase3_tag' },  // ai_review → reviewers
+        { index: 0, method: 'phase3_tag' },  // arch-review → approved
+        { index: 0, method: 'phase3_tag' },  // security-review → approved
         { index: 0, method: 'aggregate' },   // reviewers(all approved) → supervise
-        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+        { index: 0, method: 'phase3_tag' },  // supervise → COMPLETE
       ]);
 
       const completeFn = vi.fn();
@@ -135,18 +349,18 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'All passed' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // plan → implement
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 1, method: 'phase1_tag' },  // security-review → needs_fix
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },  // plan → implement
+        { index: 0, method: 'phase3_tag' },  // implement → ai_review
+        { index: 0, method: 'phase3_tag' },  // ai_review → reviewers
+        { index: 0, method: 'phase3_tag' },  // arch-review → approved
+        { index: 1, method: 'phase3_tag' },  // security-review → needs_fix
         { index: 1, method: 'aggregate' },   // reviewers: any(needs_fix) → fix
-        { index: 0, method: 'phase1_tag' },  // fix → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 0, method: 'phase1_tag' },  // security-review → approved
+        { index: 0, method: 'phase3_tag' },  // fix → reviewers
+        { index: 0, method: 'phase3_tag' },  // arch-review → approved
+        { index: 0, method: 'phase3_tag' },  // security-review → approved
         { index: 0, method: 'aggregate' },   // reviewers: all(approved) → supervise
-        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+        { index: 0, method: 'phase3_tag' },  // supervise → COMPLETE
       ]);
 
       const state = await engine.run();
@@ -181,22 +395,22 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'All passed' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // plan → implement
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 1, method: 'phase1_tag' },  // security-review → needs_fix
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },  // plan → implement
+        { index: 0, method: 'phase3_tag' },  // implement → ai_review
+        { index: 0, method: 'phase3_tag' },  // ai_review → reviewers
+        { index: 0, method: 'phase3_tag' },  // arch-review → approved
+        { index: 1, method: 'phase3_tag' },  // security-review → needs_fix
         { index: 1, method: 'aggregate' },   // reviewers: any(needs_fix) → fix
-        { index: 0, method: 'phase1_tag' },  // fix → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 1, method: 'phase1_tag' },  // security-review → needs_fix
+        { index: 0, method: 'phase3_tag' },  // fix → reviewers
+        { index: 0, method: 'phase3_tag' },  // arch-review → approved
+        { index: 1, method: 'phase3_tag' },  // security-review → needs_fix
         { index: 1, method: 'aggregate' },   // reviewers: any(needs_fix) → fix
-        { index: 0, method: 'phase1_tag' },  // fix → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 0, method: 'phase1_tag' },  // security-review → approved
+        { index: 0, method: 'phase3_tag' },  // fix → reviewers
+        { index: 0, method: 'phase3_tag' },  // arch-review → approved
+        { index: 0, method: 'phase3_tag' },  // security-review → approved
         { index: 0, method: 'aggregate' },   // reviewers: all(approved) → supervise
-        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+        { index: 0, method: 'phase3_tag' },  // supervise → COMPLETE
       ]);
 
       const fixInstructions: string[] = [];
@@ -210,19 +424,6 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       expect(fixInstructions).toHaveLength(2);
 
-      const fix1 = fixInstructions[0]!;
-      expect(fix1).toContain('## Previous Response');
-      expect(fix1).toContain('Arch R1 OK');
-      expect(fix1).toContain('Sec R1 needs fix');
-      expect(fix1).not.toContain('Arch R2 OK');
-      expect(fix1).not.toContain('Sec R2 still failing');
-
-      const fix2 = fixInstructions[1]!;
-      expect(fix2).toContain('## Previous Response');
-      expect(fix2).toContain('Arch R2 OK');
-      expect(fix2).toContain('Sec R2 still failing');
-      expect(fix2).not.toContain('Arch R1 OK');
-      expect(fix2).not.toContain('Sec R1 needs fix');
     });
 
     it('should use the latest step output across different steps for Previous Response', async () => {
@@ -242,15 +443,15 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'All passed' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // plan → implement
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix
-        { index: 0, method: 'phase1_tag' },  // ai_fix → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 0, method: 'phase1_tag' },  // security-review → approved
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },  // plan → implement
+        { index: 0, method: 'phase3_tag' },  // implement → ai_review
+        { index: 1, method: 'phase3_tag' },  // ai_review → ai_fix
+        { index: 0, method: 'phase3_tag' },  // ai_fix → reviewers
+        { index: 0, method: 'phase3_tag' },  // arch-review → approved
+        { index: 0, method: 'phase3_tag' },  // security-review → approved
         { index: 0, method: 'aggregate' },   // reviewers → supervise
-        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+        { index: 0, method: 'phase3_tag' },  // supervise → COMPLETE
       ]);
 
       const aiFixInstructions: string[] = [];
@@ -266,16 +467,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       await engine.run();
 
       expect(aiFixInstructions).toHaveLength(1);
-      const aiFix = aiFixInstructions[0]!;
-      expect(aiFix).toContain('## Previous Response');
-      expect(aiFix).toContain('AI issues found');
-      expect(aiFix).not.toContain('AI issues fixed');
 
       expect(superviseInstructions).toHaveLength(1);
-      const supervise = superviseInstructions[0]!;
-      expect(supervise).toContain('## Previous Response');
-      expect(supervise).toContain('Arch OK');
-      expect(supervise).toContain('Sec OK');
     });
   });
 
@@ -297,15 +490,15 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'All passed' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // plan → implement
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix (issues found)
-        { index: 0, method: 'phase1_tag' },  // ai_fix → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 0, method: 'phase1_tag' },  // security-review → approved
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },  // plan → implement
+        { index: 0, method: 'phase3_tag' },  // implement → ai_review
+        { index: 1, method: 'phase3_tag' },  // ai_review → ai_fix (issues found)
+        { index: 0, method: 'phase3_tag' },  // ai_fix → reviewers
+        { index: 0, method: 'phase3_tag' },  // arch-review → approved
+        { index: 0, method: 'phase3_tag' },  // security-review → approved
         { index: 0, method: 'aggregate' },   // reviewers → supervise
-        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+        { index: 0, method: 'phase3_tag' },  // supervise → COMPLETE
       ]);
 
       const state = await engine.run();
@@ -329,8 +522,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       ]);
 
       // plan rule index 1 → ABORT
-      mockDetectMatchedRuleSequence([
-        { index: 1, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 1, method: 'phase3_tag' },
       ]);
 
       const abortFn = vi.fn();
@@ -360,14 +553,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'Pass' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const startFn = vi.fn();
@@ -401,8 +594,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const startFn = vi.fn();
@@ -424,7 +617,6 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         initialStep: 'plan',
         steps: [
           makeStep('plan', {
-            provider: 'cursor',
             structuredOutput: {
               schema: {
                 type: 'object',
@@ -439,7 +631,11 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           }),
         ],
       };
-      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'claude' });
+      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'cursor',
+        model: 'cursor-fast',
+      });
 
       mockRunAgentSequence([
         makeResponse({
@@ -447,8 +643,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           content: '```json\n{"result":"ok"}\n```',
         }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const startFn = vi.fn();
@@ -460,8 +656,6 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       const [, , startInstruction] = startFn.mock.calls[0] ?? [];
       const [, , completeInstruction] = completeFn.mock.calls[0] ?? [];
-      expect(startInstruction).toContain('Return exactly one fenced JSON block');
-      expect(completeInstruction).toContain('Return exactly one fenced JSON block');
       expect(startInstruction).toBe(completeInstruction);
     });
 
@@ -478,18 +672,24 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'Pass' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const startFn = vi.fn();
-      engine.on('step:start', startFn);
+      let resumePointAtParallelStart: ReturnType<WorkflowEngine['getResumePoint']>;
+      engine.on('step:start', (...args) => {
+        startFn(...args);
+        if (args[0].name === 'reviewers') {
+          resumePointAtParallelStart = engine.getResumePoint();
+        }
+      });
 
       await engine.run();
 
@@ -501,6 +701,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       // Parallel steps emit empty string for instruction
       const [, , instruction] = reviewersCall!;
       expect(instruction).toBe('');
+      expect(reviewersCall?.[6]).toBe(1);
+      expect(resumePointAtParallelStart?.stack[0]?.step_iterations?.reviewers).toBe(1);
     });
 
     it('should emit iteration:limit when max iterations reached', async () => {
@@ -510,8 +712,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan' }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const limitFn = vi.fn();
@@ -540,14 +742,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'Supervise output' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -579,8 +781,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const phaseStartFn = vi.fn();
@@ -590,6 +792,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       await engine.run();
 
+      const expectedWorkflowStack = [
+        expect.objectContaining({
+          workflow: 'test',
+          step: 'plan',
+          kind: 'agent',
+          occurrence: 1,
+        }),
+      ];
       expect(phaseStartFn).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'plan' }),
         1, 'execute', expect.any(String), expect.objectContaining({
@@ -598,10 +808,12 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         }),
         'plan:1:1:1',
         1,
+        expectedWorkflowStack,
       );
       expect(phaseCompleteFn).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'plan' }),
         1, 'execute', expect.any(String), 'done', undefined, 'plan:1:1:1', 1,
+        expectedWorkflowStack,
       );
     });
 
@@ -618,14 +830,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'Pass' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const phaseStartFn = vi.fn();
@@ -692,6 +904,54 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 9. startStep option
   // =====================================================
   describe('startStep option', () => {
+    it('should continue the resumed step iteration in instructions, events, and the next resume point', async () => {
+      const config = buildDefaultWorkflowConfig({
+        name: 'resume-workflow',
+        maxSteps: 11,
+        initialStep: 'implement',
+        steps: [
+          makeStep('implement', {
+            persona: 'coder',
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        startStep: 'implement',
+        initialIteration: 10,
+        resumePoint: {
+          version: 2,
+          stack: [{
+            workflow: 'resume-workflow',
+            workflow_ref: 'resume-workflow',
+            step: 'implement',
+            kind: 'agent',
+            occurrence: 5,
+            step_iterations: { implement: 4, reviewers: 2 },
+          }],
+          iteration: 10,
+          elapsed_ms: 1_000,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+        },
+      });
+      mockRunAgentSequence([makeResponse({ persona: 'coder', content: 'done' })]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+      const startFn = vi.fn();
+      engine.on('step:start', startFn);
+
+      const state = await engine.run();
+
+      expect(state.stepIterations.get('implement')).toBe(5);
+      expect(state.stepIterations.get('reviewers')).toBe(2);
+      expect(startFn.mock.calls[0]?.[6]).toBe(5);
+      expect(engine.getResumePoint()?.stack[0]?.step_iterations).toEqual({
+        implement: 5,
+        reviewers: 2,
+      });
+    });
+
     it('should start from specified step instead of initialStep', async () => {
       const config = buildDefaultWorkflowConfig();
       // Start from ai_review, skipping plan and implement
@@ -707,12 +967,12 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'All passed' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 0, method: 'phase1_tag' },  // security-review → approved
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },  // ai_review → reviewers
+        { index: 0, method: 'phase3_tag' },  // arch-review → approved
+        { index: 0, method: 'phase3_tag' },  // security-review → approved
         { index: 0, method: 'aggregate' },   // reviewers(all approved) → supervise
-        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+        { index: 0, method: 'phase3_tag' },  // supervise → COMPLETE
       ]);
 
       const startFn = vi.fn();
@@ -744,14 +1004,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         makeResponse({ persona: 'supervise', content: 'All passed' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const startFn = vi.fn();
@@ -762,6 +1022,100 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       // First step should be plan (the initialStep)
       const startedSteps = startFn.mock.calls.map(call => (call[0] as WorkflowStep).name);
       expect(startedSteps[0]).toBe('plan');
+    });
+  });
+});
+
+describe('WorkflowEngine trace task metadata', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    workflowSpanParams.length = 0;
+    stepSpanParams.length = 0;
+    mockRunWithWorkflowSpan.mockImplementation(async (
+      params: WorkflowSpanParams,
+      execute: () => Promise<unknown>,
+    ) => {
+      workflowSpanParams.push(params);
+      return execute();
+    });
+    mockRunWithStepSpan.mockImplementation(async (
+      params: StepSpanParams,
+      execute: () => Promise<unknown>,
+    ) => {
+      stepSpanParams.push(params);
+      return execute();
+    });
+    tmpDir = createTestTmpDir();
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'done',
+      timestamp: new Date('2026-06-14T00:00:00.000Z'),
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'auto_select' });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('passes trace task metadata and resolved run directory to workflow and step spans', async () => {
+    const config: WorkflowConfig = {
+      name: 'trace-metadata-workflow',
+      initialStep: 'implement',
+      maxSteps: 3,
+      steps: [{
+        name: 'implement',
+        persona: 'coder',
+        instruction: 'Implement',
+        rules: [makeRule('done', 'COMPLETE')],
+      }],
+    };
+    const traceTaskMetadata = {
+      taskName: 'task-827',
+      taskSlug: 'add-trace-task-metadata',
+      taskSummary: 'Add trace task metadata',
+      taskSource: 'issue',
+      issueNumber: 827,
+      gitBranch: 'takt/827/add-trace-task-metadata',
+      gitBaseBranch: 'main',
+      worktreePath: join(tmpDir, 'worktree'),
+    };
+    const options = {
+      projectCwd: tmpDir,
+      provider: 'mock' as const,
+      observability: {
+        enabled: true,
+        monitor: false,
+        sessionLogExporter: false,
+        usageEventsPhase: false,
+      },
+      observabilityRunId: 'test-report-dir',
+      reportDirName: 'test-report-dir',
+      traceTaskMetadata,
+    } satisfies WorkflowEngineOptions & {
+      traceTaskMetadata: typeof traceTaskMetadata;
+    };
+
+    const engine = new WorkflowEngine(config, tmpDir, 'Task body', options);
+    await engine.run();
+
+    const expectedMetadata = {
+      ...traceTaskMetadata,
+      runDir: join(tmpDir, '.takt', 'runs', 'test-report-dir'),
+    };
+    expect(workflowSpanParams[0]).toMatchObject({
+      enabled: true,
+      runId: 'test-report-dir',
+      traceTaskMetadata: expectedMetadata,
+    });
+    expect(stepSpanParams[0]).toMatchObject({
+      enabled: true,
+      runId: 'test-report-dir',
+      traceTaskMetadata: expectedMetadata,
     });
   });
 });

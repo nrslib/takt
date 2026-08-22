@@ -25,6 +25,7 @@ describe('StatusLine', () => {
 
   afterEach(() => {
     statusLine.stop();
+    vi.useRealTimers();
     Object.defineProperty(process.stdout, 'isTTY', { value: savedStdoutIsTTY, configurable: true });
     process.stdout.write = savedStdoutWrite;
     process.stderr.write = savedStderrWrite;
@@ -98,14 +99,54 @@ describe('StatusLine', () => {
     statusLine.stop();
   });
 
-  it('should clear spinner line with ESC sequence on stop', () => {
-    statusLine.start('test');
+  it('should defer start while suspended and resume with the latest message', () => {
+    vi.useFakeTimers();
+    statusLine.start('original');
+    statusLine.suspend();
     stdoutChunks = [];
-    statusLine.stop();
 
-    // stop() should write \r\x1b[K to clear the spinner line
-    const clearWrites = stdoutChunks.filter((c) => c.includes('\x1b[K'));
-    expect(clearWrites.length).toBeGreaterThan(0);
+    statusLine.start('deferred');
+    vi.advanceTimersByTime(100);
+
+    expect(stdoutChunks.some((chunk) => chunk.includes('deferred'))).toBe(false);
+
+    statusLine.resume();
+    vi.advanceTimersByTime(100);
+
+    expect(stdoutChunks.some((chunk) => chunk.includes('deferred'))).toBe(true);
+  });
+
+  it('should defer update while suspended and resume with the latest message', () => {
+    vi.useFakeTimers();
+    statusLine.start('original');
+    statusLine.suspend();
+    stdoutChunks = [];
+
+    statusLine.update('updated');
+    vi.advanceTimersByTime(100);
+
+    expect(stdoutChunks.some((chunk) => chunk.includes('updated'))).toBe(false);
+
+    statusLine.resume();
+    vi.advanceTimersByTime(100);
+
+    expect(stdoutChunks.some((chunk) => chunk.includes('updated'))).toBe(true);
+  });
+
+  it('should defer start after suspending an inactive status line', () => {
+    vi.useFakeTimers();
+    statusLine.stop();
+    statusLine.suspend();
+    statusLine.start('deferred');
+
+    vi.advanceTimersByTime(100);
+
+    expect(stdoutChunks.some((chunk) => chunk.includes('deferred'))).toBe(false);
+
+    statusLine.resume();
+    vi.advanceTimersByTime(100);
+
+    expect(stdoutChunks.some((chunk) => chunk.includes('deferred'))).toBe(true);
   });
 
   it('should be safe to call stop multiple times', () => {
@@ -116,5 +157,34 @@ describe('StatusLine', () => {
 
   it('should be safe to call stop without start', () => {
     statusLine.stop(); // should not throw
+  });
+
+  it('should resume only after all nested suspensions are released', () => {
+    vi.useFakeTimers();
+    statusLine.start('Working...');
+    statusLine.suspend();
+    statusLine.suspend();
+    stdoutChunks = [];
+
+    statusLine.resume();
+    vi.advanceTimersByTime(100);
+    expect(stdoutChunks.some((chunk) => chunk.includes('Working...'))).toBe(false);
+
+    statusLine.resume();
+    vi.advanceTimersByTime(100);
+    expect(stdoutChunks.some((chunk) => chunk.includes('Working...'))).toBe(true);
+  });
+
+  it('should not resume after stop invalidates a suspension', () => {
+    vi.useFakeTimers();
+    statusLine.start('Working...');
+    statusLine.suspend();
+    statusLine.stop();
+    stdoutChunks = [];
+
+    statusLine.resume();
+    vi.advanceTimersByTime(100);
+
+    expect(stdoutChunks.some((chunk) => chunk.includes('Working...'))).toBe(false);
   });
 });

@@ -12,6 +12,7 @@ export interface TaktRunOptions {
   env: NodeJS.ProcessEnv;
   input?: string;
   timeout?: number;
+  injectProvider?: boolean;
 }
 
 export interface TaktRunResult {
@@ -68,7 +69,10 @@ export function runTakt(options: TaktRunOptions): TaktRunResult {
   const binPath = getTaktBinPath();
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
 
-  const args = injectProviderArgs(options.args, process.env.TAKT_E2E_PROVIDER);
+  const provider = options.injectProvider === false
+    ? undefined
+    : process.env.TAKT_E2E_PROVIDER;
+  const args = injectProviderArgs(options.args, provider);
   for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
     try {
       const stdout = execFileSync('node', [binPath, ...args], {

@@ -15,6 +15,8 @@ const {
   mockForceFailRunningTask,
   mockRetryFailedTask,
   mockRequeueFailedTask,
+  mockInstructBranch,
+  mockCreatePullRequestForTask,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
   mockHeader: vi.fn(),
@@ -29,6 +31,8 @@ const {
   mockForceFailRunningTask: vi.fn(),
   mockRetryFailedTask: vi.fn(),
   mockRequeueFailedTask: vi.fn(),
+  mockInstructBranch: vi.fn(),
+  mockCreatePullRequestForTask: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -61,7 +65,8 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
   tryMergeBranch: vi.fn(),
   mergeBranch: mockMergeBranch,
   deleteBranch: vi.fn(),
-  instructBranch: vi.fn(),
+  instructBranch: mockInstructBranch,
+  createPullRequestForTask: mockCreatePullRequestForTask,
 }));
 
 vi.mock('../features/tasks/list/taskDeleteActions.js', () => ({
@@ -250,7 +255,7 @@ describe('listTasks interactive status actions', () => {
   });
 
   describe('failed status action handling', () => {
-    it('failed タスクのアクションは Requeue, Retry, Delete の順で表示する', async () => {
+    it('failed タスクのアクションに Instruct を表示しない', async () => {
       mockListAllTaskItems.mockReturnValue([failedTask]);
       mockSelectOption
         .mockResolvedValueOnce('failed:0')
@@ -269,6 +274,10 @@ describe('listTasks interactive status actions', () => {
           label: 'Retry',
           value: 'retry',
           description: expect.stringContaining('conversation'),
+        }),
+        expect.objectContaining({
+          label: 'Create PR',
+          value: 'create_pr',
         }),
         expect.objectContaining({
           label: 'Delete',
@@ -301,8 +310,46 @@ describe('listTasks interactive status actions', () => {
 
       await listTasks('/project');
 
-      expect(mockRetryFailedTask).toHaveBeenCalledWith(failedTask, '/project');
+      expect(mockRetryFailedTask).toHaveBeenCalledWith(failedTask, '/project', undefined);
       expect(mockRequeueFailedTask).not.toHaveBeenCalled();
     });
+
+    it('failed action に Instruct が返っても instructBranch を呼ばない', async () => {
+      mockListAllTaskItems.mockReturnValue([failedTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('failed:0')
+        .mockResolvedValueOnce('instruct')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockInstructBranch).not.toHaveBeenCalled();
+      expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
+    });
+
+    it('failed PR 作成選択時は新しい PR action を呼ぶ', async () => {
+      mockListAllTaskItems.mockReturnValue([failedTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('failed:0')
+        .mockResolvedValueOnce('create_pr')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', failedTask);
+      expect(mockInstructBranch).not.toHaveBeenCalled();
+    });
+  });
+
+  it('completed PR 作成選択時も同じ PR action を呼ぶ', async () => {
+    mockListAllTaskItems.mockReturnValue([completedTaskWithBranch]);
+    mockShowDiffAndPromptActionForTask.mockResolvedValueOnce('create_pr');
+    mockSelectOption
+      .mockResolvedValueOnce('completed:0')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', completedTaskWithBranch);
   });
 });

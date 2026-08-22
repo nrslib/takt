@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: initial security review method and evidence boundary.
+# claude / codex CLI login is required. Excluded from the default suite.
+
+description: 'TAKT facet eval: initial security review method'
+
+prompts:
+  - file://prompts/security-review-method.phase1.md
+
+providers:
+  - id: 'exec: bash providers/claude-review.sh claude-opus-5 fixtures/security-review-method'
+    label: claude-opus-5
+  - id: 'exec: bash providers/codex-review.sh gpt-5.6-luna max fixtures/security-review-method'
+    label: codex-luna-max
+  - id: 'exec: bash providers/codex-review.sh gpt-5.6-sol high fixtures/security-review-method'
+    label: codex-sol-high
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+evaluateOptions:
+  maxConcurrency: 3
+
+tests:
+  - description: 'no changed boundary returns a concise approval'
+    vars:
+      task: file://cases/security-review-method-no-boundary.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: no-boundary/approve
+        value: '(結果|Result)\s*[:：]\s*APPROVE'
+      - type: llm-rubric
+        metric: no-boundary/precision
+        value: |
+          Judge the security decision, not exact formatting. Pass only if the response returns APPROVE with severity None, gives a short summary, and creates no finding or warning from the local rename, comment edit, or absent unrelated controls. Fail if it invents an attacker, an unchecked path contradicted by the supplied evidence, or requests unrelated defense-in-depth.
+
+  - description: 'parameter-bound SQL remains data and is approved'
+    vars:
+      task: file://cases/security-review-method-bound-sql.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: bound-sql/approve
+        value: '(結果|Result)\s*[:：]\s*APPROVE'
+      - type: llm-rubric
+        metric: bound-sql/interpreter-semantics
+        value: |
+          Pass only if the response returns APPROVE with severity None and accepts the documented parameter binding as separating the HTTP value from SQL syntax. It must not create a finding merely because the route lacks a sanitizer function, a length limit, authentication, or another defense not required by the supplied public-directory contract.
+
+  - description: 'HTTP input concatenated into SQL is rejected from static evidence'
+    vars:
+      task: file://cases/security-review-method-sql-concatenation.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: sql-concatenation/reject
+        value: '(結果|Result)\s*[:：]\s*REJECT'
+      - type: llm-rubric
+        metric: sql-concatenation/path
+        value: |
+          Pass only if the response returns REJECT and reports the verified chain from attacker-controlled HTTP query `name`, through string concatenation into SQL syntax, to the database interpreter running with application read authority and exposure of non-public email data. It must accept code plus known SQL semantics as sufficient evidence and must not require a successful attack PoC.
+
+  - description: 'scope-free update of another owner resource is rejected'
+    vars:
+      task: file://cases/security-review-method-resource-scope.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: resource-scope/reject
+        value: '(結果|Result)\s*[:：]\s*REJECT'
+      - type: llm-rubric
+        metric: resource-scope/authorization
+        value: |
+          Pass only if the response returns REJECT and identifies an ordinary authenticated user as the actor, the caller-controlled shared-link document ID, the absence of owner or tenant scope in `updateById`, the reachable modification of another account's private document, and the integrity impact. Authentication alone must not be treated as resource authorization.
+
+  - description: 'credential logging is rejected with an unauthorized observer'
+    vars:
+      task: file://cases/security-review-method-credential-log.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: credential-log/reject
+        value: '(結果|Result)\s*[:：]\s*REJECT'
+      - type: llm-rubric
+        metric: credential-log/observer
+        value: |
+          Pass only if the response returns REJECT and identifies the support contractors as concrete unauthorized observers, the unchanged authorization field reaching their readable centralized log, the production write token as protected data, and production account write access as the impact. It must not dismiss the issue because the credential is not attacker-supplied.
+
+  - description: 'helper-mediated HTTP command injection is rejected'
+    vars:
+      task: file://cases/security-review-method-helper-command.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: helper-command/reject
+        value: '(結果|Result)\s*[:：]\s*REJECT'
+      - type: llm-rubric
+        metric: helper-command/call-path
+        value: |
+          Pass only if the response returns REJECT and follows the unchanged HTTP route into the changed `runProbe` helper, identifies the attacker-controlled `target` entering a shell command string, `/bin/sh -c` as the interpreter, and command execution with the server account's filesystem and network authority as the impact. It must not require a PoC or stop because the changed helper line does not itself show the HTTP source.
+
+  - description: 'repository-author-controlled size alone stays non-blocking'
+    vars:
+      task: file://cases/security-review-method-repository-size.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: repository-size/approve
+        value: '(結果|Result)\s*[:：]\s*APPROVE'
+      - type: llm-rubric
+        metric: repository-size/evidence-threshold
+        value: |
+          Pass only if the response returns APPROVE and does not create a blocking finding from the 12 MiB repository-author-controlled rules, missing new size limit, possible provider use, or possible cost. It may provide a non-blocking warning. It must rely on the absence of a lower-trust actor, existing quantitative contract, reproduced exhaustion, provider failure, or cost impact.

@@ -2,11 +2,28 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  loadAllWorkflowsWithSourcesFromDirs,
-} from '../infra/config/loaders/workflowDiscovery.js';
+import { loadAllWorkflowsWithSourcesFromDirs } from '../infra/config/loaders/workflowDiscovery.js';
 
 describe('workflowDiscovery', () => {
+  it('loads every shipped English and Japanese workflow through the normalized rule schema', () => {
+    const onWarning = vi.fn();
+    const loadLanguageWorkflows = (language: 'en' | 'ja') => loadAllWorkflowsWithSourcesFromDirs(
+      process.cwd(),
+      [{ dir: join(process.cwd(), 'builtins', language, 'workflows'), source: 'builtin' }],
+      { onWarning },
+      undefined,
+      true,
+    );
+    const englishWorkflows = loadLanguageWorkflows('en');
+    const japaneseWorkflows = loadLanguageWorkflows('ja');
+
+    expect(onWarning).not.toHaveBeenCalled();
+    expect([...japaneseWorkflows.keys()].sort()).toEqual([...englishWorkflows.keys()].sort());
+    for (const workflows of [englishWorkflows, japaneseWorkflows]) {
+      expect(workflows.size).toBeGreaterThan(0);
+    }
+  });
+
   it('repo 直下でも builtin の privileged workflow を discovery で skip しない', () => {
     const onWarning = vi.fn();
     const workflows = loadAllWorkflowsWithSourcesFromDirs(

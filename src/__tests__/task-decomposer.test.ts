@@ -35,12 +35,22 @@ describe('parseParts', () => {
     );
   });
 
-  it('max_partsを超えたらエラー', () => {
+  it('initial_max_partsを超えたらエラー', () => {
     const content = '```json\n[{"id":"a","title":"A","instruction":"Do A"},{"id":"b","title":"B","instruction":"Do B"}]\n```';
 
     expect(() => parseParts(content, 1)).toThrow(
-      'Team leader produced too many total parts: 2 > max_total_parts 1',
+      'Team leader produced too many initial parts: 2 > initial_max_parts 1',
     );
+  });
+
+  it('initial_max_parts未指定時はpart数を制限しない', () => {
+    const entries = Array.from(
+      { length: 25 },
+      (_, index) => ({ id: `p${index + 1}`, title: `P${index + 1}`, instruction: 'Do it' }),
+    );
+    const content = `\`\`\`json\n${JSON.stringify(entries)}\n\`\`\``;
+
+    expect(parseParts(content)).toHaveLength(25);
   });
 
   it('必須フィールドが不足したらエラー', () => {

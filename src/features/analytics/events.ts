@@ -1,12 +1,20 @@
 /**
  * Analytics event type definitions for metrics collection.
  *
- * Three event types capture review findings, fix actions, and step results
+ * Event types capture review findings, fix actions, step results, and routing decisions
  * for local-only analysis when analytics.enabled = true.
  */
 
 /** Status of a review finding across iterations */
-export type FindingStatus = 'new' | 'persists' | 'resolved' | 'reopened';
+export type FindingStatus =
+  | 'new'
+  | 'persists'
+  | 'resolved'
+  | 'reopened'
+  | 'waived'
+  | 'invalidated'
+  | 'superseded'
+  | 'dismissed';
 
 /** Severity level of a review finding */
 export type FindingSeverity = 'error' | 'warning';
@@ -28,6 +36,8 @@ export interface ReviewFindingEvent {
   file: string;
   line: number;
   iteration: number;
+  workflowName: string;
+  scopeIdentity: string;
   runId: string;
   timestamp: string;
 }
@@ -41,6 +51,8 @@ export interface FixActionEvent {
   testCommand?: string;
   testResult?: string;
   iteration: number;
+  workflowName: string;
+  scopeIdentity: string;
   runId: string;
   timestamp: string;
 }
@@ -53,12 +65,111 @@ export interface StepResultEvent {
   model: string;
   decisionTag: string;
   iteration: number;
+  workflowName: string;
+  scopeIdentity: string;
   runId: string;
   timestamp: string;
 }
+
+/** Auto routing decision event — emitted without prompt, path, repository content, or task-derived run slug */
+export interface RoutingDecisionEvent {
+  type: 'routing_decision';
+  stepName: string;
+  stepTags: string[];
+  personaKey: string;
+  workflowName: string;
+  stepType: 'normal' | 'parallel' | 'agent';
+  instructionTokenCount: number;
+  phaseCount: number;
+  provider: string;
+  model: string;
+  selectedCategory: string;
+  selectedRoutingTier: 'high' | 'medium' | 'low';
+  requiredRoutingTier: 'high' | 'medium' | 'low';
+  reasonCodes?: string[];
+  fallbackReason?: string;
+  fingerprintChanged?: boolean;
+  retryReason?: 'failed-without-progress' | 'no-progress';
+  estimatorDurationMs?: number;
+  inputTokenBucket?: 'small' | 'medium' | 'large';
+  candidateCount: number;
+  strategy: 'cost' | 'balanced' | 'performance';
+  resolutionSource: string;
+  stepSuccess: boolean;
+  durationMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  taktVersion: string;
+  iteration: number;
+  runId: string;
+  timestamp: string;
+}
+
+interface CompanionAnalyticsEventBase {
+  type: 'companion';
+  step: string;
+  companion?: string;
+  selected?: string[];
+  rationale?: string;
+  severity?: 'must_fix' | 'should_fix' | 'nit';
+  sequence?: number;
+  findingCount?: number;
+  completionSettled?: boolean;
+  completionFailure?: boolean;
+  followUpRounds?: number;
+  reason?: string;
+  digest?: string;
+  changedLines?: number;
+  replaced?: {
+    trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+    digest: string;
+    changedLines: number;
+    observedGeneration: number;
+  };
+  replacement?: {
+    trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+    digest: string;
+    changedLines: number;
+    observedGeneration: number;
+  };
+  runId: string;
+  timestamp: string;
+}
+
+export interface CompanionReviewRoundAnalyticsEvent {
+  type: 'companion';
+  action: 'review_round';
+  step: string;
+  companion: string;
+  reviewMode: 'completion' | 'live';
+  trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+  digest: string;
+  changedLines: number;
+  findingCount: number;
+  runPathNamespace?: readonly string[];
+  runId: string;
+  timestamp: string;
+}
+
+export type CompanionReviewRoundAnalyticsPayload = Omit<
+  CompanionReviewRoundAnalyticsEvent,
+  'type' | 'action' | 'runId' | 'timestamp'
+>;
+
+export type CompanionAnalyticsEvent =
+  | (CompanionAnalyticsEventBase & {
+      action: 'start';
+      reviewMode: 'completion' | 'live';
+    })
+  | (CompanionAnalyticsEventBase & {
+      action: 'pool_selected' | 'finding' | 'fix_round' | 'complete' | 'queue_coalesced';
+    })
+  | CompanionReviewRoundAnalyticsEvent;
 
 /** Union of all analytics event types */
 export type AnalyticsEvent =
   | ReviewFindingEvent
   | FixActionEvent
-  | StepResultEvent;
+  | StepResultEvent
+  | RoutingDecisionEvent
+  | CompanionAnalyticsEvent;

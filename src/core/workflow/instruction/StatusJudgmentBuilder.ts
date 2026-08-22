@@ -10,6 +10,7 @@
  */
 
 import type { WorkflowStep, Language } from '../../models/types.js';
+import { semanticRuleCandidatesOf, type SemanticRuleCandidate } from '../../models/workflow-rule-condition.js';
 import { generateStatusRulesComponents } from './status-rules.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
@@ -29,6 +30,8 @@ export interface StatusJudgmentContext {
   inputSource?: 'report' | 'response';
   /** When true, omit tag output instructions (structured output schema handles format) */
   structuredOutput?: boolean;
+  /** Selectable semantic labels shared with all Phase 3 judge stages. */
+  semanticCandidates?: SemanticRuleCandidate[];
 }
 
 /**
@@ -49,11 +52,12 @@ export class StatusJudgmentBuilder {
 
     const language = this.context.language ?? 'en';
 
+    const candidates = this.context.semanticCandidates
+      ?? semanticRuleCandidatesOf(this.step.rules, this.context.interactive === true);
     const components = generateStatusRulesComponents(
       this.step.name,
-      this.step.rules,
+      candidates,
       language,
-      { interactive: this.context.interactive },
     );
 
     // 情報源に応じた内容を構築

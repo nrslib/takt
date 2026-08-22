@@ -8,15 +8,8 @@
 import chalk from 'chalk';
 import { info, blankLine } from '../../shared/ui/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { readMultilineInput } from './lineEditor.js';
+import { readPipedLine } from './lineEditor.js';
 import type { InteractiveModeResult } from './interactive.js';
-import {
-  buildInteractiveResultWithAttachments,
-  createClipboardImagePasteHandler,
-  createImagePasteHandler,
-  createSessionImageAttachmentStore,
-} from './imageAttachments.js';
-import { reportClipboardImagePasteError } from './clipboardImageFeedback.js';
 
 /**
  * Run passthrough mode: collect user input and return it as-is.
@@ -24,11 +17,15 @@ import { reportClipboardImagePasteError } from './clipboardImageFeedback.js';
  * If initialInput is provided, it is used directly as the task.
  * Otherwise, prompts the user for input.
  *
+ * @param _cwd - The project, which this mode has no use for: it neither reads
+ *   configuration nor stores anything. Kept so every interactive entry point is
+ *   called the same way.
  * @param lang - Display language
  * @param initialInput - Pre-filled input (e.g., from issue reference)
  * @returns Result with the raw user input as task
  */
 export async function passthroughMode(
+  _cwd: string,
   lang: 'en' | 'ja',
   initialInput?: string,
 ): Promise<InteractiveModeResult> {
@@ -36,28 +33,24 @@ export async function passthroughMode(
     return { action: 'execute', task: initialInput };
   }
 
-  const attachmentStore = createSessionImageAttachmentStore();
-
   info(getLabel('interactive.ui.introPassthrough', lang));
   blankLine();
 
-  const input = await readMultilineInput(chalk.green('> '), {
-    onImagePaste: createImagePasteHandler(attachmentStore),
-    onClipboardImagePaste: createClipboardImagePasteHandler(attachmentStore),
-    onClipboardImagePasteError: reportClipboardImagePasteError,
-  });
+  // Piped input carries no paste gestures — a terminal takes the TUI instead —
+  // so there is no image store here and nothing to clean up.
+  const input = await readPipedLine(chalk.green('> '));
 
   if (input === null) {
     blankLine();
     info(getLabel('interactive.ui.cancelled', lang));
-    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+    return { action: 'cancel', task: '' };
   }
 
   const trimmed = input.trim();
   if (!trimmed) {
     info(getLabel('interactive.ui.cancelled', lang));
-    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+    return { action: 'cancel', task: '' };
   }
 
-  return buildInteractiveResultWithAttachments({ action: 'execute', task: trimmed }, attachmentStore);
+  return { action: 'execute', task: trimmed };
 }

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../infra/config/loaders/workflowDoctor.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -23,6 +24,25 @@ function writeWorkflow(projectDir: string, relativePath: string, content: string
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content, 'utf-8');
   return filePath;
+}
+
+function writeWorkflowRefComposer(projectDir: string): void {
+  writeWorkflow(projectDir, '.takt/workflows/composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
 }
 
 interface WorktreeRootCase {
@@ -59,9 +79,14 @@ function writeConfigForCase(rootCase: WorktreeRootCase): void {
 
 describe('workflow doctor', () => {
   let projectDir: string;
+  // 共有 tmp 直下（../takt-worktrees）に作った branch dir の追跡リスト。
+  // afterEach で「自分が作った dir だけ」を削除する（並走テストの dir には
+  // 触れない）。
+  let createdWorktreeDirs: string[] = [];
   const previousConfigDir = process.env.TAKT_CONFIG_DIR;
 
   beforeEach(() => {
+    createdWorktreeDirs = [];
     projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-'));
     process.env.TAKT_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-global-'));
     invalidateGlobalConfigCache();
@@ -72,6 +97,9 @@ describe('workflow doctor', () => {
   });
 
   afterEach(() => {
+    for (const dir of createdWorktreeDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
     rmSync(projectDir, { recursive: true, force: true });
     if (process.env.TAKT_CONFIG_DIR) {
       rmSync(process.env.TAKT_CONFIG_DIR, { recursive: true, force: true });
@@ -168,6 +196,241 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
+  it('validates dynamic fixed/pool review tags, aggregate rules, and report references', async () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', 'provider: mock\n');
+    writeWorkflow(
+      projectDir,
+      '.takt/facets/output-contracts/review-report.md',
+      'Write the review result.',
+    );
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/dynamic-doctor.yaml', `name: dynamic-doctor
+max_steps: 2
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      fixed:
+        - name: architecture
+          tags: [review]
+          instruction: review architecture
+          output_contracts:
+            report:
+              - name: architecture.md
+                format: review-report
+          rules:
+            - condition: approved
+      pool:
+        - name: security
+          tags: [review]
+          description: review security
+          instruction: review security
+          output_contracts:
+            report:
+              - name: security.md
+                format: review-report
+          rules:
+            - condition: approved
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: fix
+  - name: fix
+    instruction: use {report:architecture.md} and {report:security.md}
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    expect(inspectWorkflowFile(filePath, projectDir).diagnostics).toEqual([]);
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('dynamic-doctor.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('accepts a dynamic selector provider through the shared transport', async () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', [
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+      '    model: opencode/big-pickle',
+    ].join('\n'));
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/dynamic-selector-provider.yaml', `name: dynamic-selector-provider
+max_steps: 1
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security
+          description: review security
+          instruction: review security
+      selection:
+        mode: replace
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('dynamic-selector-provider.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('uses the CLI selector override for runtime contract validation', async () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', [
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+      '    model: opencode/big-pickle',
+    ].join('\n'));
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/dynamic-selector-override.yaml', `name: dynamic-selector-override
+max_steps: 1
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security
+          description: review security
+          instruction: review security
+      selection:
+        mode: replace
+`);
+
+    await expect(doctorWorkflowCommand(
+      [filePath],
+      projectDir,
+      { provider: 'mock' },
+    )).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('dynamic-selector-override.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('skips disabled companion provider resolution while validating companion declarations', async () => {
+    writeWorkflow(projectDir, '.takt/companions/security-reviewer.yaml', `name: security-reviewer
+description: security review
+interval_ms: 60000
+`);
+    writeWorkflow(projectDir, '.takt/runtime.yaml', `version: 1
+companion:
+  enabled: false
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: mock
+      model: mock-model
+  targets:
+    companions:
+      security-reviewer:
+        profile: missing-profile
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/disabled-companion.yaml', `name: disabled-companion
+max_steps: 1
+initial_step: implement
+steps:
+  - name: implement
+    instruction: implement
+    companion: [security-reviewer]
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('disabled-companion.yaml'));
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('Companion review mode: completion'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('displays the resolved live companion review mode for an enabled workflow', async () => {
+    writeWorkflow(projectDir, '.takt/companions/security-reviewer.yaml', `name: security-reviewer
+description: security review
+interval_ms: 60000
+`);
+    writeWorkflow(projectDir, '.takt/runtime.yaml', `version: 1
+companion:
+  enabled: true
+  review_mode: live
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: mock
+      model: mock-model
+    security:
+      provider: mock
+      model: mock-security
+  targets:
+    companions:
+      security-reviewer:
+        profile: security
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/live-companion.yaml', `name: live-companion
+max_steps: 1
+initial_step: implement
+steps:
+  - name: implement
+    instruction: implement
+    companion: [security-reviewer]
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('Companion review mode: live'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('accepts shared selector transport when only a called workflow is dynamic', async () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', [
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+      '    model: opencode/big-pickle',
+    ].join('\n'));
+    writeWorkflow(projectDir, '.takt/workflows/child-dynamic.yaml', `name: child-dynamic
+subworkflow:
+  callable: true
+max_steps: 1
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security
+          description: review security
+          instruction: review security
+          rules:
+            - condition: approved
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+`);
+    const parentPath = writeWorkflow(projectDir, '.takt/workflows/parent-dynamic.yaml', `name: parent-dynamic
+max_steps: 1
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child-dynamic
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([parentPath], projectDir)).resolves.toBeUndefined();
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('parent-dynamic.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
   it('reports invalid team_leader inspect_tools from workflow doctor output', async () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/invalid-team-leader-inspect-tools.yaml', `name: invalid-team-leader-inspect-tools
 max_steps: 10
@@ -186,6 +449,475 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('invalid-team-leader-inspect-tools.yaml'));
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('team_leader.inspect_tools'));
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('bash'));
+  });
+
+
+  it('reports a runtime.yaml same-priority tag routing conflict as a doctor error (fail-fast forwarded)', async () => {
+    writeWorkflow(projectDir, '.takt/runtime.yaml', `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: codex
+      model: gpt-runtime
+    alt:
+      provider: opencode
+      model: opencode/big-pickle
+  targets:
+    tags:
+      t1:
+        profile: default
+      t2:
+        profile: alt
+`);
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/runtime-tag-conflict.yaml', `name: runtime-tag-conflict
+max_steps: 1
+initial_step: review
+steps:
+  - name: review
+    instruction: review the implementation
+    tags:
+      - t1
+      - t2
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('runtime-tag-conflict.yaml'));
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Conflicting provider routing for tags'));
+  });
+
+
+  it('keeps expanded workflow_ref composition valid without an inherited runtime requirement', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+    args:
+      target: regular-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeWorkflowRefComposer(projectDir);
+    writeWorkflow(projectDir, '.takt/workflows/regular-review.yaml', `name: regular-review
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+  });
+
+  it('attributes runtime validation errors to the referenced step fragment', async () => {
+    const fragmentPath = writeWorkflow(projectDir, '.takt/steps/opencode-review.yaml', `provider: opencode
+instruction: review the implementation
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/fragment-runtime-error.yaml', `name: fragment-runtime-error
+max_steps: 1
+initial_step: review
+steps:
+  - name: review
+    uses: opencode-review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+
+    const output = mockError.mock.calls.flat().join('\n');
+    expect(output).toContain('workflow YAML no longer accepts provider execution settings');
+    expect(output).toContain('configure provider/model/options in runtime.yaml');
+    expect(output).toContain(filePath);
+    expect(output).toContain('from step fragment "opencode-review"');
+    expect(output).toContain(fragmentPath);
+  });
+
+
+  it('warns when an instruction references a report that is only produced by later steps (v3-r4 arbitrate shape)', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-later.yaml', `name: report-ref-later
+max_steps: 10
+initial_step: review
+loop_monitors:
+  - cycle:
+      - review
+      - fix
+    threshold: 3
+    judge:
+      instruction: "check the loop using {report:final-review.md}"
+      rules:
+        - condition: healthy
+          next: review
+        - condition: stuck
+          next: reviewers
+steps:
+  - name: review
+    instruction: review the diff
+    rules:
+      - condition: issues found
+        next: fix
+      - condition: clean
+        next: reviewers
+    output_contracts:
+      report:
+        - name: review-1st.md
+          format: simple-report
+  - name: fix
+    instruction: fix it
+    rules:
+      - condition: fixed
+        next: review
+      - condition: no fix needed
+        next: arbitrate
+  - name: arbitrate
+    instruction: "arbitrate using {report:final-review.md}"
+    rules:
+      - condition: reviewer is right
+        next: fix
+      - condition: coder is right
+        next: reviewers
+  - name: reviewers
+    instruction: final review
+    rules:
+      - condition: ok
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: final-review.md
+          format: simple-report
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('step "arbitrate" references {report:final-review.md}'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('before any step producing the report has run'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('loop monitor judge for cycle [review -> fix] references {report:final-review.md}'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when the referenced report is produced before the step on every path', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-earlier.yaml', `name: report-ref-earlier
+max_steps: 10
+initial_step: review
+loop_monitors:
+  - cycle:
+      - review
+      - fix
+    threshold: 3
+    judge:
+      instruction: "check the loop using {report:review-1st.md}"
+      rules:
+        - condition: healthy
+          next: review
+        - condition: stuck
+          next: COMPLETE
+steps:
+  - name: review
+    instruction: review the diff
+    rules:
+      - condition: issues found
+        next: fix
+      - condition: clean
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: review-1st.md
+          format: simple-report
+  - name: fix
+    instruction: fix it
+    rules:
+      - condition: fixed
+        next: review
+      - condition: no fix needed
+        next: arbitrate
+  - name: arbitrate
+    instruction: "arbitrate using {report:review-1st.md}"
+    rules:
+      - condition: reviewer is right
+        next: fix
+      - condition: coder is right
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  // codex 指摘 (a): workflow_call のワイルドカードは全集合として交差に吸収される。
+  // 一方の経路が workflow_call（任意レポート producer）、他方が実 producer のとき、
+  // 合流点では設計上レポートが保証される — 交差を空にして偽陽性を出さない。
+  it('does not warn when a workflow_call path and a producing path merge before the reference', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    writeWorkflow(projectDir, '.takt/workflows/wildcard-child.yaml', `name: wildcard-child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: work
+max_steps: 3
+steps:
+  - name: work
+    instruction: do the delegated work
+    rules:
+      - condition: done
+        return: ok
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-wildcard-merge.yaml', `name: report-ref-wildcard-merge
+max_steps: 10
+initial_step: route
+steps:
+  - name: route
+    instruction: route the work
+    rules:
+      - condition: delegate path
+        next: delegate
+      - condition: direct path
+        next: produce
+  - name: delegate
+    kind: workflow_call
+    call: wildcard-child
+    rules:
+      - condition: ok
+        next: join
+  - name: produce
+    instruction: produce the report
+    rules:
+      - condition: done
+        next: join
+    output_contracts:
+      report:
+        - name: x-report.md
+          format: simple-report
+  - name: join
+    instruction: "consume {report:x-report.md}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  // codex 指摘 (b): loop monitor の judge は cycle 完走後にしか発火しないため、
+  // judge エッジは cycle 最後のステップからのみ張る。cycle 後半のステップが
+  // 生成するレポートを judge の遷移先が参照しても偽陽性を出さない。
+  it('does not warn when a judge target references a report produced by the last cycle step', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-cycle-late-producer.yaml', `name: report-ref-cycle-late-producer
+max_steps: 10
+initial_step: stepa
+loop_monitors:
+  - cycle:
+      - stepa
+      - stepb
+    threshold: 3
+    judge:
+      instruction: judge the loop
+      rules:
+        - condition: healthy
+          next: stepa
+        - condition: stuck
+          next: escalate
+steps:
+  - name: stepa
+    instruction: do a
+    rules:
+      - condition: continue
+        next: stepb
+  - name: stepb
+    instruction: do b
+    rules:
+      - condition: loop
+        next: stepa
+      - condition: done
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: b-report.md
+          format: simple-report
+  - name: escalate
+    instruction: "handle the stuck loop using {report:b-report.md}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  // 予約名の強制（codex 3巡目）: resume-artifacts.json は resume スナップショット
+  // manifest の内部予約名。出力契約に使うとロード時（Zod 検証）に落ちる。
+  it('rejects workflows whose output contract uses the reserved resume-artifacts.json name', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/reserved-contract-name.yaml', `name: reserved-contract-name
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: do the work
+    rules:
+      - condition: done
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: Resume-Artifacts.JSON
+          format: simple-report
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('reserved for the internal resume snapshot manifest'));
+  });
+
+  it('rejects output contracts using a noncanonical backslash separator', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/reserved-contract-backslash.yaml', `name: reserved-contract-backslash
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: do the work
+    rules:
+      - condition: done
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: 'sub\\Resume-Artifacts.JSON'
+          format: simple-report
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('non-canonical path separator'));
+  });
+
+  it('rejects output contracts containing a dotdot path segment before namespace classification', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/internal-contract-path.yaml', `name: internal-contract-path
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: do the work
+    rules:
+      - condition: done
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: 'public/../.takt-report-internal/review.md'
+          format: simple-report
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('dot path segment'));
+  });
+
+  it('reports an error when an instruction uses a noncanonical backslash separator', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/reserved-reference-backslash.yaml', `name: reserved-reference-backslash
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: 'inspect {report:sub\\Resume-Artifacts.JSON}'
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('non-canonical path separator'));
+  });
+
+  it('reports an error when an instruction report reference contains a dotdot path segment', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/internal-reference.yaml', `name: internal-reference
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: 'inspect {report:public/../.takt-report-internal/review.md}'
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('dot path segment'));
+  });
+
+  it('reports an error when an instruction references the reserved resume-artifacts.json', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/reserved-reference.yaml', `name: reserved-reference
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: "inspect {report:resume-artifacts.json}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('reserved internal file'));
+  });
+
+  it('warns when an instruction references a report that no step produces at all', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-nowhere.yaml', `name: report-ref-nowhere
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: "work with {report:ghost-report.md}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('step "step1" references {report:ghost-report.md}'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining("no step's output_contracts produce that report"));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('does not warn on callable subworkflows whose reports may come from the parent run', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-callable.yaml', `name: report-ref-callable
+subworkflow:
+  callable: true
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: "work with {report:plan.md}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockError).not.toHaveBeenCalled();
   });
 
   it('reports missing loop monitor judge references', () => {
@@ -306,6 +1038,46 @@ steps:
 
     expect(messages).toContain('initial_step references missing step "missing"');
     expect(messages).toContain('Unreachable steps: step1');
+  });
+
+  it('reports invalid auto_requeue_max_attempts from resolved project config', () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', 'auto_requeue_max_attempts: -1\n');
+    invalidateAllResolvedConfigCache();
+
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/valid.yaml', `name: valid
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('auto_requeue_max_attempts');
+  });
+
+  it('reports invalid ignore_exceed from resolved project config', () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', 'ignore_exceed: 1\n');
+    invalidateAllResolvedConfigCache();
+
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/valid.yaml', `name: valid
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('ignore_exceed');
   });
 
   it('reports unused section entries as warnings', () => {
@@ -464,6 +1236,78 @@ steps:
     );
   });
 
+  it('reports callable default section map project facet symlinks as workflow load diagnostics', () => {
+    const instructionsDir = join(projectDir, '.takt/facets/instructions');
+    const outsideDir = join(projectDir, 'outside');
+    mkdirSync(instructionsDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, 'secret.md'), 'Secret instruction', 'utf-8');
+    symlinkSync(join(outsideDir, 'secret.md'), join(instructionsDir, 'linked.md'));
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/callable-default-symlink.yaml', `name: callable-default-symlink
+subworkflow:
+  callable: true
+  params:
+    review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: linked
+max_steps: 1
+initial_step: review
+instructions:
+  linked: ../facets/instructions/linked.md
+steps:
+  - name: review
+    instruction:
+      $param: review_instruction
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(
+      /^Workflow "callable-default-symlink\.yaml" failed to load: Project facet file must stay inside the project and must not use symlinks:/,
+    );
+  });
+
+  it('reports callable default section map package parent symlinks as workflow load diagnostics', () => {
+    const ownerDir = join(process.env.TAKT_CONFIG_DIR!, 'repertoire', '@nrslib');
+    const packageLink = join(ownerDir, 'pkg');
+    const outsidePackageDir = join(projectDir, 'outside-package');
+    const workflowsDir = join(outsidePackageDir, 'workflows');
+    const instructionsDir = join(outsidePackageDir, 'facets/instructions');
+    mkdirSync(ownerDir, { recursive: true });
+    mkdirSync(workflowsDir, { recursive: true });
+    mkdirSync(instructionsDir, { recursive: true });
+    writeFileSync(join(instructionsDir, 'linked.md'), 'Secret instruction', 'utf-8');
+    writeFileSync(join(workflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  params:
+    review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: linked
+max_steps: 1
+initial_step: review
+instructions:
+  linked: ../facets/instructions/linked.md
+steps:
+  - name: review
+    instruction:
+      $param: review_instruction
+`);
+    symlinkSync(outsidePackageDir, packageLink, 'dir');
+
+    const messages = inspectWorkflowFile(join(packageLink, 'workflows/child.yaml'), projectDir, {
+      source: 'repertoire',
+    }).diagnostics.map((item) => item.message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(
+      /^Workflow "child\.yaml" failed to load: Scoped facet file must stay inside the repertoire and must not use symlinks:/,
+    );
+  });
+
   it('allows doctor inspection for callable subworkflows with required params', () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/callable-required-param.yaml', `name: callable-required-param
 subworkflow:
@@ -559,6 +1403,45 @@ steps:
     call: child
     rules:
       - condition: retry_plan
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Workflow "parent.yaml" failed to load: workflow_call step "delegate" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
+  it('reports unsupported parallel workflow_call child return conditions', () => {
+    writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review
+    rules:
+      - condition: done
+        return: ok
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    parallel:
+      - name: delegate
+        kind: workflow_call
+        call: child
+        rules:
+          - condition: retry_plan
+            next: COMPLETE
+    rules:
+      - condition: done
         next: COMPLETE
 `);
 
@@ -751,6 +1634,7 @@ steps:
     expect(report.diagnostics).toEqual([]);
   });
 
+
   it('resolves named builtin workflow targets without downgrading privileged builtin trust', async () => {
     await expect(doctorWorkflowCommand(['auto-improvement-loop'], process.cwd())).resolves.toBeUndefined();
 
@@ -801,7 +1685,11 @@ steps:
       writeConfigForCase(rootCase);
       const { rootDirRelativePath } = rootCase;
       const rootDir = join(projectDir, rootDirRelativePath);
-      const worktreeDir = join(rootDir, 'feature-branch');
+      // 共有 tmp 配下（../takt-worktrees は $TMPDIR 直下で全テストファイルが
+      // 同一パスを共有する）での並走衝突を避けるため、branch dir 名は
+      // テストごとに一意にする。
+      const worktreeDir = join(rootDir, `feature-branch-${randomUUID()}`);
+      createdWorktreeDirs.push(worktreeDir);
       const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'prepare.yaml');
       mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
       writeFileSync(worktreeWorkflowPath, `name: prepare
@@ -833,7 +1721,11 @@ steps:
       writeConfigForCase(rootCase);
       const { rootDirRelativePath } = rootCase;
       const rootDir = join(projectDir, rootDirRelativePath);
-      const worktreeDir = join(rootDir, 'feature-branch');
+      // 共有 tmp 配下（../takt-worktrees は $TMPDIR 直下で全テストファイルが
+      // 同一パスを共有する）での並走衝突を避けるため、branch dir 名は
+      // テストごとに一意にする。
+      const worktreeDir = join(rootDir, `feature-branch-${randomUUID()}`);
+      createdWorktreeDirs.push(worktreeDir);
       const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'commit.yaml');
       mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
       writeFileSync(worktreeWorkflowPath, `name: commit
@@ -863,7 +1755,11 @@ steps:
       const validateContractsSpy = vi.spyOn(workflowResolver, 'validateWorkflowCallContracts');
       const { rootDirRelativePath } = rootCase;
       const rootDir = join(projectDir, rootDirRelativePath);
-      const worktreeDir = join(rootDir, 'feature-branch');
+      // 共有 tmp 配下（../takt-worktrees は $TMPDIR 直下で全テストファイルが
+      // 同一パスを共有する）での並走衝突を避けるため、branch dir 名は
+      // テストごとに一意にする。
+      const worktreeDir = join(rootDir, `feature-branch-${randomUUID()}`);
+      createdWorktreeDirs.push(worktreeDir);
       const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'parent.yaml');
 
       writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
@@ -914,7 +1810,11 @@ steps:
       writeConfigForCase(rootCase);
       const { rootDirRelativePath } = rootCase;
       const rootDir = join(projectDir, rootDirRelativePath);
-      const worktreeDir = join(rootDir, 'feature-branch');
+      // 共有 tmp 配下（../takt-worktrees は $TMPDIR 直下で全テストファイルが
+      // 同一パスを共有する）での並走衝突を避けるため、branch dir 名は
+      // テストごとに一意にする。
+      const worktreeDir = join(rootDir, `feature-branch-${randomUUID()}`);
+      createdWorktreeDirs.push(worktreeDir);
       const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'parent.yaml');
 
       mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });

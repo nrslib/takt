@@ -2,13 +2,20 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveAgentProviderModel,
   resolveStepProviderModel,
+  resolveWorkflowCallProviderModel,
 } from '../core/workflow/provider-resolution.js';
 import { resolveLoopMonitorJudgeProviderModel } from '../core/workflow/provider-resolution.js';
 import {
   resolveModelFromCandidates,
   resolveProviderModelCandidates,
 } from '../core/provider-resolution.js';
-import { resolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
+import {
+  resolveAssistantProviderModelFromConfig,
+  resolveAssistantScopedProviderModelFromConfig,
+  resolveNonWorkflowProviderModelFromConfig,
+} from '../core/config/provider-resolution.js';
+import { resolveExecutableRoutingCandidates } from '../core/workflow/auto-routing/selector.js';
+import type { AutoRoutingConfig, ProjectConfig } from '../core/models/config-types.js';
 
 describe('resolveProviderModelCandidates', () => {
   it('should resolve first defined provider and model independently', () => {
@@ -34,9 +41,270 @@ describe('resolveProviderModelCandidates', () => {
 });
 
 describe('resolveStepProviderModel', () => {
-  it('should prefer step.provider over personaProviders.provider when both are defined', () => {
+  it('carries permission mode only from the profile that supplied the winning provider', () => {
+    const routed = resolveStepProviderModel({
+      step: { name: 'review', personaDisplayName: 'reviewer', tags: ['security'] },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      permissionMode: 'full',
+      providerRouting: {
+        tags: {
+          security: { provider: 'claude', model: 'review-model', permissionMode: 'readonly' },
+        },
+      },
+    });
+    expect(routed.permissionMode).toBe('readonly');
+
+    const overridden = resolveStepProviderModel({
+      step: { name: 'review', personaDisplayName: 'reviewer', tags: ['security'] },
+      provider: 'codex',
+      providerSource: 'cli',
+      permissionMode: 'full',
+      providerRouting: {
+        tags: {
+          security: { provider: 'claude', model: 'review-model', permissionMode: 'readonly' },
+        },
+      },
+    });
+    expect(overridden.permissionMode).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: 'provider only',
+      providerSource: 'env' as const,
+      modelSource: 'project' as const,
+      expected: {
+        provider: 'mock',
+        providerSource: 'env',
+        model: 'step-model',
+        modelSource: 'step',
+      },
+    },
+    {
+      label: 'model only',
+      providerSource: 'project' as const,
+      modelSource: 'env' as const,
+      expected: {
+        provider: 'codex',
+        providerSource: 'step',
+        model: 'env-model',
+        modelSource: 'env',
+      },
+    },
+    {
+      label: 'provider and model',
+      providerSource: 'env' as const,
+      modelSource: 'env' as const,
+      expected: {
+        provider: 'mock',
+        providerSource: 'env',
+        model: 'env-model',
+        modelSource: 'env',
+      },
+    },
+  ])('should keep environment $label above step, routing, persona, and auto routing', ({
+    providerSource,
+    modelSource,
+    expected,
+  }) => {
     const result = resolveStepProviderModel({
-      step: { provider: 'codex', model: undefined, personaDisplayName: 'coder' },
+      step: {
+        name: 'implement',
+        engineSynthesized: true,
+        provider: 'codex',
+        model: 'step-model',
+        personaDisplayName: 'coder',
+        tags: ['coding'],
+      },
+      provider: 'mock',
+      providerSource,
+      model: 'env-model',
+      modelSource,
+      providerRouting: {
+        steps: { implement: { provider: 'claude', model: 'routing-model' } },
+      },
+      personaProviders: {
+        coder: { provider: 'opencode', model: 'persona-model' },
+      },
+      autoRouting: {
+        strategy: 'cost',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+      },
+    });
+
+    expect(result).toEqual(expected);
+  });
+
+  it('should use runtime defaults when auto routing has no matching explicit pool target', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'review', provider: undefined, model: undefined },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+      autoRouting: {
+        workflowName: 'e2e-mock-single',
+        strategy: 'balanced',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+        candidatePools: {},
+      } as AutoRoutingConfig,
+    });
+
+    expect(result).toEqual({
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+    });
+  });
+
+  it('should leave an explicitly pooled target unresolved for auto routing', () => {
+    const autoRouting: AutoRoutingConfig = {
+      workflowName: 'e2e-mock-single',
+      strategy: 'balanced',
+      router: { provider: 'mock', model: 'router-model' },
+      candidates: [
+        { name: 'coding', provider: 'codex', model: 'gpt-5', routingTier: 'medium' },
+      ],
+      candidatePools: {
+        main: { candidates: ['coding'], fallback: 'coding' },
+      },
+      poolRules: { steps: { 'e2e-mock-single/execute': 'main' } },
+    };
+    const result = resolveStepProviderModel({
+      step: { name: 'execute', provider: undefined, model: undefined },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+      autoRouting,
+    });
+
+    expect(result.provider).toBeUndefined();
+    expect(result.model).toBeUndefined();
+
+    const resolvedCandidates = resolveExecutableRoutingCandidates(autoRouting, {
+      name: 'execute',
+      tags: [],
+    });
+
+    expect(resolvedCandidates).toMatchObject({
+      poolName: 'main',
+      resolutionSource: 'auto.dynamic',
+      selectionCandidates: [{ name: 'coding' }],
+      fallbackCandidate: { name: 'coding' },
+    });
+  });
+
+  it('resolves a fully qualified runtime step target in the active workflow', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', provider: undefined, model: undefined },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+      providerRouting: {
+        workflowName: 'development-core',
+        steps: {
+          'development-core/implement': { provider: 'codex', model: 'gpt-5.6-sol' },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      provider: 'codex',
+      providerSource: 'provider_routing.steps',
+      model: 'gpt-5.6-sol',
+      modelSource: 'provider_routing.steps',
+    });
+  });
+
+  it.each([
+    { layer: 'CLI', source: 'env', provider: 'mock' },
+    { layer: 'provider routing', source: 'provider_routing.steps', provider: 'opencode' },
+    { layer: 'persona', source: 'persona_providers', provider: 'cursor' },
+  ] as const)('should preserve the project model for a provider-only $layer override with auto routing', ({
+    layer,
+    source,
+    provider,
+  }) => {
+    const result = resolveStepProviderModel({
+      step: {
+        name: 'implement',
+        provider: undefined,
+        model: undefined,
+        personaDisplayName: 'coder',
+      },
+      provider: layer === 'CLI' ? provider : 'claude',
+      providerSource: layer === 'CLI' ? 'env' : 'project',
+      model: 'project-model',
+      modelSource: 'project',
+      providerRouting: layer === 'provider routing'
+        ? { steps: { implement: { provider } } }
+        : undefined,
+      personaProviders: layer === 'persona' ? { coder: { provider } } : undefined,
+      autoRouting: {
+        strategy: 'cost',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+      },
+    });
+
+    expect(result).toEqual({
+      provider,
+      providerSource: source,
+      model: 'project-model',
+      modelSource: 'project',
+    });
+  });
+
+  it.each([
+    { layer: 'CLI', source: 'env', model: 'cli-model' },
+    { layer: 'provider routing', source: 'provider_routing.steps', model: 'routing-model' },
+    { layer: 'persona', source: 'persona_providers', model: 'persona-model' },
+  ] as const)('should preserve a model-only $layer override for the auto-selected provider', ({
+    layer,
+    source,
+    model,
+  }) => {
+    const result = resolveStepProviderModel({
+      step: {
+        name: 'implement',
+        provider: undefined,
+        model: undefined,
+        personaDisplayName: 'coder',
+      },
+      provider: 'claude',
+      providerSource: 'project',
+      model: layer === 'CLI' ? model : 'project-model',
+      modelSource: layer === 'CLI' ? 'env' : 'project',
+      providerRouting: layer === 'provider routing'
+        ? { steps: { implement: { model } } }
+        : undefined,
+      personaProviders: layer === 'persona' ? { coder: { model } } : undefined,
+      autoRouting: {
+        strategy: 'cost',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+        defaultPool: 'general',
+        poolRules: { steps: { implement: 'general' } },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: undefined,
+      providerSource: undefined,
+      model,
+      modelSource: source,
+    });
+  });
+
+  it('should prefer an engine-synthesized provider over personaProviders.provider when both are defined', () => {
+    const result = resolveStepProviderModel({
+      step: { engineSynthesized: true, provider: 'codex', model: undefined, personaDisplayName: 'coder' },
       provider: 'claude',
       personaProviders: { coder: { provider: 'opencode' } },
     });
@@ -62,6 +330,8 @@ describe('resolveStepProviderModel', () => {
     });
 
     expect(result.provider).toBe('mock');
+    // Given engine source is undefined but value is set, the source stays undefined (caller must set)
+    expect(result.providerSource).toBeUndefined();
   });
 
   it('should return undefined provider when all provider candidates are missing', () => {
@@ -72,11 +342,12 @@ describe('resolveStepProviderModel', () => {
     });
 
     expect(result.provider).toBeUndefined();
+    expect(result.providerSource).toBeUndefined();
   });
 
-  it('should prefer step.model over personaProviders.model and input.model', () => {
+  it('should prefer an engine-synthesized model over personaProviders.model and input.model', () => {
     const result = resolveStepProviderModel({
-      step: { provider: undefined, model: 'step-model', personaDisplayName: 'coder' },
+      step: { engineSynthesized: true, provider: undefined, model: 'step-model', personaDisplayName: 'coder' },
       model: 'input-model',
       personaProviders: { coder: { provider: 'codex', model: 'persona-model' } },
     });
@@ -102,6 +373,8 @@ describe('resolveStepProviderModel', () => {
     });
 
     expect(result.model).toBe('input-model');
+    // Given engine source is undefined but value is set, the source stays undefined (caller must set)
+    expect(result.modelSource).toBeUndefined();
   });
 
   it('should return undefined model when all model candidates are missing', () => {
@@ -112,6 +385,7 @@ describe('resolveStepProviderModel', () => {
     });
 
     expect(result.model).toBeUndefined();
+    expect(result.modelSource).toBeUndefined();
   });
 
   it('should resolve provider from personaProviders entry with only model specified', () => {
@@ -135,6 +409,218 @@ describe('resolveStepProviderModel', () => {
     expect(result.provider).toBe('cursor');
   });
 
+  it('should ignore removed workflow fallback fields and keep the resolved project input', () => {
+    const result = resolveStepProviderModel({
+      step: {
+        provider: 'codex',
+        providerSpecified: false,
+        model: 'workflow-model',
+        modelSpecified: false,
+        personaDisplayName: 'coder',
+      },
+      provider: 'mock',
+      providerSource: 'project',
+      model: 'project-model',
+      modelSource: 'project',
+    });
+
+    expect(result).toEqual({
+      provider: 'mock',
+      providerSource: 'project',
+      model: 'project-model',
+      modelSource: 'project',
+    });
+  });
+
+});
+
+describe('resolveStepProviderModel — tag routing conflict policy', () => {
+  const twoTagRouting = {
+    tags: {
+      t1: { provider: 'codex' as const, model: 'm-a' },
+      t2: { provider: 'claude' as const, model: 'm-b' },
+    },
+  };
+
+  it('throws when runtime-v1 fail-fast policy meets a step with two conflicting tags', () => {
+    expect(() =>
+      resolveStepProviderModel({
+        step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+        providerRouting: twoTagRouting,
+        tagConflictPolicy: 'fail-fast',
+      }),
+    ).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
+  });
+
+  it('does not throw under fail-fast when the step tags map to the same assignment', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't3'] },
+      providerRouting: {
+        tags: {
+          t1: { provider: 'codex', model: 'm-a' },
+          t3: { provider: 'codex', model: 'm-a' },
+        },
+      },
+      tagConflictPolicy: 'fail-fast',
+    });
+
+    expect(result).toMatchObject({ provider: 'codex', model: 'm-a' });
+  });
+
+  it('keeps legacy last-wins (no throw) when the policy is last-wins', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: twoTagRouting,
+      tagConflictPolicy: 'last-wins',
+    });
+
+    expect(result).toMatchObject({ provider: 'claude', model: 'm-b' });
+  });
+
+  it('defaults to last-wins when no policy is supplied (legacy callers)', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: twoTagRouting,
+    });
+
+    expect(result).toMatchObject({ provider: 'claude', model: 'm-b' });
+  });
+
+  it('last-wins follows the step tag order, not the routing map key order', () => {
+    // Reversed step tags: t1 is now the last match even though the routing map lists t2 last.
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t2', 't1'] },
+      providerRouting: twoTagRouting,
+      tagConflictPolicy: 'last-wins',
+    });
+
+    expect(result).toMatchObject({ provider: 'codex', model: 'm-a' });
+  });
+
+  it('throws under fail-fast when tags share provider/model but differ in providerOptions', () => {
+    expect(() =>
+      resolveStepProviderModel({
+        step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+        providerRouting: {
+          tags: {
+            t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+            t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'low' } } },
+          },
+        },
+        tagConflictPolicy: 'fail-fast',
+      }),
+    ).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
+  });
+
+  it('throws under fail-fast when tags share provider/model but differ in permission mode', () => {
+    expect(() => resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: {
+        tags: {
+          t1: { provider: 'codex', model: 'm-a', permissionMode: 'readonly' },
+          t2: { provider: 'codex', model: 'm-a', permissionMode: 'edit' },
+        },
+      },
+      tagConflictPolicy: 'fail-fast',
+    })).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
+  });
+
+  it('does not throw under fail-fast when tags share identical provider/model/providerOptions', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: {
+        tags: {
+          t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+          t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+        },
+      },
+      tagConflictPolicy: 'fail-fast',
+    });
+
+    expect(result).toMatchObject({ provider: 'codex', model: 'm-a' });
+  });
+
+  it('does not throw under fail-fast when providerOptions differ only in key order', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: {
+        tags: {
+          t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high', network_access: true } } },
+          t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { network_access: true, reasoning_effort: 'high' } } },
+        },
+      },
+      tagConflictPolicy: 'fail-fast',
+    });
+
+    expect(result).toMatchObject({ provider: 'codex', model: 'm-a' });
+  });
+
+  it('throws under fail-fast when only one tag defines providerOptions but assignments still conflict', () => {
+    expect(() =>
+      resolveStepProviderModel({
+        step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+        providerRouting: {
+          tags: {
+            t1: { provider: 'codex', model: 'm-a' },
+            t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+          },
+        },
+        tagConflictPolicy: 'fail-fast',
+      }),
+    ).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
+  });
+});
+
+describe('resolveWorkflowCallProviderModel', () => {
+  it('should propagate the resolved runtime provider/model to a child workflow', () => {
+    const result = resolveWorkflowCallProviderModel({
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: 'runtime-model',
+      modelSource: 'runtime-v1',
+      permissionMode: 'full',
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: 'runtime-model',
+      modelSource: 'runtime-v1',
+      permissionMode: 'full',
+    });
+  });
+
+  it('should preserve CLI and environment overrides while propagating the other field', () => {
+    const result = resolveWorkflowCallProviderModel({
+      provider: 'mock',
+      providerSource: 'env',
+      model: 'env-model',
+      modelSource: 'env',
+    });
+
+    expect(result).toEqual({
+      provider: 'mock',
+      providerSource: 'env',
+      model: 'env-model',
+      modelSource: 'env',
+    });
+  });
+
+  it('keeps inherited permission when the runtime model is absent', () => {
+    const result = resolveWorkflowCallProviderModel({
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      permissionMode: 'full',
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: undefined,
+      modelSource: undefined,
+      permissionMode: 'full',
+    });
+  });
 });
 
 describe('resolveAgentProviderModel', () => {
@@ -463,42 +949,96 @@ describe('resolveAgentProviderModel', () => {
 });
 
 describe('resolveLoopMonitorJudgeProviderModel', () => {
-  it('should inherit provider and model resolved from personaProviders on the triggering step', () => {
+  it('should inherit the resolved triggering provider and override only the judge model', () => {
     const result = resolveLoopMonitorJudgeProviderModel({
-      judge: { provider: undefined, model: 'opencode/model-b' },
-      triggeringStep: {
-        provider: undefined,
-        model: undefined,
-        personaDisplayName: 'reviewer',
+      judgeProviderInfo: {
+        provider: 'opencode',
+        providerSource: 'step',
+        model: 'opencode/model-b',
+        modelSource: 'step',
       },
-      provider: 'claude',
-      personaProviders: {
-        reviewer: {
-          provider: 'opencode',
-          model: 'opencode/model-a',
-        },
+      triggeringProviderInfo: {
+        provider: 'opencode',
+        providerSource: 'persona_providers',
+        model: 'opencode/model-a',
+        modelSource: 'persona_providers',
       },
     });
 
     expect(result).toEqual({
       provider: 'opencode',
+      providerSource: 'step',
       model: 'opencode/model-b',
+      modelSource: 'step',
     });
   });
 
-  it('should clear inherited model when judge overrides only the provider', () => {
+  it('should inherit fallback-resolved triggering provider info without re-resolving the triggering step', () => {
     const result = resolveLoopMonitorJudgeProviderModel({
-      judge: { provider: 'codex', model: undefined },
-      triggeringStep: {
-        provider: 'opencode',
-        model: 'opencode/model-a',
-        personaDisplayName: 'reviewer',
+      judgeProviderInfo: {
+        provider: undefined,
+        model: undefined,
+      },
+      triggeringProviderInfo: {
+        provider: 'codex',
+        providerSource: 'step',
+        model: 'gpt-5',
+        modelSource: 'step',
       },
     });
 
     expect(result).toEqual({
       provider: 'codex',
+      providerSource: 'step',
+      model: 'gpt-5',
+      modelSource: 'step',
+    });
+  });
+
+  it('should clear inherited model when judge overrides only the provider', () => {
+    const result = resolveLoopMonitorJudgeProviderModel({
+      judgeProviderInfo: {
+        provider: 'codex',
+        providerSource: 'step',
+        model: undefined,
+        modelSource: undefined,
+      },
+      triggeringProviderInfo: {
+        provider: 'opencode',
+        providerSource: 'step',
+        model: 'opencode/model-a',
+        modelSource: 'step',
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      providerSource: 'step',
       model: undefined,
+      modelSource: 'step',
+    });
+  });
+
+  it('should inherit the triggering model when the workflow judge has no runtime override', () => {
+    const result = resolveLoopMonitorJudgeProviderModel({
+      judgeProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        modelSource: undefined,
+      },
+      triggeringProviderInfo: {
+        provider: 'cursor',
+        providerSource: 'step',
+        model: 'configured-model',
+        modelSource: 'step',
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'cursor',
+      providerSource: 'step',
+      model: 'configured-model',
+      modelSource: 'step',
     });
   });
 });
@@ -715,5 +1255,290 @@ describe('resolveAssistantProviderModelFromConfig', () => {
       provider: 'mock',
       model: 'global-model',
     });
+  });
+});
+
+describe('resolveAssistantScopedProviderModelFromConfig', () => {
+  it('should prefer local assistant over global assistant', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        provider: 'opencode',
+        model: 'local-top-level-model',
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+            model: 'local-assistant-model',
+          },
+        },
+      },
+      global: {
+        provider: 'mock',
+        model: 'global-top-level-model',
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'claude',
+      model: 'local-assistant-model',
+    });
+  });
+
+  it('should inherit global assistant when local assistant is absent', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        provider: 'opencode',
+        model: 'local-top-level-model',
+      },
+      global: {
+        provider: 'claude',
+        model: 'global-top-level-model',
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: 'global-assistant-model',
+    });
+  });
+
+  it('should not fallback to top-level provider or model when assistant is missing', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        provider: 'opencode',
+        model: 'local-top-level-model',
+      },
+      global: {
+        provider: 'claude',
+        model: 'global-top-level-model',
+      },
+    });
+
+    expect(result).toEqual({
+      provider: undefined,
+      model: undefined,
+    });
+  });
+
+  it('should return the local assistant provider with no model when only provider is configured locally', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+          },
+        },
+      },
+      global: {
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: undefined,
+    });
+  });
+
+  it('should keep the local assistant model unresolved when only assistant models are configured', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        taktProviders: {
+          assistant: {
+            model: 'local-assistant-model',
+          },
+        },
+      },
+      global: {
+        taktProviders: {
+          assistant: {
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: undefined,
+      model: 'local-assistant-model',
+    });
+  });
+
+  it('should inherit global assistant provider with no model when only provider is configured globally', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {},
+      global: {
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'claude',
+      model: undefined,
+    });
+  });
+
+  it('should not inherit a global assistant model when the local assistant provider wins', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+          },
+        },
+      },
+      global: {
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: undefined,
+    });
+  });
+});
+
+describe('resolveNonWorkflowProviderModelFromConfig', () => {
+  it('should preserve the effective concrete top-level provider and model', () => {
+    const project = {
+      provider: 'codex',
+      model: 'project-model',
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'claude', model: 'unused-router-model' },
+        candidates: [],
+      },
+    } satisfies ProjectConfig;
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project,
+      global: {
+        provider: 'mock',
+        model: 'global-model',
+      },
+    });
+
+    expect(result).toEqual({ provider: 'codex', model: 'project-model' });
+  });
+
+  it('should not combine a project provider with a global model for another provider', () => {
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project: {
+        provider: 'codex',
+      },
+      global: {
+        provider: 'claude',
+        model: 'global-claude-model',
+      },
+    });
+
+    expect(result).toEqual({ provider: 'codex', model: undefined });
+  });
+
+  it('should use the project concrete provider and model instead of auto-routing router or candidates', () => {
+    const project = {
+      provider: 'codex',
+      model: 'project-model',
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'claude', model: 'router-model' },
+        candidates: [{
+          name: 'coding',
+          description: 'Implementation',
+          provider: 'mock',
+          model: 'candidate-model',
+          routingTier: 'medium',
+        }],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
+      },
+    } satisfies ProjectConfig;
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project,
+      global: {
+        provider: 'mock',
+        model: 'global-model',
+      },
+    });
+
+    expect(result).toEqual({ provider: 'codex', model: 'project-model' });
+  });
+
+  it('should use the global concrete pair when project provider is absent even if auto_routing exists', () => {
+    const project = {
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'codex', model: 'project-router-model' },
+        candidates: [{
+          name: 'coding',
+          description: 'Implementation',
+          provider: 'codex',
+          model: 'candidate-model',
+          routingTier: 'medium',
+        }],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
+      },
+    } satisfies ProjectConfig;
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project,
+      global: {
+        provider: 'mock',
+        model: 'global-model',
+      },
+    });
+
+    expect(result).toEqual({ provider: 'mock', model: 'global-model' });
+  });
+
+  it('should not use router or candidate as a non-workflow fallback when top-level provider is absent', () => {
+    const project = {
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'codex', model: 'router-model' },
+        candidates: [
+          {
+            name: 'coding',
+            description: 'Implementation',
+            provider: 'codex',
+            model: 'candidate-model',
+            routingTier: 'medium',
+          },
+        ],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
+      },
+    } satisfies ProjectConfig;
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project,
+      global: {},
+    });
+
+    expect(result).toEqual({ provider: undefined, model: undefined });
   });
 });

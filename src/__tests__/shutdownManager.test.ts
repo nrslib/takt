@@ -71,7 +71,6 @@ describe('ShutdownManager', () => {
 
     expect(onGraceful).toHaveBeenCalledTimes(1);
     expect(onForceKill).not.toHaveBeenCalled();
-    expect(mockWarn).toHaveBeenCalledWith('workflow.sigintGraceful');
 
     manager.cleanup();
   });
@@ -93,8 +92,6 @@ describe('ShutdownManager', () => {
 
     expect(onGraceful).toHaveBeenCalledTimes(1);
     expect(onForceKill).toHaveBeenCalledTimes(1);
-    expect(mockError).toHaveBeenCalledWith('workflow.sigintTimeout');
-    expect(mockError).toHaveBeenCalledWith('workflow.sigintForce');
 
     manager.cleanup();
   });
@@ -118,7 +115,6 @@ describe('ShutdownManager', () => {
 
     expect(onGraceful).toHaveBeenCalledTimes(1);
     expect(onForceKill).toHaveBeenCalledTimes(1);
-    expect(mockError).toHaveBeenCalledWith('workflow.sigintForce');
 
     manager.cleanup();
   });

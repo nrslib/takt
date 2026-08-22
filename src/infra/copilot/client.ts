@@ -9,7 +9,13 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
-import { createLogger, crossSpawn, ensureCurrentTmpDirExists, getErrorMessage } from '../../shared/utils/index.js';
+import { formatProcessExitCause } from '../../shared/utils/process-exit.js';
+import {
+  createLogger,
+  ensureCurrentTmpDirExists,
+  getErrorMessage,
+  spawnManagedProcess,
+} from '../../shared/utils/index.js';
 import type { CopilotCallOptions } from './types.js';
 
 const log = createLogger('copilot-client');
@@ -86,6 +92,13 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
     args.push('--allow-all-tools', '--no-ask-user');
   }
 
+  // Runtime MCP adapter route (issue #1137): pass the adapter-prepared
+  // `--additional-mcp-config=@<path>` arg so the runtime-resolved MCP
+  // servers become the session's effective set (order.md:216-219).
+  if (options.preparedMcp?.args && options.preparedMcp.args.length > 0) {
+    args.push(...options.preparedMcp.args);
+  }
+
   // --share exports session transcript to a markdown file, which we parse
   // to extract the session ID for later resumption.
   if (options.shareFilePath) {
@@ -124,37 +137,50 @@ function createExecError(
   return error;
 }
 
-function execCopilot(args: string[], options: CopilotCallOptions): Promise<CopilotExecResult> {
+function execCopilot(
+  args: string[],
+  options: CopilotCallOptions,
+): Promise<CopilotExecResult> {
   return new Promise<CopilotExecResult>((resolve, reject) => {
-    const child = crossSpawn(options.copilotCliPath ?? COPILOT_COMMAND, args, {
-      cwd: options.cwd,
-      env: buildEnv(options),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
     let stdout = '';
     let stderr = '';
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
-    let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    let terminationError: CopilotExecError | undefined;
+    let overflowed = false;
+    const terminationController = new AbortController();
+    const managed = spawnManagedProcess(
+      options.copilotCliPath ?? COPILOT_COMMAND,
+      args,
+      {
+        cwd: options.cwd,
+        env: buildEnv(options),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+      terminationController.signal,
+      {
+        terminationMode: 'child',
+        terminationGraceMs: resolveForceKillDelayMs(),
+      },
+    );
+    const child = managed.child;
+
+    const requestTermination = (error: CopilotExecError): void => {
+      if (settled || terminationController.signal.aborted) return;
+      terminationError = error;
+      terminationController.abort(error);
+    };
 
     const abortHandler = (): void => {
-      if (settled) return;
-      child.kill('SIGTERM');
-      const forceKillDelayMs = resolveForceKillDelayMs();
-      abortTimer = setTimeout(() => {
-        if (!settled) {
-          child.kill('SIGKILL');
-        }
-      }, forceKillDelayMs);
-      abortTimer.unref?.();
+      requestTermination(createExecError(COPILOT_ABORTED_MESSAGE, {
+        name: 'AbortError',
+        stdout,
+        stderr,
+      }));
     };
 
     const cleanup = (): void => {
-      if (abortTimer !== undefined) {
-        clearTimeout(abortTimer);
-      }
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
       }
@@ -178,13 +204,16 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
       typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
 
     const appendChunk = (target: 'stdout' | 'stderr', text: string): void => {
+      if (overflowed || settled) {
+        return;
+      }
       const byteLength = Buffer.byteLength(text);
 
       if (target === 'stdout') {
         stdoutBytes += byteLength;
         if (stdoutBytes > COPILOT_MAX_BUFFER_BYTES) {
-          child.kill('SIGTERM');
-          rejectOnce(createExecError('copilot stdout exceeded buffer limit', {
+          overflowed = true;
+          requestTermination(createExecError('copilot stdout exceeded buffer limit', {
             code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
             stdout,
             stderr,
@@ -197,8 +226,8 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
 
       stderrBytes += byteLength;
       if (stderrBytes > COPILOT_MAX_BUFFER_BYTES) {
-        child.kill('SIGTERM');
-        rejectOnce(createExecError('copilot stderr exceeded buffer limit', {
+        overflowed = true;
+        requestTermination(createExecError('copilot stderr exceeded buffer limit', {
           code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
           stdout,
           stderr,
@@ -209,9 +238,12 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
     };
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
+      if (overflowed || settled) {
+        return;
+      }
       const text = toText(chunk);
       appendChunk('stdout', text);
-      if (options.onStream) {
+      if (!overflowed && options.onStream) {
         if (text) {
           options.onStream({ type: 'text', data: { text } });
         }
@@ -219,44 +251,34 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
     });
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', toText(chunk)));
 
-    child.on('error', (error: NodeJS.ErrnoException) => {
-      rejectOnce(createExecError(error.message, {
-        code: error.code,
-        stdout,
-        stderr,
-      }));
-    });
-
-    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-      if (settled) return;
-
-      if (options.abortSignal?.aborted) {
-        rejectOnce(createExecError(COPILOT_ABORTED_MESSAGE, {
-          name: 'AbortError',
+    void managed.wait().then(
+      ({ code, signal }) => {
+        if (code === 0) {
+          resolveOnce({ stdout, stderr });
+          return;
+        }
+        rejectOnce(createExecError(
+          `copilot exited with ${formatProcessExitCause(code, signal)}`,
+          {
+            ...(typeof code === 'number' ? { code } : {}),
+            stdout,
+            stderr,
+            signal,
+          },
+        ));
+      },
+      (error: NodeJS.ErrnoException) => {
+        if (terminationError !== undefined) {
+          rejectOnce(terminationError);
+          return;
+        }
+        rejectOnce(createExecError(error.message, {
+          code: error.code,
           stdout,
           stderr,
-          signal,
         }));
-        return;
-      }
-
-      if (code === 0) {
-        resolveOnce({ stdout, stderr });
-        return;
-      }
-
-      rejectOnce(createExecError(
-        signal
-          ? `copilot terminated by signal ${signal}`
-          : `copilot exited with code ${code ?? 'unknown'}`,
-        {
-          code: code ?? undefined,
-          stdout,
-          stderr,
-          signal,
-        },
-      ));
-    });
+      },
+    );
 
     if (options.abortSignal) {
       if (options.abortSignal.aborted) {
@@ -353,23 +375,20 @@ export function extractSessionIdFromShareFile(content: string): string | undefin
   return match?.[1];
 }
 
-function cleanupTmpDir(dir?: string): void {
-  if (dir) {
-    rm(dir, { recursive: true, force: true }).catch((err) => {
-      log.debug('Failed to clean up tmp dir', { dir, err });
-    });
+async function cleanupTmpDir(dir: string | undefined): Promise<void> {
+  if (dir === undefined) {
+    return;
   }
+  await rm(dir, { recursive: true, force: true });
 }
 
-async function extractAndCleanupSessionId(shareFilePath: string, shareTmpDir: string): Promise<string | undefined> {
+async function extractSessionId(shareFilePath: string): Promise<string | undefined> {
   try {
     const content = await readFile(shareFilePath, 'utf-8');
     return extractSessionIdFromShareFile(content);
   } catch (err) {
     log.debug('readFile share transcript failed', { shareFilePath, err });
     return undefined;
-  } finally {
-    cleanupTmpDir(shareTmpDir);
   }
 }
 
@@ -388,6 +407,89 @@ function parseCopilotOutput(stdout: string): { content: string } | { error: stri
   return { content: trimmed };
 }
 
+interface CopilotCallOutcome {
+  readonly status: 'done' | 'error';
+  readonly content: string;
+  readonly sessionId?: string;
+  readonly error?: string;
+}
+
+function executionErrorOutcome(
+  message: string,
+  sessionId: string | undefined,
+): CopilotCallOutcome {
+  return {
+    status: 'error',
+    content: message,
+    error: message,
+    sessionId,
+  };
+}
+
+async function executeCopilotCall(
+  prompt: string,
+  options: CopilotCallOptions,
+  shareFilePath: string | undefined,
+): Promise<CopilotCallOutcome> {
+  const resumableSessionId = options.sessionId;
+  try {
+    const args = buildArgs(prompt, { ...options, shareFilePath });
+    const { stdout } = await execCopilot(args, options);
+    const parsed = parseCopilotOutput(stdout);
+    if ('error' in parsed) {
+      return executionErrorOutcome(parsed.error, resumableSessionId);
+    }
+    const extractedSessionId = shareFilePath === undefined
+      ? undefined
+      : await extractSessionId(shareFilePath);
+    return {
+      status: 'done',
+      content: parsed.content,
+      sessionId: extractedSessionId ?? resumableSessionId,
+    };
+  } catch (rawError) {
+    const error = rawError as CopilotExecError;
+    return executionErrorOutcome(classifyExecutionError(error, options), resumableSessionId);
+  }
+}
+
+async function finalizeCopilotCall(
+  outcome: CopilotCallOutcome,
+  shareTmpDir: string | undefined,
+): Promise<CopilotCallOutcome> {
+  try {
+    await cleanupTmpDir(shareTmpDir);
+    return outcome;
+  } catch (error) {
+    log.debug('Failed to clean up tmp dir', { dir: shareTmpDir, err: error });
+    return outcome;
+  }
+}
+
+function emitResult(
+  outcome: CopilotCallOutcome,
+  options: CopilotCallOptions,
+): void {
+  if (options.onStream === undefined) {
+    return;
+  }
+  options.onStream({
+    type: 'result',
+    data: outcome.status === 'done'
+      ? {
+        result: outcome.content,
+        success: true,
+        sessionId: outcome.sessionId ?? '',
+      }
+      : {
+        result: '',
+        success: false,
+        error: outcome.error ?? outcome.content,
+        sessionId: outcome.sessionId ?? '',
+      },
+  });
+}
+
 /**
  * Client for GitHub Copilot CLI interactions.
  */
@@ -403,79 +505,22 @@ export class CopilotClient {
       log.debug('mkdtemp failed, skipping session extraction', { err });
     }
 
-    const args = buildArgs(prompt, { ...options, shareFilePath });
-
-    try {
-      const { stdout } = await execCopilot(args, options);
-      const parsed = parseCopilotOutput(stdout);
-      if ('error' in parsed) {
-        if (options.onStream) {
-          options.onStream({
-            type: 'result',
-            data: {
-              result: '',
-              success: false,
-              error: parsed.error,
-              sessionId: options.sessionId ?? '',
-            },
-          });
-        }
-        cleanupTmpDir(shareTmpDir);
-        return {
-          persona: agentType,
-          status: 'error',
-          content: parsed.error,
-          timestamp: new Date(),
-          sessionId: options.sessionId,
-        };
-      }
-
-      const extractedSessionId = (shareFilePath && shareTmpDir)
-        ? await extractAndCleanupSessionId(shareFilePath, shareTmpDir)
-        : undefined;
-      const sessionId = extractedSessionId ?? options.sessionId;
-
-      if (options.onStream) {
-        options.onStream({
-          type: 'result',
-          data: {
-            result: parsed.content,
-            success: true,
-            sessionId: sessionId ?? '',
-          },
-        });
-      }
-
-      return {
-        persona: agentType,
-        status: 'done',
-        content: parsed.content,
-        timestamp: new Date(),
-        sessionId,
-      };
-    } catch (rawError) {
-      cleanupTmpDir(shareTmpDir);
-      const error = rawError as CopilotExecError;
-      const message = classifyExecutionError(error, options);
-      if (options.onStream) {
-        options.onStream({
-          type: 'result',
-          data: {
-            result: '',
-            success: false,
-            error: message,
-            sessionId: options.sessionId ?? '',
-          },
-        });
-      }
-      return {
-        persona: agentType,
-        status: 'error',
-        content: message,
-        timestamp: new Date(),
-        sessionId: options.sessionId,
-      };
-    }
+    options.onActivity?.({ kind: 'attempt_started' });
+    const executionOutcome = await executeCopilotCall(
+      prompt,
+      options,
+      shareFilePath,
+    );
+    const outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
+    emitResult(outcome, options);
+    return {
+      persona: agentType,
+      status: outcome.status,
+      content: outcome.content,
+      timestamp: new Date(),
+      sessionId: outcome.sessionId,
+      ...(outcome.error === undefined ? {} : { error: outcome.error }),
+    };
   }
 
   async callCustom(

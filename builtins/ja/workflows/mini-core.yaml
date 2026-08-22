@@ -1,0 +1,226 @@
+name: mini-core
+description: miniシリーズの中核となる内部開発ワークフロー。注入されたポリシー、ナレッジ、監督者を使い、plan → implement → 並列レビュー → 直接修正を実行する。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+subworkflow:
+  callable: true
+  visibility: internal
+  params:
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - design-planning
+    plan_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+    plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: plan
+    development_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+    development_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+    supervisor_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: supervisor
+initial_step: plan
+loop_monitors:
+  - cycle:
+      - reviewers
+      - fix_both
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: reviewers
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
+          next: reviewers
+        - condition: 現行ループでは収束せず、別の検証・修正段階へ切り替える必要がある
+          next: supervise_fix
+steps:
+  - name: plan
+    uses: development-core-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      plan_knowledge:
+        $param: plan_knowledge
+      plan_instruction: plan
+      plan_report_format:
+        $param: plan_report_format
+    rules:
+      - condition: 要件が明確で実装可能
+        next: implement
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+
+  - name: implement
+    uses: development-core-implement
+    with:
+      development_policy:
+        $param: development_policy
+      development_knowledge:
+        $param: development_knowledge
+      implementation_instruction: implement
+      scope_report_format: coder-scope
+    rules:
+      - condition: 実装が完了した
+        next: reviewers
+      - condition: 実装を進行できない
+        next: ABORT
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+  - name: reviewers
+    tags:
+      - review
+    parallel:
+      - name: ai-antipattern-review-2nd
+        capabilities: readonly
+        tags:
+          - review
+        edit: false
+        persona: ai-antipattern-reviewer
+        policy:
+          - contract-change
+          - ai-antipattern
+        instruction: ai-antipattern-review
+        rules:
+          - condition: AI特有の問題なし
+          - condition: AI特有の問題あり
+        output_contracts:
+          report:
+            - name: ai-antipattern-review.md
+              format: ai-antipattern-review
+      - name: supervise
+        capabilities: readonly
+        tags:
+          - review
+          - supervise
+        edit: false
+        persona:
+          $param: supervisor_persona
+        policy:
+          - contract-change
+        knowledge:
+          $param: development_knowledge
+        instruction: supervise
+        rules:
+          - condition: BLOCKED
+          - condition: APPROVE
+          - condition: REJECT
+        output_contracts:
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation
+            - name: summary.md
+              format: supervisor-summary
+              use_judge: false
+    rules:
+      - condition: any("error")
+        next: reviewers
+      - condition: any("BLOCKED")
+        next: ABORT
+      - condition: all("AI特有の問題なし", "APPROVE")
+        next: COMPLETE
+      - condition: all("AI特有の問題あり", "REJECT")
+        next: fix_both
+      - condition: any("AI特有の問題あり")
+        next: ai-antipattern-fix
+      - condition: any("REJECT")
+        next: supervise_fix
+
+  - name: fix_both
+    uses: mini-fix-both
+    with:
+      fix_policy:
+        $param: development_policy
+      fix_knowledge:
+        $param: development_knowledge
+    rules:
+      self:
+        - condition: all("AI問題の修正完了", "監督者の指摘に対する修正が完了した")
+          next: reviewers
+        - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
+          next: implement
+      parallel:
+        ai-antipattern-fix-parallel:
+          - condition: AI問題の修正完了
+          - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+          - condition: 判断できない、情報不足
+        supervise_fix_parallel:
+          - condition: 監督者の指摘に対する修正が完了した
+          - condition: 修正を進行できない
+
+  - name: ai-antipattern-fix
+    capabilities: edit
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - contract-change
+      - $param: development_policy
+    knowledge:
+      $param: development_knowledge
+    required_permission_mode: edit
+    pass_previous_response: false
+    rules:
+      - condition: AI問題の修正完了
+        next: reviewers
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+        next: implement
+      - condition: 判断できない、情報不足
+        next: implement
+    instruction: ai-antipattern-fix
+    output_contracts:
+      report:
+        - name: ai-antipattern-fix-report.md
+          format: fix-report
+          use_judge: false
+
+  - name: supervise_fix
+    capabilities: edit
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - contract-change
+      - $param: development_policy
+    knowledge:
+      $param: development_knowledge
+    required_permission_mode: edit
+    pass_previous_response: false
+    rules:
+      - condition: 監督者の指摘に対する修正が完了した
+        next: reviewers
+      - condition: 修正を進行できない
+        next: implement
+    instruction: fix-supervisor

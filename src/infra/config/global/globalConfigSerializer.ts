@@ -6,6 +6,9 @@ import {
   denormalizeWorkflowOverrides,
   denormalizeProviderOptions,
   denormalizeRateLimitFallback,
+  denormalizeTelemetryConfig,
+  denormalizeAutoRoutingConfig,
+  denormalizeAssistantConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -40,6 +43,14 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     if (Object.keys(analyticsRaw).length > 0) {
       raw.analytics = analyticsRaw;
     }
+  }
+  const rawTelemetry = denormalizeTelemetryConfig(config.telemetry);
+  if (rawTelemetry) {
+    raw.telemetry = rawTelemetry;
+  }
+  const rawAutoRouting = denormalizeAutoRoutingConfig(config.autoRouting);
+  if (rawAutoRouting) {
+    raw.auto_routing = rawAutoRouting;
   }
   const rawObservability = denormalizeObservabilityConfig(config.observability);
   if (rawObservability) {
@@ -213,6 +224,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     }
     if (Object.keys(pipelineRaw).length > 0) raw.pipeline = pipelineRaw;
   }
+  const rawAssistant = denormalizeAssistantConfig(config.assistant);
+  if (rawAssistant) {
+    raw.assistant = rawAssistant;
+  }
   const rawPersonaProviders = denormalizePersonaProviders(config.personaProviders);
   if (rawPersonaProviders && Object.keys(rawPersonaProviders).length > 0) {
     raw.persona_providers = rawPersonaProviders;
@@ -238,6 +253,12 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   }
   if (config.syncProjectLocalTaktOnRetry !== undefined) {
     raw.sync_project_local_takt_on_retry = config.syncProjectLocalTaktOnRetry;
+  }
+  if (config.autoRequeueMaxAttempts !== undefined) {
+    raw.auto_requeue_max_attempts = config.autoRequeueMaxAttempts;
+  }
+  if (config.ignoreExceed !== undefined) {
+    raw.ignore_exceed = config.ignoreExceed;
   }
   return raw;
 }

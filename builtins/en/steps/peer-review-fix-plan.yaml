@@ -1,0 +1,33 @@
+params:
+  plan_policy:
+    type: facet_ref[]
+    facet_kind: policy
+  fix_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+  plan_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  plan_report_format:
+    type: facet_ref
+    facet_kind: report_format
+name: fix-plan
+capabilities: readonly
+tags:
+  - plan
+edit: false
+persona: planner
+policy:
+  - contract-change
+  - $param: plan_policy
+knowledge:
+  $param: fix_knowledge
+pass_previous_response: false
+instruction:
+  $param: plan_instruction
+output_contracts:
+  report:
+    - name: fix-plan.md
+      format:
+        $param: plan_report_format
+      use_judge: false

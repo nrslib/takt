@@ -1,0 +1,15 @@
+name: ai-antipattern-review-1st
+tags:
+  - review
+edit: false
+persona: ai-antipattern-reviewer
+policy:
+  - contract-change
+  - review
+  - ai-antipattern
+capabilities: readonly
+instruction: ai-antipattern-review
+output_contracts:
+  report:
+    - name: ai-antipattern-review.md
+      format: ai-antipattern-review

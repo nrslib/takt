@@ -12,14 +12,25 @@ import {
   type WorkflowContext,
 } from '../../interactive/interactive-summary.js';
 import { resolveLanguage } from '../../interactive/interactive.js';
-import { buildInteractivePolicyPrompt } from '../../interactive/policyPrompt.js';
+import {
+  prependSourceContext,
+  prependSourceContextGuardToSystemPrompt,
+} from '../../interactive/promptSections.js';
 import { formatRunSessionForPrompt, type RunSessionContext } from '../../interactive/runSessionReader.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { blankLine, info } from '../../../shared/ui/index.js';
+import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
+import { runTuiTaskConversation } from '../../tui/runTuiTask.js';
 import type { InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
+import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
+import {
+  renderPullRequestContext,
+  type PullRequestContext,
+} from '../../../core/workflow/pr-context.js';
+import { resolveFormalSpecModeWithoutPrompt } from '../../interactive/taskInstructionFormat.js';
 
 export interface DirectInstructModeOptions {
   readonly cwd: string;
@@ -28,6 +39,7 @@ export interface DirectInstructModeOptions {
   readonly workflowContext: WorkflowContext;
   readonly runSessionContext: RunSessionContext;
   readonly previousOrderContent: string | null;
+  readonly prContext?: PullRequestContext;
 }
 
 const DIRECT_INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
@@ -51,6 +63,8 @@ function buildDirectInstructTemplateVars(
     ...runPromptVars,
     hasOrderContent: options.previousOrderContent !== null,
     orderContent: options.previousOrderContent ?? '',
+    hasPrContext: options.prContext !== undefined,
+    prContextText: options.prContext ? renderPullRequestContext(options.prContext, lang) : '',
   };
 }
 
@@ -71,38 +85,53 @@ function createDirectSelectAction(
 export async function runDirectInstructMode(
   options: DirectInstructModeOptions,
 ): Promise<InstructModeResult> {
-  const globalConfig = resolveWorkflowConfigValues(options.cwd, ['language', 'provider']);
+  const globalConfig = resolveWorkflowConfigValues(options.cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
-
-  if (!globalConfig.provider) {
-    throw new Error('Provider is not configured.');
-  }
+  const formalSpec = resolveFormalSpecModeWithoutPrompt(options.cwd);
 
   const baseCtx = initializeSession(options.cwd, 'instruct');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };
   displayAndClearSessionState(options.cwd, ctx.lang);
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
-  const systemPrompt = loadTemplate(
-    'score_direct_instruct_system_prompt',
+  const systemPrompt = prependSourceContextGuardToSystemPrompt(
     ctx.lang,
-    buildDirectInstructTemplateVars(options, ctx.lang),
+    loadTemplate(
+      'score_direct_instruct_system_prompt',
+      ctx.lang,
+      buildDirectInstructTemplateVars(options, ctx.lang),
+    ),
   );
   const replayHint = buildReplayHint(ctx.lang, options.previousOrderContent !== null);
 
   const strategy: ConversationStrategy = {
     systemPrompt,
+    formalSpec,
     allowedTools: DIRECT_INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
-      buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
+      prependSourceContext(ctx.lang, userMessage, sourceContext),
     introMessage: `${ui.intro}${replayHint}`,
     selectAction: createDirectSelectAction(ui),
     previousOrderContent: options.previousOrderContent ?? undefined,
   };
 
-  const result = await runConversationLoop(options.cwd, ctx, strategy, options.workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({
+      cwd: options.cwd,
+      plan: { ctx, strategy },
+      workflowContext: options.workflowContext,
+    })
+    : await runConversationLoop(options.cwd, ctx, strategy, options.workflowContext, undefined);
   if (result.action === 'cancel') {
-    return { action: 'cancel', task: '' };
+    return attachImageAttachmentCleanup({
+      action: 'cancel',
+      task: '',
+      ...(result.attachments ? { attachments: result.attachments } : {}),
+    }, result.cleanupAttachments);
   }
-  return { action: 'execute', task: result.task };
+  return attachImageAttachmentCleanup({
+    action: 'execute',
+    task: result.task,
+    ...(result.attachments ? { attachments: result.attachments } : {}),
+  }, result.cleanupAttachments);
 }

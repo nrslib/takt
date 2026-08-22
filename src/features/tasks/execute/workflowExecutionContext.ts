@@ -13,17 +13,15 @@ export function createWorkflowExecutionContext(workflowConfig: WorkflowConfig, p
 
 export function createWorkflowCallResolver(
   workflowContext: ReturnType<typeof createWorkflowExecutionContext>,
-): WorkflowEngineOptions['workflowCallResolver'] {
+): NonNullable<WorkflowEngineOptions['workflowCallResolver']> {
   return ({
     parentWorkflow,
-    identifier,
-    stepName,
+    step,
     projectCwd,
     lookupCwd,
   }) => resolveWorkflowCallTarget(
     parentWorkflow,
-    identifier,
-    stepName,
+    step,
     projectCwd,
     lookupCwd,
     workflowContext,

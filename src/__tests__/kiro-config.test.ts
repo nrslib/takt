@@ -104,8 +104,8 @@ describe('Kiro provider schema', () => {
     ).toThrow(/default_permission_mode/i);
   });
 
-  it('Given workflow and step provider kiro, When normalized, Then Kiro provider is preserved', () => {
-    const config = normalizeWorkflowConfig({
+  it('Given workflow and step provider kiro, When normalized, Then runtime.yaml migration is required', () => {
+    expect(() => normalizeWorkflowConfig({
       name: 'kiro-workflow',
       workflow_config: {
         provider: 'kiro',
@@ -118,10 +118,7 @@ describe('Kiro provider schema', () => {
           rules: [{ condition: 'done', next: 'COMPLETE' }],
         },
       ],
-    }, process.cwd());
-
-    expect(config.provider).toBe('kiro');
-    expect(config.steps[0]?.provider).toBe('kiro');
+    }, process.cwd())).toThrow(/runtime\.yaml/);
   });
 
   it('Given project config contains Kiro global-only fields, When parsed, Then it fails fast', () => {
@@ -292,7 +289,8 @@ describe('Kiro provider capabilities', () => {
   it('Given Kiro provider, When capability predicates run, Then unsupported cross-provider options are disabled', () => {
     expect(providerSupportsStructuredOutput('kiro')).toBe(false);
     expect(providerSupportsAllowedTools('kiro')).toBe(false);
-    expect(providerSupportsMcpServers('kiro')).toBe(false);
+    // issue #1137: kiro now declares MCP transports (stdio+http) for runtime assignment.
+    expect(providerSupportsMcpServers('kiro')).toBe(true);
     expect(providerSupportsMaxTurns('kiro')).toBe(false);
   });
 });

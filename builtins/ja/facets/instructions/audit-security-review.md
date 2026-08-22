@@ -1,5 +1,7 @@
 前回の監査で不十分と判断されたファイルを再監査してください。
 
+{{include:instructions/security-knowledge-routing}}
+
 **重要:** supervisor の検証結果を確認し、以下を把握してください:
 - 未監査ファイルの一覧
 - 監査が不十分と指摘されたファイルの一覧

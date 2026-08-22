@@ -11,24 +11,35 @@ import type {
   WorkflowState,
   AgentResponse,
   WorkflowResumePointEntry,
+  WorkflowMaxSteps,
+  WorkflowWideRule,
 } from '../../models/types.js';
+import { join } from 'node:path';
 import type { ArpeggioStepConfig, BatchResult, DataBatch } from '../arpeggio/types.js';
 import { createDataSource } from '../arpeggio/data-source-factory.js';
 import { loadTemplate, expandTemplate } from '../arpeggio/template.js';
 import { buildMergeFn, writeMergedOutput } from '../arpeggio/merge.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
-import { detectMatchedRule } from '../evaluation/index.js';
-import { incrementStepIteration } from './state-manager.js';
+import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
+import { getPreviousOutput, incrementStepIteration } from './state-manager.js';
 import { createLogger, delay } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import type { PhaseName, PhasePromptParts, RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
-import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
+import type { InstructionContext } from '../instruction/instruction-context.js';
+import { preparePreviousResponseContent } from '../instruction/InstructionBuilder.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
+import { renderWorkflowWideRules } from '../instruction/workflow-wide-rules.js';
+import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createAgentResponseFailureError,
+  isProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -36,15 +47,21 @@ export interface ArpeggioRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly getCwd: () => string;
+  readonly getReportDir: () => string;
+  readonly getReportsRootDir: () => string;
+  readonly getProjectCwd: () => string;
+  readonly getTask: () => string;
+  readonly getMaxSteps: () => WorkflowMaxSteps;
   readonly getWorkflowName: () => string;
+  readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
+  readonly getReviewScope: () => InstructionContext['reviewScope'];
+  readonly getWorkflowCallVars?: () => InstructionContext['workflowCallVars'];
   readonly getInteractive: () => boolean;
   readonly childProcessEnv?: RunAgentOptions['childProcessEnv'];
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
-  readonly detectRuleIndex: (content: string, stepName: string) => number;
-  readonly structuredCaller: StructuredCaller;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -119,13 +136,16 @@ async function executeBatchWithRetry(
   maxRetries: number,
   retryDelayMs: number,
   observability: ArpeggioBatchObservability,
+  instructionContext: InstructionContext,
   runtime?: RuntimeStepResolution,
 ): Promise<BatchResult> {
   const prompt = buildArpeggioPrompt(
     template,
     batch,
+    observability.step,
     allowGitCommit,
     agentOptions.language ?? 'en',
+    instructionContext,
     runtime,
   );
   let lastError: string | undefined;
@@ -149,6 +169,12 @@ async function executeBatchWithRetry(
       try {
         const response = await executeAgent(persona, prompt, agentOptions);
         if (response.status === 'error') {
+          if (
+            response.failureCategory
+            === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
+          ) {
+            throw createAgentResponseFailureError(response, 'Arpeggio batch failed');
+          }
           lastError = response.error ?? response.content ?? 'Agent returned error status';
           log.info('Batch execution failed, retrying', {
             batchIndex: batch.batchIndex,
@@ -185,6 +211,9 @@ async function executeBatchWithRetry(
           providerUsage: response.providerUsage,
         };
       } catch (error) {
+        if (isProviderStreamParseError(error)) {
+          throw error;
+        }
         lastError = error instanceof Error ? error.message : String(error);
         log.info('Batch execution threw, retrying', {
           batchIndex: batch.batchIndex,
@@ -224,8 +253,10 @@ function getBatchResultStatus(result: BatchResult): string {
 function buildArpeggioPrompt(
   template: string,
   batch: DataBatch,
+  step: WorkflowStep,
   allowGitCommit: boolean | undefined,
   language: NonNullable<RunAgentOptions['language']>,
+  instructionContext: InstructionContext,
   runtime?: RuntimeStepResolution,
 ): string {
   const prompt = expandTemplate(template, batch);
@@ -233,7 +264,21 @@ function buildArpeggioPrompt(
   const fallbackNotice = runtime?.fallback
     ? renderFallbackNotice(runtime.fallback, language)
     : '';
-  return [gitRules, fallbackNotice, prompt]
+  const renderedRules = renderWorkflowWideRules(
+    instructionContext.workflowRules,
+    language,
+    step,
+    instructionContext,
+  );
+  return [
+    gitRules,
+    renderedRules.noticeAfterExecutionRules,
+    renderedRules.afterExecutionRules,
+    fallbackNotice,
+    renderedRules.noticeBeforeInstructionRules,
+    renderedRules.beforeInstructionRules,
+    prompt,
+  ]
     .filter((part): part is string => typeof part === 'string' && part.length > 0)
     .join('\n\n');
 }
@@ -251,13 +296,14 @@ export class ArpeggioRunner {
     step: WorkflowStep,
     state: WorkflowState,
     runtime?: RuntimeStepResolution,
+    activeStepIteration?: number,
   ): Promise<StepRunResult> {
     const arpeggioConfig = step.arpeggio;
     if (!arpeggioConfig) {
       throw new Error(`Step "${step.name}" has no arpeggio configuration`);
     }
 
-    const stepIteration = incrementStepIteration(state, step.name);
+    const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     log.debug('Running arpeggio step', {
       step: step.name,
       source: arpeggioConfig.source,
@@ -285,6 +331,38 @@ export class ArpeggioRunner {
       ? this.deps.optionsBuilder.resolveStepProviderModel(step, runtime)
       : this.deps.optionsBuilder.resolveStepProviderModel(step);
     const agentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
+    const previousOutput = getPreviousOutput(state);
+    const previousResponseText = step.passPreviousResponse && previousOutput
+      ? preparePreviousResponseContent(
+          previousOutput.content,
+          state.previousResponseSourcePath,
+          step.preserveFullPreviousResponse === true,
+        )
+      : undefined;
+    const instructionContext: InstructionContext = {
+      task: this.deps.getTask(),
+      iteration: state.iteration,
+      maxSteps: this.deps.getMaxSteps(),
+      stepIteration,
+      cwd: this.deps.getCwd(),
+      projectCwd: this.deps.getProjectCwd(),
+      userInputs: state.userInputs,
+      previousOutput,
+      previousResponseSourcePath: state.previousResponseSourcePath,
+      previousResponseText,
+      reportDir: join(this.deps.getCwd(), this.deps.getReportDir()),
+      reportsRootDir: this.deps.getReportsRootDir(),
+      resumeReportConsumerKey: buildResumeReportConsumerKeyFromStack(
+        this.deps.getCurrentWorkflowStack?.() ?? [],
+      ),
+      language: agentOptions.language ?? 'en',
+      interactive: this.deps.getInteractive(),
+      workflowName: this.deps.getWorkflowName(),
+      reviewScope: this.deps.getReviewScope(),
+      workflowState: state,
+      workflowRules: this.deps.getWorkflowRules(),
+      workflowCallVars: this.deps.getWorkflowCallVars?.(),
+    };
     const semaphore = new Semaphore(arpeggioConfig.concurrency);
     const results = await this.executeBatches(
       batches,
@@ -296,6 +374,7 @@ export class ArpeggioRunner {
       arpeggioConfig,
       semaphore,
       stepProviderModel,
+      instructionContext,
       runtime,
     );
 
@@ -331,16 +410,23 @@ export class ArpeggioRunner {
 
     const ruleCtx = {
       state,
-      cwd: this.deps.getCwd(),
-      provider: stepProviderModel.provider,
-      resolvedProvider: stepProviderModel.provider,
-      resolvedModel: stepProviderModel.model,
-      childProcessEnv: this.deps.childProcessEnv,
       interactive: this.deps.getInteractive(),
-      detectRuleIndex: this.deps.detectRuleIndex,
-      structuredCaller: this.deps.structuredCaller,
     };
-    const match = await detectMatchedRule(step, mergedContent, '', ruleCtx);
+    const match = await evaluatePostExecutionRules(
+      step,
+      () => this.deps.optionsBuilder.buildPhaseRunnerContext(
+        step,
+        state,
+        mergedContent,
+        () => undefined,
+        this.deps.onPhaseStart,
+        this.deps.onPhaseComplete,
+        undefined,
+        state.iteration,
+        runtime,
+      ),
+      ruleCtx,
+    );
 
     const aggregatedResponse: AgentResponse = {
       persona: step.name,
@@ -373,6 +459,7 @@ export class ArpeggioRunner {
     config: ArpeggioStepConfig,
     semaphore: Semaphore,
     providerInfo: StepProviderInfo,
+    instructionContext: InstructionContext,
     runtime?: RuntimeStepResolution,
   ): Promise<BatchResult[]> {
     const promises = batches.map(async (batch) => {
@@ -410,6 +497,7 @@ export class ArpeggioRunner {
             providerInfo,
             getPromptParts: () => resolvedPromptParts,
           },
+          instructionContext,
           runtime,
         );
         if (!didEmitPhaseStart) {

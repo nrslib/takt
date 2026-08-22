@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/__tests__/type-contracts/**/*.ts",
+    "src/types/**/*.d.ts"
+  ],
+  "exclude": []
+}

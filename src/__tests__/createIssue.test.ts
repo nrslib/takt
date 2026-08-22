@@ -9,20 +9,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 
+const { mockLogError } = vi.hoisted(() => ({
+  mockLogError: vi.fn(),
+}));
+
 vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
 }));
 
-vi.mock('../../shared/utils/index.js', async (importOriginal) => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
     info: vi.fn(),
     debug: vi.fn(),
-    error: vi.fn(),
+    error: mockLogError,
   }),
 }));
 
-import { createIssue } from '../infra/github/issue.js';
+import { closeIssue, createIssue } from '../infra/github/issue.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -41,8 +45,11 @@ describe('createIssue', () => {
     const result = createIssue({ title: 'Test issue', body: 'Test body' }, '/project');
 
     // Then
-    expect(result.success).toBe(true);
-    expect(result.url).toBe('https://github.com/owner/repo/issues/42');
+    expect(result).toEqual({
+      success: true,
+      issueNumber: 42,
+      url: 'https://github.com/owner/repo/issues/42',
+    });
   });
 
   it('should pass title and body as arguments', () => {
@@ -183,5 +190,95 @@ describe('createIssue', () => {
     // Then
     expect(result.success).toBe(false);
     expect(result.error).toContain('repo not found');
+  });
+
+  it('should return error when gh issue create returns a URL without a numeric issue number', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce('https://github.com/owner/repo/issues/not-a-number\n' as unknown as Buffer);
+
+    const result = createIssue({ title: 'Test', body: 'Body' }, '/project');
+
+    expect(result).toEqual({
+      success: false,
+      issueCreated: true,
+      url: 'https://github.com/owner/repo/issues/not-a-number',
+      error: 'Failed to extract issue number from created issue URL',
+    });
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Issue number extraction failed after issue creation',
+      {
+        error: 'Failed to extract issue number from created issue URL',
+        url: 'https://github.com/owner/repo/issues/not-a-number',
+      },
+    );
+  });
+
+  it('should return error when gh issue create returns a URL with a trailing slash', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce('https://github.com/owner/repo/issues/42/\n' as unknown as Buffer);
+
+    const result = createIssue({ title: 'Test', body: 'Body' }, '/project');
+
+    expect(result).toEqual({
+      success: false,
+      issueCreated: true,
+      url: 'https://github.com/owner/repo/issues/42/',
+      error: 'Failed to extract issue number from created issue URL',
+    });
+  });
+});
+
+describe('closeIssue', () => {
+  it('should close a GitHub issue with a compensation comment', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce(Buffer.from(''));
+
+    const result = closeIssue(938, 'Compensation comment', '/project');
+
+    expect(result).toEqual({ success: true, commentCreated: true });
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'gh',
+      ['issue', 'close', '938', '--comment', 'Compensation comment'],
+      expect.objectContaining({ cwd: '/project' }),
+    );
+  });
+
+  it('should return an error when gh CLI is unavailable', () => {
+    mockExecFileSync
+      .mockImplementationOnce(() => { throw new Error('not authenticated'); })
+      .mockReturnValueOnce(Buffer.from('gh version 2.0.0'));
+
+    const result = closeIssue(938, 'Compensation comment', '/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not authenticated');
+    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+  });
+
+  it('should return an error when gh issue close fails', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockImplementationOnce(() => { throw new Error('close failed'); });
+
+    const result = closeIssue(938, 'Compensation comment', '/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('close failed');
+  });
+
+  it('should pass cwd to all gh commands', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce(Buffer.from(''));
+
+    closeIssue(938, 'Compensation comment', '/worktree/clone');
+
+    for (const call of mockExecFileSync.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ cwd: '/worktree/clone' }));
+    }
   });
 });

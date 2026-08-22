@@ -1,0 +1,223 @@
+name: simple-core
+description: Internal core workflow for the simple family. It uses injected instructions, policies, and knowledge to run plan → write_tests → implement → review ⇄ fix → supervise.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+subworkflow:
+  callable: true
+  visibility: internal
+  params:
+    plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: plan
+    testing_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: write-tests-first
+    implement_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: implement-after-tests
+    review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: review-coding
+    supervise_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - design-planning
+    testing_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+    development_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+    review_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - review
+        - coding
+        - testing
+    development_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+    testing_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+        - unit-testing
+        - e2e-testing
+    review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+        - unit-testing
+        - e2e-testing
+capabilities: [readonly, enable-skills]
+initial_step: plan
+steps:
+  - name: plan
+    capabilities: [readonly, enable-skills]
+    uses: development-core-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      plan_knowledge:
+        $param: development_knowledge
+      plan_instruction:
+        $param: plan_instruction
+      plan_report_format: plan
+    rules:
+      - condition: Requirements are clear and implementation is feasible
+        next: write_tests
+      - condition: The user is asking a question rather than requesting implementation
+        next: COMPLETE
+      - condition: Requirements are unclear or information is insufficient
+        next: ABORT
+        appendix: |
+          Questions:
+          - {Question 1}
+          - {Question 2}
+
+  - name: write_tests
+    capabilities: [edit, enable-skills]
+    uses: development-core-write-tests
+    with:
+      testing_policy:
+        $param: testing_policy
+      testing_knowledge:
+        $param: testing_knowledge
+      testing_instruction:
+        $param: testing_instruction
+      testing_report_format: test-report
+    rules:
+      - condition: Test creation completed
+        next: implement
+      - condition: Test creation skipped because the target is not yet implemented
+        next: implement
+      - condition: Unable to create tests
+        next: ABORT
+      - condition: User input is required to resolve a question
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+
+  - name: implement
+    capabilities: [edit, enable-skills]
+    uses: development-core-implement
+    with:
+      development_policy:
+        $param: development_policy
+      development_knowledge:
+        $param: development_knowledge
+      implementation_instruction:
+        $param: implement_instruction
+      scope_report_format: coder-scope
+    rules:
+      - condition: Implementation completed
+        next: review
+      - condition: The plan needs revision
+        next: plan
+      - condition: Unable to proceed with implementation
+        next: ABORT
+      - condition: User input is required to resolve a question
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: review
+    tags:
+      - review
+    edit: false
+    persona: coding-reviewer
+    policy:
+      - contract-change
+      - $param: review_policy
+    knowledge:
+      $param: review_knowledge
+    pass_previous_response: false
+    instruction:
+      $param: review_instruction
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: remediation
+
+  - name: remediation
+    uses: review-remediation
+    with:
+      plan_policy:
+        $param: review_policy
+      fix_policy:
+        $param: development_policy
+      verification_policy:
+        $param: review_policy
+      fix_knowledge:
+        $param: review_knowledge
+    rules:
+      - condition: COMPLETE
+        next: review
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT
+
+  - name: supervise
+    tags:
+      - review
+      - final-gate
+      - supervise
+    edit: false
+    persona: supervisor
+    policy:
+      - contract-change
+      - $param: review_policy
+    knowledge:
+      $param: review_knowledge
+    pass_previous_response: false
+    instruction:
+      $param: supervise_instruction
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: supervisor-summary
+          use_judge: false
+    rules:
+      - condition: BLOCKED
+        next: ABORT
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: remediation

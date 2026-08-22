@@ -5,34 +5,32 @@
  * and sets up the preAction hook for initialization.
  */
 
-import { createRequire } from 'node:module';
-import { Command } from 'commander';
-import { resolve } from 'node:path';
-import {
-  initGlobalDirs,
-  initProjectDirs,
-  resolveConfigValues,
-  isVerboseMode,
-} from '../../infra/config/index.js';
-import { initGitProvider } from '../../infra/git/index.js';
-import { setQuietMode } from '../../shared/context.js';
-import { setLogLevel } from '../../shared/ui/index.js';
-import { initDebugLogger, createLogger, setVerboseConsole } from '../../shared/utils/index.js';
+import { Command, InvalidArgumentError, Option } from 'commander';
+import { packageVersion } from '../../shared/package-info.js';
+import { PROVIDER_TYPES, type ProviderType } from '../../shared/types/provider.js';
+import { runUpdateCheck } from './updateCheck.js';
 
-const require = createRequire(import.meta.url);
-const { version: cliVersion } = require('../../../package.json') as { version: string };
-
-const log = createLogger('cli');
-
-/** Resolved cwd shared across commands via preAction hook */
-export let resolvedCwd = '';
-
-/** Whether pipeline mode is active (--task specified, set in preAction) */
-export let pipelineMode = false;
+const cliVersion = packageVersion;
 
 export { cliVersion };
 
 export const program = new Command();
+program.exitOverride();
+
+let updateCheckStarted = false;
+
+function parseProviderOption(value: string): ProviderType {
+  const provider = PROVIDER_TYPES.find((candidate) => candidate === value);
+  if (provider !== undefined) {
+    return provider;
+  }
+  if (value === 'auto') {
+    throw new InvalidArgumentError(
+      'provider: auto has been removed; set --provider to a concrete provider and configure auto_routing separately.',
+    );
+  }
+  throw new InvalidArgumentError(`Allowed choices are ${PROVIDER_TYPES.join(', ')}.`);
+}
 
 program
   .name('takt')
@@ -48,46 +46,43 @@ program
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--draft', 'Create PR as draft (requires --auto-pr or auto_pr config)')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
-  .option(
+  .addOption(new Option(
     '--provider <name>',
-    'Override agent provider (claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock)',
-  )
+    `Override agent provider (${PROVIDER_TYPES.join('|')})`,
+  ).choices([...PROVIDER_TYPES]).argParser(parseProviderOption))
+  .addOption(new Option('--auto-strategy <strategy>', 'Auto routing strategy (cost|balanced|performance)')
+    .choices(['cost', 'balanced', 'performance']))
   .option('--model <name>', 'Override agent model')
   .option('-t, --task <string>', 'Task content (as alternative to issue reference)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
   .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
-  .option('-c, --continue', 'Continue from the last assistant session');
+  .option('-c, --continue', 'Continue from the last assistant session')
+  // Declared in this order so the default stays undefined: neither flag means
+  // "TUI when a terminal is attached", which routing decides.
+  .option('--tui', 'Require the Ink-based TUI for the task conversation (fails without a TTY)');
+
+program
+  .argument('[task]', 'Task to execute (or issue reference like "#6")')
+  .action(async (task?: string) => {
+    const { executeDefaultAction } = await import('./routing.js');
+    await executeDefaultAction(task);
+  });
 
 /**
  * Run pre-action hook: common initialization for all commands.
  * Exported for use in slash-command fallback logic.
  */
 export async function runPreActionHook(): Promise<void> {
-  resolvedCwd = resolve(process.cwd());
+  await scheduleUpdateCheck();
+  const { initializeCliExecutionContext } = await import('./initialization.js');
+  await initializeCliExecutionContext(program, cliVersion);
+}
 
-  const rootOpts = program.opts();
-  pipelineMode = rootOpts.pipeline === true;
-
-  await initGlobalDirs({ nonInteractive: pipelineMode });
-  initProjectDirs(resolvedCwd);
-  initGitProvider(resolvedCwd);
-
-  const verbose = isVerboseMode(resolvedCwd);
-  const config = resolveConfigValues(resolvedCwd, ['logging', 'minimalOutput']);
-  initDebugLogger(verbose ? { enabled: true, trace: config.logging?.trace } : undefined, resolvedCwd);
-
-  if (verbose) {
-    setVerboseConsole(true);
-    setLogLevel('debug');
-  } else {
-    setLogLevel(config.logging?.level ?? 'info');
-  }
-
-  const quietMode = rootOpts.quiet === true || config.minimalOutput === true;
-  setQuietMode(quietMode);
-
-  log.info('TAKT CLI starting', { version: cliVersion, cwd: resolvedCwd, verbose, pipelineMode, quietMode });
+export async function scheduleUpdateCheck(): Promise<void> {
+  if (updateCheckStarted) return;
+  updateCheckStarted = true;
+  await runUpdateCheck(cliVersion);
 }
 
 // Common initialization for all commands

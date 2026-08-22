@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: sync_conflict_resolver_message
   role: user message for sync conflict resolver agent

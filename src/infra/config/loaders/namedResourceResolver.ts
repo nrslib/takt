@@ -1,10 +1,12 @@
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
+import { isPathInside } from '../../../shared/utils/pathBoundary.js';
 
 interface ResolveNamedResourceOptions {
   candidateDirs: readonly string[];
   extensions: readonly string[];
   fileAccess?: NamedResourceFileAccess;
+  rejectSymlinkedCandidateDirs?: boolean;
 }
 
 export interface ResolvedNamedResource {
@@ -22,7 +24,7 @@ export interface NamedResourceFileAccess {
 const nodeFileAccess: NamedResourceFileAccess = {
   exists: (path) => existsSync(path),
   realpath: (path) => realpathSync(path),
-  isSymlink: (path) => lstatSync(path).isSymbolicLink(),
+  isSymlink: (path) => lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ?? false,
 };
 
 function assertBareResourceName(name: string): void {
@@ -32,14 +34,12 @@ function assertBareResourceName(name: string): void {
     || name.includes('/')
     || name.includes('\\')
     || name.includes('..')
+    || name.trim() !== name
+    // eslint-disable-next-line no-control-regex
+    || /[\u0000-\u001f\u007f-\u009f]/.test(name)
   ) {
     throw new Error(`Configuration error: named resource must be a bare name: ${name}`);
   }
-}
-
-function isPathInsideDirectory(path: string, directory: string): boolean {
-  const relativePath = relative(directory, path);
-  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
 }
 
 function assertResourceStaysInsideCandidateDir(
@@ -48,14 +48,21 @@ function assertResourceStaysInsideCandidateDir(
   candidateDir: string,
   fileAccess: NamedResourceFileAccess,
 ): void {
-  if (fileAccess.isSymlink?.(candidateDir) === true) {
-    throw new Error(`Configuration error: named resource candidate directory must not be a symlink: ${name}`);
-  }
-
   const realFilePath = fileAccess.realpath(filePath);
   const realCandidateDir = fileAccess.realpath(candidateDir);
-  if (!isPathInsideDirectory(realFilePath, realCandidateDir)) {
-    throw new Error(`Configuration error: named resource must stay inside its candidate directory: ${name}`);
+  if (!isPathInside(realCandidateDir, realFilePath)) {
+    throw new Error(`Configuration error: named resource must stay inside its candidate directory: ${name} (candidate file: ${filePath}; candidate root: ${candidateDir})`);
+  }
+}
+
+function assertCandidateDirIsNotSymlink(
+  name: string,
+  candidateDir: string,
+  fileAccess: NamedResourceFileAccess,
+): void {
+  const isSymlink = fileAccess.isSymlink?.(candidateDir) === true;
+  if (isSymlink) {
+    throw new Error(`Configuration error: named resource candidate directory must not be a symlink: ${name} (candidate root: ${candidateDir})`);
   }
 }
 
@@ -67,9 +74,13 @@ export function resolveNamedResourceWithSource(
   const fileAccess = options.fileAccess ?? nodeFileAccess;
 
   for (const [candidateDirIndex, dir] of options.candidateDirs.entries()) {
+    if (options.rejectSymlinkedCandidateDirs) {
+      assertCandidateDirIsNotSymlink(name, dir, fileAccess);
+    }
     for (const extension of options.extensions) {
       const filePath = resolve(dir, `${name}${extension}`);
       if (fileAccess.exists(filePath)) {
+        assertCandidateDirIsNotSymlink(name, dir, fileAccess);
         assertResourceStaysInsideCandidateDir(name, filePath, dir, fileAccess);
         return {
           path: filePath,

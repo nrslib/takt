@@ -4,6 +4,8 @@ export interface RunPaths {
   readonly slug: string;
   readonly runRootRel: string;
   readonly reportsRel: string;
+  /** namespace（workflow_call の子）を除いた run の reports ルート。 */
+  readonly reportsRootRel: string;
   readonly contextRel: string;
   readonly contextTaskRel: string;
   readonly contextTaskOrderRel: string;
@@ -11,9 +13,17 @@ export interface RunPaths {
   readonly contextPolicyRel: string;
   readonly contextPreviousResponsesRel: string;
   readonly logsRel: string;
+  readonly operationsRel: string;
+  readonly operationJournalRel: string;
   readonly metaRel: string;
+  readonly workflowBundleRel: string;
+  readonly workflowBundleManifestRel: string;
+  readonly workflowBundleManifestHashRel: string;
+  readonly workflowBundleObjectsRel: string;
+  readonly workflowBundleResourcesRel: string;
   readonly runRootAbs: string;
   readonly reportsAbs: string;
+  readonly reportsRootAbs: string;
   readonly contextAbs: string;
   readonly contextTaskAbs: string;
   readonly contextTaskOrderAbs: string;
@@ -21,7 +31,14 @@ export interface RunPaths {
   readonly contextPolicyAbs: string;
   readonly contextPreviousResponsesAbs: string;
   readonly logsAbs: string;
+  readonly operationsAbs: string;
+  readonly operationJournalAbs: string;
   readonly metaAbs: string;
+  readonly workflowBundleAbs: string;
+  readonly workflowBundleManifestAbs: string;
+  readonly workflowBundleManifestHashAbs: string;
+  readonly workflowBundleObjectsAbs: string;
+  readonly workflowBundleResourcesAbs: string;
 }
 
 function joinRel(base: string, namespace: string[] | undefined): string {
@@ -32,7 +49,8 @@ function joinRel(base: string, namespace: string[] | undefined): string {
 
 export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): RunPaths {
   const runRootRel = `.takt/runs/${slug}`;
-  const reportsRel = joinRel(`${runRootRel}/reports`, namespace);
+  const reportsRootRel = `${runRootRel}/reports`;
+  const reportsRel = joinRel(reportsRootRel, namespace);
   const contextRel = joinRel(`${runRootRel}/context`, namespace);
   const contextTaskRel = join(contextRel, 'task');
   const contextTaskOrderRel = join(contextTaskRel, 'order.md');
@@ -40,12 +58,20 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
   const contextPolicyRel = join(contextRel, 'policy');
   const contextPreviousResponsesRel = join(contextRel, 'previous_responses');
   const logsRel = `${runRootRel}/logs`;
+  const operationsRel = `${runRootRel}/operations`;
+  const operationJournalRel = `${operationsRel}/journal.json`;
   const metaRel = `${runRootRel}/meta.json`;
+  const workflowBundleRel = `${runRootRel}/workflow-bundle`;
+  const workflowBundleManifestRel = `${workflowBundleRel}/manifest.json`;
+  const workflowBundleManifestHashRel = `${workflowBundleRel}/manifest.sha256`;
+  const workflowBundleObjectsRel = `${workflowBundleRel}/objects`;
+  const workflowBundleResourcesRel = `${workflowBundleRel}/resources`;
 
   return {
     slug,
     runRootRel,
     reportsRel,
+    reportsRootRel,
     contextRel,
     contextTaskRel,
     contextTaskOrderRel,
@@ -53,9 +79,17 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     contextPolicyRel,
     contextPreviousResponsesRel,
     logsRel,
+    operationsRel,
+    operationJournalRel,
     metaRel,
+    workflowBundleRel,
+    workflowBundleManifestRel,
+    workflowBundleManifestHashRel,
+    workflowBundleObjectsRel,
+    workflowBundleResourcesRel,
     runRootAbs: join(cwd, runRootRel),
     reportsAbs: join(cwd, reportsRel),
+    reportsRootAbs: join(cwd, reportsRootRel),
     contextAbs: join(cwd, contextRel),
     contextTaskAbs: join(cwd, contextTaskRel),
     contextTaskOrderAbs: join(cwd, contextTaskOrderRel),
@@ -63,6 +97,13 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     contextPolicyAbs: join(cwd, contextPolicyRel),
     contextPreviousResponsesAbs: join(cwd, contextPreviousResponsesRel),
     logsAbs: join(cwd, logsRel),
+    operationsAbs: join(cwd, operationsRel),
+    operationJournalAbs: join(cwd, operationJournalRel),
     metaAbs: join(cwd, metaRel),
+    workflowBundleAbs: join(cwd, workflowBundleRel),
+    workflowBundleManifestAbs: join(cwd, workflowBundleManifestRel),
+    workflowBundleManifestHashAbs: join(cwd, workflowBundleManifestHashRel),
+    workflowBundleObjectsAbs: join(cwd, workflowBundleObjectsRel),
+    workflowBundleResourcesAbs: join(cwd, workflowBundleResourcesRel),
   };
 }

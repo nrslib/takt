@@ -1,0 +1,70 @@
+name: simple-dual-cqrs
+description: A simple development workflow that trusts a capable model's judgment and injects frontend, backend, and CQRS+ES knowledge and policies into simple-core.
+max_steps: 30
+initial_step: develop
+steps:
+  - name: develop
+    kind: workflow_call
+    call: simple-core
+    args:
+      plan_policy:
+        - design-planning
+        - cqrs-es
+      testing_policy:
+        - coding
+        - testing
+        - cqrs-es
+        - architecture
+        - backend
+        - frontend
+        - react
+      development_policy:
+        - coding
+        - testing
+        - cqrs-es
+        - design-fidelity
+        - screen-api
+        - architecture
+        - backend
+        - frontend
+        - react
+      review_policy:
+        - review
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+        - cqrs-es
+        - architecture
+        - backend
+        - frontend
+        - react
+      development_knowledge:
+        - frontend
+        - react
+        - backend
+        - cqrs-es
+        - security
+        - architecture
+      testing_knowledge:
+        - frontend
+        - react
+        - backend
+        - cqrs-es
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_knowledge:
+        - frontend
+        - react
+        - backend
+        - cqrs-es
+        - security
+        - architecture
+        - unit-testing
+        - e2e-testing
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

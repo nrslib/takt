@@ -1,6 +1,7 @@
 import { type TaskInfo, type TaskResult, TaskRunner } from '../../../infra/task/index.js';
 import { error, info, success } from '../../../shared/ui/index.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import type { ExceededInfo, WorkflowExecutionResult } from './types.js';
 
 interface BuildTaskResultParams {
@@ -41,13 +42,18 @@ export function buildTaskResult(params: BuildTaskResultParams): TaskResult {
     throw new Error('Task failed without reason');
   }
 
+  const lastMessage = runResult.lastMessage === undefined
+    ? undefined
+    : sanitizeSensitiveText(runResult.lastMessage);
+
   return {
     task,
     success: taskSuccess,
     response: taskSuccess ? 'Task completed successfully' : runResult.reason!,
-    executionLog: runResult.lastMessage ? [runResult.lastMessage] : [],
+    executionLog: lastMessage ? [lastMessage] : [],
     failureStep: runResult.lastStep,
-    failureLastMessage: runResult.lastMessage,
+    failureLastMessage: lastMessage,
+    failureRetryable: runResult.retryable,
     startedAt,
     completedAt,
     ...(branch ? { branch } : {}),
@@ -84,9 +90,12 @@ export function persistPrFailedTaskResult(
   taskRunner: TaskRunner,
   taskResult: TaskResult,
   prError: string,
+  options?: PersistTaskResultOptions,
 ): void {
   taskRunner.prFailTask(taskResult, prError);
-  info(`Task "${taskResult.task.name}" completed (PR creation failed)`);
+  if (options?.emitStatusLog !== false) {
+    info(`Task "${taskResult.task.name}" completed (PR creation failed)`);
+  }
 }
 
 export function persistTaskResult(
@@ -114,6 +123,7 @@ export function persistExceededTaskResult(
   task: TaskInfo,
   exceeded: ExceededInfo,
   context?: { worktreePath?: string; branch?: string },
+  options?: PersistTaskResultOptions,
 ): void {
   taskRunner.exceedTask(task.name, {
     currentStep: exceeded.currentStep,
@@ -123,7 +133,9 @@ export function persistExceededTaskResult(
     ...(context?.worktreePath ? { worktreePath: context.worktreePath } : {}),
     ...(context?.branch ? { branch: context.branch } : {}),
   });
-  info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentStep}"`);
+  if (options?.emitStatusLog !== false) {
+    info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentStep}"`);
+  }
 }
 
 export function persistTaskError(

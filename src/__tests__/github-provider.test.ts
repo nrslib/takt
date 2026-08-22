@@ -13,6 +13,7 @@ const {
   mockFetchIssue,
   mockListOpenIssues,
   mockCreateIssue,
+  mockCloseIssue,
   mockFindExistingPr,
   mockCommentOnPr,
   mockClosePr,
@@ -24,6 +25,7 @@ const {
   mockFetchIssue: vi.fn(),
   mockListOpenIssues: vi.fn(),
   mockCreateIssue: vi.fn(),
+  mockCloseIssue: vi.fn(),
   mockFindExistingPr: vi.fn(),
   mockCommentOnPr: vi.fn(),
   mockClosePr: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock('../infra/github/issue.js', () => ({
   fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
   listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
   createIssue: (...args: unknown[]) => mockCreateIssue(...args),
+  closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
 }));
 
 vi.mock('../infra/github/pr.js', () => ({
@@ -51,6 +54,7 @@ vi.mock('../infra/github/pr.js', () => ({
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { getGitProvider } from '../infra/git/index.js';
 import type { CommentResult, PrReviewData } from '../infra/git/index.js';
+import { createIssueSuccess } from './helpers/createIssueResult.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -188,7 +192,7 @@ describe('GitHubProvider', () => {
     it('createIssue(opts) に委譲し結果を返す', () => {
       // Given
       const opts = { title: 'New issue', body: 'Description' };
-      const issueResult = { success: true, url: 'https://github.com/org/repo/issues/1' };
+      const issueResult = createIssueSuccess(1, 'https://github.com/org/repo/issues/1');
       mockCreateIssue.mockReturnValue(issueResult);
       const provider = new GitHubProvider();
 
@@ -203,7 +207,7 @@ describe('GitHubProvider', () => {
     it('ラベルを含む場合、opts をそのまま委譲する', () => {
       // Given
       const opts = { title: 'Bug', body: 'Details', labels: ['bug', 'urgent'] };
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/org/repo/issues/2' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(2, 'https://github.com/org/repo/issues/2'));
       const provider = new GitHubProvider();
 
       // When
@@ -216,7 +220,7 @@ describe('GitHubProvider', () => {
     it('cwd を指定した場合は createIssue にそのまま転送する', () => {
       // Given
       const opts = { title: 'Issue', body: 'Body' };
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/org/repo/issues/3' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(3, 'https://github.com/org/repo/issues/3'));
       const provider = new GitHubProvider();
 
       // When
@@ -229,7 +233,7 @@ describe('GitHubProvider', () => {
     it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
       // Given
       const opts = { title: 'Issue', body: 'Body' };
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/org/repo/issues/4' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(4, 'https://github.com/org/repo/issues/4'));
       const provider = new GitHubProvider();
 
       // When
@@ -237,6 +241,37 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockCreateIssue).toHaveBeenCalledWith(opts, process.cwd());
+    });
+  });
+
+  describe('closeIssue', () => {
+    it('closeIssue(issueNumber, comment, cwd) に委譲し結果を返す', () => {
+      const closeResult = { success: true };
+      mockCloseIssue.mockReturnValue(closeResult);
+      const provider = new GitHubProvider();
+
+      const result = provider.closeIssue(938, 'Compensation comment', '/project');
+
+      expect(mockCloseIssue).toHaveBeenCalledWith(938, 'Compensation comment', '/project');
+      expect(result).toBe(closeResult);
+    });
+
+    it('失敗時はエラー結果を委譲して返す', () => {
+      mockCloseIssue.mockReturnValue({ success: false, error: 'close blocked' });
+      const provider = new GitHubProvider();
+
+      const result = provider.closeIssue(938, 'Compensation comment', '/project');
+
+      expect(result).toEqual({ success: false, error: 'close blocked' });
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      mockCloseIssue.mockReturnValue({ success: true });
+      const provider = new GitHubProvider();
+
+      provider.closeIssue(938, 'Compensation comment');
+
+      expect(mockCloseIssue).toHaveBeenCalledWith(938, 'Compensation comment', process.cwd());
     });
   });
 
@@ -552,6 +587,7 @@ describe('getGitProvider', () => {
     expect(typeof provider.fetchIssue).toBe('function');
     expect(typeof provider.listOpenIssues).toBe('function');
     expect(typeof provider.createIssue).toBe('function');
+    expect(typeof provider.closeIssue).toBe('function');
     expect(typeof provider.fetchPrReviewComments).toBe('function');
     expect(typeof provider.findExistingPr).toBe('function');
     expect(typeof provider.createPullRequest).toBe('function');

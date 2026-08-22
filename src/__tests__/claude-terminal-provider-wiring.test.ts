@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 
 const {
   mockCallClaudeTerminal,
@@ -57,6 +56,7 @@ describe('ClaudeTerminalProvider wiring', () => {
     const onStream = vi.fn();
     const onPermissionRequest = vi.fn();
     const onAskUserQuestion = vi.fn();
+    const onActivity = vi.fn();
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
     const mcpServers = {
       docs: { type: 'stdio' as const, command: 'docs-mcp', args: ['serve'] },
@@ -87,6 +87,7 @@ describe('ClaudeTerminalProvider wiring', () => {
       onStream,
       onPermissionRequest,
       onAskUserQuestion,
+      onActivity,
       outputSchema: SCHEMA,
       childProcessEnv,
     });
@@ -110,6 +111,7 @@ describe('ClaudeTerminalProvider wiring', () => {
       onStream,
       onPermissionRequest,
       onAskUserQuestion,
+      onActivity,
       outputSchema: SCHEMA,
       pathToClaudeCodeExecutable: '/opt/claude/bin/claude',
       childProcessEnv,
@@ -127,6 +129,33 @@ describe('ClaudeTerminalProvider wiring', () => {
 
     const terminalOptions = mockCallClaudeTerminal.mock.calls[0]?.[2];
     expect(Object.prototype.hasOwnProperty.call(terminalOptions, 'maxTurns')).toBe(false);
+  });
+
+  it('Given explicit runtime permissions, When call is invoked, Then they reach the terminal client', async () => {
+    const systemPrompt = 'selector guidance';
+    const agent = new ClaudeTerminalProvider().setup({
+      name: 'selector',
+      systemPrompt,
+    });
+
+    await agent.call('prompt', {
+      cwd: '/tmp/worktree',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      providerOptions: {
+        claude: {
+          skills: { enabled: true },
+        },
+      },
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', 'prompt', expect.objectContaining({
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      skillsEnabled: true,
+    }));
   });
 
   it('Given claude sandbox provider option, When call is invoked, Then terminal provider ignores sandbox and continues', async () => {
@@ -154,7 +183,14 @@ describe('ClaudeTerminalProvider wiring', () => {
     expect(Object.prototype.hasOwnProperty.call(terminalOptions, 'sandbox')).toBe(false);
   });
 
-  it('Given incompatible claude effort, When call is invoked, Then provider error is returned before terminal client call', async () => {
+  it('Given claude xhigh effort on any model, When call is invoked, Then effort is passed to terminal client', async () => {
+    mockCallClaudeTerminal.mockResolvedValueOnce({
+      persona: 'coder',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+      sessionId: 'session-123',
+    });
     const provider = new ClaudeTerminalProvider();
     const agent = provider.setup({ name: 'coder' });
 
@@ -169,19 +205,11 @@ describe('ClaudeTerminalProvider wiring', () => {
       } as never,
     });
 
-    expect(mockCallClaudeTerminal).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      persona: 'coder',
-      status: 'error',
-      sessionId: 'session-123',
-      failureCategory: 'provider_error',
-      providerUsage: {
-        usageMissing: true,
-        reason: USAGE_MISSING_REASONS.NOT_SUPPORTED_BY_PROVIDER,
-      },
-    });
-    expect(result.error).toContain('Claude terminal provider failed:');
-    expect(result.error).toContain("provider_options.claude.effort 'xhigh' is not supported");
+    expect(result.status).toBe('done');
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('coder', 'implement this', expect.objectContaining({
+      model: 'claude-sonnet-4-5',
+      effort: 'xhigh',
+    }));
   });
 
   it('Given terminal client rejects, When call is invoked, Then provider error response is returned', async () => {
@@ -216,6 +244,47 @@ describe('ClaudeTerminalProvider wiring', () => {
 
     expect(mockCallClaudeTerminal).toHaveBeenCalledWith('judge', 'judge this', expect.objectContaining({
       systemPrompt: 'You are a judge.',
+    }));
+  });
+
+  it('Given disabled Claude Skills, When the provider starts or resumes a terminal session, Then it forwards the resolved false value', async () => {
+    const provider = new ClaudeTerminalProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement this', {
+      cwd: '/tmp/worktree',
+      sessionId: 'session-123',
+      providerOptions: {
+        claude: { skills: { enabled: false } },
+      } as never,
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('coder', 'implement this', expect.objectContaining({
+      sessionId: 'session-123',
+      skillsEnabled: false,
+    }));
+  });
+
+  it('Given isolated structured execution, When the provider calls the terminal client, Then it forwards the strict marker and cleared ambient inputs', async () => {
+    const systemPrompt = 'selector guidance';
+    const agent = new ClaudeTerminalProvider().setupIsolatedStructured({
+      name: 'selector',
+      systemPrompt,
+    });
+    await agent.call('prompt', {
+      cwd: '/tmp/worktree',
+      sessionId: 'ambient-session',
+      allowedTools: ['Read'],
+      mcpServers: { docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] } },
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', `${systemPrompt}\n\nprompt`, expect.objectContaining({
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: undefined,
+      skillsEnabled: false,
+      allowedTools: [],
+      mcpServers: undefined,
     }));
   });
 });

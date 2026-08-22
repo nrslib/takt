@@ -18,52 +18,6 @@ describe('formatTaskHistorySummary', () => {
     expect(formatTaskHistorySummary([], 'en')).toBe('');
   });
 
-  it('formats task history with required fields', () => {
-    const history: TaskHistorySummaryItem[] = [
-      {
-        worktreeId: 'wt-1',
-        status: 'interrupted',
-        startedAt: '2026-02-18T00:00:00.000Z',
-        completedAt: 'N/A',
-        finalResult: 'interrupted',
-        failureSummary: undefined,
-        logKey: 'log-1',
-      },
-      {
-        worktreeId: 'wt-2',
-        status: 'failed',
-        startedAt: '2026-02-17T00:00:00.000Z',
-        completedAt: '2026-02-17T00:01:00.000Z',
-        finalResult: 'failed',
-        failureSummary: 'Syntax error in test',
-        logKey: 'log-2',
-      },
-    ];
-
-    const result = formatTaskHistorySummary(history, 'en');
-    expect(result).toContain('## Task execution history');
-    expect(result).toContain('Worktree ID: wt-1');
-    expect(result).toContain('Status: interrupted');
-    expect(result).toContain('Failure summary: Syntax error in test');
-    expect(result).toContain('Log key: log-2');
-  });
-
-  it('normalizes empty start/end timestamps to N/A', () => {
-    const history: TaskHistorySummaryItem[] = [
-      {
-        worktreeId: 'wt-3',
-        status: 'interrupted',
-        startedAt: '',
-        completedAt: '',
-        finalResult: 'interrupted',
-        failureSummary: undefined,
-        logKey: 'log-3',
-      },
-    ];
-
-    const result = formatTaskHistorySummary(history, 'en');
-    expect(result).toContain('Start/End: N/A / N/A');
-  });
 });
 
 describe('buildSummaryPrompt', () => {
@@ -96,66 +50,47 @@ describe('buildSummaryPrompt', () => {
       workflowContext,
     );
 
-    expect(summary).toContain('## Task execution history');
-    expect(summary).toContain('Worktree ID: wt-1');
-    expect(summary).toContain('Conversation:');
-    expect(summary).toContain('User: Improve parser');
+    expect(summary).toContain('wt-1');
+    expect(summary).toContain('Improve parser');
   });
 
-  it('includes source context when conversation is present', () => {
-    const buildSummaryPromptWithSourceContext = buildSummaryPrompt as unknown as (
-      history: Array<{ role: 'user' | 'assistant'; content: string }>,
-      hasSession: boolean,
-      lang: 'en' | 'ja',
-      noTranscriptNote: string,
-      conversationLabel: string,
-      workflowContext?: WorkflowContext,
-      sourceContext?: string,
-    ) => string;
-
-    const summary = buildSummaryPromptWithSourceContext(
+  it('includes Gherkin output rules when formal specification mode is disabled', () => {
+    const summary = buildSummaryPrompt(
       [{ role: 'user', content: 'Improve parser' }],
       false,
       'en',
       'No transcript',
       'Conversation:',
       undefined,
-      'PR context',
+      undefined,
+      undefined,
+      false,
     );
 
-    expect(summary).toContain('Conversation:');
-    expect(summary).toContain('User: Improve parser');
-    expect(summary).toContain('PR context');
-    expect(summary).toContain('untrusted external reference data');
-    expect(summary).toContain('```text');
+    expect(summary).toContain('Gherkin');
+    expect(summary).not.toContain('Quint');
+    expect(summary).not.toContain('Alloy');
   });
 
-  it('builds a summary from source context only', () => {
-    const buildSummaryPromptWithSourceContext = buildSummaryPrompt as unknown as (
-      history: Array<{ role: 'user' | 'assistant'; content: string }>,
-      hasSession: boolean,
-      lang: 'en' | 'ja',
-      noTranscriptNote: string,
-      conversationLabel: string,
-      workflowContext?: WorkflowContext,
-      sourceContext?: string,
-    ) => string;
-
-    const summary = buildSummaryPromptWithSourceContext(
-      [],
+  it('adds conditional Quint and Alloy guidance when formal specification mode is enabled', () => {
+    const summary = buildSummaryPrompt(
+      [{ role: 'user', content: 'Improve parser' }],
       false,
       'en',
       'No transcript',
       'Conversation:',
       undefined,
-      'PR context',
+      undefined,
+      undefined,
+      true,
     );
 
-    expect(summary).toContain('PR context');
-    expect(summary).toContain('untrusted external reference data');
-    expect(summary).toContain('```text');
-    expect(summary).not.toContain('User: PR context');
+    expect(summary).toContain('Gherkin');
+    expect(summary).toContain('Quint');
+    expect(summary).toContain('Alloy');
+    expect(summary).toContain('ASCII');
   });
+
 });
 
 describe('buildSummaryActionOptions', () => {

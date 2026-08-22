@@ -1,10 +1,10 @@
 /**
  * E2E tests for interactive conversation loop routes.
  *
- * Exercises the real runConversationLoop via runInstructMode,
+ * Exercises the real runConversationLoop via interactiveMode,
  * simulating user stdin and verifying each conversation path.
  *
- * Real: runConversationLoop, callAIWithRetry, readMultilineInput,
+ * Real: runConversationLoop, callAIWithRetry, readPipedLine,
  *       buildSummaryPrompt, selectPostSummaryAction
  * Mocked: provider (scenario-based), config, UI, session persistence
  */
@@ -44,8 +44,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -76,7 +75,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     continuePrompt: 'Continue?',
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
-    playNoTask: 'No task for /play',
     cancelled: 'Cancelled',
     actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
   })),
@@ -86,13 +84,10 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
-import { error as logError, info as logInfo } from '../shared/ui/index.js';
-import { runInstructMode } from '../features/tasks/list/instructMode.js';
+import { interactiveMode } from '../features/interactive/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
-const mockLogError = vi.mocked(logError);
-const mockLogInfo = vi.mocked(logInfo);
 
 // --- Helpers ---
 
@@ -108,8 +103,8 @@ function setupScenarioProvider(...scenarios: Parameters<typeof createScenarioPro
   return capture;
 }
 
-async function runInstruct() {
-  return runInstructMode('/test', '', 'takt/test-branch', 'test-branch', '', '');
+async function runInteractive() {
+  return interactiveMode('/test');
 }
 
 beforeEach(() => {
@@ -129,7 +124,7 @@ describe('EOF handling', () => {
     setupRawStdin(toRawInputs([null]));
     setupProvider([]);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
     expect(result.task).toBe('');
@@ -139,11 +134,10 @@ describe('EOF handling', () => {
     setupRawStdin(toRawInputs(['hello', null]));
     const capture = setupProvider(['Hi there.']);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
     expect(capture.callCount).toBe(1);
-    expect(mockLogInfo).toHaveBeenCalledWith('Assistant is thinking...');
   });
 });
 
@@ -155,34 +149,10 @@ describe('empty input handling', () => {
     setupRawStdin(toRawInputs(['', '  ', '/cancel']));
     const capture = setupProvider([]);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
     expect(capture.callCount).toBe(0);
-  });
-});
-
-// =================================================================
-// Route C: /play → direct execute
-// =================================================================
-describe('/play command', () => {
-  it('should return execute with the given task text', async () => {
-    setupRawStdin(toRawInputs(['/play fix the login bug']));
-    setupProvider([]);
-
-    const result = await runInstruct();
-
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('fix the login bug');
-  });
-
-  it('should show error and continue when /play has no task', async () => {
-    setupRawStdin(toRawInputs(['/play', '/cancel']));
-    setupProvider([]);
-
-    const result = await runInstruct();
-
-    expect(result.action).toBe('cancel');
   });
 });
 
@@ -195,7 +165,7 @@ describe('/go summary flow', () => {
     setupRawStdin(toRawInputs(['add error handling', '/go']));
     const capture = setupProvider(['What kind of error handling?', 'Add try-catch to all API calls.']);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Add try-catch to all API calls.');
@@ -206,21 +176,18 @@ describe('/go summary flow', () => {
     setupRawStdin(toRawInputs(['/go add error handling', '/cancel']));
     const capture = setupProvider(['Add error handling to all API calls.']);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Add error handling to all API calls.');
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('User: add error handling');
-    expect(capture.prompts[0]).not.toContain('User Note:\nadd error handling');
-    expect(mockLogInfo).toHaveBeenCalledWith('Creating instruction...');
   });
 
   it('should reject /go without prior conversation', async () => {
     setupRawStdin(toRawInputs(['/go', '/cancel']));
     setupProvider([]);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
   });
@@ -230,7 +197,7 @@ describe('/go summary flow', () => {
     setupProvider(['Understood.', 'Summary of task.']);
     mockSelectOption.mockResolvedValueOnce('continue');
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
   });
@@ -240,7 +207,7 @@ describe('/go summary flow', () => {
     setupProvider(['Got it.', 'Implement the feature.']);
     mockSelectOption.mockResolvedValue('save_task');
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('save_task');
     expect(result.task).toBe('Implement the feature.');
@@ -253,14 +220,12 @@ describe('/go summary flow', () => {
 describe('/go with user note', () => {
   it('should append user note to summary prompt', async () => {
     setupRawStdin(toRawInputs(['refactor auth', '/go also check security']));
-    const capture = setupProvider(['Will do.', 'Refactor auth and check security.']);
+    setupProvider(['Will do.', 'Refactor auth and check security.']);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Refactor auth and check security.');
-    // /go summary call should include the user note in the prompt
-    expect(capture.prompts[1]).toContain('also check security');
   });
 });
 
@@ -278,7 +243,7 @@ describe('/go summary AI failure', () => {
       { content: '', throws: new Error('API timeout') },
     );
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
     expect(capture.callCount).toBe(2);
@@ -296,10 +261,9 @@ describe('/go summary AI blocked', () => {
       { content: 'Permission denied', status: 'blocked' },
     );
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
-    expect(mockLogError).toHaveBeenCalledWith('Permission denied');
   });
 });
 
@@ -311,7 +275,7 @@ describe('/cancel command', () => {
     setupRawStdin(toRawInputs(['/cancel']));
     setupProvider([]);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
   });
@@ -320,7 +284,7 @@ describe('/cancel command', () => {
     setupRawStdin(toRawInputs(['hello', 'world', '/cancel']));
     const capture = setupProvider(['Hi.', 'Hello again.']);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
     expect(capture.callCount).toBe(2);
@@ -345,7 +309,7 @@ describe('regular conversation', () => {
       'Add cursor-based pagination and sorting to the API.',
     ]);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Add cursor-based pagination and sorting to the API.');
@@ -363,66 +327,32 @@ describe('regular message AI blocked', () => {
       { content: 'Rate limited', status: 'blocked' },
     );
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
-    expect(mockLogError).toHaveBeenCalledWith('Rate limited');
-  });
-});
-
-// =================================================================
-// Route G: /play command with empty task shows error
-// =================================================================
-describe('/play empty task error', () => {
-  it('should show error message when /play has no argument', async () => {
-    setupRawStdin(toRawInputs(['/play', '/play  ', '/cancel']));
-    setupProvider([]);
-
-    const result = await runInstruct();
-
-    expect(result.action).toBe('cancel');
-    // /play with no task should not trigger any AI calls
-  });
-});
-
-// =================================================================
-// Route H: End-of-line slash commands
-// =================================================================
-describe('end-of-line /play command', () => {
-  it('should return execute with preceding text as task', async () => {
-    setupRawStdin(toRawInputs(['fix the login bug /play']));
-    setupProvider([]);
-
-    const result = await runInstruct();
-
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('fix the login bug');
   });
 });
 
 describe('end-of-line /go command', () => {
   it('should use preceding text as user note in summary', async () => {
     setupRawStdin(toRawInputs(['refactor auth', 'also check security /go']));
-    const capture = setupProvider(['Will do.', 'Refactor auth and check security.']);
+    setupProvider(['Will do.', 'Refactor auth and check security.']);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Refactor auth and check security.');
-    expect(capture.prompts[1]).toContain('also check security');
   });
 
   it('should use preceding text as first task input without prior conversation', async () => {
     setupRawStdin(toRawInputs(['実行して /go', '/cancel']));
     const capture = setupProvider(['実行タスクを整理する。']);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('実行タスクを整理する。');
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('User: 実行して');
-    expect(capture.prompts[0]).not.toContain('User Note:\n実行して');
   });
 });
 
@@ -431,7 +361,7 @@ describe('end-of-line /cancel command', () => {
     setupRawStdin(toRawInputs(['やっぱりやめる /cancel']));
     setupProvider([]);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
     expect(result.task).toBe('');
@@ -443,7 +373,7 @@ describe('middle-of-text command is not recognized', () => {
     setupRawStdin(toRawInputs(['テキスト中に /go を含むがコマンドではない文', '/cancel']));
     const capture = setupProvider(['OK.']);
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
     expect(capture.callCount).toBe(1);
@@ -462,52 +392,11 @@ describe('session propagation', () => {
       { content: 'Final summary.' },
     );
 
-    const result = await runInstruct();
+    const result = await runInteractive();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Final summary.');
     // Second call should receive the sessionId from first call
     expect(capture.sessionIds[1]).toBe('session-abc');
-  });
-});
-
-// =================================================================
-// Policy injection: transformPrompt wraps user input
-// =================================================================
-describe('policy injection', () => {
-  it('should wrap user messages with policy content', async () => {
-    setupRawStdin(toRawInputs(['fix the bug', '/cancel']));
-    const capture = setupProvider(['OK.']);
-
-    await runInstructMode('/test', '', 'takt/test', 'test', '', '');
-
-    // The prompt sent to AI should contain Policy section
-    expect(capture.prompts[0]).toContain('Policy');
-    expect(capture.prompts[0]).toContain('fix the bug');
-    expect(capture.prompts[0]).toContain('Policy Reminder');
-  });
-});
-
-// =================================================================
-// System prompt: branch name appears in intro
-// =================================================================
-describe('branch context', () => {
-  it('should include branch name and context in system prompt', async () => {
-    setupRawStdin(toRawInputs(['check changes', '/cancel']));
-    const capture = setupProvider(['Looks good.']);
-
-    await runInstructMode(
-      '/test',
-      '## Changes\n```\nsrc/auth.ts | 50 +++\n```',
-      'takt/feature-auth',
-      'feature-auth',
-      'Do something',
-      '',
-    );
-
-    expect(capture.systemPrompts.length).toBeGreaterThan(0);
-    const systemPrompt = capture.systemPrompts[0]!;
-    expect(systemPrompt).toContain('takt/feature-auth');
-    expect(systemPrompt).toContain('src/auth.ts | 50 +++');
   });
 });

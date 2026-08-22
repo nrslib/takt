@@ -1,47 +1,41 @@
 name: review-fix-dual-cqrs
-description: Frontend + CQRS+ES focused review + fix loop (structure, modularization, domain model, component design, security, QA)
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+description: Frontend + CQRS+ES focused review + fix loop (structure, modularization, domain model, component design, security, coding)
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 30
+facet_pools:
+  security-review-facets:
+    uses: security-review-facets
 initial_step: gather
 loop_monitors:
   - cycle:
       - reviewers
-      - fix
+      - final-gate
+      - remediation
     threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: Healthy (progress being made)
+        - condition: Healthy (fixes progressing and report content converging)
           next: reviewers
-        - condition: Unproductive (repeated findings, fixes not applied)
-          next: supervise
+        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+          next: reviewers
+        - condition: The current loop cannot converge and requires a final-gate decision
+          next: final-gate
 
 steps:
   - name: gather
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: gather-review
-    output_contracts:
-      report:
-        - name: review-target.md
-          format: review-gather
+    uses: review-gather-to-reviewers
     rules:
       - condition: Review target information gathered
         next: reviewers
@@ -52,24 +46,23 @@ steps:
     tags:
       - review
     parallel:
+      fixed:
       - name: arch-review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: architecture-reviewer
-        policy: review
+        policy:
+          - contract-change
+          - review
+          - architecture
+          - backend
+          - frontend
         knowledge:
           - architecture
           - frontend
           - backend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-arch
         output_contracts:
           report:
@@ -80,22 +73,19 @@ steps:
           - condition: needs_fix
 
       - name: cqrs-es-review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: cqrs-es-reviewer
-        policy: review
+        policy:
+          - cqrs-es
+          - contract-change
+          - review
+          - backend
         knowledge:
           - cqrs-es
           - backend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-cqrs-es
         output_contracts:
           report:
@@ -106,22 +96,17 @@ steps:
           - condition: needs_fix
 
       - name: frontend-review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: frontend-reviewer
         policy:
+          - contract-change
           - review
           - design-fidelity
+          - frontend
         knowledge: frontend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-frontend
         output_contracts:
           report:
@@ -131,95 +116,16 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: security-review
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy: review
-        knowledge: security
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
-      - name: qa-review
-        tags:
-          - review
-        edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        instruction: review-qa
-        output_contracts:
-          report:
-            - name: qa-review.md
-              format: qa-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: coding-reviewer
         policy:
+          - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:
@@ -229,108 +135,106 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-    rules:
-      - condition: all("approved")
-        next: supervise
-      - condition: any("needs_fix")
-        next: fix
+      pool:
+      - name: security-review
+        description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
+        capabilities: readonly
+        tags:
+          - review
+        edit: false
+        persona: security-reviewer
+        policy:
+          - contract-change
+          - security-review
+        knowledge:
+          - security
+          - security-data
+          - security-dependencies
+        dynamic_facets:
+          pool: security-review-facets
+          selector:
+            instruction: select-applicable-candidates
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: security-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      selection:
+        selector:
+          instruction: select-applicable-candidates
 
-  - name: fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - screen-api
-    knowledge:
-      - frontend
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    pass_previous_response: false
-    instruction: fix
     rules:
-      - condition: Fixes complete
+      - condition: any("error")
         next: reviewers
-      - condition: Unable to proceed with fixes
-        next: supervise
+      - condition: all("approved")
+        next: final-gate
+      - condition: any("needs_fix")
+        next: remediation
 
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: dual-supervisor
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-    instruction: supervise
-    pass_previous_response: false
+  - name: final-gate
+    kind: workflow_call
+    call: final-gate
+    args:
+      supervise_knowledge:
+        - frontend
+        - backend
+        - cqrs-es
+        - security
+        - architecture
+      supervise_policy:
+        - contract-change
+        - frontend
+        - backend
+        - cqrs-es
+        - architecture
     rules:
-      - condition: All validations complete, ready to merge
+      - condition: COMPLETE
         next: COMPLETE
-      - condition: Issues detected
-        next: fix_supervisor
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false
-
-  - name: fix_supervisor
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - screen-api
-    knowledge:
-      - frontend
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: fix-supervisor
-    pass_previous_response: false
+      - condition: needs_fix
+        next: remediation
+      - condition: need_replan
+        next: ABORT
+      - condition: ABORT
+        next: ABORT
+  - name: remediation
+    uses: review-remediation
+    with:
+      plan_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+        - review
+        - cqrs-es
+      fix_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+        - cqrs-es
+        - architecture
+        - backend
+        - frontend
+      verification_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+        - review
+        - cqrs-es
+      fix_knowledge:
+        - frontend
+        - backend
+        - cqrs-es
+        - security
+        - architecture
     rules:
-      - condition: Fixes for supervisor findings complete
-        next: supervise
-      - condition: Unable to proceed with fixes
-        next: supervise
+      - condition: COMPLETE
+        next: reviewers
+      - condition: need_replan
+        next: final-gate
+      - condition: ABORT
+        next: ABORT

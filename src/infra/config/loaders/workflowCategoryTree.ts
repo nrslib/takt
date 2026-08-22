@@ -131,5 +131,10 @@ export function buildCategorizedWorkflows(
     ? appendOthersCategory(categoriesWithEnsemble, allWorkflows, categorized, config.othersCategoryName)
     : categoriesWithEnsemble;
 
-  return { categories, allWorkflows, missingWorkflows };
+  return {
+    categories,
+    allWorkflows,
+    missingWorkflows,
+    workflowDescriptions: config.workflowDescriptions,
+  };
 }

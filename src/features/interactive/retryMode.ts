@@ -21,11 +21,29 @@ import {
   type PostSummaryAction,
 } from './interactive-summary.js';
 import { resolveLanguage } from './interactive.js';
-import { buildInteractivePolicyPrompt } from './policyPrompt.js';
+import {
+  prependSourceContext,
+  prependSourceContextGuardToSystemPrompt,
+} from './promptSections.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
 import type { InstructModeResult, InstructUIText } from './instructModeTypes.js';
+import { attachImageAttachmentCleanup } from './imageAttachments.js';
+import { runTuiTaskConversation } from '../tui/runTuiTask.js';
+import {
+  buildOrderRevisionPrompt,
+  createOrderRevisionSelector,
+  normalizeOrderRevisionSummary,
+} from './orderRevisionMode.js';
+import { resolveMaxImageIndex } from '../tasks/orderRevision.js';
+import {
+  renderPullRequestContext,
+  type PullRequestContext,
+} from '../../core/workflow/pr-context.js';
+import { SlashCommand } from '../../shared/constants.js';
+import { hasInteractiveTerminal } from '../../shared/utils/index.js';
+import { resolveFormalSpecModeWithoutPrompt } from './taskInstructionFormat.js';
 
 /** Failure information for a retry task */
 export interface RetryFailureInfo {
@@ -63,6 +81,7 @@ export interface RetryContext {
   readonly workflowContext: WorkflowContext;
   readonly run: RetryRunInfo | null;
   readonly previousOrderContent: string | null;
+  readonly prContext?: PullRequestContext;
 }
 
 const RETRY_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
@@ -109,6 +128,8 @@ export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja'): Re
     runReports: run !== null ? run.reports : '',
     hasOrderContent: ctx.previousOrderContent !== null,
     orderContent: ctx.previousOrderContent ?? '',
+    hasPrContext: ctx.prContext !== undefined,
+    prContextText: ctx.prContext ? renderPullRequestContext(ctx.prContext, lang) : '',
   };
 }
 
@@ -136,13 +157,10 @@ async function runRetryConversation(
   cwd: string,
   retryContext: RetryContext,
   createSelectAction: RetrySelectActionFactory,
+  reviseOrder: boolean,
 ): Promise<InstructModeResult> {
-  const globalConfig = resolveConfigValues(cwd, ['language', 'provider']);
+  const globalConfig = resolveConfigValues(cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
-
-  if (!globalConfig.provider) {
-    throw new Error('Provider is not configured.');
-  }
 
   const baseCtx = initializeSession(cwd, 'retry');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'retry' };
@@ -150,9 +168,14 @@ async function runRetryConversation(
   displayAndClearSessionState(cwd, ctx.lang);
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
+  const canonicalOrderContent = (retryContext.previousOrderContent ?? retryContext.failure.taskContent).trim();
 
   const templateVars = buildRetryTemplateVars(retryContext, lang);
-  const systemPrompt = loadTemplate('score_retry_system_prompt', ctx.lang, templateVars);
+  const systemPrompt = prependSourceContextGuardToSystemPrompt(
+    ctx.lang,
+    loadTemplate('score_retry_system_prompt', ctx.lang, templateVars),
+  );
+  const formalSpec = resolveFormalSpecModeWithoutPrompt(cwd);
 
   const retryIntro = getLabel('retry.ui.intro', ctx.lang);
   const subjectLabel = formatRetrySubjectLabel(retryContext.subject.kind, ctx.lang);
@@ -162,42 +185,70 @@ async function runRetryConversation(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
+    formalSpec,
     allowedTools: RETRY_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
-      buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
+      prependSourceContext(ctx.lang, userMessage, sourceContext),
     introMessage: introLabel,
     selectAction: createSelectAction(ui),
+    ...(reviseOrder
+      ? {
+        selectGoAction: createOrderRevisionSelector(),
+        selectRetryAction: async (): Promise<PostSummaryAction> => 'execute',
+        summaryPromptBuilder: (summaryOptions: Parameters<typeof buildOrderRevisionPrompt>[0]) =>
+          buildOrderRevisionPrompt(summaryOptions, canonicalOrderContent),
+        normalizeSummaryTask: (task: string, attachments) => normalizeOrderRevisionSummary(task, attachments, ctx.lang),
+        initialImageAttachmentIndex: resolveMaxImageIndex(canonicalOrderContent),
+        enabledCommands: [
+          SlashCommand.Go,
+          SlashCommand.Retry,
+          SlashCommand.Replay,
+          SlashCommand.Cancel,
+          SlashCommand.Resume,
+          SlashCommand.PasteImage,
+        ],
+      }
+      : {}),
     previousOrderContent: retryContext.previousOrderContent ?? undefined,
     enableRetryCommand: true,
+    ...(reviseOrder ? { trackResultSource: true } : {}),
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({
+      cwd,
+      plan: { ctx, strategy },
+      workflowContext: retryContext.workflowContext,
+    })
+    : await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
 
   if (result.action === 'cancel') {
-    return {
+    return attachImageAttachmentCleanup({
       action: 'cancel',
       task: '',
+      ...(result.source ? { source: result.source } : {}),
       ...(result.attachments ? { attachments: result.attachments } : {}),
-    };
+    }, result.cleanupAttachments);
   }
 
-  return {
+  return attachImageAttachmentCleanup({
     action: result.action as InstructModeResult['action'],
     task: result.task,
+    ...(result.source ? { source: result.source } : {}),
     ...(result.attachments ? { attachments: result.attachments } : {}),
-  };
+  }, result.cleanupAttachments);
 }
 
 export async function runTaskRetryMode(
   cwd: string,
   retryContext: RetryContext,
 ): Promise<InstructModeResult> {
-  return runRetryConversation(cwd, retryContext, createSelectActionWithoutExecute);
+  return runRetryConversation(cwd, retryContext, createSelectActionWithoutExecute, true);
 }
 
 export async function runDirectRetryMode(
   cwd: string,
   retryContext: RetryContext,
 ): Promise<InstructModeResult> {
-  return runRetryConversation(cwd, retryContext, createDirectRetrySelectAction);
+  return runRetryConversation(cwd, retryContext, createDirectRetrySelectAction, false);
 }

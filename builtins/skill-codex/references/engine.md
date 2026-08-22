@@ -52,14 +52,21 @@ codex exec --full-auto - < "$tmp_prompt_file"
 5. 各サブステップの `rules` で条件マッチを判定する
 6. 親 step の `rules` で aggregate 評価（`all()` / `any()`）を行う
 
+## Team Leader step の実行
+
+1. 親 Team Leader はタスクを独立 part に分解する。`initial_max_parts` 指定時のみ初回 batch の part 数を制限する
+2. member は `session: refresh` と part 固有 session key で、最大 `max_concurrency` 個ずつ実行する
+3. 現在 batch の全 part が完了するまで次の分解を要求しない
+4. 次 batch は完了結果だけを基に計画する。依存する検証はこの段階でのみ追加できる
+5. `fail_on_part_error: true` では回復 part の実行後も親 step を error で終了する
+
+`refill_threshold` は互換キーであり、省略または `0` のみ有効である。逐次 refill は存在しない。親の `pass_previous_response: true` は state 上の前回出力を親の分解 prompt に渡す。member には前回出力を渡さない。
+
 ### サブステップ条件マッチ判定
 
-各サブステップ出力に対する判定優先順位:
+各サブステップは semantic 条件と `when(...)` 条件だけを通常 step と同じ YAML 順の first-match で判定する。意味ラベルが必要な場合だけ重複のない候補から一度選択し、その選択を以後の rule 評価に使う。どの rule も成立しなければ `rule_no_match` で ABORT する。
 
-1. `[STEP:N]` タグがあればインデックスで照合（最後のタグを採用）
-2. タグがなければ出力全文と条件文の意味一致で判定
-
-マッチした condition 文字列を記録し、親 step の aggregate 評価に使う。
+マッチした condition 文字列を記録し、parallel 親 step だけが確定済みのサブステップ結果を `all(...)` / `any(...)` で評価する。
 
 ## セクションマップの解決
 
@@ -76,6 +83,9 @@ codex exec --full-auto - < "$tmp_prompt_file"
 - `policies.coding: ../facets/policies/coding.md` → `~/.agents/skills/takt/facets/policies/coding.md`
 - `instructions.plan: ../facets/instructions/plan.md` → `~/.agents/skills/takt/facets/instructions/plan.md`
 
+ファセット本文の `{{include:<kind>/<name>}}` は、`facets/partials/<kind>/<name>.md` を同じ言語のリソースから読み込み、参照先に include があれば再帰的に展開する。
+参照先が存在しない場合、または include が循環する場合はエラーとして扱い、別言語の partial へフォールバックしない。
+
 ## プロンプト構築
 
 各 step 実行時、以下を上から順に結合してプロンプトを作る。
@@ -91,8 +101,6 @@ codex exec --full-auto - < "$tmp_prompt_file"
 9. 前回出力（`pass_previous_response: true` のとき）
 10. レポート出力指示（`report` または `output_contracts.report` があるとき）
 11. ステータスタグ出力指示（`rules` があるとき）
-12. ポリシーリマインダー（ポリシーを末尾再掲）
-
 ### テンプレート変数展開
 
 インストラクション内のプレースホルダーを置換する。
@@ -144,24 +152,26 @@ report:
 
 ## ステータスタグ出力指示
 
-step に `rules` がある場合、最後に1つだけタグを出力するよう指示する。
+step に semantic rule がある場合、最後に意味ラベルを1つだけ出力するよう指示する。
 
 ```text
-[STEP:0] = {rules[0].condition}
-[STEP:1] = {rules[1].condition}
+[STEP:1] = {semanticCandidates[0].label}
+[STEP:2] = {semanticCandidates[1].label}
 ...
 ```
 
-- `ai("...")` は括弧を外した条件文を表示する
+- `when(...)` と `all(...)` / `any(...)` は候補に含めない
+- 同じ意味ラベルは最初の YAML 出現だけを候補にする
 - parallel サブステップでも同様に適用する
 
 ## Rule 評価
 
 ### 通常 step
 
-1. 出力中の `[STEP:N]` を検出（複数なら最後を採用）
-2. 該当 index の rule を採用
-3. タグがない場合は全文を読み condition と意味照合して最も近い rule を採用
+1. rules を YAML 順に評価する。意味ラベルを必要としない先行 machine rule が成立した場合は、意味ラベルを選択せずその rule を採用する
+2. 最初の semantic condition に到達した時点でのみ、structured output、タグ検出、AI judge の順で意味ラベルを一度だけ選択する
+3. 選択した意味ラベルと各 rule の guard を使って、現在の rule から後続 rules を YAML 順に評価する。guard が偽でも意味ラベルは再選択しない
+4. どの rule も成立しない場合は `rule_no_match` で ABORT する
 
 ### Parallel step（Aggregate）
 
@@ -217,7 +227,7 @@ initial_step 取得
 │   ↓
 │   Loop Monitor チェック（必要時 judge を codex exec で実行）
 │   ↓
-│   Rule 評価（タグ優先、未タグ時は意味照合）
+│   Rule 評価（YAML 順 first-match）
 │   ↓
 │   next 決定
 │     ├── COMPLETE → 終了報告

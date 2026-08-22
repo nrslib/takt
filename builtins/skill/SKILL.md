@@ -84,7 +84,7 @@ $ARGUMENTS を以下のように解析する:
 
 YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
 - `name`, `max_steps`, `initial_step`, `steps` 配列
-- `workflow_config`（ワークフロー全体の provider / runtime 等）
+- `workflow_config`（`runtime.prepare` などの process 準備。provider / model / options は runtime.yaml）
 - セクションマップ: `personas`, `policies`, `instructions`, `output_contracts`, `knowledge`
 
 ### 手順 2: セクションリソースの事前読み込み
@@ -94,6 +94,9 @@ YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
 
 例: ワークフローが `~/.claude/skills/takt/workflows/default.yaml` にあり、`personas:` に `coder: ../facets/personas/coder.md` がある場合
 → 絶対パスは `~/.claude/skills/takt/facets/personas/coder.md`
+
+ファセット本文に `{{include:<kind>/<name>}}` がある場合は、同じ言語の `facets/partials/<kind>/<name>.md` を Read で取得し、参照先の include も再帰的に展開してからプロンプトへ結合する。
+参照先が存在しない場合、または include が循環する場合はエラーとして扱い、別言語の partial へフォールバックしない。
 
 重複を除いて Read で全て読み込む。読み込んだ内容はチームメイトへのプロンプト構築に使う。
 
@@ -137,7 +140,7 @@ current_step のプロンプトを構築する（→ references/engine.md のプ
 
 プロンプト構築の要素:
 1. **ペルソナ**: `persona:` キー → `personas:` セクション → .md ファイル内容
-2. **ポリシー**: `policy:` キー → `policies:` セクション → .md ファイル内容（複数可、末尾にリマインダー再掲）
+2. **ポリシー**: `policy:` キー → `policies:` セクション → .md ファイル内容（複数可）
 3. **実行コンテキスト**: cwd, ワークフロー名, step 名, イテレーション情報
 4. **ナレッジ**: `knowledge:` キー → `knowledge:` セクション → .md ファイル内容
 5. **インストラクション**: `instruction:` キー → `instructions:` セクション → .md ファイル内容（テンプレート変数展開済み）
@@ -199,9 +202,11 @@ Task tool を呼ぶ（2つ目）:
 Task tool から返ってきたチームメイトの出力から matched_rule を決定する。
 
 **通常 step:**
-1. 出力に `[STEP:N]` タグがあるか探す（複数ある場合は最後のタグを採用）
-2. タグがあれば → rules[N] を選択（0始まりインデックス）
-3. タグがなければ → 出力全体を読み、全 condition と比較して最も近いものを選択
+1. rules を YAML 記述順に評価する。
+2. `when(...)` と `all(...)` / `any(...)` は workflow state とサブステップ結果から決定的に評価する。
+3. 最初の意味ラベル condition に到達した場合だけ、重複を除いた意味ラベル候補から一度だけ選択する。
+4. 選択したラベルと guard を使って以後も YAML 順に評価し、最初に true となった rule を選択する。
+5. どの rule も成立しない、または意味ラベル選択が不正なら `rule_no_match` として ABORT する。
 
 **parallel step:**
 1. 各サブステップの Task tool 出力に対して、サブステップの rules で条件マッチを判定

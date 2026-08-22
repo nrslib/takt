@@ -2,69 +2,42 @@
 
 ## Existing System Contracts
 
-In an existing system, contracts are not limited to explicit APIs. Values and structures observed by users or developers also function as contracts. A small code change can affect production screens, tests, reviews, and maintenance workflows.
+In an existing system, contracts are not limited to explicit APIs. Values and structures observed by users or developers also function as contracts. A small code change can propagate to production screens, tests, reviews, and maintenance procedures.
 
-| Criteria | Judgment |
-|----------|----------|
-| User-visible copy or state changes | Contract change |
-| A value asserted by tests changes | Contract change |
-| Hook or component call shape changes | Contract change |
-| Only file placement or type names change | May still be a maintenance contract change |
-| Closed internal duplication is removed | Internal change if impact is contained |
+Existing-contract preservation, current-consumer migration, and legacy support affect different boundaries. When a public API, event, command, configuration, path, or persisted format is replaced, current code, existing tests and usage sites, stored data, published or released status, and placement or isolation at a read boundary reveal distinct impact paths. API compatibility, event upcasters, data migration or backfill, and Read Model rebuilds operate on separate support boundaries and do not imply one another.
 
-## Diff Classification
+## Structure of a Causal Diff
 
-Changes in existing systems are classified by causal relationship to the request. The question is whether the request requires the change, not whether the change is in a touched file.
+Changes in an existing system divide into `required`, `related`, and `unnecessary` according to their causal relationship to the request. Being located in a target file does not establish that a change is necessary.
 
-| Classification | Decision criteria |
-|----------------|-------------------|
-| Required change | Directly required to satisfy the request |
-| Related change | Required to wire, verify, or keep a required change consistent |
-| Unnecessary change | The request still succeeds without it |
-| Dangerous unnecessary change | The request still succeeds without it and it changes an existing contract |
+| Classification | Structure |
+|----------------|-----------|
+| `required` | A direct change that makes the request hold |
+| `related` | A change connecting the producer, consumer, verification, or consistency of a `required` change |
+| `unnecessary` | A change whose removal leaves the request satisfied and whose basis is only proximity, preference, general style, or future prediction |
 
-### Boundary of Related Changes
+A related change has a connection traceable to a required change. Updating callers of a function with a new argument or removing an old store after replacing a persistence boundary has such a connection. Renaming a public type near the change or reorganizing a return structure may lack that connection even when it is nearby.
 
-A related change must have an explainable connection to a required change. Proximity, same file, or same responsibility is not enough.
+## Observable Contracts and Internal Structure
 
-| Example | Classification |
-|---------|----------------|
-| Updating callers after adding a required parameter | Related change |
-| Deleting an old store after changing persistence boundary | Related change |
-| Renaming a touched component's Props type by preference | Unnecessary change |
-| Changing a hook return shape to a props object as cleanup | Dangerous unnecessary change |
+User-visible copy and state, accessibility, public APIs, events, logs, configuration formats, and file placement can be observable contracts. A test assertion provides evidence of an impact path, but the mere existence of a test does not necessarily turn closed internal structure into a public contract.
 
-## Conflicts With General Quality Criteria
+Comments can preserve calculation rationale, platform constraints, known-bug workarounds, and prior design decisions. A comment that restates a function name and a comment recording a reason that cannot be recovered from the code have different change impacts.
 
-In maintenance work, general design improvements and framework style are not always the highest priority. Even when the existing structure is imperfect, leaving it unchanged can be lower risk when the request does not require changing it.
+## Impact Paths for Replacement and Preservation
 
-| Situation | Judgment |
-|-----------|----------|
-| Component extraction would look cleaner but is not causally related to the request | Do not change |
-| Renaming or relocating Props types only to match common style | Do not change |
-| The existing structure cannot satisfy the request | Change within the causally related scope |
-| The existing structure is the cause of the bug | Change it with reason and impact scope documented |
+In a contract replacement, the old definition, the new producer, current consumers, verification sites, persisted data, and published users are distinct impact points. Adding a new path does not by itself complete migration or removal of the old path.
 
-## Meaning of Comments and Tests
+For a preserved contract, the implementation, tests, and usage sites that demonstrate current behavior form reference points. Even when the internal mechanism changes, a contract can remain preserved if the values and states observed at those reference points remain the same.
 
-Comments and tests may preserve historical constraints or intent. Even comments that look explanatory can act like contracts when they document calculation rationale, platform constraints, or known workaround reasons.
+## Relationship to General Quality Criteria
 
-| Target | Handling |
-|--------|----------|
-| Calculation rationale comments | Preserve |
-| Constraint or workaround comments | Preserve |
-| Comments contradicting code | Correct |
-| Comments that only restate function names | May consider deleting |
-| Existing test expectations | Treat as existing contracts |
+In maintenance work, general design improvements and framework style do not necessarily align with the request's causal path. Even when the existing structure is imperfect, changing that structure creates its own consumer migration, review scope, and regression surface.
 
-## Maintenance Change Risk
-
-For maintenance work, preserving existing behavior is more important than making new code look better. Even a technically good change increases review cost and regression risk when it is outside the request.
-
-| Change | Risk |
-|--------|------|
-| Rename | Increases grep, history tracing, and review scope |
-| File move | Changes ownership boundaries, imports, and history tracing |
-| UI contract change | Changes user experience, assistive technology behavior, and tests |
-| Test weakening | Reduces regression detection |
-| Extra abstraction | Adds present understanding cost for future flexibility |
+| Change | Primary impact |
+|--------|----------------|
+| Rename | Changes search, history tracing, references, and review scope |
+| File move | Changes ownership boundaries, reference paths, and history tracing |
+| UI or accessibility contract change | Affects user experience, assistive technology, and tests |
+| Test-expectation weakening | Reduces existing regression detection |
+| Additional abstraction | Trades future flexibility for more present-day indirection and change points |

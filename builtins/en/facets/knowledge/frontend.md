@@ -2,24 +2,7 @@
 
 ## Component Design
 
-Do not write everything in one file. Always split components.
-
-Required splits:
-- Has its own state → Must split
-- JSX over 50 lines → Split
-- Reusable → Split
-- Multiple responsibilities → Split
-- Independent section within page → Split
-
-| Criteria | Judgment |
-|----------|----------|
-| Component over 200 lines | Consider splitting |
-| Component over 300 lines | Warning. Suggest splitting |
-| Display and logic mixed | Consider separation |
-| Props drilling (3+ levels) | Consider state management |
-| Component with multiple responsibilities | REJECT |
-
-Component line count is a review signal, not a unit-test or snapshot-test failure condition.
+Choose component boundaries by responsibility, reason to change, reuse boundary, and data ownership rather than line count or the mere presence of state. Independently changing sections and side effects are separation candidates, but closely collaborating presentation should not be split mechanically. Do not introduce state management based on prop depth alone; reconsider ownership when multiple branches share the same state or another real ownership boundary appears.
 
 Good Component:
 - Single responsibility: Does one thing well
@@ -51,19 +34,12 @@ features/{feature-name}/
 
 Do not stop at creating the page component. A new page must also be wired into an actual entry path. Decide together with the implementation how the page is reached: router, menu, temporary route, or another explicit entry point.
 
-| Criteria | Judgment |
-|----------|----------|
-| A new page exists but no route is registered for it | REJECT |
-| Basename-based URL and route path mapping is not verified | REJECT |
-| Router wiring and page entry are decided together with the page implementation | OK |
-| A temporary development route is used and its purpose/removal plan is recorded | OK |
-| Routes are updated but actual entry points such as menus, buttons, links, or external callers are not checked | Warning |
 
 ```tsx
-// OK - page and route are added together
+// Example: page and route are added together
 <Route path="/contreg" element={<ContainerRegisterPage />} />
 
-// REJECT - page exists but has no reachable route
+// Avoid: page exists but has no reachable route
 // src/pages/ContainerRegisterPage.tsx exists
 // Router has no matching route
 ```
@@ -74,24 +50,11 @@ Reachability is broader than router configuration. Confirm the real entry path u
 
 Third-party UI libraries such as data grids, date pickers, charts, and virtualized lists can fail at runtime even when types pass. This is especially common across major-version changes where prop names or state model shapes are no longer compatible, and shallow mocks do not expose the problem.
 
-| Criteria | Judgment |
-|----------|----------|
-| Major UI library props are guessed without checking the version used by the project | REJECT |
-| Tests fully mock the library and miss real mount failures | Warning |
-| The real component is rendered with representative props and verified not to crash at screen level | OK |
-| Prop shapes are chosen by referencing existing in-project usage patterns and the installed version | OK |
 
 ### Accessibility Contracts
 
 Accessible names, roles, and states are UI contracts consumed by assistive technologies and tests. Add appropriate accessibility attributes for new UI elements, but treat changes to existing accessibility contracts like other user-facing copy or behavior changes.
 
-| Criteria | Judgment |
-|----------|----------|
-| A new interactive element has no accessible name | REJECT |
-| Checked, expanded, disabled, or similar state is not exposed to assistive technologies | Warning |
-| An existing accessible name is changed without being required by the task | REJECT |
-| Existing accessible names are preserved while missing role/state is added | OK |
-| The reason and impact scope for changing an existing contract are explicit | OK |
 
 ## State Management
 
@@ -120,27 +83,11 @@ Exception (OK for child to have local state):
 - UI-only temporary state (hover, focus, animation)
 - Completely local state that doesn't need to be communicated to parent
 
-| Criteria | Judgment |
-|----------|----------|
-| Unnecessary global state | Consider localizing |
-| Same state managed in multiple places | REJECT. Normalize it in the nearest common parent or shared store |
-| State changes from child to parent (reverse data flow) | REJECT |
-| API response stored as-is in state | Consider normalization |
-| Inappropriate useEffect dependencies | REJECT |
-| Initial load tied to unstable Context/Provider function references | REJECT |
 
 ### Canonical and Derived State
 
 State should hold canonical values such as user input, server data, and temporary UI state. Display values, aggregates, selection states, sorted results, and grouped results that can be computed from canonical state are derived values and must not be kept as independent state.
 
-| Criteria | Judgment |
-|----------|----------|
-| A value that can always be computed from one state is kept as another state | REJECT |
-| Multiple state fields have invariants that require constant synchronization | REJECT |
-| Display labels, counts, totals, all-selected flags, sorted results, or grouped results are kept as canonical state | REJECT |
-| API sending, persistence, or diffing depends on derived state instead of canonical state | REJECT |
-| Only canonical state is stored, and display, aggregation, and decisions are derived via selectors, render logic, or useMemo | OK |
-| Derived values required by external contracts are generated from canonical state at send or persistence boundaries | OK |
 
 State Placement Guidelines:
 
@@ -156,12 +103,6 @@ State Placement Guidelines:
 
 Initial loading should be separated from reactive refetching. If refetching is not driven by URL, filter, paging, or explicit user action, keep it mount-only and do not tie it to unstable callback references.
 
-| Criteria | Judgment |
-|----------|----------|
-| Initial load reruns because a Provider/Context callback changed identity | REJECT |
-| Refetch conditions are explicit (URL, filter, paging, refresh action) | OK |
-| Message display, loading toggles, or modal state cause refetching | REJECT |
-| Initial load is mount-only and later refetches are triggered explicitly | OK |
 
 ## Data Fetching
 
@@ -239,33 +180,21 @@ Widget conditions (must satisfy all):
 
 If any condition is not met, fetch data at View level and pass via props.
 
-| Criteria | Judgment |
-|----------|----------|
-| Direct fetch in component | Separate to Container layer |
-| No error handling | REJECT |
-| Loading state not handled | REJECT |
-| N+1 query-like fetching | REJECT |
 
 ### Screen-Specific API Usage
 
 Fetch data from screen-specific API endpoints. Do not assemble screens by repurposing generic APIs. If an API doesn't exist, add a backend endpoint first rather than working around it on the frontend.
 
-| Criteria | Judgment |
-|----------|----------|
-| Reusing list API response for detail screen | REJECT |
-| Display unit and API fetch unit mismatch | REJECT |
-| Fetching all records just for a decision (should use aggregation API) | REJECT |
-| Each screen has dedicated fetch endpoints returning only needed data | OK |
 
 ```tsx
-// REJECT - Reusing list API for detail screen
+// Avoid: Reusing list API for detail screen
 const DetailScreen = ({ itemId }) => {
   const { data: list } = useListItems({ date })
   const item = list?.items.find(i => i.id === itemId)
   return <Detail item={item} />
 }
 
-// OK - Detail screen uses detail API
+// Example: Detail screen uses detail API
 const DetailScreen = ({ itemId }) => {
   const { data: item } = useGetItem(itemId)
   return <Detail item={item} />
@@ -276,15 +205,10 @@ const DetailScreen = ({ itemId }) => {
 
 Communication is scoped to the active tab/screen. Do not prefetch for other tabs. Periodic polling runs only on the visible screen.
 
-| Criteria | Judgment |
-|----------|----------|
-| Only visible tab communicates on tab switch | OK |
-| Parent fetches for all tabs and distributes to children | REJECT |
-| Polling continues on hidden tabs | REJECT |
 
 ## Shared Components and Abstraction
 
-Common UI patterns should be shared components. Copy-paste of inline styles is prohibited.
+Common UI patterns should be shared components. Copy-paste of inline styles is prohibited. UI that represents the same role or semantic state (placeholder, disabled, unconfirmed, etc.) must align copy, styling, and screen-reader output within the same shared component or an explicit design contract; presentation may vary with display context (hierarchy, density, theme), but the meaning and interaction contract must hold.
 
 ```tsx
 // ❌ WRONG - Copy-pasted inline styles
@@ -389,14 +313,9 @@ Anti-patterns:
 
 ## Abstraction Level Evaluation
 
-**Conditional branch bloat detection:**
+**Conditionals and abstraction:**
 
-| Pattern | Judgment |
-|---------|----------|
-| Same conditional in 3+ places | Extract to shared component → **REJECT** |
-| Props-based branching with 5+ types | Consider component split |
-| Nested ternaries in render | Early return or component separation → **REJECT** |
-| Type-based render branching | Consider polymorphic components |
+Express rendering branches in terms of user-visible states and responsibility. Once two implementations with the same meaning, contract, and reason to change are observed, decide the owner of a shared component or transformation. Do not require component splitting or polymorphism based only on branch count or syntax.
 
 **Abstraction level mismatch detection:**
 
@@ -479,11 +398,6 @@ export function formatDate(date: Date): string {
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Backend returns display strings | Suggest design review |
-| Same format logic copy-pasted | Unify to utility function |
-| Inline formatting in component | Extract to function |
 
 ### Domain Logic Placement (Smart UI Elimination)
 
@@ -500,17 +414,11 @@ Frontend responsibilities:
 - Manage UI-only temporary state (focus, hover, modal open/close)
 - Display format conversion (formatting, sorting, filtering)
 
-| Criteria | Judgment |
-|----------|----------|
-| Price calculation/stock validation in frontend | Move to backend → **REJECT** |
-| Status transition rules in frontend | Move to backend → **REJECT** |
-| Business validation in frontend | Move to backend → **REJECT** |
-| Recalculating server-computable values in frontend | Redundant → **REJECT** |
 
-Good vs Bad Examples:
+Good and contrasting examples:
 
 ```tsx
-// ❌ BAD - Business rules in frontend
+// Avoid: Business rules in frontend
 function OrderForm({ order }: { order: Order }) {
   const totalPrice = order.items.reduce((sum, item) =>
     sum + item.price * item.quantity, 0
@@ -533,7 +441,7 @@ function OrderForm({ order }: { order: Order }) {
 ```
 
 ```tsx
-// ❌ BAD - Status transition logic in frontend
+// Avoid: Status transition logic in frontend
 function TaskCard({ task }: { task: Task }) {
   const canStart = task.status === 'pending' && task.assignee !== null
   const canComplete = task.status === 'in_progress' && /* complex conditions... */
@@ -572,17 +480,10 @@ Exceptions (OK to have logic in frontend):
 
 Decision criteria: "Would the business break if this calculation differs from the server?"
 - YES → Place in backend (domain logic)
-- NO → OK in frontend (display logic)
+- NO → keep the logic in the frontend (display logic)
 
 ## Performance
 
-| Criteria | Judgment |
-|----------|----------|
-| Unnecessary re-renders | Needs optimization |
-| Large lists without virtualization | Warning |
-| Unoptimized images | Warning |
-| Unused code in bundle | Check tree-shaking |
-| Excessive memoization | Verify necessity |
 
 Optimization Checklist:
 - Are `React.memo` / `useMemo` / `useCallback` appropriate?
@@ -603,13 +504,6 @@ const style = useMemo(() => ({ color: 'red' }), []);
 
 ## Accessibility
 
-| Criteria | Judgment |
-|----------|----------|
-| Interactive elements without keyboard support | REJECT |
-| Images without alt attribute | REJECT |
-| Form elements without labels | REJECT |
-| Information conveyed by color only | REJECT |
-| Missing focus management (modals, etc.) | REJECT |
 
 Checklist:
 - Using semantic HTML?
@@ -620,41 +514,8 @@ Checklist:
 
 ## TypeScript/Type Safety
 
-| Criteria | Judgment |
-|----------|----------|
-| Use of `any` type | REJECT |
-| Excessive type assertions (as) | Needs review |
-| No Props type definition | REJECT |
-| Inappropriate event handler types | Needs fix |
 
 ## Frontend Security
 
-| Criteria | Judgment |
-|----------|----------|
-| dangerouslySetInnerHTML usage | Check XSS risk |
-| Unsanitized user input | REJECT |
-| Sensitive data stored in frontend | REJECT |
-| CSRF token not used | Needs verification |
 
 ## Testability
-
-| Criteria | Judgment |
-|----------|----------|
-| No data-testid, etc. | Warning |
-| Structure difficult to test | Consider separation |
-| Business logic embedded in UI | REJECT |
-
-## Anti-pattern Detection
-
-REJECT if found:
-
-| Anti-pattern | Problem |
-|--------------|---------|
-| God Component | All features concentrated in one component |
-| Prop Drilling | Deep props bucket brigade |
-| Inline Styles abuse | Maintainability degradation |
-| useEffect hell | Dependencies too complex |
-| Premature Optimization | Unnecessary memoization |
-| Magic Strings | Hardcoded strings |
-| Hidden Dependencies | Child components with hidden API calls |
-| Over-generalization | Components forced to be generic |

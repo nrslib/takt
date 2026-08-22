@@ -4,9 +4,18 @@
  * Note: Uses zod v4 syntax for SDK compatibility.
  */
 
+import {
+  classifyReportRelativePath,
+  reportPathRejectionMessage,
+} from './reserved-report-names.js';
 import { z } from 'zod/v4';
+import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { STATUS_VALUES } from './status.js';
-import { CLAUDE_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES, COPILOT_EFFORT_VALUES, RUNTIME_PREPARE_PRESETS } from './workflow-types.js';
+import {
+  OPENCODE_GUARD_PROFILES,
+  RUNTIME_PREPARE_PRESETS,
+} from './workflow-types.js';
+import { ConfiguredModelSchema } from './model-schema.js';
 
 export { McpServerConfigSchema, McpServersSchema } from './mcp-schemas.js';
 
@@ -48,56 +57,165 @@ export const StatusSchema = z.enum(STATUS_VALUES);
 /** Permission mode schema for tool execution */
 export const PermissionModeSchema = z.enum(['readonly', 'edit', 'full']);
 
-/** Claude sandbox settings schema */
-export const ClaudeSandboxSchema = z.object({
+const ClaudeSandboxShape = {
   allow_unsandboxed_commands: z.boolean().optional(),
   excluded_commands: z.array(z.string()).optional(),
-}).optional();
+};
+
+/** Claude sandbox settings schema */
+export const ClaudeSandboxSchema = z.object(ClaudeSandboxShape).optional();
 
 /** Provider-specific step options schema */
+const CodexSkillsShape = {
+  repo: z.boolean().optional(),
+  user: z.boolean().optional(),
+};
+
+const ProviderEffortSchema = z.string().trim().min(1, 'effort must not be empty');
+
+const ProviderGuardOptionShape = {
+  call_timeout_ms: z.number().int().min(60_000).max(86_400_000).optional(),
+};
+
+const ProviderGuardOptionsSchema = z.object(ProviderGuardOptionShape).strict();
+
+const CodexProviderOptionShape = {
+  base_url: z.string().min(1).optional(),
+  network_access: z.boolean().optional(),
+  permission_control: z.enum(['takt', 'codex']).optional(),
+  reasoning_effort: ProviderEffortSchema.optional(),
+  fast_mode: z.boolean().optional(),
+  skills: z.object(CodexSkillsShape).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
+};
+
+const CodexProviderOptionsSchema = z.object(CodexProviderOptionShape);
+
+const StrictCodexProviderOptionsSchema = z.object({
+  ...CodexProviderOptionShape,
+  skills: z.object(CodexSkillsShape).strict().optional(),
+}).strict();
+
+const OpenCodeGuardOptionShape = {
+  profile: z.enum(OPENCODE_GUARD_PROFILES).optional(),
+  model_profiles: z.record(
+    z.string().min(1),
+    z.enum(OPENCODE_GUARD_PROFILES),
+  ).optional(),
+  call_timeout_ms: z.number().int().min(60_000).max(86_400_000).optional(),
+  event_limit: z.number().int().positive().optional(),
+  text_byte_limit: z.number().int().positive().optional(),
+  reasoning_byte_limit: z.number().int().positive().optional(),
+};
+
+const OpenCodeProviderOptionShape = {
+  network_access: z.boolean().optional(),
+  variant: z.string().min(1).optional(),
+  allowed_tools: z.array(z.string()).optional(),
+  guards: z.object(OpenCodeGuardOptionShape).optional(),
+};
+
+const OpenCodeProviderOptionsSchema = z.object(OpenCodeProviderOptionShape);
+
+const StrictOpenCodeProviderOptionsSchema = z.object({
+  ...OpenCodeProviderOptionShape,
+  guards: z.object(OpenCodeGuardOptionShape).strict().optional(),
+}).strict();
+
+const ClaudeSkillsShape = { enabled: z.boolean().optional() };
+const ClaudeSkillsSchema = z.object(ClaudeSkillsShape).strict();
+
+const ClaudeProviderOptionShape = {
+  base_url: z.string().min(1).optional(),
+  allowed_tools: z.array(z.string()).optional(),
+  effort: ProviderEffortSchema.optional(),
+  skills: ClaudeSkillsSchema.optional(),
+  sandbox: z.object(ClaudeSandboxShape).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
+};
+
+const ClaudeProviderOptionsSchema = z.object(ClaudeProviderOptionShape);
+
+const StrictClaudeProviderOptionsSchema = z.object({
+  ...ClaudeProviderOptionShape,
+  sandbox: z.object(ClaudeSandboxShape).strict().optional(),
+}).strict();
+
+const ClaudeTerminalProviderOptionsSchema = z.object({
+  backend: z.enum(['tmux']).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
+  timeout_ms: z.number().int().positive().optional(),
+  keep_session: z.boolean().optional(),
+  transcript_poll_interval_ms: z.number().int().positive().optional(),
+}).strict();
+
+const CopilotProviderOptionsSchema = z.object({
+  effort: ProviderEffortSchema.optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
+});
+
+const KiroProviderOptionsSchema = z.object({
+  agent: z.string().min(1).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
+});
+
+const CursorProviderOptionsSchema = z.object({
+  guards: ProviderGuardOptionsSchema.optional(),
+});
+
+const DeepSeekHarnessProviderOptionsSchema = z.object({
+  python_path: z.string().min(1).optional(),
+  base_url: z.string().min(1).optional(),
+  session_root: z.string().min(1).optional(),
+  cordis: z.string().min(1).optional(),
+  max_tokens: z.number().int().positive().safe().optional(),
+  request_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
+  shutdown_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
+  runtime_mode: z.enum(['exe', 'node']).optional(),
+}).strict();
+
+const PiProviderOptionsSchema = z.object({
+  guards: ProviderGuardOptionsSchema.optional(),
+  extensions: z.array(z.string().min(1)).optional(),
+  no_extensions: z.boolean().optional(),
+  no_skills: z.boolean().optional(),
+  no_prompt_templates: z.boolean().optional(),
+  no_themes: z.boolean().optional(),
+  no_context_files: z.boolean().optional(),
+});
+
 export const StepProviderOptionsObjectSchema = z.object({
-  codex: z.object({
-    network_access: z.boolean().optional(),
-    reasoning_effort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
-  }).optional(),
-  opencode: z.object({
-    network_access: z.boolean().optional(),
-    variant: z.string().min(1).optional(),
-    allowed_tools: z.array(z.string()).optional(),
-  }).optional(),
-  claude: z.object({
-    allowed_tools: z.array(z.string()).optional(),
-    effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
-    sandbox: ClaudeSandboxSchema,
-  }).optional(),
-  claude_terminal: z.object({
-    backend: z.enum(['tmux']).optional(),
-    timeout_ms: z.number().int().positive().optional(),
-    keep_session: z.boolean().optional(),
-    transcript_poll_interval_ms: z.number().int().positive().optional(),
-  }).strict().optional(),
-  copilot: z.object({
-    effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
-  }).optional(),
-  kiro: z.object({
-    agent: z.string().min(1).optional(),
-  }).optional(),
+  codex: CodexProviderOptionsSchema.optional(),
+  opencode: OpenCodeProviderOptionsSchema.optional(),
+  claude: ClaudeProviderOptionsSchema.optional(),
+  claude_terminal: ClaudeTerminalProviderOptionsSchema.optional(),
+  cursor: CursorProviderOptionsSchema.optional(),
+  copilot: CopilotProviderOptionsSchema.optional(),
+  kiro: KiroProviderOptionsSchema.optional(),
+  pi: PiProviderOptionsSchema.optional(),
+  deepseek_harness: DeepSeekHarnessProviderOptionsSchema.optional(),
 });
 
 export const StepProviderOptionsSchema = StepProviderOptionsObjectSchema.optional();
 
+const StrictStepProviderOptionsSchema = z.object({
+  codex: StrictCodexProviderOptionsSchema.optional(),
+  opencode: StrictOpenCodeProviderOptionsSchema.optional(),
+  claude: StrictClaudeProviderOptionsSchema.optional(),
+  claude_terminal: ClaudeTerminalProviderOptionsSchema.strict().optional(),
+  cursor: CursorProviderOptionsSchema.strict().optional(),
+  copilot: CopilotProviderOptionsSchema.strict().optional(),
+  kiro: KiroProviderOptionsSchema.strict().optional(),
+  pi: PiProviderOptionsSchema.strict().optional(),
+  deepseek_harness: DeepSeekHarnessProviderOptionsSchema.strict().optional(),
+}).strict().optional();
+
 /** Provider key schema for profile maps */
-export const ProviderProfileNameSchema = z.enum([
-  'claude',
-  'claude-sdk',
-  'claude-terminal',
-  'codex',
-  'opencode',
-  'cursor',
-  'copilot',
-  'kiro',
-  'mock',
-]);
+export const ProviderProfileNameSchema = z.enum(PROVIDER_TYPES, {
+  error: (issue) => issue.input === 'auto'
+    ? 'provider: auto has been removed; set a concrete provider and configure auto_routing separately'
+    : undefined,
+});
 export const ProviderTypeSchema = ProviderProfileNameSchema;
 
 export const ProviderBlockSchema = z.object({
@@ -170,6 +288,109 @@ export const ProviderBlockSchema = z.object({
 
 export const ProviderReferenceSchema = z.union([ProviderTypeSchema, ProviderBlockSchema]);
 
+export const RoutingTierSchema = z.enum(['high', 'medium', 'low']);
+export const AutoRoutingStrategySchema = z.enum(['cost', 'balanced', 'performance']);
+const AutoRoutingFullModelIdSchema = z.string().min(1).refine((value) => (
+  /[0-9]/.test(value) || value.includes('/')
+), {
+  message: 'auto_routing model must be a full model id',
+});
+const AutoRoutingCandidateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1).optional(),
+  provider: ProviderTypeSchema,
+  model: AutoRoutingFullModelIdSchema,
+  routing_tier: RoutingTierSchema,
+  provider_options: StepProviderOptionsSchema,
+}).strict();
+
+const AutoRoutingSchemaBase = z.object({
+  strategy: AutoRoutingStrategySchema,
+  router: z.object({
+    provider: ProviderTypeSchema,
+    model: AutoRoutingFullModelIdSchema,
+  }).strict(),
+  candidates: z.array(AutoRoutingCandidateSchema).min(1),
+  default_pool: z.string().min(1),
+  candidate_pools: z.record(z.string().min(1), z.object({
+    candidates: z.array(z.string().min(1)).min(1),
+    fallback: z.string().min(1),
+  }).strict()),
+  pool_rules: z.object({
+    tags: z.record(z.string(), z.string().min(1)).optional(),
+    steps: z.record(z.string(), z.string().min(1)).optional(),
+    personas: z.record(z.string(), z.string().min(1)).optional(),
+  }).strict().optional(),
+  rules: z.object({
+    tags: z.record(z.string(), z.string().min(1)).optional(),
+    steps: z.record(z.string(), z.string().min(1)).optional(),
+    personas: z.record(z.string(), z.string().min(1)).optional(),
+  }).strict().optional(),
+}, {
+  error: (issue) => issue.code === 'unrecognized_keys' && issue.keys.includes('default_provider')
+    ? 'auto_routing.default_provider has been removed; move its provider and model to the top-level provider and model fields'
+    : undefined,
+}).strict();
+
+function validateAutoRoutingSchema(
+  config: z.infer<typeof AutoRoutingSchemaBase>,
+  ctx: z.RefinementCtx,
+): void {
+  const candidateNames = new Set<string>();
+  config.candidates.forEach((candidate, index) => {
+    if (candidateNames.has(candidate.name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['candidates', index, 'name'],
+        message: `auto_routing candidates contain duplicate candidate name "${candidate.name}"`,
+      });
+    }
+    candidateNames.add(candidate.name);
+  });
+
+  for (const [ruleKind, rules] of Object.entries(config.rules ?? {})) {
+    for (const [ruleKey, candidateName] of Object.entries(rules ?? {})) {
+      if (!candidateNames.has(candidateName)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['rules', ruleKind, ruleKey],
+          message: `auto_routing rule references unknown candidate "${candidateName}"`,
+        });
+      }
+    }
+  }
+
+  if (!Object.hasOwn(config.candidate_pools, config.default_pool)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['default_pool'],
+      message: `auto_routing default_pool references unknown pool "${config.default_pool}"`,
+    });
+  }
+  for (const [poolName, pool] of Object.entries(config.candidate_pools)) {
+    for (const candidateName of pool.candidates) {
+      if (!candidateNames.has(candidateName)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['candidate_pools', poolName, 'candidates'], message: `auto_routing pool "${poolName}" references unknown candidate "${candidateName}"` });
+      }
+    }
+    if (!pool.candidates.includes(pool.fallback)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['candidate_pools', poolName, 'fallback'], message: `auto_routing pool fallback must belong to its pool candidates` });
+    }
+    if (!candidateNames.has(pool.fallback)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['candidate_pools', poolName, 'fallback'], message: `auto_routing pool "${poolName}" fallback references unknown candidate "${pool.fallback}"` });
+    }
+  }
+  for (const [ruleKind, rules] of Object.entries(config.pool_rules ?? {})) {
+    for (const [ruleKey, poolName] of Object.entries(rules ?? {})) {
+      if (!Object.hasOwn(config.candidate_pools, poolName)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pool_rules', ruleKind, ruleKey], message: `auto_routing pool rule references unknown pool "${poolName}"` });
+      }
+    }
+  }
+}
+
+export const AutoRoutingSchema = AutoRoutingSchemaBase.superRefine(validateAutoRoutingSchema);
+
 export const RateLimitFallbackSchema = z.object({
   switch_chain: z.array(z.object({
     provider: ProviderTypeSchema,
@@ -193,6 +414,8 @@ export const ProviderPermissionProfilesSchema = z.object({
   cursor: ProviderPermissionProfileSchema.optional(),
   copilot: ProviderPermissionProfileSchema.optional(),
   kiro: ProviderPermissionProfileSchema.optional(),
+  pi: ProviderPermissionProfileSchema.optional(),
+  'deepseek-harness': ProviderPermissionProfileSchema.optional(),
   mock: ProviderPermissionProfileSchema.optional(),
 }).strict().optional();
 
@@ -210,19 +433,27 @@ export const RuntimeConfigSchema = z.object({
   prepare: z.array(RuntimePrepareEntrySchema).optional(),
 }).optional();
 
-/** Workflow-level provider options schema */
-export const WorkflowProviderOptionsSchema = z.object({
-  provider: ProviderReferenceSchema.optional(),
-  model: z.string().optional(),
-  provider_options: StepProviderOptionsSchema,
-  runtime: RuntimeConfigSchema,
-}).optional();
+function createReportRelativePathSchema(label: string) {
+  return z.string().min(1).transform((name, ctx) => {
+    const classification = classifyReportRelativePath(name);
+    if (classification.kind !== 'public') {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${label} ${reportPathRejectionMessage(name)}`,
+      });
+      return z.NEVER;
+    }
+    return classification.normalizedPath;
+  });
+}
+
+export const ReportRelativePathSchema = createReportRelativePathSchema('report path');
 
 /**
  * Output contract item schema (new structured format).
  */
 export const OutputContractItemSchema = z.object({
-  name: z.string().min(1),
+  name: createReportRelativePathSchema('output contract report name'),
   format: z.union([
     z.string().min(1),
     z.object({
@@ -245,16 +476,6 @@ const CommandQualityGateInputSchema = z.object({
   cwd: z.string().min(1).optional(),
   timeout_ms: z.number().int().positive().optional(),
 }).strict();
-
-function normalizeCommandQualityGate(gate: z.output<typeof CommandQualityGateInputSchema>) {
-  return {
-    type: gate.type,
-    ...(gate.name !== undefined ? { name: gate.name } : {}),
-    command: gate.command,
-    ...(gate.cwd !== undefined ? { cwd: gate.cwd } : {}),
-    ...(gate.timeout_ms !== undefined ? { timeoutMs: gate.timeout_ms } : {}),
-  };
-}
 
 const QualityGateRawSchema = z.unknown().superRefine((gate, ctx) => {
   if (typeof gate === 'string') {
@@ -284,7 +505,7 @@ const QualityGateRawSchema = z.unknown().superRefine((gate, ctx) => {
     return gate;
   }
 
-  return normalizeCommandQualityGate(CommandQualityGateInputSchema.parse(gate));
+  return CommandQualityGateInputSchema.parse(gate);
 });
 
 /** Quality gates schema - AI directives and command gates for step completion */
@@ -296,7 +517,7 @@ export const StepQualityGatesOverrideSchema = z.object({
 }).optional();
 
 export function hasProviderOptionsLeaf(
-  providerOptions: NonNullable<z.infer<typeof StepProviderOptionsSchema>>,
+  providerOptions: Readonly<Record<string, unknown>>,
 ): boolean {
   return Object.values(providerOptions).some(hasDefinedProviderOptionLeaf);
 }
@@ -367,11 +588,136 @@ export const TaktProviderEntrySchema = z.object({
   { message: "takt_providers.assistant must include either 'provider' or 'model'" }
 );
 
+export const TaktSelectorProviderEntrySchema = z.object({
+  provider: ProviderTypeSchema.optional(),
+  model: ConfiguredModelSchema.optional(),
+  provider_options: StrictStepProviderOptionsSchema,
+}).strict().superRefine((entry, ctx) => {
+  if (entry.provider === undefined && entry.model === undefined && entry.provider_options === undefined) {
+    ctx.addIssue({ code: 'custom', message: "takt_providers.selector must include provider, model, or provider_options" });
+  }
+  if (entry.provider_options !== undefined && !hasProviderOptionsLeaf(entry.provider_options)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['provider_options'],
+      message: 'takt_providers.selector provider_options must include at least one provider-specific option',
+    });
+  }
+});
+
+const NormalizedStepProviderOptionsSchema = z.object({
+  codex: z.object({
+    baseUrl: z.string().min(1).optional(),
+    networkAccess: z.boolean().optional(),
+    permissionControl: z.enum(['takt', 'codex']).optional(),
+    reasoningEffort: ProviderEffortSchema.optional(),
+    fastMode: z.boolean().optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+    skills: z.object(CodexSkillsShape).strict().optional(),
+  }).strict().optional(),
+  opencode: z.object({
+    networkAccess: z.boolean().optional(),
+    variant: z.string().min(1).optional(),
+    allowedTools: z.array(z.string()).optional(),
+    guards: z.object({
+      profile: z.enum(OPENCODE_GUARD_PROFILES).optional(),
+      modelProfiles: z.record(
+        z.string().min(1),
+        z.enum(OPENCODE_GUARD_PROFILES),
+      ).optional(),
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+      eventLimit: z.number().int().positive().optional(),
+      textByteLimit: z.number().int().positive().optional(),
+      reasoningByteLimit: z.number().int().positive().optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  claude: z.object({
+    baseUrl: z.string().min(1).optional(),
+    allowedTools: z.array(z.string()).optional(),
+    effort: ProviderEffortSchema.optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+    skills: z.object(ClaudeSkillsShape).strict().optional(),
+    sandbox: z.object({
+      allowUnsandboxedCommands: z.boolean().optional(),
+      excludedCommands: z.array(z.string()).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  claudeTerminal: z.object({
+    backend: z.enum(['tmux']).optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+    timeoutMs: z.number().int().positive().optional(),
+    keepSession: z.boolean().optional(),
+    transcriptPollIntervalMs: z.number().int().positive().optional(),
+  }).strict().optional(),
+  copilot: z.object({
+    effort: ProviderEffortSchema.optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  kiro: z.object({
+    agent: z.string().min(1).optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  cursor: z.object({
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  deepseekHarness: z.object({
+    pythonPath: z.string().min(1).optional(),
+    baseUrl: z.string().min(1).optional(),
+    sessionRoot: z.string().min(1).optional(),
+    cordis: z.string().min(1).optional(),
+    maxTokens: z.number().int().positive().safe().optional(),
+    requestTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
+    shutdownTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
+    runtimeMode: z.enum(['exe', 'node']).optional(),
+  }).strict().optional(),
+  pi: z.object({
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+    extensions: z.array(z.string().min(1)).optional(),
+    noExtensions: z.boolean().optional(),
+    noSkills: z.boolean().optional(),
+    noPromptTemplates: z.boolean().optional(),
+    noThemes: z.boolean().optional(),
+    noContextFiles: z.boolean().optional(),
+  }).strict().optional(),
+}).strict().optional();
+
+export const NormalizedTaktSelectorProviderEntrySchema = z.object({
+  provider: ProviderTypeSchema.optional(),
+  model: ConfiguredModelSchema.optional(),
+  providerOptions: NormalizedStepProviderOptionsSchema,
+}).strict().superRefine((entry, ctx) => {
+  if (entry.provider === undefined && entry.model === undefined && entry.providerOptions === undefined) {
+    ctx.addIssue({ code: 'custom', message: "takt_providers.selector must include provider, model, or providerOptions" });
+  }
+  if (entry.providerOptions !== undefined && !hasProviderOptionsLeaf(entry.providerOptions)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['providerOptions'],
+      message: 'takt_providers.selector providerOptions must include at least one provider-specific option',
+    });
+  }
+});
+
 export const TaktProvidersSchema = z.object({
   assistant: TaktProviderEntrySchema.optional(),
+  selector: TaktSelectorProviderEntrySchema.optional(),
 }).strict().refine(
-  (entry) => entry.assistant !== undefined,
-  { message: "takt_providers must include 'assistant'" }
+  (entry) => entry.assistant !== undefined || entry.selector !== undefined,
+  { message: "takt_providers must include 'assistant' or 'selector'" },
 );
 
 /** Custom agent configuration schema */
@@ -406,6 +752,11 @@ export const AnalyticsConfigSchema = z.object({
   events_path: z.string().optional(),
   retention_days: z.number().int().positive().optional(),
 });
+
+/** Local-only telemetry config schema */
+export const TelemetryConfigSchema = z.object({
+  routing_decisions: z.boolean().optional(),
+}).strict();
 
 /** Language setting schema */
 export const LanguageSchema = z.enum(['en', 'ja']);

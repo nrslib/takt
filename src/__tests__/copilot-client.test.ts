@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockSpawn, mockMkdtemp, mockReadFile, mockRm } = vi.hoisted(() => ({
   mockSpawn: vi.fn(),
@@ -67,7 +67,11 @@ function mockSpawnWithScenario(scenario: SpawnScenario): void {
         return;
       }
 
-      child.emit('close', scenario.code ?? 0, scenario.signal ?? null);
+      child.emit(
+        'close',
+        scenario.code === undefined ? 0 : scenario.code,
+        scenario.signal === undefined ? null : scenario.signal,
+      );
     });
 
     return child;
@@ -78,6 +82,8 @@ describe('callCopilot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.COPILOT_GITHUB_TOKEN;
+    delete process.env.COPILOT_ALLOW_ALL;
+    delete process.env.COPILOT_MCP_CONFIG;
     delete process.env.TAKT_OBSERVABILITY;
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     mockMkdtemp.mockResolvedValue('/tmp/takt-copilot-XXXXXX');
@@ -87,7 +93,12 @@ describe('callCopilot', () => {
     mockRm.mockResolvedValue(undefined);
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('should invoke copilot with required args including --silent, --no-color', async () => {
+    const onActivity = vi.fn();
     mockSpawnWithScenario({
       stdout: 'Implementation complete. All tests pass.',
       code: 0,
@@ -99,11 +110,13 @@ describe('callCopilot', () => {
       sessionId: 'sess-prev',
       permissionMode: 'full',
       copilotGithubToken: 'gh-token',
+      onActivity,
     });
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('Implementation complete. All tests pass.');
     expect(result.sessionId).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(onActivity).toHaveBeenCalledOnce();
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [command, args, options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv; stdio?: unknown }];
@@ -232,15 +245,17 @@ describe('callCopilot', () => {
       code: 0,
     });
 
-    await callCopilot('reviewer', 'review this code', {
+    const systemPrompt = 'custom system prompt';
+    const userPrompt = 'custom user prompt';
+    await callCopilot('reviewer', userPrompt, {
       cwd: '/repo',
-      systemPrompt: 'You are a strict reviewer.',
+      systemPrompt,
     });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
     const promptIndex = args.indexOf('-p');
     expect(promptIndex).toBeGreaterThan(-1);
-    expect(args[promptIndex + 1]).toBe('You are a strict reviewer.\n\nreview this code');
+    expect(args[promptIndex + 1]).toBe(`${systemPrompt}\n\n${userPrompt}`);
   });
 
   it('should return structured error when copilot binary is not found', async () => {
@@ -279,6 +294,32 @@ describe('callCopilot', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('code 2');
     expect(result.content).toContain('unexpected failure');
+  });
+
+  it('should distinguish signal termination from a numeric exit code', async () => {
+    mockSpawnWithScenario({
+      code: null,
+      signal: 'SIGTERM',
+    });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('signal SIGTERM');
+    expect(result.content).not.toContain('code 0');
+  });
+
+  it('should report a close event with neither code nor signal', async () => {
+    mockSpawnWithScenario({
+      code: null,
+      signal: null,
+    });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('no exit code or signal');
+    expect(result.content).not.toContain('unknown');
   });
 
   it('should return error when stdout is empty', async () => {
@@ -434,34 +475,58 @@ describe('callCopilot', () => {
     expect(result.sessionId).toBe('12345678-abcd-1234-ef01-123456789012');
   });
 
-  it('should return error when stdout buffer overflows', async () => {
+  it('should terminate, force-kill, await close, and clean up once when stdout overflows', async () => {
+    vi.stubEnv('TAKT_COPILOT_FORCE_KILL_DELAY_MS', '10');
+    let child: MockChildProcess | undefined;
     mockSpawn.mockImplementation(() => {
-      const child = createMockChildProcess();
+      child = createMockChildProcess();
       queueMicrotask(() => {
-        child.stdout.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
+        child!.stdout.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
       });
       return child;
     });
+    let settled = false;
+    const call = callCopilot('coder', 'implement', { cwd: '/repo' });
+    void call.finally(() => {
+      settled = true;
+    });
 
-    const result = await callCopilot('coder', 'implement', { cwd: '/repo' });
+    await vi.waitFor(() => expect(child?.kill).toHaveBeenCalledWith('SIGTERM'));
+    expect(settled).toBe(false);
+    expect(mockRm).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(child?.kill).toHaveBeenCalledWith('SIGKILL'));
+    child?.emit('close', null, 'SIGKILL');
+    const result = await call;
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('Copilot CLI output exceeded buffer limit');
+    expect(mockRm).toHaveBeenCalledTimes(1);
   });
 
-  it('should return error when stderr buffer overflows', async () => {
+  it('should await close before cleaning up when stderr overflows', async () => {
+    let child: MockChildProcess | undefined;
     mockSpawn.mockImplementation(() => {
-      const child = createMockChildProcess();
+      child = createMockChildProcess();
       queueMicrotask(() => {
-        child.stderr.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
+        child!.stderr.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
       });
       return child;
     });
+    let settled = false;
+    const call = callCopilot('coder', 'implement', { cwd: '/repo' });
+    void call.finally(() => {
+      settled = true;
+    });
 
-    const result = await callCopilot('coder', 'implement', { cwd: '/repo' });
+    await vi.waitFor(() => expect(child?.kill).toHaveBeenCalledWith('SIGTERM'));
+    expect(settled).toBe(false);
+    expect(mockRm).not.toHaveBeenCalled();
+    child?.emit('close', null, 'SIGTERM');
+    const result = await call;
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('Copilot CLI output exceeded buffer limit');
+    expect(mockRm).toHaveBeenCalledTimes(1);
   });
 
   it('should return error when abort signal is already aborted before call', async () => {

@@ -17,7 +17,7 @@ import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig
 import { KiroProvider } from '../infra/providers/kiro.js';
 
 type MockChildProcess = EventEmitter & {
-  stdin: { end: ReturnType<typeof vi.fn> };
+  stdin: EventEmitter & { end: ReturnType<typeof vi.fn> };
   stdout: EventEmitter;
   stderr: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
@@ -25,7 +25,8 @@ type MockChildProcess = EventEmitter & {
 
 function createMockChildProcess(): MockChildProcess {
   const child = new EventEmitter() as MockChildProcess;
-  child.stdin = { end: vi.fn() };
+  child.stdin = new EventEmitter() as EventEmitter & { end: ReturnType<typeof vi.fn> };
+  child.stdin.end = vi.fn();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn(() => true);
@@ -174,6 +175,61 @@ describe('KiroProvider integration', () => {
     expect(args.at(-1)).toBe('plan the feature');
   });
 
+  it('Given no session ID, When provider agent calls the real client and succeeds, Then resolves the session ID via a second --list-sessions spawn (issue #781)', async () => {
+    const kiroCliPath = join(testDir, 'kiro-cli');
+    writeFileSync(kiroCliPath, '#!/bin/sh\necho kiro\n', 'utf-8');
+    chmodSync(kiroCliPath, 0o755);
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'language: en',
+        'provider: kiro',
+        `kiro_cli_path: ${kiroCliPath}`,
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const uuid = '123e4567-e89b-12d3-a456-426614174000';
+    mockSpawn
+      .mockImplementationOnce(() => {
+        const child = createMockChildProcess();
+        queueMicrotask(() => {
+          child.stdout.emit('data', Buffer.from('turn one result', 'utf-8'));
+          child.emit('close', 0, null);
+        });
+        return child;
+      })
+      .mockImplementationOnce(() => {
+        const child = createMockChildProcess();
+        queueMicrotask(() => {
+          child.stderr.emit('data', Buffer.from(`${uuid}  updated just now`, 'utf-8'));
+          child.emit('close', 0, null);
+        });
+        return child;
+      });
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement feature', {
+      cwd: testDir,
+      permissionMode: 'edit',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('turn one result');
+    expect(result.sessionId).toBe(uuid);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+    const [, secondArgs, secondOptions] = mockSpawn.mock.calls[1] as [
+      string,
+      string[],
+      { cwd?: string },
+    ];
+    expect(secondArgs).toEqual(['chat', '--list-sessions']);
+    expect(secondOptions.cwd).toBe(testDir);
+  });
+
   it('Given no providerOptions, When provider agent calls real client, Then spawn args have no --agent flag', async () => {
     writeFileSync(
       join(taktDir, 'config.yaml'),
@@ -196,5 +252,56 @@ describe('KiroProvider integration', () => {
     expect(result.status).toBe('done');
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
     expect(args).not.toContain('--agent');
+  });
+
+  it('Given a resolved model, When provider agent calls real client, Then --model reaches spawn args', async () => {
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'language: en',
+        'provider: kiro',
+      ].join('\n'),
+      'utf-8',
+    );
+    mockSpawnSuccess('model ok');
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement', {
+      cwd: testDir,
+      permissionMode: 'readonly',
+      model: 'claude-3-opus',
+    });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const modelFlagIndex = args.indexOf('--model');
+    expect(modelFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(args[modelFlagIndex + 1]).toBe('claude-3-opus');
+  });
+
+  it('Given no model, When provider agent calls real client, Then spawn args have no --model flag', async () => {
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'language: en',
+        'provider: kiro',
+      ].join('\n'),
+      'utf-8',
+    );
+    mockSpawnSuccess('no model ok');
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement', {
+      cwd: testDir,
+      permissionMode: 'readonly',
+    });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('--model');
   });
 });

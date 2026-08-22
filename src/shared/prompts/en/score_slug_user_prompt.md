@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: score_slug_user_prompt
   role: user prompt for task-name-to-slug generation

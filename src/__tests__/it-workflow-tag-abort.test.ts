@@ -1,0 +1,219 @@
+/**
+ * Tag-driven ABORT paths through the real engine.
+ *
+ * Exercises WorkflowEngine with real runAgent + MockProvider + tag-based
+ * rule detection (no vi.mock on runAgent or RuleEvaluator): a step tag that
+ * selects an ABORT rule, a tag belonging to a different step, and a failed
+ * fix step must each abort the run. Extracted from the retired
+ * it-workflow-execution suite whose happy paths are covered by the engine
+ * unit suites.
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
+import type { WorkflowConfig, WorkflowStep, WorkflowRule } from '../core/models/index.js';
+import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
+import { makeRule } from './test-helpers.js';
+
+// --- Mocks (minimal — only infrastructure, not core logic) ---
+
+vi.mock('../core/workflow/phase-runner.js', () => ({
+  runReportPhase: vi.fn().mockResolvedValue(undefined),
+  runStatusJudgmentPhase: vi.fn().mockImplementation((step, ctx) => {
+    const candidateIndex = detectCandidateIndex(ctx.lastResponse ?? '', step.name);
+    const candidate = semanticRuleCandidatesOf(step.rules ?? [], ctx.interactive === true)[candidateIndex];
+    if (!candidate) {
+      throw new RuleDetectionExhaustedError(step.name);
+    }
+    return { label: candidate.label, method: 'phase3_tag' };
+  }),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+  generateSessionId: vi.fn().mockReturnValue('test-session-id'),
+}));
+
+vi.mock('../infra/config/global/globalConfig.js', () => ({
+  loadGlobalConfig: vi.fn().mockReturnValue({}),
+  getLanguage: vi.fn().mockReturnValue('en'),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock('../infra/config/project/projectConfig.js', () => ({
+  loadProjectConfig: vi.fn().mockReturnValue({}),
+}));
+
+// --- Imports (after mocks) ---
+
+import { WorkflowEngine } from '../core/workflow/index.js';
+
+// --- Test helpers ---
+
+function makeStep(name: string, agentPath: string, rules: WorkflowRule[]): WorkflowStep {
+  return {
+    name,
+    persona: `./.takt/personas/${name}.md`,
+    personaDisplayName: name,
+    personaPath: agentPath,
+    instruction: '{task}',
+    passPreviousResponse: true,
+    rules,
+  };
+}
+
+function createTestEnv(): { dir: string; agentPaths: Record<string, string> } {
+  const dir = mkdtempSync(join(tmpdir(), 'takt-it-wf-'));
+  mkdirSync(join(dir, '.takt', 'reports', 'test-report-dir'), { recursive: true });
+
+  const personasDir = join(dir, '.takt', 'personas');
+  mkdirSync(personasDir, { recursive: true });
+
+  const agents = ['planner', 'coder', 'reviewer', 'fixer', 'supervisor'];
+  const agentPaths: Record<string, string> = {};
+  for (const agent of agents) {
+    const path = join(personasDir, `${agent}.md`);
+    writeFileSync(path, `You are a ${agent}.`);
+    agentPaths[agent] = path;
+  }
+
+  return { dir, agentPaths };
+}
+
+function buildEngineOptions(projectCwd: string) {
+  return {
+    projectCwd,
+    structuredCaller: new ProviderNeutralStructuredCaller(),
+  };
+}
+
+function buildSimpleWorkflow(agentPaths: Record<string, string>): WorkflowConfig {
+  return {
+    name: 'it-simple',
+    description: 'IT simple workflow',
+    maxSteps: 15,
+    initialStep: 'plan',
+    steps: [
+      makeStep('plan', agentPaths.planner, [
+        makeRule('Requirements are clear', 'implement'),
+        makeRule('Requirements unclear', 'ABORT'),
+      ]),
+      makeStep('implement', agentPaths.coder, [
+        makeRule('Implementation complete', 'review'),
+        makeRule('Cannot proceed', 'plan'),
+      ]),
+      makeStep('review', agentPaths.reviewer, [
+        makeRule('All checks passed', 'COMPLETE'),
+        makeRule('Issues found', 'implement'),
+      ]),
+    ],
+  };
+}
+
+function buildLoopWorkflow(agentPaths: Record<string, string>): WorkflowConfig {
+  return {
+    name: 'it-loop',
+    description: 'IT workflow with fix loop',
+    maxSteps: 20,
+    initialStep: 'plan',
+    steps: [
+      makeStep('plan', agentPaths.planner, [
+        makeRule('Requirements are clear', 'implement'),
+        makeRule('Requirements unclear', 'ABORT'),
+      ]),
+      makeStep('implement', agentPaths.coder, [
+        makeRule('Implementation complete', 'review'),
+        makeRule('Cannot proceed', 'plan'),
+      ]),
+      makeStep('review', agentPaths.reviewer, [
+        makeRule('Approved', 'supervise'),
+        makeRule('Needs fix', 'fix'),
+      ]),
+      makeStep('fix', agentPaths.fixer, [
+        makeRule('Fix complete', 'review'),
+        makeRule('Cannot fix', 'ABORT'),
+      ]),
+      makeStep('supervise', agentPaths.supervisor, [
+        makeRule('All checks passed', 'COMPLETE'),
+        makeRule('Requirements unmet', 'plan'),
+      ]),
+    ],
+  };
+}
+
+
+describe('Workflow Engine IT: tag-driven ABORT paths', () => {
+  let testDir: string;
+  let agentPaths: Record<string, string>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const env = createTestEnv();
+    testDir = env.dir;
+    agentPaths = env.agentPaths;
+  });
+
+  afterEach(() => {
+    resetScenario();
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should ABORT when plan returns rule 2', async () => {
+    setMockScenario([
+      { persona: 'plan', status: 'done', content: '[PLAN:2]\n\nRequirements unclear.' },
+    ]);
+
+    const config = buildSimpleWorkflow(agentPaths);
+    const engine = new WorkflowEngine(config, testDir, 'Vague task', {
+      ...buildEngineOptions(testDir),
+      provider: 'mock',
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.iteration).toBe(1);
+  });
+
+  it('should abort when a tag belongs to a different step', async () => {
+    setMockScenario([
+      { persona: 'plan', status: 'done', content: '[OTHER:1]\n\nRequirements are clear.' },
+    ]);
+
+    const config = buildSimpleWorkflow(agentPaths);
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
+      ...buildEngineOptions(testDir),
+      provider: 'mock',
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.iteration).toBe(1);
+  });
+
+  it('should ABORT if fix fails', async () => {
+    setMockScenario([
+      { persona: 'plan', status: 'done', content: '[PLAN:1]\n\nClear.' },
+      { persona: 'implement', status: 'done', content: '[IMPLEMENT:1]\n\nDone.' },
+      { persona: 'review', status: 'done', content: '[REVIEW:2]\n\nNeeds fix.' },
+      { persona: 'fix', status: 'done', content: '[FIX:2]\n\nCannot fix.' },
+    ]);
+
+    const config = buildLoopWorkflow(agentPaths);
+    const engine = new WorkflowEngine(config, testDir, 'Unfixable task', {
+      ...buildEngineOptions(testDir),
+      provider: 'mock',
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+  });
+});

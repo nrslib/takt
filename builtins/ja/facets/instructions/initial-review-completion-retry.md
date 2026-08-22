@@ -1,0 +1,3 @@
+{{include:instructions/review-completion-retry-common}}
+
+元のreviewer instructionが明示的に要求する範囲の網羅性を再確認してください。元のinstructionが要求したか、直前の報告がすでに特定した不変条件については実際の経路をさらに追跡してもかまいませんが、無関係なレビュー基準を追加してはいけません。

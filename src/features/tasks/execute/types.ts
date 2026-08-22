@@ -2,21 +2,39 @@
  * Execution module type definitions
  */
 
-import type { Language } from '../../../core/models/index.js';
-import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../../core/models/config-types.js';
+import type { CompanionReviewMode, Language } from '../../../core/models/index.js';
+import type {
+  AutoRoutingConfig,
+  AutoRoutingStrategy,
+  PersonaProviderEntry,
+  ProviderRoutingConfig,
+} from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
-import type { WorkflowResumePoint } from '../../../core/models/index.js';
-import type { WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
-import type { ProviderType } from '../../../infra/providers/index.js';
+import type { McpServerConfig, WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
+import type { ProviderType } from '../../../shared/types/provider.js';
+import type {
+  AskUserQuestionHandler,
+  SelectorProviderInfo,
+  StepProviderInfo,
+  WorkflowCallResolver,
+  WorkflowTraceTaskMetadata,
+} from '../../../core/workflow/types.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
   ProviderResolutionSource,
 } from '../../../core/workflow/provider-options-trace.js';
-import type { DirectResumeMetadata } from './runMeta.js';
+import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
+import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
 import type { TaskAttachment } from '../attachments.js';
 import type { TraceTaskContext } from './traceTaskMetadata.js';
+import type { RunFinalizationIssue } from './workflowRunExecution.js';
+import type { ResolvedTaskSpec } from './taskSpecContext.js';
+import type { SelectorProviderOverrides } from '../../../infra/config/selectorProviderResolution.js';
+import type { LoopAnalysisPublicationCoordinator } from './loopAnalysisPublication.js';
+
+export type LoopAnalysisScheduler = (sourceRunDirectory: string) => void;
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -26,15 +44,168 @@ export interface ExceededInfo {
   resumePoint?: WorkflowResumePoint;
 }
 
+export type WorkflowExecutionEvent =
+  | {
+      type: 'run_started';
+      runDirectory: string;
+      reportDirectory: string;
+      ndjsonLogPath: string;
+    }
+  | {
+      type: 'step_started';
+      step: string;
+      iteration: number;
+      maxSteps: number | 'infinite';
+    }
+  | {
+      type: 'step_completed';
+      step: string;
+      status: string;
+    }
+  | {
+      type: 'rate_limited';
+      step?: string;
+      message: string;
+    }
+  | {
+      type: 'blocked';
+      step: string;
+      confirmationId: string;
+      message: string;
+    }
+  | {
+      type: 'progress';
+      message: string;
+      step?: string;
+    }
+  | {
+      type: 'output';
+      outputType: 'text' | 'thinking' | 'tool_output' | 'tool_result' | 'result' | 'error';
+      message: string;
+      step?: string;
+      tool?: string;
+      isError?: boolean;
+    }
+  | {
+      type: 'tool_started';
+      toolCallId: string;
+      tool: string;
+      input: Record<string, unknown>;
+      step?: string;
+    }
+  | {
+      type: 'tool_completed';
+      toolCallId: string;
+      message: string;
+      step?: string;
+      isError?: boolean;
+    }
+  | {
+      type: 'confirmation_requested';
+      confirmationId: string;
+      message: string;
+      step?: string;
+    }
+  | {
+      type: 'error';
+      message: string;
+      step?: string;
+    }
+  | {
+      type: 'completed';
+      success: true;
+      reportDirectory?: string;
+    }
+  | {
+      type: 'completed';
+      success: false;
+      reason: string;
+      reportDirectory?: string;
+    }
+  | {
+      type: 'companion';
+      action: 'start';
+      step: string;
+      companion: string;
+      reviewMode: CompanionReviewMode;
+    }
+  | {
+      type: 'companion';
+      action: 'pool_selected';
+      step: string;
+      selected: string[];
+      rationale: string;
+    }
+  | {
+      type: 'companion';
+      action: 'finding';
+      step: string;
+      companion: string;
+      severity: 'must_fix' | 'should_fix' | 'nit';
+    }
+  | {
+      type: 'companion';
+      action: 'fix_round';
+      step: string;
+      sequence: number;
+      findingCount: number;
+    }
+  | {
+      type: 'companion';
+      action: 'complete';
+      step: string;
+      completionSettled: boolean;
+      completionFailure: boolean;
+      followUpRounds: number;
+      reason?: string;
+    }
+  | {
+      type: 'companion';
+      action: 'review_round';
+      step: string;
+      reviewMode: CompanionReviewMode;
+      companion: string;
+      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+      digest: string;
+      changedLines: number;
+      findingCount: number;
+    }
+  | {
+      type: 'companion';
+      action: 'queue_coalesced';
+      step: string;
+      companion: string;
+      replaced: {
+        trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+        digest: string;
+        changedLines: number;
+        observedGeneration: number;
+      };
+      replacement: {
+        trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+        digest: string;
+        changedLines: number;
+        observedGeneration: number;
+      };
+    };
+
+/** Live-only workflow feedback. Delivery failure never changes run outcome. */
+export type WorkflowExecutionEventSink = (event: WorkflowExecutionEvent) => void | Promise<void>;
+
 /** Result of workflow execution */
 export interface WorkflowExecutionResult {
   success: boolean;
   reason?: string;
+  retryable?: boolean;
   lastStep?: string;
   lastMessage?: string;
+  runDirectory?: string;
+  reportDirectory?: string;
+  ndjsonLogPath?: string;
   /** True when iteration limit was hit in non-interactive mode */
   exceeded?: boolean;
   exceededInfo?: ExceededInfo;
+  finalizationIssues?: readonly RunFinalizationIssue[];
 }
 
 /** Metadata from interactive mode, passed through to NDJSON logging */
@@ -49,6 +220,14 @@ export interface InteractiveMetadata {
 export interface WorkflowExecutionOptions {
   /** Header prefix for display */
   headerPrefix?: string;
+  /** Controls terminal-oriented output side effects. */
+  outputMode?: 'terminal' | 'silent';
+  /** Receives workflow lifecycle events for non-CLI adapters. */
+  eventSink?: WorkflowExecutionEventSink;
+  /** Handles provider AskUserQuestion calls for non-CLI adapters. */
+  onAskUserQuestion?: AskUserQuestionHandler;
+  /** MCP servers supplied by a trusted application adapter for this run. */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Project root directory (where .takt/ lives). */
   projectCwd: string;
   /** Override maxSteps from workflow config (used when resuming exceeded tasks) */
@@ -63,8 +242,16 @@ export interface WorkflowExecutionOptions {
   model?: string;
   /** Source layer of `model`. */
   modelSource?: ProviderResolutionSource;
+  /** Provider/model used only for report phase fallback after OpenCode report retries fail. */
+  reportFallbackProvider?: StepProviderInfo;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
+  selectorProvider?: SelectorProviderInfo;
+  selectorProviderOverrides?: SelectorProviderOverrides;
+  /** Resolved automatic provider/model routing configuration */
+  autoRouting?: AutoRoutingConfig;
+  /** Strategy override for automatic provider/model routing. */
+  autoStrategy?: AutoRoutingStrategy;
   /** Source layer for resolved provider options */
   providerOptionsSource?: ProviderOptionsSource;
   /** Nested origin resolver for resolved provider options */
@@ -85,10 +272,14 @@ export interface WorkflowExecutionOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
-  /** Source direct run metadata for resumed direct executions */
-  directResume?: DirectResumeMetadata;
+  /** Stateless authored path for retrying from a new nested position. */
+  restartPoint?: WorkflowRestartPoint;
+  resumeSource?: RunResumeSource;
+  /** Resolver used to inspect workflow_call targets before engine construction. */
+  workflowCallResolver?: WorkflowCallResolver;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
+  taskSpec?: ResolvedTaskSpec;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
@@ -101,6 +292,14 @@ export interface WorkflowExecutionOptions {
   currentTaskIssueNumber?: number;
   /** Task metadata used only for trace discovery attributes. */
   traceTaskMetadata?: WorkflowTraceTaskMetadata;
+  /** Structured PR context used as prompt input. */
+  prContext?: PullRequestContext;
+  /** Coordinates optional loop-analysis publication with source-run PR handling. */
+  loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
+  /** Sanitizes report content before it crosses the report-file persistence boundary. */
+  reportContentSanitizer?: (content: string) => string;
+  /** Non-blocking hook invoked after terminal artifacts and observability are finalized. */
+  loopAnalysisScheduler?: LoopAnalysisScheduler;
 }
 
 export interface TaskExecutionOptions {
@@ -110,6 +309,14 @@ export interface TaskExecutionOptions {
   model?: string;
   /** Source layer of `model` (defaults to 'cli' when set via --model). */
   modelSource?: ProviderResolutionSource;
+  /** Strategy override for automatic provider/model routing. */
+  autoStrategy?: AutoRoutingStrategy;
+}
+
+export interface TaskExecutionContextOverride {
+  branch?: string;
+  baseBranch?: string;
+  prNumber?: number;
 }
 
 export interface RunAllTasksOptions extends TaskExecutionOptions {
@@ -121,6 +328,7 @@ export interface TaskExecutionParallelOptions {
   taskPrefix?: string;
   taskColorIndex?: number;
   taskDisplayLabel?: string;
+  outputMode?: 'terminal' | 'silent';
 }
 
 export interface ExecuteTaskOptions {
@@ -134,6 +342,14 @@ export interface ExecuteTaskOptions {
   projectCwd: string;
   /** Agent provider/model overrides */
   agentOverrides?: TaskExecutionOptions;
+  /** Controls terminal-oriented output side effects. */
+  outputMode?: 'terminal' | 'silent';
+  /** Receives workflow lifecycle events for non-CLI adapters. */
+  eventSink?: WorkflowExecutionEventSink;
+  /** Handles provider AskUserQuestion calls for non-CLI adapters. */
+  onAskUserQuestion?: AskUserQuestionHandler;
+  /** MCP servers supplied by a trusted application adapter for this run. */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Override maxSteps from workflow config (used when resuming exceeded tasks) */
   maxStepsOverride?: number;
   /** Override initial iteration count (used when resuming exceeded tasks) */
@@ -148,10 +364,14 @@ export interface ExecuteTaskOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
-  /** Source direct run metadata for resumed direct executions */
-  directResume?: DirectResumeMetadata;
+  /** Stateless authored path for retrying from a new nested position. */
+  restartPoint?: WorkflowRestartPoint;
+  resumeSource?: RunResumeSource;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
+  taskSpec?: ResolvedTaskSpec;
+  /** Provider permission profile overrides supplied by a trusted runtime boundary. */
+  providerProfileOverrides?: ProviderPermissionProfiles;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
@@ -166,6 +386,10 @@ export interface ExecuteTaskOptions {
   traceTaskContext?: TraceTaskContext;
   /** Task metadata used only for trace discovery attributes. */
   traceTaskMetadata?: WorkflowTraceTaskMetadata;
+  /** Structured PR context used as prompt input. */
+  prContext?: PullRequestContext;
+  /** Coordinates optional loop-analysis publication with source-run PR handling. */
+  loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
 }
 
 export interface PipelineExecutionOptions {
@@ -191,6 +415,8 @@ export interface PipelineExecutionOptions {
   cwd: string;
   provider?: ProviderType;
   model?: string;
+  /** Strategy override for automatic provider/model routing. */
+  autoStrategy?: AutoRoutingStrategy;
   /** Whether to create worktree for task execution */
   createWorktree?: boolean | undefined;
 }
@@ -201,6 +427,8 @@ export interface WorktreeConfirmationResult {
   branch?: string;
   baseBranch?: string;
   taskSlug?: string;
+  pullRequestBaseRef?: string;
+  pullRequestHeadRef?: string;
 }
 
 export interface SelectAndExecuteOptions {
@@ -215,4 +443,12 @@ export interface SelectAndExecuteOptions {
   attachments?: TaskAttachment[];
   /** Source metadata for direct trace discovery when no task record exists. */
   traceTaskContext?: TraceTaskContext;
+  /** Structured PR context resolved by the direct CLI boundary. */
+  prContext?: PullRequestContext;
+  /** Override report directory name (e.g. "20260201-015714-foptng") */
+  reportDirName?: string;
+  /** Provider permission profile overrides supplied by a trusted runtime boundary. */
+  providerProfileOverrides?: ProviderPermissionProfiles;
+  /** When false, throw an error instead of calling process.exit(1) on task failure (default: true). */
+  exitOnFailure?: boolean;
 }

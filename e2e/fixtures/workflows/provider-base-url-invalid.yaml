@@ -1,0 +1,20 @@
+name: e2e-provider-base-url-invalid
+description: Invalid provider base_url fixture for CLI E2E
+workflow_config:
+  provider_options:
+    codex:
+      base_url: ''
+personas:
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 3
+steps:
+  - name: execute
+    edit: true
+    persona: test-coder
+    required_permission_mode: edit
+    instruction: |
+      {task}
+    rules:
+      - condition: Done
+        next: COMPLETE

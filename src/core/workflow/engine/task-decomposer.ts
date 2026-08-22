@@ -25,7 +25,7 @@ function parseJsonBlock(content: string): unknown {
   }
 }
 
-export function parseParts(content: string, maxTotalParts: number): PartDefinition[] {
+export function parseParts(content: string, maxInitialParts?: number): PartDefinition[] {
   const parsed = parseJsonBlock(content);
   if (!Array.isArray(parsed)) {
     throw new Error('Team leader JSON must be an array');
@@ -33,8 +33,8 @@ export function parseParts(content: string, maxTotalParts: number): PartDefiniti
   if (parsed.length === 0) {
     throw new Error('Team leader JSON must contain at least one part');
   }
-  if (parsed.length > maxTotalParts) {
-    throw new Error(`Team leader produced too many total parts: ${parsed.length} > max_total_parts ${maxTotalParts}`);
+  if (maxInitialParts !== undefined && parsed.length > maxInitialParts) {
+    throw new Error(`Team leader produced too many initial parts: ${parsed.length} > initial_max_parts ${maxInitialParts}`);
   }
 
   const parts = parsed.map((entry, index) => parsePartDefinitionEntry(entry, index));

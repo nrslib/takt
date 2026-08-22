@@ -20,6 +20,7 @@ export interface PartResult {
     provider: ProviderType | undefined;
     model: string | undefined;
   };
+  durationMs?: number;
 }
 
 /** team_leader config on a step */
@@ -34,17 +35,20 @@ export interface TeamLeaderConfig {
   providerRoutingPersonaKey?: string;
   /** Maximum number of parts to run in parallel */
   maxConcurrency: number;
-  maxTotalParts: number;
-  /** Trigger additional planning when queued parts drop to this threshold or below */
-  refillThreshold: number;
+  /** Maximum number of parts the initial decomposition may create */
+  initialMaxParts?: number;
+  /** Fail the parent step when any member part fails. */
+  failOnPartError?: boolean;
   /** Default timeout for parts in milliseconds */
   timeoutMs: number;
-  /** Read-only inspection tools for the parent decomposition call */
+  /** Read-only inspection tools for the parent decomposition and feedback calls */
   inspectTools?: string[];
   /** Persona reference for part agents */
   partPersona?: string;
   /** Resolved absolute path for part persona */
   partPersonaPath?: string;
+  /** Raw persona reference for part agents */
+  partPersonaRef?: string;
   partTags?: string[];
   /** Allowed tools for part agents */
   partAllowedTools?: string[];

@@ -4,14 +4,19 @@
  * Defines the context structures used by instruction builders.
  */
 
-import type { AgentResponse, FallbackContext, Language, WorkflowMaxSteps, WorkflowState } from '../../models/types.js';
-
-export interface FindingContractInstructionContext {
-  ledgerCopyPath: string;
-  ledgerSummary: string;
-  reportLedgerSummary: string;
-  rawFindingsJsonSchema?: Record<string, unknown>;
-}
+import type {
+  AgentResponse,
+  FallbackContext,
+  Language,
+  WorkflowMaxSteps,
+  WorkflowState,
+  ResolvedFacetContent,
+  WorkflowWideRule,
+} from '../../models/types.js';
+import { loadTemplate } from '../../../shared/prompts/index.js';
+import type { PullRequestContext } from '../pr-context.js';
+import type { TaskReviewScope } from '../review-scope.js';
+import type { CompanionReviewMode } from '../../models/companion-types.js';
 
 /**
  * Context for building instruction from template.
@@ -41,14 +46,18 @@ export interface InstructionContext {
   previousResponseText?: string;
   /** Report directory path */
   reportDir?: string;
-  /** Latest report paths for the current step */
-  currentReport?: string;
-  /** Most recent versioned report paths for the current step */
-  previousReport?: string;
-  /** Versioned report history paths for the current step */
-  reportHistory?: string;
-  /** Latest report paths for peer steps */
-  peerReports?: string;
+  /**
+   * run の reports ルート（namespace なし）。workflow_call の子の {report:X} が
+   * 親成果物へ read-only フォールバックするために engine から明示的に渡す。
+   */
+  reportsRootDir?: string;
+  /** Resume snapshot 上の元 run 座標を引くための論理 consumer key。 */
+  resumeReportConsumerKey?: string;
+  /**
+   * {report:X} の存在検証を無効化する（`takt prompt` プレビューなど実 run が
+   * 存在しない文脈のみ）。既定は検証あり。
+   */
+  validateReportReferences?: boolean;
   /** Language for metadata rendering. Defaults to 'en'. */
   language?: Language;
   /** Whether interactive-only rules are enabled */
@@ -63,18 +72,31 @@ export interface InstructionContext {
   workflowDescription?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** Structured PR context resolved at the execution boundary. */
+  prContext?: PullRequestContext;
+  /**
+   * Engine-computed changed file set for this task, resolved at the execution
+   * boundary and rendered by the `{review_scope}` placeholder.
+   */
+  reviewScope?: TaskReviewScope;
   /** Resolved policy content strings for injection into instruction */
-  policyContents?: string[];
+  policyContents?: readonly ResolvedFacetContent[];
   /** Source path for policy snapshot */
   policySourcePath?: string;
   /** Resolved knowledge content strings for injection into instruction */
-  knowledgeContents?: string[];
+  knowledgeContents?: readonly ResolvedFacetContent[];
   /** Source path for knowledge snapshot */
   knowledgeSourcePath?: string;
   /** Workflow state for context/structured/effect interpolation */
   workflowState?: WorkflowState;
-  /** Finding Contract input for reviewer raw finding output. */
-  findingContract?: FindingContractInstructionContext;
+  /** Resolved workflow-wide rules for Phase 1 only. */
+  workflowRules?: readonly WorkflowWideRule[];
+  /** Scalar context inherited through workflow_call boundaries. */
+  workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
+  companion?: {
+    mailboxDirectory: string;
+    reviewMode: CompanionReviewMode;
+  };
 }
 
 /**
@@ -101,6 +123,18 @@ export function buildEditRule(edit: boolean | undefined, language: Language): st
 
 type GitRulePhase = 'phase1' | 'phase2';
 
+/**
+ * git 操作の禁止ルール。文面は src/shared/prompts/{en,ja}/parts/git_rules.md にある。
+ *
+ * phase1 だけに載る「index の状態を根拠に指摘を立てるな」は、隣の「git add を実行するな」
+ * が**行為**の禁止でしかなく、指摘を立てる**判断**を禁じていなかったために足した（#1012）。
+ * TAKT が stage/commit を管理する実行では、実際にステージするのはワークフロー成功後の
+ * stageAndCommit() だけなので、「未追跡だからコミットせよ」という指摘はそれ自身が
+ * ブロックしている成功に依存し、coder には構造的に閉じられない。
+ *
+ * 禁止は index の状態に限る。.gitignore の誤設定や意図しない削除など、git の状態が
+ * 正当な証拠になる場合まで潰さない。
+ */
 export function buildGitRules(
   allowGitCommit: boolean | undefined,
   language: Language,
@@ -109,24 +143,5 @@ export function buildGitRules(
   if (allowGitCommit === true) {
     return '';
   }
-
-  if (language === 'ja') {
-    const rules = [
-      '- **git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。',
-      '- **git push を実行しないでください。** プッシュもシステムが自動で行います。',
-    ];
-    if (phase === 'phase1') {
-      rules.push('- **git add を実行しないでください。** ステージングもシステムが自動で行います。新規ファイルが未追跡（`??`）でも正常です。');
-    }
-    return rules.join('\n');
-  }
-
-  const rules = [
-    '- **Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.',
-    '- **Do NOT run git push.** Pushes are also handled automatically by the system.',
-  ];
-  if (phase === 'phase1') {
-    rules.push('- **Do NOT run git add.** Staging is also handled automatically by the system. Untracked files (`??`) are normal.');
-  }
-  return rules.join('\n');
+  return loadTemplate('parts/git_rules', language, { isPhase1: phase === 'phase1' }).trimEnd();
 }

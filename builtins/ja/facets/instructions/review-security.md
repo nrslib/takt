@@ -1,16 +1,5 @@
-**セキュリティ**のレビューに集中してください。
+{{include:instructions/security-review-focus}}
 
-手順:
-1. Knowledge と Policy の Source Path を Read ツールで開き、全文を取得する
-2. それぞれの `##` セクションをすべて列挙する（取捨選択しない）
-3. 列挙した各セクションの判定基準を変更差分と照合し、該当する問題を検出する
 
-## ステップ固有の確認事項
-
-- 仕様上の優先順位、拡張点、設定のオーバーライドを、それだけで脆弱性と断定しない
-- 対話確認や警告プロンプトが消えたこと自体を、直ちにセキュリティ境界の後退とみなさない
-- ブロッキング finding を出すには、攻撃者がどの入力を制御し、何を新たに達成できるのかを具体化する
-- 設定の優先順位、local/global の shadow、非対話指定などが関わる場合は次を追加確認する
-  - その挙動が `order.md` や `plan.md` で意図された仕様か
-  - 明示的な selector や引数指定によりユーザー意図が十分に表現されているか
-  - 低信頼側が高信頼側を上書きできること自体ではなく、信頼境界の破壊や新しい攻撃能力があるか
+{{include:instructions/review-investigation-discipline}}
+{{include:instructions/review-path-check}}

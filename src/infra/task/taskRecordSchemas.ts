@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 import { TaskExecutionConfigObjectSchema } from './taskExecutionSchemas.js';
 import { buildTaskSchema, serializeTaskConfig } from './taskConfigSerialization.js';
+import { RUN_RESUME_MODES } from '../../core/workflow/run/run-meta.js';
 
 export const TaskStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'exceeded', 'pr_failed']);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
@@ -10,6 +11,7 @@ export const TaskFailureSchema = z.object({
   step: z.string().optional(),
   error: z.string().min(1),
   last_message: z.string().optional(),
+  retryable: z.boolean().optional(),
 }).strict();
 export type TaskFailure = z.infer<typeof TaskFailureSchema>;
 
@@ -19,6 +21,8 @@ export const TaskRecordSchema = buildTaskSchema(
     status: TaskStatusSchema,
     slug: z.string().optional(),
     run_slug: z.string().min(1).optional(),
+    source_run_slug: z.string().min(1).optional(),
+    resume_mode: z.enum(RUN_RESUME_MODES).optional(),
     summary: z.string().optional(),
     worktree_path: z.string().optional(),
     pr_url: z.string().optional(),
@@ -30,6 +34,7 @@ export const TaskRecordSchema = buildTaskSchema(
     completed_at: z.string().nullable(),
     owner_pid: z.number().int().positive().nullable().optional(),
     failure: TaskFailureSchema.optional(),
+    auto_requeue_count: z.number().int().min(0).optional(),
   }),
 ).superRefine((value, ctx) => {
   const sourceFields = [value.content, value.content_file, value.task_dir].filter((field) => field !== undefined);
@@ -52,6 +57,13 @@ export const TaskRecordSchema = buildTaskSchema(
       code: z.ZodIssueCode.custom,
       path: ['task_dir'],
       message: 'task_dir must match .takt/tasks/<slug> format.',
+    });
+  }
+  if (value.source_run_slug !== undefined && value.resume_mode === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['resume_mode'],
+      message: 'resume_mode is required when source_run_slug is set.',
     });
   }
 

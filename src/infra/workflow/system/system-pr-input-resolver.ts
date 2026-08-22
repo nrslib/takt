@@ -4,8 +4,11 @@ import type {
   WorkflowSystemInput,
 } from '../../../core/models/types.js';
 import { stringifyWorkflowPrListWhere } from '../../../core/models/workflow-types.js';
-import type { SystemStepInputResolutionContext } from '../../../core/workflow/system/system-step-services.js';
-import type { PrListItem } from '../../git/types.js';
+import type {
+  SystemStepGitProvider,
+  SystemStepInputResolutionContext,
+  SystemStepPrListItem,
+} from '../../../core/workflow/system/system-step-services.js';
 import { fetchOpenPrList } from './system-git-context.js';
 import {
   getCachedCandidateSnapshot,
@@ -18,7 +21,7 @@ function matchesSimpleWildcard(value: string, pattern: string): boolean {
   return new RegExp(`^${escaped}$`).test(value);
 }
 
-function matchesPrWhere(pr: PrListItem, where?: WorkflowPrListWhere): boolean {
+function matchesPrWhere(pr: SystemStepPrListItem, where?: WorkflowPrListWhere): boolean {
   if (where?.author !== undefined && pr.author !== where.author) {
     return false;
   }
@@ -43,8 +46,12 @@ function matchesPrWhere(pr: PrListItem, where?: WorkflowPrListWhere): boolean {
   return true;
 }
 
-function listMatchingPrs(projectCwd: string, where?: WorkflowPrListWhere): PrListItem[] {
-  const openPrs = fetchOpenPrList(projectCwd);
+function listMatchingPrs(
+  projectCwd: string,
+  where: WorkflowPrListWhere | undefined,
+  gitProvider?: SystemStepGitProvider,
+): SystemStepPrListItem[] {
+  const openPrs = fetchOpenPrList(projectCwd, gitProvider);
   const filtered = openPrs.filter((pr) => matchesPrWhere(pr, where));
   filtered.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
   return filtered;
@@ -53,12 +60,13 @@ function listMatchingPrs(projectCwd: string, where?: WorkflowPrListWhere): PrLis
 function getPrCandidateSnapshot(
   projectCwd: string,
   where: WorkflowPrListWhere | undefined,
+  gitProvider: SystemStepGitProvider | undefined,
   resolutionContext?: SystemStepInputResolutionContext,
-): PrListItem[] {
+): SystemStepPrListItem[] {
   const cacheKey = `pr_candidates:${stringifyWorkflowPrListWhere(where)}`;
   return getCachedCandidateSnapshot(
     cacheKey,
-    () => listMatchingPrs(projectCwd, where),
+    () => listMatchingPrs(projectCwd, where, gitProvider),
     resolutionContext,
   );
 }
@@ -72,7 +80,7 @@ function toPrSummary({
   labels,
   same_repository,
   draft,
-}: PrListItem) {
+}: SystemStepPrListItem) {
   return {
     number,
     author,
@@ -88,14 +96,16 @@ function toPrSummary({
 export function resolvePrListInput(
   input: Extract<WorkflowSystemInput, { type: 'pr_list' }>,
   projectCwd: string,
+  gitProvider?: SystemStepGitProvider,
   resolutionContext?: SystemStepInputResolutionContext,
 ) {
-  return getPrCandidateSnapshot(projectCwd, input.where, resolutionContext).map(toPrSummary);
+  return getPrCandidateSnapshot(projectCwd, input.where, gitProvider, resolutionContext).map(toPrSummary);
 }
 
 export function resolvePrSelectionInput(
   input: Extract<WorkflowSystemInput, { type: 'pr_selection' }>,
   projectCwd: string,
+  gitProvider: SystemStepGitProvider | undefined,
   state: WorkflowState | undefined,
   stepName: string | undefined,
   resolutionContext?: SystemStepInputResolutionContext,
@@ -107,7 +117,7 @@ export function resolvePrSelectionInput(
     throw new Error('pr_selection requires step name');
   }
 
-  const candidates = getPrCandidateSnapshot(projectCwd, input.where, resolutionContext);
+  const candidates = getPrCandidateSnapshot(projectCwd, input.where, gitProvider, resolutionContext);
   const selectedPr = selectNextCandidate(
     candidates,
     readPreviousSelectedNumber(state, stepName, input.as),

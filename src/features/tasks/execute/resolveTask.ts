@@ -13,16 +13,28 @@ import {
   resolveTaskStartStepValue,
   TaskExecutionConfigSchema,
 } from '../../../infra/task/index.js';
-import type { WorkflowResumePoint } from '../../../core/models/index.js';
+import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
+import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
-import { getGitProvider, type Issue } from '../../../infra/git/index.js';
+import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
-import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import {
+  resolveTaskSpecForExecution,
+  type ResolvedTaskSpec,
+} from './taskSpecContext.js';
 import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
+import { validateTaskRetryRestartPoint } from '../taskRetryStartPath.js';
+import type { ExecuteTaskOptions, TaskExecutionContextOverride } from './types.js';
+import { createPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
+import {
+  materializeTaskPullRequestWorktreeContext,
+  resolveTaskPullRequestContext,
+} from '../pullRequestWorktreeContext.js';
+import { warnIfResumePointAdjusted } from './resumePointAdjustmentWarning.js';
 
 const log = createLogger('task');
 
@@ -30,9 +42,102 @@ function resolveTaskDataBaseBranch(taskData: TaskInfo['data']): string | undefin
   return taskData?.base_branch;
 }
 
-function resolveTaskBaseBranch(projectDir: string, taskData: TaskInfo['data']): string {
-  const preferredBaseBranch = resolveTaskDataBaseBranch(taskData);
+function resolveTaskBaseBranch(projectDir: string, preferredBaseBranch: string | undefined): string {
   return resolveBaseBranch(projectDir, preferredBaseBranch).branch;
+}
+
+function assertPrReviewTaskContextMatchesSavedIdentity(
+  taskName: string,
+  contextOverride: TaskExecutionContextOverride | undefined,
+  savedIdentity: { prNumber: number; baseBranch?: string; headBranch: string },
+): void {
+  if (contextOverride?.prNumber !== undefined && contextOverride.prNumber !== savedIdentity.prNumber) {
+    throw new Error(
+      `PR review task "${taskName}" cannot override saved pr_number ${savedIdentity.prNumber} with runtime taskContext.prNumber ${contextOverride.prNumber}.`,
+    );
+  }
+  if (contextOverride?.branch !== undefined && contextOverride.branch !== savedIdentity.headBranch) {
+    throw new Error(
+      `PR review task "${taskName}" cannot override saved branch "${savedIdentity.headBranch}" with runtime taskContext.branch "${contextOverride.branch}".`,
+    );
+  }
+  if (contextOverride?.baseBranch !== undefined && contextOverride.baseBranch !== savedIdentity.baseBranch) {
+    throw new Error(
+      `PR review task "${taskName}" cannot override saved base_branch "${savedIdentity.baseBranch ?? '<default branch fallback>'}" with runtime taskContext.baseBranch "${contextOverride.baseBranch}".`,
+    );
+  }
+}
+
+function resolvePrReviewContext(
+  taskName: string,
+  normalizedData: ReturnType<typeof TaskExecutionConfigSchema.parse>,
+  projectCwd: string,
+  contextOverride: TaskExecutionContextOverride | undefined,
+): PullRequestContext | undefined {
+  if (normalizedData.source !== 'pr_review') {
+    return undefined;
+  }
+  if (normalizedData.pr_number === undefined || normalizedData.branch === undefined) {
+    throw new Error(`PR review task "${taskName}" requires pr_number and branch.`);
+  }
+
+  assertPrReviewTaskContextMatchesSavedIdentity(taskName, contextOverride, {
+    prNumber: normalizedData.pr_number,
+    ...(normalizedData.base_branch === undefined ? {} : { baseBranch: normalizedData.base_branch }),
+    headBranch: normalizedData.branch,
+  });
+
+  return resolveTaskPullRequestContext({
+    projectDir: projectCwd,
+    prNumber: normalizedData.pr_number,
+    headBranch: normalizedData.branch,
+    ...(normalizedData.base_branch === undefined
+      ? {}
+      : { savedBaseBranch: normalizedData.base_branch }),
+  });
+}
+
+function assertPrReviewExecutionIdentity(
+  taskName: string,
+  prContext: PullRequestContext | undefined,
+  branch: string | undefined,
+  baseBranch: string | undefined,
+): void {
+  if (!prContext) {
+    return;
+  }
+  if (branch !== prContext.headBranch || baseBranch !== prContext.baseBranch) {
+    throw new Error(`PR review task "${taskName}" resolved an execution identity that differs from its PR context.`);
+  }
+}
+
+function assertReusedWorktreeContext(
+  task: TaskInfo,
+  reusedWorktree: { branch?: string; worktreePath: string },
+  contextOverride: TaskExecutionContextOverride | undefined,
+): void {
+  if (
+    contextOverride?.branch !== undefined
+    && reusedWorktree.branch !== undefined
+    && contextOverride.branch !== reusedWorktree.branch
+  ) {
+    throw new Error(
+      `Task "${task.name}" has existing worktree ${reusedWorktree.worktreePath} for branch "${reusedWorktree.branch ?? '<none>'}", ` +
+      `but runtime taskContext.branch is "${contextOverride.branch}".`,
+    );
+  }
+
+  const savedBaseBranch = resolveTaskDataBaseBranch(task.data);
+  if (
+    contextOverride?.baseBranch !== undefined
+    && savedBaseBranch !== undefined
+    && contextOverride.baseBranch !== savedBaseBranch
+  ) {
+    throw new Error(
+      `Task "${task.name}" has existing worktree ${reusedWorktree.worktreePath} with base_branch "${savedBaseBranch ?? '<none>'}", ` +
+      `but runtime taskContext.baseBranch is "${contextOverride.baseBranch}".`,
+    );
+  }
 }
 
 export interface ResolvedTaskExecution {
@@ -40,21 +145,29 @@ export interface ResolvedTaskExecution {
   workflowIdentifier: string;
   isWorktree: boolean;
   reportDirName: string;
-  taskPrompt?: string;
-  orderContent?: string;
+  taskSpec?: ResolvedTaskSpec;
   branch?: string;
   worktreePath?: string;
   baseBranch?: string;
   startStep?: string;
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
+  restartPoint?: WorkflowRestartPoint;
+  resumeSource?: RunResumeSource;
   autoPr: boolean;
   draftPr: boolean;
   managedPr: boolean;
   shouldPublishBranchToOrigin: boolean;
   issueNumber?: number;
+  prNumber?: number;
   maxStepsOverride?: number;
   initialIterationOverride?: number;
+  prContext?: PullRequestContext;
+}
+
+export interface ResolveTaskExecutionOptions {
+  outputMode?: ExecuteTaskOptions['outputMode'];
+  taskContext?: TaskExecutionContextOverride;
 }
 
 function resolveRetryResume(
@@ -63,19 +176,45 @@ function resolveRetryResume(
   lookupCwd: string,
   configuredStartStep: string | undefined,
   resumePoint: WorkflowResumePoint | undefined,
+  restartPoint: WorkflowRestartPoint | undefined,
+  outputMode: ExecuteTaskOptions['outputMode'],
 ): {
   startStep?: string;
   resumePoint?: WorkflowResumePoint;
+  restartPoint?: WorkflowRestartPoint;
 } {
-  if (!resumePoint) {
+  if (restartPoint !== undefined) {
+    const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd });
+    if (!workflowConfig) {
+      throw new Error(`Cannot validate task retry restart path because workflow "${workflowIdentifier}" was not found`);
+    }
+    validateTaskRetryRestartPoint(workflowConfig, restartPoint, { projectCwd, lookupCwd });
+    return {
+      startStep: restartPoint.stack[0]!.step,
+      restartPoint,
+    };
+  }
+  if (resumePoint === undefined) {
     return configuredStartStep ? { startStep: configuredStartStep } : {};
   }
-
-  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd });
+  const workflowConfig = loadWorkflowByIdentifier(
+    workflowIdentifier,
+    projectCwd,
+    { lookupCwd },
+  );
   if (!workflowConfig) {
-    return {
-      ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
-    };
+    const resolved = configuredStartStep
+      ? { startStep: configuredStartStep }
+      : {};
+    warnIfResumePointAdjusted({
+      context: 'task_reexecution',
+      outputMode,
+      workflow: workflowIdentifier,
+      original: resumePoint,
+      accepted: undefined,
+      startStep: configuredStartStep,
+    });
+    return resolved;
   }
 
   const resolvedResumePoint = trimResumePointStackForWorkflow({
@@ -83,23 +222,29 @@ function resolveRetryResume(
     resumePoint,
     resolveWorkflowCall: (parentWorkflow, step) => resolveWorkflowCallTarget(
       parentWorkflow,
-      step.call,
-      step.name,
+      step,
       projectCwd,
       lookupCwd,
     ),
   });
   const rootEntry = resolvedResumePoint?.stack[0];
-  if (rootEntry) {
-    return {
+  const resolved = rootEntry
+    ? {
       startStep: rootEntry.step,
       resumePoint: resolvedResumePoint,
+    }
+    : {
+      ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
     };
-  }
-
-  return {
-    ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
-  };
+  warnIfResumePointAdjusted({
+    context: 'task_reexecution',
+    outputMode,
+    workflow: workflowConfig.name,
+    original: resumePoint,
+    accepted: resolvedResumePoint,
+    startStep: resolved.startStep,
+  });
+  return resolved;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -108,20 +253,36 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-export function resolveTaskIssue(issueNumber: number | undefined, projectCwd: string): Issue[] | undefined {
+async function runWithTaskProgress<T>(
+  outputMode: ExecuteTaskOptions['outputMode'],
+  message: string,
+  successMessage: string | ((result: T) => string),
+  action: () => Promise<T>,
+): Promise<T> {
+  if (outputMode === 'silent') {
+    return action();
+  }
+  return withProgress(message, successMessage, action);
+}
+
+export function resolveTaskIssue(
+  issueNumber: number | undefined,
+  projectCwd: string,
+  gitProvider?: GitProvider,
+): Issue[] | undefined {
   if (issueNumber === undefined) {
     return undefined;
   }
 
-  const gitProvider = getGitProvider();
-  const cliStatus = gitProvider.checkCliStatus(projectCwd);
+  const resolvedGitProvider = gitProvider ?? getGitProvider();
+  const cliStatus = resolvedGitProvider.checkCliStatus(projectCwd);
   if (!cliStatus.available) {
     log.info('VCS CLI unavailable, skipping issue resolution for PR body', { issueNumber });
     return undefined;
   }
 
   try {
-    const issue = gitProvider.fetchIssue(issueNumber, projectCwd);
+    const issue = resolvedGitProvider.fetchIssue(issueNumber, projectCwd);
     return [issue];
   } catch (e) {
     log.info('Failed to fetch issue for PR body, continuing without issue info', { issueNumber, error: getErrorMessage(e) });
@@ -133,6 +294,7 @@ export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
   abortSignal?: AbortSignal,
+  options?: ResolveTaskExecutionOptions,
 ): Promise<ResolvedTaskExecution> {
   throwIfAborted(abortSignal);
 
@@ -144,24 +306,28 @@ export async function resolveTaskExecution(
   const validationData = { ...data } as Record<string, unknown>;
   delete validationData.task;
   delete validationData.baseBranch;
-  const normalizedData = TaskExecutionConfigSchema.parse(validationData) as Record<string, unknown>;
+  const normalizedData = TaskExecutionConfigSchema.parse(validationData);
   const workflowIdentifier = resolveTaskWorkflowValue(normalizedData);
   if (!workflowIdentifier || workflowIdentifier.trim() === '') {
     throw new Error(`Task "${task.name}" is missing required workflow.`);
   }
   const configuredStartStep = resolveTaskStartStepValue(normalizedData);
-  const resumePoint = normalizedData.resume_point as WorkflowResumePoint | undefined;
-  const retryNote = normalizedData.retry_note;
+  const resumePoint = normalizedData.resume_point;
+  const restartPoint = normalizedData.restart_point as WorkflowRestartPoint | undefined;
+  const contextOverride = options?.taskContext;
+  let prContext = resolvePrReviewContext(task.name, normalizedData, defaultCwd, contextOverride);
 
   let execCwd = defaultCwd;
   let isWorktree = false;
   let reportDirName: string | undefined;
-  let taskPrompt: string | undefined;
-  let orderContent: string | undefined;
+  let taskSpec: ResolvedTaskSpec | undefined;
   let branch: string | undefined;
   let worktreePath: string | undefined;
-  let baseBranch: string | undefined;
-  const preferredBaseBranch = resolveTaskDataBaseBranch(data);
+  let baseBranch: string | undefined = prContext?.baseBranch ?? contextOverride?.baseBranch;
+  const preferredBaseBranch = prContext?.baseBranch
+    ?? contextOverride?.baseBranch
+    ?? resolveTaskDataBaseBranch(data);
+  const contextBranch = prContext?.headBranch ?? contextOverride?.branch;
   if (task.taskDir) {
     const taskSlug = getTaskSlugFromTaskDir(task.taskDir);
     if (!taskSlug) {
@@ -171,39 +337,54 @@ export async function resolveTaskExecution(
 
   if (data.worktree) {
     throwIfAborted(abortSignal);
-    const targetBranch = data.branch;
+    const targetBranch = contextBranch ?? data.branch;
     const needsBaseBranch = !targetBranch || !branchExists(defaultCwd, targetBranch);
-    baseBranch = needsBaseBranch
-      ? resolveTaskBaseBranch(defaultCwd, data)
-      : preferredBaseBranch;
+    baseBranch = prContext
+      ? prContext.baseBranch
+      : needsBaseBranch
+        ? resolveTaskBaseBranch(defaultCwd, preferredBaseBranch)
+        : preferredBaseBranch;
 
     const reusedWorktree = resolveReusedWorktreeExecution(
       defaultCwd,
       task,
       configuredStartStep,
       resumePoint,
-      retryNote,
+      restartPoint,
+      data.retry_note,
     );
     if (reusedWorktree) {
+      assertReusedWorktreeContext(task, reusedWorktree, contextOverride);
       execCwd = reusedWorktree.execCwd;
       branch = reusedWorktree.branch;
       worktreePath = reusedWorktree.worktreePath;
       isWorktree = reusedWorktree.isWorktree;
+      if (prContext) {
+        prContext = materializeTaskPullRequestWorktreeContext({
+          projectDir: defaultCwd,
+          worktreePath: reusedWorktree.execCwd,
+          taskName: task.name,
+          prContext,
+        });
+      }
     } else {
-      const taskSlug = task.slug ?? await withProgress(
+      const taskSlug = task.slug ?? await runWithTaskProgress(
+        options?.outputMode,
         'Generating branch name...',
         (slug) => `Branch name generated: ${slug}`,
         () => summarizeTaskName(task.content, { cwd: defaultCwd }),
       );
 
       throwIfAborted(abortSignal);
-      const result = await withProgress(
+      const result = await runWithTaskProgress(
+        options?.outputMode,
         'Creating clone...',
         (cloneResult) => `Clone created: ${cloneResult.path} (branch: ${cloneResult.branch})`,
         async () => createSharedCloneAbortable(defaultCwd, {
           worktree: data.worktree!,
-          branch: data.branch,
+          branch: targetBranch,
           ...(preferredBaseBranch ? { baseBranch: preferredBaseBranch } : {}),
+          ...(prContext ? { pullRequestBaseBranch: prContext.baseBranch } : {}),
           taskSlug,
           issueNumber: data.issue,
         }, abortSignal),
@@ -213,27 +394,52 @@ export async function resolveTaskExecution(
       branch = result.branch;
       worktreePath = result.path;
       isWorktree = true;
+      if (prContext) {
+        if (!result.pullRequestBaseRef || !result.pullRequestHeadRef) {
+          throw new Error(`PR review task "${task.name}" clone did not materialize PR diff refs.`);
+        }
+        prContext = createPullRequestContext({
+          ...prContext,
+          baseDiffRef: result.pullRequestBaseRef,
+          headDiffRef: result.pullRequestHeadRef,
+        });
+      }
     }
+  } else if (contextBranch !== undefined || data.branch !== undefined) {
+    branch = contextBranch ?? data.branch;
   }
+
+  assertPrReviewExecutionIdentity(task.name, prContext, branch, baseBranch);
 
   if (task.taskDir) {
     reportDirName = generateExecutionReportDir(execCwd, task.content);
-    const stagedTaskSpec = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
-    taskPrompt = stagedTaskSpec.taskPrompt;
-    orderContent = stagedTaskSpec.orderContent;
+    taskSpec = resolveTaskSpecForExecution(
+      defaultCwd,
+      execCwd,
+      task.taskDir,
+      reportDirName,
+    );
   }
 
-  const resolvedReportDirName = reportDirName ?? generateReportDir(task.content);
+  const resumeSource = task.resumeMode
+    ? { ...(task.sourceRunSlug ? { sourceRunSlug: task.sourceRunSlug } : {}), resumeMode: task.resumeMode }
+    : undefined;
+  const resolvedReportDirName = reportDirName
+    ?? (resumeSource?.sourceRunSlug === undefined
+      ? generateReportDir(task.content)
+      : generateExecutionReportDir(execCwd, task.content));
   const retryResume = resolveRetryResume(
     workflowIdentifier,
     defaultCwd,
     execCwd,
     configuredStartStep,
     resumePoint,
+    restartPoint,
+    options?.outputMode,
   );
   const resolvedRetryNote = data.retry_note;
   const maxStepsOverride = data.exceeded_max_steps;
-  const initialIterationOverride = data.exceeded_current_iteration ?? retryResume.resumePoint?.iteration;
+  const initialIterationOverride = data.exceeded_current_iteration;
 
   const autoPr = data.auto_pr ?? resolveWorkflowConfigValue(defaultCwd, 'autoPr') ?? false;
   const draftPr = data.draft_pr ?? resolveWorkflowConfigValue(defaultCwd, 'draftPr') ?? false;
@@ -250,16 +456,23 @@ export async function resolveTaskExecution(
     draftPr,
     managedPr,
     shouldPublishBranchToOrigin,
-    ...(taskPrompt ? { taskPrompt } : {}),
-    ...(orderContent !== undefined ? { orderContent } : {}),
+    ...(taskSpec === undefined ? {} : { taskSpec }),
     ...(branch ? { branch } : {}),
     ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),
     ...(retryResume.startStep ? { startStep: retryResume.startStep } : {}),
     ...(resolvedRetryNote ? { retryNote: resolvedRetryNote } : {}),
     ...(retryResume.resumePoint ? { resumePoint: retryResume.resumePoint } : {}),
+    ...(retryResume.restartPoint ? { restartPoint: retryResume.restartPoint } : {}),
+    ...(resumeSource ? { resumeSource } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
+    ...(prContext
+      ? { prNumber: prContext.prNumber }
+      : contextOverride?.prNumber !== undefined
+      ? { prNumber: contextOverride.prNumber }
+      : data.context_pr_number !== undefined ? { prNumber: data.context_pr_number } : {}),
     ...(maxStepsOverride !== undefined ? { maxStepsOverride } : {}),
     ...(initialIterationOverride !== undefined ? { initialIterationOverride } : {}),
+    ...(prContext ? { prContext } : {}),
   };
 }

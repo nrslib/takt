@@ -4,13 +4,7 @@ import {
   TaskFileSchema,
   TaskExecutionConfigSchema,
   serializeTaskRecord,
-  resolveTaskWorkflowValue,
-  resolveTaskStartStepValue,
 } from '../infra/task/schema.js';
-import {
-  unexpectedStartStepKey,
-  unexpectedWorkflowKey,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 
 function makePendingRecord() {
   return {
@@ -69,6 +63,14 @@ function makePrFailedRecord() {
   };
 }
 
+const taskIdFields = ['issue', 'pr_number', 'context_pr_number'] as const;
+const invalidTaskIdValues = [
+  ['zero', 0],
+  ['negative', -1],
+  ['decimal', 1.5],
+  ['unsafe', Number.MAX_SAFE_INTEGER + 1],
+] as const;
+
 describe('TaskExecutionConfigSchema', () => {
   it('should accept valid config with all optional fields', () => {
     const config = {
@@ -114,6 +116,22 @@ describe('TaskExecutionConfigSchema', () => {
     expect(() => TaskExecutionConfigSchema.parse({ issue: 1.5 })).toThrow();
   });
 
+  it('should accept positive safe integer task id fields', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      issue: Number.MAX_SAFE_INTEGER,
+      pr_number: Number.MAX_SAFE_INTEGER,
+      context_pr_number: Number.MAX_SAFE_INTEGER,
+    })).not.toThrow();
+  });
+
+  it('should reject non-positive, decimal, and unsafe task id fields', () => {
+    for (const field of taskIdFields) {
+      for (const [, value] of invalidTaskIdValues) {
+        expect(() => TaskExecutionConfigSchema.parse({ [field]: value })).toThrow();
+      }
+    }
+  });
+
   it('should accept base_branch when provided in config', () => {
     expect(() => TaskExecutionConfigSchema.parse({ base_branch: 'feature/base' })).not.toThrow();
   });
@@ -128,57 +146,255 @@ describe('TaskExecutionConfigSchema', () => {
     expect(config.start_step).toBe('plan');
   });
 
-  it('should reject unknown workflow keys and accept canonical start_movement', () => {
+  it('should read the legacy start_movement key as start_step', () => {
+    const config = TaskExecutionConfigSchema.parse({
+      start_movement: 'develop',
+    }) as Record<string, unknown>;
+
+    expect(config.start_step).toBe('develop');
+    expect(config.start_movement).toBeUndefined();
+  });
+
+  it('should prefer start_step when the legacy start_movement key is also present', () => {
+    const config = TaskExecutionConfigSchema.parse({
+      start_step: 'plan',
+      start_movement: 'develop',
+    }) as Record<string, unknown>;
+
+    expect(config.start_step).toBe('plan');
+    expect(config.start_movement).toBeUndefined();
+  });
+
+  it('should not let the legacy start_movement key mask a non-string start_step', () => {
     expect(() => TaskExecutionConfigSchema.parse({
-      [unexpectedWorkflowKey]: 'legacy-workflow',
+      start_step: 123,
+      start_movement: 'develop',
     })).toThrow();
+  });
+
+  it('should require occurrence and accept omitted or positive integer step iterations', () => {
+    const baseResumePoint = {
+      version: 2,
+      iteration: 3,
+      elapsed_ms: 100,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
 
     expect(() => TaskExecutionConfigSchema.parse({
-      [unexpectedStartStepKey]: 'plan',
+      resume_point: {
+        ...baseResumePoint,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'implement',
+          kind: 'agent',
+        }],
+      },
+    })).toThrow();
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        ...baseResumePoint,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'implement',
+          kind: 'agent',
+          occurrence: 1,
+        }],
+      },
+    })).not.toThrow();
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        ...baseResumePoint,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'implement',
+          kind: 'agent',
+          occurrence: 2,
+          step_iterations: { implement: 1, review: 4 },
+        }],
+      },
     })).not.toThrow();
   });
 
-  it('should reject conflicting start_step and start_movement values', () => {
+  it.each([0, -1, 1.5])('should reject invalid occurrence %s', (occurrence) => {
     expect(() => TaskExecutionConfigSchema.parse({
-      start_step: 'plan',
-      start_movement: 'implement',
-    })).toThrow('start_step and start_movement must match when both are set');
-  });
-
-  it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
-    const input = {
-      start_step: 'plan',
-      start_movement: 'implement',
-    };
-
-    expect(() => TaskExecutionConfigSchema.safeParse(input)).not.toThrow();
-    const result = TaskExecutionConfigSchema.safeParse(input);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          message: 'start_step and start_movement must match when both are set',
-          path: ['start_movement'],
-        }),
-      ]));
-    }
-  });
-
-  it('should reject non-string start_movement values', () => {
-    expect(() => TaskExecutionConfigSchema.parse({
-      start_movement: 123,
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'implement',
+          kind: 'agent',
+          occurrence,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
     })).toThrow();
   });
 
-  it('should resolve workflow and start step through shared helpers', () => {
-    expect(resolveTaskWorkflowValue({ workflow: 'unit-test' })).toBe('unit-test');
-    expect(resolveTaskStartStepValue({ start_step: 'plan' })).toBe('plan');
-    expect(resolveTaskStartStepValue({ [unexpectedStartStepKey]: 'plan' })).toBe('plan');
-    expect(resolveTaskStartStepValue({ start_step: 'plan', start_movement: 'plan' })).toBe('plan');
-    expect(resolveTaskWorkflowValue({ [unexpectedWorkflowKey]: 'unit-test' })).toBeUndefined();
+  it('should accept parallel resume frame kind', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'reviewers',
+          kind: 'parallel',
+          occurrence: 1,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    })).not.toThrow();
   });
 
-  it('should serialize canonical task keys as workflow and start_movement', () => {
+  it.each([
+    ['dynamic_parallel_selections', {
+      '{"workflow":"default","step":"reviewers","calls":[]}': {
+        identity: '{"workflow":"default","step":"reviewers","calls":[]}',
+        step_name: 'reviewers',
+        round: 1,
+        selected_pool_ids: ['frontend'],
+        effective_selection_ids: ['architecture', 'frontend'],
+      },
+    }],
+    ['dynamic_facet_selections', {
+      '{"workflow":"default","step":"fix","calls":[]}': {
+        identity: '{"workflow":"default","step":"fix","calls":[]}',
+        step_name: 'fix',
+        round: 1,
+        selected_ids: ['frontend'],
+        selected_policy_refs: [],
+        selected_knowledge_refs: [],
+        rationale: 'frontend is relevant',
+      },
+    }],
+  ] as const)('should reject legacy resume point field %s', (field, value) => {
+    const result = TaskExecutionConfigSchema.safeParse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'reviewers',
+          kind: 'parallel',
+          occurrence: 1,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        [field]: value,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error(`Expected legacy field ${field} to be rejected`);
+    const issue = result.error.issues.find(({ code, path }) =>
+      code === 'custom' && path.length === 1 && path[0] === 'resume_point');
+    expect(issue).toMatchObject({
+      code: 'custom',
+      path: ['resume_point'],
+    });
+    expect(issue?.message).toContain('Unrecognized key');
+    expect(issue?.message).toContain(`"${field}"`);
+  });
+
+  it('should round-trip the canonical workflow-call invocation index', () => {
+    const invocationIdentity = '{"workflow":"default","step":"delegate","calls":[]}';
+    const parsed = TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 2,
+          call_instance: 2,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {
+          [invocationIdentity]: {
+            call_instance: 2,
+            report_namespace_segment: 'iteration-3--step-delegate--workflow-child',
+          },
+        },
+        workflow_step_participations: {},
+      },
+    });
+
+    expect(parsed.resume_point?.workflow_call_invocations).toEqual({
+      [invocationIdentity]: {
+        call_instance: 2,
+        report_namespace_segment: 'iteration-3--step-delegate--workflow-child',
+      },
+    });
+  });
+
+  it.each([
+    ['an empty key', { '': 1 }],
+    ['zero', { implement: 0 }],
+    ['a negative value', { implement: -1 }],
+    ['a decimal value', { implement: 1.5 }],
+  ])('should reject step iterations containing %s', (_name, stepIterations) => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'implement',
+          kind: 'agent',
+          occurrence: 1,
+          step_iterations: stepIterations,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    })).toThrow();
+  });
+
+  it.each(['workflow_call_invocations', 'workflow_step_participations'] as const)(
+    'should reject version 2 resume points missing %s',
+    (field) => {
+      const completeResumePoint = {
+        version: 2,
+        stack: [{ workflow: 'default', step: 'implement', kind: 'agent' }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
+      const resumePoint = Object.fromEntries(
+        Object.entries(completeResumePoint).filter(([key]) => key !== field),
+      );
+
+      expect(() => TaskExecutionConfigSchema.parse({ resume_point: resumePoint })).toThrow();
+    },
+  );
+
+
+  it('should reject non-string start_step values', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      start_step: 123,
+    })).toThrow();
+  });
+
+
+  it('should serialize canonical task keys as workflow and start_step', () => {
     const serialized = serializeTaskRecord({
       ...makePendingRecord(),
       workflow: 'unit-test',
@@ -187,7 +403,7 @@ describe('TaskExecutionConfigSchema', () => {
 
     expect(serialized).toMatchObject({
       workflow: 'unit-test',
-      start_movement: 'plan',
+      start_step: 'plan',
     });
   });
 
@@ -208,26 +424,6 @@ describe('TaskFileSchema', () => {
     expect(() => TaskFileSchema.parse({ task: 'do something' })).not.toThrow();
   });
 
-  it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
-    const input = {
-      task: 'do something',
-      start_step: 'plan',
-      start_movement: 'implement',
-    };
-
-    expect(() => TaskFileSchema.safeParse(input)).not.toThrow();
-    const result = TaskFileSchema.safeParse(input);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          message: 'start_step and start_movement must match when both are set',
-          path: ['start_movement'],
-        }),
-      ]));
-    }
-  });
-
   it('should reject empty task string', () => {
     expect(() => TaskFileSchema.parse({ task: '' })).toThrow();
   });
@@ -235,32 +431,29 @@ describe('TaskFileSchema', () => {
   it('should reject missing task field', () => {
     expect(() => TaskFileSchema.parse({})).toThrow();
   });
+
+  it('should accept positive safe integer task id fields', () => {
+    expect(() => TaskFileSchema.parse({
+      task: 'do something',
+      issue: Number.MAX_SAFE_INTEGER,
+      pr_number: Number.MAX_SAFE_INTEGER,
+      context_pr_number: Number.MAX_SAFE_INTEGER,
+    })).not.toThrow();
+  });
+
+  it('should reject non-positive, decimal, and unsafe task id fields', () => {
+    for (const field of taskIdFields) {
+      for (const [, value] of invalidTaskIdValues) {
+        expect(() => TaskFileSchema.parse({ task: 'do something', [field]: value })).toThrow();
+      }
+    }
+  });
 });
 
 describe('TaskRecordSchema', () => {
   describe('pending status', () => {
     it('should accept valid pending record', () => {
       expect(() => TaskRecordSchema.parse(makePendingRecord())).not.toThrow();
-    });
-
-    it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
-      const input = {
-        ...makePendingRecord(),
-        start_step: 'plan',
-        start_movement: 'implement',
-      };
-
-      expect(() => TaskRecordSchema.safeParse(input)).not.toThrow();
-      const result = TaskRecordSchema.safeParse(input);
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            message: 'start_step and start_movement must match when both are set',
-            path: ['start_movement'],
-          }),
-        ]));
-      }
     });
 
     it('should reject pending record with started_at', () => {
@@ -457,5 +650,46 @@ describe('TaskRecordSchema', () => {
       task_dir: '.takt/tasks/feat-bugfix',
       base_branch: 'release/main',
     })).not.toThrow();
+  });
+
+  it('should accept and serialize auto_requeue_count when present', () => {
+    const parsed = TaskRecordSchema.parse({
+      ...makeFailedRecord(),
+      auto_requeue_count: 2,
+    }) as Record<string, unknown>;
+    const serialized = serializeTaskRecord(parsed as never);
+
+    expect(parsed.auto_requeue_count).toBe(2);
+    expect(serialized).toMatchObject({
+      auto_requeue_count: 2,
+    });
+  });
+
+  it('should reject invalid auto_requeue_count values', () => {
+    expect(() => TaskRecordSchema.parse({
+      ...makeFailedRecord(),
+      auto_requeue_count: -1,
+    })).toThrow();
+    expect(() => TaskRecordSchema.parse({
+      ...makeFailedRecord(),
+      auto_requeue_count: 1.5,
+    })).toThrow();
+  });
+
+  it('should accept positive safe integer task id fields', () => {
+    expect(() => TaskRecordSchema.parse({
+      ...makePendingRecord(),
+      issue: Number.MAX_SAFE_INTEGER,
+      pr_number: Number.MAX_SAFE_INTEGER,
+      context_pr_number: Number.MAX_SAFE_INTEGER,
+    })).not.toThrow();
+  });
+
+  it('should reject non-positive, decimal, and unsafe task id fields', () => {
+    for (const field of taskIdFields) {
+      for (const [, value] of invalidTaskIdValues) {
+        expect(() => TaskRecordSchema.parse({ ...makePendingRecord(), [field]: value })).toThrow();
+      }
+    }
   });
 });

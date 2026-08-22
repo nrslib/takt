@@ -10,17 +10,11 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
   if (options.allowedTools && options.allowedTools.length > 0) {
     log.info('Kiro provider does not support allowedTools; ignoring');
   }
-  if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
-    log.info('Kiro provider does not support mcpServers; ignoring');
-  }
   if (options.maxTurns !== undefined) {
     log.info('Kiro provider does not support maxTurns; ignoring');
   }
   if (options.outputSchema) {
     log.info('Kiro provider does not support outputSchema; ignoring');
-  }
-  if (options.model) {
-    log.info('Kiro provider does not support model CLI flag; ignoring');
   }
   if (options.imageAttachments && options.imageAttachments.length > 0) {
     log.info('Kiro provider does not support imageAttachments; ignoring');
@@ -30,21 +24,25 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    model: options.model,
     systemPrompt,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     kiroApiKey: options.kiroApiKey ?? resolveKiroApiKey(),
     kiroCliPath: resolveKiroCliPath(),
     agent: options.providerOptions?.kiro?.agent,
     childProcessEnv: options.childProcessEnv,
+    preparedMcp: options.preparedMcp,
   };
 }
 
 export class KiroProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
-  getRuntimeInstructions(): string | null {
+  getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
   }
 
@@ -61,4 +59,5 @@ export class KiroProvider implements Provider {
       },
     };
   }
+
 }

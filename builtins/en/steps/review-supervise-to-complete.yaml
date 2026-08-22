@@ -1,0 +1,17 @@
+name: supervise
+capabilities: readonly
+tags:
+  - supervise
+edit: false
+persona: supervisor
+policy:
+  - contract-change
+pass_previous_response: false
+instruction: supervise
+output_contracts:
+  report:
+    - name: supervisor-validation.md
+      format: supervisor-validation
+    - name: summary.md
+      format: supervisor-summary
+      use_judge: false

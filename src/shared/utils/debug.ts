@@ -4,9 +4,29 @@
  * When verbose console is enabled, also outputs to stderr.
  */
 
-import { existsSync, appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { PromptLogRecord } from './types.js';
+import {
+  appendPrivateFile,
+  ensurePrivateDirectory,
+  repairPrivateDirectory,
+  writePrivateFile,
+} from './private-file.js';
+import { normalizeLogMetadata, normalizeLogValue, truncateLogText } from './logMetadata.js';
+import { sanitizeSensitiveText } from './sensitiveText.js';
+
+const MAX_DEBUG_DATA_LENGTH = 50_000;
+
+function serializeDebugData(data: unknown): string {
+  if (typeof data === 'string') {
+    return normalizeLogMetadata(data);
+  }
+  const serialized = JSON.stringify(data, normalizeLogValue, 2);
+  if (serialized === undefined) {
+    throw new Error('Debug data is not serializable');
+  }
+  return truncateLogText(sanitizeSensitiveText(serialized), MAX_DEBUG_DATA_LENGTH);
+}
+
 /** Debug configuration (duplicated from core/models to avoid shared → core dependency) */
 interface DebugConfig {
   enabled: boolean;
@@ -24,7 +44,6 @@ export class DebugLogger {
   private debugEnabled = false;
   private traceEnabled = false;
   private debugLogFile: string | null = null;
-  private debugPromptsLogFile: string | null = null;
   private initialized = false;
   private verboseConsoleEnabled = false;
 
@@ -61,21 +80,16 @@ export class DebugLogger {
     if (this.debugEnabled) {
       if (config?.logFile) {
         this.debugLogFile = config.logFile;
-        if (config.logFile.endsWith('.log')) {
-          this.debugPromptsLogFile = config.logFile.slice(0, -4) + '-prompts.jsonl';
-        } else {
-          this.debugPromptsLogFile = `${config.logFile}-prompts.jsonl`;
-        }
       } else if (projectDir) {
         const logPrefix = DebugLogger.getDefaultLogPrefix(projectDir);
         this.debugLogFile = `${logPrefix}.log`;
-        this.debugPromptsLogFile = `${logPrefix}-prompts.jsonl`;
       }
 
       if (this.debugLogFile) {
         const logDir = dirname(this.debugLogFile);
-        if (!existsSync(logDir)) {
-          mkdirSync(logDir, { recursive: true });
+        ensurePrivateDirectory(logDir);
+        if (!config?.logFile) {
+          repairPrivateDirectory(logDir);
         }
 
         const header = [
@@ -87,15 +101,7 @@ export class DebugLogger {
           '',
         ].join('\n');
 
-        writeFileSync(this.debugLogFile, header, 'utf-8');
-      }
-
-      if (this.debugPromptsLogFile) {
-        const promptsLogDir = dirname(this.debugPromptsLogFile);
-        if (!existsSync(promptsLogDir)) {
-          mkdirSync(promptsLogDir, { recursive: true });
-        }
-        writeFileSync(this.debugPromptsLogFile, '', 'utf-8');
+        writePrivateFile(this.debugLogFile, header);
       }
     }
 
@@ -107,7 +113,6 @@ export class DebugLogger {
     this.debugEnabled = false;
     this.traceEnabled = false;
     this.debugLogFile = null;
-    this.debugPromptsLogFile = null;
     this.initialized = false;
     this.verboseConsoleEnabled = false;
   }
@@ -132,22 +137,16 @@ export class DebugLogger {
     return this.debugLogFile;
   }
 
-  /** Get current debug prompts log file path */
-  getPromptsLogFile(): string | null {
-    return this.debugPromptsLogFile;
-  }
-
   /** Format log message with timestamp and level */
   private static formatLogMessage(level: string, component: string, message: string, data?: unknown): string {
     const timestamp = new Date().toISOString();
     const prefix = `[${timestamp}] [${level.toUpperCase()}] [${component}]`;
 
-    let logLine = `${prefix} ${message}`;
+    let logLine = `${prefix} ${normalizeLogMetadata(message)}`;
 
     if (data !== undefined) {
       try {
-        const dataStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-        logLine += `\n${dataStr}`;
+        logLine += `\n${serializeDebugData(data)}`;
       } catch {
         logLine += `\n[Unable to serialize data]`;
       }
@@ -159,7 +158,7 @@ export class DebugLogger {
   /** Format a compact console log line */
   private static formatConsoleMessage(level: string, component: string, message: string): string {
     const timestamp = new Date().toISOString().slice(11, 23);
-    return `[${timestamp}] [${level}] [${component}] ${message}`;
+    return `[${timestamp}] [${level}] [${component}] ${normalizeLogMetadata(message)}`;
   }
 
   /** Write a log entry to verbose console (stderr) and/or file */
@@ -175,20 +174,7 @@ export class DebugLogger {
     const logLine = DebugLogger.formatLogMessage(level, component, message, data);
 
     try {
-      appendFileSync(this.debugLogFile, logLine + '\n', 'utf-8');
-    } catch {
-      // Silently fail - logging errors should not interrupt main flow
-    }
-  }
-
-  /** Write a prompt/response debug log entry */
-  writePromptLog(record: PromptLogRecord): void {
-    if (!this.debugEnabled || !this.debugPromptsLogFile) {
-      return;
-    }
-
-    try {
-      appendFileSync(this.debugPromptsLogFile, JSON.stringify(record) + '\n', 'utf-8');
+      appendPrivateFile(this.debugLogFile, logLine + '\n');
     } catch {
       // Silently fail - logging errors should not interrupt main flow
     }
@@ -236,10 +222,6 @@ export function getDebugLogFile(): string | null {
   return DebugLogger.getInstance().getLogFile();
 }
 
-export function getDebugPromptsLogFile(): string | null {
-  return DebugLogger.getInstance().getPromptsLogFile();
-}
-
 export function debugLog(component: string, message: string, data?: unknown): void {
   DebugLogger.getInstance().writeLog('DEBUG', component, message, data);
 }
@@ -250,10 +232,6 @@ export function infoLog(component: string, message: string, data?: unknown): voi
 
 export function errorLog(component: string, message: string, data?: unknown): void {
   DebugLogger.getInstance().writeLog('ERROR', component, message, data);
-}
-
-export function writePromptLog(record: PromptLogRecord): void {
-  DebugLogger.getInstance().writePromptLog(record);
 }
 
 export function traceEnter(component: string, funcName: string, args?: Record<string, unknown>): void {

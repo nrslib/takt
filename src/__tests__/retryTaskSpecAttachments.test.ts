@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   cleanupPreparedRetryTaskSpec,
   prepareRetryTaskSpecWithAttachments,
-} from '../features/tasks/list/retryTaskSpecAttachments.js';
+} from '../features/tasks/retryTaskSpecAttachments.js';
 import type { TaskAttachment } from '../features/tasks/attachments.js';
 
 const tempRoots = new Set<string>();
@@ -69,6 +69,7 @@ describe('prepareRetryTaskSpecWithAttachments', () => {
     }
     const preparedTaskDir = prepared.taskDir;
     const orderContent = fs.readFileSync(path.join(preparedTaskDir, 'order.md'), 'utf-8');
+    expect(prepared.retryNote).toBe('Use [Image #2].');
     expect(orderContent).toContain('Original task with [Image #1].');
     expect(orderContent).toContain('Use [Image #2].');
     expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
@@ -101,6 +102,7 @@ describe('prepareRetryTaskSpecWithAttachments', () => {
       throw new Error('Prepared retry task spec is required.');
     }
     const orderContent = fs.readFileSync(path.join(prepared.taskDir, 'order.md'), 'utf-8');
+    expect(prepared.retryNote).toBe('Use [Image #2].');
     expect(orderContent).toContain('Original task with [Image #1].');
     expect(orderContent).toContain('Use [Image #2].');
     expect(orderContent).toContain('- [Image #2]: `attachments/image-2.png`');

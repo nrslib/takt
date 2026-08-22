@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TAKT — Multi-Agent Workflow Orchestration CLI</title>
+  <meta name="description" content="Stop babysitting AI coding agents. TAKT orchestrates multiple AI agents through YAML-defined workflows with structured review loops, managed prompts, and guardrails.">
+  <meta property="og:title" content="TAKT — Multi-Agent Workflow Orchestration CLI">
+  <meta property="og:description" content="Stop babysitting AI coding agents. Orchestrate multiple AI agents through YAML-defined workflows.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nrslib.github.io/takt/">
+  <meta property="og:image" content="https://nrslib.github.io/takt/assets/tutorial-preview.jpg">
+  <meta property="og:image:width" content="720">
+  <meta property="og:image:height" content="405">
+  <meta property="og:image:alt" content="TAKT turns an instruction into a queued multi-agent workflow">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://nrslib.github.io/takt/assets/tutorial-preview.jpg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwindcss.config = {
+      theme: {
+        extend: {
+          colors: {
+            takt: { 50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc', 400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1', 800: '#075985', 900: '#0c4a6e' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .gradient-bg { background: linear-gradient(135deg, #0c4a6e 0%, #1e293b 50%, #0f172a 100%); }
+    .code-block { background: #1e293b; border: 1px solid #334155; }
+    .feature-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); }
+    .feature-card:hover { background: rgba(255,255,255,0.06); border-color: rgba(56,189,248,0.3); }
+    .comparison-old { background: rgba(239,68,68,0.08); border-left: 3px solid #ef4444; }
+    .comparison-new { background: rgba(34,197,94,0.08); border-left: 3px solid #22c55e; }
+  </style>
+</head>
+<body class="gradient-bg text-gray-100 antialiased">
+
+  <!-- Hero -->
+  <section class="min-h-screen flex flex-col justify-center px-6 py-20">
+    <div class="max-w-4xl mx-auto text-center">
+      <p class="text-takt-400 font-mono text-sm tracking-widest uppercase mb-4">Multi-Agent Workflow Orchestration</p>
+      <h1 class="mb-6">
+        <img src="assets/takt-logo-dark.svg" alt="TAKT" class="mx-auto w-full max-w-lg">
+      </h1>
+      <p class="text-xl md:text-2xl text-gray-300 mb-4 max-w-2xl mx-auto leading-relaxed">
+        Stop babysitting AI coding agents.
+      </p>
+      <p class="text-lg text-gray-400 mb-10 max-w-2xl mx-auto">
+        Define planning, implementation, review, and fix loops in YAML.
+        Let TAKT coordinate your AI agents with structured workflows.
+      </p>
+
+      <div class="code-block rounded-lg px-6 py-4 inline-block mb-8">
+        <code class="text-takt-300 text-lg font-mono">npm install -g takt</code>
+      </div>
+
+      <div class="flex flex-wrap justify-center gap-4">
+        <a href="https://github.com/nrslib/takt" class="inline-flex items-center gap-2 bg-white text-gray-900 font-semibold px-6 py-3 rounded-lg hover:bg-gray-200 transition">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          GitHub
+        </a>
+        <a href="#tutorial" class="inline-flex items-center gap-2 border border-white/30 text-white font-semibold px-6 py-3 rounded-lg hover:bg-white/10 transition">
+          <svg class="w-5 h-5" aria-hidden="true" fill="currentColor" viewBox="0 0 20 20"><path d="M6.5 4.9a1 1 0 0 1 1.53-.85l7 4.6a1 1 0 0 1 0 1.7l-7 4.6A1 1 0 0 1 6.5 14.1V4.9Z"/></svg>
+          Watch TAKT Run
+        </a>
+        <a href="https://github.com/nrslib/takt#quick-start" class="inline-flex items-center gap-2 border border-takt-400 text-takt-300 font-semibold px-6 py-3 rounded-lg hover:bg-takt-400/10 transition">
+          Get Started
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tutorial -->
+  <section id="tutorial" class="scroll-mt-6 border-y border-white/5 bg-slate-950/20 px-6 py-20">
+    <div class="max-w-5xl mx-auto">
+      <div class="text-center mb-10">
+        <p class="text-takt-400 font-mono text-sm tracking-widest uppercase mb-3">See TAKT in Action</p>
+        <h2 class="text-3xl md:text-4xl font-bold mb-4">Describe it. Queue it. Let TAKT run.</h2>
+        <p class="text-gray-400 max-w-3xl mx-auto leading-relaxed">
+          Refine the instruction in a conversation, save it as a task, then run <code class="text-takt-300 font-mono text-sm">takt run</code>.
+          TAKT coordinates planning, implementation, and parallel review in an isolated worktree.
+        </p>
+      </div>
+
+      <figure class="mb-12">
+        <div class="rounded-2xl border border-takt-400/20 bg-slate-950/80 p-2 md:p-3 shadow-2xl shadow-sky-950/40">
+          <picture>
+            <source media="(prefers-reduced-motion: reduce)" srcset="./assets/tutorial-preview.jpg">
+            <img
+              src="./assets/tutorial-preview.gif"
+              width="720"
+              height="405"
+              loading="lazy"
+              decoding="async"
+              alt="TAKT tutorial preview showing an instruction being refined, queued as a task, and executed through planning, coding, and parallel AI review"
+              class="w-full rounded-xl"
+            >
+          </picture>
+        </div>
+        <figcaption class="mt-4 text-center text-sm text-gray-500">
+          A task moves through a repeatable workflow: describe, queue, run, and review. Animated preview, 35 seconds, no audio.
+        </figcaption>
+      </figure>
+
+      <div class="text-center mb-7">
+        <h3 class="text-2xl font-semibold mb-2">Watch the full tutorial</h3>
+        <p class="text-gray-400 text-sm">Continue with the complete hands-on walkthrough on YouTube.</p>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+        <a
+          href="https://youtu.be/HUcFFvOy39I"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Watch TAKT Video Tutorial Chapter 1 on YouTube"
+          class="feature-card group overflow-hidden rounded-xl transition focus:outline-none focus-visible:ring-2 focus-visible:ring-takt-400"
+        >
+          <div class="relative aspect-video overflow-hidden bg-slate-900">
+            <img
+              src="https://i.ytimg.com/vi/HUcFFvOy39I/hqdefault.jpg"
+              width="480"
+              height="360"
+              loading="lazy"
+              decoding="async"
+              alt=""
+              class="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+            >
+            <span class="absolute inset-0 flex items-center justify-center bg-slate-950/20 transition group-hover:bg-slate-950/5">
+              <span class="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white shadow-lg">
+                <svg class="ml-1 h-6 w-6" aria-hidden="true" fill="currentColor" viewBox="0 0 20 20"><path d="M6.5 4.9a1 1 0 0 1 1.53-.85l7 4.6a1 1 0 0 1 0 1.7l-7 4.6A1 1 0 0 1 6.5 14.1V4.9Z"/></svg>
+              </span>
+            </span>
+          </div>
+          <div class="p-5">
+            <p class="text-takt-400 font-mono text-xs tracking-widest uppercase mb-2">Video Tutorial</p>
+            <h4 class="text-lg font-semibold text-white">Chapter 1</h4>
+          </div>
+        </a>
+
+        <a
+          href="https://youtu.be/UIlM2iM-rmA"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Watch TAKT Video Tutorial Chapter 2 on YouTube"
+          class="feature-card group overflow-hidden rounded-xl transition focus:outline-none focus-visible:ring-2 focus-visible:ring-takt-400"
+        >
+          <div class="relative aspect-video overflow-hidden bg-slate-900">
+            <img
+              src="https://i.ytimg.com/vi/UIlM2iM-rmA/hqdefault.jpg"
+              width="480"
+              height="360"
+              loading="lazy"
+              decoding="async"
+              alt=""
+              class="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+            >
+            <span class="absolute inset-0 flex items-center justify-center bg-slate-950/20 transition group-hover:bg-slate-950/5">
+              <span class="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white shadow-lg">
+                <svg class="ml-1 h-6 w-6" aria-hidden="true" fill="currentColor" viewBox="0 0 20 20"><path d="M6.5 4.9a1 1 0 0 1 1.53-.85l7 4.6a1 1 0 0 1 0 1.7l-7 4.6A1 1 0 0 1 6.5 14.1V4.9Z"/></svg>
+              </span>
+            </span>
+          </div>
+          <div class="p-5">
+            <p class="text-takt-400 font-mono text-xs tracking-widest uppercase mb-2">Video Tutorial</p>
+            <h4 class="text-lg font-semibold text-white">Chapter 2</h4>
+          </div>
+        </a>
+      </div>
+
+      <div class="mt-7 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm text-gray-500">
+        <span>Japanese videos:</span>
+        <a href="https://youtu.be/H_L_slDJNqs" target="_blank" rel="noopener noreferrer" class="text-takt-300 hover:text-takt-200 underline underline-offset-4">Chapter 1</a>
+        <a href="https://youtu.be/cfM9USMkh2Y" target="_blank" rel="noopener noreferrer" class="text-takt-300 hover:text-takt-200 underline underline-offset-4">Chapter 2</a>
+        <a href="https://github.com/nrslib/takt/blob/main/docs/tutorial.md" target="_blank" rel="noopener noreferrer" class="text-takt-300 hover:text-takt-200 underline underline-offset-4">Written tutorial</a>
+        <a href="https://github.com/nrslib/takt/blob/main/README.md#documentation" target="_blank" rel="noopener noreferrer" class="text-takt-300 hover:text-takt-200 underline underline-offset-4">All docs</a>
+        <a href="https://github.com/nrslib/takt/blob/main/docs/README.zh-CN.md" target="_blank" rel="noopener noreferrer" class="text-takt-300 hover:text-takt-200 underline underline-offset-4">简体中文文档</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Why TAKT -->
+  <section class="px-6 py-20">
+    <div class="max-w-4xl mx-auto">
+      <h2 class="text-3xl md:text-4xl font-bold text-center mb-4">Why TAKT?</h2>
+      <p class="text-gray-400 text-center mb-12 max-w-2xl mx-auto">
+        AI coding agents are powerful, but they don't automatically create a stable development process.
+      </p>
+
+      <div class="grid md:grid-cols-2 gap-6">
+        <div class="comparison-old rounded-lg p-6">
+          <h3 class="text-red-400 font-semibold mb-4 text-sm uppercase tracking-wide">Plain AI Agents</h3>
+          <ul class="space-y-3 text-gray-300 text-sm">
+            <li>The prompt asks the agent to follow a process</li>
+            <li>Review steps can be forgotten or skipped</li>
+            <li>One long context keeps growing</li>
+            <li>Implementation and review responsibilities blur</li>
+            <li>The same process must be recreated by memory</li>
+          </ul>
+        </div>
+        <div class="comparison-new rounded-lg p-6">
+          <h3 class="text-green-400 font-semibold mb-4 text-sm uppercase tracking-wide">With TAKT</h3>
+          <ul class="space-y-3 text-gray-300 text-sm">
+            <li>The YAML workflow owns the process</li>
+            <li>Review and fix loops are explicit transitions</li>
+            <li>Each step receives only the context it needs</li>
+            <li>Personas, permissions, and output contracts separate roles</li>
+            <li>Workflows are reusable, reviewable, and versionable</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="px-6 py-20">
+    <div class="max-w-4xl mx-auto">
+      <h2 class="text-3xl md:text-4xl font-bold text-center mb-12">How It Works</h2>
+
+      <div class="grid md:grid-cols-2 gap-12 max-w-2xl mx-auto">
+        <div class="text-center">
+          <div class="w-12 h-12 rounded-full bg-takt-500/20 text-takt-400 flex items-center justify-center text-xl font-bold mx-auto mb-4">1</div>
+          <h3 class="font-semibold text-lg mb-2">Talk</h3>
+          <div class="code-block rounded-lg p-3 mt-4 mb-4 text-left">
+            <code class="text-xs text-gray-300 font-mono">$ takt<br><span class="text-gray-500">> Add JWT authentication</span></code>
+          </div>
+          <p class="text-gray-400 text-sm">Describe your task to the AI assistant. TAKT helps you refine requirements and queue it.</p>
+        </div>
+
+        <div class="text-center">
+          <div class="w-12 h-12 rounded-full bg-takt-500/20 text-takt-400 flex items-center justify-center text-xl font-bold mx-auto mb-4">2</div>
+          <h3 class="font-semibold text-lg mb-2">Run</h3>
+          <div class="code-block rounded-lg p-3 mt-4 mb-4 text-left">
+            <code class="text-xs text-gray-300 font-mono">$ takt run</code>
+          </div>
+          <p class="text-gray-400 text-sm">Execute tasks in isolated worktrees. TAKT handles planning, implementation, review, and fix loops automatically. A PR is created when done. No GitHub? Works locally too.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="px-6 py-20">
+    <div class="max-w-5xl mx-auto">
+      <h2 class="text-3xl md:text-4xl font-bold text-center mb-12">Features</h2>
+
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">🎼</div>
+          <h3 class="font-semibold mb-2">YAML Workflows</h3>
+          <p class="text-gray-400 text-sm">Define plan, implement, review, and fix loops as explicit state machine steps with rule-based routing.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">🎭</div>
+          <h3 class="font-semibold mb-2">Faceted Prompting</h3>
+          <p class="text-gray-400 text-sm">Split prompts into personas, policies, knowledge, instructions, and output contracts. Each step gets only what it needs.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">🔄</div>
+          <h3 class="font-semibold mb-2">Review Loops</h3>
+          <p class="text-gray-400 text-sm">Parallel multi-reviewer steps with automatic fix loops. Reviews can't be silently skipped.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">🤖</div>
+          <h3 class="font-semibold mb-2">Multi-Provider</h3>
+          <p class="text-gray-400 text-sm">Claude Code, Claude SDK, Codex, OpenCode, Pi, Cursor, GitHub Copilot, and Kiro. Mix providers per step.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">🌲</div>
+          <h3 class="font-semibold mb-2">Isolated Worktrees</h3>
+          <p class="text-gray-400 text-sm">Tasks run in git clones. Auto-commit, push, and PR creation. No pollution of your working tree.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">👥</div>
+          <h3 class="font-semibold mb-2">Team Leader</h3>
+          <p class="text-gray-400 text-sm">Dynamic task decomposition with parallel worker dispatch. One leader plans, multiple workers execute.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">🔗</div>
+          <h3 class="font-semibold mb-2">GitHub / GitLab</h3>
+          <p class="text-gray-400 text-sm">Create tasks from issues, auto-create PRs/MRs, and close issues on merge. Works with both GitHub and GitLab.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">📦</div>
+          <h3 class="font-semibold mb-2">Repertoire Packages</h3>
+          <p class="text-gray-400 text-sm">Share and install workflow packages from GitHub. Community-driven workflow ecosystem.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">📊</div>
+          <h3 class="font-semibold mb-2">Observability</h3>
+          <p class="text-gray-400 text-sm">OTLP traces, session logs, usage analytics, and per-step reports. Full auditability from task to PR.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">✅</div>
+          <h3 class="font-semibold mb-2">Quality Gates</h3>
+          <p class="text-gray-400 text-sm">Run build, lint, and tests automatically before a step completes. Fail fast, not after merge.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">🛡️</div>
+          <h3 class="font-semibold mb-2">Loop Monitors</h3>
+          <p class="text-gray-400 text-sm">Detect and stop infinite review-fix cycles automatically. No more runaway token spend.</p>
+        </div>
+
+        <div class="feature-card rounded-xl p-6 transition">
+          <div class="text-2xl mb-3">🔧</div>
+          <h3 class="font-semibold mb-2">Builtin Workflows</h3>
+          <p class="text-gray-400 text-sm">Ready-to-use workflows for frontend, backend, CQRS/ES, dual-stack, review, audit, and maintenance.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Social Proof -->
+  <section class="px-6 py-20">
+    <div class="max-w-4xl mx-auto">
+      <div class="flex flex-col md:flex-row items-center justify-center gap-10 mb-12">
+        <div class="text-center">
+          <a href="https://github.com/nrslib/takt/stargazers">
+            <img src="https://img.shields.io/github/stars/nrslib/takt?style=for-the-badge&logo=github&label=Stars&color=0ea5e9" alt="GitHub Stars" class="mx-auto">
+          </a>
+        </div>
+        <div class="text-center">
+          <a href="https://www.npmjs.com/package/takt">
+            <img src="https://img.shields.io/npm/v/takt?style=for-the-badge&logo=npm&label=npm&color=0ea5e9" alt="npm version" class="mx-auto">
+          </a>
+        </div>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-8">
+        <div class="feature-card rounded-xl p-6">
+          <p class="text-gray-300 text-sm italic mb-4">"What we estimated would take 100% of the effort, TAKT got it done at 20%."</p>
+          <p class="text-gray-500 text-xs">— Enterprise user feedback</p>
+        </div>
+        <div class="feature-card rounded-xl p-6 flex items-center gap-4">
+          <a href="https://coderabbit.link/nrslib" class="block">
+            <p class="text-gray-500 text-xs uppercase tracking-wide mb-2">Sponsored by</p>
+            <img src="https://victorious-bubble-f69a016683.media.strapiapp.com/White_Typemark_79b9189d19.svg" alt="CodeRabbit" height="32" class="h-8">
+            <p class="text-gray-500 text-xs mt-2">AI-powered code review — Open Source Support Program</p>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Workflow Example -->
+  <section class="px-6 py-20">
+    <div class="max-w-3xl mx-auto">
+      <h2 class="text-3xl md:text-4xl font-bold text-center mb-4">Define Your Process</h2>
+      <p class="text-gray-400 text-center mb-10">Workflows are simple YAML. Here's the core idea:</p>
+
+      <div class="code-block rounded-xl p-6 overflow-x-auto">
+<pre class="text-sm font-mono text-gray-300 leading-relaxed"><span class="text-takt-400">steps:</span>
+  - <span class="text-takt-300">name:</span> plan
+    <span class="text-takt-300">persona:</span> planner
+    <span class="text-takt-300">instruction:</span> <span class="text-gray-400">Analyze the task and create an implementation plan.</span>
+    <span class="text-takt-300">rules:</span>
+      - <span class="text-takt-300">condition:</span> Plan approved  <span class="text-takt-300">next:</span> implement
+
+  - <span class="text-takt-300">name:</span> implement
+    <span class="text-takt-300">persona:</span> coder
+    <span class="text-takt-300">edit:</span> true
+    <span class="text-takt-300">instruction:</span> <span class="text-gray-400">Implement according to the plan.</span>
+    <span class="text-takt-300">rules:</span>
+      - <span class="text-takt-300">condition:</span> Implementation complete  <span class="text-takt-300">next:</span> review
+
+  - <span class="text-takt-300">name:</span> review
+    <span class="text-takt-300">parallel:</span>
+      - <span class="text-takt-300">persona:</span> architecture-reviewer
+      - <span class="text-takt-300">persona:</span> security-reviewer
+    <span class="text-takt-300">rules:</span>
+      - <span class="text-takt-300">condition:</span> All approved  <span class="text-takt-300">next:</span> COMPLETE
+      - <span class="text-takt-300">condition:</span> Needs fix     <span class="text-takt-300">next:</span> fix
+
+  - <span class="text-takt-300">name:</span> fix
+    <span class="text-takt-300">persona:</span> coder
+    <span class="text-takt-300">edit:</span> true
+    <span class="text-takt-300">rules:</span>
+      - <span class="text-takt-300">condition:</span> Fixed  <span class="text-takt-300">next:</span> review</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Providers -->
+  <section class="px-6 py-20">
+    <div class="max-w-4xl mx-auto text-center">
+      <h2 class="text-3xl md:text-4xl font-bold mb-4">Works With Your Stack</h2>
+      <p class="text-gray-400 mb-10">Use any combination of providers. Assign different agents to different workflow steps.</p>
+      <div class="flex flex-wrap justify-center gap-4">
+        <span class="code-block rounded-lg px-4 py-2 text-sm font-mono text-gray-300">Claude Code</span>
+        <span class="code-block rounded-lg px-4 py-2 text-sm font-mono text-gray-300">Claude SDK</span>
+        <span class="code-block rounded-lg px-4 py-2 text-sm font-mono text-gray-300">Codex</span>
+        <span class="code-block rounded-lg px-4 py-2 text-sm font-mono text-gray-300">OpenCode</span>
+        <span class="code-block rounded-lg px-4 py-2 text-sm font-mono text-gray-300">Cursor</span>
+        <span class="code-block rounded-lg px-4 py-2 text-sm font-mono text-gray-300">GitHub Copilot</span>
+        <span class="code-block rounded-lg px-4 py-2 text-sm font-mono text-gray-300">Kiro</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="px-6 py-20">
+    <div class="max-w-3xl mx-auto text-center">
+      <h2 class="text-3xl md:text-4xl font-bold mb-6">Get Started in 5 Minutes</h2>
+      <div class="code-block rounded-lg px-6 py-4 inline-block mb-8">
+        <code class="text-takt-300 text-lg font-mono">npm install -g takt</code>
+      </div>
+      <p class="text-gray-400 mb-8">Also available via Nix: <code class="text-takt-300 font-mono text-sm">nix run github:nrslib/takt</code></p>
+      <div class="flex flex-wrap justify-center gap-4">
+        <a href="https://github.com/nrslib/takt" class="inline-flex items-center gap-2 bg-white text-gray-900 font-semibold px-6 py-3 rounded-lg hover:bg-gray-200 transition">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          Star on GitHub
+        </a>
+        <a href="https://github.com/nrslib/takt/blob/main/README.md" class="inline-flex items-center gap-2 border border-takt-400 text-takt-300 font-semibold px-6 py-3 rounded-lg hover:bg-takt-400/10 transition">
+          Read the Docs
+        </a>
+        <a href="https://discord.gg/R2Xz3uYWxD" class="inline-flex items-center gap-2 border border-gray-600 text-gray-300 font-semibold px-6 py-3 rounded-lg hover:bg-gray-700/30 transition">
+          Join Discord
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="px-6 py-10 border-t border-gray-800">
+    <div class="max-w-4xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+      <p class="text-gray-500 text-sm">TAKT — <strong>T</strong>AKT <strong>A</strong>gent <strong>K</strong>oordination <strong>T</strong>opology</p>
+      <div class="flex gap-6">
+        <a href="https://github.com/nrslib/takt" class="text-gray-500 hover:text-gray-300 text-sm transition">GitHub</a>
+        <a href="https://discord.gg/R2Xz3uYWxD" class="text-gray-500 hover:text-gray-300 text-sm transition">Discord</a>
+        <a href="https://github.com/nrslib/takt/blob/main/LICENSE" class="text-gray-500 hover:text-gray-300 text-sm transition">MIT License</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

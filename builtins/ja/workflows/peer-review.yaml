@@ -1,193 +1,258 @@
 name: peer-review
-description: 6 並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正 ループ。
+description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）→ 指摘裁定 → 共通修正ループ後、supervisor が要件充足を最終裁定する。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal
   returns:
     - need_replan
   params:
-    arch_knowledge:
+    reviewer_suite:
+      type: workflow_ref
+      default: peer-review-suite-base
+    fix_companions:
+      type: companion_ref[]
+      default: []
+    fix_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    remediation_workflow:
+      type: workflow_ref
+      default: development-remediation
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
       type: facet_ref[]
       facet_kind: knowledge
       default:
         - architecture
         - takt
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
-max_steps: 30
-initial_step: reviewers
+    security_review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    security_review_pool:
+      type: facet_pool_ref
+      default: security-review-facets
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - takt
+        - architecture
+    verification_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - takt
+        - architecture
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+        - review
+    fix_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+    verification_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+        - review
+    final_gate_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+        - review
+        - architecture
+        - takt
+    fix_plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix-plan-from-review-resolution
+    fix_plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: fix-plan
+    final_gate_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise-review-resolution
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+  takt-coding-facets:
+    uses: takt-coding-facets
+  security-review-facets:
+    uses: security-review-facets
+  takt-security-review-facets:
+    uses: takt-security-review-facets
+initial_step: initial-reviewers
 loop_monitors:
   - cycle:
       - reviewers
-      - fix
-    threshold: 5
+      - review-adjudication
+      - remediation
+    threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: 健全（指摘数が減少、修正が反映されている）
+        - condition: 健全（修正進捗があり、報告内容も収束している）
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
-          next: COMPLETE
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
+          next: reviewers
+        - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
+          next: remediation
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
+  - cycle:
+      - reviewers
+      - review-adjudication
+      - final-gate
+      - remediation
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: reviewers
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
+          next: reviewers
+        - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
+          next: remediation
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
 steps:
+  - name: initial-reviewers
+    uses: peer-review-suite-call
+    with:
+      reviewer_suite:
+        $param: reviewer_suite
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+      security_review_knowledge_additions:
+        $param: security_review_knowledge_additions
+      security_review_pool:
+        $param: security_review_pool
+      architecture_review_instruction: architecture-review
+      security_review_instruction: security-review
+      testing_review_instruction: testing-review
+      coding_review_instruction: coding-review
+      ai_antipattern_review_instruction: initial-ai-antipattern-review
+      frontend_review_instruction: frontend-review
+      cqrs_es_review_instruction: cqrs-es-review
+    rules:
+      - condition: COMPLETE
+        next: review-adjudication
+      - condition: needs_fix
+        next: review-adjudication
   - name: reviewers
-    tags:
-      - review
-    parallel:
-      - name: arch-review
-        tags:
-          - review
-        edit: false
-        persona: architecture-reviewer
-        policy: review
-        knowledge:
-          $param: arch_knowledge
-        provider_options:
-          extends: review-readonly
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-arch
-        output_contracts:
-          report:
-            - name: architect-review.md
-              format: architecture-review
-      - name: security-review
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy: review
-        knowledge: security
-        provider_options:
-          extends: review-readonly
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
-      - name: qa-review
-        tags:
-          - review
-        edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
-        provider_options:
-          extends: review-readonly
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-qa
-        output_contracts:
-          report:
-            - name: qa-review.md
-              format: qa-review
-      - name: testing-review
-        tags:
-          - review
-        edit: false
-        persona: testing-reviewer
-        policy:
-          - review
-          - testing
-        knowledge:
-          - unit-testing
-          - e2e-testing
-        provider_options:
-          extends: review-readonly
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-test
-        output_contracts:
-          report:
-            - name: testing-review.md
-              format: testing-review
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          extends: review-readonly
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
-      - name: coding-review
-        tags:
-          - review
-        edit: false
-        persona: coding-reviewer
-        policy:
-          - review
-          - coding
-        pass_previous_response: false
-        provider_options:
-          extends: review-readonly
-        instruction: review-coding
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: coding-review.md
-              format: coding-review
-      - name: ai-antipattern-review-2nd
-        tags:
-          - review
-        edit: false
-        persona: ai-antipattern-reviewer
-        policy:
-          - review
-          - ai-antipattern
-        provider_options:
-          extends: review-web
-        instruction: ai-antipattern-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: ai-antipattern-review.md
-              format: ai-antipattern-review
+    uses: peer-review-suite-call
+    with:
+      reviewer_suite:
+        $param: reviewer_suite
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+      security_review_knowledge_additions:
+        $param: security_review_knowledge_additions
+      security_review_pool:
+        $param: security_review_pool
+      architecture_review_instruction: follow-up-architecture-review
+      security_review_instruction: follow-up-security-review
+      testing_review_instruction: follow-up-testing-review
+      coding_review_instruction: follow-up-coding-review
+      ai_antipattern_review_instruction: follow-up-ai-antipattern-review
+      frontend_review_instruction: follow-up-frontend-review
+      cqrs_es_review_instruction: follow-up-cqrs-es-review
     rules:
-      - condition: all("approved")
-        next: COMPLETE
-      - condition: any("needs_fix")
-        next: fix
-  - name: fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - takt
-      - architecture
-    provider_options:
-      extends: edit
-    required_permission_mode: edit
-    pass_previous_response: false
+      - condition: COMPLETE
+        next: review-adjudication
+      - condition: needs_fix
+        next: review-adjudication
+  - name: review-adjudication
+    uses: peer-review-adjudication
+    with:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
     rules:
-      - condition: 修正完了
-        next: reviewers
-      - condition: 判断できない、情報不足
+      - condition: 修正対象あり
+        next: remediation
+      - condition: 修正対象なし
+        next: final-gate
+      - condition: タスク全体の再計画が必要
         return: need_replan
-    instruction: fix
+  - name: final-gate
+    uses: peer-review-final-gate
+    with:
+      review_knowledge:
+        $param: review_knowledge_additions
+      final_gate_policy:
+        $param: final_gate_policy
+      final_gate_instruction:
+        $param: final_gate_instruction
+    rules:
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: remediation
+      - condition: BLOCKED
+        return: need_replan
+  - name: remediation
+    kind: workflow_call
+    call:
+      $param: remediation_workflow
+    args:
+      fix_pool:
+        $param: fix_pool
+      fix_companions:
+        $param: fix_companions
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      verification_knowledge:
+        $param: verification_knowledge
+      plan_policy:
+        $param: plan_policy
+      verification_policy:
+        $param: verification_policy
+      fix_plan_instruction:
+        $param: fix_plan_instruction
+      fix_plan_report_format:
+        $param: fix_plan_report_format
+    rules:
+      - condition: COMPLETE
+        next: reviewers
+      - condition: need_replan
+        return: need_replan
+      - condition: ABORT
+        next: ABORT

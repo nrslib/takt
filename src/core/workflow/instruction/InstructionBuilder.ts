@@ -20,7 +20,10 @@ import {
   prepareKnowledgeContent as prepareKnowledgeContentGeneric,
   preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
-import { renderFencedJsonBlock } from './fenced-json.js';
+import { renderPullRequestContext } from '../pr-context.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../models/workflow-types.js';
+import { getCompanionInstructionCopy } from '../companion/evidence.js';
+import { renderWorkflowWideRules } from './workflow-wide-rules.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
@@ -32,8 +35,14 @@ function preparePolicyContent(content: string, sourcePath?: string): string {
   return preparePolicyContentGeneric(content, CONTEXT_MAX_CHARS, sourcePath);
 }
 
-function preparePreviousResponseContent(content: string, sourcePath?: string): string {
-  const prepared = trimContextContent(content, CONTEXT_MAX_CHARS);
+export function preparePreviousResponseContent(
+  content: string,
+  sourcePath: string | undefined,
+  preserveFullContent: boolean,
+): string {
+  const prepared = preserveFullContent
+    ? { content, truncated: false }
+    : trimContextContent(content, CONTEXT_MAX_CHARS);
   const lines: string[] = [prepared.content];
   if (prepared.truncated && sourcePath) {
     lines.push('', `Previous Response is truncated. Source: ${sourcePath}`);
@@ -116,8 +125,18 @@ export class InstructionBuilder {
       ? preparePreviousResponseContent(
           this.context.previousOutput.content,
           this.context.previousResponseSourcePath,
+          this.step.preserveFullPreviousResponse === true,
         )
       : '';
+    const workflowRules = renderWorkflowWideRules(
+      this.context.workflowRules,
+      language,
+      this.step,
+      {
+        ...this.context,
+        previousResponseText: previousResponsePrepared || undefined,
+      },
+    );
     const previousResponse = hasPreviousResponse
       ? escapeTemplateChars(previousResponsePrepared)
       : '';
@@ -129,7 +148,7 @@ export class InstructionBuilder {
       : '';
 
     // Instructions (step instruction with placeholder processing)
-    const instructions = this.appendFindingContractInstruction(replaceTemplatePlaceholders(
+    const instructions = this.appendCompanionInstruction(replaceTemplatePlaceholders(
       tmpl,
       this.step,
       {
@@ -146,19 +165,25 @@ export class InstructionBuilder {
     // Retry note
     const hasRetryNote = !!this.context.retryNote;
     const retryNote = hasRetryNote ? escapeTemplateChars(this.context.retryNote!) : '';
+    const hasPrContext = this.context.prContext !== undefined;
+    const prContext = hasPrContext
+      ? renderPullRequestContext(this.context.prContext!, language)
+      : '';
 
-    // Policy injection (top + bottom reminder per "Lost in the Middle" research)
+    // Policy facet content
     const policyContents = this.context.policyContents ?? this.step.policyContents;
-    const hasPolicy = !!(policyContents && policyContents.length > 0);
-    const policyJoined = hasPolicy && policyContents ? policyContents.join('\n\n---\n\n') : '';
+    const policyStrings = policyContents?.map((c) => c.content);
+    const hasPolicy = !!(policyStrings && policyStrings.length > 0);
+    const policyJoined = hasPolicy && policyStrings ? policyStrings.join('\n\n---\n\n') : '';
     const policyContent = hasPolicy
       ? preparePolicyContent(policyJoined, this.context.policySourcePath)
       : '';
 
     // Knowledge injection (domain-specific knowledge, no reminder needed)
     const knowledgeContents = this.context.knowledgeContents ?? this.step.knowledgeContents;
-    const hasKnowledge = !!(knowledgeContents && knowledgeContents.length > 0);
-    const knowledgeJoined = hasKnowledge && knowledgeContents ? knowledgeContents.join('\n\n---\n\n') : '';
+    const knowledgeStrings = knowledgeContents?.map((c) => c.content);
+    const hasKnowledge = !!(knowledgeStrings && knowledgeStrings.length > 0);
+    const knowledgeJoined = hasKnowledge && knowledgeStrings ? knowledgeStrings.join('\n\n---\n\n') : '';
     const knowledgeContent = hasKnowledge
       ? prepareKnowledgeContent(knowledgeJoined, this.context.knowledgeSourcePath)
       : '';
@@ -195,12 +220,20 @@ export class InstructionBuilder {
       userInputs,
       hasRetryNote,
       retryNote,
+      hasPrContext,
+      prContext,
       hasPolicy,
       policyContent,
       hasKnowledge,
       knowledgeContent,
       hasQualityGates,
       qualityGatesContent,
+      hasWorkflowRulesAfterExecution: workflowRules.hasAfterExecutionRules,
+      workflowRulesNoticeAfterExecution: workflowRules.noticeAfterExecutionRules,
+      workflowRulesAfterExecution: workflowRules.afterExecutionRules,
+      hasWorkflowRulesBeforeInstruction: workflowRules.hasBeforeInstructionRules,
+      workflowRulesNoticeBeforeInstruction: workflowRules.noticeBeforeInstructionRules,
+      workflowRulesBeforeInstruction: workflowRules.beforeInstructionRules,
       instructions,
     });
   }
@@ -227,35 +260,22 @@ export class InstructionBuilder {
     return [structureHeader, ...stepLines].join('\n');
   }
 
-  private appendFindingContractInstruction(instructions: string): string {
-    if (!this.context.findingContract) {
-      return instructions;
-    }
-
-    const lines = [
-      instructions,
-      '',
-      '## Finding Contract',
-      `- Consolidated ledger copy: ${this.context.findingContract.ledgerCopyPath}`,
-      '- Use existing finding IDs from the ledger when referring to tracked findings.',
-      '- Do not assign final finding IDs.',
-      '',
-      'Current finding ledger summary:',
-      renderFencedJsonBlock(this.context.findingContract.ledgerSummary),
-    ];
-
-    if (this.context.findingContract.rawFindingsJsonSchema) {
-      lines.push(
-        '',
-        '- Report every issue you observe as structured raw findings.',
-        '- Use rawFindingId values that are unique within this response.',
-        '- Copy each Observed Findings family_tag value into the structured familyTag field.',
-        '- Return structured output matching this raw findings schema:',
-        renderFencedJsonBlock(this.context.findingContract.rawFindingsJsonSchema),
-      );
-    }
-
-    return lines.join('\n');
+  private appendCompanionInstruction(instructions: string): string {
+    if (
+      !isNormalOrTeamLeaderWorkflowStep(this.step)
+      || this.step.companion === undefined
+      || this.context.companion === undefined
+    ) return instructions;
+    const language = this.context.language ?? 'en';
+    const companionCopy = getCompanionInstructionCopy(language);
+    const section = [
+      `## ${companionCopy.heading}`,
+      `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
+      companionCopy.reviewDelivery[this.context.companion.reviewMode],
+      companionCopy.evidenceGuard,
+      companionCopy.advisoryNotice,
+    ].join('\n');
+    return [instructions, '', section].join('\n');
   }
 }
 

@@ -1,6 +1,6 @@
 # AI Antipattern Detection Criteria
 
-Detect assumptions, over-implementation, and superficial fixes that AI-generated changes commonly introduce.
+Avoid assumptions, over-implementation, and superficial fixes during implementation, and detect them during review.
 
 ## Principles
 
@@ -10,10 +10,18 @@ Detect assumptions, over-implementation, and superficial fixes that AI-generated
 | Reality check | Do not infer APIs, settings, fields, or wiring paths |
 | Context fit | Match existing naming, structure, error handling, logging, and tests |
 | Minimal diff | Do not mix in unnecessary features, abstractions, settings, or compatibility code |
-| Contract preservation | Do not change UI copy, public APIs, return values, errors, or test expectations out of scope |
+| Contract preservation | Do not change out-of-scope UI copy, public APIs, return values, errors, or test expectations |
 | Direct fixes | Do not replace a fix with tests or documentation explaining the issue |
 | Reachability | Confirm that added or retained code is used by current call paths |
 | Verifiability | Check code paths, usage sites, and execution results instead of explanations |
+
+## Justifying Extension Points
+
+| Judgment | Criteria |
+|----------|----------|
+| REJECT | Add options, a Strategy, or an extension point for a value or behavior fixed by the requirement when current callers do not use it |
+| REJECT | A Strategy or interface has only one implementation and the current requirement has no replacement axis |
+| OK | The current requirement has multiple implementations or change axes and the abstraction represents that boundary |
 
 ## Assumption Verification
 
@@ -96,9 +104,11 @@ AI tends to implement data retrieval via callbacks and external variable capture
 
 | Pattern | Example | Verdict |
 |---------|---------|---------|
-| Assign to external variable in callback | `let result; await f(x => { result = x })` | REJECT |
-| Get value via event handler | `emitter.on('data', d => { captured = d })` to synchronously get value | REJECT |
-| Build state across multiple callbacks | `forEach(item => { externalMap.set(...) })` to construct result | REJECT |
+| Assign to external variable in callback | `let result; await f(x => { result = x })` when a return value can express the same contract | REJECT |
+| Get value via event handler | `emitter.on('data', d => { captured = d })` to synchronously get a value when a direct API can express the same contract | REJECT |
+| Build state across multiple callbacks | `forEach(item => { externalMap.set(...) })` when a returned collection can express the same contract | REJECT |
+| Record callback or event observations in test-local state | Store emitted payloads or call order in a collection created and owned by the test | OK |
+| Sequence mock responses in test-local state | Advance responses or errors across repeated calls to verify retry or transition behavior | OK |
 
 ```typescript
 // REJECT - Capturing external variable via callback
@@ -115,8 +125,9 @@ return selectedMode;
 
 Verification approach:
 1. Find places where callback functions assign to variables in the outer scope
-2. Check if the value can be returned as a function return value
-3. If possible, flag for rewriting to the return-value pattern
+2. Determine whether the callback or event is part of the contract, or whether the state is only a test-local observation or mock sequence
+3. Check whether a return value or direct API can express the same contract
+4. Only when it can, flag for rewriting to the return-value pattern
 
 ## Inappropriate Response to Review Findings
 
@@ -134,6 +145,24 @@ Verification approach:
 2. If the fix consists only of new file additions, check whether those files "fix" the issue or merely "verify" it
 3. If tests are added as part of the fix, verify they test "correct behavior after the fix" (not "the finding itself")
 4. For mid-PR specification changes, verify the tests cover the new behavior in the layer that owns it, not only the absence of the old specification
+
+## Superficial Fixes Through Test Doubles
+
+AI sometimes makes tests pass by loosening test doubles or ignoring arguments the production code uses instead of fixing the production contract. A passing test is evidence only when it exercised the same semantic contract as production.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| A test double omits constraints or overrides always applied by the production helper | Permissions, capabilities, limits, or missing-value semantics differ from production | REJECT |
+| A mock ignores input that production uses for branching | Accepts `options` or `context` but never verifies them | REJECT |
+| A dependency with side-effect contracts is replaced by a return-only stub | Session updates, cache invalidation, or event emission are unobserved | REJECT |
+| The test only verifies that something was called, not the arguments or side effects | The test passes even when constraints are not propagated | REJECT |
+| The test double reproduces the observable production contract and assertions inspect arguments and side effects | Key options, missing values, and failure-state transitions are verified | OK |
+
+Verification approach:
+1. Inspect the replaced production function, builder, or adapter for return shape, missing values, side effects, and override propagation
+2. Check whether the test double collapses branch-relevant inputs into fixed values
+3. When the fix concerns state transitions or permission propagation, verify call arguments and side effects in addition to final state
+4. Check that test names and completion reports do not overclaim behavior the test double cannot prove
 
 ## Context Fitness Assessment
 
@@ -179,7 +208,7 @@ AI tends to over-deliver. Check for unnecessary additions.
 | Gold-plating | "Nice-to-have" additions not asked for |
 | Extra changes disguised as related work | Cleanup, renames, or moves justified only because they are near the edited code |
 | Incidental observable contract changes | Changing values observed by users or tests without being asked |
-| Unnecessary legacy support | Adding mapping/normalization logic for old values without explicit instruction |
+| Contract-replacement violation | Adding or retaining an old path contrary to the contract replacement policy |
 
 The best code is the minimum code that solves the problem.
 
@@ -213,7 +242,8 @@ AI often changes existing contracts under the banner of "improvement", "standard
 | Tests are updated only to follow the new contract | REJECT |
 | New contract required by new functionality | OK |
 | Missing information is added while preserving the existing contract | OK |
-| Reason, impact scope, and migration path for the contract change are explicit | OK |
+| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Apply the contract replacement policy |
+| Fixing display, accessibility, or test contract breakage newly caused by the requested change | OK. This is change-induced reconciliation, not scope creep |
 
 Verification approach:
 1. Inspect changed strings, attributes, event names, return values, error messages, and log formats in the diff
@@ -221,20 +251,15 @@ Verification approach:
 3. If test expectations merely follow implementation changes, check whether the original contract can be preserved
 4. If the contract change is necessary, verify that reason and impact scope are explained
 
-Legacy support criteria:
-- Unless explicitly instructed to "support legacy values" or "maintain backward compatibility", legacy support is unnecessary
-- Do not add `.transform()` normalization, `LEGACY_*_MAP` mappings, or `@deprecated` type definitions
-- Support only new values and keep it simple
-
 ### Over-Abstracting with Function Objects
 
 AI often turns a small number of concrete branches into config arrays, function objects, and generic loops to make the code look "extensible". The problem is not Strategy itself; the problem is hiding differences in data without naming the concept. A Strategy is useful when it names a domain concept and makes the replacement boundary explicit.
 
 | Pattern | Example | Verdict |
 |---------|---------|---------|
-| Single-use operation config array | Processing `[{ kind, fields, removedFields }]` in a loop | REJECT |
+| Operation config array hides meaning, contracts, or change boundaries | Side effects require reading both `[{ kind, fields, removedFields }]` and its loop | REJECT |
 | Deletions, side effects, or exception cases are hidden in config objects | Readers must inspect config values to find destructive behavior | REJECT |
-| Function object introduced when each branch is only 1-3 lines | `handlers[type]()` adds indirection only | REJECT |
+| Function object introduced when branch differences have no independent concept or change axis | `handlers[type]()` adds only indirection | REJECT |
 | Strategy represents a domain concept and clarifies the implementation boundary | `TaxPolicy`, `PaymentMethod`, `RetryStrategy` | OK |
 | Many branches share the same shape and are expected to grow | Consider a handler map | OK |
 
@@ -339,36 +364,6 @@ Verification approach:
 1. Grep to confirm no references to changed/deleted code remain
 2. Verify that public module (index files, etc.) export lists match actual implementations
 3. Check that no old code remains corresponding to newly added code
-
-## Unnecessary Backward Compatibility Code Detection
-
-AI tends to leave unnecessary code "for backward compatibility". Don't miss this.
-
-Code to remove:
-
-| Pattern | Example | Verdict |
-|---------|---------|---------|
-| deprecated + no usage | `@deprecated` annotation with no one using it | Remove immediately |
-| Both old and new APIs exist | Old function remains alongside new function | Remove old, unless both have active usage sites |
-| Completed migration wrapper | Wrapper created for compatibility but migration is complete | Remove |
-| Comment says "remove later" | `// TODO: remove after migration` left abandoned | Remove now |
-| Excessive proxy/adapter usage | Complexity added solely for backward compatibility | Replace simply |
-
-Code to keep:
-
-| Pattern | Example | Verdict |
-|---------|---------|---------|
-| Externally published API | npm package exports | Consider carefully |
-| Config file compatibility | Can read old format config | Maintain until major version |
-| During data migration | In the middle of DB schema migration | Maintain until complete |
-
-Decision criteria:
-1. Are there usage sites? -> Verify with grep/search. Remove if none
-2. Do both old and new have usage sites? -> If both are currently in use, this may be intentional coexistence rather than backward compatibility. Check callers
-3. Is it externally published? -> Can remove immediately if internal only
-4. Is migration complete? -> Remove if complete
-
-When AI says "for backward compatibility", be skeptical. Verify if it's truly necessary.
 
 ## Decision Traceability Review
 

@@ -1,11 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { join } from 'node:path';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { WorkflowStepRawSchema } from '../core/models/schemas.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('team_leader schema', () => {
+  it('トップレベルの dynamic_facets と companion を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      instruction: 'decompose',
+      team_leader: {
+        persona: 'team-leader',
+        max_concurrency: 2,
+      },
+      dynamic_facets: {
+        pool: 'review',
+        max_selected: 1,
+      },
+      companion: ['security-reviewer'],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('max_parts <= 3 の設定を受け付ける', () => {
     const raw = {
       name: 'implement',
@@ -21,13 +39,13 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('max_concurrency と max_total_parts の設定を受け付ける', () => {
+  it('max_concurrency と initial_max_parts の設定を受け付ける', () => {
     const raw = {
       name: 'implement',
       team_leader: {
         persona: 'team-leader',
         max_concurrency: 2,
-        max_total_parts: 5,
+        initial_max_parts: 5,
         timeout_ms: 120000,
       },
       instruction: 'decompose',
@@ -40,7 +58,34 @@ describe('team_leader schema', () => {
     }
     const teamLeader = result.data.team_leader as Record<string, unknown>;
     expect(teamLeader.max_concurrency).toBe(2);
-    expect(teamLeader.max_total_parts).toBe(5);
+    expect(teamLeader.initial_max_parts).toBe(5);
+  });
+
+  it('initial_max_parts と fail_on_part_error の設定を受け付ける', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        initial_max_parts: 2,
+        fail_on_part_error: true,
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('initial_max_parts は20を超えても受け付ける', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        initial_max_parts: 21,
+      },
+      instruction: 'decompose',
+    };
+
+    expect(WorkflowStepRawSchema.safeParse(raw).success).toBe(true);
   });
 
   it('max_parts > 3 は拒否する', () => {
@@ -69,19 +114,6 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('max_total_parts > 20 は拒否する', () => {
-    const raw = {
-      name: 'implement',
-      team_leader: {
-        max_total_parts: 21,
-      },
-      instruction: 'decompose',
-    };
-
-    const result = WorkflowStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(false);
-  });
-
   it('max_parts と max_concurrency の同時指定は拒否する', () => {
     const raw = {
       name: 'implement',
@@ -96,12 +128,12 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('refill_threshold > max_parts は拒否する', () => {
+  it('refill_threshold の非0値は batch 障壁と両立しないため拒否する', () => {
     const raw = {
       name: 'implement',
       team_leader: {
         max_parts: 2,
-        refill_threshold: 3,
+        refill_threshold: 1,
       },
       instruction: 'decompose',
     };
@@ -110,18 +142,18 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('refill_threshold > max_concurrency は拒否する', () => {
+  it('refill_threshold: 0 は互換キーとして受け付ける', () => {
     const raw = {
       name: 'implement',
       team_leader: {
         max_concurrency: 2,
-        refill_threshold: 3,
+        refill_threshold: 0,
       },
       instruction: 'decompose',
     };
 
     const result = WorkflowStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it('parallel と team_leader の同時指定は拒否する', () => {
@@ -238,7 +270,34 @@ describe('team_leader schema', () => {
 });
 
 describe('normalizeWorkflowConfig team_leader', () => {
-  it('team_leader の新しい上限設定を内部形式へ正規化する', () => {
+  it('トップレベルの dynamic_facets と companion を内部形式へ保持する', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const config = normalizeWorkflowConfig({
+      name: 'workflow',
+      policies: {
+        review: 'review policy',
+      },
+      facet_pools: {
+        review: {
+          candidates: [{ id: 'selected', description: 'selected facet', policy: 'review' }],
+        },
+      },
+      steps: [{
+        name: 'implement',
+        instruction: 'decompose',
+        team_leader: { max_concurrency: 2 },
+        dynamic_facets: { pool: 'review', max_selected: 1 },
+        companion: ['security-reviewer'],
+      }],
+    }, workflowDir);
+
+    expect(config.steps[0]).toEqual(expect.objectContaining({
+      dynamicFacets: { pool: 'review', maxSelected: 1 },
+      companion: { fixed: ['security-reviewer'], pool: [] },
+    }));
+  });
+
+  it('team_leader の並列・初回分解設定を内部形式へ正規化する', () => {
     const workflowDir = join(process.cwd(), 'src', '__tests__');
     const raw = {
       name: 'workflow',
@@ -249,7 +308,8 @@ describe('normalizeWorkflowConfig team_leader', () => {
           team_leader: {
             persona: 'team-leader',
             max_concurrency: 2,
-            max_total_parts: 5,
+            initial_max_parts: 2,
+            fail_on_part_error: true,
             timeout_ms: 90000,
             inspect_tools: [' Read ', 'Glob', 'grep'],
             part_tags: [' coding ', 'review'],
@@ -273,13 +333,14 @@ describe('normalizeWorkflowConfig team_leader', () => {
       personaDisplayName: 'team-leader',
       providerRoutingPersonaKey: 'team-leader',
       maxConcurrency: 2,
-      maxTotalParts: 5,
-      refillThreshold: 0,
+      initialMaxParts: 2,
+      failOnPartError: true,
       timeoutMs: 90000,
       inspectTools: ['read', 'glob', 'grep'],
       partTags: ['coding', 'review'],
       partPersona: 'coder',
       partPersonaPath: undefined,
+      partPersonaRef: 'coder',
       partAllowedTools: ['Read', 'Edit'],
       partEdit: true,
       partPermissionMode: 'edit',
@@ -361,8 +422,6 @@ describe('normalizeWorkflowConfig team_leader', () => {
       personaDisplayName: undefined,
       providerRoutingPersonaKey: undefined,
       maxConcurrency: 2,
-      maxTotalParts: 20,
-      refillThreshold: 0,
       timeoutMs: 900000,
       inspectTools: undefined,
       partPersona: undefined,

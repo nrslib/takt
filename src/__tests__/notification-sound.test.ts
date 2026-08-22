@@ -1,0 +1,521 @@
+/**
+ * Integration test: notification sound ON/OFF in executeWorkflow().
+ *
+ * Verifies that:
+ * - notificationSound: undefined (default) → playWarningSound / notifySuccess / notifyError are called
+ * - notificationSound: true → playWarningSound / notifySuccess / notifyError are called
+ * - notificationSound: false → playWarningSound / notifySuccess / notifyError are NOT called
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { existsSync, rmSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+
+// --- Hoisted mocks (must be before vi.mock calls) ---
+
+const {
+  disabledObservability,
+  MockWorkflowEngine,
+  mockInterruptAllQueries,
+  mockLoadGlobalConfig,
+  mockNotifySuccess,
+  mockNotifyError,
+  mockNotifyWarning,
+  mockPlayWarningSound,
+  mockSelectOption,
+} = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
+
+  const mockInterruptAllQueries = vi.fn().mockReturnValue(0);
+  const mockLoadGlobalConfig = vi.fn().mockReturnValue({ provider: 'claude' });
+  const mockNotifySuccess = vi.fn();
+  const mockNotifyError = vi.fn();
+  const mockNotifyWarning = vi.fn();
+  const mockPlayWarningSound = vi.fn();
+  const mockSelectOption = vi.fn().mockResolvedValue('stop');
+
+  // Mock WorkflowEngine that can simulate complete / abort / iteration-limit
+  class MockWorkflowEngine extends EE {
+    static latestInstance: MockWorkflowEngine | null = null;
+
+    private runResolve: ((value: { status: string; iteration: number }) => void) | null = null;
+    private onIterationLimit: ((req: unknown) => Promise<number | null>) | undefined;
+
+    constructor(
+      _config: unknown,
+      _cwd: string,
+      _task: string,
+      options: { onIterationLimit?: (req: unknown) => Promise<number | null> },
+    ) {
+      super();
+      this.onIterationLimit = options?.onIterationLimit;
+      MockWorkflowEngine.latestInstance = this;
+    }
+
+    abort(): void {
+      const state = { status: 'aborted', iteration: 1 };
+      this.emit('workflow:abort', state, 'user_interrupted', 'interrupt', {
+        kind: 'interrupt',
+        step: 'step1',
+        reason: 'user_interrupted',
+        error: 'user_interrupted',
+      });
+      if (this.runResolve) {
+        this.runResolve(state);
+        this.runResolve = null;
+      }
+    }
+
+    complete(): void {
+      const state = { status: 'completed', iteration: 3 };
+      this.emit('workflow:complete', state);
+      if (this.runResolve) {
+        this.runResolve(state);
+        this.runResolve = null;
+      }
+    }
+
+    async triggerIterationLimit(): Promise<void> {
+      if (this.onIterationLimit) {
+        await this.onIterationLimit({
+          currentIteration: 10,
+          maxSteps: 10,
+          currentStep: 'step1',
+        });
+      }
+    }
+
+    triggerRateLimited(): void {
+      this.emit(
+        'step:rate_limited',
+        { name: 'step1', personaDisplayName: 'step1', instruction: 'Run step1' },
+        {
+          persona: 'step1',
+          status: 'rate_limited',
+          content: '',
+          error: 'Rate limit exceeded. Please try again later.',
+          timestamp: new Date(),
+        },
+        {
+          provider: 'claude',
+          detectedAt: new Date('2026-05-13T03:00:00.000Z'),
+          source: 'stream_marker',
+        },
+      );
+    }
+
+    async run(): Promise<{ status: string; iteration: number }> {
+      return new Promise((resolve) => {
+        this.runResolve = resolve;
+      });
+    }
+  }
+
+  return {
+    disabledObservability: {
+      enabled: false,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    },
+    MockWorkflowEngine,
+    mockInterruptAllQueries,
+    mockLoadGlobalConfig,
+    mockNotifySuccess,
+    mockNotifyError,
+    mockNotifyWarning,
+    mockPlayWarningSound,
+    mockSelectOption,
+  };
+});
+
+// --- Module mocks ---
+
+vi.mock('../core/workflow/index.js', async () => {
+  const errorModule = await import('../core/workflow/ask-user-question-error.js');
+  return {
+    WorkflowEngine: MockWorkflowEngine,
+    createDenyAskUserQuestionHandler: errorModule.createDenyAskUserQuestionHandler,
+  };
+});
+
+vi.mock('../features/tasks/execute/workflowRunLifecycle.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunLifecycle.js')
+  >();
+  const { createWorkflowRunLifecycleCompositionTestDouble } = await import(
+    './helpers/run-lifecycle.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunLifecycle: (
+      input: Parameters<typeof actual.createWorkflowRunLifecycle>[0],
+    ) => createWorkflowRunLifecycleCompositionTestDouble(
+      actual.createWorkflowRunLifecycle,
+      input,
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-02-07T00:00:00.000Z',
+        projectTerminalArtifacts: false,
+      },
+    ),
+  };
+});
+
+vi.mock('../infra/claude/query-manager.js', () => ({
+  interruptAllQueries: mockInterruptAllQueries,
+}));
+
+vi.mock('../infra/config/index.js', () => ({
+  loadPersonaSessions: vi.fn().mockReturnValue({}),
+  updatePersonaSession: vi.fn(),
+  loadWorktreeSessions: vi.fn().mockReturnValue({}),
+  updateWorktreeSession: vi.fn(),
+  loadGlobalConfig: mockLoadGlobalConfig,
+  loadProjectConfig: vi.fn(() => ({})),
+  loadConfig: vi.fn().mockImplementation(() => ({
+    global: mockLoadGlobalConfig(),
+    project: {},
+  })),
+  resolveWorkflowConfigValues: (_projectDir: string, keys: readonly string[]) => {
+    const global = mockLoadGlobalConfig() as Record<string, unknown>;
+    const config = {
+      ...global,
+      workflow: 'default',
+      provider: global.provider ?? 'claude',
+      verbose: false,
+      observability: disabledObservability,
+    };
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      result[key] = config[key];
+    }
+    return result;
+  },
+  saveSessionState: vi.fn(),
+  ensureDir: vi.fn(),
+  writeFileAtomic: vi.fn(),
+}));
+
+vi.mock('../shared/context.js', () => ({
+  isQuietMode: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock('../shared/ui/index.js', () => ({
+  header: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  success: vi.fn(),
+  status: vi.fn(),
+  blankLine: vi.fn(),
+  StreamDisplay: vi.fn().mockImplementation(() => ({
+    createHandler: vi.fn().mockReturnValue(vi.fn()),
+    flush: vi.fn(),
+  })),
+}));
+
+vi.mock('../infra/fs/index.js', () => ({
+  generateSessionId: vi.fn().mockReturnValue('test-session-id'),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
+    iterations: 0,
+    status: 'running',
+    history: [],
+  })),
+  finalizeSessionLog: vi.fn().mockImplementation((log, _status) => ({
+    ...log,
+    status: _status,
+    endTime: new Date().toISOString(),
+  })),
+  initNdjsonLog: vi.fn((
+    sessionId: string,
+    _task: string,
+    _workflowName: string,
+    options: { logsDir: string },
+  ) => join(options.logsDir, `${sessionId}.jsonl`)),
+  appendNdjsonLine: vi.fn(),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../shared/utils/index.js')>();
+  return {
+    ...original,
+    createLogger: vi.fn().mockReturnValue({
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    }),
+    notifySuccess: mockNotifySuccess,
+    notifyError: mockNotifyError,
+    notifyWarning: mockNotifyWarning,
+    playWarningSound: mockPlayWarningSound,
+    preventSleep: vi.fn(),
+    isDebugEnabled: vi.fn().mockReturnValue(false),
+    generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+    isValidReportDirName: vi.fn().mockImplementation((value: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)),
+  };
+});
+
+vi.mock('../shared/prompt/index.js', () => ({
+  selectOption: mockSelectOption,
+  promptInput: vi.fn(),
+}));
+
+vi.mock('../shared/i18n/index.js', () => ({
+  getLabel: vi.fn().mockImplementation((key: string) => key),
+}));
+
+vi.mock('../shared/exitCodes.js', () => ({
+  EXIT_SIGINT: 130,
+}));
+
+// --- Import under test (after mocks) ---
+
+import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
+import type { WorkflowConfig } from '../core/models/index.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+
+// --- Helpers ---
+
+function makeConfig(): WorkflowConfig {
+  return {
+    name: 'test-notify',
+    maxSteps: 10,
+    initialStep: 'step1',
+    steps: [
+      {
+        name: 'step1',
+        persona: '../agents/coder.md',
+        personaDisplayName: 'coder',
+        instruction: 'Do something',
+        passPreviousResponse: true,
+        rules: [
+          normalizeRule({ condition: 'done', next: 'COMPLETE' }),
+          normalizeRule({ condition: 'fail', next: 'ABORT' }),
+        ],
+      },
+    ],
+  };
+}
+
+async function waitForWorkflowEngine(): Promise<InstanceType<typeof MockWorkflowEngine>> {
+  await vi.waitFor(() => {
+    expect(MockWorkflowEngine.latestInstance).not.toBeNull();
+  });
+  const engine = MockWorkflowEngine.latestInstance;
+  if (!engine) {
+    throw new Error('Mock workflow engine was not created');
+  }
+  return engine;
+}
+
+// --- Tests ---
+
+describe('executeWorkflow: notification sound behavior', () => {
+  let tmpDir: string;
+  let savedSigintListeners: ((...args: unknown[]) => void)[];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    MockWorkflowEngine.latestInstance = null;
+    tmpDir = join(tmpdir(), `takt-notify-it-${randomUUID()}`);
+    mkdirSync(tmpDir, { recursive: true });
+    mkdirSync(join(tmpDir, '.takt', 'reports'), { recursive: true });
+
+    savedSigintListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
+  });
+
+  afterEach(() => {
+    if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+    process.removeAllListeners('SIGINT');
+    for (const listener of savedSigintListeners) {
+      process.on('SIGINT', listener as NodeJS.SignalsListener);
+    }
+    process.removeAllListeners('uncaughtException');
+  });
+
+  describe('notifySuccess on workflow:complete', () => {
+    it('should call notifySuccess when notificationSound is undefined (default)', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude' });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      engine.complete();
+      await resultPromise;
+
+      expect(mockNotifySuccess).toHaveBeenCalledOnce();
+    });
+
+    it('should call notifySuccess when notificationSound is true', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: true });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      engine.complete();
+      await resultPromise;
+
+      expect(mockNotifySuccess).toHaveBeenCalledOnce();
+    });
+
+    it('should NOT call notifySuccess when notificationSound is false', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: false });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      engine.complete();
+      await resultPromise;
+
+      expect(mockNotifySuccess).not.toHaveBeenCalled();
+    });
+
+    it('should NOT call notifySuccess when workflow_complete event is disabled', async () => {
+      mockLoadGlobalConfig.mockReturnValue({
+        provider: 'claude',
+        notificationSound: true,
+        notificationSoundEvents: { workflowComplete: false },
+      });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      engine.complete();
+      await resultPromise;
+
+      expect(mockNotifySuccess).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('notifyError on workflow:abort', () => {
+    it('should call notifyError when notificationSound is undefined (default)', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude' });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      engine.abort();
+      await resultPromise;
+
+      expect(mockNotifyError).toHaveBeenCalledOnce();
+    });
+
+    it('should call notifyError when notificationSound is true', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: true });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      engine.abort();
+      await resultPromise;
+
+      expect(mockNotifyError).toHaveBeenCalledOnce();
+    });
+
+    it('should NOT call notifyError when notificationSound is false', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: false });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      engine.abort();
+      await resultPromise;
+
+      expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+
+    it('should NOT call notifyError when workflow_abort event is disabled', async () => {
+      mockLoadGlobalConfig.mockReturnValue({
+        provider: 'claude',
+        notificationSound: true,
+        notificationSoundEvents: { workflowAbort: false },
+      });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      engine.abort();
+      await resultPromise;
+
+      expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('playWarningSound on iteration limit', () => {
+    it('should call playWarningSound when notificationSound is undefined (default)', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude' });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      await engine.triggerIterationLimit();
+      engine.abort();
+      await resultPromise;
+
+      expect(mockPlayWarningSound).toHaveBeenCalledOnce();
+    });
+
+    it('should call playWarningSound when notificationSound is true', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: true });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      await engine.triggerIterationLimit();
+      engine.abort();
+      await resultPromise;
+
+      expect(mockPlayWarningSound).toHaveBeenCalledOnce();
+    });
+
+    it('should NOT call playWarningSound when notificationSound is false', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: false });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      await engine.triggerIterationLimit();
+      engine.abort();
+      await resultPromise;
+
+      expect(mockPlayWarningSound).not.toHaveBeenCalled();
+    });
+
+    it('should NOT call playWarningSound when iteration_limit event is disabled', async () => {
+      mockLoadGlobalConfig.mockReturnValue({
+        provider: 'claude',
+        notificationSound: true,
+        notificationSoundEvents: { iterationLimit: false },
+      });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      await engine.triggerIterationLimit();
+      engine.abort();
+      await resultPromise;
+
+      expect(mockPlayWarningSound).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('warning notification on rate limit', () => {
+    it('should call playWarningSound and notifyWarning when step:rate_limited is emitted', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude' });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      const engine = await waitForWorkflowEngine();
+      engine.triggerRateLimited();
+      engine.abort();
+      await resultPromise;
+
+      expect(mockPlayWarningSound).toHaveBeenCalledOnce();
+      expect(mockNotifyWarning).toHaveBeenCalledOnce();
+    });
+  });
+
+});

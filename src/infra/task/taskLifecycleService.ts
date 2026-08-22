@@ -12,6 +12,8 @@ import {
   buildTerminalTaskRecord,
   generateTaskName,
 } from './taskRecordMutations.js';
+import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
+import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -47,6 +49,10 @@ export class TaskLifecycleService {
         owner_pid: null,
         ...options,
       });
+      const conflict = findActiveTaskTargetConflict(current.tasks, record);
+      if (conflict) {
+        throw conflict;
+      }
       return { tasks: [...current.tasks, record] };
     });
 
@@ -105,7 +111,7 @@ export class TaskLifecycleService {
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {
     if (!task.run_slug) {
-      return {};
+      return hasInheritedRetryCheckpoint(task) ? { preserveExisting: true } : {};
     }
 
     const retryMetadata = readRetryMetadataByRunSlug(
@@ -117,9 +123,24 @@ export class TaskLifecycleService {
       return retryMetadata;
     }
 
-    return retryMetadata.startStep
-      ? { startStep: retryMetadata.startStep }
-      : {};
+    if (retryMetadata.resumePoint) {
+      return retryMetadata;
+    }
+
+    if (retryMetadata.startStep) {
+      return {
+        startStep: retryMetadata.startStep,
+        ...(retryMetadata.currentIteration !== undefined
+          ? { currentIteration: retryMetadata.currentIteration }
+          : {}),
+      };
+    }
+
+    if (hasInheritedRetryCheckpoint(task)) {
+      return { preserveExisting: true };
+    }
+
+    return {};
   }
 
   completeTask(result: TaskResult): string {
@@ -157,6 +178,7 @@ export class TaskLifecycleService {
       step: result.failureStep,
       error: result.response,
       last_message: result.failureLastMessage ?? result.executionLog[result.executionLog.length - 1],
+      retryable: result.failureRetryable,
     };
 
     this.store.update((current) => {
@@ -275,4 +297,13 @@ export class TaskLifecycleService {
   private isRunningTaskStale(task: TaskRecord): boolean {
     return isStaleRunningTask(task.owner_pid ?? undefined);
   }
+}
+
+function hasInheritedRetryCheckpoint(task: TaskRecord): boolean {
+  return task.resume_mode !== undefined
+    && (
+      task.start_step !== undefined
+      || task.resume_point !== undefined
+      || task[TASK_RESTART_POINT_KEY] !== undefined
+    );
 }

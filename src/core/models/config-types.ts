@@ -8,23 +8,118 @@
  */
 
 import type { ProviderType } from '../../shared/types/provider.js';
+import type { PermissionMode } from './types.js';
 import type { QualityGate, RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from './workflow-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
+
+export type RoutingTier = 'high' | 'medium' | 'low';
+export type AutoRoutingStrategy = 'cost' | 'balanced' | 'performance';
+
+export interface AutoRoutingCandidate {
+  name: string;
+  description?: string;
+  provider: ProviderType;
+  model: string;
+  routingTier: RoutingTier;
+  providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
+}
+
+export interface AutoRoutingConfig {
+  /** Engine-local workflow identity used to resolve runtime.yaml `<workflow>/<step>` targets. */
+  workflowName?: string;
+  strategy: AutoRoutingStrategy;
+  router: {
+    provider: ProviderType;
+    model: string;
+    providerOptions?: StepProviderOptions;
+    permissionMode?: PermissionMode;
+  };
+  candidates: AutoRoutingCandidate[];
+  /** Legacy auto routing default; runtime.yaml requires an explicit target pool instead. */
+  defaultPool?: string;
+  candidatePools: Record<string, {
+    candidates: string[];
+    fallback: string;
+  }>;
+  poolRules?: {
+    tags?: Record<string, string>;
+    steps?: Record<string, string>;
+    personas?: Record<string, string>;
+  };
+  rules?: {
+    tags?: Record<string, string>;
+    steps?: Record<string, string>;
+    personas?: Record<string, string>;
+  };
+}
 
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+  /** Exact permission mode declared by the resolved runtime profile. */
+  permissionMode?: PermissionMode;
 }
 
 export type ProviderRoutingEntry = PersonaProviderEntry;
 
+/**
+ * runtime.yaml `provider.targets.internal_agents` の seat 割り当て（解決済み）。
+ *
+ * seat はエンジンが自前で合成するエージェント（ワークフローの step として書けない
+ * 役職）の宛先を runtime 側から名指しするための口である。`targets.personas` が
+ * 人間定義 persona の表示名照合であるのに対し、ここは固定のロールキーで引く。
+ *
+ * すべて **オプショナル**。未指定の seat は従来どおりの既定解決
+ * （persona routing → project → global → provider 既定）に落ちる。
+ * 指定された seat だけが合成ステップへ焼き込まれ、
+ * step 直指定と同じ層（CLI/環境変数の明示 override より下、`provider_routing` より上）
+ * で効く。
+ */
+export interface InternalAgentSeats {
+  /** `selector`: 動的 facet / 動的 parallel のセレクタ。 */
+  selector?: ProviderRoutingEntry;
+  /** `assistant`: 対話モードのアシスタント。 */
+  assistant?: ProviderRoutingEntry;
+  /** `loop-judge`: loop_monitors の判定役。 */
+  loopJudge?: ProviderRoutingEntry;
+  /** `review-completion-judge`: completion-retry episode の網羅性判定役。 */
+  completionRetryJudge?: ProviderRoutingEntry;
+}
+
 export interface ProviderRoutingConfig {
+  /** Engine-local workflow identity used to resolve runtime.yaml `<workflow>/<step>` targets. */
+  workflowName?: string;
   personas?: Record<string, ProviderRoutingEntry>;
   tags?: Record<string, ProviderRoutingEntry>;
   steps?: Record<string, ProviderRoutingEntry>;
 }
+
+/**
+ * Fully-resolved provider ladders (issue #1208), keyed by the same assignment paths as
+ * `ProviderRoutingConfig` plus `defaults`. Each value holds every stage of a `ladder`
+ * assignment in order. Stage 0 is the initial assignment already reflected in
+ * providerRouting/personaProviders/provider-model defaults; a matched target-less `{at:N}`
+ * promotion advances to `stages[index]` at the runtime resolution seam. `personas` is keyed by
+ * persona display name (runtime `targets.personas` compiles into `personaProviders`).
+ */
+export interface ProviderLadderConfig {
+  /** Engine-local workflow identity used to resolve runtime.yaml `<workflow>/<step>` targets. */
+  workflowName?: string;
+  defaults?: ProviderRoutingEntry[];
+  personas?: Record<string, ProviderRoutingEntry[]>;
+  tags?: Record<string, ProviderRoutingEntry[]>;
+  steps?: Record<string, ProviderRoutingEntry[]>;
+}
+
+/**
+ * How to resolve a step whose tag set maps to two or more distinct tag routing
+ * assignments at the same priority. `last-wins` merges them field-by-field in tag order
+ * (legacy behavior); `fail-fast` throws before the agent runs (runtime-v1 behavior).
+ */
+export type TagRoutingConflictPolicy = 'last-wins' | 'fail-fast';
 
 export interface TaktProviderEntry {
   provider: ProviderType;
@@ -38,12 +133,28 @@ export type TaktProviderModelOnlyEntry = {
 
 export type TaktProviderConfigEntry = TaktProviderEntry | TaktProviderModelOnlyEntry;
 
-export interface TaktProvidersConfig {
-  assistant: TaktProviderConfigEntry;
+export interface TaktSelectorProviderConfigEntry {
+  provider?: ProviderType;
+  model?: string;
+  providerOptions?: StepProviderOptions;
 }
+
+export interface TaktProvidersConfig {
+  assistant?: TaktProviderConfigEntry;
+  selector?: TaktSelectorProviderConfigEntry;
+}
+
+export type FormalSpecSetting = boolean | 'Y/n' | 'y/N';
 
 export interface AssistantConfig {
   initFiles?: string[];
+  /** Enable Alloy and Quint guidance, or ask with the configured default in interactive sessions. */
+  formalSpec?: FormalSpecSetting;
+}
+
+export interface GlobalAssistantConfig {
+  /** Enable Alloy and Quint guidance, or ask with the configured default in interactive sessions. */
+  formalSpec?: FormalSpecSetting;
 }
 
 /** Step-specific quality gates override */
@@ -107,6 +218,12 @@ export interface AnalyticsConfig {
   eventsPath?: string;
   /** Retention period in days for analytics event files (default: 30) */
   retentionDays?: number;
+}
+
+/** Local-only telemetry configuration */
+export interface TelemetryConfig {
+  /** Enable local routing decision recording to .takt/events (default: true) */
+  routingDecisions?: boolean;
 }
 
 /** Project-level submodule acquisition selection */
@@ -226,12 +343,20 @@ export interface ProjectConfig {
   interactivePreviewSteps?: number;
   /** Sync project-local .takt resources from root when retry reuses a worktree */
   syncProjectLocalTaktOnRetry?: boolean;
+  /** Maximum automatic requeue attempts for failed tasks */
+  autoRequeueMaxAttempts?: number;
+  /** Continue takt run when a workflow reaches the iteration limit */
+  ignoreExceed?: boolean;
   /** Project-level analytics overrides */
   analytics?: AnalyticsConfig;
+  /** Local-only telemetry settings */
+  telemetry?: TelemetryConfig;
   /** Project-level observability opt-in overrides */
   observability?: ObservabilityConfig;
   /** Provider-specific options (overrides global, overridden by workflow/step) */
   providerOptions?: StepProviderOptions;
+  /** Automatic provider/model routing configuration. */
+  autoRouting?: AutoRoutingConfig;
   /** Rate limit fallback provider switch chain */
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Provider-specific permission profiles (project-level override) */
@@ -260,11 +385,12 @@ export interface ProjectConfig {
  * — handled by the resolution layer.
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant'> {
+  /** Global default for assistant task-instruction formatting. */
+  assistant?: GlobalAssistantConfig;
   /** @globalOnly */
   language: Language;
   /** @globalOnly */
   logging?: LoggingConfig;
-  /** @globalOnly */
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktreeDir?: string;
   /** @globalOnly */

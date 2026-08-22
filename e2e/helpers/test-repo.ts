@@ -60,6 +60,9 @@ function getGitHubUser(): string {
 }
 
 function canUseGitHubRepo(): boolean {
+  if (process.env.TAKT_E2E_PROVIDER === 'mock') {
+    return false;
+  }
   try {
     const user = getGitHubUser();
     const repoName = `${user}/takt-testing`;
@@ -77,7 +80,7 @@ export function isGitHubE2EAvailable(): boolean {
   return canUseGitHubRepo();
 }
 
-function createOfflineTestRepo(options?: CreateTestRepoOptions): TestRepo {
+export function createOfflineTestRepo(options?: CreateTestRepoOptions): TestRepo {
   const sandboxPath = mkdtempSync(join(tmpdir(), 'takt-e2e-repo-'));
   const originPath = join(sandboxPath, 'origin.git');
   const repoPath = join(sandboxPath, 'work');

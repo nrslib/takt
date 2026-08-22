@@ -5,12 +5,19 @@
  * user inputs and agent sessions.
  */
 
-import type { WorkflowState, WorkflowConfig, AgentResponse } from '../../models/types.js';
+import {
+  type WorkflowState,
+  type WorkflowConfig,
+  type AgentResponse,
+} from '../../models/types.js';
 import {
   MAX_USER_INPUTS,
   MAX_INPUT_LENGTH,
 } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
+import {
+  workflowEntryMatchesWorkflow,
+} from '../workflow-reference.js';
 
 /**
  * Manages workflow execution state.
@@ -34,9 +41,16 @@ export class StateManager {
       ? [...options.initialUserInputs]
       : [];
 
+    const currentStep = options.startStep ?? config.initialStep;
+    const resumeEntry = options.resumePoint?.stack[options.resumeStackPrefix?.length ?? 0];
+    const stepIterations = resumeEntry !== undefined
+      && resumeEntry.step === currentStep
+      && workflowEntryMatchesWorkflow(resumeEntry, config)
+      ? new Map(Object.entries(resumeEntry.step_iterations ?? {}))
+      : new Map<string, number>();
     this.state = {
       workflowName: config.name,
-      currentStep: options.startStep ?? config.initialStep,
+      currentStep,
       iteration: options.initialIteration ?? 0,
       stepOutputs: new Map(),
       structuredOutputs: new Map(),
@@ -46,7 +60,10 @@ export class StateManager {
       previousResponseSourcePath: undefined,
       userInputs,
       personaSessions,
-      stepIterations: new Map(),
+      stepIterations,
+      restoredStepIterationNames: new Set(stepIterations.keys()),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
   }

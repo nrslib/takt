@@ -22,8 +22,8 @@ export interface BuildTraceTaskMetadataOptions extends TraceTaskContext {
 
 export function buildTraceTaskMetadata(options: BuildTraceTaskMetadataOptions): WorkflowTraceTaskMetadata {
   const issueNumber = options.issueNumber ?? options.task?.data?.issue;
-  const prNumber = options.prNumber ?? options.task?.data?.pr_number;
-  const taskSource = resolveTaskSource(options.source ?? options.task?.data?.source, issueNumber, prNumber);
+  const prNumber = options.prNumber ?? options.task?.data?.context_pr_number ?? options.task?.data?.pr_number;
+  const taskSource = resolveTaskSource(options.source ?? options.task?.data?.source, issueNumber);
   const taskSummary = resolveTaskSummary(options);
 
   return compactTraceTaskMetadata({
@@ -42,13 +42,9 @@ export function buildTraceTaskMetadata(options: BuildTraceTaskMetadataOptions): 
 function resolveTaskSource(
   source: TaskSource | undefined,
   issueNumber: number | undefined,
-  prNumber: number | undefined,
 ): TaskSource {
   if (source) {
     return source;
-  }
-  if (prNumber !== undefined) {
-    return 'pr_review';
   }
   if (issueNumber !== undefined) {
     return 'issue';

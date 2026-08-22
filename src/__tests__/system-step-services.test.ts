@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowState } from '../core/models/index.js';
+import type { SystemStepGitProvider } from '../core/workflow/system/system-step-services.js';
 
 const {
   mockGetCurrentBranch,
@@ -13,7 +14,8 @@ const {
   mockCommentOnPr,
   mockMergePr,
   mockSaveTaskFile,
-  mockCreateIssueFromTask,
+  mockCreateIssueFromTaskResult,
+  mockCloseIssue,
   mockTaskRunnerListAllTaskItems,
   mockResolveBaseBranch,
   mockCreateBaseBranchIfMissing,
@@ -34,7 +36,8 @@ const {
   mockCommentOnPr: vi.fn(),
   mockMergePr: vi.fn(),
   mockSaveTaskFile: vi.fn(),
-  mockCreateIssueFromTask: vi.fn(),
+  mockCreateIssueFromTaskResult: vi.fn(),
+  mockCloseIssue: vi.fn(),
   mockTaskRunnerListAllTaskItems: vi.fn(),
   mockResolveBaseBranch: vi.fn(),
   mockCreateBaseBranchIfMissing: vi.fn(),
@@ -68,9 +71,12 @@ vi.mock('../infra/task/clone-exec.js', () => ({
   cloneAndIsolate: (...args: unknown[]) => mockCloneAndIsolate(...args),
 }));
 
-vi.mock('../features/tasks/add/index.js', () => ({
-  saveTaskFile: (...args: unknown[]) => mockSaveTaskFile(...args),
-  createIssueFromTask: (...args: unknown[]) => mockCreateIssueFromTask(...args),
+vi.mock('../infra/task/enqueuedTaskFile.js', () => ({
+  saveEnqueuedTaskFile: (...args: unknown[]) => mockSaveTaskFile(...args),
+}));
+
+vi.mock('../infra/task/issueTask.js', () => ({
+  createIssueFromTaskResult: (...args: unknown[]) => mockCreateIssueFromTaskResult(...args),
 }));
 
 vi.mock('../shared/prompts/index.js', () => ({
@@ -89,6 +95,8 @@ vi.mock('../infra/git/index.js', () => ({
   getGitProvider: vi.fn(() => ({
     checkCliStatus: vi.fn(() => ({ available: true })),
     fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+    createIssue: vi.fn(() => ({ success: true, issueNumber: 586 })),
+    closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
     listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
     listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
@@ -101,6 +109,10 @@ vi.mock('../infra/git/index.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   getLanguage: vi.fn(() => 'en'),
   resolveConfigValues: vi.fn(() => ({ syncConflictResolver: undefined })),
+  resolveNonWorkflowProviderModel: vi.fn(() => ({ provider: 'codex', model: 'gpt-5.4' })),
+  resolveNonWorkflowProviderOptions: vi.fn(() => ({
+    codex: { skills: { repo: false, user: false } },
+  })),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -145,6 +157,40 @@ function createWorkflowState(currentStep = 'route_context'): WorkflowState {
   };
 }
 
+function createSystemStepGitProvider(
+  overrides: Partial<SystemStepGitProvider>,
+): SystemStepGitProvider {
+  return {
+    checkCliStatus: vi.fn(() => ({ available: true })),
+    fetchIssue: vi.fn(() => ({
+      number: 1,
+      title: 'Issue',
+      body: 'Body',
+      labels: [],
+      comments: [],
+    })),
+    createIssue: vi.fn(() => ({ success: true, issueNumber: 1 })),
+    closeIssue: vi.fn(() => ({ success: true })),
+    fetchPrReviewComments: vi.fn(() => ({
+      number: 1,
+      title: 'PR',
+      body: 'Body',
+      url: 'https://example.com/pull/1',
+      headRefName: 'task/test',
+      comments: [],
+      reviews: [],
+      files: [],
+    })),
+    listOpenIssues: vi.fn(() => []),
+    listOpenPrs: vi.fn(() => []),
+    findExistingPr: vi.fn(() => undefined),
+    commentOnPr: vi.fn(() => ({ success: true })),
+    closePr: vi.fn(() => ({ success: true })),
+    mergePr: vi.fn(() => ({ success: true })),
+    ...overrides,
+  };
+}
+
 function findGitCallIndex(
   predicate: (args: string[]) => boolean,
 ): number {
@@ -153,6 +199,7 @@ function findGitCallIndex(
 
 describe('DefaultSystemStepServices', () => {
   beforeEach(() => {
+    vi.mocked(getGitProvider).mockClear();
     mockGetCurrentBranch.mockReset();
     mockExecFileSync.mockReset();
     mockAgentCall.mockReset();
@@ -164,7 +211,8 @@ describe('DefaultSystemStepServices', () => {
     mockCommentOnPr.mockReset();
     mockMergePr.mockReset();
     mockSaveTaskFile.mockReset();
-    mockCreateIssueFromTask.mockReset();
+    mockCreateIssueFromTaskResult.mockReset();
+    mockCloseIssue.mockReset();
     mockTaskRunnerListAllTaskItems.mockReset();
     mockResolveBaseBranch.mockReset();
     mockCreateBaseBranchIfMissing.mockReset();
@@ -186,7 +234,8 @@ describe('DefaultSystemStepServices', () => {
     mockCommentOnPr.mockReturnValue({ success: true });
     mockMergePr.mockReturnValue({ success: true });
     mockSaveTaskFile.mockResolvedValue({ taskName: 'task-1', tasksFile: '/repo/.takt/tasks.yaml' });
-    mockCreateIssueFromTask.mockReturnValue(undefined);
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: false, error: 'Failed to create issue from task' });
+    mockCloseIssue.mockReturnValue({ success: true });
     mockTaskRunnerListAllTaskItems.mockReturnValue([]);
     mockResolveBaseBranch.mockImplementation((_cwd: string, branch?: string) => ({ branch: branch ?? 'main' }));
     mockCreateBaseBranchIfMissing.mockImplementation((_cwd: string, config: { name: string }) => ({
@@ -1578,6 +1627,8 @@ describe('DefaultSystemStepServices', () => {
     vi.mocked(getGitProvider).mockReturnValueOnce({
       checkCliStatus: vi.fn(() => ({ available: false, error: 'gh unavailable' })),
       fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+      createIssue: vi.fn(() => ({ success: true, issueNumber: 586 })),
+      closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
       listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
       fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
       listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
@@ -1604,6 +1655,8 @@ describe('DefaultSystemStepServices', () => {
     vi.mocked(getGitProvider).mockReturnValueOnce({
       checkCliStatus: vi.fn(() => ({ available: false, error: 'gh unavailable' })),
       fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+      createIssue: vi.fn(() => ({ success: true, issueNumber: 586 })),
+      closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
       listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
       fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
       listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
@@ -1626,8 +1679,151 @@ describe('DefaultSystemStepServices', () => {
     expect(mockListOpenIssues).not.toHaveBeenCalled();
   });
 
+  it('issue_list は SystemStepServicesOptions の gitProvider を優先する', () => {
+    const requestProvider = createSystemStepGitProvider({
+      listOpenIssues: vi.fn(() => [{
+        number: 586,
+        title: 'Implement MCP provider contract',
+        labels: ['automation'],
+        updated_at: '2026-07-02T00:00:00Z',
+      }]),
+    });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect issue list',
+      gitProvider: requestProvider,
+    });
+
+    const result = services.resolveSystemInput({
+      type: 'issue_list',
+      source: 'current_project',
+      as: 'issues',
+    });
+
+    expect(getGitProvider).not.toHaveBeenCalled();
+    expect(requestProvider.checkCliStatus).toHaveBeenCalledWith('/repo');
+    expect(requestProvider.listOpenIssues).toHaveBeenCalledWith('/repo');
+    expect(result).toEqual([
+      expect.objectContaining({
+        number: 586,
+        category_codes: ['automation'],
+      }),
+    ]);
+  });
+
+  it('comment_pr は SystemStepServicesOptions の gitProvider を優先する', async () => {
+    const requestProvider = createSystemStepGitProvider({
+      commentOnPr: vi.fn(() => ({ success: true })),
+    });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Comment on PR',
+      gitProvider: requestProvider,
+    });
+
+    const result = await services.executeEffect({
+      type: 'comment_pr',
+      pr: 938,
+      body: 'done',
+    }, {
+      pr: 938,
+      body: 'done',
+    }, {} as never);
+
+    expect(getGitProvider).not.toHaveBeenCalled();
+    expect(requestProvider.commentOnPr).toHaveBeenCalledWith(938, 'done', '/repo');
+    expect(result).toEqual({ success: true, failed: false });
+  });
+
+  it('enqueue_task の Issue 作成は SystemStepServicesOptions の gitProvider を優先する', async () => {
+    const requestProvider = createSystemStepGitProvider({
+      createIssue: vi.fn(),
+      closeIssue: vi.fn(),
+    });
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+      gitProvider: requestProvider,
+    });
+
+    const result = await services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      issue: {
+        create: true,
+        title: 'Implement follow-up effect with issue title',
+      },
+    } as never, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      issue: {
+        create: true,
+        title: 'Implement follow-up effect with issue title',
+      },
+    } as never, {} as never);
+
+    expect(getGitProvider).not.toHaveBeenCalled();
+    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith('Implement follow-up effect', {
+      cwd: '/repo',
+      title: 'Implement follow-up effect with issue title',
+      outputMode: 'silent',
+      gitProvider: requestProvider,
+    });
+    expect(result).toEqual({
+      success: true,
+      failed: false,
+      taskName: 'task-1',
+      tasksFile: '/repo/.takt/tasks.yaml',
+      issueNumber: 586,
+    });
+  });
+
+  it('sync_with_root は SystemStepServicesOptions の gitProvider を優先する', async () => {
+    const requestProvider = createSystemStepGitProvider({
+      fetchPrReviewComments: vi.fn(() => ({
+        number: 42,
+        title: 'Follow-up PR',
+        body: 'Body',
+        url: 'https://example.test/pr/42',
+        headRefName: 'task/test-branch',
+        baseRefName: 'improve',
+        comments: [],
+        reviews: [],
+        files: [],
+      })),
+    });
+    mockExecFileSync.mockReturnValue('');
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Sync PR',
+      gitProvider: requestProvider,
+    });
+
+    const result = await services.executeEffect(
+      { type: 'sync_with_root', pr: 42 },
+      { pr: 42 },
+      {} as never,
+    );
+
+    expect(getGitProvider).not.toHaveBeenCalled();
+    expect(requestProvider.fetchPrReviewComments).toHaveBeenCalledWith(42, '/repo');
+    expect(result).toEqual({ success: true, failed: false, conflicted: false });
+  });
+
   it('creates a new follow-up task and forwards worktree options', async () => {
-    mockCreateIssueFromTask.mockReturnValue(586);
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1649,7 +1845,7 @@ describe('DefaultSystemStepServices', () => {
       worktree: {
         enabled: true,
         auto_pr: true,
-        draft_pr: true,
+        draft_pr: false,
         managed_pr: true,
       },
     } as never;
@@ -1666,17 +1862,21 @@ describe('DefaultSystemStepServices', () => {
       worktree: {
         enabled: true,
         auto_pr: true,
-        draft_pr: true,
+        draft_pr: false,
         managed_pr: true,
       },
     } as never;
 
     const result = await services.executeEffect(rawPayload, resolvedPayload, {} as never);
 
-    expect(mockCreateIssueFromTask).toHaveBeenCalledWith('Implement follow-up effect', {
+    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith('Implement follow-up effect', {
       cwd: '/repo',
       title: 'Implement follow-up effect with issue title',
       labels: ['bug', 'enhancement'],
+      outputMode: 'silent',
+      gitProvider: expect.objectContaining({
+        closeIssue: expect.any(Function),
+      }),
     });
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
       workflow: 'takt-default',
@@ -1684,7 +1884,7 @@ describe('DefaultSystemStepServices', () => {
       worktree: true,
       baseBranch: 'improve',
       autoPr: true,
-      draftPr: true,
+      draftPr: false,
       managedPr: true,
     });
     expect(mockResolveBaseBranch).toHaveBeenCalledWith('/repo', 'improve');
@@ -1694,6 +1894,51 @@ describe('DefaultSystemStepServices', () => {
       taskName: 'task-1',
       tasksFile: '/repo/.takt/tasks.yaml',
       issueNumber: 586,
+    });
+  });
+
+  it('preserves an explicit non-draft setting when enqueueing without a new issue', async () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    const result = await services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      worktree: {
+        enabled: true,
+        auto_pr: true,
+        draft_pr: false,
+        managed_pr: true,
+      },
+    } as never, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      worktree: {
+        enabled: true,
+        auto_pr: true,
+        draft_pr: false,
+        managed_pr: true,
+      },
+    }, {} as never);
+
+    expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
+      workflow: 'takt-default',
+      worktree: true,
+      autoPr: true,
+      draftPr: false,
+      managedPr: true,
+    });
+    expect(result).toEqual({
+      success: true,
+      failed: false,
+      taskName: 'task-1',
+      tasksFile: '/repo/.takt/tasks.yaml',
     });
   });
 
@@ -1761,9 +2006,126 @@ describe('DefaultSystemStepServices', () => {
     expect(result).toEqual({
       success: false,
       failed: true,
+      issueCreated: false,
+      taskEnqueued: false,
+      stage: 'issue_creation',
       error: 'Failed to create issue from task',
     });
     expect(mockSaveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('returns partial success when an issue is created without a usable number', async () => {
+    mockCreateIssueFromTaskResult.mockReturnValue({
+      success: false,
+      issueCreated: true,
+      issueUrl: 'https://example.test/issues/unknown',
+      error: 'Failed to extract issue number from created issue URL',
+    });
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    const result = await services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      issue: { create: true },
+    }, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      issue: { create: true },
+    }, {} as never);
+
+    expect(result).toEqual({
+      success: false,
+      failed: true,
+      issueCreated: true,
+      taskEnqueued: false,
+      stage: 'issue_number_parsing',
+      issueUrl: 'https://example.test/issues/unknown',
+      error: 'Failed to extract issue number from created issue URL',
+    });
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('leaves the created issue open when enqueue_task task saving fails after issue creation', async () => {
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
+    mockSaveTaskFile.mockRejectedValueOnce(new Error('disk full'));
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    const result = await services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      issue: { create: true },
+    }, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      issue: { create: true },
+    }, {} as never);
+
+    expect(mockCloseIssue).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      failed: true,
+      issueCreated: true,
+      taskEnqueued: false,
+      stage: 'task_saving',
+      issueNumber: 586,
+      error: 'disk full',
+    });
+  });
+
+  it('redacts secrets and local paths from enqueue_task issue failure results', async () => {
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
+    mockSaveTaskFile.mockRejectedValueOnce(
+      new Error('token=plain-secret\nCannot write file:///Users/nrs/secret/tasks.yaml'),
+    );
+    mockCloseIssue.mockReturnValue({
+      success: false,
+      commentCreated: true,
+      error: 'Authorization: Bearer ghp_123456789\nCannot close /Users/nrs/secret/issue',
+    });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    const result = await services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      issue: { create: true },
+    }, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      issue: { create: true },
+    }, {} as never);
+
+    expect(result).toEqual({
+      success: false,
+      failed: true,
+      issueCreated: true,
+      taskEnqueued: false,
+      stage: 'task_saving',
+      issueNumber: 586,
+      error: 'token=[REDACTED]\nCannot write [path]',
+    });
   });
 
   it('creates a PR follow-up task using pr head and base branches', async () => {
@@ -1895,7 +2257,31 @@ describe('DefaultSystemStepServices', () => {
       workflow: 'takt-default',
       task: 'Address review comments',
       pr: '42',
-    }, {} as never)).rejects.toThrow('System effect requires positive integer field "pr"');
+    }, {} as never)).rejects.toThrow('System effect requires positive safe integer field "pr"');
+  });
+
+  it('rejects unsafe enqueue_task PR numbers before fetching PR context or saving the task', async () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    await expect(services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'from_pr',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      pr: '{context:route.pr.number}',
+    }, {
+      mode: 'from_pr',
+      workflow: 'takt-default',
+      task: 'Address review comments',
+      pr: Number.MAX_SAFE_INTEGER + 1,
+    }, {} as never)).rejects.toThrow('System effect requires positive safe integer field "pr"');
+
+    expect(mockFetchPrReviewComments).not.toHaveBeenCalled();
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
   });
 
   it('rejects malformed enqueue_task issue payloads at the effect boundary', async () => {
@@ -2644,7 +3030,7 @@ describe('DefaultSystemStepServices', () => {
     await expect(services.executeEffect({ type: 'comment_pr', pr: 42, body: 'Looks good' }, {
       pr: '42',
       body: 'Looks good',
-    }, {} as never)).rejects.toThrow('System effect requires positive integer field "pr"');
+    }, {} as never)).rejects.toThrow('System effect requires positive safe integer field "pr"');
   });
 
   it('returns success for resolve_conflicts_with_ai when AI resolves a merge conflict', async () => {

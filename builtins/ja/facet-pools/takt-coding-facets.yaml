@@ -1,0 +1,15 @@
+knowledge:
+  unit-testing: ../facets/knowledge/unit-testing.md
+  e2e-testing: ../facets/knowledge/e2e-testing.md
+  security: ../facets/knowledge/security.md
+  security-api: ../facets/knowledge/security-api.md
+  security-local: ../facets/knowledge/security-local.md
+  security-data: ../facets/knowledge/security-data.md
+  security-dependencies: ../facets/knowledge/security-dependencies.md
+candidates:
+  - id: testing
+    description: TAKTのテスト設計、カバレッジ、統合境界、E2E境界を扱う
+    knowledge: [unit-testing, e2e-testing]
+  - id: security
+    description: TAKTの認証認可、入力検証、機密情報、ローカル実行、依存関係、セキュリティ境界を扱う
+    knowledge: [security, security-api, security-local, security-data, security-dependencies]

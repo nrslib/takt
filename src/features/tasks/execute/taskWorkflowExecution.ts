@@ -1,12 +1,29 @@
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import { loadWorkflowByIdentifier, isWorkflowPath, resolveWorkflowConfigValues } from '../../../infra/config/index.js';
+import type {
+  ProviderPermissionProfile,
+  ProviderPermissionProfiles,
+  ProviderProfileName,
+} from '../../../core/models/provider-profiles.js';
+import {
+  loadGlobalConfig,
+  loadProjectConfig,
+  loadWorkflowByIdentifier,
+  isWorkflowPath,
+  resolveWorkflowConfigValues,
+} from '../../../infra/config/index.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
+import {
+  resolveAssistantScopedProviderModelFromConfig,
+} from '../../../core/config/provider-resolution.js';
+import type {
+  StepProviderInfo,
+  WorkflowTraceTaskMetadata,
+} from '../../../core/workflow/types.js';
 import { info, error } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { ExecuteTaskOptions, WorkflowExecutionOptions, WorkflowExecutionResult } from './types.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
-import type { WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
 
 const log = createLogger('task');
 
@@ -16,6 +33,83 @@ type WorkflowExecutor = (
   cwd: string,
   options: WorkflowExecutionOptions,
 ) => Promise<WorkflowExecutionResult>;
+
+function cloneProviderProfile(profile: ProviderPermissionProfile): ProviderPermissionProfile {
+  return {
+    defaultPermissionMode: profile.defaultPermissionMode,
+    ...(profile.stepPermissionOverrides
+      ? { stepPermissionOverrides: { ...profile.stepPermissionOverrides } }
+      : {}),
+  };
+}
+
+function mergeProviderProfileOverrides(
+  base: ProviderPermissionProfiles | undefined,
+  overrides: ProviderPermissionProfiles | undefined,
+): ProviderPermissionProfiles | undefined {
+  if (!overrides) {
+    return base;
+  }
+
+  const providers = new Set([
+    ...Object.keys(base ?? {}),
+    ...Object.keys(overrides),
+  ] as ProviderProfileName[]);
+  const merged: ProviderPermissionProfiles = {};
+
+  for (const provider of providers) {
+    const baseProfile = base?.[provider];
+    const overrideProfile = overrides[provider];
+    if (!baseProfile && overrideProfile) {
+      merged[provider] = cloneProviderProfile(overrideProfile);
+      continue;
+    }
+    if (baseProfile && !overrideProfile) {
+      merged[provider] = cloneProviderProfile(baseProfile);
+      continue;
+    }
+    if (baseProfile && overrideProfile) {
+      merged[provider] = {
+        defaultPermissionMode: overrideProfile.defaultPermissionMode,
+        stepPermissionOverrides: {
+          ...baseProfile.stepPermissionOverrides,
+          ...overrideProfile.stepPermissionOverrides,
+        },
+      };
+    }
+  }
+
+  return merged;
+}
+
+function emitMissingWorkflowFile(outputMode: ExecuteTaskOptions['outputMode'], safeWorkflowIdentifier: string): void {
+  if (outputMode === 'silent') {
+    return;
+  }
+  error(`Workflow file not found: ${safeWorkflowIdentifier}`);
+}
+
+function emitMissingWorkflow(outputMode: ExecuteTaskOptions['outputMode'], safeWorkflowIdentifier: string): void {
+  if (outputMode === 'silent') {
+    return;
+  }
+  error(`Workflow "${safeWorkflowIdentifier}" not found.`);
+  info('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
+  info('If the same workflow name exists in multiple locations, project workflows/ take priority over user workflows/.');
+  info('Specify a valid workflow when creating tasks (e.g., via "takt add").');
+}
+
+async function dispatchMissingWorkflowFailure(
+  eventSink: ExecuteTaskOptions['eventSink'],
+  reason: string,
+): Promise<WorkflowExecutionResult> {
+  await eventSink?.({
+    type: 'completed',
+    success: false,
+    reason,
+  });
+  return { success: false, reason };
+}
 
 export async function executeTaskWorkflow(
   options: ExecuteTaskOptions,
@@ -27,13 +121,19 @@ export async function executeTaskWorkflow(
     workflowIdentifier,
     projectCwd,
     agentOverrides,
+    outputMode,
+    eventSink,
+    onAskUserQuestion,
+    mcpServers,
     interactiveUserInput,
     interactiveMetadata,
     startStep,
     retryNote,
     resumePoint,
-    directResume,
+    restartPoint,
+    resumeSource,
     reportDirName,
+    taskSpec,
     abortSignal,
     taskPrefix,
     taskColorIndex,
@@ -41,22 +141,31 @@ export async function executeTaskWorkflow(
     maxStepsOverride,
     initialIterationOverride,
     currentTaskIssueNumber,
+    prContext,
+    loopAnalysisPublication,
   } = options;
   const traceTaskMetadata = resolveTraceTaskMetadata(options);
-  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd: cwd });
+  const workflowConfig = loadWorkflowByIdentifier(
+    workflowIdentifier,
+    projectCwd,
+    { lookupCwd: cwd },
+  );
   const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
 
   if (!workflowConfig) {
     if (isWorkflowPath(workflowIdentifier)) {
-      error(`Workflow file not found: ${safeWorkflowIdentifier}`);
-      return { success: false, reason: `Workflow file not found: ${safeWorkflowIdentifier}` };
+      emitMissingWorkflowFile(outputMode, safeWorkflowIdentifier);
+      return dispatchMissingWorkflowFailure(
+        eventSink,
+        `Workflow file not found: ${safeWorkflowIdentifier}`,
+      );
     }
 
-    error(`Workflow "${safeWorkflowIdentifier}" not found.`);
-    info('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
-    info('If the same workflow name exists in multiple locations, project workflows/ take priority over user workflows/.');
-    info('Specify a valid workflow when creating tasks (e.g., via "takt add").');
-    return { success: false, reason: `Workflow "${safeWorkflowIdentifier}" not found.` };
+    emitMissingWorkflow(outputMode, safeWorkflowIdentifier);
+    return dispatchMissingWorkflowFailure(
+      eventSink,
+      `Workflow "${safeWorkflowIdentifier}" not found.`,
+    );
   }
   log.debug('Running workflow', {
     name: workflowConfig.name,
@@ -69,20 +178,39 @@ export async function executeTaskWorkflow(
     projectCwd,
     language: config.language,
     provider: agentOverrides?.provider,
+    providerSource: agentOverrides?.providerSource,
     model: agentOverrides?.model,
+    modelSource: agentOverrides?.modelSource,
+    autoStrategy: agentOverrides?.autoStrategy,
+    reportFallbackProvider: resolveReportFallbackProviderModel(projectCwd),
+    selectorProviderOverrides: agentOverrides === undefined
+      ? undefined
+      : {
+          provider: agentOverrides.provider,
+          model: agentOverrides.model,
+          autoStrategy: agentOverrides.autoStrategy,
+          providerSource: agentOverrides.providerSource,
+          modelSource: agentOverrides.modelSource,
+        },
+    outputMode,
+    eventSink,
+    onAskUserQuestion,
+    mcpServers,
     providerOptions: providerOptions.value,
     providerOptionsSource: providerOptions.source,
     providerOptionsOriginResolver: providerOptions.originResolver,
     personaProviders: config.personaProviders,
     providerRouting: config.providerRouting,
-    providerProfiles: config.providerProfiles,
+    providerProfiles: mergeProviderProfileOverrides(config.providerProfiles, options.providerProfileOverrides),
     interactiveUserInput,
     interactiveMetadata,
     startStep,
     retryNote,
     resumePoint,
-    directResume,
+    restartPoint,
+    resumeSource,
     reportDirName,
+    taskSpec,
     abortSignal,
     taskPrefix,
     taskColorIndex,
@@ -91,7 +219,37 @@ export async function executeTaskWorkflow(
     initialIterationOverride,
     currentTaskIssueNumber,
     traceTaskMetadata,
+    ...(prContext ? { prContext } : {}),
+    ...(loopAnalysisPublication === undefined
+      ? {}
+      : { loopAnalysisPublication }),
   });
+}
+
+function resolveReportFallbackProviderModel(projectCwd: string): StepProviderInfo | undefined {
+  const project = loadProjectConfig(projectCwd);
+  const global = loadGlobalConfig();
+  const resolved = resolveAssistantScopedProviderModelFromConfig({
+    local: {
+      provider: project.provider,
+      model: project.model,
+      taktProviders: project.taktProviders,
+    },
+    global: {
+      provider: global.provider,
+      model: global.model,
+      taktProviders: global.taktProviders,
+    },
+  });
+
+  if (resolved.provider === undefined) {
+    return undefined;
+  }
+
+  return {
+    provider: resolved.provider,
+    model: resolved.model,
+  };
 }
 
 function resolveTraceTaskMetadata(options: ExecuteTaskOptions): WorkflowTraceTaskMetadata | undefined {

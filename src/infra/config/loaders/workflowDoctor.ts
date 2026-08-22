@@ -2,30 +2,39 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import { getProjectWorkflowsDir, getRepertoireDir, isPathSafe } from '../paths.js';
 import { resolveWorkflowConfigValue } from '../resolveWorkflowConfigValue.js';
 import { validateDoctorGraph } from './workflowDoctorGraph.js';
 import { validateWorkflowReferences } from './workflowDoctorRefValidator.js';
 import type { WorkflowDiagnostic, WorkflowDoctorReport } from './workflowDoctorTypes.js';
 import { formatWorkflowLoadWarning } from './workflowLoadWarning.js';
-import { isMissingWorkflowCallArgError } from './workflowCallableArgResolver.js';
+import {
+  annotateWorkflowFragmentError,
+  parseWorkflowRaw,
+} from './workflowRawParser.js';
+import {
+  collectSelectorInstructionRefs,
+  isMissingWorkflowCallArgError,
+} from './workflowCallableArgResolver.js';
 import {
   findWorkflowInLookupDirs,
   getNamedWorkflowLookupDirs,
 } from './workflowLookupDirectories.js';
 import { isWorkflowPath, validateWorkflowCallContracts } from './workflowResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from './workflowResolvedLoader.js';
-import type { WorkflowTrustSource } from './workflowTrustSource.js';
+import { resolveWorkflowTrustInfo, type WorkflowTrustSource } from './workflowTrustSource.js';
 import {
   type FacetResolutionContext,
   type WorkflowSections,
-  resolveSectionMap,
+  resolveSectionMapWithSource,
+  unwrapResolvedSectionMap,
 } from './resource-resolver.js';
+import { buildResolvedFacetPoolDependencies, compileFacetPool, type FacetPoolCompilationInput } from './facetPoolCompiler.js';
+import type { WorkflowConfig } from '../../../core/models/types.js';
 
 export type { WorkflowDiagnostic, WorkflowDoctorReport } from './workflowDoctorTypes.js';
 
-type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
+type RawWorkflow = ReturnType<typeof parseWorkflowRaw>;
 
 export interface WorkflowDoctorTarget {
   filePath: string;
@@ -146,13 +155,41 @@ function buildContext(projectDir: string, filePath: string): FacetResolutionCont
   };
 }
 
-function buildSections(raw: RawWorkflow, workflowDir: string): WorkflowSections {
+function buildSections(raw: RawWorkflow, context: FacetResolutionContext): WorkflowSections {
+  const workflowDir = context.workflowDir;
+  if (!workflowDir) {
+    throw new Error('Workflow doctor facet resolution requires workflowDir');
+  }
+  const selectorInstructionRefs = collectSelectorInstructionRefs(
+    raw.steps,
+    raw.subworkflow?.params,
+  );
+  const resolvedInstructionsWithSource = resolveSectionMapWithSource(
+    raw.instructions,
+    workflowDir,
+    'instructions',
+    context,
+    undefined,
+    selectorInstructionRefs,
+  );
+  const resolvedKnowledgeWithSource = resolveSectionMapWithSource(raw.knowledge, workflowDir, 'knowledge', context);
+  const resolvedPoliciesWithSource = resolveSectionMapWithSource(raw.policies, workflowDir, 'policies', context);
+  const resolvedReportFormatsWithSource = resolveSectionMapWithSource(
+    raw.report_formats,
+    workflowDir,
+    'output-contracts',
+    context,
+  );
   return {
     personas: raw.personas,
-    resolvedInstructions: resolveSectionMap(raw.instructions, workflowDir),
-    resolvedKnowledge: resolveSectionMap(raw.knowledge, workflowDir),
-    resolvedPolicies: resolveSectionMap(raw.policies, workflowDir),
-    resolvedReportFormats: resolveSectionMap(raw.report_formats, workflowDir),
+    resolvedInstructions: unwrapResolvedSectionMap(resolvedInstructionsWithSource),
+    resolvedInstructionsWithSource,
+    resolvedKnowledge: unwrapResolvedSectionMap(resolvedKnowledgeWithSource),
+    resolvedKnowledgeWithSource,
+    resolvedPolicies: unwrapResolvedSectionMap(resolvedPoliciesWithSource),
+    resolvedPoliciesWithSource,
+    resolvedReportFormats: unwrapResolvedSectionMap(resolvedReportFormatsWithSource),
+    resolvedReportFormatsWithSource,
   };
 }
 
@@ -198,26 +235,55 @@ export function inspectWorkflowFile(
   },
 ): WorkflowDoctorReport {
   try {
-    const raw = WorkflowConfigRawSchema.parse(parseYaml(readFileSync(filePath, 'utf-8')));
+    const context = buildContext(projectDir, filePath);
+    const raw = parseWorkflowRaw(parseYaml(readFileSync(filePath, 'utf-8')), {
+      context,
+      workflowPath: filePath,
+      trustInfo: resolveWorkflowTrustInfo({
+        filePath,
+        projectCwd: projectDir,
+        lookupCwd: options?.lookupCwd,
+        source: options?.source,
+      }),
+    });
     const lookupCwd = options?.lookupCwd ?? projectDir;
+    let workflow: WorkflowConfig | undefined;
     try {
-      const workflow = loadWorkflowForDoctorValidation(filePath, projectDir, raw, options);
+      workflow = loadWorkflowForDoctorValidation(filePath, projectDir, raw, options);
       validateWorkflowCallContracts(workflow, projectDir, lookupCwd, { allowPathBasedCalls: false });
     } catch (error) {
       return {
-        diagnostics: [{ level: 'error', message: formatWorkflowLoadWarning(basename(filePath), error) }],
+        diagnostics: [{
+          level: 'error',
+          message: formatWorkflowLoadWarning(
+            basename(filePath),
+            annotateWorkflowFragmentError(error, raw, filePath),
+          ),
+        }],
         filePath,
       };
     }
 
-    const context = buildContext(projectDir, filePath);
-    const sections = buildSections(raw, context.workflowDir!);
+    const sections = buildSections(raw, context);
     const diagnostics: WorkflowDiagnostic[] = [];
     validateWorkflowReferences(raw, sections, context, diagnostics);
     validateDoctorGraph(raw, diagnostics);
+    if (workflow !== undefined) {
+      validateFacetPoolReferences(raw, workflow, context, sections, diagnostics);
+    }
 
     return {
-      diagnostics,
+      diagnostics: diagnostics.map(({ path, ...diagnostic }) => ({
+        ...diagnostic,
+        message: path === undefined
+          ? diagnostic.message
+          : annotateWorkflowFragmentError(
+            new Error(diagnostic.message),
+            raw,
+            filePath,
+            path,
+          ).message,
+      })),
       filePath,
     };
   } catch (error) {
@@ -225,5 +291,49 @@ export function inspectWorkflowFile(
       diagnostics: [{ level: 'error', message: formatWorkflowLoadWarning(basename(filePath), error) }],
       filePath,
     };
+  }
+}
+
+function validateFacetPoolReferences(
+  raw: RawWorkflow,
+  workflow: WorkflowConfig,
+  context: FacetResolutionContext,
+  sections: WorkflowSections,
+  diagnostics: WorkflowDiagnostic[],
+): void {
+  const facetPools = raw.facet_pools;
+  if (facetPools === undefined) return;
+  const resolvedPools = workflow.facetPools;
+  for (const [poolName, pool] of Object.entries(facetPools)) {
+    const resolved = resolvedPools?.[poolName];
+    if (resolved === undefined) {
+      diagnostics.push({
+        level: 'error',
+        message: `facet_pools entry "${poolName}" did not resolve to a compiled pool`,
+        path: ['facet_pools', poolName],
+      });
+      continue;
+    }
+    const input: FacetPoolCompilationInput = 'uses' in pool && typeof pool.uses === 'string'
+      ? { kind: 'external', name: poolName, ref: pool.uses }
+      : {
+          kind: 'inline',
+          name: poolName,
+          policies: 'policies' in pool ? pool.policies : undefined,
+          knowledge: 'knowledge' in pool ? pool.knowledge : undefined,
+          candidates: 'candidates' in pool ? pool.candidates : [],
+        };
+    try {
+      buildResolvedFacetPoolDependencies(input, context);
+      compileFacetPool(input, context.workflowDir ?? '', context, {
+        workflowSections: sections,
+      });
+    } catch (error) {
+      diagnostics.push({
+        level: 'error',
+        message: `facet_pools entry "${poolName}" has unresolved dependencies: ${error instanceof Error ? error.message : String(error)}`,
+        path: ['facet_pools', poolName],
+      });
+    }
   }
 }

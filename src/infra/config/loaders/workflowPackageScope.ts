@@ -1,12 +1,17 @@
-import { dirname, resolve } from 'node:path';
+import * as path from 'node:path';
 import type { FacetType } from '../paths.js';
 import {
   getBuiltinFacetDir,
+  getGlobalConfigDir,
   getGlobalFacetDir,
+  getProjectConfigDir,
   getProjectFacetDir,
   getRepertoireFacetDir,
 } from '../paths.js';
+import { getLanguageResourcesDir } from '../../resources/index.js';
 import type { Language } from '../../../core/models/index.js';
+
+type PathOperations = Pick<typeof path, 'dirname' | 'isAbsolute' | 'join' | 'relative' | 'resolve' | 'sep'>;
 
 export interface FacetResolutionContext {
   projectDir?: string;
@@ -17,28 +22,35 @@ export interface FacetResolutionContext {
 
 function normalizeWorkflowBaseDir(workflowDir: string): string {
   if (workflowDir.endsWith('.yaml') || workflowDir.endsWith('.yml')) {
-    return dirname(workflowDir);
+    return path.dirname(workflowDir);
   }
   return workflowDir;
 }
 
-export function isPackageWorkflow(workflowDir: string, repertoireDir: string): boolean {
-  const resolvedWorkflow = resolve(workflowDir);
-  const resolvedRepertoire = resolve(repertoireDir);
-  return resolvedWorkflow.startsWith(`${resolvedRepertoire}/`);
+export function isPackageWorkflow(workflowDir: string, repertoireDir: string, pathOperations: PathOperations = path): boolean {
+  const relativePath = pathOperations.relative(
+    pathOperations.resolve(repertoireDir),
+    pathOperations.resolve(workflowDir),
+  );
+  return relativePath !== ''
+    && relativePath !== '..'
+    && !relativePath.startsWith(`..${pathOperations.sep}`)
+    && !pathOperations.isAbsolute(relativePath);
 }
 
 export function getPackageFromWorkflowDir(
   workflowDir: string,
   repertoireDir: string,
+  pathOperations: PathOperations = path,
 ): { owner: string; repo: string } | undefined {
-  if (!isPackageWorkflow(workflowDir, repertoireDir)) {
+  if (!isPackageWorkflow(workflowDir, repertoireDir, pathOperations)) {
     return undefined;
   }
-  const resolvedRepertoire = resolve(repertoireDir);
-  const resolvedWorkflow = resolve(workflowDir);
-  const relative = resolvedWorkflow.slice(resolvedRepertoire.length + 1);
-  const parts = relative.split('/');
+  const relativePath = pathOperations.relative(
+    pathOperations.resolve(repertoireDir),
+    pathOperations.resolve(workflowDir),
+  );
+  const parts = relativePath.split(pathOperations.sep);
   if (parts.length < 2) {
     return undefined;
   }
@@ -75,6 +87,27 @@ export function buildCandidateDirsWithPackage(
   dirs.push(getBuiltinFacetDir(context.lang, facetType));
 
   return dirs;
+}
+
+export function buildFacetsRoots(context: FacetResolutionContext): string[] {
+  const roots: string[] = [];
+
+  if (context.workflowDir && context.repertoireDir) {
+    const workflowBaseDir = normalizeWorkflowBaseDir(context.workflowDir);
+    const pkg = getPackageFromWorkflowDir(workflowBaseDir, context.repertoireDir);
+    if (pkg) {
+      const base = context.repertoireDir;
+      roots.push(path.join(base, `@${pkg.owner}`, pkg.repo, 'facets'));
+    }
+  }
+
+  if (context.projectDir) {
+    roots.push(path.join(getProjectConfigDir(context.projectDir), 'facets'));
+  }
+  roots.push(path.join(getGlobalConfigDir(), 'facets'));
+  roots.push(path.join(getLanguageResourcesDir(context.lang), 'facets'));
+
+  return roots;
 }
 
 export function getWorkflowBaseDir(workflowDir: string): string {

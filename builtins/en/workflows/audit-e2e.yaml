@@ -1,11 +1,6 @@
 name: audit-e2e
 description: Comprehensive E2E audit. Enumerate user flows and coverage gaps, then produce an issue-ready report without modifying code
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+capabilities: readonly
 max_steps: 12
 initial_step: plan
 
@@ -32,7 +27,10 @@ steps:
     tags:
       - plan
     persona: test-planner
-    policy: testing
+    policy:
+      - contract-change
+      - testing
+      - architecture
     knowledge:
       - architecture
       - e2e-testing
@@ -54,8 +52,10 @@ steps:
     edit: false
     persona: testing-reviewer
     policy:
+      - contract-change
       - review
       - testing
+      - architecture
     knowledge:
       - architecture
       - e2e-testing
@@ -75,9 +75,13 @@ steps:
   - name: supervise
     tags:
       - review
+      - supervise
     edit: false
     persona: supervisor
-    policy: review
+    policy:
+      - contract-change
+      - review
+      - testing
     knowledge:
       - e2e-testing
     instruction: e2e-audit-supervise
@@ -94,6 +98,7 @@ steps:
     edit: false
     persona: testing-reviewer
     policy:
+      - contract-change
       - review
       - testing
     knowledge:

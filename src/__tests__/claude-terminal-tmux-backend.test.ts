@@ -33,23 +33,35 @@ function createExecFileError(message: string, code: number, stderr: string): Err
   return Object.assign(new Error(message), { code, stderr });
 }
 
-function createSpawnChild(stdinWrites: string[], exitCode: number, stderrText: string) {
+function createSpawnChild(
+  stdinWrites: string[],
+  exitCode: number,
+  stderrText: string,
+  streamError?: { stream: 'stdin' | 'stderr'; error: Error },
+) {
   const child = new EventEmitter() as EventEmitter & {
     stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-    stdin: { end: ReturnType<typeof vi.fn> };
+    stdin: EventEmitter & { end: ReturnType<typeof vi.fn> };
+    kill: ReturnType<typeof vi.fn>;
   };
   const stderr = new EventEmitter() as EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  const stdin = new EventEmitter() as EventEmitter & { end: ReturnType<typeof vi.fn> };
   stderr.setEncoding = vi.fn();
   child.stderr = stderr;
-  child.stdin = {
-    end: vi.fn((text: string) => {
-      stdinWrites.push(text);
-      if (stderrText.length > 0) {
-        stderr.emit('data', stderrText);
-      }
-      queueMicrotask(() => child.emit('close', exitCode));
-    }),
-  };
+  child.kill = vi.fn(() => true);
+  child.stdin = stdin;
+  stdin.end = vi.fn((text: string) => {
+    stdinWrites.push(text);
+    if (stderrText.length > 0) {
+      stderr.emit('data', stderrText);
+    }
+    if (streamError?.stream === 'stdin') {
+      stdin.emit('error', streamError.error);
+    } else if (streamError?.stream === 'stderr') {
+      stderr.emit('error', streamError.error);
+    }
+    queueMicrotask(() => child.emit('close', exitCode));
+  });
   return child;
 }
 
@@ -181,6 +193,22 @@ describe('TmuxTerminalBackend', () => {
       ['send-keys', '-t', 'takt-session', 'Enter'],
       ['delete-buffer', '-b', 'takt-session-prompt'],
     ]);
+  });
+
+  it('Given a tmux stdio error, When pasteText is called, Then the stream failure is returned and the child is terminated', async () => {
+    const backend = new TmuxTerminalBackend();
+    const stdinWrites: string[] = [];
+    const childError = new Error('tmux pipe closed');
+    let child: ReturnType<typeof createSpawnChild> | undefined;
+    mockSpawn.mockImplementation(() => {
+      child = createSpawnChild(stdinWrites, 0, '', { stream: 'stderr', error: childError });
+      return child;
+    });
+
+    await expect(backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'implement task'))
+      .rejects.toThrow('tmux stderr stream error: tmux pipe closed');
+
+    expect(child?.kill).toHaveBeenCalledOnce();
   });
 
   it('Given Claude pane is still busy, When pasteText is called, Then prompt is not pasted until input is ready', async () => {

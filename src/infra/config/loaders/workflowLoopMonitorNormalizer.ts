@@ -1,13 +1,11 @@
 import type { LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import { resolvePersona, resolveRefToContent } from './resource-resolver.js';
-import { normalizeProviderReference } from './workflowStepNormalizer.js';
+import { parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 
 function normalizeLoopMonitorJudge(
   raw: {
     persona?: string;
-    provider?: unknown;
-    model?: string;
     instruction?: string;
     rules: Array<{ condition: string; next: string }>;
   },
@@ -16,18 +14,10 @@ function normalizeLoopMonitorJudge(
   context?: FacetResolutionContext,
 ): LoopMonitorJudge {
   const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, workflowDir, context);
-  const normalizedProvider = normalizeProviderReference(
-    raw.provider as Parameters<typeof normalizeProviderReference>[0],
-    raw.model,
-    undefined,
-    workflowDir,
-  );
   return {
     persona: personaSpec,
     personaPath,
-    provider: normalizedProvider.provider,
-    model: normalizedProvider.model,
-    providerOptions: normalizedProvider.providerOptions,
+    ...(raw.persona !== undefined && raw.persona.length > 0 ? { personaRef: raw.persona } : {}),
     instruction: raw.instruction
       ? resolveRefToContent(
           raw.instruction,
@@ -37,18 +27,21 @@ function normalizeLoopMonitorJudge(
           context,
         )
       : undefined,
-    rules: raw.rules.map((rule) => ({ condition: rule.condition, next: rule.next })),
+    ...(raw.instruction === undefined ? {} : { instructionRef: raw.instruction }),
+    rules: raw.rules.map((rule) => ({
+      condition: parseWorkflowRuleCondition(rule.condition),
+      next: rule.next,
+    })),
   };
 }
 
 export function normalizeLoopMonitors(
   raw: Array<{
     cycle: string[];
+    ignore_steps?: string[];
     threshold: number;
     judge: {
       persona?: string;
-      provider?: unknown;
-      model?: string;
       instruction?: string;
       rules: Array<{ condition: string; next: string }>;
     };
@@ -63,6 +56,7 @@ export function normalizeLoopMonitors(
 
   return raw.map((monitor) => ({
     cycle: monitor.cycle,
+    ignoreSteps: monitor.ignore_steps,
     threshold: monitor.threshold,
     judge: normalizeLoopMonitorJudge(monitor.judge, workflowDir, sections, context),
   }));

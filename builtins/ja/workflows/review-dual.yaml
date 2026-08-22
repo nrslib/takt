@@ -1,34 +1,25 @@
 name: review-dual
-description: フロントエンド＋バックエンド特化レビュー（構造・モジュール化・コンポーネント設計・セキュリティ・QA）
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+description: フロントエンド＋バックエンド特化レビュー（構造・モジュール化・コンポーネント設計・セキュリティ・コーディング）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 10
+facet_pools:
+  security-review-facets:
+    uses: security-review-facets
 initial_step: gather
 
 steps:
   - name: gather
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: gather-review
-    output_contracts:
-      report:
-        - name: review-target.md
-          format: review-gather
+    uses: review-gather-to-reviewers
     rules:
       - condition: レビュー対象の情報収集完了
         next: reviewers
@@ -39,24 +30,23 @@ steps:
     tags:
       - review
     parallel:
+      fixed:
       - name: arch-review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: architecture-reviewer
-        policy: review
+        policy:
+          - contract-change
+          - review
+          - architecture
+          - backend
+          - frontend
         knowledge:
           - architecture
           - frontend
           - backend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-arch
         output_contracts:
           report:
@@ -67,22 +57,17 @@ steps:
           - condition: needs_fix
 
       - name: frontend-review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: frontend-reviewer
         policy:
+          - contract-change
           - review
           - design-fidelity
+          - frontend
         knowledge: frontend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-frontend
         output_contracts:
           report:
@@ -92,95 +77,16 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: security-review
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy: review
-        knowledge: security
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
-      - name: qa-review
-        tags:
-          - review
-        edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        instruction: review-qa
-        output_contracts:
-          report:
-            - name: qa-review.md
-              format: qa-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: coding-reviewer
         policy:
+          - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:
@@ -190,35 +96,61 @@ steps:
           - condition: approved
           - condition: needs_fix
 
+      pool:
+      - name: security-review
+        description: 既定では選ばない。(a) 変更が secret または credential の取扱い、外部入力の処理、process 実行、filesystem 操作、network または terminal の境界、sandbox、権限に影響し得る場合、または (b) 修正の規模が大きく、セキュリティへの影響がないと判断しきれない場合に限って選ぶ。ドキュメントのみ・コメントのみ・テストのみの変更や小さな局所修正では選ばない。
+        capabilities: readonly
+        tags:
+          - review
+        edit: false
+        persona: security-reviewer
+        policy:
+          - contract-change
+          - security-review
+        knowledge:
+          - security
+          - security-data
+          - security-dependencies
+        dynamic_facets:
+          pool: security-review-facets
+          selector:
+            instruction: select-applicable-candidates
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: security-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      selection:
+        selector:
+          instruction: select-applicable-candidates
+
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: all("approved")
-        next: supervise
+        next: review-synthesis
       - condition: any("needs_fix")
         next: supervise
 
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: supervisor
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-    pass_previous_response: false
-    instruction: supervise
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false
+  - name: review-synthesis
+    uses: review-synthesis-to-complete
     rules:
-      - condition: レビュー統合完了
+      - condition: BLOCKED
+        next: ABORT
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: COMPLETE
+
+  - name: supervise
+    uses: review-supervise-to-complete
+    rules:
+      - condition: BLOCKED
+        next: ABORT
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
         next: COMPLETE

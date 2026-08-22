@@ -1,0 +1,159 @@
+name: simple
+description: A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+max_steps: 30
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+capabilities: [readonly, enable-skills]
+initial_step: plan
+steps:
+  - name: plan
+    capabilities: [readonly, enable-skills]
+    uses: development-core-plan
+    with:
+      plan_policy: [design-planning]
+      plan_knowledge: [architecture]
+      plan_instruction: simple-plan
+      plan_report_format: plan
+    rules:
+      - condition: Requirements are clear and implementation is feasible
+        next: write_tests
+      - condition: The user is asking a question rather than requesting implementation
+        next: COMPLETE
+      - condition: Requirements are unclear or information is insufficient
+        next: ABORT
+        appendix: |
+          Questions:
+          - {Question 1}
+          - {Question 2}
+
+  - name: write_tests
+    capabilities: [edit, enable-skills]
+    uses: development-core-write-tests
+    with:
+      testing_policy: [coding, testing]
+      testing_knowledge: [architecture, unit-testing, e2e-testing]
+      testing_instruction: simple-write-tests-first
+      testing_report_format: test-report
+    rules:
+      - condition: Test creation completed
+        next: implement
+      - condition: Test creation skipped because the target is not yet implemented
+        next: implement
+      - condition: Unable to create tests
+        next: ABORT
+      - condition: User input is required to resolve a question
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+
+  - name: implement
+    capabilities: [edit, enable-skills]
+    uses: development-core-implement
+    with:
+      development_policy: [coding, testing, ai-antipattern]
+      development_knowledge: [architecture]
+      implementation_instruction: simple-implement-after-tests
+      scope_report_format: coder-scope
+    dynamic_facets:
+      pool: coding-facets
+    rules:
+      - condition: Implementation completed
+        next: review
+      - condition: The plan needs revision
+        next: plan
+      - condition: Unable to proceed with implementation
+        next: ABORT
+      - condition: User input is required to resolve a question
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: review
+    tags:
+      - review
+    edit: false
+    persona: coding-reviewer
+    policy:
+      - contract-change
+      - review
+      - coding
+      - testing
+      - ai-antipattern
+    knowledge:
+      - architecture
+      - unit-testing
+      - e2e-testing
+    dynamic_facets:
+      pool: coding-facets
+    pass_previous_response: false
+    instruction: simple-review-coding
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: remediation
+
+  - name: remediation
+    uses: review-remediation
+    with:
+      plan_policy: [review, coding, testing, ai-antipattern]
+      fix_policy: [coding, testing, ai-antipattern]
+      verification_policy: [review, coding, testing, ai-antipattern]
+      fix_knowledge: [architecture, unit-testing, e2e-testing]
+    rules:
+      - condition: COMPLETE
+        next: review
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT
+
+  - name: supervise
+    tags:
+      - review
+      - final-gate
+      - supervise
+    edit: false
+    persona: supervisor
+    policy:
+      - contract-change
+      - review
+      - coding
+      - testing
+      - ai-antipattern
+    knowledge:
+      - architecture
+      - unit-testing
+      - e2e-testing
+    pass_previous_response: false
+    instruction: simple-supervise
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: supervisor-summary
+          use_judge: false
+    rules:
+      - condition: BLOCKED
+        next: ABORT
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: remediation

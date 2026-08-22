@@ -1,0 +1,110 @@
+name: simple-mini
+description: 強いモデルの判断力を信頼する軽量な開発ワークフロー（plan → implement → review ⇄ fix → COMPLETE）。独立したテスト作成と要件充足の最終確認を省き、利用可能な関連SKILLをモデル自身が選ぶ。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+capabilities: [readonly, enable-skills]
+max_steps: 20
+initial_step: plan
+steps:
+  - name: plan
+    capabilities: [readonly, enable-skills]
+    uses: development-core-plan
+    with:
+      plan_policy: [design-planning, architecture]
+      plan_knowledge: [architecture]
+      plan_instruction: simple-plan
+      plan_report_format: plan
+    rules:
+      - condition: 要件が明確で実装可能
+        next: implement
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
+
+  - name: implement
+    capabilities: [edit, enable-skills]
+    uses: development-core-implement
+    with:
+      development_policy: [coding, testing, architecture]
+      development_knowledge: [architecture]
+      implementation_instruction: simple-implement
+      scope_report_format: coder-scope
+    rules:
+      - condition: 実装が完了した
+        next: review
+      - condition: 計画の見直しが必要
+        next: plan
+      - condition: 実装を進行できない
+        next: ABORT
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: review
+    tags:
+      - review
+    edit: false
+    persona: coding-reviewer
+    policy:
+      - contract-change
+      - review
+      - coding
+      - testing
+      - architecture
+    knowledge:
+      - architecture
+      - unit-testing
+      - e2e-testing
+    pass_previous_response: false
+    instruction: simple-review-coding
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: needs_fix
+        next: remediation
+
+  - name: remediation
+    uses: review-remediation
+    with:
+      plan_policy:
+        - coding
+        - testing
+        - review
+      fix_policy:
+        - coding
+        - testing
+        - architecture
+      verification_policy:
+        - coding
+        - testing
+        - review
+      fix_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+    rules:
+      - condition: COMPLETE
+        next: review
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT

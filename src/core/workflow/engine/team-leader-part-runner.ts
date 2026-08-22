@@ -8,11 +8,19 @@ import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { ParallelLogger } from './parallel-logger.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { createPartStep } from './team-leader-common.js';
-import { buildGitRules } from '../instruction/instruction-context.js';
-import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
-import { classifyAbortSignalReason } from '../../../shared/types/agent-failure.js';
+import type { StepProviderInfo } from '../types.js';
+import {
+  classifyAbortSignalReason,
+  isAgentFailureError,
+} from '../../../shared/types/agent-failure.js';
+import { hasWorkflowStepCallTimeoutGuard } from './step-deadline.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
+import {
+  ExplicitPartFailureError,
+  OperationRecoveryError,
+} from '../operations/operation-recovery-error.js';
 
 export interface TeamLeaderPartObservability {
   readonly enabled: boolean;
@@ -23,11 +31,18 @@ export interface TeamLeaderPartObservability {
   readonly sanitizeText?: (text: string) => string;
 }
 
-function hasReportPhase(step: WorkflowStep): boolean {
-  return step.outputContracts !== undefined && step.outputContracts.length > 0;
+export interface TeamLeaderPartExecutionOptions {
+  readonly forceNewSession: boolean;
+  readonly onDispatch?: RunAgentOptions['onDispatch'];
+  readonly composeOptions?: (options: RunAgentOptions) => RunAgentOptions;
+  readonly deadlineSignal?: AbortSignal;
+  readonly providerInfo: StepProviderInfo;
 }
 
-function buildPartScopedSessionKey(partStep: WorkflowStep, provider: ProviderType | undefined): string {
+export function buildPartScopedSessionKey(
+  partStep: WorkflowStep,
+  resolvedTarget: { provider: ProviderType | undefined; model: string | undefined },
+): string {
   const sessionKeyStep: AgentWorkflowStep = {
     kind: 'agent',
     name: partStep.name,
@@ -35,37 +50,7 @@ function buildPartScopedSessionKey(partStep: WorkflowStep, provider: ProviderTyp
     personaDisplayName: partStep.personaDisplayName,
     instruction: partStep.instruction,
   };
-  return buildSessionKey(sessionKeyStep, provider);
-}
-
-function buildTeamLeaderPartSessionKey(
-  step: WorkflowStep,
-  partStep: WorkflowStep,
-  provider: ProviderType | undefined,
-): string {
-  const partSessionKey = buildSessionKey(partStep, provider);
-  const parentSessionKey = buildSessionKey(step, provider);
-
-  if (hasReportPhase(step) && partSessionKey === parentSessionKey) {
-    return buildPartScopedSessionKey(partStep, provider);
-  }
-
-  return partSessionKey;
-}
-
-function buildTeamLeaderPartInstruction(
-  partStep: WorkflowStep,
-  part: PartDefinition,
-  language: NonNullable<RunAgentOptions['language']>,
-  runtime?: RuntimeStepResolution,
-): string {
-  const gitRules = buildGitRules(partStep.allowGitCommit, language, 'phase1');
-  const fallbackNotice = runtime?.fallback
-    ? renderFallbackNotice(runtime.fallback, language)
-    : '';
-  return [gitRules, fallbackNotice, part.instruction]
-    .filter((item): item is string => typeof item === 'string' && item.length > 0)
-    .join('\n\n');
+  return buildSessionKey(sessionKeyStep, resolvedTarget);
 }
 
 export async function runTeamLeaderPart(
@@ -78,13 +63,17 @@ export async function runTeamLeaderPart(
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   parallelLogger: ParallelLogger | undefined,
   observability: TeamLeaderPartObservability,
+  buildInstruction: (partStep: WorkflowStep) => string,
   runtime?: RuntimeStepResolution,
+  executionAbortSignal?: AbortSignal,
+  executionOptions?: TeamLeaderPartExecutionOptions,
 ): Promise<PartResult> {
   const partStep = createPartStep(step, part);
-  const partProviderInfo = runtime
-    ? optionsBuilder.resolveStepProviderModel(partStep, runtime)
-    : optionsBuilder.resolveStepProviderModel(partStep);
-  const baseOptions = optionsBuilder.buildAgentOptions(partStep, {
+  const partProviderInfo = executionOptions?.providerInfo
+    ?? (runtime
+      ? optionsBuilder.resolveStepProviderModel(partStep, runtime)
+      : optionsBuilder.resolveStepProviderModel(partStep));
+  const resolvedBaseOptions = optionsBuilder.buildAgentOptions(partStep, {
     ...runtime,
     providerInfo: partProviderInfo,
     teamLeaderPart: {
@@ -92,25 +81,53 @@ export async function runTeamLeaderPart(
       processSafety: leaderWorkflowMeta?.processSafety,
     },
   });
-  const { signal, dispose } = buildAbortSignal(defaultTimeoutMs, baseOptions.abortSignal);
-  const options = parallelLogger
+  const baseOptions = executionOptions?.forceNewSession === true
+    ? { ...resolvedBaseOptions, sessionId: undefined }
+    : resolvedBaseOptions;
+  const deadlineSignal = executionOptions?.deadlineSignal;
+  let signal: AbortSignal;
+  let dispose: () => void;
+  if (deadlineSignal === undefined) {
+    const legacyDeadline = buildAbortSignal(
+      defaultTimeoutMs,
+      executionAbortSignal ?? baseOptions.abortSignal,
+    );
+    signal = legacyDeadline.signal;
+    dispose = legacyDeadline.dispose;
+  } else {
+    const legacyDeadline = !hasWorkflowStepCallTimeoutGuard(
+      partProviderInfo.provider,
+      partProviderInfo.providerOptions,
+    )
+      ? buildAbortSignal(defaultTimeoutMs, executionAbortSignal ?? baseOptions.abortSignal)
+      : undefined;
+    const signals = [executionAbortSignal, deadlineSignal, legacyDeadline?.signal].filter(
+      (candidate): candidate is AbortSignal => candidate !== undefined,
+    );
+    signal = signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
+    dispose = legacyDeadline?.dispose ?? (() => {});
+  }
+  const baseRunOptions = parallelLogger
     ? {
       ...baseOptions,
       abortSignal: signal,
-      onStream: parallelLogger.createStreamHandler(part.id, partIndex),
+      onDispatch: executionOptions?.onDispatch,
+      onStream: optionsBuilder.buildProviderStream(
+        partStep,
+        partProviderInfo.provider,
+        partProviderInfo.model,
+        parallelLogger.createStreamHandler(part.id, partIndex),
+      ),
     }
     : {
       ...baseOptions,
       abortSignal: signal,
+      onDispatch: executionOptions?.onDispatch,
     };
+  const options = executionOptions?.composeOptions?.(baseRunOptions) ?? baseRunOptions;
 
   try {
-    const partInstruction = buildTeamLeaderPartInstruction(
-      partStep,
-      part,
-      options.language ?? 'en',
-      runtime,
-    );
+    const partInstruction = buildInstruction(partStep);
     const response = await runWithPhaseSpan({
       enabled: observability.enabled,
       runId: observability.runId,
@@ -123,13 +140,38 @@ export async function runTeamLeaderPart(
       workflowStack: observability.workflowStack,
       sanitizeText: observability.sanitizeText,
       providerInfo: partProviderInfo,
-    }, () => executeAgent(partStep.persona, partInstruction, options), (result) => ({
+    }, async () => {
+      try {
+        const result = await executeAgent(partStep.persona, partInstruction, options);
+        if (isTeamLeaderPartCancellation(signal.reason)) {
+          throw signal.reason;
+        }
+        return result;
+      } catch (error) {
+        if (isTeamLeaderPartCancellation(signal.reason)) {
+          throw signal.reason;
+        }
+        throw error;
+      }
+    }, (result) => ({
       status: result.status,
       content: result.content,
       error: result.error,
       providerUsage: result.providerUsage,
-    }));
-    updatePersonaSession(buildTeamLeaderPartSessionKey(step, partStep, partProviderInfo.provider), response.sessionId);
+    }), (error) => (
+      isTeamLeaderPartCancellation(error)
+        ? { status: 'cancelled' }
+        : undefined
+    ));
+    if (response.sessionId !== undefined) {
+      updatePersonaSession(
+        buildPartScopedSessionKey(partStep, {
+          provider: partProviderInfo.provider,
+          model: partProviderInfo.model,
+        }),
+        response.sessionId,
+      );
+    }
     return {
       part,
       providerInfo: partProviderInfo,
@@ -139,7 +181,16 @@ export async function runTeamLeaderPart(
       },
     };
   } catch (error) {
-    return buildTeamLeaderErrorPartResult(step, part, error, signal);
+    if (error instanceof OperationRecoveryError) {
+      throw error;
+    }
+    if (isTeamLeaderPartCancellation(error)) {
+      throw error;
+    }
+    return {
+      ...buildTeamLeaderErrorPartResult(step, part, error, signal),
+      providerInfo: partProviderInfo,
+    };
   } finally {
     dispose();
   }
@@ -153,14 +204,28 @@ export function buildTeamLeaderErrorPartResult(
 ): PartResult {
   const message = getErrorMessage(error);
   const failure = abortSignal?.aborted ? classifyAbortSignalReason(abortSignal.reason) : undefined;
-  const errorMsg = failure ? failure.reason : message;
+  const errorMsg = failure ? failure.reason : isAgentFailureError(error) ? error.reason : message;
   const errorResponse: AgentResponse = {
     persona: `${step.name}.${part.id}`,
     status: 'error',
     content: '',
     timestamp: new Date(),
     error: errorMsg,
-    ...(failure ? { failureCategory: failure.category } : {}),
+    ...(failure
+      ? { failureCategory: failure.category }
+      : isAgentFailureError(error)
+        ? { failureCategory: error.failureCategory }
+        : {}),
   };
   return { part, response: errorResponse };
+}
+
+export function createExplicitPartFailure(
+  boundaryId: string,
+  result: PartResult,
+): ExplicitPartFailureError {
+  return new ExplicitPartFailureError(
+    result.response.error ?? result.response.content,
+    { boundaryId },
+  );
 }

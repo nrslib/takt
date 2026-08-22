@@ -1,0 +1,20 @@
+# リポジトリを変更せずに調べる。読み取り・検索・シェル・Web 検索。
+claude:
+  allowed_tools:
+    - Read
+    - Glob
+    - Grep
+    - Bash
+    - WebSearch
+    - WebFetch
+opencode:
+  allowed_tools:
+    - read
+    - glob
+    - grep
+    - bash
+    - websearch
+    - webfetch
+  network_access: true
+codex:
+  network_access: true

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { expandImageAttachmentPlaceholders } from '../infra/providers/imageAttachmentPrompt.js';
 import { buildClaudePromptInput } from '../infra/claude/image-input.js';
+import { validateProviderImageAttachments } from '../infra/providers/imageAttachments.js';
 
 const tempRoots = new Set<string>();
 
@@ -29,6 +30,23 @@ describe('provider image attachment prompt support', () => {
     ]);
 
     expect(result).toBe('見て [Image #1] (`/tmp/image-1.png`)');
+  });
+
+  it('should append image path references when the prompt has no matching placeholders', () => {
+    const result = expandImageAttachmentPlaceholders('Summarize the completed run.', [
+      { placeholder: '[Image #1]', path: '/tmp/image-1.png' },
+    ]);
+
+    expect(result).toBe('Summarize the completed run.\n\n[Image #1] path: `/tmp/image-1.png`');
+  });
+
+  it('should preserve expanded placeholders and append only unreferenced image attachments', () => {
+    const result = expandImageAttachmentPlaceholders('見て [Image #1]', [
+      { placeholder: '[Image #1]', path: '/tmp/image-1.png' },
+      { placeholder: '[Image #2]', path: '/tmp/image-2.png' },
+    ]);
+
+    expect(result).toBe('見て [Image #1] (`/tmp/image-1.png`)\n\n[Image #2] path: `/tmp/image-2.png`');
   });
 });
 
@@ -56,7 +74,7 @@ describe('buildClaudePromptInput', () => {
           role: 'user',
           content: [
             { type: 'text', text: '見て [Image #1]' },
-            { type: 'text', text: `[Image #1] path: \`${imagePath}\`` },
+            { type: 'text', text: '[Image #1]' },
             {
               type: 'image',
               source: {
@@ -85,5 +103,41 @@ describe('buildClaudePromptInput', () => {
         throw new Error('Expected image read failure before yielding Claude message');
       }
     }).rejects.toThrow(`Failed to read image attachment at ${missingPath}`);
+  });
+});
+
+describe('validateProviderImageAttachments', () => {
+  it('should reject malformed attachment entries before provider SDK conversion', () => {
+    expect(() => validateProviderImageAttachments([
+      undefined as unknown as { placeholder: string; path: string },
+    ])).toThrow('Image attachment must be an object.');
+  });
+
+  it('should reject duplicate image placeholders before provider SDK conversion', () => {
+    const imagePath = createTempImage('.png');
+
+    expect(() => validateProviderImageAttachments([
+      { placeholder: '[Image #1]', path: imagePath },
+      { placeholder: '[Image #1]', path: imagePath },
+    ])).toThrow('Duplicate image attachment placeholder: [Image #1]');
+  });
+
+  it('should reject unsupported image extensions before provider SDK conversion', () => {
+    const imagePath = createTempImage('.txt');
+
+    expect(() => validateProviderImageAttachments([
+      { placeholder: '[Image #1]', path: imagePath },
+    ])).toThrow('Unsupported image attachment file extension: image.txt');
+  });
+
+  it('should reject non-regular image attachment files before provider SDK conversion', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-provider-image-dir-test-'));
+    tempRoots.add(root);
+    const directoryPath = path.join(root, 'image.png');
+    fs.mkdirSync(directoryPath);
+
+    expect(() => validateProviderImageAttachments([
+      { placeholder: '[Image #1]', path: directoryPath },
+    ])).toThrow(`Image attachment source must be a regular file: ${directoryPath}`);
   });
 });

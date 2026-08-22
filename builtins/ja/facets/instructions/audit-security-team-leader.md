@@ -1,5 +1,7 @@
 セキュリティ監査タスクを分解し、担当ファイルを割り当てて並列実行してください。
 
+{{include:instructions/security-knowledge-routing}}
+
 **重要:** 計画レポートを参照してください: {report:01-plan.md}
 
 **やること:**

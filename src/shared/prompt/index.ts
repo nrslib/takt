@@ -13,9 +13,15 @@ export {
   countRenderedLines,
   type KeyInputResult,
   handleKeyInput,
+  firstSelectableIndex,
   selectOption,
   selectOptionWithDefault,
 } from './select.js';
+
+export {
+  selectMultipleOptions,
+  type MultipleSelectOptions,
+} from './multi-select.js';
 
 export {
   promptInput,

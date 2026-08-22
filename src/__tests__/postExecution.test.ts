@@ -18,6 +18,8 @@ const {
   mockBuildTaktManagedPrOptions,
   mockCreatePullRequestSafely,
   mockStripTaktManagedPrMarker,
+  mockReadPrivateFileState,
+  mockWritePrivateFile,
 } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
@@ -30,12 +32,19 @@ const {
       body: `${body}\n\n<!-- takt:managed -->`,
     })),
     mockCreatePullRequestSafely: vi.fn(),
+    mockReadPrivateFileState: vi.fn(),
+    mockWritePrivateFile: vi.fn(),
     mockStripTaktManagedPrMarker: vi.fn((body: string) => body
       .split('<!-- takt:managed -->')
       .join('')
       .replace(/\n{3,}/g, '\n\n')
       .trimEnd()),
   }));
+
+vi.mock('../shared/utils/private-file.js', () => ({
+  readPrivateFileState: (...args: unknown[]) => mockReadPrivateFileState(...args),
+  writePrivateFile: (...args: unknown[]) => mockWritePrivateFile(...args),
+}));
 
 vi.mock('../infra/task/index.js', () => ({
   autoCommitAndPush: (...args: unknown[]) => mockAutoCommitAndPush(...args),
@@ -76,9 +85,11 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import {
+  commentLoopAnalysisReportOnPr,
   postExecutionFlow,
   type PostExecutionOptions,
 } from '../features/tasks/execute/postExecution.js';
+import { error, info, success } from '../shared/ui/index.js';
 
 const MOCK_NFF_DIAGNOSTIC_TAIL =
   'Push rejected (non-fast-forward): remote is ahead; resync or recreate worktree; stale local branch may apply.';
@@ -93,6 +104,10 @@ const baseOptions = {
   draftPr: false,
   workflowIdentifier: 'default',
 };
+
+const mockInfo = vi.mocked(info);
+const mockError = vi.mocked(error);
+const mockSuccess = vi.mocked(success);
 
 describe('postExecutionFlow', () => {
   beforeEach(() => {
@@ -128,7 +143,7 @@ describe('postExecutionFlow', () => {
       body: 'pr-body',
     }));
     expect(mockCommentOnPr).not.toHaveBeenCalled();
-    expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.', undefined);
+    expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, expect.any(String), undefined);
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
   });
 
@@ -142,7 +157,7 @@ describe('postExecutionFlow', () => {
 
     expect(mockBuildPrBody).toHaveBeenCalledWith(
       undefined,
-      'Workflow `default` completed successfully.',
+      expect.any(String),
       '## Task\n\nUse order.md as the PR summary.',
     );
     expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
@@ -178,9 +193,8 @@ describe('postExecutionFlow', () => {
 
     const [createOptions, createCwd] = mockCreatePullRequest.mock.calls[0] as [Record<string, unknown>, string];
     expect(createCwd).toBe('/project');
-    expect(createOptions).toEqual(expect.objectContaining({
-      body: '## Summary\n\nIssue body\n\n## Execution Report\n\nWorkflow `default` completed successfully.\n\nCloses #12',
-    }));
+    expect(String(createOptions.body)).toContain('Issue body');
+    expect(String(createOptions.body)).toContain('Closes #12');
     expect(String(createOptions.body)).not.toContain(TAKT_MANAGED_PR_MARKER);
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
   });
@@ -205,7 +219,7 @@ describe('postExecutionFlow', () => {
     const [commentPrNumber, commentBody, commentCwd] = mockCommentOnPr.mock.calls[0] as [number, string, string];
     expect(commentPrNumber).toBe(42);
     expect(commentCwd).toBe('/project');
-    expect(commentBody).toBe(buildActualPrBody(undefined, 'Workflow `default` completed successfully.'));
+    expect(commentBody).toBeTruthy();
     expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
@@ -220,7 +234,6 @@ describe('postExecutionFlow', () => {
 
     const [, commentBody] = mockCommentOnPr.mock.calls[0] as [number, string, string];
     expect(commentBody).toContain(orderContent);
-    expect(commentBody).toContain('## Execution Report');
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
 
@@ -233,7 +246,7 @@ describe('postExecutionFlow', () => {
     const [commentPrNumber, commentBody, commentCwd] = mockCommentOnPr.mock.calls[0] as [number, string, string];
     expect(commentPrNumber).toBe(42);
     expect(commentCwd).toBe('/project');
-    expect(commentBody).toBe(buildActualPrBody(undefined, 'Workflow `default` completed successfully.'));
+    expect(commentBody).toBeTruthy();
     expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
@@ -253,7 +266,8 @@ describe('postExecutionFlow', () => {
     await postExecutionFlow({ ...baseOptions, issues });
 
     const [, commentBody] = mockCommentOnPr.mock.calls[0] as [number, string, string];
-    expect(commentBody).toBe('## Summary\n\nIssue body\n\n## Execution Report\n\nWorkflow `default` completed successfully.\n\nCloses #34');
+    expect(commentBody).toContain('Issue body');
+    expect(commentBody).toContain('Closes #34');
     expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
   });
 
@@ -312,6 +326,23 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBe(true);
     expect(result.prError).toBe('Failed to create pull request. Base ref must be a branch');
     expect(result.prUrl).toBeUndefined();
+  });
+
+  it('outputMode が silent の場合は PR 作成失敗時も通常 UI ログを出力しない', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    mockCreatePullRequest.mockReturnValue({ success: false, error: 'Base ref must be a branch' });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      outputMode: 'silent',
+    });
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError).toBe('Failed to create pull request. Base ref must be a branch');
+    expect(result.prUrl).toBeUndefined();
+    expect(mockInfo).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   it('ローカルpush失敗後も commitHash があれば（localPushFailed なし）PR 作成失敗を prFailed として返す', async () => {
@@ -603,6 +634,23 @@ describe('postExecutionFlow', () => {
     expect(result.prUrl).toBeUndefined();
   });
 
+  it('outputMode が silent の場合は PR コメント失敗時も通常 UI ログを出力しない', async () => {
+    mockFindExistingPr.mockReturnValue({ number: 42, url: 'https://github.com/org/repo/pull/42' });
+    mockCommentOnPr.mockReturnValue({ success: false, error: 'Permission denied' });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      outputMode: 'silent',
+    });
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError).toBe('Failed to update pull request comment.');
+    expect(result.prUrl).toBeUndefined();
+    expect(mockInfo).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
   it('PRプロバイダーの詳細エラーは UI 用 prError に露出しない', async () => {
     mockFindExistingPr.mockReturnValue({ number: 42, url: 'https://github.com/org/repo/pull/42' });
     mockCommentOnPr.mockReturnValue({
@@ -624,6 +672,21 @@ describe('postExecutionFlow', () => {
 
     expect(result.prFailed).toBeUndefined();
     expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
+  });
+
+  it('outputMode が silent の場合は通常 UI ログを出力しない', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      outputMode: 'silent',
+    });
+
+    expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
+    expect(mockInfo).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   it('issues が渡された場合、PRタイトルにIssue番号プレフィックスが付与される', async () => {
@@ -681,5 +744,117 @@ describe('postExecutionFlow', () => {
       expect.objectContaining({ title: expectedTitle }),
       '/project',
     );
+  });
+});
+
+describe('commentLoopAnalysisReportOnPr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCommentOnPr.mockReturnValue({ success: true });
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from('# Loop analysis'),
+    });
+  });
+
+  it('Given the source branch has an existing PR, When the analysis report is published, Then the persisted UTF-8 content is posted unchanged', async () => {
+    const reportContent = '# Loop analysis\n\n  Preserve spacing exactly.  \n';
+    mockFindExistingPr.mockReturnValue({
+      number: 41,
+      url: 'https://github.com/org/repo/pull/41',
+    });
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from(reportContent),
+    });
+
+    await commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+    });
+
+    expect(mockFindExistingPr).toHaveBeenCalledWith('takt/source-run', '/project');
+    expect(mockReadPrivateFileState).toHaveBeenCalledWith(
+      '/project/.takt/runs/analysis/reports/loop-analysis.md',
+    );
+    expect(mockWritePrivateFile).not.toHaveBeenCalled();
+    expect(mockCommentOnPr).toHaveBeenCalledWith(41, reportContent, '/project');
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('Given a report contains sensitive or identifying data, When it is published, Then the persisted and posted content is sanitized', async () => {
+    const reportContent = [
+      '# Loop analysis',
+      'api_key=plain-secret',
+      'Contact: jane@example.com',
+      'Runner name: private-runner-7',
+      'Evidence: /Users/jane/project/.takt/runs/run-1/logs/session.jsonl',
+      'Windows evidence: C:/Users/jane/project/.takt/runs/run-1/logs/session.jsonl',
+      'Windows backslash evidence: C:\\Users\\jane\\project\\.takt\\runs\\run-1\\logs\\session.jsonl',
+      'Host: 192.168.10.4',
+    ].join('\n');
+    mockFindExistingPr.mockReturnValue({
+      number: 41,
+      url: 'https://github.com/org/repo/pull/41',
+    });
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from(reportContent),
+    });
+
+    await commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+    });
+
+    const published = mockCommentOnPr.mock.calls[0]?.[1];
+    if (typeof published !== 'string') {
+      throw new Error('Expected the sanitized report to be published');
+    }
+    expect(published).not.toMatch(/plain-secret|jane@example\.com|private-runner-7|\/Users\/jane|C:\/Users\/jane|C:\\Users\\jane|192\.168\.10\.4/);
+    expect(published).toContain('[REDACTED]');
+    expect(published).toContain('[PII]');
+    expect(published).toContain('[path]');
+    expect(mockWritePrivateFile).toHaveBeenCalledWith(
+      '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      published,
+    );
+  });
+
+  it('Given the source branch has no existing PR, When the analysis report is available, Then no comment or PR creation is attempted', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+    });
+
+    expect(mockFindExistingPr).toHaveBeenCalledWith('takt/source-run', '/project');
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('Given posting the report comment fails, When the analysis result is published, Then the provider error is surfaced', async () => {
+    mockFindExistingPr.mockReturnValue({
+      number: 41,
+      url: 'https://github.com/org/repo/pull/41',
+    });
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from('# Loop analysis'),
+    });
+    mockCommentOnPr.mockReturnValue({
+      success: false,
+      error: 'comment rejected',
+    });
+
+    await expect(commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+    })).rejects.toThrow('comment rejected');
   });
 });

@@ -1,0 +1,40 @@
+params:
+  development_policy:
+    type: facet_ref[]
+    facet_kind: policy
+  development_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+  implementation_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  scope_report_format:
+    type: facet_ref
+    facet_kind: report_format
+name: implement
+capabilities: edit
+tags:
+  - coding
+edit: true
+persona: coder
+policy:
+  - contract-change
+  - $param: development_policy
+knowledge:
+  $param: development_knowledge
+required_permission_mode: edit
+instruction:
+  $param: implementation_instruction
+output_contracts:
+  report:
+    - name: coder-scope.md
+      format:
+        $param: scope_report_format
+      use_judge: false
+    - name: coder-decisions.md
+      format: coder-decisions
+      use_judge: false
+    - name: implementation-report.md
+      format: implementation-report
+      order: implementation-report-order
+      use_judge: false

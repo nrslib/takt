@@ -7,7 +7,7 @@
 language: ja         # 表示言語: ja | en
 
 # デフォルトプロバイダー・モデル
-# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
+# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
 # model: sonnet                       # デフォルトモデル（プロバイダーにそのまま渡される）
 
 # 実行制御
@@ -17,8 +17,9 @@ language: ja         # 表示言語: ja | en
 # base_branch: main                # cloneのベースブランチ（デフォルト: カレントブランチ）
 # concurrency: 1                   # takt run の同時実行タスク数 (1-10)
 # task_poll_interval_ms: 500       # 新規タスク検出のポーリング間隔（ms, 100-5000）
+# auto_requeue_max_attempts: 0     # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、0で無効）
+# ignore_exceed: false             # takt run / takt watch で --ignore-exceed 相当を適用
 # sync_project_local_takt_on_retry: true # Retry / re-execution 前に root の project-local .takt を同期。保持したい場合は false
-
 # PR / ブランチ
 # auto_pr: false                   # worktree実行後にPR自動作成
 # draft_pr: false                  # ドラフトPRとして作成
@@ -63,6 +64,9 @@ language: ja         # 表示言語: ja | en
 
 # インタラクティブモード
 # interactive_preview_steps: 3 # インタラクティブモードでの step プレビュー数 (0-10)
+# assistant:
+#   formal_spec: 'y/N'         # true/false は質問なし。Y/n または y/N は TTY で既定回答付き質問（未設定: y/N）。非 TTY は既定回答を採用。適用可能な要件に限り該当する記法を追加し、同じ要件を重複させず、両方の記法を強制しません。
+# Gherkin のガイダンスは常時有効です。廃止済み assistant.gherkin は警告後に無視され、移行されません。
 
 # workflow step の provider routing（推奨）
 # provider_routing:
@@ -79,7 +83,13 @@ language: ja         # 表示言語: ja | en
 #       model: gpt-5
 #     review:
 #       provider: opencode
-#       model: opencode/qwen3-coder-next
+#       model: ollama-cloud/qwen3.5:397b
+#     final-gate:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
 #     edit:
 #       provider_options:
 #         codex:
@@ -87,7 +97,7 @@ language: ja         # 表示言語: ja | en
 #   steps:
 #     ai-antipattern-review-2nd:
 #       provider: opencode
-#       model: opencode/qwen3-coder-next
+#       model: ollama-cloud/qwen3.5:397b
 
 # display name ベースの旧 provider 上書き（deprecated。新規設定では provider_routing を推奨）
 # persona_providers:
@@ -99,9 +109,14 @@ language: ja         # 表示言語: ja | en
 # provider_options:
 #   codex:
 #     network_access: true
+#     skills:
+#       repo: false
+#       user: false
 #   opencode:
 #     variant: high
 #   claude:
+#     skills:
+#       enabled: false
 #     sandbox:
 #       allow_unsandboxed_commands: true
 

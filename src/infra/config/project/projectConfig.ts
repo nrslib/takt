@@ -1,9 +1,9 @@
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { stringify } from 'yaml';
 import { ProjectConfigSchema } from '../../../core/models/index.js';
-import type { QualityGate } from '../../../core/models/workflow-types.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectConfig } from '../types.js';
+import type { TaktProviderConfigEntry } from '../../../core/models/config-types.js';
 import {
   normalizeConfigProviderReference,
   type ConfigProviderReference,
@@ -25,7 +25,11 @@ import {
   denormalizeWorkflowOverrides,
   normalizeRuntime,
   normalizeRateLimitFallback,
+  normalizeAutoRoutingConfig,
+  denormalizeAutoRoutingConfig,
   denormalizeRateLimitFallback,
+  normalizeTelemetryConfig,
+  denormalizeTelemetryConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -54,8 +58,13 @@ import {
   normalizeObservabilityConfig,
 } from '../observabilityConfig.js';
 import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
+import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
+import {
+  omitDeprecatedAssistantGherkin,
+  warnDeprecatedAssistantGherkin,
+} from '../deprecatedAssistantConfig.js';
 
 export type { ProjectConfig as ProjectLocalConfig } from '../types.js';
 
@@ -64,7 +73,18 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 export function loadProjectConfig(projectDir: string): ProjectConfig {
   const configPath = getProjectConfigPath(projectDir);
-  const { parsedConfig, rawConfig, trace } = loadProjectConfigTrace(configPath);
+  const loadedTrace = loadProjectConfigTrace(
+    configPath,
+    PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
+  );
+  const parsedWithoutLegacy = omitDeprecatedAssistantGherkin(loadedTrace.parsedConfig);
+  const rawWithoutLegacy = omitDeprecatedAssistantGherkin(loadedTrace.rawConfig);
+  if (parsedWithoutLegacy.ignored || rawWithoutLegacy.ignored) {
+    warnDeprecatedAssistantGherkin();
+  }
+  const parsedConfig = parsedWithoutLegacy.config;
+  const rawConfig = rawWithoutLegacy.config;
+  const { trace } = loadedTrace;
   setCachedProjectConfigTrace(projectDir, trace);
   assertValidProjectConfig(parsedConfig, configPath, true);
   assertValidProjectConfig(rawConfig, configPath);
@@ -83,7 +103,9 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     submodules,
     with_submodules,
     provider_options,
+    auto_routing,
     analytics,
+    telemetry,
     pipeline,
     assistant,
     takt_providers,
@@ -96,13 +118,29 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     runtime,
     rate_limit_fallback,
     sync_project_local_takt_on_retry,
+    auto_requeue_max_attempts,
+    ignore_exceed,
     sync_conflict_resolver,
     observability,
   } = parsedConfigResult;
+  const projectProviderOptionsPolicy = {
+    baseUrlTrust: 'local-loopback-only' as const,
+    pythonPathTrust: 'local-untrusted' as const,
+    pathTrust: 'local-untrusted' as const,
+    // Cordis selects executable tool composition and is therefore never
+    // accepted from repository/project configuration. Keep it restricted to
+    // trusted global or explicit environment configuration.
+    cordisTrust: 'untrusted' as const,
+    getOrigin: trace.getOrigin,
+  };
   const normalizedProvider = normalizeConfigProviderReference(
     provider as RawProviderReference,
     model as string | undefined,
     provider_options as Record<string, unknown> | undefined,
+    {
+      ...projectProviderOptionsPolicy,
+      pathPrefix: 'provider_options',
+    },
   );
   const normalizedSubmodules = normalizeSubmodules(submodules);
   const normalizedWithSubmodules = normalizeWithSubmodules(with_submodules);
@@ -117,6 +155,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       model?: string;
       provider_options?: Record<string, unknown>;
     }> | undefined,
+    projectProviderOptionsPolicy,
   );
   const normalizedProviderRouting = normalizeProviderRouting(
     provider_routing as {
@@ -124,15 +163,25 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       tags?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
       steps?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
     } | undefined,
+    projectProviderOptionsPolicy,
   );
   const analyticsConfig = normalizeAnalytics(analytics as Record<string, unknown> | undefined);
   const normalizedTaktProviders = normalizeTaktProviders(
     takt_providers as {
       assistant?: {
-        provider?: ProjectConfig['provider'];
+        provider?: TaktProviderConfigEntry['provider'];
         model?: string;
       };
+      selector?: {
+        provider?: TaktProviderConfigEntry['provider'];
+        model?: string;
+        provider_options?: Record<string, unknown>;
+      };
     } | undefined,
+    {
+      ...projectProviderOptionsPolicy,
+      pathPrefix: 'takt_providers.selector.provider_options',
+    },
   );
 
   return {
@@ -148,6 +197,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     taskPollIntervalMs: task_poll_interval_ms as number | undefined,
     interactivePreviewSteps: resolveAliasedPreviewCount(parsedConfigResult as Record<string, unknown>),
     syncProjectLocalTaktOnRetry: sync_project_local_takt_on_retry as boolean | undefined,
+    autoRequeueMaxAttempts: auto_requeue_max_attempts as number | undefined,
+    ignoreExceed: ignore_exceed as boolean | undefined,
     allowGitHooks: allow_git_hooks as boolean | undefined,
     allowGitFilters: allow_git_filters as boolean | undefined,
     autoPr: auto_pr as boolean | undefined,
@@ -160,10 +211,12 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       ...analyticsConfig,
       eventsPath: expandOptionalHomePath(analyticsConfig.eventsPath),
     } : undefined,
+    telemetry: normalizeTelemetryConfig(telemetry),
     observability: normalizeObservabilityConfig(observability),
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
+    autoRouting: normalizeAutoRoutingConfig(auto_routing, projectProviderOptionsPolicy),
     rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
@@ -171,12 +224,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
         step_permission_overrides?: Record<string, string>;
       }> | undefined,
     ),
-    workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides as {
-      quality_gates?: QualityGate[];
-      quality_gates_edit_only?: boolean;
-      steps?: Record<string, { quality_gates?: QualityGate[] }>;
-      personas?: Record<string, { quality_gates?: QualityGate[] }>;
-    } | undefined),
+    workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides),
     runtime: normalizeRuntime(runtime),
     workflowRuntimePrepare: normalizeWorkflowRuntimePreparePolicy(parsedConfigResult.workflow_runtime_prepare),
     workflowCommandGates: normalizeWorkflowCommandGatesPolicy(parsedConfigResult.workflow_command_gates),
@@ -217,6 +265,21 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     delete savePayload.analytics;
   }
 
+  const rawTelemetry = denormalizeTelemetryConfig(config.telemetry);
+  if (rawTelemetry) {
+    savePayload.telemetry = rawTelemetry;
+  } else {
+    delete savePayload.telemetry;
+  }
+
+  const rawAutoRouting = denormalizeAutoRoutingConfig(config.autoRouting);
+  if (rawAutoRouting) {
+    savePayload.auto_routing = rawAutoRouting;
+  } else {
+    delete savePayload.auto_routing;
+  }
+
+
   const rawObservability = denormalizeObservabilityConfig(config.observability);
   if (rawObservability) {
     savePayload.observability = rawObservability;
@@ -242,7 +305,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.rate_limit_fallback;
   }
-  for (const [camel, snake] of [['language', 'language'], ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'], ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'], ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'], ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'], ['interactivePreviewSteps', 'interactive_preview_steps'], ['syncProjectLocalTaktOnRetry', 'sync_project_local_takt_on_retry'], ['concurrency', 'concurrency']] as const) {
+  for (const [camel, snake] of [['language', 'language'], ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'], ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'], ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'], ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'], ['interactivePreviewSteps', 'interactive_preview_steps'], ['syncProjectLocalTaktOnRetry', 'sync_project_local_takt_on_retry'], ['autoRequeueMaxAttempts', 'auto_requeue_max_attempts'], ['ignoreExceed', 'ignore_exceed'], ['concurrency', 'concurrency']] as const) {
     if (config[camel] !== undefined) savePayload[snake] = config[camel];
   }
   delete savePayload.pipeline;
@@ -265,7 +328,10 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.provider_routing;
   }
-  const rawTaktProviders = buildRawTaktProvidersOrThrow(config.taktProviders);
+  const rawTaktProviders = buildRawTaktProvidersOrThrow(config.taktProviders, {
+    baseUrlTrust: 'loopback-only',
+    pathPrefix: 'takt_providers.selector.provider_options',
+  });
   if (rawTaktProviders) {
     savePayload.takt_providers = rawTaktProviders;
   } else {
@@ -288,7 +354,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 

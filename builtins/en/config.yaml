@@ -7,7 +7,7 @@
 language: en        # UI language: en | ja
 
 # Default provider and model
-# provider: claude                    # Default provider: claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
+# provider: claude                    # Default provider: claude | claude-sdk | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
 # model: sonnet                       # Default model (passed directly to provider)
 
 # Execution control
@@ -17,8 +17,9 @@ language: en        # UI language: en | ja
 # base_branch: main                # Base branch to clone from (default: current branch)
 # concurrency: 1                   # Number of tasks to run concurrently in takt run (1-10)
 # task_poll_interval_ms: 500       # Polling interval in ms for picking up new tasks (100-5000)
+# auto_requeue_max_attempts: 0     # Auto-requeue failed workflow tasks during takt run (non-negative integer; 0 disables)
+# ignore_exceed: false             # Applies to takt run and takt watch like --ignore-exceed
 # sync_project_local_takt_on_retry: true # Sync root project-local .takt before retry / re-execution. Set false to keep the worktree copy
-
 # PR / branch
 # auto_pr: false                   # Auto-create PR after worktree execution
 # draft_pr: false                  # Create PR as draft
@@ -63,6 +64,9 @@ language: en        # UI language: en | ja
 
 # Interactive mode
 # interactive_preview_steps: 3 # Number of step previews in interactive mode (0-10)
+# assistant:
+#   formal_spec: 'y/N'         # true/false never asks; Y/n or y/N asks on TTY with that default (unset: y/N). Non-TTY uses the default answer. Adds notation guidance only for applicable requirements; do not duplicate requirements across notations or require both.
+# Gherkin guidance is always enabled. Deprecated assistant.gherkin is warned about and ignored without migration.
 
 # Provider routing for workflow steps (recommended)
 # provider_routing:
@@ -79,7 +83,13 @@ language: en        # UI language: en | ja
 #       model: gpt-5
 #     review:
 #       provider: opencode
-#       model: opencode/qwen3-coder-next
+#       model: ollama-cloud/qwen3.5:397b
+#     final-gate:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
 #     edit:
 #       provider_options:
 #         codex:
@@ -87,7 +97,7 @@ language: en        # UI language: en | ja
 #   steps:
 #     ai-antipattern-review-2nd:
 #       provider: opencode
-#       model: opencode/qwen3-coder-next
+#       model: ollama-cloud/qwen3.5:397b
 
 # Legacy display-name based provider overrides (deprecated; prefer provider_routing)
 # persona_providers:
@@ -99,9 +109,14 @@ language: en        # UI language: en | ja
 # provider_options:
 #   codex:
 #     network_access: true
+#     skills:
+#       repo: false
+#       user: false
 #   opencode:
 #     variant: high
 #   claude:
+#     skills:
+#       enabled: false
 #     sandbox:
 #       allow_unsandboxed_commands: true
 

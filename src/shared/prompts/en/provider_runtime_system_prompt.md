@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: provider_runtime_system_prompt
   role: provider runtime instructions without workflow context

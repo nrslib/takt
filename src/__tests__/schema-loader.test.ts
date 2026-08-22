@@ -73,7 +73,7 @@ describe('schema-loader', () => {
     expect(readFileSyncMock).toHaveBeenCalledWith('/mock/resources/schemas/judgment.json', 'utf-8');
   });
 
-  it('loadDecompositionSchema は maxItems を注入し、呼び出しごとに独立したオブジェクトを返す', async () => {
+  it('loadDecompositionSchema は指定された初回part数を maxItems に設定する', async () => {
     const { loadDecompositionSchema } = await import('../infra/resources/schema-loader.js');
 
     const first = loadDecompositionSchema(2);
@@ -87,32 +87,31 @@ describe('schema-loader', () => {
     expect(readFileSyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it('loadDecompositionSchema は不正な maxTotalParts を拒否する', async () => {
+  it('loadDecompositionSchema は未指定時にpart数を制限しない', async () => {
     const { loadDecompositionSchema } = await import('../infra/resources/schema-loader.js');
 
-    expect(() => loadDecompositionSchema(0)).toThrow('maxTotalParts must be a positive integer: 0');
-    expect(() => loadDecompositionSchema(-1)).toThrow('maxTotalParts must be a positive integer: -1');
-    expect(() => loadDecompositionSchema(21)).toThrow('maxTotalParts must be less than or equal to 20: 21');
+    const schema = loadDecompositionSchema();
+    const parts = (schema.properties as Record<string, unknown>).parts as Record<string, unknown>;
+
+    expect(parts.maxItems).toBeUndefined();
   });
 
-  it('loadMorePartsSchema は maxItems を注入し、呼び出しごとに独立したオブジェクトを返す', async () => {
+  it('loadDecompositionSchema は不正な maxInitialParts を拒否する', async () => {
+    const { loadDecompositionSchema } = await import('../infra/resources/schema-loader.js');
+
+    expect(() => loadDecompositionSchema(0)).toThrow('maxInitialParts must be a positive integer: 0');
+    expect(() => loadDecompositionSchema(-1)).toThrow('maxInitialParts must be a positive integer: -1');
+  });
+
+  it('loadMorePartsSchema は追加part数を制限しない', async () => {
     const { loadMorePartsSchema } = await import('../infra/resources/schema-loader.js');
 
-    const first = loadMorePartsSchema(1);
-    const second = loadMorePartsSchema(4);
+    const first = loadMorePartsSchema();
+    const second = loadMorePartsSchema();
+    const parts = (first.properties as Record<string, unknown>).parts as Record<string, unknown>;
 
-    const firstParts = (first.properties as Record<string, unknown>).parts as Record<string, unknown>;
-    const secondParts = (second.properties as Record<string, unknown>).parts as Record<string, unknown>;
-
-    expect(firstParts.maxItems).toBe(1);
-    expect(secondParts.maxItems).toBe(4);
+    expect(parts.maxItems).toBeUndefined();
+    expect(first).not.toBe(second);
     expect(readFileSyncMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('loadMorePartsSchema は不正な maxAdditionalParts を拒否する', async () => {
-    const { loadMorePartsSchema } = await import('../infra/resources/schema-loader.js');
-
-    expect(() => loadMorePartsSchema(0)).toThrow('maxAdditionalParts must be a positive integer: 0');
-    expect(() => loadMorePartsSchema(-1)).toThrow('maxAdditionalParts must be a positive integer: -1');
   });
 });

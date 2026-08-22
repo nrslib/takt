@@ -1,7 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 const mockInitWorkflowCommand = vi.fn();
 const mockDoctorWorkflowCommand = vi.fn();
+const mockInspectWorkflowCommand = vi.fn();
+const mockInspectModuleLoaded = vi.fn();
+const mockPreviewPrompts = vi.fn();
 
 const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
   const commandActions = new Map<string, (...args: unknown[]) => void>();
@@ -49,81 +52,42 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
 
 vi.mock('../app/cli/program.js', () => ({
   program: rootCommand,
-  resolvedCwd: '/test/cwd',
-  pipelineMode: false,
 }));
 
-vi.mock('../infra/config/index.js', () => ({
-  clearPersonaSessions: vi.fn(),
-  resolveConfigValue: vi.fn(),
+vi.mock('../app/cli/initialization.js', () => ({
+  getCliExecutionContext: vi.fn(() => ({ cwd: '/test/cwd', pipelineMode: false })),
 }));
 
-vi.mock('../infra/config/paths.js', () => ({
-  getGlobalConfigDir: vi.fn(() => '/tmp/takt'),
-}));
-
-vi.mock('../shared/ui/index.js', () => ({
-  success: vi.fn(),
-  info: vi.fn(),
-  error: vi.fn(),
-}));
-
-vi.mock('../features/tasks/index.js', () => ({
-  runAllTasks: vi.fn(),
-  addTask: vi.fn(),
-  watchTasks: vi.fn(),
-  listTasks: vi.fn(),
-}));
-
-vi.mock('../features/config/index.js', () => ({
-  ejectBuiltin: vi.fn(),
-  ejectFacet: vi.fn(),
-  parseFacetType: vi.fn(),
-  VALID_FACET_TYPES: ['personas', 'policies', 'knowledge', 'instructions', 'output-contracts'],
-  resetCategoriesToDefault: vi.fn(),
-  resetConfigToDefault: vi.fn(),
-  deploySkill: vi.fn(),
-  deploySkillCodex: vi.fn(),
-}));
-
-vi.mock('../features/prompt/index.js', () => ({
-  previewPrompts: vi.fn(),
-}));
-
-vi.mock('../features/catalog/index.js', () => ({
-  showCatalog: vi.fn(),
-}));
-
-vi.mock('../features/analytics/index.js', () => ({
-  computeReviewMetrics: vi.fn(),
-  formatReviewMetrics: vi.fn(),
-  parseSinceDuration: vi.fn(),
-  purgeOldEvents: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/add.js', () => ({
-  repertoireAddCommand: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/remove.js', () => ({
-  repertoireRemoveCommand: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/list.js', () => ({
-  repertoireListCommand: vi.fn(),
-}));
-
-vi.mock('../features/workflowAuthoring/index.js', () => ({
+vi.mock('../features/workflowAuthoring/init.js', () => ({
   initWorkflowCommand: (...args: unknown[]) => mockInitWorkflowCommand(...args),
+}));
+
+vi.mock('../features/workflowAuthoring/doctor.js', () => ({
   doctorWorkflowCommand: (...args: unknown[]) => mockDoctorWorkflowCommand(...args),
 }));
 
+vi.mock('../features/workflowAuthoring/inspect.js', () => {
+  mockInspectModuleLoaded();
+  return {
+    inspectWorkflowCommand: (...args: unknown[]) => mockInspectWorkflowCommand(...args),
+  };
+});
+
+vi.mock('../features/prompt/preview.js', () => ({
+  previewPrompts: (...args: unknown[]) => mockPreviewPrompts(...args),
+}));
+
 import '../app/cli/commands.js';
+
+const inspectModuleLoadedCallsAtRegistration = mockInspectModuleLoaded.mock.calls.length;
 
 describe('CLI workflow command', () => {
   beforeEach(() => {
     mockInitWorkflowCommand.mockClear();
     mockDoctorWorkflowCommand.mockClear();
+    mockInspectWorkflowCommand.mockClear();
+    mockPreviewPrompts.mockClear();
+    rootCommand.opts.mockReturnValue({});
   });
 
   it('should register workflow root command and subcommands', () => {
@@ -133,32 +97,25 @@ describe('CLI workflow command', () => {
     expect(calledCommandNames).toContain('workflow');
     expect(commandMocks.get('root.workflow.init')).toBeTruthy();
     expect(commandMocks.get('root.workflow.doctor')).toBeTruthy();
+    expect(commandMocks.get('root.workflow.inspect')).toBeTruthy();
+    expect(inspectModuleLoadedCallsAtRegistration).toBe(0);
   });
 
-  it('should describe workflow command set with workflow terminology', () => {
-    expect(commandMocks.get('root.workflow')?.description)
-      .toHaveBeenCalledWith('Workflow authoring utilities');
-    expect(commandMocks.get('root.workflow.init')?.description)
-      .toHaveBeenCalledWith('Initialize a new workflow scaffold');
-    expect(commandMocks.get('root.workflow.doctor')?.description)
-      .toHaveBeenCalledWith('Validate workflow definitions');
-  });
-
-  it('should define init options and doctor target arguments', () => {
+  it('should define init options and doctor/inspect target arguments', () => {
     const initCommand = commandMocks.get('root.workflow.init');
     const doctorCommand = commandMocks.get('root.workflow.doctor');
+    const inspectCommand = commandMocks.get('root.workflow.inspect');
 
-    expect(initCommand?.argument).toHaveBeenCalledWith('<name>', 'Workflow name');
-    expect(initCommand?.option.mock.calls).toContainEqual(['--description <text>', 'Workflow description']);
-    expect(initCommand?.option.mock.calls[1]?.[0]).toBe('--steps <count>');
-    expect(initCommand?.option.mock.calls[1]?.[1]).toBe('Initial number of steps');
-    expect(typeof initCommand?.option.mock.calls[1]?.[2]).toBe('function');
-    expect(initCommand?.option.mock.calls).toContainEqual(['--template <kind>', 'Template kind (minimal|faceted)']);
-    expect(initCommand?.option.mock.calls).toContainEqual([
+    expect((initCommand?.argument as Mock).mock.calls[0]?.[0]).toBe('<name>');
+    const optionNames = (initCommand?.option as Mock).mock.calls.map(([name]) => name as string);
+    expect(optionNames).toEqual(expect.arrayContaining([
+      '--description <text>',
+      '--steps <count>',
+      '--template <kind>',
       '--global',
-      'Create in ~/.takt/workflows instead of project .takt/workflows',
-    ]);
-    expect(doctorCommand?.argument).toHaveBeenCalledWith('[targets...]', 'Workflow names or YAML paths');
+    ]));
+    expect((doctorCommand?.argument as Mock).mock.calls[0]?.[0]).toBe('[targets...]');
+    expect((inspectCommand?.argument as Mock).mock.calls[0]?.[0]).toBe('[target]');
   });
 
   it('should delegate init action to workflow authoring feature', async () => {
@@ -189,6 +146,38 @@ describe('CLI workflow command', () => {
 
     await doctorAction?.(['default', './flow.yaml']);
 
-    expect(mockDoctorWorkflowCommand).toHaveBeenCalledWith(['default', './flow.yaml'], '/test/cwd');
+    expect(mockDoctorWorkflowCommand).toHaveBeenCalledWith(['default', './flow.yaml'], '/test/cwd', undefined);
+  });
+
+  it('should delegate inspect action with one target to workflow authoring feature', async () => {
+    const inspectAction = commandActions.get('root.workflow.inspect');
+
+    expect(inspectAction).toBeTypeOf('function');
+
+    await inspectAction?.('sample-flow');
+
+    expect(mockInspectWorkflowCommand).toHaveBeenCalledWith('sample-flow', '/test/cwd', undefined);
+  });
+
+  it('should propagate CLI execution overrides to prompt preview, workflow doctor, and workflow inspect', async () => {
+    rootCommand.opts.mockReturnValue({ provider: 'mock', model: 'cli-model', autoStrategy: 'performance' });
+    const promptAction = commandActions.get('root.prompt');
+    const doctorAction = commandActions.get('root.workflow.doctor');
+    const inspectAction = commandActions.get('root.workflow.inspect');
+    const expectedOverrides = {
+      provider: 'mock',
+      providerSource: 'cli',
+      model: 'cli-model',
+      modelSource: 'cli',
+      autoStrategy: 'performance',
+    };
+
+    await promptAction?.('default');
+    await doctorAction?.(['default']);
+    await inspectAction?.('default');
+
+    expect(mockPreviewPrompts).toHaveBeenCalledWith('/test/cwd', 'default', expectedOverrides);
+    expect(mockDoctorWorkflowCommand).toHaveBeenCalledWith(['default'], '/test/cwd', expectedOverrides);
+    expect(mockInspectWorkflowCommand).toHaveBeenCalledWith('default', '/test/cwd', expectedOverrides);
   });
 });

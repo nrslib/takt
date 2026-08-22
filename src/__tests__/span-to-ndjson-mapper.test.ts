@@ -8,8 +8,9 @@ import {
 describe('span-to-ndjson mapper', () => {
   it('maps step span start and end into session log compatible records', () => {
     const stack = [
-      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call' },
-      { workflow: 'child', workflow_ref: 'project:sha256:child', step: 'implement', kind: 'agent' },
+      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'reviewers', kind: 'parallel', occurrence: 1 },
+      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call', occurrence: 2 },
+      { workflow: 'child', workflow_ref: 'project:sha256:child', step: 'implement', kind: 'agent', occurrence: 1 },
     ];
     const baseSpan: SpanSnapshot = {
       name: 'step.implement',
@@ -71,6 +72,27 @@ describe('span-to-ndjson mapper', () => {
     });
   });
 
+  it('canonical workflow stack frameにoccurrenceが欠けたspanはfail-fastする', () => {
+    const span: SpanSnapshot = {
+      name: 'step.implement',
+      startTime: [1_778_777_200, 0],
+      attributes: {
+        'takt.step.name': 'implement',
+        'takt.step.persona': 'coder',
+        'takt.step.iteration': 1,
+        'takt.step.instruction': 'implement',
+        'takt.workflow.stack': JSON.stringify([{
+          workflow: 'child',
+          workflow_ref: 'project:sha256:child',
+          step: 'implement',
+          kind: 'agent',
+        }]),
+      },
+    };
+
+    expect(() => mapSpanStartToNdjson(span)).toThrow(/occurrence/i);
+  });
+
   it('parses provider options from the step span into step_start', () => {
     const span: SpanSnapshot = {
       name: 'step.implement',
@@ -117,6 +139,25 @@ describe('span-to-ndjson mapper', () => {
     });
   });
 
+  it('maps the stdout parse failure category into the session record', () => {
+    const record = mapSpanEndToNdjson({
+      name: 'step.implement',
+      attributes: {
+        'takt.step.name': 'implement',
+        'takt.step.persona': 'coder',
+        'takt.step.iteration': 1,
+        'takt.step.status': 'error',
+        'takt.step.result.content': 'Failed to parse item: invalid stdout line',
+        'takt.step.result.failure_category': 'provider_stream_parse_error',
+      },
+    });
+
+    expect(record).toMatchObject({
+      type: 'step_complete',
+      failureCategory: 'provider_stream_parse_error',
+    });
+  });
+
   it('maps terminal workflow spans and skips non-terminal running spans', () => {
     expect(mapSpanEndToNdjson({
       name: 'workflow.default',
@@ -137,6 +178,23 @@ describe('span-to-ndjson mapper', () => {
         'takt.workflow.status': 'running',
       },
     })).toBeUndefined();
+
+    expect(mapSpanEndToNdjson({
+      name: 'workflow.default',
+      endTime: [1_778_777_300, 0],
+      attributes: {
+        'takt.workflow.status': 'aborted',
+        'takt.workflow.iterations': 2,
+        'takt.workflow.abort.reason': 'provider stream parse error: invalid line',
+        'takt.failure.category': 'provider_stream_parse_error',
+      },
+    })).toEqual({
+      type: 'workflow_abort',
+      iterations: 2,
+      reason: 'provider stream parse error: invalid line',
+      failureCategory: 'provider_stream_parse_error',
+      endTime: '2026-05-14T16:48:20.000Z',
+    });
   });
 
   it('skips workflow_start discoverability spans for shadow session log parity', () => {
@@ -182,7 +240,13 @@ describe('span-to-ndjson mapper', () => {
 
   it('maps phase spans into session log compatible phase records', () => {
     const stack = [
-      { workflow: 'default', step: 'implement', kind: 'agent' },
+      {
+        workflow: 'default',
+        workflow_ref: 'project:sha256:default',
+        step: 'implement',
+        kind: 'agent',
+        occurrence: 1,
+      },
     ];
     const phaseSpan: SpanSnapshot = {
       name: 'phase.implement.execute',

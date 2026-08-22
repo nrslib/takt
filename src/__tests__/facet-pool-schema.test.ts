@@ -1,0 +1,403 @@
+import { describe, expect, it } from 'vitest';
+import { WorkflowConfigRawSchema } from '../core/models/workflow-schemas.js';
+
+function baseWorkflowWithFacetPools(facetPools: unknown, steps: unknown[] = [
+  {
+    name: 'fix',
+    persona: 'coder',
+    policy: ['coding'],
+    knowledge: ['architecture'],
+    dynamic_facets: { pool: 'fix', max_selected: 3 },
+    instruction: 'fix',
+    edit: true,
+    rules: [{ condition: 'done', next: 'COMPLETE' }],
+  },
+]): unknown {
+  return {
+    name: 'backend-fix',
+    policies: {
+      'transaction-correctness': '../facets/policies/transaction-correctness.md',
+      'backward-compatibility': '../facets/policies/backward-compatibility.md',
+      coding: '../facets/policies/coding.md',
+    },
+    knowledge: {
+      'backend-api': '../facets/knowledge/backend-api.md',
+      'database-transaction': '../facets/knowledge/database-transaction.md',
+      architecture: '../facets/knowledge/architecture.md',
+    },
+    facet_pools: facetPools,
+    steps,
+    initial_step: 'fix',
+    max_steps: 3,
+  };
+}
+
+describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-NESTED, C-LOAD-FAILFAST)', () => {
+  describe('inline pool', () => {
+    it('should accept an inline pool with scalar and array facet refs (C-CANDIDATE-SCHEMA, C-INLINE-POOL)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            { id: 'backend', description: 'API、repository、server-side実装を扱う', knowledge: 'backend-api' },
+            {
+              id: 'transaction',
+              description: 'transaction境界、rollback、排他制御を扱う',
+              policy: 'transaction-correctness',
+              knowledge: 'database-transaction',
+            },
+            {
+              id: 'backward-compatibility',
+              description: '公開APIやschemaの互換性を維持する',
+              policy: ['backward-compatibility'],
+            },
+          ],
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
+    it('should accept dynamic_facets without max_selected (unlimited selection)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            { id: 'backend', description: 'API、repository、server-side実装を扱う', knowledge: 'backend-api' },
+          ],
+        },
+      }, [{
+        name: 'fix',
+        persona: 'coder',
+        policy: ['coding'],
+        dynamic_facets: { pool: 'fix' },
+        instruction: 'fix',
+        edit: true,
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }]);
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
+    it('should accept a candidate that bundles multiple facets as arrays (C-CANDIDATE-SCHEMA bundle)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            {
+              id: 'full-stack',
+              description: 'bundle of policy and knowledge',
+              policy: ['transaction-correctness', 'backward-compatibility'],
+              knowledge: ['backend-api', 'database-transaction'],
+            },
+          ],
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
+    it('should reject an empty pool (C-LOAD-FAILFAST: pool が空)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: { candidates: [] },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject a candidate with a duplicate id (C-LOAD-FAILFAST: candidate ID の重複)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            { id: 'backend', description: 'first', knowledge: 'backend-api' },
+            { id: 'backend', description: 'duplicate', policy: 'transaction-correctness' },
+          ],
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow(/duplicate/i);
+    });
+
+    it('should reject a candidate with an empty id (C-CANDIDATE-SCHEMA: id は非空)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            { id: '', description: 'empty id', knowledge: 'backend-api' },
+          ],
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject a candidate with an empty description (C-CANDIDATE-SCHEMA: description は非空)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            { id: 'backend', description: '', knowledge: 'backend-api' },
+          ],
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject a candidate with neither policy nor knowledge (C-CANDIDATE-SCHEMA: 両方欠落)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            { id: 'noop', description: 'no facets' },
+          ],
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject a candidate with an empty policy array (C-CANDIDATE-SCHEMA: 空配列)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            { id: 'backend', description: 'empty policy array', policy: [], knowledge: 'backend-api' },
+          ],
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject a candidate with an empty knowledge array (C-CANDIDATE-SCHEMA: 空配列)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            { id: 'backend', description: 'empty knowledge array', policy: 'coding', knowledge: [] },
+          ],
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+  });
+
+  describe('external pool (uses)', () => {
+    it('should accept an external pool with uses (C-EXTERNAL-POOL)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: { uses: 'implementation-fix' },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
+    it('should reject mixing uses with inline candidates (C-USES-INLINE-MIX)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          uses: 'implementation-fix',
+          candidates: [
+            { id: 'backend', description: 'inline candidate', knowledge: 'backend-api' },
+          ],
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject mixing uses with inline policies (C-USES-INLINE-MIX)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          uses: 'implementation-fix',
+          policies: { 'transaction-correctness': '../facets/policies/transaction-correctness.md' },
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject mixing uses with inline knowledge (C-USES-INLINE-MIX)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          uses: 'implementation-fix',
+          knowledge: { 'backend-api': '../facets/knowledge/backend-api.md' },
+        },
+      });
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+  });
+
+  describe('dynamic_facets on step', () => {
+    it('should accept dynamic_facets on a normal agent step (DFP-001)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          policy: ['coding'],
+          knowledge: ['architecture'],
+          dynamic_facets: { pool: 'fix', max_selected: 3 },
+          instruction: 'fix',
+          edit: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
+    it('should reject dynamic_facets on a workflow_call step (C-LOAD-FAILFAST: 通常 agent step 以外)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'callstep',
+          call: 'called',
+          dynamic_facets: { pool: 'fix', max_selected: 3 },
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+
+      const nestedRaw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'parallel-parent',
+          parallel: [{
+            name: 'callstep',
+            call: 'called',
+            dynamic_facets: { pool: 'fix', max_selected: 3 },
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+          }],
+          rules: [{ condition: 'all("done")', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(nestedRaw)).toThrow();
+    });
+
+    it('should reject dynamic_facets on a parallel parent step (C-LOAD-FAILFAST: 通常 agent step 以外)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'parallel-parent',
+          parallel: [
+            { name: 'child', instruction: 'child', rules: [{ condition: 'done', next: 'COMPLETE' }] },
+          ],
+          dynamic_facets: { pool: 'fix', max_selected: 3 },
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should accept dynamic_facets on a static parallel agent child (DFP-002)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'parallel-parent',
+          parallel: [
+            {
+              name: 'child',
+              instruction: 'child',
+              dynamic_facets: { pool: 'fix', max_selected: 3 },
+              rules: [{ condition: 'done', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
+    it('should accept dynamic_facets on dynamic parallel fixed and pool agent children (DFP-002)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        {
+          fix: {
+            candidates: [
+              { id: 'backend', description: 'backend', knowledge: 'backend-api' },
+            ],
+          },
+        },
+        [{
+          name: 'parallel-parent',
+          parallel: {
+            fixed: [{
+              name: 'fixed-child',
+              persona: 'coder',
+              instruction: 'fixed',
+              dynamic_facets: { pool: 'fix', max_selected: 1 },
+              rules: [{ condition: 'done', next: 'COMPLETE' }],
+            }],
+            pool: [{
+              name: 'pool-child',
+              description: 'pool child',
+              persona: 'coder',
+              instruction: 'pool',
+              dynamic_facets: { pool: 'fix' },
+              rules: [{ condition: 'done', next: 'COMPLETE' }],
+            }],
+          },
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
+    it('should reject min_selected because the contract only supports max_selected (DFP-015)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          dynamic_facets: { pool: 'fix', max_selected: 1, min_selected: 1 },
+          instruction: 'fix',
+          edit: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject max_selected of 0 (C-LOAD-FAILFAST: max_selected が不正)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          policy: ['coding'],
+          dynamic_facets: { pool: 'fix', max_selected: 0 },
+          instruction: 'fix',
+          edit: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject a negative max_selected (C-LOAD-FAILFAST: max_selected が不正)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          policy: ['coding'],
+          dynamic_facets: { pool: 'fix', max_selected: -1 },
+          instruction: 'fix',
+          edit: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject a non-integer max_selected (C-LOAD-FAILFAST: max_selected が不正)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          policy: ['coding'],
+          dynamic_facets: { pool: 'fix', max_selected: 1.5 },
+          instruction: 'fix',
+          edit: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject dynamic_facets referencing an undefined pool (C-LOAD-FAILFAST: 未知 pool)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          policy: ['coding'],
+          dynamic_facets: { pool: 'nonexistent', max_selected: 3 },
+          instruction: 'fix',
+          edit: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+  });
+});

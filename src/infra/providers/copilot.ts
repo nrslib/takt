@@ -14,11 +14,11 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
   if (options.allowedTools && options.allowedTools.length > 0) {
     log.info('Copilot provider does not support allowedTools; ignoring');
   }
-  if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
-    log.info('Copilot provider does not support mcpServers in non-interactive mode; ignoring');
-  }
   if (options.outputSchema) {
     log.info('Copilot provider does not support outputSchema; ignoring');
+  }
+  if (options.imageAttachments && options.imageAttachments.length > 0) {
+    log.info('Copilot provider does not support imageAttachments; ignoring');
   }
 
   return {
@@ -29,9 +29,11 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
     effort: options.providerOptions?.copilot?.effort,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     copilotGithubToken: options.copilotGithubToken ?? resolveCopilotGithubToken(),
     copilotCliPath: resolveCopilotCliPath(),
     childProcessEnv: options.childProcessEnv,
+    preparedMcp: options.preparedMcp,
   };
 }
 
@@ -39,8 +41,9 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
 export class CopilotProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
-  getRuntimeInstructions(): string | null {
+  getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
   }
 
@@ -64,4 +67,5 @@ export class CopilotProvider implements Provider {
       },
     };
   }
+
 }

@@ -5,7 +5,6 @@
  * - persona/persona_name fields in workflow YAML
  * - Workflow-level policies definition and resolution
  * - Step-level policy references
- * - Policy injection in InstructionBuilder
  * - File-based policy content loading via resolveContentPath
  */
 
@@ -14,27 +13,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
-import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 
 // --- Test helpers ---
 
 function createTestDir(): string {
   return mkdtempSync(join(tmpdir(), 'takt-policy-'));
-}
-
-function makeContext(overrides: Partial<InstructionContext> = {}): InstructionContext {
-  return {
-    task: 'Test task',
-    iteration: 1,
-    maxSteps: 10,
-    stepIteration: 1,
-    cwd: '/tmp/test',
-    projectCwd: '/tmp/test',
-    userInputs: [],
-    language: 'ja',
-    ...overrides,
-  };
 }
 
 // --- persona alias tests ---
@@ -218,7 +201,7 @@ describe('policies', () => {
       coding: 'Always write clean code.',
       review: 'Be thorough in reviews.',
     });
-    expect(config.steps[0]!.policyContents).toEqual(['Always write clean code.']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['Always write clean code.']);
   });
 
   it('should resolve policies from .md file paths', () => {
@@ -246,7 +229,7 @@ describe('policies', () => {
     const config = normalizeWorkflowConfig(raw, testDir);
     expect(config.policies!['coding']).toBe('# Coding Policy\n\nWrite clean code.');
     expect(config.policies!['review']).toBe('# Review Policy\n\nBe thorough.');
-    expect(config.steps[0]!.policyContents).toEqual(['# Coding Policy\n\nWrite clean code.']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['# Coding Policy\n\nWrite clean code.']);
   });
 
   it('should support multiple policy references (array)', () => {
@@ -267,7 +250,7 @@ describe('policies', () => {
     };
 
     const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual([
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual([
       'Clean code rules.',
       'Test everything.',
     ]);
@@ -309,7 +292,7 @@ describe('policies', () => {
     };
 
     const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual(['nonexistent']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['nonexistent']);
   });
 
   it('should resolve policies in parallel sub-steps', () => {
@@ -343,8 +326,8 @@ describe('policies', () => {
 
     const config = normalizeWorkflowConfig(raw, testDir);
     const parallel = config.steps[0]!.parallel!;
-    expect(parallel[0]!.policyContents).toEqual(['Be thorough.']);
-    expect(parallel[1]!.policyContents).toEqual(['Write clean code.', 'Be thorough.']);
+    expect(parallel[0]!.policyContents!.map((r) => r.content)).toEqual(['Be thorough.']);
+    expect(parallel[1]!.policyContents!.map((r) => r.content)).toEqual(['Write clean code.', 'Be thorough.']);
   });
 
   it('should leave config.policies undefined when no policies defined', () => {
@@ -361,100 +344,6 @@ describe('policies', () => {
 
     const config = normalizeWorkflowConfig(raw, testDir);
     expect(config.policies).toBeUndefined();
-  });
-});
-
-// --- policy injection in InstructionBuilder ---
-
-describe('InstructionBuilder policy injection', () => {
-  it('should inject policy content into instruction (JA)', () => {
-    const step = {
-      name: 'test-step',
-      personaDisplayName: 'coder',
-      instruction: 'Do the thing.',
-      passPreviousResponse: false,
-      policyContents: ['# Coding Policy\n\nWrite clean code.'],
-    };
-
-    const ctx = makeContext({ language: 'ja' });
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).toContain('## Policy');
-    expect(result).toContain('# Coding Policy');
-    expect(result).toContain('Write clean code.');
-    expect(result).toContain('必ず遵守してください');
-  });
-
-  it('should inject policy content into instruction (EN)', () => {
-    const step = {
-      name: 'test-step',
-      personaDisplayName: 'coder',
-      instruction: 'Do the thing.',
-      passPreviousResponse: false,
-      policyContents: ['# Coding Policy\n\nWrite clean code.'],
-    };
-
-    const ctx = makeContext({ language: 'en' });
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).toContain('## Policy');
-    expect(result).toContain('Write clean code.');
-    expect(result).toContain('You MUST comply');
-  });
-
-  it('should not inject policy section when no policyContents', () => {
-    const step = {
-      name: 'test-step',
-      personaDisplayName: 'coder',
-      instruction: 'Do the thing.',
-      passPreviousResponse: false,
-    };
-
-    const ctx = makeContext({ language: 'ja' });
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).not.toContain('## Policy');
-  });
-
-  it('should join multiple policies with separator', () => {
-    const step = {
-      name: 'test-step',
-      personaDisplayName: 'coder',
-      instruction: 'Do the thing.',
-      passPreviousResponse: false,
-      policyContents: ['Policy A content.', 'Policy B content.'],
-    };
-
-    const ctx = makeContext({ language: 'en' });
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).toContain('Policy A content.');
-    expect(result).toContain('Policy B content.');
-    expect(result).toContain('---');
-  });
-
-  it('should prefer context policyContents over step policyContents', () => {
-    const step = {
-      name: 'test-step',
-      personaDisplayName: 'coder',
-      instruction: 'Do the thing.',
-      passPreviousResponse: false,
-      policyContents: ['Step policy.'],
-    };
-
-    const ctx = makeContext({
-      language: 'en',
-      policyContents: ['Context policy.'],
-    });
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).toContain('Context policy.');
-    expect(result).not.toContain('Step policy.');
   });
 });
 
@@ -511,7 +400,7 @@ describe('section reference resolution', () => {
     };
 
     const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['# Coding Policy\nWrite clean code.']);
   });
 
   it('should resolve mixed policy array: [section-name, ./path]', () => {
@@ -527,7 +416,7 @@ describe('section reference resolution', () => {
     };
 
     const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual([
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual([
       '# Coding Policy\nWrite clean code.',
       '# Testing Policy\nTest everything.',
     ]);
@@ -599,21 +488,6 @@ describe('section reference resolution', () => {
     const config = normalizeWorkflowConfig(raw, testDir);
     // No matching section key → treated as inline persona spec
     expect(config.steps[0]!.persona).toBe('nonexistent');
-  });
-
-  it('should resolve instruction field from instructions section', () => {
-    const raw = {
-      name: 'test-workflow',
-      instructions: { implement: './instructions/implement.md' },
-      steps: [{
-        name: 'impl',
-        persona: 'coder',
-        instruction: 'implement',
-      }],
-    };
-
-    const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.instruction).toBe('Implement the feature.');
   });
 
   it('should fail fast when step uses instruction_template', () => {
@@ -782,27 +656,12 @@ describe('section reference resolution', () => {
     const config = normalizeWorkflowConfig(raw, testDir);
     const parallel = config.steps[0]!.parallel!;
     expect(parallel[0]!.persona).toBe('./personas/coder.md');
-    expect(parallel[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
+    expect(parallel[0]!.policyContents!.map((r) => r.content)).toEqual(['# Coding Policy\nWrite clean code.']);
     expect(parallel[0]!.instruction).toBe('Implement the feature.');
-    expect(parallel[1]!.policyContents).toEqual([
+    expect(parallel[1]!.policyContents!.map((r) => r.content)).toEqual([
       '# Coding Policy\nWrite clean code.',
       '# Testing Policy\nTest everything.',
     ]);
   });
 
-  it('should resolve policy by plain name (primary mechanism)', () => {
-    const raw = {
-      name: 'test-workflow',
-      policies: { coding: './policies/coding.md' },
-      steps: [{
-        name: 'impl',
-        persona: 'coder',
-        policy: 'coding',
-        instruction: '{task}',
-      }],
-    };
-
-    const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
-  });
 });

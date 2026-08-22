@@ -50,7 +50,6 @@ export {
 } from './engine/parallel-logger.js';
 export {
   RuleEvaluator,
-  evaluateAggregateConditions,
 } from './evaluation/index.js';
 export {
   AggregateEvaluator,

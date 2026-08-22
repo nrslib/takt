@@ -5,7 +5,8 @@ export function commentPrEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number; body: string },
 ): Record<string, unknown> {
-  const result = getGitProvider().commentOnPr(payload.pr, payload.body, options.projectCwd);
+  const gitProvider = options.gitProvider ?? getGitProvider();
+  const result = gitProvider.commentOnPr(payload.pr, payload.body, options.projectCwd);
   return {
     success: result.success,
     failed: result.success !== true,
@@ -17,7 +18,8 @@ export function mergePrEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
 ): Record<string, unknown> {
-  const result = getGitProvider().mergePr(payload.pr, options.projectCwd);
+  const gitProvider = options.gitProvider ?? getGitProvider();
+  const result = gitProvider.mergePr(payload.pr, options.projectCwd);
   return {
     success: result.success,
     failed: result.success !== true,
@@ -29,7 +31,8 @@ export function closePrEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
 ): Record<string, unknown> {
-  const result = getGitProvider().closePr(payload.pr, options.projectCwd);
+  const gitProvider = options.gitProvider ?? getGitProvider();
+  const result = gitProvider.closePr(payload.pr, options.projectCwd);
   return {
     success: result.success,
     failed: result.success !== true,

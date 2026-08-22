@@ -1,0 +1,34 @@
+name: reviewers_2
+tags:
+  - review
+parallel:
+  - name: security-review
+    tags:
+      - review
+    edit: false
+    persona: security-reviewer
+    policy:
+      - contract-change
+      - security-review
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+    capabilities: readonly
+    instruction: review-security
+    output_contracts:
+      report:
+        - name: security-review.md
+          format: security-review
+  - name: coding-review
+    tags:
+      - review
+    edit: false
+    persona: coding-reviewer
+    policy:
+      - contract-change
+      - review
+      - coding
+    capabilities: readonly
+    instruction: review-coding
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review

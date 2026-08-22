@@ -25,14 +25,40 @@ import { loadGlobalConfig } from '../infra/config/global/globalConfigCore.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowLoader.js';
 
 function createStep(overrides: Record<string, unknown> = {}): WorkflowStep {
-  return {
+  const engineSynthesized = 'provider' in overrides
+    || 'model' in overrides
+    || 'providerOptions' in overrides;
+  const step = {
     name: 'implement',
     kind: 'agent',
     personaDisplayName: 'implement-coder',
     instruction: '{task}',
     passPreviousResponse: true,
+    engineSynthesized,
     ...overrides,
   } as WorkflowStep;
+  return step;
+}
+
+function collectValidationIssuePaths(error: unknown): PropertyKey[][] {
+  const paths: PropertyKey[][] = [];
+  const visit = (value: unknown, prefix: PropertyKey[]): void => {
+    if (Array.isArray(value)) {
+      for (const entry of value) visit(entry, prefix);
+      return;
+    }
+    if (typeof value !== 'object' || value === null) return;
+    const issue = value as { path?: unknown; errors?: unknown; issues?: unknown };
+    const path = Array.isArray(issue.path) ? issue.path as PropertyKey[] : [];
+    const fullPath = [...prefix, ...path];
+    if (issue.errors === undefined && issue.issues === undefined) {
+      paths.push(fullPath);
+    }
+    if (issue.errors !== undefined) visit(issue.errors, fullPath);
+    if (issue.issues !== undefined) visit(issue.issues, fullPath);
+  };
+  visit(error, []);
+  return paths;
 }
 
 function createBuilder(
@@ -231,8 +257,79 @@ describe('provider_routing provider/model resolution', () => {
   });
 });
 
+describe('OptionsBuilder tag conflict policy forwarding', () => {
+  const conflictingTagRouting = {
+    tags: {
+      review: { provider: 'opencode' as const, model: 'opencode/big-pickle' },
+      web: { provider: 'codex' as const, model: 'gpt-5' },
+    },
+  };
+
+  it('Given fail-fast policy and two conflicting tags, When resolving through OptionsBuilder, Then it throws before running', () => {
+    const builder = createBuilder({
+      providerRoutingTagConflictPolicy: 'fail-fast',
+      providerRouting: conflictingTagRouting,
+    });
+    const step = createStep({ name: 'review', tags: ['review', 'web'] });
+
+    expect(() => builder.resolveStepProviderModel(step)).toThrow(/Conflicting provider routing/);
+  });
+
+  it('Given last-wins policy and two conflicting tags, When resolving through OptionsBuilder, Then the later tag wins', () => {
+    const builder = createBuilder({
+      providerRoutingTagConflictPolicy: 'last-wins',
+      providerRouting: conflictingTagRouting,
+    });
+    const step = createStep({ name: 'review', tags: ['review', 'web'] });
+
+    expect(builder.resolveStepProviderModel(step)).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'provider_routing.tags',
+      modelSource: 'provider_routing.tags',
+    });
+  });
+});
+
+describe('WorkflowValidator tag conflict policy forwarding', () => {
+  const conflictingTagRouting = {
+    tags: {
+      review: { provider: 'opencode' as const, model: 'opencode/big-pickle' },
+      web: { provider: 'codex' as const, model: 'gpt-5' },
+    },
+  };
+
+  function validateConflictingWorkflow(
+    providerRoutingTagConflictPolicy: 'fail-fast' | 'last-wins',
+  ): void {
+    validateWorkflowConfig({
+      name: 'validator-tag-conflict',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          tags: ['review', 'web'],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+      providerRouting: conflictingTagRouting,
+      providerRoutingTagConflictPolicy,
+    } as WorkflowEngineOptions);
+  }
+
+  it('Given fail-fast policy and a step with two conflicting tags, When validating the workflow, Then preflight throws before execution', () => {
+    expect(() => validateConflictingWorkflow('fail-fast')).toThrow(/Conflicting provider routing for tags/);
+  });
+
+  it('Given last-wins policy and a step with two conflicting tags, When validating the workflow, Then preflight does not throw', () => {
+    expect(() => validateConflictingWorkflow('last-wins')).not.toThrow();
+  });
+});
+
 describe('provider_routing provider_options resolution', () => {
-  it('Given provider_routing resolves the provider, When building agent options, Then session key uses {persona}:{provider}', () => {
+  it('Given provider_routing resolves the provider, When building agent options, Then session key includes persona, provider, and model', () => {
     const step = createStep({
       persona: 'coder',
       providerRoutingPersonaKey: 'coder',
@@ -243,7 +340,7 @@ describe('provider_routing provider_options resolution', () => {
           coder: { provider: 'codex' },
         },
       },
-    }, (key) => (key === 'coder:codex' ? 'session-codex' : undefined));
+    }, (key) => (key === '["coder","codex","project-model"]' ? 'session-codex' : undefined));
 
     const options = builder.buildAgentOptions(step);
 
@@ -317,6 +414,97 @@ describe('provider_routing provider_options resolution', () => {
     });
   });
 
+  it('Given persona, ordered tag, and step routes for Claude Skills, When building options, Then the highest routing layer determines enabled', () => {
+    const step = createStep({
+      providerRoutingPersonaKey: 'coder',
+      tags: ['first', 'second'],
+    });
+    const builder = createBuilder({
+      providerOptions: {
+        claude: { skills: { enabled: false } },
+      },
+      providerRouting: {
+        personas: {
+          coder: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+        tags: {
+          first: { providerOptions: { claude: { skills: { enabled: false } } } },
+          second: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+        steps: {
+          implement: { providerOptions: { claude: { skills: { enabled: false } } } },
+        },
+      },
+    });
+
+    expect(builder.buildBaseOptions(step).providerOptions).toEqual({
+      claude: { skills: { enabled: false } },
+    });
+    expect(builder.resolveStepProviderModel(step).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'provider_routing.steps',
+    });
+  });
+
+  it('Given a sibling Claude env option, When workflow, step, and routing enable Skills, Then each explicit value and source win', () => {
+    const builder = createBuilder({
+      providerOptionsSource: 'project',
+      providerOptionsOriginResolver: (path: string) => {
+        if (path === 'claude') return 'env';
+        return 'default';
+      },
+      providerOptions: {
+        claude: { effort: 'high', skills: { enabled: false } },
+      },
+      providerRouting: {
+        personas: {
+          coder: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+        tags: {
+          implementation: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+        steps: {
+          implement: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+      },
+    });
+
+    const directStep = createStep({
+      providerRoutingPersonaKey: 'coder',
+      tags: ['implementation'],
+      providerOptions: { claude: { skills: { enabled: true } } },
+    });
+    expect(builder.buildBaseOptions(directStep).providerOptions).toEqual({
+      claude: { effort: 'high', skills: { enabled: true } },
+    });
+    expect(builder.resolveStepProviderModel(directStep).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'step',
+    });
+
+    const routedStep = createStep({ providerRoutingPersonaKey: 'coder', tags: ['implementation'] });
+    expect(builder.buildBaseOptions(routedStep).providerOptions).toEqual({
+      claude: { effort: 'high', skills: { enabled: true } },
+    });
+    expect(builder.resolveStepProviderModel(routedStep).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'provider_routing.steps',
+    });
+
+    const taggedStep = createStep({ name: 'review', tags: ['implementation'] });
+    expect(builder.buildBaseOptions(taggedStep).providerOptions).toEqual({
+      claude: { effort: 'high', skills: { enabled: true } },
+    });
+    expect(builder.resolveStepProviderModel(taggedStep).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'provider_routing.tags',
+    });
+
+    const personaStep = createStep({ name: 'review', providerRoutingPersonaKey: 'coder' });
+    expect(builder.buildBaseOptions(personaStep).providerOptions).toEqual({
+      claude: { effort: 'high', skills: { enabled: true } },
+    });
+    expect(builder.resolveStepProviderModel(personaStep).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'provider_routing.personas',
+    });
+  });
+
   it('Given env-origin config leaf, When provider_routing and step set same leaf, Then env-origin config still wins', () => {
     const step = createStep({
       providerRoutingPersonaKey: 'coder',
@@ -343,6 +531,55 @@ describe('provider_routing provider_options resolution', () => {
 
     expect(builder.buildBaseOptions(step).providerOptions).toEqual({
       codex: { networkAccess: true },
+    });
+  });
+
+  it('Given env-origin base_url config leaf, When provider_routing sets base_url, Then routing layers win by scope', () => {
+    const builder = createBuilder({
+      providerOptionsSource: 'project',
+      providerOptionsOriginResolver: (path: string) =>
+        path === 'codex.baseUrl' || path === 'claude.baseUrl' ? 'env' : 'local',
+      providerOptions: {
+        codex: { baseUrl: 'http://env.example.test/v1' },
+        claude: { baseUrl: 'http://env.example.test' },
+      },
+      providerRouting: {
+        personas: {
+          coder: { providerOptions: { codex: { baseUrl: 'http://persona.example.test/v1' } } },
+        },
+        tags: {
+          edit: { providerOptions: { claude: { baseUrl: 'http://tag.example.test' } } },
+        },
+        steps: {
+          implement: { providerOptions: { codex: { baseUrl: 'http://step-route.example.test/v1' } } },
+        },
+      },
+    });
+
+    const routedStep = createStep({
+      providerRoutingPersonaKey: 'coder',
+      tags: ['edit'],
+    });
+    expect(builder.buildBaseOptions(routedStep).providerOptions).toEqual({
+      codex: { baseUrl: 'http://step-route.example.test/v1' },
+      claude: { baseUrl: 'http://tag.example.test' },
+    });
+    expect(builder.resolveStepProviderModel(routedStep).providerOptionsSources).toMatchObject({
+      'codex.baseUrl': 'provider_routing.steps',
+      'claude.baseUrl': 'provider_routing.tags',
+    });
+
+    const personaOnlyStep = createStep({
+      name: 'review',
+      providerRoutingPersonaKey: 'coder',
+    });
+    expect(builder.buildBaseOptions(personaOnlyStep).providerOptions).toEqual({
+      codex: { baseUrl: 'http://persona.example.test/v1' },
+      claude: { baseUrl: 'http://env.example.test' },
+    });
+    expect(builder.resolveStepProviderModel(personaOnlyStep).providerOptionsSources).toMatchObject({
+      'codex.baseUrl': 'provider_routing.personas',
+      'claude.baseUrl': 'env',
     });
   });
 
@@ -411,7 +648,7 @@ describe('provider_routing provider_options resolution', () => {
     });
   });
 
-  it('Given team_leader part with workflow fallback and tags, When building part options, Then routing overrides workflow fallback', () => {
+  it('Given team_leader part with runtime options and tags, When building part options, Then runtime options override routing', () => {
     const parentStep = createStep({
       name: 'implement',
       persona: 'leader',
@@ -424,14 +661,9 @@ describe('provider_routing provider_options resolution', () => {
       providerOptions: {
         codex: { networkAccess: false },
       },
-      workflowProviderOptions: {
-        codex: { networkAccess: false },
-      },
       teamLeader: {
         persona: 'planner',
         maxConcurrency: 3,
-        maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 900000,
         partPersona: 'coder',
       },
@@ -474,9 +706,6 @@ describe('provider_routing provider_options resolution', () => {
       tags: ['implementation', 'edit'],
       providerSpecified: false,
       modelSpecified: false,
-      workflowProviderOptions: {
-        codex: { networkAccess: false },
-      },
     });
     expect(builder.resolveStepProviderModel(partStep)).toMatchObject({
       provider: 'codex',
@@ -486,7 +715,7 @@ describe('provider_routing provider_options resolution', () => {
     });
     expect(builder.buildBaseOptions(partStep).providerOptions).toEqual({
       codex: {
-        networkAccess: true,
+        networkAccess: false,
         reasoningEffort: 'high',
       },
     });
@@ -501,8 +730,6 @@ describe('provider_routing provider_options resolution', () => {
       teamLeader: {
         persona: 'planner',
         maxConcurrency: 3,
-        maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 900000,
         partPersona: 'coder',
         partTags: ['coding'],
@@ -561,8 +788,6 @@ describe('provider_routing provider_options resolution', () => {
       teamLeader: {
         persona: 'planner',
         maxConcurrency: 3,
-        maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 900000,
         partPersona: 'coder',
         partTags: ['coding'],
@@ -604,7 +829,10 @@ describe('provider_routing config normalization', () => {
           provider: 'codex',
           model: 'gpt-5',
           provider_options: {
-            codex: { reasoning_effort: 'high' },
+            codex: {
+              reasoning_effort: 'high',
+              skills: { repo: false },
+            },
           },
         },
       },
@@ -629,7 +857,10 @@ describe('provider_routing config normalization', () => {
           provider: 'codex',
           model: 'gpt-5',
           providerOptions: {
-            codex: { reasoningEffort: 'high' },
+            codex: {
+              reasoningEffort: 'high',
+              skills: { repo: false },
+            },
           },
         },
       },
@@ -655,7 +886,10 @@ describe('provider_routing config normalization', () => {
         coder: {
           provider: 'codex',
           providerOptions: {
-            codex: { reasoningEffort: 'high' },
+            codex: {
+              reasoningEffort: 'high',
+              skills: { user: true },
+            },
           },
         },
       },
@@ -673,7 +907,10 @@ describe('provider_routing config normalization', () => {
         coder: {
           provider: 'codex',
           provider_options: {
-            codex: { reasoning_effort: 'high' },
+            codex: {
+              reasoning_effort: 'high',
+              skills: { user: true },
+            },
           },
         },
       },
@@ -705,14 +942,25 @@ describe('provider_routing config normalization', () => {
     })).toThrow(/provider_routing\.personas\.coder\.provider_options/);
   });
 
-  it('Given provider_routing entry uses opencode without provider-qualified model, When normalizing, Then provider/model validation fails', () => {
-    expect(() => normalizeProviderRouting({
+  it('Given provider_routing entry uses opencode without a local model, When normalizing, Then provider-only routing is preserved', () => {
+    expect(normalizeProviderRouting({
       steps: {
         review: {
           provider: 'opencode',
         },
       },
-    })).toThrow(/provider 'opencode' requires model in 'provider\/model' format/);
+    })?.steps?.review).toEqual({ provider: 'opencode' });
+  });
+
+  it('Given provider_routing entry uses opencode with a bare model, When normalizing, Then provider/model validation fails', () => {
+    expect(() => normalizeProviderRouting({
+      steps: {
+        review: {
+          provider: 'opencode',
+          model: 'big-pickle',
+        },
+      },
+    })).toThrow(/provider\/model/);
   });
 });
 
@@ -794,6 +1042,22 @@ describe('provider_routing config loading', () => {
     ].join('\n'));
 
     expect(() => loadProjectConfig(tempDir)).toThrow(/provider_routing\.steps\.implement\.provider_options/);
+  });
+
+  it('Given project config provider_routing has external base_url, When loading config, Then it fails at the routing path', () => {
+    const projectConfigDir = getProjectConfigDir(tempDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'provider_routing:',
+      '  tags:',
+      '    edit:',
+      '      provider_options:',
+      '        codex:',
+      '          base_url: https://attacker.example.test/v1',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(tempDir))
+      .toThrow(/provider_routing\.tags\.edit\.provider_options\.codex\.base_url must use a loopback base_url/);
   });
 
   it('Given providerRouting is saved, When reading raw config, Then key is written as provider_routing', () => {
@@ -971,114 +1235,81 @@ describe('workflow step tags', () => {
     expect(() => loadWorkflowFromFile(workflowPath, tempDir)).toThrow(error);
   });
 
-  it('Given workflow_config and provider_routing both define provider, When loading workflow and resolving step, Then routing is above workflow fallback', () => {
-    const workflowPath = join(tempDir, 'provider-routing-workflow-config.yaml');
+  it.each([
+    {
+      name: 'workflow_config.provider',
+      workflowLines: ['workflow_config:', '  provider: mock'],
+      stepLines: [],
+      expectedPath: ['workflow_config', 'provider'],
+    },
+    {
+      name: 'workflow_config.model',
+      workflowLines: ['workflow_config:', '  model: workflow-model'],
+      stepLines: [],
+      expectedPath: ['workflow_config', 'model'],
+    },
+    {
+      name: 'workflow_config.provider_options',
+      workflowLines: ['workflow_config:', '  provider_options:', '    codex:', '      network_access: true'],
+      stepLines: [],
+      expectedPath: ['workflow_config', 'provider_options'],
+    },
+    {
+      name: 'step provider',
+      workflowLines: [],
+      stepLines: ['    provider: mock'],
+      expectedPath: ['steps', 0, 'provider'],
+    },
+    {
+      name: 'step model',
+      workflowLines: [],
+      stepLines: ['    model: workflow-model'],
+      expectedPath: ['steps', 0, 'model'],
+    },
+    {
+      name: 'step provider_options',
+      workflowLines: [],
+      stepLines: ['    provider_options:', '      codex:', '        network_access: true'],
+      expectedPath: ['steps', 0, 'provider_options'],
+    },
+    {
+      name: 'parallel sub-step provider',
+      workflowLines: [],
+      stepLines: [
+        '    parallel:',
+        '      - name: implement-api',
+        '        persona: coder',
+        '        provider: mock',
+        '        instruction: "{task}"',
+      ],
+      expectedPath: ['steps', 0, 'parallel', 0, 'provider'],
+    },
+  ])('Given $name is present in workflow YAML, When loading workflow, Then it fails fast with the runtime migration target', ({ name, workflowLines, stepLines, expectedPath }) => {
+    const workflowPath = join(tempDir, `provider-routing-removed-${name.replace(/[^a-z0-9]+/gi, '-')}.yaml`);
     writeFileSync(workflowPath, [
-      'name: provider-routing-workflow-config',
+      'name: provider-routing-removed',
       'initial_step: implement',
       'max_steps: 1',
-      'workflow_config:',
-      '  provider: claude',
-      '  model: workflow-model',
+      ...workflowLines,
       'steps:',
       '  - name: implement',
       '    persona: coder',
-      '    tags:',
-      '      - implementation',
-      '    instruction: "{task}"',
+      ...stepLines,
+      ...(stepLines.some((line) => line.includes('parallel:')) ? [] : ['    instruction: "{task}"']),
     ].join('\n'));
 
-    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
-    const result = resolveStepProviderModel({
-      step: workflow.steps[0],
-      provider: 'claude',
-      providerSource: 'project',
-      model: 'workflow-model',
-      modelSource: 'project',
-      providerRouting: {
-        tags: {
-          implementation: { provider: 'codex', model: 'gpt-5' },
-        },
-      },
-    });
-
-    expect(result).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5',
-      providerSource: 'provider_routing.tags',
-      modelSource: 'provider_routing.tags',
-    });
-  });
-
-  it('Given parallel sub-step inherits workflow_config fallback, When resolving sub-step, Then routing remains above workflow fallback', () => {
-    const workflowPath = join(tempDir, 'provider-routing-parallel-workflow-config.yaml');
-    writeFileSync(workflowPath, [
-      'name: provider-routing-parallel-workflow-config',
-      'initial_step: implement',
-      'max_steps: 1',
-      'workflow_config:',
-      '  provider: claude',
-      '  model: workflow-model',
-      '  provider_options:',
-      '    codex:',
-      '      network_access: false',
-      'steps:',
-      '  - name: implement',
-      '    persona: coder',
-      '    parallel:',
-      '      - name: implement-api',
-      '        persona: coder',
-      '        tags:',
-      '          - implementation',
-      '        instruction: "{task}"',
-    ].join('\n'));
-
-    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
-    const subStep = workflow.steps[0].parallel?.[0];
-    if (!subStep) {
-      throw new Error('parallel sub-step must be normalized');
+    try {
+      loadWorkflowFromFile(workflowPath, tempDir);
+      expect.fail('Expected workflow provider setting to be rejected');
+    } catch (error) {
+      expect(collectValidationIssuePaths(error)).toContainEqual(expectedPath);
+      expect(String(error)).toContain('runtime.yaml');
     }
-
-    expect(subStep).toMatchObject({
-      provider: 'claude',
-      providerSpecified: false,
-      model: 'workflow-model',
-      modelSpecified: false,
-      workflowProviderOptions: {
-        codex: { networkAccess: false },
-      },
-    });
-    expect(resolveStepProviderModel({
-      step: subStep,
-      providerRouting: {
-        tags: {
-          implementation: { provider: 'codex', model: 'gpt-5' },
-        },
-      },
-    })).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5',
-      providerSource: 'provider_routing.tags',
-      modelSource: 'provider_routing.tags',
-    });
-    expect(createBuilder({
-      providerRouting: {
-        tags: {
-          implementation: {
-            providerOptions: {
-              codex: { networkAccess: true },
-            },
-          },
-        },
-      },
-    }).buildBaseOptions(subStep).providerOptions).toEqual({
-      codex: { networkAccess: true },
-    });
   });
 });
 
 describe('provider_routing provider/model validation', () => {
-  it('Given routing layers compose an incompatible provider/model, When validating workflow, Then it fails fast', () => {
+  it('Given routing layers compose a codex provider with arbitrary model, When validating workflow, Then provider decides support', () => {
     expect(() => validateWorkflowConfig({
       name: 'provider-routing-validation',
       initialStep: 'review',
@@ -1097,7 +1328,7 @@ describe('provider_routing provider/model validation', () => {
           'claude-model': { model: 'sonnet' },
         },
       },
-    } as WorkflowEngineOptions)).toThrow(/model 'sonnet' is a Claude model alias but provider is 'codex'/);
+    } as WorkflowEngineOptions)).not.toThrow();
   });
 
   it('Given routing resolves opencode without a model, When validating workflow, Then it fails fast', () => {
@@ -1121,7 +1352,130 @@ describe('provider_routing provider/model validation', () => {
     } as WorkflowEngineOptions)).toThrow(/provider 'opencode' requires model/);
   });
 
-  it('Given parallel sub-step routing composes an incompatible provider/model, When validating workflow, Then it fails fast', () => {
+  it('Given routing resolves opencode and the input model is provider-qualified, When validating workflow, Then it passes', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'provider-routing-opencode-input-model-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          tags: ['opencode-provider'],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+      model: 'opencode/big-pickle',
+      modelSource: 'project',
+      providerRouting: {
+        tags: {
+          'opencode-provider': { provider: 'opencode' },
+        },
+      },
+    } as WorkflowEngineOptions)).not.toThrow();
+  });
+
+  it('Given a workflow step uses opencode with a bare model, When validating workflow, Then it fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'workflow-step-opencode-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          provider: 'opencode',
+          model: 'big-pickle',
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
+  });
+
+  it.each([
+    {
+      name: 'removed provider setting',
+      workflowName: 'promotion-opencode-missing-model-validation',
+      stepProvider: 'codex',
+      stepModel: 'gpt-5',
+      promotion: { at: 1, provider: 'opencode', providerSpecified: true },
+      runtimeProvider: 'mock',
+    },
+    {
+      name: 'removed provider and model settings',
+      workflowName: 'promotion-opencode-bare-model-validation',
+      stepProvider: 'codex',
+      stepModel: 'gpt-5',
+      promotion: {
+        at: 1,
+        provider: 'opencode',
+        providerSpecified: true,
+        model: 'big-pickle',
+      },
+      runtimeProvider: 'mock',
+    },
+    {
+      name: 'normalized ladder promotion',
+      workflowName: 'promotion-opencode-inherited-provider-validation',
+      stepProvider: 'opencode',
+      stepModel: 'opencode/base-model',
+      promotion: { at: 1, model: 'big-pickle' },
+      runtimeProvider: 'codex',
+    },
+  ] as const)(
+    'Given $name, When validating and resolving, Then runtime owns provider/model',
+    ({ workflowName, stepProvider, stepModel, promotion, runtimeProvider }) => {
+      const step = createStep({
+        name: 'review',
+        provider: stepProvider,
+        model: stepModel,
+        engineSynthesized: false,
+        promotion: [promotion],
+      });
+
+      expect(() => validateWorkflowConfig({
+        name: workflowName,
+        initialStep: 'review',
+        maxSteps: 1,
+        steps: [step],
+      }, {
+        projectCwd: '/project',
+      } as WorkflowEngineOptions)).not.toThrow();
+      expect(resolveStepProviderModel({
+        step,
+        provider: runtimeProvider,
+        providerSource: 'runtime-v1',
+        model: 'runtime-model',
+        modelSource: 'runtime-v1',
+      })).toMatchObject({
+        provider: runtimeProvider,
+        providerSource: 'runtime-v1',
+        model: 'runtime-model',
+        modelSource: 'runtime-v1',
+      });
+    },
+  );
+
+  it('Given persona_providers resolves opencode with a bare model, When validating workflow, Then it fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'persona-providers-opencode-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          personaDisplayName: 'reviewer',
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+      personaProviders: {
+        reviewer: { provider: 'opencode', model: 'big-pickle' },
+      },
+    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
+  });
+
+  it('Given parallel sub-step routing composes a codex provider with arbitrary model, When validating workflow, Then provider decides support', () => {
     expect(() => validateWorkflowConfig({
       name: 'provider-routing-parallel-validation',
       initialStep: 'implement',
@@ -1143,6 +1497,28 @@ describe('provider_routing provider/model validation', () => {
           'implement-api': { provider: 'codex', model: 'sonnet' },
         },
       },
-    } as WorkflowEngineOptions)).toThrow(/model 'sonnet' is a Claude model alias but provider is 'codex'/);
+    } as WorkflowEngineOptions)).not.toThrow();
+  });
+
+  it('Given parallel sub-step uses opencode with a bare model, When validating workflow, Then it fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'parallel-opencode-validation',
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'implement',
+          parallel: [
+            createStep({
+              name: 'implement-api',
+              provider: 'opencode',
+              model: 'big-pickle',
+            }),
+          ],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
   });
 });
