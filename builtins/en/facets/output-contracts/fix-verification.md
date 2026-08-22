@@ -3,7 +3,7 @@
 
 ## Result: verified / incomplete / plan_invalid
 
-When a plan omission or other plan defect coexists with an implementation or evidence gap, record every gap of both kinds in the unmet or unverified items — never drop one kind of gap because the other exists. For an item affected by both conditions, record both applicable conditions, their evidence, and the required actions. Selecting among `verified` / `incomplete` / `plan_invalid` is owned by the remediation workflow rules; this contract defines only what must be recorded.
+When a plan omission or other plan defect coexists with an implementation or evidence gap, record every gap of both kinds in the unmet or unverified items — never drop one kind of gap because the other exists. For an item affected by both conditions, record both applicable conditions, their evidence, and the required actions.
 
 ## Summary
 {Decision and primary evidence}
