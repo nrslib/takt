@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { WorkflowDirEntry } from '../infra/config/loaders/workflowLoader.js';
 import type { CategorizedWorkflows } from '../infra/config/loaders/workflowCategories.js';
 import type { WorkflowWithSource } from '../infra/config/loaders/workflowResolver.js';
+import type { SelectionOption } from '../features/workflowSelection/index.js';
 
 const selectOptionMock = vi.fn();
 const bookmarkState = vi.hoisted(() => ({
@@ -238,7 +239,7 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
 
     await selectWorkflowFromCategorizedWorkflows(categorized);
 
-    const workflowOptions = selectOptionMock.mock.calls[1]![1] as { label: string; value: string; description?: string }[];
+    const workflowOptions = selectOptionMock.mock.calls[1]![1] as SelectionOption[];
     expect(workflowOptions).toEqual([
       {
         label: '🎼 my-workflow',
