@@ -2391,6 +2391,7 @@ steps:
 
     const output = renderedOutput();
     expect(output).toContain('recursive workflow_call cycle detected');
+    expect(output).not.toContain('Workflow inspect: path-cycle-a');
     expect(output).not.toContain('Workflow inspected:');
   });
 
