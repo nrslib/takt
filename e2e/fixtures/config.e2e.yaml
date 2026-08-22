@@ -1,5 +1,9 @@
 provider: claude
 language: en
+assistant:
+  # The TUI runs in a PTY; an unset formal_spec would ask the Y/n question
+  # before Ink mounts and every spec would time out waiting for the input box.
+  formal_spec: false
 logging:
   level: info
 provider_options:
