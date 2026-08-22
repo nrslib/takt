@@ -75,11 +75,6 @@ describe('E2E: Ink TUI', () => {
     tui.write(ENTER);
   }
 
-  /** Give the selector a moment to redraw between keystrokes. */
-  async function flushKeys(tui: TaktPtySession): Promise<void> {
-    await tui.waitForOutput('Cancel');
-  }
-
   /** Accept the highlighted row of a select list. */
   async function chooseHighlighted(tui: TaktPtySession, prompt: string): Promise<void> {
     await tui.waitForOutput(prompt);
@@ -134,7 +129,9 @@ describe('E2E: Ink TUI', () => {
     // The selector's own Cancel row is the last one; choosing it ends the run
     // without ever mounting Ink.
     tui.write(ARROW_DOWN.repeat(5));
-    await flushKeys(tui);
+    // The highlighted row is what says the selector consumed the keys; the
+    // `Cancel` label itself is on screen from the first draw.
+    await tui.waitForOutput('❯ Cancel');
     tui.write(ENTER);
     await expect(tui.waitForExit()).resolves.toBe(0);
     expect(tui.output()).not.toContain(TUI_HINT);
@@ -159,13 +156,15 @@ describe('E2E: Ink TUI', () => {
 
     await chooseHighlighted(tui, MODE_PROMPT);
     await tui.waitForOutput(TUI_HINT);
-    const beforeConversation = tui.output().length;
     await submitLine(tui, 'add a health check endpoint');
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
 
-    // The streamed tail carries no marker, so the committed reply is marked once.
-    const conversationOutput = tui.output().slice(beforeConversation);
-    expect((conversationOutput.match(/●/g) ?? []).length).toBe(1);
+    // The streamed tail carries no marker, so the committed reply is marked
+    // once. Counted on the visible screen, because the raw byte history also
+    // holds frames the app has since erased.
+    const transcript = await tui.visibleTranscript();
+    expect(transcript.filter((line) => line.includes('●')), transcript.join('\n'))
+      .toHaveLength(1);
 
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit()).resolves.toBe(0);
@@ -398,7 +397,6 @@ describe('E2E: Ink TUI', () => {
     tui.write('alpha');
     await tui.waitForOutput('❯ alpha');
     tui.write(SHIFT_ENTER);
-    await tui.waitForOutput('beta', 10_000).catch(() => undefined);
     tui.write('beta');
     await tui.waitForOutput('beta');
     tui.write(OPTION_ENTER);

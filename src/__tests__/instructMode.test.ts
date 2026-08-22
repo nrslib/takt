@@ -445,8 +445,10 @@ describe('runInstructMode', () => {
 });
 
 describe('runInstructMode conversation routes', () => {
-  it('should not execute directly when /play is entered in order revision mode', async () => {
-    setupRawStdin(toRawInputs(['/play fix the login bug', '/go']));
+  it('should not execute directly when a command this mode disabled is entered', async () => {
+    // `/accept` is not on the mode's list, so the line is ordinary text — the
+    // session reads the same list the front-end gates its commands with.
+    setupRawStdin(toRawInputs(['/accept fix the login bug', '/go']));
     setupMockProvider(['I will consider the requested change.', 'Revised order body.']);
 
     const result = await runTestInstructMode();
@@ -526,8 +528,8 @@ describe('runInstructMode conversation routes', () => {
     expect(result.action).toBe('cancel');
   });
 
-  it('should not execute directly when end-of-line /play is entered in order revision mode', async () => {
-    setupRawStdin(toRawInputs(['fix the login bug /play', '/go']));
+  it('should not execute directly when a disabled command closes the line', async () => {
+    setupRawStdin(toRawInputs(['fix the login bug /accept', '/go']));
     setupMockProvider(['I will consider the requested change.', 'Revised order body.']);
 
     const result = await runTestInstructMode();

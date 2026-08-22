@@ -6,7 +6,7 @@
  * consulted once, with the same inputs, whichever front-end asks.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockResolveAssistant, mockResolveNonWorkflow } = vi.hoisted(() => ({
   mockResolveAssistant: vi.fn(),
@@ -34,6 +34,12 @@ import {
   createPersonaConversationPlan,
 } from '../features/interactive/conversationPlan.js';
 
+// The resolver doubles are asserted on by call count, so every test starts from
+// a clean slate rather than from whatever ran before it.
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 describe('assistant provider resolution', () => {
   it('should read the assistant ladder for every assistant conversation', () => {
     mockResolveAssistant.mockReturnValue({
@@ -43,6 +49,7 @@ describe('assistant provider resolution', () => {
     });
 
     for (const assistantMode of ['assistant', 'grill-me'] as const) {
+      // Each mode is its own case; the counts below are per iteration.
       mockResolveAssistant.mockClear();
       const plan = createAssistantConversationPlan('/repo', { assistantMode });
 
@@ -77,7 +84,6 @@ describe('assistant provider resolution', () => {
 
   it('should resolve a persona conversation as a non-workflow agent', () => {
     mockResolveNonWorkflow.mockReturnValue({ runtimeManaged: true, provider: 'codex', model: 'gpt-5.6-luna' });
-    mockResolveAssistant.mockClear();
 
     const plan = createPersonaConversationPlan('/repo', {
       personaContent: 'persona',

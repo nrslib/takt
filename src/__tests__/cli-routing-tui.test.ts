@@ -155,7 +155,11 @@ beforeEach(() => {
   mockLoadWorkflowByIdentifier.mockReturnValue({ name: 'default', steps: [] });
   mockSelectInteractiveMode.mockResolvedValue('assistant');
   mockInteractiveMode.mockResolvedValue({ action: 'cancel', task: '' });
-  mockRunTui.mockResolvedValue({ workflowId: 'default', result: { action: 'execute', task: 'tui task' } });
+  mockRunTui.mockResolvedValue({
+    kind: 'selected',
+    workflowId: 'default',
+    result: { action: 'execute', task: 'tui task' },
+  });
 });
 
 afterEach(() => {
@@ -276,6 +280,7 @@ describe('TUI routing', () => {
 
   it('should execute with the workflow the TUI returned', async () => {
     mockRunTui.mockResolvedValue({
+      kind: 'selected',
       workflowId: 'picked-in-tui',
       result: { action: 'execute', task: 'tui task' },
     });
@@ -300,7 +305,7 @@ describe('TUI routing', () => {
       task: 'saved task',
       attachments: [{ placeholder: '[Image #1]', tempPath: '/tmp/i.png', fileName: 'i.png' }],
     };
-    mockRunTui.mockResolvedValue({ workflowId: 'default', result });
+    mockRunTui.mockResolvedValue({ kind: 'selected', workflowId: 'default', result });
 
     await executeDefaultAction();
 

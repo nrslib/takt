@@ -18,6 +18,7 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
 
 import { updatePersonaSession } from '../infra/config/index.js';
 import { createConversationSession } from '../features/interactive/conversationSession.js';
+import { makeProvider, makeSessionContext } from './test-helpers.js';
 
 const mockUpdatePersonaSession = vi.mocked(updatePersonaSession);
 
@@ -25,20 +26,10 @@ function createSession(sessionId?: string) {
   return createConversationSession({
     cwd: '/repo',
     outputMode: 'silent',
-    ctx: {
-      provider: {
-        setup: vi.fn(() => ({ call: mockCall })),
-        getRuntimeInstructions: vi.fn(() => null),
-        supportsStructuredOutput: false,
-        supportsNativeImageInput: false,
-        keepsAllowedToolWithoutEdit: false,
-      },
-      providerType: 'mock',
-      model: 'mock-model',
-      lang: 'en',
-      personaName: 'interactive',
+    ctx: makeSessionContext({
+      provider: makeProvider({ setup: () => ({ call: mockCall }) }),
       sessionId,
-    } as never,
+    }),
     strategy: {
       systemPrompt: 'system',
       allowedTools: [],
@@ -183,6 +174,78 @@ describe('a turn the caller has already moved past', () => {
     await session.createTaskInstruction({ userNote: '' });
     const summaryPrompt = String(mockCall.mock.calls[2]?.[0] ?? '');
     expect(summaryPrompt).toContain('first question');
+  });
+
+  it('should keep an interrupted answer out of the conversation, session and all', async () => {
+    const interrupted = createPendingCall();
+    mockCall.mockImplementationOnce(() => interrupted.promise);
+    const session = createSession();
+    const controller = new AbortController();
+
+    const abandoned = session.handleUserMessage({
+      text: 'first question',
+      abortSignal: controller.signal,
+    });
+    controller.abort();
+
+    // The provider ignored the abort and answered anyway. Nothing of that answer
+    // was ever on screen, so nothing of it may reach the conversation.
+    interrupted.settle({
+      persona: 'interactive',
+      status: 'done',
+      content: 'answer nobody saw',
+      sessionId: 'session-unseen',
+      timestamp: new Date(),
+    });
+    await abandoned;
+
+    expect(session.getLatestAssistantMessage()).toBeNull();
+    expect(mockUpdatePersonaSession.mock.calls.map((call) => call[2])).not.toContain('session-unseen');
+
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive',
+      status: 'done',
+      content: 'Task instruction',
+      timestamp: new Date(),
+    });
+    await session.createTaskInstruction({ userNote: '' });
+    const summaryPrompt = String(mockCall.mock.calls[1]?.[0] ?? '');
+    // The question the user asked is on screen as their own line, so it stays.
+    expect(summaryPrompt).toContain('first question');
+    expect(summaryPrompt).not.toContain('answer nobody saw');
+  });
+
+  it('should keep the interrupted message when the abort surfaces as a failure', async () => {
+    const interrupted = createPendingCall();
+    mockCall.mockImplementationOnce(() => interrupted.promise);
+    const session = createSession();
+    const controller = new AbortController();
+
+    const abandoned = session.handleUserMessage({
+      text: 'first question',
+      abortSignal: controller.signal,
+    });
+    controller.abort();
+
+    // An aborted call usually comes back as a failure, and a failure normally
+    // rolls the turn back — but the user's line is on screen and stays.
+    interrupted.settle({
+      persona: 'interactive',
+      status: 'error',
+      content: '',
+      error: 'aborted',
+      timestamp: new Date(),
+    });
+    await abandoned;
+
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive',
+      status: 'done',
+      content: 'Task instruction',
+      timestamp: new Date(),
+    });
+    await session.createTaskInstruction({ userNote: '' });
+    expect(String(mockCall.mock.calls[1]?.[0] ?? '')).toContain('first question');
   });
 
   it('should not persist the session a superseded turn came back with', async () => {

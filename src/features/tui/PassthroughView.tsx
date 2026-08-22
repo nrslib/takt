@@ -3,13 +3,20 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import { PromptInput } from './PromptInput.js';
 import { toDisplayText, toSingleLineText } from './displayText.js';
+import { resolveEditorKey } from './editorKeys.js';
 import {
   applyEditorKey,
   createEditorState,
   type EditorState,
 } from './editorState.js';
 import { resolvePromptContentWidth } from './promptLayout.js';
-import { useImagePaste, type ImagePasteSink, type PendingWork } from './useImagePaste.js';
+import {
+  awaitPendingWork,
+  drainPendingWork,
+  useImagePaste,
+  type ImagePasteSink,
+  type PendingWork,
+} from './useImagePaste.js';
 
 /**
  * Passthrough takes the typed text as the task verbatim. It never contacts a
@@ -98,24 +105,20 @@ export function PassthroughView({
   }, [images, onDone]);
 
   /**
-   * Drains the saves in flight before deciding the task, so a placeholder that
+   * Settles the saves in flight before deciding the task, so a placeholder that
    * lands while the user presses Enter is part of the text, and so the caller's
    * cleanup cannot race a temp file.
+   *
+   * `settlePending` is what separates the two ways out: Enter lets a capture
+   * finish, because its image is meant to be in the text, while an interrupt
+   * stops it — the user asked for it to end.
    */
   const finish = useCallback(async (
+    settlePending: (pending: Set<PendingWork>) => Promise<void>,
     resolveResult: () => InteractiveModeResult,
   ): Promise<void> => {
     finishingRef.current = true;
-    while (pendingRef.current.size > 0) {
-      const draining = [...pendingRef.current];
-      for (const work of draining) {
-        work.controller.abort();
-      }
-      await Promise.all(draining.map((work) => work.completion));
-      for (const work of draining) {
-        pendingRef.current.delete(work);
-      }
-    }
+    await settlePending(pendingRef.current);
     settleOnce(resolveResult());
   }, [settleOnce]);
 
@@ -131,7 +134,7 @@ export function PassthroughView({
         settleOnce(CANCELLED);
         return;
       }
-      void finish(() => CANCELLED);
+      void finish(drainPendingWork, () => CANCELLED);
       return;
     }
     if (finishingRef.current) {
@@ -150,56 +153,20 @@ export function PassthroughView({
       return;
     }
     if (key.return) {
-      // Read after the drain: a save still running owns part of the text.
-      void finish(() => {
+      // Read after the wait: a save still running owns part of the text.
+      void finish(awaitPendingWork, () => {
         const task = editorRef.current.text.trim();
         return task ? { action: 'execute', task } : CANCELLED;
       });
       return;
     }
-    if (key.backspace) {
-      edit(applyEditorKey(editorRef.current, { kind: 'backspace' }));
+    // There is no history in this mode, so the arrows only walk the draft's own
+    // rows and do nothing at the first and last of them.
+    const editorKey = resolveEditorKey(input, key, contentWidth);
+    if (editorKey === null) {
       return;
     }
-    if (key.delete) {
-      edit(applyEditorKey(editorRef.current, { kind: 'delete' }));
-      return;
-    }
-    if (key.leftArrow) {
-      edit(applyEditorKey(editorRef.current, { kind: 'left' }));
-      return;
-    }
-    if (key.rightArrow) {
-      edit(applyEditorKey(editorRef.current, { kind: 'right' }));
-      return;
-    }
-    // The draft is multi-line here, so the arrows walk its lines. There is no
-    // history in this mode, so at the first and last line they do nothing.
-    if (key.upArrow) {
-      edit(applyEditorKey(editorRef.current, { kind: 'up', contentWidth }));
-      return;
-    }
-    if (key.downArrow) {
-      edit(applyEditorKey(editorRef.current, { kind: 'down', contentWidth }));
-      return;
-    }
-    if (key.ctrl && input === 'k') {
-      edit(applyEditorKey(editorRef.current, { kind: 'deleteToLineEnd' }));
-      return;
-    }
-    // Home/End keys, plus their readline equivalents.
-    if (key.home || (key.ctrl && input === 'a')) {
-      edit(applyEditorKey(editorRef.current, { kind: 'home' }));
-      return;
-    }
-    if (key.end || (key.ctrl && input === 'e')) {
-      edit(applyEditorKey(editorRef.current, { kind: 'end' }));
-      return;
-    }
-    if (key.ctrl || key.meta || key.escape || key.tab || key.pageUp || key.pageDown) {
-      return;
-    }
-    edit(applyEditorKey(editorRef.current, { kind: 'insert', text: input }));
+    edit(applyEditorKey(editorRef.current, editorKey));
   });
 
   return (

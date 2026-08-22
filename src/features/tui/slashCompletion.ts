@@ -8,7 +8,6 @@ import { filterSlashCommands, type CommandAvailability } from '../interactive/sl
  */
 const TUI_ENABLED_COMMANDS: readonly SlashCommand[] = [
   SlashCommand.Accept,
-  SlashCommand.Play,
   SlashCommand.Go,
   SlashCommand.Retry,
   SlashCommand.Replay,

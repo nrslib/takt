@@ -113,17 +113,42 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
   // Serialized: the emulator applies writes asynchronously, so chunks must be
   // queued in arrival order and drained before the buffer is read.
   let terminalDrained: Promise<void> = Promise.resolve();
+  /** What the emulator refused, kept so a screen read can say why it is stale. */
+  let terminalWriteError: unknown;
   pty.onData((chunk) => {
     raw += chunk;
-    terminalDrained = terminalDrained.then(
-      () => new Promise<void>((resolve) => terminal.write(chunk, resolve)),
-    );
+    terminalDrained = terminalDrained
+      .then(() => new Promise<void>((resolve) => terminal.write(chunk, resolve)))
+      // A refused write must not leave the chain rejected: every later screen
+      // read would then fail with this instead of with what the TUI did.
+      .catch((error: unknown) => {
+        terminalWriteError ??= error;
+      });
   });
   pty.onExit(({ exitCode: code }) => {
     exitCode = code;
   });
 
-  const output = (): string => stripAnsi(raw);
+  // `raw` only grows, so the sanitized form is cached and extended rather than
+  // recomputed from the whole byte history on every poll.
+  let sanitized = '';
+  let sanitizedFrom = 0;
+  const output = (): string => {
+    if (sanitizedFrom !== raw.length) {
+      sanitized += stripAnsi(raw.slice(sanitizedFrom));
+      sanitizedFrom = raw.length;
+    }
+    return sanitized;
+  };
+
+  async function drainTerminal(): Promise<void> {
+    await terminalDrained;
+    if (terminalWriteError !== undefined) {
+      throw new Error(
+        `the terminal emulator refused a write: ${String(terminalWriteError)}`,
+      );
+    }
+  }
 
   function readTerminalLines(from: number, to: number): string[] {
     const buffer = terminal.buffer.active;
@@ -141,12 +166,12 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
     output,
 
     async visibleTranscript(): Promise<string[]> {
-      await terminalDrained;
+      await drainTerminal();
       return readTerminalLines(0, terminal.buffer.active.length);
     },
 
     async visibleScreen(): Promise<string[]> {
-      await terminalDrained;
+      await drainTerminal();
       const buffer = terminal.buffer.active;
       return readTerminalLines(buffer.baseY, buffer.baseY + terminal.rows);
     },
@@ -176,15 +201,22 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
     },
 
     async dispose(): Promise<void> {
-      if (exitCode !== null) {
-        return;
-      }
-      pty.kill('SIGKILL');
-      const released = await waitFor(() => exitCode !== null, DISPOSE_TIMEOUT);
-      if (!released) {
-        throw new Error(
-          `takt PTY was not released within ${DISPOSE_TIMEOUT}ms\noutput:\n${output()}`,
-        );
+      try {
+        if (exitCode !== null) {
+          return;
+        }
+        pty.kill('SIGKILL');
+        const released = await waitFor(() => exitCode !== null, DISPOSE_TIMEOUT);
+        if (!released) {
+          throw new Error(
+            `takt PTY was not released within ${DISPOSE_TIMEOUT}ms\noutput:\n${output()}`,
+          );
+        }
+      } finally {
+        // The emulator holds a scrollback buffer and its own listeners, and a
+        // spec mounts one of these per test: it has to go whether the run ended
+        // by itself or had to be killed.
+        terminal.dispose();
       }
     },
   };

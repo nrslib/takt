@@ -4,7 +4,7 @@
  * Exercises the real runConversationLoop via interactiveMode,
  * simulating user stdin and verifying each conversation path.
  *
- * Real: runConversationLoop, callAIWithRetry, readMultilineInput,
+ * Real: runConversationLoop, callAIWithRetry, readPipedLine,
  *       buildSummaryPrompt, selectPostSummaryAction
  * Mocked: provider (scenario-based), config, UI, session persistence
  */
@@ -75,7 +75,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     continuePrompt: 'Continue?',
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
-    playNoTask: 'No task for /play',
     cancelled: 'Cancelled',
     actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
   })),
@@ -154,30 +153,6 @@ describe('empty input handling', () => {
 
     expect(result.action).toBe('cancel');
     expect(capture.callCount).toBe(0);
-  });
-});
-
-// =================================================================
-// Route C: /play → direct execute
-// =================================================================
-describe('/play command', () => {
-  it('should return execute with the given task text', async () => {
-    setupRawStdin(toRawInputs(['/play fix the login bug']));
-    setupProvider([]);
-
-    const result = await runInteractive();
-
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('fix the login bug');
-  });
-
-  it('should show error and continue when /play has no task', async () => {
-    setupRawStdin(toRawInputs(['/play', '/cancel']));
-    setupProvider([]);
-
-    const result = await runInteractive();
-
-    expect(result.action).toBe('cancel');
   });
 });
 
@@ -355,36 +330,6 @@ describe('regular message AI blocked', () => {
     const result = await runInteractive();
 
     expect(result.action).toBe('cancel');
-  });
-});
-
-// =================================================================
-// Route G: /play command with empty task shows error
-// =================================================================
-describe('/play empty task error', () => {
-  it('should show error message when /play has no argument', async () => {
-    setupRawStdin(toRawInputs(['/play', '/play  ', '/cancel']));
-    setupProvider([]);
-
-    const result = await runInteractive();
-
-    expect(result.action).toBe('cancel');
-    // /play with no task should not trigger any AI calls
-  });
-});
-
-// =================================================================
-// Route H: End-of-line slash commands
-// =================================================================
-describe('end-of-line /play command', () => {
-  it('should return execute with preceding text as task', async () => {
-    setupRawStdin(toRawInputs(['fix the login bug /play']));
-    setupProvider([]);
-
-    const result = await runInteractive();
-
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('fix the login bug');
   });
 });
 

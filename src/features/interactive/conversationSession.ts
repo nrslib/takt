@@ -1,6 +1,7 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { matchSlashCommand } from './commandMatcher.js';
+import type { CommandAvailability } from './slashCommandRegistry.js';
 import { prependInitialPromptContext } from './promptSections.js';
 import {
   buildConversationSummaryPrompt,
@@ -14,6 +15,7 @@ import type { PermissionMode } from '../../core/models/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
+import { getErrorMessage } from '../../shared/utils/index.js';
 
 export interface ConversationSessionStrategy {
   systemPrompt: string;
@@ -29,6 +31,12 @@ export interface ConversationSessionStrategy {
    * from the canonical order — the same builder the readline loop uses.
    */
   summaryPromptBuilder?: SummaryPromptBuilder;
+  /**
+   * The commands this mode allows. The front-end refuses the rest before they
+   * reach the session, and the session reads the same list so a line a guarded
+   * mode disabled is text here too — not a command it happens to understand.
+   */
+  enabledCommands?: readonly SlashCommand[];
 }
 
 export interface ConversationSessionOptions {
@@ -176,23 +184,54 @@ export function createConversationSession(options: ConversationSessionOptions): 
    * over the current one would undo a turn the user has already seen answered.
    */
   let currentTurn = 0;
-  /** Opens a turn and hands back the test for "is this still the turn in play". */
-  function beginTurn(): () => boolean {
+  /**
+   * What the front-end gates its own command list with. Sharing it is what keeps
+   * a disabled command from being re-read as a command down here.
+   */
+  const commandAvailability: CommandAvailability = {
+    ...(options.strategy.enabledCommands
+      ? { enabledCommands: options.strategy.enabledCommands }
+      : {}),
+  };
+  /**
+   * Opens a turn and hands back the test for "is this still the turn in play".
+   *
+   * A turn stops being the one in play when a later turn starts, and also when
+   * the caller interrupts it: a provider that ignores its abort still answers
+   * eventually, and that answer was never on screen. Recording it would let a
+   * later `/go` summarize — or `/accept` hand over — words the user never saw.
+   *
+   * What the user did say stays: the interrupted message is on screen as their
+   * line, so it stays in the history too, and a failure that arrives after an
+   * interrupt does not roll it back.
+   */
+  function beginTurn(abortSignal: AbortSignal | undefined): () => boolean {
     const turn = ++currentTurn;
-    return (): boolean => turn === currentTurn;
+    return (): boolean => turn === currentTurn && abortSignal?.aborted !== true;
   }
 
   async function handleRegularMessage(
     message: string,
     input: ConversationTurnInput,
   ): Promise<ConversationSessionResult> {
-    const isCurrentTurn = beginTurn();
+    const isCurrentTurn = beginTurn(input.abortSignal);
     const previousHistory = history;
     history = [...history, { role: 'user', content: message }];
     const prompt = prependInitialPromptContext(
       options.strategy.transformPrompt(message, options.sourceContext),
       shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
     );
+    // A placeholder whose file went missing is the user's problem to fix, not a
+    // crash: the turn is rolled back and reported like any other failed call.
+    let imageAttachments;
+    try {
+      imageAttachments = options.resolveImageAttachments?.(prompt);
+    } catch (error) {
+      if (isCurrentTurn()) {
+        history = previousHistory;
+      }
+      return { kind: 'error', code: 'provider_error', message: getErrorMessage(error) };
+    }
     const { result, sessionId: newSessionId, error: callError } = await callAIWithRetry(
       prompt,
       options.strategy.systemPrompt,
@@ -207,7 +246,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         // its session id over the one the current turn is using.
         persistSession: isCurrentTurn,
         permissionMode: options.strategy.permissionMode,
-        imageAttachments: options.resolveImageAttachments?.(prompt),
+        imageAttachments,
         ...(input.onNotice ? { onNotice: input.onNotice } : {}),
       },
     );
@@ -257,7 +296,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     // `/go` is a turn like any other: opening it supersedes a chat turn that is
     // still running, so that one no longer writes history or session id when it
     // finally settles.
-    const isCurrentTurn = beginTurn();
+    const isCurrentTurn = beginTurn(input.abortSignal);
     const resumedSessionNote = options.summarizeResumedSession === true && sessionId
       ? getLabel('interactive.noTranscript', options.ctx.lang)
       : undefined;
@@ -292,6 +331,14 @@ export function createConversationSession(options: ConversationSessionOptions): 
       return { kind: 'error', code: 'no_conversation', message: 'No conversation to summarize' };
     }
 
+    // Same as a chat turn: an unreadable pasted image is reported, not thrown.
+    // Nothing was added to the history here, so there is nothing to roll back.
+    let summaryImageAttachments;
+    try {
+      summaryImageAttachments = options.resolveImageAttachments?.(summaryPrompt);
+    } catch (error) {
+      return { kind: 'error', code: 'provider_error', message: getErrorMessage(error) };
+    }
     const { result, sessionId: newSessionId, error: callError } = await callAIWithRetry(
       summaryPrompt,
       summaryPrompt,
@@ -304,7 +351,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         persistSession: false,
         onStream: input.onStream ?? options.onStream,
         permissionMode: options.strategy.permissionMode,
-        imageAttachments: options.resolveImageAttachments?.(summaryPrompt),
+        imageAttachments: summaryImageAttachments,
         ...(input.onNotice ? { onNotice: input.onNotice } : {}),
       },
     );
@@ -368,26 +415,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
         return { kind: 'error', code: 'message_required', message: 'Message text is required' };
       }
 
-      const match = matchSlashCommand(message);
+      const match = matchSlashCommand(message, commandAvailability);
       if (!match) {
         return handleRegularMessage(message, input);
       }
 
       switch (match.command) {
-        case SlashCommand.Play: {
-          const task = match.text.trim();
-          if (!task) {
-            return { kind: 'error', code: 'task_text_required', message: 'Task text is required' };
-          }
-          return {
-            kind: 'workflow_execution_requested',
-            task,
-            interactiveMetadata: {
-              confirmed: true,
-              task,
-            },
-          };
-        }
         case SlashCommand.Go:
           return handleGoCommand(match.text, input);
         default:

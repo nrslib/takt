@@ -14,7 +14,7 @@ import {
 import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { readMultilineInput } from './lineEditor.js';
+import { readPipedLine } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
 import { matchSlashCommand } from './commandMatcher.js';
 import type { CommandAvailability } from './slashCommandRegistry.js';
@@ -33,7 +33,6 @@ import {
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
 import {
   createInputLogMeta,
-  createPlayCommandLogMeta,
   createSessionLogMeta,
 } from './conversationLogMeta.js';
 import { resolvePreviousOrder } from './conversationPlan.js';
@@ -161,7 +160,7 @@ export interface ConversationStrategy {
 /**
  * Run the shared conversation loop.
  *
- * Handles: EOF, /play, /accept, /retry, /go (summary), /cancel, regular AI messaging.
+ * Handles: EOF, /accept, /retry, /replay, /go (summary), /cancel, regular AI messaging.
  * The Strategy object controls system prompt, tool access, and prompt transformation.
  */
 export async function runConversationLoop(
@@ -263,7 +262,7 @@ export async function runConversationLoop(
     };
 
     while (true) {
-      const input = await readMultilineInput(chalk.green('> '));
+      const input = await readPipedLine(chalk.green('> '));
 
       if (input === null) {
         blankLine();
@@ -321,19 +320,6 @@ export async function runConversationLoop(
             action: 'execute',
             task: assistantMessage.content,
             ...(strategy.trackResultSource ? { source: 'accept' as const } : {}),
-          }, attachmentStore);
-        }
-
-        case SlashCommand.Play: {
-          if (!match.text) {
-            info(ui.playNoTask);
-            continue;
-          }
-          log.info('Play command', createPlayCommandLogMeta(match.text));
-          return buildInteractiveResultWithAttachments({
-            action: 'execute',
-            task: match.text,
-            ...(strategy.trackResultSource ? { source: 'play' as const } : {}),
           }, attachmentStore);
         }
 

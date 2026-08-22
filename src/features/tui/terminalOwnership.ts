@@ -92,6 +92,47 @@ export function takeTerminalOwnership(): TerminalOwnership {
   process.stdout.write = hold(directStdoutWrite);
   process.stderr.write = hold(directStderrWrite);
 
+  /**
+   * A selector opened while Ink is mounted ends the process itself when the user
+   * interrupts it (`shared/prompt/select.ts` exits with 130), and `release()`
+   * never runs. Everything the queue holds — a provider's log, a warning about
+   * why the run stopped — would go down with it, which is exactly the output the
+   * failure needs. `exit` handlers can only do synchronous work, which restoring
+   * the streams and replaying the queue are.
+   */
+  const releaseOnExit = (): void => {
+    restoreAndReplay();
+  };
+  process.once('exit', releaseOnExit);
+
+  function restoreAndReplay(): void {
+    released = true;
+    ownershipHeld = false;
+    process.stdout.write = directStdoutWrite;
+    process.stderr.write = directStderrWrite;
+
+    // Drain the whole queue even if one replay throws, then surface the first
+    // failure — losing the rest of a provider's output would hide more than it
+    // reports.
+    let firstFailure: unknown;
+    // Tracked separately from the value: a thrown `undefined` is still a failure.
+    let hasFailure = false;
+    for (const entry of held) {
+      try {
+        replayHeldWrite(entry);
+      } catch (error) {
+        if (!hasFailure) {
+          hasFailure = true;
+          firstFailure = error;
+        }
+      }
+    }
+    held.length = 0;
+    if (hasFailure) {
+      throw firstFailure;
+    }
+  }
+
   return {
     stdout: createDirectStream(process.stdout, directStdoutWrite),
     stderr: createDirectStream(process.stderr, directStderrWrite),
@@ -99,31 +140,8 @@ export function takeTerminalOwnership(): TerminalOwnership {
       if (released) {
         return;
       }
-      released = true;
-      ownershipHeld = false;
-      process.stdout.write = directStdoutWrite;
-      process.stderr.write = directStderrWrite;
-
-      // Drain the whole queue even if one replay throws, then surface the first
-      // failure — losing the rest of a provider's output would hide more than it
-      // reports.
-      let firstFailure: unknown;
-      // Tracked separately from the value: a thrown `undefined` is still a failure.
-      let hasFailure = false;
-      for (const entry of held) {
-        try {
-          replayHeldWrite(entry);
-        } catch (error) {
-          if (!hasFailure) {
-            hasFailure = true;
-            firstFailure = error;
-          }
-        }
-      }
-      held.length = 0;
-      if (hasFailure) {
-        throw firstFailure;
-      }
+      process.off('exit', releaseOnExit);
+      restoreAndReplay();
     },
   };
 }

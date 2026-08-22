@@ -212,8 +212,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       info(getLabel('interactive.ui.cancelled', lang));
       return;
     }
-    // Only a cancelled conversation reaches this point, so the attachments are
-    // released without anything left to dispatch.
+    // The last decision the run made, which nothing dispatched on its way out:
+    // a resident session dispatches each decision as it happens and comes back
+    // here with the `cancel` that ended it, while passthrough returns the task
+    // itself. Dispatching it releases the attachments with it.
     await finishConversation(run.workflowId, run.result);
     return;
   }

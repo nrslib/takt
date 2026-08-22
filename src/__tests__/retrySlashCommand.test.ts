@@ -85,7 +85,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     continuePrompt: 'Continue?',
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
-    playNoTask: 'No task',
     cancelled: 'Cancelled',
     retryNoOrder: 'No previous order found.',
     actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
@@ -192,11 +191,12 @@ describe('/retry slash command', () => {
     expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
   });
 
-  it('should not execute /accept or /play directly in order revision retry mode', async () => {
-    setupRawStdin(toRawInputs(['/accept', '/play run it', '/go']));
+  it('should not execute a command this mode disabled in order revision retry mode', async () => {
+    // Neither is on the mode's list, so both lines are ordinary text.
+    setupRawStdin(toRawInputs(['/accept', '/setup run it', '/go']));
     setupProvider([
       'Assistant response to accept text',
-      'Assistant response to play text',
+      'Assistant response to setup text',
       'Revised retry order',
     ]);
 

@@ -26,24 +26,13 @@ vi.mock('../features/interactive/interactiveApplication.js', async (importOrigin
 }));
 
 import { createConversationSession } from '../features/interactive/conversationSession.js';
-import type { SessionContext } from '../features/interactive/aiCaller.js';
-
-/** These tests never reach past `setup`; the rest of the provider is unused. */
-function stubProvider(): SessionContext['provider'] {
-  return {
-    setup: vi.fn(),
-    getRuntimeInstructions: vi.fn(() => null),
-    supportsStructuredOutput: false,
-    supportsNativeImageInput: false,
-    keepsAllowedToolWithoutEdit: false,
-  } as unknown as SessionContext['provider'];
-}
+import { makeProvider } from './test-helpers.js';
 
 function createSession(cwd = '/repo') {
   return createConversationSession({
     cwd,
     ctx: {
-      provider: stubProvider(),
+      provider: makeProvider(),
       providerType: 'mock',
       model: 'mock-model',
       lang: 'en',
@@ -122,22 +111,6 @@ describe('conversation session application API', () => {
         abortSignal: abortController.signal,
       }),
     );
-  });
-
-  it('should convert /play into a workflow execution request without calling AI', async () => {
-    const session = createSession();
-
-    const result = await session.handleUserMessage({ text: '/play implement ACP support' });
-
-    expect(result).toEqual({
-      kind: 'workflow_execution_requested',
-      task: 'implement ACP support',
-      interactiveMetadata: {
-        confirmed: true,
-        task: 'implement ACP support',
-      },
-    });
-    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
   it('should summarize conversation on /go and return a structured execution request', async () => {
@@ -494,7 +467,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       summarizeResumedSession: true,
       ctx: {
-        provider: stubProvider(),
+        provider: makeProvider(),
         providerType: 'mock',
         model: 'mock-model',
         lang: 'en',
@@ -520,7 +493,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       initialUserMessage: 'implement ACP support',
       ctx: {
-        provider: stubProvider(),
+        provider: makeProvider(),
         providerType: 'mock',
         model: 'mock-model',
         lang: 'en',
@@ -553,7 +526,7 @@ describe('conversation session application API', () => {
       workflowContext,
       sourceContext: 'Issue #12 body',
       ctx: {
-        provider: stubProvider(),
+        provider: makeProvider(),
         providerType: 'mock',
         model: 'mock-model',
         lang: 'en',

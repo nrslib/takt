@@ -12,15 +12,30 @@ vi.mock('../features/exec/assistantSession.js', () => ({
   askExecAssistant: (...args: unknown[]) => mockAskExecAssistant(...args),
 }));
 
+import type { ConversationMessage } from '../features/interactive/interactive.js';
+import type { ExecSessionContext } from '../features/exec/assistantSession.js';
+import { makeSessionContext } from './test-helpers.js';
 import {
   createExecTuiConversation,
   EXEC_GO_HANDOFF,
   EXEC_SETUP_HANDOFF,
 } from '../features/exec/tuiConversation.js';
 
-function createConversation(overrides: Record<string, unknown> = {}) {
-  const turns: unknown[] = [];
-  const goTexts: string[] = [];
+interface RecordedTurn {
+  readonly turn: readonly ConversationMessage[];
+  readonly sessionId: string | undefined;
+}
+
+function createSession(): ExecSessionContext {
+  return {
+    ...makeSessionContext({ sessionId: 'session-1', personaName: 'exec' }),
+    facetLookupConfig: { enableBuiltinWorkflows: true, language: 'en' },
+    codexSkillInheritance: { repo: false, user: false },
+  };
+}
+
+function createConversation() {
+  const turns: RecordedTurn[] = [];
   const conversation = createExecTuiConversation({
     cwd: '/repo',
     attachmentStore: {
@@ -29,13 +44,11 @@ function createConversation(overrides: Record<string, unknown> = {}) {
       cleanup: vi.fn(),
       seal: vi.fn(),
     },
-    session: () => ({ lang: 'en', sessionId: 'session-1' }) as never,
+    session: createSession,
     systemPrompt: () => 'clarify prompt',
     onTurn: (turn, sessionId) => turns.push({ turn, sessionId }),
-    onGoText: (text) => goTexts.push(text),
-    ...overrides,
   });
-  return { conversation, turns, goTexts };
+  return { conversation, turns };
 }
 
 describe('exec conversation on the TUI', () => {
@@ -46,12 +59,16 @@ describe('exec conversation on the TUI', () => {
       .toEqual({ kind: 'handoff', id: EXEC_SETUP_HANDOFF });
   });
 
-  it('should hand the terminal over for /go and keep the text typed with it', () => {
-    const { conversation, goTexts } = createConversation();
+  it('should hand the terminal over for /go and carry the text typed with it', () => {
+    const { conversation } = createConversation();
 
+    // The text travels with the hand-off rather than through a side effect: the
+    // queue resolves a command once to see whether it can wait and again when it
+    // runs, and the run must be told what was typed exactly once.
     expect(conversation.resolveLocalCommand('/go ship it'))
-      .toEqual({ kind: 'handoff', id: EXEC_GO_HANDOFF });
-    expect(goTexts).toEqual(['ship it']);
+      .toEqual({ kind: 'handoff', id: EXEC_GO_HANDOFF, text: 'ship it' });
+    expect(conversation.resolveLocalCommand('/go ship it'))
+      .toEqual({ kind: 'handoff', id: EXEC_GO_HANDOFF, text: 'ship it' });
   });
 
   it('should offer exec commands only', () => {
@@ -79,9 +96,9 @@ describe('exec conversation on the TUI', () => {
     expect(conversation.isCommandLine('/usr/local/bin is missing')).toBe(false);
   });
 
-  it('should report the reason a failed call gave, not a generic sentence', async () => {
+  it('should report the reason a failed call gave and keep the run going', async () => {
     mockAskExecAssistant.mockRejectedValue(new Error('opencode server did not start'));
-    const { conversation } = createConversation();
+    const { conversation, turns } = createConversation();
 
     const submission = await conversation.submit({
       text: 'build a cli',
@@ -89,7 +106,10 @@ describe('exec conversation on the TUI', () => {
       onAssistantChunk: vi.fn(),
     });
 
+    // The provider's own words, not a generic sentence, and nothing on record:
+    // the conversation carries on from where it was.
     expect(submission).toMatchObject({ kind: 'error', message: 'opencode server did not start' });
+    expect(turns).toEqual([]);
   });
 
   it('should record the turn and the session only when the view commits it', async () => {
@@ -131,32 +151,20 @@ describe('exec conversation on the TUI', () => {
     }]);
   });
 
-  it('should leave the run untouched when the view drops an answered turn', async () => {
+  it('should leave the run untouched when an interrupted turn answers anyway', async () => {
     mockAskExecAssistant.mockResolvedValue({ content: 'too late', sessionId: 'session-late' });
     const { conversation, turns } = createConversation();
+    const controller = new AbortController();
+    controller.abort();
 
-    // The provider ignored the abort and answered anyway; the view interrupted
-    // this turn, so it never commits it.
+    // The provider ignored the abort and answered; the view drops such a turn,
+    // so it never commits it and the run's transcript stays as it was.
     await conversation.submit({
       text: 'build a cli',
-      abortSignal: new AbortController().signal,
+      abortSignal: controller.signal,
       onAssistantChunk: vi.fn(),
     });
 
-    expect(turns).toEqual([]);
-  });
-
-  it('should report a failed turn as a notice instead of ending the run', async () => {
-    mockAskExecAssistant.mockRejectedValue(new Error('provider exploded'));
-    const { conversation, turns } = createConversation();
-
-    const submission = await conversation.submit({
-      text: 'build a cli',
-      abortSignal: new AbortController().signal,
-      onAssistantChunk: vi.fn(),
-    });
-
-    expect(submission).toMatchObject({ kind: 'error', message: 'provider exploded' });
     expect(turns).toEqual([]);
   });
 });

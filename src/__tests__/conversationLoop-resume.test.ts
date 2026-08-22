@@ -120,7 +120,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     continuePrompt: 'Continue?',
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
-    playNoTask: 'No task for /play',
     retryNoOrder: 'No previous order found.',
     retryUnavailable: '/retry is not available in this mode.',
     cancelled: 'Cancelled',
@@ -546,11 +545,10 @@ describe('/resume command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
-  it('does not turn disabled /accept or /play into execution results in a guarded mode', async () => {
-    setupRawStdin(toRawInputs(['/accept', '/play run it', '/go']));
+  it('does not turn a disabled /accept into an execution result in a guarded mode', async () => {
+    setupRawStdin(toRawInputs(['/accept', '/go']));
     const { provider } = createScenarioProvider([
       { content: 'Assistant response to accept text' },
-      { content: 'Assistant response to play text' },
       { content: 'Revised order body' },
     ]);
     const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
@@ -856,8 +854,8 @@ describe('/go command', () => {
 });
 
 describe('conversation logging', () => {
-  it('should log only non-sensitive metadata for initial input, session state, and play task', async () => {
-    setupRawStdin(toRawInputs(['/play secret implementation details']));
+  it('should log only non-sensitive metadata for initial input and session state', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
     setupProvider([]);
 
     const ctx = createSessionContext({ sessionId: 'sensitive-session-id' });
@@ -870,10 +868,7 @@ describe('conversation logging', () => {
       { sourceContext: 'secret prefilled input' },
     );
 
-    expect(result).toEqual({
-      action: 'execute',
-      task: 'secret implementation details',
-    });
+    expect(result).toEqual({ action: 'cancel', task: '' });
     expect(mockLogger.debug).toHaveBeenCalledWith(
       'Loaded initial input as source context without auto-submitting to AI',
       {
@@ -882,10 +877,6 @@ describe('conversation logging', () => {
         hasSession: true,
       },
     );
-    expect(mockLogger.info).toHaveBeenCalledWith('Play command', {
-      hasTaskText: true,
-      taskLength: 'secret implementation details'.length,
-    });
     expect(mockLogger.debug).not.toHaveBeenCalledWith(
       'Loaded initial input as source context without auto-submitting to AI',
       expect.objectContaining({
@@ -896,12 +887,6 @@ describe('conversation logging', () => {
       'Sending to AI',
       expect.objectContaining({
         sessionId: 'sensitive-session-id',
-      }),
-    );
-    expect(mockLogger.info).not.toHaveBeenCalledWith(
-      'Play command',
-      expect.objectContaining({
-        task: 'secret implementation details',
       }),
     );
   });

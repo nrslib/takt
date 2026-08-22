@@ -23,13 +23,16 @@ function buildRunFailure(
   if (teardownErrors.length === 0) {
     return primaryError;
   }
-  return primaryError instanceof Error
-    ? Object.assign(primaryError, {
+  // A wrapped error already names its own cause, and overwriting it would lose
+  // what the run actually failed on; the two are reported side by side instead.
+  if (primaryError instanceof Error && primaryError.cause === undefined) {
+    return Object.assign(primaryError, {
       cause: restTeardownErrors.length === 0
         ? firstTeardownError
         : new AggregateError(teardownErrors, 'TUI teardown failed'),
-    })
-    : new AggregateError([primaryError, ...teardownErrors], 'TUI run failed');
+    });
+  }
+  return new AggregateError([primaryError, ...teardownErrors], 'TUI run failed');
 }
 
 /**
@@ -95,6 +98,12 @@ export async function mountInk<T>(
         exitOnCtrlC: false,
         stdout: terminal.stdout,
         stderr: terminal.stderr,
+        // Ink otherwise turns its live frame off whenever `CI` is set, even on a
+        // real terminal — and then the conversation has no input box while the
+        // run still reads keys. TAKT has already decided this is an interactive
+        // terminal (`hasInteractiveTerminal`) and owns it, so that decision is
+        // handed to Ink rather than re-made from the environment.
+        interactive: true,
       });
 
       // An Ink teardown before the view settles would leave this pending.

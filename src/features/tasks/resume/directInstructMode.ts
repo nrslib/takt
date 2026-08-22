@@ -25,6 +25,7 @@ import { blankLine, info } from '../../../shared/ui/index.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
 import { runTuiTaskConversation } from '../../tui/runTuiTask.js';
 import type { InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
+import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
 import {
   renderPullRequestContext,
   type PullRequestContext,
@@ -78,14 +79,6 @@ function createDirectSelectAction(
       { label: ui.actions.continue, value: 'continue' },
     ]);
   };
-}
-
-/**
- * A terminal gets the Ink conversation; piped input keeps the readline loop that
- * the non-interactive callers and the E2E suite depend on.
- */
-function hasInteractiveTerminal(): boolean {
-  return process.stdin.isTTY === true && process.stdout.isTTY === true;
 }
 
 export async function runDirectInstructMode(

@@ -1,7 +1,7 @@
-import { readMultilineInput } from '../interactive/lineEditor.js';
+import { readPipedLine } from '../interactive/lineEditor.js';
 import { runTuiPrompt } from '../tui/runTuiPrompt.js';
 import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../../shared/prompt/index.js';
-import { sanitizeTerminalText } from '../../shared/utils/index.js';
+import { hasInteractiveTerminal, sanitizeTerminalText } from '../../shared/utils/index.js';
 import type { SessionContext } from '../interactive/aiCaller.js';
 import { execLabel, type ExecLanguage } from './labels.js';
 
@@ -34,10 +34,10 @@ export function askExecQuestion(
   lang: SessionContext['lang'],
   emptyKeepsCurrent: boolean,
 ): Promise<string | null> {
-  if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
+  if (hasInteractiveTerminal()) {
     return runTuiPrompt({ lang, question, emptyKeepsCurrent });
   }
-  return readMultilineInput(question);
+  return readPipedLine(question);
 }
 
 export async function promptTextOrCancel(prompt: string, current: string, lang: SessionContext['lang']): Promise<string | null> {

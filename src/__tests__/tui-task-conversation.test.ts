@@ -4,7 +4,7 @@
  * readline loop gates them.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SlashCommand } from '../shared/constants.js';
 
 const { mockRunTuiConversation, mockCreateTuiConversation, sessionStoreCalls } = vi.hoisted(() => ({
@@ -38,17 +38,13 @@ vi.mock('../features/interactive/imageAttachments.js', async (importOriginal) =>
 });
 
 import { runTuiTaskConversation } from '../features/tui/runTuiTask.js';
+import type { ConversationStrategy } from '../features/interactive/conversationLoop.js';
+import type { ConversationPlan } from '../features/interactive/conversationPlan.js';
+import { makeSessionContext } from './test-helpers.js';
 
-function createPlan(strategy: Record<string, unknown>) {
+function createPlan(strategy: Partial<ConversationStrategy>): ConversationPlan {
   return {
-    ctx: {
-      provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
-      providerType: 'mock',
-      model: 'mock-model',
-      lang: 'en' as const,
-      personaName: 'retry',
-      sessionId: undefined,
-    },
+    ctx: makeSessionContext({ personaName: 'retry' }),
     strategy: {
       systemPrompt: 'system',
       allowedTools: [],
@@ -56,8 +52,15 @@ function createPlan(strategy: Record<string, unknown>) {
       introMessage: 'Retry mode - describe additional instructions.',
       ...strategy,
     },
-  } as never;
+  };
 }
+
+beforeEach(() => {
+  // Module-scope state: a later assertion on `at(-1)` must not read a call some
+  // earlier test made.
+  sessionStoreCalls.length = 0;
+  vi.clearAllMocks();
+});
 
 describe('runTuiTaskConversation', () => {
   it('should open with the intro and use the mode selector for a finished summary', async () => {
@@ -138,7 +141,6 @@ describe('runTuiTaskConversation', () => {
   });
 
   it('should number pasted images past the ones the canonical order already has', async () => {
-    sessionStoreCalls.length = 0;
     mockRunTuiConversation.mockResolvedValue({ action: 'cancel', task: '' });
 
     await runTuiTaskConversation({
@@ -166,8 +168,8 @@ describe('retry and replay availability', () => {
     strategy: Record<string, unknown>,
     text: string,
   ): Promise<unknown> {
-    vi.resetModules();
-    vi.doUnmock('../features/tui/tuiConversation.js');
+    // `importActual` bypasses the mock registry on its own; unmocking or
+    // resetting the module cache would only add side effects.
     const { createTuiConversation } = await vi.importActual<
       typeof import('../features/tui/tuiConversation.js')
     >('../features/tui/tuiConversation.js');
@@ -190,7 +192,8 @@ describe('retry and replay availability', () => {
       SlashCommand.Retry,
     ) as { command: unknown; conversation: { commandAvailability: unknown } };
     // `/retry` puts the previous order through the action selector.
-    expect(enabled.command).toEqual({ kind: 'choose_action', task: 'previous order' });
+    expect(enabled.command)
+      .toEqual({ kind: 'choose_action', task: 'previous order', origin: 'retry' });
     expect(enabled.conversation.commandAvailability)
       .toEqual({ enableRetryCommand: true, hasPreviousOrder: true });
 
@@ -206,7 +209,9 @@ describe('retry and replay availability', () => {
       { previousOrderContent: 'previous order' },
       SlashCommand.Replay,
     );
-    expect(withOrder).toMatchObject({ command: { kind: 'execute', task: 'previous order' } });
+    expect(withOrder).toMatchObject({
+      command: { kind: 'execute', task: 'previous order', origin: 'replay' },
+    });
 
     const withoutOrder = await resolveCommand({}, SlashCommand.Replay);
     expect(withoutOrder).toMatchObject({ command: { kind: 'notice' } });

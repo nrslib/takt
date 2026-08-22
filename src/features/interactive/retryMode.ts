@@ -42,6 +42,7 @@ import {
   type PullRequestContext,
 } from '../../core/workflow/pr-context.js';
 import { SlashCommand } from '../../shared/constants.js';
+import { hasInteractiveTerminal } from '../../shared/utils/index.js';
 
 /** Failure information for a retry task */
 export interface RetryFailureInfo {
@@ -149,14 +150,6 @@ function createDirectRetrySelectAction(
         ['save_task'],
       ),
     );
-}
-
-/**
- * A terminal gets the Ink conversation; piped input keeps the readline loop that
- * the non-interactive callers and the E2E suite depend on.
- */
-function hasInteractiveTerminal(): boolean {
-  return process.stdin.isTTY === true && process.stdout.isTTY === true;
 }
 
 async function runRetryConversation(

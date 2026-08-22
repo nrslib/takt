@@ -51,7 +51,6 @@ export interface InteractiveUIText {
   };
   cancelled: string;
   acceptNoAssistant: string;
-  playNoTask: string;
   retryNoOrder: string;
   retryUnavailable: string;
   pasteImageUnavailable: string;
@@ -249,5 +248,5 @@ export interface InteractiveModeResult extends ImageAttachmentCleanupOwner {
   /** Images pasted during interactive input and referenced by placeholder. */
   attachments?: InteractiveImageAttachment[];
   /** The command path that produced this result. */
-  source?: 'go' | 'retry' | 'replay' | 'accept' | 'play';
+  source?: 'go' | 'retry' | 'replay' | 'accept';
 }

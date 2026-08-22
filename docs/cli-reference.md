@@ -23,7 +23,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
-| `--tui` | Force the Ink-based TUI for the task conversation (requires a TTY). Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel |
+| `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel |
 
 `--workflow` is the canonical option.
 
@@ -48,7 +48,7 @@ takt hello
 1. Select workflow
 2. Select interactive mode (assistant / grill-me / persona / quiet / passthrough)
 3. Refine task content through conversation with AI
-4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`), or use `/play <task>` to execute a task immediately
+4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`)
 5. Execute (run workflow, create PR)
 
 ### Interactive Mode Variants
@@ -121,7 +121,7 @@ Launch it from an ACP-compatible client as the agent command:
 takt-acp
 ```
 
-The ACP session `cwd` must be an absolute path. TAKT uses that directory as both the conversation base and workflow project root. By default, `session/prompt` is an enqueue-first conversation entrypoint: prompts such as "enqueue this task" or "make it a pending task" add a pending task to `.takt/tasks.yaml` with `worktree: true`, and the task can later be executed with `takt run`. Direct workflow execution is kept only for explicit requests such as "run it now" or "execute now"; ambiguous prompts stay in the conversation. The main ACP UX does not depend on `/go` or `/play`: `/go` follows the session `defaultAction` and is enqueued by default, while `/play <task>` remains a compatibility-only explicit direct execution command.
+The ACP session `cwd` must be an absolute path. TAKT uses that directory as both the conversation base and workflow project root. By default, `session/prompt` is an enqueue-first conversation entrypoint: prompts such as "enqueue this task" or "make it a pending task" add a pending task to `.takt/tasks.yaml` with `worktree: true`, and the task can later be executed with `takt run`. Direct workflow execution is kept only for explicit requests such as "run it now" or "execute now"; ambiguous prompts stay in the conversation. The main ACP UX does not depend on `/go`, which follows the session `defaultAction` and is enqueued by default.
 
 If an ACP prompt creates or directly executes a task, TAKT uses the `default` workflow unless the conversation result explicitly provides another workflow.
 

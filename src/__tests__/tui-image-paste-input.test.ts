@@ -116,12 +116,6 @@ describe('inline image paste reassembly', () => {
     expect(released?.kind === 'passthrough' && released.consumed).toBe(false);
   });
 
-  it('should keep reading a sequence whose terminator is the only control byte', () => {
-    const { steps } = feed([OPENER, IMAGE_PAYLOAD]);
-
-    expect(steps[1]).toContain('image(');
-  });
-
   it('should report an OSC 1337 sequence that carries no image as ordinary input', () => {
     const notAnImage = '1337;SetMark\x07';
     const { steps } = feed([OPENER, notAnImage]);

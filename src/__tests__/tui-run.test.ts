@@ -219,6 +219,7 @@ beforeEach(() => {
     resumeSession: vi.fn(),
     recordRejectedDraft: vi.fn(),
     commandAvailability: {},
+    tracksResultSource: false,
   });
   mockDetermineWorkflow.mockResolvedValue('default');
   mockSelectInteractiveMode.mockResolvedValue('assistant');
@@ -383,11 +384,12 @@ describe('runTui', () => {
       await run;
     });
 
-    it('should give a rejected draft back to the conversation before remounting', async () => {
+    it('should give a rejected /go draft back to the conversation before remounting', async () => {
       const tree = scriptRender();
       const conversation = {
         resumeSession: vi.fn(),
         commandAvailability: {},
+        tracksResultSource: true,
         recordRejectedDraft: vi.fn(),
       };
       mockCreateTuiConversation.mockReturnValue(conversation);
@@ -396,7 +398,7 @@ describe('runTui', () => {
       await waitForMount(tree, 1);
 
       tree.conversationProps().onExit(
-        { kind: 'choose_action', task: 'proposed order' },
+        { kind: 'choose_action', task: 'proposed order', origin: 'go' },
         { history: ['ship it'], queue: [] },
       );
       await waitForMount(tree, 2);
@@ -408,14 +410,74 @@ describe('runTui', () => {
       await run;
     });
 
-    it('should carry the command path of a confirmed task into the result', async () => {
+    it('should keep a /retry order out of the conversation when it is not confirmed', async () => {
       const tree = scriptRender();
+      const conversation = {
+        resumeSession: vi.fn(),
+        commandAvailability: {},
+        tracksResultSource: true,
+        recordRejectedDraft: vi.fn(),
+      };
+      mockCreateTuiConversation.mockReturnValue(conversation);
+      mockSelectAction.mockResolvedValue('continue');
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      // `/retry` offers the order the task already has; declining it says nothing
+      // about the conversation, and recording it would poison the next summary.
+      tree.conversationProps().onExit(
+        { kind: 'choose_action', task: 'previous order', origin: 'retry' },
+        { history: [], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      expect(conversation.recordRejectedDraft).not.toHaveBeenCalled();
+
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+      await run;
+    });
+
+    it('should record nothing when the selector is left without choosing', async () => {
+      const tree = scriptRender();
+      const conversation = {
+        resumeSession: vi.fn(),
+        commandAvailability: {},
+        tracksResultSource: true,
+        recordRejectedDraft: vi.fn(),
+      };
+      mockCreateTuiConversation.mockReturnValue(conversation);
+      // The selector's own Cancel row resolves to null, which is not a rejected
+      // draft — the readline loop records nothing for it either.
+      mockSelectAction.mockResolvedValue(null);
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit(
+        { kind: 'choose_action', task: 'proposed order', origin: 'go' },
+        { history: [], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      expect(conversation.recordRejectedDraft).not.toHaveBeenCalled();
+
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+      await run;
+    });
+
+    it('should carry the command path of a confirmed task only where the mode records it', async () => {
+      const tree = scriptRender();
+      mockCreateTuiConversation.mockReturnValue({
+        resumeSession: vi.fn(),
+        commandAvailability: {},
+        tracksResultSource: true,
+        recordRejectedDraft: vi.fn(),
+      });
       mockSelectAction.mockResolvedValue('execute');
       const run = startRun();
       await waitForMount(tree, 1);
 
       tree.conversationProps().onExit(
-        { kind: 'choose_action', task: 'revised order', source: 'go' },
+        { kind: 'choose_action', task: 'revised order', origin: 'go' },
         { history: [], queue: [] },
       );
 
@@ -424,6 +486,24 @@ describe('runTui', () => {
         kind: 'selected',
         workflowId: 'default',
         result: { action: 'execute', task: 'revised order', source: 'go' },
+      });
+    });
+
+    it('should leave the command path off for a mode that does not record it', async () => {
+      const tree = scriptRender();
+      mockSelectAction.mockResolvedValue('execute');
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit(
+        { kind: 'choose_action', task: 'ship it', origin: 'go' },
+        { history: [], queue: [] },
+      );
+
+      await expect(run).resolves.toEqual({
+        kind: 'selected',
+        workflowId: 'default',
+        result: { action: 'execute', task: 'ship it' },
       });
     });
 

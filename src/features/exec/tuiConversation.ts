@@ -36,8 +36,6 @@ export interface ExecTuiConversationOptions {
   readonly systemPrompt: () => string;
   /** Called after every finished turn so the run keeps the transcript it summarizes. */
   readonly onTurn: (turn: readonly ConversationMessage[], sessionId: string | undefined) => void;
-  /** Text typed alongside `/go`, which the run needs when it summarizes. */
-  readonly onGoText: (text: string) => void;
 }
 
 /** What one exec turn reported alongside its answer. */
@@ -53,6 +51,9 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
     // Exec offers its own command set; `/retry` and `/replay` are not part of it,
     // and `/setup` — which the plain conversation has no use for — is.
     commandAvailability: EXEC_CONVERSATION_COMMAND_AVAILABILITY,
+    // Exec runs its own workflow through `/go`; no result of its own records a
+    // command path.
+    tracksResultSource: false,
 
     isCommandLine(text: string): boolean {
       // Exec's own command set, so a line that names something else is text.
@@ -70,8 +71,10 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
         case SlashCommand.Setup:
           return { kind: 'handoff', id: EXEC_SETUP_HANDOFF };
         case SlashCommand.Go:
-          options.onGoText(match.text);
-          return { kind: 'handoff', id: EXEC_GO_HANDOFF };
+          // No side effect here: the queue resolves a command once to see
+          // whether it can wait and again when it runs, and the run must be told
+          // what was typed exactly once.
+          return { kind: 'handoff', id: EXEC_GO_HANDOFF, text: match.text };
         case SlashCommand.PasteImage:
           return { kind: 'paste_image' };
         default:

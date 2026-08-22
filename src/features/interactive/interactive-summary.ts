@@ -312,25 +312,13 @@ export function createPostSummaryActionSelector(
   );
 }
 
+/** The same selector, for a run that withholds nothing. */
 export function selectPostSummaryAction(
   task: string,
   proposedLabel: string,
   ui: InteractiveSummaryUIText,
 ): Promise<PostSummaryAction | null> {
-  return selectSummaryAction(
-    task,
-    proposedLabel,
-    ui.actionPrompt,
-    buildSummaryActionOptions(
-      {
-        execute: ui.actions.execute,
-        createIssue: ui.actions.createIssue,
-        saveTask: ui.actions.saveTask,
-        continue: ui.actions.continue,
-      },
-      ['create_issue'],
-    ),
-  );
+  return createPostSummaryActionSelector(proposedLabel, ui)(task);
 }
 
 /**

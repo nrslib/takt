@@ -139,6 +139,20 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
   }
 
   /**
+   * The provider and model the caller named on the command line, in the shape
+   * the assistant ladder takes them. Built in one place so the session it
+   * resumes and the plan it then runs cannot resolve different providers.
+   */
+  function agentProviderOverrides(): { provider?: ProviderType; model?: string } {
+    return {
+      ...(options.agentOverrides?.provider
+        ? { provider: options.agentOverrides.provider as ProviderType }
+        : {}),
+      ...(options.agentOverrides?.model ? { model: options.agentOverrides.model } : {}),
+    };
+  }
+
+  /**
    * `--continue` resumes the session recorded for the mode's own persona. The
    * notice mirrors the readline flow, which says either that it is resuming or
    * that nothing was found to resume from.
@@ -149,10 +163,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     if (options.continueSession !== true || (mode !== 'assistant' && mode !== 'grill-me')) {
       return { sessionId: undefined, notice: null };
     }
-    const { provider } = resolveAssistantProviderModel(options.cwd, {
-      ...(options.agentOverrides?.provider ? { provider: options.agentOverrides.provider as ProviderType } : {}),
-      ...(options.agentOverrides?.model ? { model: options.agentOverrides.model } : {}),
-    });
+    const { provider } = resolveAssistantProviderModel(options.cwd, agentProviderOverrides());
     if (!provider) {
       throw new ProviderNotConfiguredError();
     }
@@ -216,8 +227,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       : createAssistantConversationPlan(options.cwd, {
         assistantMode: mode === 'grill-me' ? 'grill-me' : 'assistant',
         workflowContext,
-        ...(options.agentOverrides?.provider ? { provider: options.agentOverrides.provider as ProviderType } : {}),
-        ...(options.agentOverrides?.model ? { model: options.agentOverrides.model } : {}),
+        ...agentProviderOverrides(),
         ...(continued.sessionId ? { sessionId: continued.sessionId } : {}),
       });
     const hasSeededInput = options.userMessage !== undefined || options.sourceContext !== undefined;
@@ -259,12 +269,6 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     ), exitedEarly);
   }
 
-  /**
-   * The conversation, mounted once per stretch between selectors. Everything the
-   * next mount has to continue from — the session, the recall history — is held
-   * here; the transcript itself is already in the scrollback, so a remount seeds
-   * an empty one rather than printing it a second time.
-   */
   /**
    * What a finished task leaves behind, as one transcript line. The run writes
    * its own state file, which is the same source the readline flow reads when it

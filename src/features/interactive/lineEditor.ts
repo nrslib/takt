@@ -9,7 +9,7 @@
 
 import * as readline from 'node:readline';
 
-export function readMultilineInput(prompt: string): Promise<string | null> {
+export function readPipedLine(prompt: string): Promise<string | null> {
   return new Promise((resolve) => {
     if (process.stdin.readable && !process.stdin.destroyed) {
       process.stdin.resume();

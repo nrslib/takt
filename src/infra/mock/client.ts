@@ -266,12 +266,20 @@ export async function callMock(
       data: { model: 'mock-model', sessionId },
     };
     options.onStream(initEvent);
+    // The caller can abort while it consumes an event, and the answer body is
+    // the one thing an abort cannot take back once it is on screen.
+    if (isAborted(options.abortSignal)) {
+      return finishAbortedCall(personaName, sessionId);
+    }
 
     for (const event of scenarioEntry?.streamEvents ?? []) {
       options.onStream({
         type: 'tool_use',
         data: { tool: event.tool, id: event.id, input: { ...event.input } },
       });
+      if (isAborted(options.abortSignal)) {
+        return finishAbortedCall(personaName, sessionId);
+      }
     }
 
     if (scenarioEntry?.textChunks === undefined) {

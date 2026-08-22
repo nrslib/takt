@@ -41,10 +41,12 @@ export interface TuiConversationRunOptions {
    * Runs the post-summary selector on the bare terminal. The task it answers
    * with is what the run returns: a mode may normalize the draft (Retry and
    * Instruct append the attachment list) before showing it for confirmation.
+   * `origin` is the command path the task came from, which decides which of the
+   * mode's selectors runs.
    */
   readonly chooseAction: (
     task: string,
-    source?: InteractiveResultSource,
+    origin?: InteractiveResultSource,
   ) => Promise<{ action: PostSummaryAction; task: string } | null>;
   /** Printed when the selector says to keep editing. */
   readonly continuePrompt: string;
@@ -55,11 +57,11 @@ export interface TuiConversationRunOptions {
    */
   readonly dispatch?: (result: InteractiveModeResult) => Promise<string | null>;
   /**
-   * Runs what a `handoff` command asked for, with Ink unmounted. It answers
-   * with the line to greet the session with, or with the result that ends the
-   * run.
+   * Runs what a `handoff` command asked for, with Ink unmounted, together with
+   * whatever was typed alongside the command. It answers with the line to greet
+   * the session with, or with the result that ends the run.
    */
-  readonly onHandoff?: (id: string) => Promise<TuiHandoffOutcome>;
+  readonly onHandoff?: (id: string, text: string) => Promise<TuiHandoffOutcome>;
 }
 
 export type TuiHandoffOutcome =
@@ -150,18 +152,24 @@ export async function runTuiConversation(
         break;
       }
       case 'choose_action': {
-        const chosen = await options.chooseAction(settled.exit.task, settled.exit.source);
+        const origin = settled.exit.origin;
+        const chosen = await options.chooseAction(settled.exit.task, origin);
         if (chosen === null || chosen.action === 'continue') {
-          // The rejected draft goes back into the conversation, so the next
-          // revision starts from what was proposed rather than from nothing.
-          options.conversation.recordRejectedDraft?.(chosen?.task ?? settled.exit.task);
+          // Only a `/go` draft that was turned down goes back into the
+          // conversation, exactly as the readline loop records it: it is the
+          // proposal the next revision starts from. Leaving the selector
+          // altogether records nothing, and neither does `/retry`, whose task is
+          // the order the mode already has rather than something just drafted.
+          if (chosen !== null && origin === 'go') {
+            options.conversation.recordRejectedDraft?.(chosen.task);
+          }
           info(options.continuePrompt);
           break;
         }
         const finished = await settleDecision({
           action: chosen.action,
           task: chosen.task,
-          ...(settled.exit.source ? { source: settled.exit.source } : {}),
+          ...(options.conversation.tracksResultSource && origin ? { source: origin } : {}),
         });
         if (finished !== undefined) {
           return finished;
@@ -181,7 +189,7 @@ export async function runTuiConversation(
         if (onHandoff === undefined) {
           throw new Error(`No handler for the "${settled.exit.id}" hand-off`);
         }
-        const outcome = await onHandoff(settled.exit.id);
+        const outcome = await onHandoff(settled.exit.id, settled.exit.text ?? '');
         if (outcome.kind === 'finished') {
           return outcome.result;
         }

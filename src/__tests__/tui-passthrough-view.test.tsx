@@ -192,7 +192,10 @@ describe('PassthroughView', () => {
   it('should include an image that finished saving while Enter was pressed', async () => {
     let releaseSave!: () => void;
     const images: ImagePasteSink = {
-      pasteClipboardImage: () => new Promise<string>((resolve) => {
+      // A capture that honours its abort signal: Enter must let it finish, or
+      // the placeholder it was about to insert never reaches the task.
+      pasteClipboardImage: (abortSignal: AbortSignal) => new Promise<string>((resolve, reject) => {
+        abortSignal.addEventListener('abort', () => reject(new Error('capture stopped')));
         releaseSave = () => resolve('[Image #1]');
       }),
       saveInlineImage: () => Promise.resolve('[Image #1]'),
@@ -312,9 +315,11 @@ describe('PassthroughView', () => {
 
   it('should force the exit on a second Ctrl+C and seal against the late save', async () => {
     let releaseSave!: () => void;
+    let captureSignal!: AbortSignal;
     const sealImages = vi.fn();
     const images: ImagePasteSink = {
-      pasteClipboardImage: () => new Promise<string>((resolve) => {
+      pasteClipboardImage: (abortSignal: AbortSignal) => new Promise<string>((resolve) => {
+        captureSignal = abortSignal;
         releaseSave = () => resolve('[Image #1]');
       }),
       saveInlineImage: () => Promise.resolve('[Image #1]'),
@@ -327,8 +332,11 @@ describe('PassthroughView', () => {
     app.stdin.write(CTRL_V);
     await flushFrames();
 
+    // An interrupt is the user ending the capture, so this one is stopped
+    // rather than waited out.
     app.stdin.write(CTRL_C);
     await flushFrames();
+    expect(captureSignal.aborted).toBe(true);
     expect(onDone).not.toHaveBeenCalled();
 
     // The capture ignores the abort, so the second Ctrl+C must not wait for it.

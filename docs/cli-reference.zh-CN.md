@@ -23,7 +23,7 @@
 | `--auto-strategy <strategy>` | 覆盖自动路由策略（`cost`\|`balanced`\|`performance`）。只有执行进入当前 workflow 或具有有效 `auto_routing` 的 workflow-call 子流程时才应用；否则 TAKT 会警告并忽略。 |
 | `--model <name>` | 覆盖 agent model |
 | `-c, --continue` | 从当前项目目录和 provider 的上一次 assistant session 继续 |
-| `--tui` | 强制使用基于 Ink 的 TUI 进行任务对话（需要 TTY）。工作流选择、模式选择和总结后的操作选择仍使用原有选择器，TUI 只负责对话本身。Enter 发送，Shift+Enter / Option+Enter 换行，Ctrl+K 删除到行尾，Esc 中断正在生成的回答，队列中的内容会作为下一轮立即发送。回答期间提交的行会进入队列并在完成后发送（队列开始发送前可用 ↑ 取回编辑）。任务执行后会话继续保持，直到 /cancel |
+| `--tui` | 终端下这本就是默认形态：stdin 与 stdout 均为 TTY 时，无论是否指定该选项，任务对话都由 Ink 绘制；管道输入则继续使用原有读取器。该选项只是把这一前提写明——没有 TTY 时不会回退，而是以 `--tui requires an interactive terminal` 失败。工作流选择、模式选择和总结后的操作选择仍使用原有选择器，TUI 只负责对话本身。Enter 发送，Shift+Enter / Option+Enter 换行，Ctrl+K 删除到行尾，Esc 中断正在生成的回答，队列中的内容会作为下一轮立即发送。回答期间提交的行会进入队列并在完成后发送（队列开始发送前可用 ↑ 取回编辑）。任务执行后会话继续保持，直到 /cancel |
 
 `--workflow` 是规范选项。
 
@@ -48,7 +48,7 @@ takt hello
 1. 选择 workflow
 2. 选择交互模式（assistant / grill-me / persona / quiet / passthrough）
 3. 通过与 AI 对话完善任务内容
-4. 使用 `/go` 完成任务指令（也可以使用 `/go additional instructions` 添加额外指令），或使用 `/play <task>` 立即执行任务
+4. 使用 `/go` 完成任务指令（也可以使用 `/go additional instructions` 添加额外指令）
 5. 执行 workflow，并按需要创建 PR
 
 ### 交互模式变体
@@ -124,7 +124,7 @@ takt-acp
 
 ACP session 的 `cwd` 必须是绝对路径。TAKT 将该目录同时作为对话基目录和 workflow 项目根目录。默认情况下，`session/prompt` 是“先加入队列”的对话入口：诸如“enqueue this task”或“make it a pending task”的 prompt 会将待处理任务写入 `.takt/tasks.yaml`，之后可以用 `takt run` 执行。只有明确要求“run it now”或“execute now”时才直接执行 workflow；含义不明确的 prompt 会留在对话中。
 
-主 ACP UX 不依赖 `/go` 或 `/play`：`/go` 遵循 session 的 `defaultAction`，默认加入队列；`/play <task>` 只是兼容用的显式直接执行命令。
+主 ACP UX 不依赖 `/go`：它遵循 session 的 `defaultAction`，默认加入队列。
 
 如果 ACP prompt 创建或直接执行任务，TAKT 使用 `default` workflow，除非对话结果明确给出其他 workflow。
 

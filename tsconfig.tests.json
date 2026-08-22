@@ -14,6 +14,7 @@
   "include": [
     "src/__tests__/ai-caller-output-mode.test.ts",
     "src/__tests__/assistant-provider-parity.test.ts",
+    "src/__tests__/cli-routing-issue-resolve.test.ts",
     "src/__tests__/cli-routing-tui.test.ts",
     "src/__tests__/conversation-plan.test.ts",
     "src/__tests__/conversation-session-failure.test.ts",
@@ -25,9 +26,12 @@
     "src/__tests__/grapheme.test.ts",
     "src/__tests__/helpers/stdinSimulator.ts",
     "src/__tests__/image-attachment-store-seal.test.ts",
+    "src/__tests__/imageAttachments.test.ts",
     "src/__tests__/instructMode.test.ts",
+    "src/__tests__/interactive-mode.test.ts",
     "src/__tests__/interactive.test.ts",
     "src/__tests__/mock-scenario-stream-chunks.test.ts",
+    "src/__tests__/releaseVerificationWiring.test.ts",
     "src/__tests__/retry-mode-flow.test.ts",
     "src/__tests__/retrySlashCommand.test.ts",
     "src/__tests__/runtime-internal-agent-assistant.test.ts",
@@ -38,6 +42,7 @@
     "src/__tests__/tui-image-paste-input.test.ts",
     "src/__tests__/tui-passthrough-view.test.tsx",
     "src/__tests__/tui-prompt-layout.test.ts",
+    "src/__tests__/tui-prompt-screen.test.tsx",
     "src/__tests__/tui-run.test.ts",
     "src/__tests__/tui-task-conversation.test.ts",
     "src/__tests__/tui-terminal-ownership.test.ts"

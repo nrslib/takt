@@ -39,6 +39,7 @@ import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 import { renderPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
 import { SlashCommand } from '../../../shared/constants.js';
+import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
 
 export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
@@ -134,14 +135,6 @@ function buildInstructTemplateVars(
     reportSummary,
     worktreeSummary,
   };
-}
-
-/**
- * A terminal gets the Ink conversation; piped input keeps the readline loop that
- * the non-interactive callers and the E2E suite depend on.
- */
-function hasInteractiveTerminal(): boolean {
-  return process.stdin.isTTY === true && process.stdout.isTTY === true;
 }
 
 export async function runInstructMode(

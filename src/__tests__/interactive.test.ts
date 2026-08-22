@@ -385,61 +385,6 @@ describe('interactiveMode', () => {
     );
   });
 
-  describe('/play command', () => {
-    it('should return action=execute with task on /play command', async () => {
-      // Given
-      setupRawStdin(toRawInputs(['/play implement login feature']));
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then
-      expect(result.action).toBe('execute');
-      expect(result.task).toBe('implement login feature');
-    });
-
-    it('should show error when /play has no task content', async () => {
-      // Given: /play without task, then /cancel to exit
-      setupRawStdin(toRawInputs(['/play', '/cancel']));
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: should cancel (fell through to /cancel)
-      expect(result.action).toBe('cancel');
-    });
-
-    it('should handle /play with leading/trailing spaces', async () => {
-      // Given
-      setupRawStdin(toRawInputs(['/play   test task  ']));
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then
-      expect(result.action).toBe('execute');
-      expect(result.task).toBe('test task');
-    });
-
-    it('should skip AI summary when using /play', async () => {
-      // Given
-      setupRawStdin(toRawInputs(['/play quick task']));
-      setupMockProvider([]);
-
-      // When
-      const result = await interactiveMode('/project');
-
-      // Then: provider should NOT have been called (no summary needed)
-      const mockProvider = mockGetProvider.mock.results[0]?.value as { _call: ReturnType<typeof vi.fn> };
-      expect(mockProvider._call).not.toHaveBeenCalled();
-      expect(result.action).toBe('execute');
-      expect(result.task).toBe('quick task');
-    });
-  });
-
   describe('/accept command', () => {
     it('should return action=execute with the latest assistant response unchanged', async () => {
       // Given

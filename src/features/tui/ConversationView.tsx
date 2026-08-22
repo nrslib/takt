@@ -19,7 +19,7 @@ import type {
   TuiConversation,
   TuiLocalCommand,
 } from './tuiConversation.js';
-import { useImagePaste, type PendingWork } from './useImagePaste.js';
+import { drainPendingWork, useImagePaste, type PendingWork } from './useImagePaste.js';
 
 export interface ConversationUiText {
   thinking: string;
@@ -40,11 +40,15 @@ export interface ConversationUiText {
 /** What the conversation phase asks the surrounding TUI to do next. */
 export type ConversationExit =
   | { kind: 'result'; result: InteractiveModeResult }
-  /** `source` travels with the task for the modes that record where it came from. */
-  | { kind: 'choose_action'; task: string; source?: InteractiveResultSource }
+  /**
+   * `origin` is the command path that produced the task. It always travels with
+   * it — the selector and the meaning of a rejected draft both depend on it —
+   * while whether it reaches the result is the mode's decision.
+   */
+  | { kind: 'choose_action'; task: string; origin?: InteractiveResultSource }
   | { kind: 'resume_session' }
   /** The caller runs `id` with Ink unmounted, then this view is mounted again. */
-  | { kind: 'handoff'; id: string }
+  | { kind: 'handoff'; id: string; text?: string }
   | { kind: 'failed'; error: unknown };
 
 /** What survives a mount: the recall history and the lines still waiting. */
@@ -290,7 +294,7 @@ export function ConversationView({
           void finishRun({
             kind: 'choose_action',
             task: outcome.task,
-            ...(outcome.source ? { source: outcome.source } : {}),
+            ...(outcome.origin ? { origin: outcome.origin } : {}),
           });
           return;
       }
@@ -370,16 +374,7 @@ export function ConversationView({
     setIsFinishing(true);
     // Drain everything: a submission and a clipboard capture can be in flight at
     // the same time, and each one still owns state the caller cleans up after.
-    while (pendingRef.current.size > 0) {
-      const draining = [...pendingRef.current];
-      for (const work of draining) {
-        work.controller.abort();
-      }
-      await Promise.all(draining.map((work) => work.completion));
-      for (const work of draining) {
-        pendingRef.current.delete(work);
-      }
-    }
+    await drainPendingWork(pendingRef.current);
     exit(next);
   }, [exit]);
 
@@ -407,7 +402,9 @@ export function ConversationView({
           result: {
             action: 'execute',
             task: command.task,
-            ...(command.source ? { source: command.source } : {}),
+            ...(conversation.tracksResultSource && command.origin
+              ? { source: command.origin }
+              : {}),
           },
         });
         return;
@@ -415,7 +412,7 @@ export function ConversationView({
         void finishRun({
           kind: 'choose_action',
           task: command.task,
-          ...(command.source ? { source: command.source } : {}),
+          ...(command.origin ? { origin: command.origin } : {}),
         });
         return;
       case 'resume_session':
@@ -430,7 +427,11 @@ export function ConversationView({
         setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
         updateEditor(commitEditorInput(editorRef.current, text));
         setNotice(null);
-        void finishRun({ kind: 'handoff', id: command.id });
+        void finishRun({
+          kind: 'handoff',
+          id: command.id,
+          ...(command.text === undefined ? {} : { text: command.text }),
+        });
         return;
       // Neither of these ends the mount, so whatever was queued behind them
       // still has to go out.
@@ -446,7 +447,7 @@ export function ConversationView({
         drainQueueRef.current();
         return;
     }
-  }, [captureClipboardImage, exit, finishRun, updateEditor]);
+  }, [captureClipboardImage, finishRun, updateEditor]);
 
   /** One queued or typed line, sent exactly as if it had just been typed. */
   const submitLine = useCallback((text: string) => {
@@ -492,7 +493,11 @@ export function ConversationView({
     writeQueue(queued.slice(end));
     submitLine(queued.slice(0, end).join('\n'));
   }, [conversation, submitLine, writeQueue]);
-  drainQueueRef.current = drainQueue;
+  // Assigned in an effect rather than during render: React may throw a render
+  // away, and the ref must hold the function of the render that was committed.
+  useEffect(() => {
+    drainQueueRef.current = drainQueue;
+  }, [drainQueue]);
 
   const autoSubmittedRef = useRef(false);
   useEffect(() => {
@@ -649,7 +654,8 @@ export function ConversationView({
       return;
     }
     // Ctrl+V pastes the clipboard image, the same gesture the readline editor
-    // offers; the terminal's own text paste never reaches this handler.
+    // offered. A terminal's own text paste arrives as ordinary input and is
+    // inserted with its line breaks intact, so it never reaches this branch.
     if (key.ctrl && input === 'v') {
       captureClipboardImage();
       return;

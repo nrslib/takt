@@ -61,19 +61,28 @@ beforeEach(() => {
 });
 
 describe('AI call output ownership', () => {
-  it('should not write to the terminal in silent mode when images cannot go native', async () => {
+  it('should hand a silent caller the notice instead of writing it to the terminal', async () => {
+    const notices: string[] = [];
+
     const { result } = await callAIWithRetry(
       'prompt {{image:1}}',
       'system',
       ['Read'],
       '/repo',
       createContext(),
-      { outputMode: 'silent', imageAttachments: [ATTACHMENT] },
+      {
+        outputMode: 'silent',
+        imageAttachments: [ATTACHMENT],
+        onNotice: (message) => notices.push(message),
+      },
     );
 
     expect(result?.success).toBe(true);
     expect(mockInfo).not.toHaveBeenCalled();
     expect(mockError).not.toHaveBeenCalled();
+    // The caller renders it itself; losing it would leave the user wondering
+    // why the image was ignored.
+    expect(notices).toEqual([expect.stringContaining('does not support native image input')]);
   });
 
   it('should still tell a terminal caller that image paths were inlined', async () => {

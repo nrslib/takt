@@ -109,7 +109,6 @@ export function replaceEditorText(state: EditorState, text: string): EditorState
   return { ...state, text, cursor: text.length };
 }
 
-/** Rows for rendering: the buffer split on '\n', plus the caret's row/column. */
 /**
  * Pasted text arrives straight from the terminal, so it is sanitized before it
  * reaches the buffer. Line breaks survive: a multi-line paste is meant to land

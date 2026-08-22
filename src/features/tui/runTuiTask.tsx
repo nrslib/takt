@@ -63,13 +63,13 @@ export async function runTuiTaskConversation(
    */
   const chooseAction = async (
     task: string,
-    source?: InteractiveResultSource,
+    origin?: InteractiveResultSource,
   ): Promise<{ action: PostSummaryAction; task: string } | null> => {
-    const normalized = source === 'go' && strategy.normalizeSummaryTask
+    const normalized = origin === 'go' && strategy.normalizeSummaryTask
       ? strategy.normalizeSummaryTask(task, attachmentStore.listAttachments()).task
       : task;
-    const selector = (source === 'go' ? strategy.selectGoAction : undefined)
-      ?? (source === 'retry' ? strategy.selectRetryAction : undefined)
+    const selector = (origin === 'go' ? strategy.selectGoAction : undefined)
+      ?? (origin === 'retry' ? strategy.selectRetryAction : undefined)
       ?? strategy.selectAction;
     const action = selector
       ? await selector(normalized, ctx.lang)

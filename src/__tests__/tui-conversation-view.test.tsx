@@ -126,6 +126,8 @@ function createScriptedConversation(
   return {
     lang: 'en',
     commandAvailability,
+    // The plain conversation does not record which command produced a task.
+    tracksResultSource: false,
 
     // The real conversation asks the registry; the double answers for the
     // commands this test gave it, so a `/path`-looking line stays text.
@@ -591,7 +593,7 @@ describe('ConversationView', () => {
 
     it('should send a queued command on its own, after the lines before it', async () => {
       const conversation = createScriptedConversation(
-        new Map<string, TuiLocalCommand>([['/play run it', { kind: 'execute', task: 'run it' }]]),
+        new Map<string, TuiLocalCommand>([['/accept', { kind: 'execute', task: 'run it' }]]),
         NO_ORDER_COMMANDS,
       );
       const onExit = vi.fn();
@@ -603,7 +605,7 @@ describe('ConversationView', () => {
       await flushFrames();
       app.stdin.write(ENTER);
       await flushFrames();
-      app.stdin.write('/play run it');
+      app.stdin.write('/accept');
       await flushFrames();
       app.stdin.write(ENTER);
       await flushFrames();
@@ -927,7 +929,9 @@ describe('ConversationView', () => {
       await flushFrames();
       expect(conversation.submitCalls[1]?.abortSignal.aborted).toBe(true);
       const frame = app.lastFrame() ?? '';
-      expect((frame.match(new RegExp(UI.responseInterrupted, 'g')) ?? [])).toHaveLength(2);
+      // Counted by splitting rather than by regex: the label is i18n text and
+      // its punctuation would be read as pattern syntax.
+      expect(frame.split(UI.responseInterrupted)).toHaveLength(3);
       expect(frame).not.toContain(UI.thinking);
 
       app.unmount();
@@ -1057,14 +1061,14 @@ describe('ConversationView', () => {
     // A resident session runs the decision and mounts this view again, so the
     // store it pastes into has to survive the exit.
     const conversation = createScriptedConversation(
-      new Map<string, TuiLocalCommand>([['/play run it', { kind: 'execute', task: 'run it' }]]),
+      new Map<string, TuiLocalCommand>([['/accept', { kind: 'execute', task: 'run it' }]]),
       NO_ORDER_COMMANDS,
     );
     const onExit = vi.fn();
     const app = renderConversation(conversation, 'chat', onExit, { residentSession: true });
     await flushFrames();
 
-    app.stdin.write('/play run it');
+    app.stdin.write('/accept');
     await flushFrames();
     app.stdin.write(ENTER);
     await flushFrames();
@@ -1089,13 +1093,13 @@ describe('ConversationView', () => {
 
   it('should seal on a finished decision when nothing follows it', async () => {
     const conversation = createScriptedConversation(
-      new Map<string, TuiLocalCommand>([['/play run it', { kind: 'execute', task: 'run it' }]]),
+      new Map<string, TuiLocalCommand>([['/accept', { kind: 'execute', task: 'run it' }]]),
       NO_ORDER_COMMANDS,
     );
     const app = renderConversation(conversation, 'chat', vi.fn());
     await flushFrames();
 
-    app.stdin.write('/play run it');
+    app.stdin.write('/accept');
     await flushFrames();
     app.stdin.write(ENTER);
     await flushFrames();
@@ -1607,15 +1611,15 @@ describe('ConversationView', () => {
     },
     {
       name: 'execute',
-      input: '/play run it',
+      input: '/accept',
       command: { kind: 'execute', task: 'run it' },
       expected: { kind: 'result', result: { action: 'execute', task: 'run it' } },
     },
     {
       name: 'choose_action',
       input: '/retry',
-      command: { kind: 'choose_action', task: 'previous order' },
-      expected: { kind: 'choose_action', task: 'previous order' },
+      command: { kind: 'choose_action', task: 'previous order', origin: 'retry' },
+      expected: { kind: 'choose_action', task: 'previous order', origin: 'retry' },
     },
     {
       name: 'resume_session',
@@ -1650,6 +1654,43 @@ describe('ConversationView', () => {
       app.unmount();
     },
   );
+
+  it('should publish the command path only where the mode records it', async () => {
+    const command: TuiLocalCommand = { kind: 'execute', task: 'previous order', origin: 'replay' };
+    const plain = createScriptedConversation(new Map([['/replay', command]]), NO_ORDER_COMMANDS);
+    const plainExit = vi.fn();
+    const plainApp = renderConversation(plain, 'chat', plainExit);
+    await flushFrames();
+    plainApp.stdin.write('/replay');
+    await flushFrames();
+    plainApp.stdin.write(ENTER);
+    await flushFrames();
+
+    expect(plainExit).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'result', result: { action: 'execute', task: 'previous order' } },
+      expect.anything(),
+    );
+    plainApp.unmount();
+
+    const recording = {
+      ...createScriptedConversation(new Map([['/replay', command]]), NO_ORDER_COMMANDS),
+      tracksResultSource: true,
+    };
+    const recordingExit = vi.fn();
+    const recordingApp = renderConversation(recording, 'chat', recordingExit);
+    await flushFrames();
+    recordingApp.stdin.write('/replay');
+    await flushFrames();
+    recordingApp.stdin.write(ENTER);
+    await flushFrames();
+
+    // The caller decides what to do with the task by where it came from.
+    expect(recordingExit).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'result', result: { action: 'execute', task: 'previous order', source: 'replay' } },
+      expect.anything(),
+    );
+    recordingApp.unmount();
+  });
 
   it('should render a local notice and stay in the conversation', async () => {
     const conversation = createScriptedConversation(
@@ -2310,17 +2351,16 @@ describe('ConversationView', () => {
 
     const completionFrame = app.lastFrame() ?? '';
     expect(completionFrame).toContain('❯ /accept');
-    expect(completionFrame).toContain('/play');
     expect(completionFrame).toContain('/go');
     expect(completionFrame).toContain('/cancel');
-    expect(completionFrame).toContain('Run a task immediately');
+    expect(completionFrame).toContain('Accept latest assistant response');
     // Both order commands are unavailable in this run, so they stay out of the menu.
     expect(completionFrame).not.toContain('/retry');
     expect(completionFrame).not.toContain('/replay');
 
     app.stdin.write(ARROW_DOWN);
     await flushFrames();
-    expect(app.lastFrame() ?? '').toContain('❯ /play');
+    expect(app.lastFrame() ?? '').toContain('❯ /go');
 
     app.stdin.write(ARROW_UP);
     await flushFrames();
@@ -2332,7 +2372,7 @@ describe('ConversationView', () => {
     const acceptedFrame = app.lastFrame() ?? '';
     // The buffer now holds the accepted command and the menu is gone.
     expect(acceptedFrame).toContain('❯ /accept');
-    expect(acceptedFrame).not.toContain('Run a task immediately');
+    expect(acceptedFrame).not.toContain('Accept latest assistant response');
     expect(acceptedFrame).not.toContain('/cancel');
 
     app.unmount();
@@ -2353,7 +2393,7 @@ describe('ConversationView', () => {
     expect(frame).toContain('/retry');
     expect(frame).toContain('/replay');
     expect(frame).toContain('/resume');
-    expect(frame).not.toContain('/play');
+    expect(frame).not.toContain('/accept');
 
     app.unmount();
   });

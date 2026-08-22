@@ -1,6 +1,7 @@
 import { Box, Text, useInput, useStdout } from 'ink';
 import { useCallback, useRef, useState, type ReactElement } from 'react';
 import { toDisplayText } from './displayText.js';
+import { resolveEditorKey } from './editorKeys.js';
 import {
   applyEditorKey,
   createEditorState,
@@ -75,47 +76,11 @@ export function PromptScreen({
       finish(editorRef.current.text);
       return;
     }
-    if (key.backspace) {
-      edit(applyEditorKey(editorRef.current, { kind: 'backspace' }));
+    const editorKey = resolveEditorKey(input, key, contentWidth);
+    if (editorKey === null) {
       return;
     }
-    if (key.delete) {
-      edit(applyEditorKey(editorRef.current, { kind: 'delete' }));
-      return;
-    }
-    if (key.leftArrow) {
-      edit(applyEditorKey(editorRef.current, { kind: 'left' }));
-      return;
-    }
-    if (key.rightArrow) {
-      edit(applyEditorKey(editorRef.current, { kind: 'right' }));
-      return;
-    }
-    if (key.upArrow) {
-      edit(applyEditorKey(editorRef.current, { kind: 'up', contentWidth }));
-      return;
-    }
-    if (key.downArrow) {
-      edit(applyEditorKey(editorRef.current, { kind: 'down', contentWidth }));
-      return;
-    }
-    // Home/End keys, plus their readline equivalents.
-    if (key.home || (key.ctrl && input === 'a')) {
-      edit(applyEditorKey(editorRef.current, { kind: 'home' }));
-      return;
-    }
-    if (key.end || (key.ctrl && input === 'e')) {
-      edit(applyEditorKey(editorRef.current, { kind: 'end' }));
-      return;
-    }
-    if (key.ctrl && input === 'k') {
-      edit(applyEditorKey(editorRef.current, { kind: 'deleteToLineEnd' }));
-      return;
-    }
-    if (key.ctrl || key.meta || key.tab || key.pageUp || key.pageDown) {
-      return;
-    }
-    edit(applyEditorKey(editorRef.current, { kind: 'insert', text: input }));
+    edit(applyEditorKey(editorRef.current, editorKey));
   });
 
   return (

@@ -12,16 +12,14 @@ vi.mock('../features/interactive/aiCaller.js', () => ({
   callAIWithRetry: (...args: unknown[]) => mockCallAIWithRetry(...args),
 }));
 
-import { askExecAssistant } from '../features/exec/assistantSession.js';
+import { askExecAssistant, type ExecSessionContext } from '../features/exec/assistantSession.js';
+import { makeSessionContext } from './test-helpers.js';
 
-const CTX = {
-  provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
-  providerType: 'mock',
-  model: 'mock-model',
-  lang: 'en',
-  personaName: 'exec-assistant',
-  sessionId: undefined,
-} as never;
+const CTX: ExecSessionContext = {
+  ...makeSessionContext({ personaName: 'exec-assistant' }),
+  facetLookupConfig: { enableBuiltinWorkflows: true, language: 'en' },
+  codexSkillInheritance: { repo: false, user: false },
+};
 
 describe('askExecAssistant', () => {
   it('should throw the reason the call reported', async () => {

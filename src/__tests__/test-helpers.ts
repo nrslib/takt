@@ -13,11 +13,46 @@ import type {
   WorkflowStep,
 } from '../core/models/types.js';
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
+import type { Provider } from '../infra/providers/types.js';
+import type { SessionContext } from '../features/interactive/aiCaller.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import { WorkflowResumeContinuation } from '../core/workflow/engine/workflow-resume-continuation.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+
+/**
+ * A provider double for tests that only need a session context to exist.
+ *
+ * Typed rather than cast, so a change to the provider contract shows up as a
+ * type error in every test that builds one — which is the point of listing
+ * these tests in `tsconfig.tests.json`.
+ */
+export function makeProvider(overrides: Partial<Provider> = {}): Provider {
+  return {
+    supportsStructuredOutput: false,
+    supportsNativeImageInput: false,
+    keepsAllowedToolWithoutEdit: () => false,
+    getRuntimeInstructions: () => null,
+    setup: () => ({
+      call: () => Promise.reject(new Error('the provider double was asked to call')),
+    }),
+    ...overrides,
+  };
+}
+
+/** The interactive session context, with the provider double in place. */
+export function makeSessionContext(overrides: Partial<SessionContext> = {}): SessionContext {
+  return {
+    provider: makeProvider(),
+    providerType: 'mock',
+    model: 'mock-model',
+    lang: 'en',
+    personaName: 'interactive',
+    sessionId: undefined,
+    ...overrides,
+  };
+}
 
 export function makeRule(condition: string, next: string, extra: Partial<WorkflowRule> = {}): WorkflowRule {
   return { condition: parseWorkflowRuleCondition(condition), next, ...extra };

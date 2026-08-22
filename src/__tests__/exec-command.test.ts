@@ -8,7 +8,7 @@ import {
   resolveWorkflowConfigValues,
 } from '../infra/config/index.js';
 import { getProvider } from '../infra/providers/index.js';
-import { readMultilineInput } from '../features/interactive/lineEditor.js';
+import { readPipedLine } from '../features/interactive/lineEditor.js';
 import type { ImageAttachmentStore, InteractiveImageAttachment } from '../features/interactive/imageAttachments.js';
 import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { formatRunSessionForPrompt, loadRunSessionContext } from '../features/interactive/runSessionReader.js';
@@ -20,6 +20,7 @@ import { saveExecPreset, saveLastUsedExecConfig } from '../features/exec/presetS
 import type { ExecActorConfig, ExecConfig, ResolvedExecConfig } from '../features/exec/types.js';
 import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
 import { stripAnsi } from '../shared/utils/text.js';
+import { makeProvider } from './test-helpers.js';
 
 const execAttachmentStores = vi.hoisted(() => ({ stores: [] as ImageAttachmentStore[] }));
 
@@ -51,7 +52,7 @@ vi.mock('../infra/config/runtime-provider/provider-environment.js', () => ({
 }));
 
 vi.mock('../features/interactive/lineEditor.js', () => ({
-  readMultilineInput: vi.fn(),
+  readPipedLine: vi.fn(),
 }));
 
 // The exec run owns its image attachment store now that the input line no
@@ -100,7 +101,7 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectMultipleOptions: vi.fn(),
 }));
 
-const mockReadMultilineInput = vi.mocked(readMultilineInput);
+const mockReadMultilineInput = vi.mocked(readPipedLine);
 const mockSelectOption = vi.mocked(selectOption);
 const mockSelectMultipleOptions = vi.mocked(selectMultipleOptions);
 const mockResolveWorkflowConfigValues = vi.mocked(resolveWorkflowConfigValues);
@@ -164,11 +165,6 @@ function setRunSessionContext(context: unknown): void {
 
 function setRunSessionPrompt(prompt: unknown): void {
   mockFormatRunSessionForPrompt.mockReturnValue(runSessionPrompt(prompt));
-}
-
-/** Exec only calls `setup` on the provider in these tests. */
-function stubProvider(): ReturnType<typeof getProvider> {
-  return { setup: vi.fn() } as unknown as ReturnType<typeof getProvider>;
 }
 
 /** The default config as the run resolves it, with provider and model filled in. */
@@ -278,7 +274,7 @@ describe('exec command setup', () => {
       model: 'opus',
     });
     mockResolveNonWorkflowProviderOptions.mockImplementation((_cwd, options) => options);
-    mockGetProvider.mockReturnValue(stubProvider());
+    mockGetProvider.mockReturnValue(makeProvider());
     mockSelectAndExecuteTask.mockResolvedValue(undefined);
     setRunSessionContext({
       reports: [
@@ -462,6 +458,31 @@ describe('exec command setup', () => {
       throw new Error('Expected the test to create an exec image attachment session directory.');
     }
     expect(existsSync(sessionDir)).toBe(false);
+  });
+
+  it('should clean the pasted images up when a selector ends the process', async () => {
+    const listenersBefore = process.listeners('exit');
+    let sessionDir: string | undefined;
+    mockReadMultilineInput.mockImplementationOnce(async () => {
+      const store = requireExecAttachmentStore();
+      const attachment = await store.saveImage(Buffer.from('setup-image'), 'image/png');
+      sessionDir = dirname(dirname(attachment.tempPath));
+      expect(existsSync(sessionDir)).toBe(true);
+
+      // `/setup` opens readline selectors, and Ctrl+C there ends the process
+      // itself: the exit handler is all that gets to run.
+      const added = process.listeners('exit').filter((listener) => !listenersBefore.includes(listener));
+      expect(added).toHaveLength(1);
+      (added[0] as () => void)();
+      expect(existsSync(sessionDir)).toBe(false);
+      return '/cancel';
+    });
+
+    await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
+
+    // The run finished on its own, so the net comes down with it.
+    expect(process.listeners('exit').filter((listener) => !listenersBefore.includes(listener)))
+      .toEqual([]);
   });
 
   it('should leave nothing behind when a paste lands after exec ended', async () => {

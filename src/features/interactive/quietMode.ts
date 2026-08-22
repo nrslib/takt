@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { readMultilineInput } from './lineEditor.js';
+import { readPipedLine } from './lineEditor.js';
 import {
   type WorkflowContext,
   type InteractiveModeResult,
@@ -67,7 +67,7 @@ export async function quietMode(
     blankLine();
 
     // Piped input carries no paste gestures; a terminal takes the TUI instead.
-    const input = await readMultilineInput(chalk.green('> '));
+    const input = await readPipedLine(chalk.green('> '));
     if (input === null) {
       blankLine();
       info(getLabel('interactive.ui.cancelled', ctx.lang));

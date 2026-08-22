@@ -1,8 +1,9 @@
 import { matchSlashCommand } from '../interactive/commandMatcher.js';
-import { readMultilineInput } from '../interactive/lineEditor.js';
+import { readPipedLine } from '../interactive/lineEditor.js';
 import type { ConversationMessage } from '../interactive/interactive.js';
 import {
   cleanupImageAttachmentStore,
+  cleanupImageAttachmentStoreOnProcessExit,
   createSessionImageAttachmentStore,
   resolvePromptImageAttachments,
   type InteractiveImageAttachment,
@@ -12,7 +13,7 @@ import { formatRunSessionForPrompt } from '../interactive/runSessionReader.js';
 import type { TaskExecutionOptions } from '../tasks/index.js';
 import { SlashCommand } from '../../shared/constants.js';
 import { blankLine, info, success } from '../../shared/ui/index.js';
-import { debugLog, sanitizeTerminalText } from '../../shared/utils/index.js';
+import { debugLog, hasInteractiveTerminal, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { askExecAssistant, createExecSessionContext, shouldKeepExecSession } from './assistantSession.js';
 import {
   createExecTuiConversation,
@@ -156,9 +157,14 @@ async function runExecConversation(
   let ctx = createExecSessionContext(cwd, currentRuntimeConfig);
   let history: ConversationMessage[] = [];
   const attachmentStore = createSessionImageAttachmentStore(cwd);
+  // `/setup` opens readline selectors, and those end the process themselves when
+  // the user interrupts them (`shared/prompt/select.ts` exits with 130). The run
+  // never reaches its own teardown then, so the pasted images get a net that
+  // does not depend on this call returning.
+  const releaseExitCleanup = cleanupImageAttachmentStoreOnProcessExit(attachmentStore);
   try {
     info('Starting exec mode');
-    if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
+    if (hasInteractiveTerminal()) {
       // The conversation opens with the summary and the commands as its first
       // lines, so printing them here as well would say everything twice.
       await runExecTuiConversation();
@@ -170,7 +176,7 @@ async function runExecConversation(
     blankLine();
 
     while (true) {
-      const input = await readMultilineInput('Assistant> ');
+      const input = await readPipedLine('Assistant> ');
       if (input === null) {
         info('Cancelled');
         return;
@@ -181,27 +187,10 @@ async function runExecConversation(
       }
       const match = matchSlashCommand(trimmed, EXEC_CONVERSATION_COMMAND_AVAILABILITY);
       if (match?.command === SlashCommand.Setup) {
-        try {
-          const previousSessionConfig = currentRuntimeConfig.session;
-          const previousConfig = currentConfig;
-          const nextConfig = await runSetupMenu(cwd, currentConfig, ctx, providerModelDefaults);
-          if (!isSameExecConfig(previousConfig, nextConfig)) {
-            saveExecConfigForNextRun(nextConfig);
-          }
-          currentConfig = nextConfig;
-          currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
-          const nextSessionId = shouldKeepExecSession(previousSessionConfig, currentRuntimeConfig.session) ? ctx.sessionId : undefined;
-          ctx = createExecSessionContext(
-            cwd,
-            currentRuntimeConfig,
-            nextSessionId,
-            ctx.codexSkillInheritance,
-          );
-          info(formatExecConfigSummary(currentRuntimeConfig));
-        } catch (error) {
-          info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
-          blankLine();
-        }
+        // The same menu the TUI hands the terminal over for; running it from one
+        // place is what keeps the two front-ends on the same settings.
+        await applySetupMenu();
+        info(formatExecConfigSummary(currentRuntimeConfig));
         continue;
       }
 
@@ -242,8 +231,9 @@ async function runExecConversation(
   } finally {
     // The shared teardown, which seals before it deletes: a paste that the input
     // did not wait for would otherwise recreate the session directory right
-    // after it was removed.
+    // after it was removed. With the files gone the net comes down.
     cleanupImageAttachmentStore(attachmentStore);
+    releaseExitCleanup();
   }
 
   /**
@@ -252,7 +242,6 @@ async function runExecConversation(
    * picks up again afterwards with what happened on record.
    */
   async function runExecTuiConversation(): Promise<void> {
-    let goText = '';
     const conversation = createExecTuiConversation({
       cwd,
       attachmentStore,
@@ -261,9 +250,6 @@ async function runExecConversation(
       onTurn: (turn, sessionId) => {
         history = [...history, ...turn];
         ctx = { ...ctx, sessionId };
-      },
-      onGoText: (text) => {
-        goText = text;
       },
     });
 
@@ -283,7 +269,7 @@ async function runExecConversation(
       // itself, through its own hand-off.
       chooseAction: () => Promise.resolve(null),
       continuePrompt: '',
-      onHandoff: async (id) => {
+      onHandoff: async (id, goText) => {
         if (id === EXEC_SETUP_HANDOFF) {
           await applySetupMenu();
           return { kind: 'continue', notice: formatExecConfigSummary(currentRuntimeConfig) };
@@ -304,7 +290,6 @@ async function runExecConversation(
         } catch (error) {
           info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
         }
-        goText = '';
         return { kind: 'continue', notice: getLabel('tui.ui.runFinished', ctx.lang) };
       },
     });

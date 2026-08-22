@@ -391,20 +391,6 @@ describe('TUI local commands', () => {
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
-  it('should turn an inline /play command into an execute command', () => {
-    const conversation = createConversation();
-
-    expect(conversation.resolveLocalCommand('/play ship the feature')).toEqual({
-      kind: 'execute',
-      task: 'ship the feature',
-    });
-    expect(conversation.resolveLocalCommand('/play')).toEqual({
-      kind: 'notice',
-      message: 'Please specify task content: /play <task>',
-    });
-    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
-  });
-
   it('should summarize a resumed session that has no local transcript yet', async () => {
     mockInitializeSession.mockReturnValue({
       provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
@@ -484,9 +470,9 @@ describe('TUI local commands', () => {
     });
 
     expect(conversation.resolveLocalCommand('/replay'))
-      .toEqual({ kind: 'execute', task: '# Previous order' });
+      .toEqual({ kind: 'execute', task: '# Previous order', origin: 'replay' });
     expect(conversation.resolveLocalCommand('/retry'))
-      .toEqual({ kind: 'choose_action', task: '# Previous order' });
+      .toEqual({ kind: 'choose_action', task: '# Previous order', origin: 'retry' });
     expect(conversation.commandAvailability).toEqual({
       enableRetryCommand: true,
       hasPreviousOrder: true,
@@ -527,12 +513,12 @@ describe('TUI local commands', () => {
     expect(outcome).toEqual({
       kind: 'task_instruction',
       task: 'Revised order',
-      source: 'go',
+      origin: 'go',
       notices: [],
     });
   });
 
-  it('should leave the source off for a mode that does not record it', async () => {
+  it('should say a task came from /go even where the mode does not publish it', async () => {
     const conversation = createConversation();
 
     await send(conversation, 'describe the change', []);
@@ -541,8 +527,11 @@ describe('TUI local commands', () => {
       sessionId: undefined,
     });
 
+    // The origin decides which selector runs and what a rejected draft means, so
+    // it travels with every task; only publishing it on the result is optional.
     expect(await send(conversation, '/go', []))
-      .toEqual({ kind: 'task_instruction', task: 'Task instruction', notices: [] });
+      .toEqual({ kind: 'task_instruction', task: 'Task instruction', origin: 'go', notices: [] });
+    expect(conversation.tracksResultSource).toBe(false);
   });
 
   it('should put a rejected /go draft back into the conversation', async () => {
@@ -591,11 +580,34 @@ describe('TUI local commands', () => {
 
     // Not on the mode's list: the line is text, exactly as the readline loop
     // treats it once `enabledCommands` is set.
-    expect(conversation.isCommandLine('/play something')).toBe(false);
-    expect(conversation.resolveLocalCommand('/play something')).toBeNull();
+    expect(conversation.isCommandLine('/accept')).toBe(false);
+    expect(conversation.resolveLocalCommand('/accept')).toBeNull();
     expect(conversation.isCommandLine('/replay')).toBe(true);
     expect(conversation.resolveLocalCommand('/replay'))
-      .toEqual({ kind: 'execute', task: 'previous order', source: 'replay' });
+      .toEqual({ kind: 'execute', task: 'previous order', origin: 'replay' });
+    expect(conversation.tracksResultSource).toBe(true);
+  });
+
+  it('should send a command the mode disabled to the provider as text', async () => {
+    const plan = createPlan();
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: {
+        ...plan,
+        strategy: {
+          ...plan.strategy,
+          enabledCommands: [SlashCommand.Go, SlashCommand.Cancel],
+        },
+      },
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+    });
+
+    const outcome = await send(conversation, '/accept', []);
+
+    // The session reads the same allow-list as the front-end, so a line the mode
+    // disabled is not re-read as a command it happens to understand.
+    expect(outcome).toMatchObject({ kind: 'assistant_response' });
+    expect(mockCallAIWithRetry.mock.calls.at(-1)?.[0]).toContain('/accept');
   });
 
   it('should send /retry through the mode selector with its own source', () => {
@@ -615,7 +627,7 @@ describe('TUI local commands', () => {
     });
 
     expect(conversation.resolveLocalCommand('/retry'))
-      .toEqual({ kind: 'choose_action', task: 'previous order', source: 'retry' });
+      .toEqual({ kind: 'choose_action', task: 'previous order', origin: 'retry' });
   });
 
   it('should hand /resume and /paste-image back to the caller', () => {
@@ -638,6 +650,7 @@ describe('TUI local commands', () => {
     expect(conversation.resolveLocalCommand('/accept')).toEqual({
       kind: 'execute',
       task: 'Assistant answer',
+      origin: 'accept',
     });
   });
 });

@@ -83,16 +83,17 @@ function setupMockProvider(responses: string[]): void {
     };
   });
   const mockSetup = vi.fn(() => ({ call: mockCall }));
-  const mockProvider = {
-    getRuntimeInstructions: vi.fn(() => null),
-    setup: mockSetup,
+  // The spies stay reachable for the assertions; the rest of the provider
+  // contract comes from the shared double so a change to it fails type checking.
+  const mockProvider = Object.assign(makeProvider({ setup: mockSetup }), {
     _call: mockCall,
     _setup: mockSetup,
-  };
+  });
   mockGetProvider.mockReturnValue(mockProvider);
 }
 
 // ── Imports (after mocks) ──
+import { makeProvider } from './test-helpers.js';
 
 import { INTERACTIVE_MODES, DEFAULT_INTERACTIVE_MODE } from '../core/models/interactive-mode.js';
 import { selectInteractiveMode } from '../features/interactive/modeSelection.js';
@@ -518,19 +519,6 @@ describe('personaMode', () => {
 
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
-  });
-
-  it('should handle /play command', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['/play direct task text']));
-    setupMockProvider([]);
-
-    // When
-    const result = await personaMode('/project', mockFirstStep);
-
-    // Then
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('direct task text');
   });
 
   it('should fall back to default tools when first step has none', async () => {

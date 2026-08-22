@@ -25,6 +25,46 @@ export interface PendingWork {
   readonly completion: Promise<void>;
 }
 
+/** Waits out the work the set holds right now and takes it off the set. */
+async function settlePendingWork(pending: Set<PendingWork>): Promise<void> {
+  const settling = [...pending];
+  await Promise.all(settling.map((work) => work.completion));
+  for (const work of settling) {
+    pending.delete(work);
+  }
+}
+
+/**
+ * Waits for everything a view still has running, letting it finish.
+ *
+ * A capture that lands while the user is pressing Enter still belongs to the
+ * text being submitted, so the exit that reads the draft waits rather than
+ * cutting the capture short. Looping, because work that finishes can start more
+ * of it — inserting a placeholder is itself a state change.
+ */
+export async function awaitPendingWork(pending: Set<PendingWork>): Promise<void> {
+  while (pending.size > 0) {
+    await settlePendingWork(pending);
+  }
+}
+
+/**
+ * Stops everything a view still has running and waits for it to settle.
+ *
+ * This is the exit that does not want what is in flight: an interrupt, or a
+ * decision that ends the run. Each piece of work owns state the caller cleans up
+ * afterwards, so leaving one running would resurrect a temp file or leave a
+ * provider call talking to a view that is gone.
+ */
+export async function drainPendingWork(pending: Set<PendingWork>): Promise<void> {
+  while (pending.size > 0) {
+    for (const work of pending) {
+      work.controller.abort();
+    }
+    await settlePendingWork(pending);
+  }
+}
+
 export interface ImagePasteSink {
   pasteClipboardImage(abortSignal: AbortSignal): Promise<string>;
   saveInlineImage(image: PastedImage): Promise<string>;
@@ -79,7 +119,10 @@ export function useImagePaste({
         setNotice(null);
         insertAtCaret(`${placeholder}${trailing}`);
       } catch (error) {
-        if (isStopped()) {
+        // The run aborts its own captures on the way out, and the view can still
+        // be taking state changes at that moment: a capture the user themselves
+        // ended must not come back as a red failure line.
+        if (isStopped() || controller.signal.aborted) {
           return;
         }
         reportFailure(error);
