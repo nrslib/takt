@@ -306,34 +306,43 @@ describe('ConversationView', () => {
     // Pasted earlier in this mount, so its file has to outlive the hand-off.
     const pastedBefore = await store.saveImage(PNG_BYTES, 'image/png');
 
-    const onExit = vi.fn();
-    const app = renderConversation(conversation, 'chat', onExit, { residentSession: false });
-    await flushFrames();
+    const mounted: ReturnType<typeof renderConversation>[] = [];
+    try {
+      const onExit = vi.fn();
+      const app = renderConversation(conversation, 'chat', onExit, { residentSession: false });
+      mounted.push(app);
+      await flushFrames();
 
-    app.stdin.write('/setup');
-    await flushFrames();
-    app.stdin.write(ENTER);
-    await flushFrames();
-    expect(onExit).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'handoff', id: 'exec-setup' }),
-      expect.anything(),
-    );
-    app.unmount();
-    await flushFrames();
+      app.stdin.write('/setup');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      expect(onExit).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'handoff', id: 'exec-setup' }),
+        expect.anything(),
+      );
+      app.unmount();
+      await flushFrames();
 
-    // The menu ran on the bare terminal and the conversation is mounted again.
-    const resumed = renderConversation(conversation, 'chat', vi.fn(), { residentSession: false });
-    await flushFrames();
-    resumed.stdin.write(INLINE_IMAGE_PASTE);
-    await flushFrames();
+      // The menu ran on the bare terminal and the conversation is mounted again.
+      const resumed = renderConversation(conversation, 'chat', vi.fn(), { residentSession: false });
+      mounted.push(resumed);
+      await flushFrames();
+      resumed.stdin.write(INLINE_IMAGE_PASTE);
+      await flushFrames();
 
-    // Both files are there: nothing sealed the store on the way through.
-    expect(readdirSync(join(tmpRoot, 'session-1', 'attachments'))).toHaveLength(2);
-    expect(existsSync(pastedBefore.tempPath)).toBe(true);
-
-    resumed.unmount();
-    cleanupImageAttachmentStore(store);
-    rmSync(tmpRoot, { recursive: true, force: true });
+      // Both files are there: nothing sealed the store on the way through.
+      expect(readdirSync(join(tmpRoot, 'session-1', 'attachments'))).toHaveLength(2);
+      expect(existsSync(pastedBefore.tempPath)).toBe(true);
+    } finally {
+      // A failed assertion must not leave an Ink tree holding stdin, or a temp
+      // directory behind: unmounting twice is safe, so every mount is released.
+      for (const app of mounted) {
+        app.unmount();
+      }
+      cleanupImageAttachmentStore(store);
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it('should leave a real store usable after a hand-off unmount', async () => {
@@ -348,21 +357,24 @@ describe('ConversationView', () => {
       sealImages: () => store.seal(),
     };
     const app = renderConversation(conversation, 'chat', vi.fn());
-    await flushFrames();
+    try {
+      await flushFrames();
 
-    app.stdin.write('/resume');
-    await flushFrames();
-    app.stdin.write(ENTER);
-    await flushFrames();
-    app.unmount();
-    await flushFrames();
+      app.stdin.write('/resume');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.unmount();
+      await flushFrames();
 
-    // A paste after the hand-off still reaches disk.
-    const attachment = await store.saveImage(PNG_BYTES, 'image/png');
-    expect(existsSync(attachment.tempPath)).toBe(true);
-
-    cleanupImageAttachmentStore(store);
-    rmSync(tmpRoot, { recursive: true, force: true });
+      // A paste after the hand-off still reaches disk.
+      const attachment = await store.saveImage(PNG_BYTES, 'image/png');
+      expect(existsSync(attachment.tempPath)).toBe(true);
+    } finally {
+      app.unmount();
+      cleanupImageAttachmentStore(store);
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it('should submit on Enter pressed right after a lone OSC opener', async () => {
@@ -2034,25 +2046,29 @@ describe('ConversationView', () => {
       sealImages: () => store.seal(),
     };
     const app = renderConversation(conversation, 'chat', vi.fn());
-    await flushFrames();
+    try {
+      await flushFrames();
 
-    app.stdin.write('/paste-image');
-    await flushFrames();
-    app.stdin.write(ENTER);
-    await flushFrames();
+      app.stdin.write('/paste-image');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
 
-    // The caller tears the tree down and cleans up while the capture runs.
-    app.unmount();
-    cleanupImageAttachmentStore(store);
+      // The caller tears the tree down and cleans up while the capture runs.
+      app.unmount();
+      cleanupImageAttachmentStore(store);
 
-    releasePaste();
-    await flushFrames();
+      releasePaste();
+      await flushFrames();
 
-    expect(store.listAttachments()).toEqual([]);
-    expect(existsSync(join(tmpRoot, 'session-1'))).toBe(false);
-    expect(readdirSync(tmpRoot)).toEqual([]);
-
-    rmSync(tmpRoot, { recursive: true, force: true });
+      expect(store.listAttachments()).toEqual([]);
+      expect(existsSync(join(tmpRoot, 'session-1'))).toBe(false);
+      expect(readdirSync(tmpRoot)).toEqual([]);
+    } finally {
+      app.unmount();
+      cleanupImageAttachmentStore(store);
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it('should seal against a save that lands after a forced exit', async () => {

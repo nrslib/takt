@@ -23,6 +23,8 @@ const DEFAULT_OUTPUT_TIMEOUT = 60_000;
 const DEFAULT_EXIT_TIMEOUT = 120_000;
 const DISPOSE_TIMEOUT = 10_000;
 const TERMINAL_SCROLLBACK = 10_000;
+/** Matches the polling `waitFor` does, so both waits react at the same pace. */
+const SCREEN_POLL_INTERVAL = 100;
 
 export interface TaktPtyOptions {
   args: string[];
@@ -53,6 +55,20 @@ export interface TaktPtySession {
   visibleScreen(): Promise<string[]>;
   /** Resolve once the pattern appears in the output; reject with the output on timeout. */
   waitForOutput(pattern: string | RegExp, timeoutMs?: number): Promise<void>;
+  /**
+   * Resolve once the live screen satisfies `predicate`, with the screen it
+   * matched on; reject with the last screen on timeout.
+   *
+   * `waitForOutput` searches the whole byte history, so a pattern the app has
+   * since erased still matches it. Anything that has to be true *now* — a draft
+   * that was taken, a hint that went away — has to be asked of the screen, and
+   * `expectation` is what the timeout message says was never true.
+   */
+  waitForScreen(
+    expectation: string,
+    predicate: (screen: string) => boolean,
+    timeoutMs?: number,
+  ): Promise<string>;
   /** Send raw key bytes to the terminal. */
   write(data: string): void;
   /** Resolve with the process exit code; reject with the output on timeout. */
@@ -152,6 +168,12 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
     return lines;
   }
 
+  async function readScreen(): Promise<string[]> {
+    await drainTerminal();
+    const buffer = terminal.buffer.active;
+    return readTerminalLines(buffer.baseY, buffer.baseY + terminal.rows);
+  }
+
   return {
     output,
 
@@ -160,11 +182,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
       return readTerminalLines(0, terminal.buffer.active.length);
     },
 
-    async visibleScreen(): Promise<string[]> {
-      await drainTerminal();
-      const buffer = terminal.buffer.active;
-      return readTerminalLines(buffer.baseY, buffer.baseY + terminal.rows);
-    },
+    visibleScreen: readScreen,
 
     async waitForOutput(pattern: string | RegExp, timeoutMs = DEFAULT_OUTPUT_TIMEOUT): Promise<void> {
       const found = await waitFor(() => matches(output(), pattern), timeoutMs);
@@ -173,6 +191,25 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
           `Timed out after ${timeoutMs}ms waiting for ${String(pattern)}\noutput:\n${output()}`,
         );
       }
+    },
+
+    async waitForScreen(
+      expectation: string,
+      predicate: (screen: string) => boolean,
+      timeoutMs = DEFAULT_OUTPUT_TIMEOUT,
+    ): Promise<string> {
+      const deadline = Date.now() + timeoutMs;
+      let screen = '';
+      while (Date.now() < deadline) {
+        screen = (await readScreen()).join('\n');
+        if (predicate(screen)) {
+          return screen;
+        }
+        await new Promise((resolve) => setTimeout(resolve, SCREEN_POLL_INTERVAL));
+      }
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for ${expectation}\nscreen:\n${screen}`,
+      );
     },
 
     write(data: string): void {

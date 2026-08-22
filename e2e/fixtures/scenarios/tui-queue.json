@@ -6,51 +6,51 @@
     "text_chunks": [
       {
         "text": "QUEUE-FIRST-REPLY line 1\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 2\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 3\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 4\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 5\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 6\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 7\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 8\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 9\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 10\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-REPLY line 11\n",
-        "delay_ms": 400
+        "delay_ms": 600
       },
       {
         "text": "QUEUE-FIRST-END",
-        "delay_ms": 400
+        "delay_ms": 600
       }
     ]
   },

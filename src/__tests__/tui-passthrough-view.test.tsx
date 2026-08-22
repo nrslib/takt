@@ -281,23 +281,29 @@ describe('PassthroughView', () => {
       sealImages: () => store.seal(),
     };
     const app = renderView(vi.fn(), '', images);
-    await flushFrames();
+    try {
+      await flushFrames();
 
-    app.stdin.write(CTRL_V);
-    await flushFrames();
+      app.stdin.write(CTRL_V);
+      await flushFrames();
 
-    // The caller tears the tree down and cleans up while the capture runs.
-    app.unmount();
-    cleanupImageAttachmentStore(store);
+      // The caller tears the tree down and cleans up while the capture runs.
+      app.unmount();
+      cleanupImageAttachmentStore(store);
 
-    releaseSave();
-    await flushFrames();
+      releaseSave();
+      await flushFrames();
 
-    expect(store.listAttachments()).toEqual([]);
-    expect(existsSync(join(tmpRoot, 'session-1'))).toBe(false);
-    expect(readdirSync(tmpRoot)).toEqual([]);
-
-    rmSync(tmpRoot, { recursive: true, force: true });
+      expect(store.listAttachments()).toEqual([]);
+      expect(existsSync(join(tmpRoot, 'session-1'))).toBe(false);
+      expect(readdirSync(tmpRoot)).toEqual([]);
+    } finally {
+      // A failed assertion must not leave the tree holding stdin or the temp
+      // directory on disk; unmounting twice is safe.
+      app.unmount();
+      cleanupImageAttachmentStore(store);
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it('should cancel on Ctrl+D with a draft in the buffer, like the readline editor', async () => {

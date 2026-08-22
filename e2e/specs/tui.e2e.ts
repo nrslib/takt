@@ -32,6 +32,8 @@ const ACTION_PROMPT = 'What would you like to do?';
 const THINKING_MARKER = 'Thinking';
 /** Only shown while lines are waiting for the current answer to finish. */
 const QUEUE_HINT = 'to edit the queued line';
+/** Drawn in the box in place of the draft, so it means "nothing typed". */
+const PLACEHOLDER = 'Type a task, / for commands';
 const ESC = '\x1b';
 const INTERRUPTED = 'Response interrupted.';
 /**
@@ -75,9 +77,26 @@ describe('E2E: Ink TUI', () => {
     tui.write(ENTER);
   }
 
+  /**
+   * Resolve once the readline selector owns the keyboard.
+   *
+   * `shared/prompt/select.ts` prints its question before it turns raw mode on
+   * and draws the rows after: a key sent as soon as the question appears is
+   * still the terminal's to interpret, and Ctrl+C is then a SIGINT that kills
+   * the run rather than the selector's own cancel. A drawn row is what says the
+   * selector is listening.
+   */
+  async function waitForSelector(tui: TaktPtySession, prompt: string): Promise<void> {
+    await tui.waitForOutput(prompt);
+    await tui.waitForScreen(
+      `the rows of "${prompt}"`,
+      (screen) => screen.includes(prompt) && screen.includes('❯ '),
+    );
+  }
+
   /** Accept the highlighted row of a select list. */
   async function chooseHighlighted(tui: TaktPtySession, prompt: string): Promise<void> {
-    await tui.waitForOutput(prompt);
+    await waitForSelector(tui, prompt);
     tui.write(ENTER);
   }
 
@@ -120,7 +139,7 @@ describe('E2E: Ink TUI', () => {
   it('should offer every interactive mode and cancel out of the selector', async () => {
     const tui = start('tui-conversation.json', ['--workflow', WORKFLOW_PATH]);
 
-    await tui.waitForOutput(MODE_PROMPT);
+    await waitForSelector(tui, MODE_PROMPT);
     const listing = tui.output();
     for (const label of ['Assistant', 'Grill Me', 'Persona', 'Quiet', 'Passthrough']) {
       expect(listing, `mode "${label}" is missing`).toContain(label);
@@ -144,7 +163,7 @@ describe('E2E: Ink TUI', () => {
     await chooseHighlighted(tui, WORKFLOW_PROMPT);
     // Workflow rows carry the score marker; category rows carry a folder.
     await chooseHighlighted(tui, '🎼 ');
-    await tui.waitForOutput(MODE_PROMPT);
+    await waitForSelector(tui, MODE_PROMPT);
 
     // Ctrl+C inside a readline selector ends the process the way it always has.
     tui.write(CTRL_C);
@@ -204,7 +223,7 @@ describe('E2E: Ink TUI', () => {
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
 
     await submitLine(tui, '/go');
-    await tui.waitForOutput(ACTION_PROMPT);
+    await waitForSelector(tui, ACTION_PROMPT);
     // The selector owns the bare terminal: the Ink input box is gone by now.
     const duringSelector = await tui.visibleScreen();
     expect(duringSelector.join('\n')).not.toContain('╰');
@@ -244,6 +263,15 @@ describe('E2E: Ink TUI', () => {
       tui.write(line);
       await tui.waitForOutput(`❯ ${line}`);
       tui.write(ENTER);
+      // The Enter has to reach the app as a chunk of its own. A PTY read that
+      // catches it together with the next line arrives as a single key event,
+      // and the carriage return is then just a control byte inside the text
+      // that gets inserted — the line is never handed over. An empty draft is
+      // what says this one was.
+      await tui.waitForScreen(
+        `the draft to be empty after "${line}"`,
+        (screen) => screen.includes(PLACEHOLDER),
+      );
     }
     // Waiting for the hint proves the lines were queued rather than sent.
     await tui.waitForOutput(QUEUE_HINT);
@@ -284,9 +312,14 @@ describe('E2E: Ink TUI', () => {
     tui.write(ENTER);
     await tui.waitForOutput(QUEUE_HINT);
 
-    // Up with an empty draft takes the queued line back for editing.
+    // Up with an empty draft takes the queued line back for editing. The text
+    // is on screen either way, so the hint going is what says the arrow landed
+    // — waiting on the text alone would match the queue row it came from.
     tui.write(ARROW_UP);
-    await tui.waitForOutput('❯ queued line');
+    await tui.waitForScreen(
+      'the queued line back in the draft',
+      (screen) => screen.includes('❯ queued line') && !screen.includes(QUEUE_HINT),
+    );
     tui.write(' amended');
     await tui.waitForOutput('queued line amended');
 
@@ -474,7 +507,7 @@ describe('E2E: Ink TUI', () => {
 
     // The list and the action menu are the ordinary selectors.
     await chooseHighlighted(tui, 'List Tasks');
-    await tui.waitForOutput('Action for takt/e2e-instruct', 60_000);
+    await waitForSelector(tui, 'Action for takt/e2e-instruct');
     tui.write(ARROW_DOWN);
     await tui.waitForOutput('❯ Instruct');
     tui.write(ENTER);
@@ -494,7 +527,7 @@ describe('E2E: Ink TUI', () => {
     await tui.waitForOutput('Task "e2e-instruct" completed', 60_000);
 
     // `takt list` comes back to its own menu, which Esc leaves.
-    await tui.waitForOutput('List Tasks', 60_000);
+    await waitForSelector(tui, 'List Tasks');
     tui.write(ESC);
     await expect(tui.waitForExit(60_000)).resolves.toBe(0);
   }, 300_000);
@@ -517,7 +550,7 @@ describe('E2E: Ink TUI', () => {
 
     // `/setup` hands the terminal to the readline menu, with Ink gone.
     await submitLine(tui, '/setup');
-    await tui.waitForOutput('(↑↓ to move, Enter to select)', 60_000);
+    await waitForSelector(tui, '(↑↓ to move, Enter to select)');
     const duringMenu = (await tui.visibleScreen()).join('\n');
     expect(duringMenu).not.toContain('╰');
 

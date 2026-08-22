@@ -577,39 +577,42 @@ describe('runTui', () => {
       const sessionDir = dirname(dirname(attachment.tempPath));
       const listenersBefore = process.listeners('exit');
 
-      const tree = scriptRender();
-      const run = startRun();
-      await waitForMount(tree, 1);
-      tree.conversationProps().onExit(
-        { kind: 'result', result: { action: 'execute', task: 'go' } },
-        { history: [], queue: [] },
-      );
-      const finished = await run;
+      try {
+        const tree = scriptRender();
+        const run = startRun();
+        await waitForMount(tree, 1);
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'execute', task: 'go' } },
+          { history: [], queue: [] },
+        );
+        const finished = await run;
 
-      // The caller runs a label selector and the workflow next, and either can
-      // end the process, so the net must still be armed after runTui returned.
-      expect(mockReleaseProcessExit).not.toHaveBeenCalled();
-      const added = process.listeners('exit')
-        .filter((listener) => !listenersBefore.includes(listener));
-      expect(added).toHaveLength(1);
-      (added[0] as () => void)();
-      expect(existsSync(sessionDir)).toBe(false);
+        // The caller runs a label selector and the workflow next, and either can
+        // end the process, so the net must still be armed after runTui returned.
+        expect(mockReleaseProcessExit).not.toHaveBeenCalled();
+        const added = process.listeners('exit')
+          .filter((listener) => !listenersBefore.includes(listener));
+        expect(added).toHaveLength(1);
+        (added[0] as () => void)();
+        expect(existsSync(sessionDir)).toBe(false);
 
-      // The caller's own attachment cleanup is what finally takes it down.
-      if (finished.kind !== 'selected') {
-        throw new Error('expected the run to hand a result back');
+        // The caller's own attachment cleanup is what finally takes it down.
+        if (finished.kind !== 'selected') {
+          throw new Error('expected the run to hand a result back');
+        }
+        // The pasted image travels with the result: the caller passes it to the
+        // task it starts, so losing it here would silently drop the attachment.
+        expect(finished.result.attachments).toEqual([attachment]);
+
+        finished.result.cleanupAttachments?.();
+        finished.result.cleanupAttachments?.();
+        expect(mockReleaseProcessExit).toHaveBeenCalledTimes(1);
+        expect(process.listeners('exit').filter((listener) => !listenersBefore.includes(listener)))
+          .toEqual([]);
+      } finally {
+        // A failed assertion must not leave the temp directory behind.
+        rmSync(tmpRoot, { recursive: true, force: true });
       }
-      // The pasted image travels with the result: the caller passes it to the
-      // task it starts, so losing it here would silently drop the attachment.
-      expect(finished.result.attachments).toEqual([attachment]);
-
-      finished.result.cleanupAttachments?.();
-      finished.result.cleanupAttachments?.();
-      expect(mockReleaseProcessExit).toHaveBeenCalledTimes(1);
-      expect(process.listeners('exit').filter((listener) => !listenersBefore.includes(listener)))
-        .toEqual([]);
-
-      rmSync(tmpRoot, { recursive: true, force: true });
     });
 
     it('should release the net when the selection is cancelled before Ink', async () => {
