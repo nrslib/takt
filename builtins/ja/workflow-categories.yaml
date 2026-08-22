@@ -25,7 +25,7 @@ workflow_categories:
   🎵 TAKT開発:
     workflows:
       - takt-default: "TAKTを開発する"
-      - takt-default-team: "Team Leaderに実装を任せてTAKTを開発する"
+      - takt-default-team: "実装チームでTAKTを開発する"
       - auto-improvement-loop: "PR・Issue・改善タスクを巡回して処理し続ける"
       - review-takt-default: "TAKTを並列レビューする"
       - review-fix-takt-default: "TAKTを並列レビューして修正する"

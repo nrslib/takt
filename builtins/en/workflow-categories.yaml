@@ -25,7 +25,7 @@ workflow_categories:
   🎵 TAKT Development:
     workflows:
       - takt-default: "TAKT development"
-      - takt-default-team: "TAKT development with Team Leader implementation"
+      - takt-default-team: "TAKT development with an implementation team"
       - auto-improvement-loop: "Keep cycling through PRs, issues, and improvements"
       - review-takt-default: "Parallel review for TAKT"
       - review-fix-takt-default: "Parallel review and fix for TAKT"
