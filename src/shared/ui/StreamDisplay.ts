@@ -87,7 +87,7 @@ export class StreamDisplay {
   private stopToolSpinner(): void {
     if (this.toolSpinner) {
       clearInterval(this.toolSpinner.intervalId);
-      process.stdout.write('\r' + ' '.repeat(120) + '\r');
+      process.stdout.write('\r\x1b[K');
       this.toolSpinner = null;
       this.spinnerFrame = 0;
     }
@@ -291,27 +291,31 @@ export class StreamDisplay {
   private formatToolInput(tool: string, input: Record<string, unknown>): string {
     switch (tool) {
       case 'Bash':
-        return truncate(String(input.command || ''), 60);
+        return this.formatToolPreview(String(input.command || ''), 60);
       case 'Read':
-        return truncate(String(input.file_path || ''), 60);
+        return this.formatToolPreview(String(input.file_path || ''), 60);
       case 'Write':
       case 'Edit':
-        return truncate(String(input.file_path || ''), 60);
+        return this.formatToolPreview(String(input.file_path || ''), 60);
       case 'Glob':
-        return truncate(String(input.pattern || ''), 60);
+        return this.formatToolPreview(String(input.pattern || ''), 60);
       case 'Grep':
-        return truncate(String(input.pattern || ''), 60);
+        return this.formatToolPreview(String(input.pattern || ''), 60);
       default: {
         const keys = Object.keys(input);
         if (keys.length === 0) return '';
         const firstKey = keys[0];
         if (firstKey) {
           const value = input[firstKey];
-          return truncate(String(value || ''), 50);
+          return this.formatToolPreview(String(value || ''), 50);
         }
         return '';
       }
     }
+  }
+
+  private formatToolPreview(value: string, maxLength: number): string {
+    return truncate(value.replace(/\s+/g, ' '), maxLength);
   }
 
   private ensureToolOutputHeader(tool?: string): void {

@@ -227,6 +227,70 @@ describe('StreamDisplay', () => {
     });
   });
 
+  describe('tool spinner terminal output', () => {
+    it('should keep multiline Bash previews on one line', () => {
+      vi.useFakeTimers();
+      try {
+        const display = new StreamDisplay('test-agent', false);
+        display.showToolUse('Bash', { command: 'printf "first\\nsecond"\n echo third' });
+
+        vi.advanceTimersByTime(80);
+
+        const spinnerWrites = stdoutWriteSpy.mock.calls
+          .map(([chunk]) => String(chunk))
+          .filter((chunk) => chunk.startsWith('\r  '));
+        expect(spinnerWrites).toHaveLength(1);
+        expect(spinnerWrites[0]).not.toContain('\n');
+
+        display.flush();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should keep unregistered tool previews on one line', () => {
+      vi.useFakeTimers();
+      try {
+        const display = new StreamDisplay('test-agent', false);
+        display.showToolUse('CustomTool', { input: 'first\nsecond' });
+
+        vi.advanceTimersByTime(80);
+
+        const spinnerWrites = stdoutWriteSpy.mock.calls
+          .map(([chunk]) => String(chunk))
+          .filter((chunk) => chunk.startsWith('\r  '));
+        expect(spinnerWrites).toHaveLength(1);
+        expect(spinnerWrites[0]).not.toContain('\n');
+
+        display.flush();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should clear a spinner within a narrow terminal width', () => {
+      vi.useFakeTimers();
+      const savedColumns = process.stdout.columns;
+      Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
+      try {
+        const display = new StreamDisplay('test-agent', false);
+        display.showToolUse('Bash', { command: 'ls' });
+
+        vi.advanceTimersByTime(80);
+        display.flush();
+
+        const clearWrite = stdoutWriteSpy.mock.calls
+          .map(([chunk]) => String(chunk))
+          .find((chunk) => chunk === '\r\x1b[K');
+        expect(clearWrite).toBeDefined();
+        expect(clearWrite?.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(40);
+      } finally {
+        Object.defineProperty(process.stdout, 'columns', { value: savedColumns, configurable: true });
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('showToolResult AskUserQuestion content suppression', () => {
     it('should suppress content preview for AskUserQuestion non-error result', () => {
       const display = new StreamDisplay('test-agent', false);
