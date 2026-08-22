@@ -45,7 +45,7 @@ describe('createImageAttachmentStore', () => {
 
     expect(attachment).toEqual({
       placeholder: '[Image #1]',
-      tempPath: path.join(tmpRoot, 'takt', 'session-abc', 'attachments', 'image-1.png'),
+      tempPath: path.join(tmpRoot, 'session-abc', 'attachments', 'image-1.png'),
       fileName: 'image-1.png',
     });
     expect(fs.readFileSync(attachment.tempPath)).toEqual(imageData);
@@ -68,6 +68,38 @@ describe('createImageAttachmentStore', () => {
     expect(store.listAttachments()).toEqual([first, second]);
   });
 
+  it('should start after the highest existing file name index', async () => {
+    const tmpRoot = createTempRoot();
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-existing-index',
+      initialAttachments: [{
+        placeholder: '[Image #3]',
+        tempPath: path.join(tmpRoot, 'existing-image.png'),
+        fileName: 'image-10.png',
+      }],
+    });
+
+    const attachment = await store.saveImage(Buffer.from('new'), 'image/png');
+
+    expect(attachment.placeholder).toBe('[Image #11]');
+    expect(attachment.fileName).toBe('image-11.png');
+  });
+
+  it('should start after an explicit index even when initial attachments are lower', async () => {
+    const tmpRoot = createTempRoot();
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-explicit-index',
+      initialAttachmentIndex: 20,
+    });
+
+    const attachment = await store.saveImage(Buffer.from('new'), 'image/png');
+
+    expect(attachment.placeholder).toBe('[Image #21]');
+    expect(attachment.fileName).toBe('image-21.png');
+  });
+
   it('should create session attachment directories and pasted files with private permissions', async () => {
     const tmpRoot = createTempRoot();
     const store = createImageAttachmentStore({
@@ -77,7 +109,7 @@ describe('createImageAttachmentStore', () => {
 
     const attachment = await store.saveImage(Buffer.from('private'), 'image/png');
 
-    const sessionDir = path.join(tmpRoot, 'takt', 'session-private');
+    const sessionDir = path.join(tmpRoot, 'session-private');
     const attachmentDir = path.join(sessionDir, 'attachments');
     expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
     expect(fs.statSync(attachmentDir).mode & 0o777).toBe(0o700);
@@ -86,7 +118,7 @@ describe('createImageAttachmentStore', () => {
 
   it('should reject an existing attachment path without changing its content', async () => {
     const tmpRoot = createTempRoot();
-    const attachmentDir = path.join(tmpRoot, 'takt', 'session-collision', 'attachments');
+    const attachmentDir = path.join(tmpRoot, 'session-collision', 'attachments');
     const existingPath = path.join(attachmentDir, 'image-1.png');
     fs.mkdirSync(attachmentDir, { recursive: true });
     fs.writeFileSync(existingPath, 'existing');
@@ -107,7 +139,7 @@ describe('createImageAttachmentStore', () => {
       sessionId: 'session-cleanup',
     });
     const attachment = await store.saveImage(Buffer.from('cleanup'), 'image/png');
-    const sessionDir = path.join(tmpRoot, 'takt', 'session-cleanup');
+    const sessionDir = path.join(tmpRoot, 'session-cleanup');
 
     expect(fs.existsSync(attachment.tempPath)).toBe(true);
 
@@ -131,16 +163,22 @@ describe('createImageAttachmentStore', () => {
     }
   });
 
-  it('should create a process session store in the OS tmp directory', async () => {
-    const store = createSessionImageAttachmentStore();
+  it('should keep a process session store inside the project', async () => {
+    // A provider that sandboxes file access can read the project it was pointed
+    // at and nothing else, so a pasted image has to live there.
+    const projectDir = createTempRoot();
+    const store = createSessionImageAttachmentStore(projectDir);
 
     const attachment = await store.saveImage(Buffer.from('session'), 'image/png');
-    tempRoots.add(path.dirname(path.dirname(attachment.tempPath)));
 
     expect(attachment.placeholder).toBe('[Image #1]');
     expect(attachment.fileName).toBe('image-1.png');
-    expect(attachment.tempPath.startsWith(path.join(os.tmpdir(), 'takt') + path.sep)).toBe(true);
+    expect(attachment.tempPath.startsWith(path.join(projectDir, '.takt', 'tmp', 'images') + path.sep))
+      .toBe(true);
     expect(fs.readFileSync(attachment.tempPath)).toEqual(Buffer.from('session'));
+
+    store.cleanup();
+    expect(fs.existsSync(attachment.tempPath)).toBe(false);
   });
 
   it('should create a paste handler that stores images and returns placeholders', async () => {
@@ -158,7 +196,7 @@ describe('createImageAttachmentStore', () => {
 
     expect(placeholder).toBe('[Image #1]');
     const [attachment] = store.listAttachments();
-    expect(attachment?.tempPath).toBe(path.join(tmpRoot, 'takt', 'session-paste', 'attachments', 'image-1.png'));
+    expect(attachment?.tempPath).toBe(path.join(tmpRoot, 'session-paste', 'attachments', 'image-1.png'));
     expect(fs.readFileSync(attachment!.tempPath)).toEqual(Buffer.from('paste'));
   });
 });
@@ -263,7 +301,7 @@ describe('buildInteractiveResultWithAttachments', () => {
       sessionId: 'session-result-cleanup',
     });
     const attachment = await store.saveImage(Buffer.from('result-cleanup-image'), 'image/png');
-    const sessionDir = path.join(tmpRoot, 'takt', 'session-result-cleanup');
+    const sessionDir = path.join(tmpRoot, 'session-result-cleanup');
     const result = buildInteractiveResultWithAttachments({ action: 'execute', task: 'Use [Image #1].' }, store);
 
     expect(fs.existsSync(attachment.tempPath)).toBe(true);

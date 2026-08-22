@@ -46,7 +46,7 @@ Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介�
 
 ### MCP Client からのタスク保存
 
-MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存できます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、任意の `issue` object で既存 Issue を紐付けるか、設定済み TAKT issue provider で新規 Issue を作成します。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は、代わりに Issue URL を返すことがあります。この tool は絶対パスの `cwd` と空でないタスク本文を必須入力とします。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
+MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存できます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、任意の `issue` object で既存 Issue を紐付けるか、設定済み TAKT issue provider で新規 Issue を作成します。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は代わりに Issue URL を返すことがあります。この tool は絶対パスの `cwd` と空でないタスク本文を必須入力とします。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
 
 ## タスクディレクトリ形式
 
@@ -106,7 +106,7 @@ tasks:
       meta.json          # 実行メタデータ
 ```
 
-run ディレクトリのスラグは実行ごとにランダムな6文字のサフィックスを付けて別採番されるため、タスクディレクトリのスラグとは一致しません。タスクの run ディレクトリを探すには、`tasks.yaml` の `run_slug` フィールドか `.takt/runs/` 配下の最新ディレクトリを確認してください。
+run ディレクトリのスラグは実行ごとにランダムな6文字のサフィックスを付けて別採番されるため、タスクディレクトリのスラグとは一致しません。タスクの run ディレクトリを探すには`tasks.yaml` の `run_slug` フィールドか `.takt/runs/` 配下の最新ディレクトリを確認してください。
 
 `takt add` は `.takt/tasks/{slug}/order.md` を自動作成し、`task_dir` への参照を `tasks.yaml` に保存します。実行前に `order.md` を自由に編集したり、タスクディレクトリに補足ファイル（SQL スキーマ、ワイヤーフレーム、API 仕様など）を追加したりできます。
 
@@ -187,7 +187,7 @@ watch コマンドの動作は次の通りです。
 takt list
 ```
 
-リストビューでは、すべてのタスクがステータス別（pending、running、completed、failed、exceeded、pr_failed）に作成日とサマリ付きで表示されます。タスクを選択すると、そのステータスに応じた操作が表示されます。一覧の最下部には、すべてのタスクを一括削除する **All Delete** も表示されます。
+リストビューではすべてのタスクがステータス別（pending、running、completed、failed、exceeded、pr_failed）に作成日とサマリ付きで表示されます。タスクを選択すると、そのステータスに応じた操作が表示されます。一覧の最下部にはすべてのタスクを一括削除する **All Delete** も表示されます。
 
 ### 完了タスクの操作
 
@@ -267,7 +267,7 @@ takt list
 
 Requeue 後は新しい namespace で実行されるため、台帳を引き継がず白紙で開始します。
 
-`/go` の後、リトライ会話は Instruct モードと同じ選択肢（**Save as Task** / **Continue editing**）を提供し、即時再実行には `/accept` と `/replay`、中断には `/cancel` を使用します。保存と即時再実行のどちらも、選択した Resume または Restart の開始位置を使用します。リトライのメモは複数のリトライ試行にわたってタスクレコードに蓄積されます。
+`/go` の後、リトライ会話は Instruct モードと同じ選択肢（**Save as Task** / **Continue editing**）を提供し、即時再実行には `/accept` と `/replay`、中断には `/cancel` を使用します。保存と即時再実行のどちらも選択した Resume または Restart の開始位置を使用します。リトライのメモは複数のリトライ試行にわたってタスクレコードに蓄積されます。
 
 ### 非インタラクティブモード（`--non-interactive`）
 

@@ -3,6 +3,8 @@
 
 ## Result: verified / incomplete / plan_invalid
 
+When a plan omission or other plan defect coexists with an implementation or evidence gap, the top-level `Result` must be `plan_invalid`; retain every implementation or evidence gap in the unmet or unverified items instead of allowing `incomplete` to mask the plan defect. Use `incomplete` only when the plan has no defect and a planned obligation has an implementation or evidence gap. For an item affected by both conditions, record both applicable conditions, their evidence, and the required actions.
+
 ## Summary
 {Decision and primary evidence}
 

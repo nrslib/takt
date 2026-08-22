@@ -54,7 +54,25 @@ describe('buildSummaryPrompt', () => {
     expect(summary).toContain('Improve parser');
   });
 
-  it('includes the existing Gherkin output rules when enabled', () => {
+  it('includes Gherkin output rules when formal specification mode is disabled', () => {
+    const summary = buildSummaryPrompt(
+      [{ role: 'user', content: 'Improve parser' }],
+      false,
+      'en',
+      'No transcript',
+      'Conversation:',
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+
+    expect(summary).toContain('Gherkin');
+    expect(summary).not.toContain('Quint');
+    expect(summary).not.toContain('Alloy');
+  });
+
+  it('adds conditional Quint and Alloy guidance when formal specification mode is enabled', () => {
     const summary = buildSummaryPrompt(
       [{ role: 'user', content: 'Improve parser' }],
       false,
@@ -67,26 +85,10 @@ describe('buildSummaryPrompt', () => {
       true,
     );
 
-    expect(summary).toContain('## Markdown + Gherkin Output Format');
-  });
-
-  it('keeps the existing Markdown-only output contract when disabled', () => {
-    const summary = buildSummaryPrompt(
-      [{ role: 'user', content: 'Improve parser' }],
-      false,
-      'en',
-      'No transcript',
-      'Conversation:',
-      undefined,
-      undefined,
-      undefined,
-      false,
-    );
-
-    expect(summary).not.toContain('## Markdown + Gherkin Output Format');
-    expect(summary).not.toContain('Write these in a fenced `gherkin` block:');
-    expect(summary).not.toContain('Do not duplicate the same requirement in Markdown and Gherkin');
-    expect(summary).toContain('Output only the final task instruction (no preamble).');
+    expect(summary).toContain('Gherkin');
+    expect(summary).toContain('Quint');
+    expect(summary).toContain('Alloy');
+    expect(summary).toContain('ASCII');
   });
 
 });

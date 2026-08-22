@@ -1,0 +1,71 @@
+{
+  // Type-checks the tests on this list. Vitest strips types, so a test that
+  // drifts from the code it exercises keeps passing while asserting on a shape
+  // that no longer exists — this is what catches that.
+  //
+  // Add a test here when you write or change one. If an older test does not
+  // type-check yet, fix the test and then add it; never widen the list to
+  // something red.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": [
+    "src/__tests__/ai-caller-output-mode.test.ts",
+    "src/__tests__/assistant-provider-parity.test.ts",
+    "src/__tests__/claude-mcp-runtime.test.ts",
+    "src/__tests__/cli-routing-issue-resolve.test.ts",
+    "src/__tests__/cli-routing-tui.test.ts",
+    "src/__tests__/conversation-plan.test.ts",
+    "src/__tests__/conversation-session-failure.test.ts",
+    "src/__tests__/conversationLoop-resume.test.ts",
+    "src/__tests__/conversationSession.test.ts",
+    "src/__tests__/e2e-terminal-output.test.ts",
+    "src/__tests__/exec-assistant-failure.test.ts",
+    "src/__tests__/exec-command.test.ts",
+    "src/__tests__/exec-tui-conversation.test.ts",
+    "src/__tests__/grapheme.test.ts",
+    "src/__tests__/helpers/stdinSimulator.ts",
+    "src/__tests__/image-attachment-store-seal.test.ts",
+    "src/__tests__/imageAttachments.test.ts",
+    "src/__tests__/instructMode.test.ts",
+    "src/__tests__/interactive-mode.test.ts",
+    "src/__tests__/interactive.test.ts",
+    "src/__tests__/mock-scenario-stream-chunks.test.ts",
+    "src/__tests__/provider-mcp-adapter.test.ts",
+    "src/__tests__/provider-mcp-capability-declaration.test.ts",
+    "src/__tests__/provider-mcp-cleanup.test.ts",
+    "src/__tests__/provider-mcp-error-category.test.ts",
+    "src/__tests__/provider-mcp-runtime.test.ts",
+    "src/__tests__/provider-mcp-transport-validation.test.ts",
+    "src/__tests__/provider-mcp-wiring.test.ts",
+    "src/__tests__/releaseVerificationWiring.test.ts",
+    "src/__tests__/retry-mode-flow.test.ts",
+    "src/__tests__/retrySlashCommand.test.ts",
+    "src/__tests__/runner-mcp-pool-identity.test.ts",
+    "src/__tests__/runtime-internal-agent-assistant.test.ts",
+    "src/__tests__/runtime-mcp-engine-wiring.test.ts",
+    "src/__tests__/runtime-mcp-env-interpolation.test.ts",
+    "src/__tests__/runtime-mcp-legacy-mix.test.ts",
+    "src/__tests__/runtime-mcp-merge.test.ts",
+    "src/__tests__/runtime-mcp-schema.test.ts",
+    "src/__tests__/runtime-mcp-secret-redaction.test.ts",
+    "src/__tests__/runtime-mcp-session-isolation.test.ts",
+    "src/__tests__/runtime-mcp-target-resolution.test.ts",
+    "src/__tests__/runtime-mcp-workflow-call-inheritance.test.ts",
+    "src/__tests__/runtime-mcp.integration.test.ts",
+    "src/__tests__/tui-conversation-view.test.tsx",
+    "src/__tests__/tui-conversation.test.ts",
+    "src/__tests__/tui-display-text.test.ts",
+    "src/__tests__/tui-editor-state.test.ts",
+    "src/__tests__/tui-image-paste-input.test.ts",
+    "src/__tests__/tui-passthrough-view.test.tsx",
+    "src/__tests__/tui-prompt-layout.test.ts",
+    "src/__tests__/tui-prompt-screen.test.tsx",
+    "src/__tests__/tui-run.test.ts",
+    "src/__tests__/tui-task-conversation.test.ts",
+    "src/__tests__/tui-terminal-ownership.test.ts"
+  ],
+  "exclude": []
+}

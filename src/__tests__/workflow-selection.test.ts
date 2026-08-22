@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { WorkflowDirEntry } from '../infra/config/loaders/workflowLoader.js';
 import type { CategorizedWorkflows } from '../infra/config/loaders/workflowCategories.js';
 import type { WorkflowWithSource } from '../infra/config/loaders/workflowResolver.js';
+import type { SelectionOption } from '../features/workflowSelection/index.js';
 
 const selectOptionMock = vi.fn();
 const bookmarkState = vi.hoisted(() => ({
@@ -38,6 +39,7 @@ const configMock = vi.hoisted(() => ({
   loadAllStandaloneWorkflowsWithSources: vi.fn(),
   listStandaloneWorkflowEntries: vi.fn(),
   getWorkflowCategories: vi.fn(),
+  getWorkflowDescriptions: vi.fn(),
   resolveIgnoredWorkflows: vi.fn(),
   buildCategorizedWorkflows: vi.fn(),
 }));
@@ -214,6 +216,58 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
 
     const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
     expect(selected).toBe('my-workflow');
+  });
+
+  it('should show configured descriptions in categorized workflow labels', async () => {
+    const categorized: CategorizedWorkflows = {
+      categories: [
+        { name: 'Dev', workflows: ['my-workflow'], children: [] },
+      ],
+      allWorkflows: new Map([
+        ['my-workflow', {
+          source: 'user' as const,
+          config: { name: 'my-workflow', description: 'YAML description must not be shown' },
+        }],
+      ]),
+      missingWorkflows: [],
+      workflowDescriptions: { 'my-workflow': 'Configured description\nwith control text' },
+    };
+
+    selectOptionMock
+      .mockResolvedValueOnce('__custom_category__:Dev')
+      .mockResolvedValueOnce('my-workflow');
+
+    await selectWorkflowFromCategorizedWorkflows(categorized);
+
+    const workflowOptions = selectOptionMock.mock.calls[1]![1] as SelectionOption[];
+    expect(workflowOptions).toEqual([
+      {
+        label: '🎼 my-workflow',
+        value: 'my-workflow',
+        description: 'Configured description\\nwith control text',
+      },
+    ]);
+  });
+
+  it('should show configured descriptions in flat workflow labels', async () => {
+    const entries: WorkflowDirEntry[] = [
+      { name: 'flat-workflow', path: '/tmp/flat-workflow.yaml', source: 'user' },
+    ];
+
+    selectOptionMock.mockResolvedValueOnce('flat-workflow');
+
+    const selected = await selectWorkflowFromEntries(entries, {
+      'flat-workflow': 'Flat description\twith control text',
+    });
+
+    expect(selected).toBe('flat-workflow');
+    expect(selectOptionMock.mock.calls[0]![1]).toEqual([
+      {
+        label: '🎼 flat-workflow',
+        value: 'flat-workflow',
+        description: 'Flat description\\twith control text',
+      },
+    ]);
   });
 
   it('should navigate into subcategories recursively', async () => {
@@ -431,6 +485,7 @@ describe('selectWorkflow', () => {
     configMock.loadAllStandaloneWorkflowsWithSources.mockReset();
     configMock.listStandaloneWorkflowEntries.mockReset();
     configMock.getWorkflowCategories.mockReset();
+    configMock.getWorkflowDescriptions.mockReset();
     configMock.resolveIgnoredWorkflows.mockReset();
     configMock.buildCategorizedWorkflows.mockReset();
     uiMock.info.mockReset();
@@ -522,6 +577,7 @@ describe('selectWorkflow', () => {
 
   it('should use directory-based selection when no category config', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
+    configMock.getWorkflowDescriptions.mockReturnValue({ 'custom-flow': 'Custom workflow' });
     configMock.listStandaloneWorkflowEntries.mockReturnValue([
       { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
       { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
@@ -537,6 +593,10 @@ describe('selectWorkflow', () => {
     expect(configMock.listStandaloneWorkflowEntries).toHaveBeenCalledWith('/cwd', {
       onWarning: uiMock.warn,
     });
+    expect(configMock.getWorkflowDescriptions).toHaveBeenCalledWith('/cwd');
+    expect(selectOptionMock.mock.calls[1]![1]).toEqual(expect.arrayContaining([
+      { label: '🎼 custom-flow', value: 'custom-flow', description: 'Custom workflow' },
+    ]));
   });
 
   it('should exclude invalid workflows from normal selection path and forward warnings to UI', async () => {

@@ -23,14 +23,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const TEST_TMPDIR = realpathSync(tmpdir());
 
 const injectedFileFailure = vi.hoisted(() => ({
-  operation: '' as '' | 'open' | 'fstat' | 'fchmod' | 'ftruncate' | 'read' | 'write' | 'partialWrite' | 'append' | 'close' | 'rename',
+  operation: '' as '' | 'open' | 'lstat' | 'fstat' | 'fchmod' | 'ftruncate' | 'read' | 'write' | 'partialWrite' | 'append' | 'close' | 'rename',
   cleanupOperation: '' as '' | 'unlink',
   skipMatchingCalls: 0,
   descriptor: undefined as number | undefined,
   descriptorPaths: new Map<number, string>(),
   pathPredicate: undefined as ((path: string) => boolean) | undefined,
   skipBeforeOpenCalls: 0,
+  skipBeforeLstatCalls: 0,
   beforeOpen: undefined as (() => void) | undefined,
+  beforeLstat: undefined as (() => void) | undefined,
   beforeArtifactCreation: undefined as (() => void) | undefined,
   beforePublication: undefined as (() => void) | undefined,
 }));
@@ -92,6 +94,29 @@ vi.mock('node:fs', async () => {
   };
   return {
     ...actual,
+    lstatSync(...args: Parameters<typeof actual.lstatSync>) {
+      const path = String(args[0]);
+      if (
+        injectedFileFailure.beforeLstat !== undefined
+        && (injectedFileFailure.pathPredicate === undefined || injectedFileFailure.pathPredicate(path))
+      ) {
+        if (injectedFileFailure.skipBeforeLstatCalls > 0) {
+          injectedFileFailure.skipBeforeLstatCalls -= 1;
+        } else {
+          const beforeLstat = injectedFileFailure.beforeLstat;
+          injectedFileFailure.beforeLstat = undefined;
+          beforeLstat();
+        }
+      }
+      if (
+        injectedFileFailure.operation === 'lstat'
+        && (injectedFileFailure.pathPredicate === undefined || injectedFileFailure.pathPredicate(path))
+      ) {
+        injectedFileFailure.operation = '';
+        throw Object.assign(new Error('injected lstat failure'), { code: 'EIO' });
+      }
+      return actual.lstatSync(...args);
+    },
     openSync(...args: Parameters<typeof actual.openSync>) {
       const path = String(args[0]);
       if (
@@ -228,6 +253,8 @@ vi.mock('node:fs', async () => {
 import {
   appendPrivateFile,
   ensurePrivateDirectory,
+  PrivateArtifactPublicationConflictError,
+  readPrivateFileState,
   readRegularFileNoFollow,
   repairPrivateDirectory,
   writeNewPrivateFileWithMode,
@@ -263,7 +290,9 @@ describe('private file artifacts', () => {
     injectedFileFailure.descriptorPaths.clear();
     injectedFileFailure.pathPredicate = undefined;
     injectedFileFailure.skipBeforeOpenCalls = 0;
+    injectedFileFailure.skipBeforeLstatCalls = 0;
     injectedFileFailure.beforeOpen = undefined;
+    injectedFileFailure.beforeLstat = undefined;
     injectedFileFailure.beforeArtifactCreation = undefined;
     injectedFileFailure.beforePublication = undefined;
     for (const root of roots.splice(0)) {
@@ -537,6 +566,80 @@ describe('private file artifacts', () => {
     expect(readFileSync(file, 'utf-8')).toBe('original\n');
     expect(injectedFileFailure.descriptor).toBeDefined();
     expect(() => fstatSync(injectedFileFailure.descriptor!)).toThrow();
+  });
+
+  it('should classify a file replacement during a private read as a publication conflict', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-read-file-swap-'));
+    roots.push(root);
+    const file = join(root, 'artifact.log');
+    const original = join(root, 'original.log');
+    writeFileSync(file, 'original\n');
+    injectedFileFailure.beforeOpen = () => {
+      renameSync(file, original);
+      writeFileSync(file, 'replacement\n');
+    };
+
+    expect(() => readPrivateFileState(file))
+      .toThrow(PrivateArtifactPublicationConflictError);
+  });
+
+  it('should classify an ancestor replacement during a private read as a publication conflict', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-read-ancestor-swap-'));
+    roots.push(root);
+    const logs = join(root, '.takt', 'runs', 'run-1', 'logs');
+    const movedLogs = join(root, 'original-logs');
+    const outsideLogs = join(root, 'outside-logs');
+    mkdirSync(logs, { recursive: true });
+    mkdirSync(outsideLogs);
+    const file = join(logs, 'events.jsonl');
+    const outsideFile = join(outsideLogs, 'events.jsonl');
+    writeFileSync(file, 'original\n');
+    linkSync(file, outsideFile);
+    injectedFileFailure.beforeOpen = () => {
+      renameSync(logs, movedLogs);
+      symlinkSync(outsideLogs, logs, 'dir');
+    };
+
+    expect(() => readPrivateFileState(file))
+      .toThrow(PrivateArtifactPublicationConflictError);
+  });
+
+  it('should classify an ancestor deletion during a private read as a publication conflict', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-read-ancestor-delete-'));
+    roots.push(root);
+    const logs = join(root, '.takt', 'runs', 'run-1', 'logs');
+    mkdirSync(logs, { recursive: true });
+    const file = join(logs, 'events.jsonl');
+    writeFileSync(file, 'original\n');
+    injectedFileFailure.pathPredicate = (path) => path === logs;
+    injectedFileFailure.skipBeforeLstatCalls = 1;
+    injectedFileFailure.beforeLstat = () => rmSync(logs, { recursive: true });
+
+    expect(() => readPrivateFileState(file))
+      .toThrow(PrivateArtifactPublicationConflictError);
+  });
+
+  it('should preserve an ancestor I/O error during a private read', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-read-ancestor-io-'));
+    roots.push(root);
+    const logs = join(root, '.takt', 'runs', 'run-1', 'logs');
+    mkdirSync(logs, { recursive: true });
+    const file = join(logs, 'events.jsonl');
+    writeFileSync(file, 'original\n');
+    injectedFileFailure.beforeOpen = () => {
+      injectedFileFailure.operation = 'lstat';
+      injectedFileFailure.pathPredicate = (path) => path === logs;
+    };
+
+    let thrown: unknown;
+    try {
+      readPrivateFileState(file);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({ code: 'EIO', message: 'injected lstat failure' });
+    expect(thrown).not.toBeInstanceOf(PrivateArtifactPublicationConflictError);
   });
 
   it.each([

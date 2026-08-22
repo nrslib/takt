@@ -29,6 +29,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
     onStream: options.onStream,
     onActivity: options.onActivity,
     allowedTools: options.allowedTools,
+    preparedMcp: options.preparedMcp,
     outputSchema: options.outputSchema,
   };
 }
@@ -38,6 +39,7 @@ export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
@@ -72,6 +74,7 @@ export class MockProvider implements Provider {
         permissionMode: 'readonly',
         allowedTools: [],
         mcpServers: undefined,
+        preparedMcp: undefined,
         imageAttachments: undefined,
         outputSchema: assertOutputSchema(options.outputSchema, 'mock'),
       };

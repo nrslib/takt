@@ -74,6 +74,7 @@ import {
   prepareWorkflowExecutionBundle,
   publishWorkflowExecutionBundle,
 } from './workflowExecutionBundle.js';
+import { scheduleLoopAnalysis } from './loopAnalysis.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -258,13 +259,14 @@ async function executeWorkflowInternal(
       resumeLineage,
     );
   } catch (bootstrapError) {
-    return await terminalizeBootstrapFailure({
+    return terminalizeBootstrapFailure({
       activeRun,
       workflowConfig,
       task,
       projectCwd: options.projectCwd,
       primaryError: bootstrapError,
       resumeLineage,
+      loopAnalysisScheduler: options.loopAnalysisScheduler,
     });
   }
   const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
@@ -399,6 +401,7 @@ async function executeWorkflowInternal(
         model: bootstrap.configuredModel,
         modelSource: bootstrap.configuredModelSource,
         reportFallbackProvider: options.reportFallbackProvider,
+        reportContentSanitizer: options.reportContentSanitizer,
         rateLimitFallback: bootstrap.rateLimitFallback,
         providerOptions: bootstrap.providerOptions,
         configProviderOptions: bootstrap.configProviderOptions,
@@ -417,10 +420,12 @@ async function executeWorkflowInternal(
         providerLadders: bootstrap.providerLadders,
         internalAgentSeats: bootstrap.internalAgentSeats,
         companionEnabled: bootstrap.companionEnabled,
+        companionReviewMode: bootstrap.companionReviewMode,
         companionProviders: bootstrap.companionProviders,
         providerRoutingTagConflictPolicy: bootstrap.providerRoutingTagConflictPolicy,
         providerProfiles: options.providerProfiles,
         mcpServers: options.mcpServers,
+        mcpAssignment: bootstrap.mcpAssignment,
         interactive: bootstrap.interactiveUserInput,
         structuredCaller: bootstrap.structuredCaller,
         structuredOutputNormalizers: createDefaultStructuredOutputNormalizers(),
@@ -556,6 +561,10 @@ async function executeWorkflowInternal(
         );
         finalizationIssues.push(...finalization.issues);
         committedPublication = terminalPublication;
+        scheduleLoopAnalysis(
+          options.loopAnalysisScheduler,
+          activeRun.runPaths.runRootAbs,
+        );
       } catch (error) {
         terminalizationErrors.push(error);
       }
@@ -632,6 +641,7 @@ async function terminalizeBootstrapFailure(input: {
   readonly projectCwd: string;
   readonly primaryError: unknown;
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
+  readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
 }): Promise<never> {
   const reason = getErrorMessage(input.primaryError);
   const finalizationErrors: unknown[] = [];
@@ -705,6 +715,10 @@ async function terminalizeBootstrapFailure(input: {
       reason,
     }, payload);
     finalizationErrors.push(...finalization.issues);
+    scheduleLoopAnalysis(
+      input.loopAnalysisScheduler,
+      input.activeRun.runPaths.runRootAbs,
+    );
   } catch (error) {
     finalizationErrors.push(error);
   }

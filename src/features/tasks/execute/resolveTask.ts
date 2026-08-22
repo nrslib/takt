@@ -314,7 +314,6 @@ export async function resolveTaskExecution(
   const configuredStartStep = resolveTaskStartStepValue(normalizedData);
   const resumePoint = normalizedData.resume_point;
   const restartPoint = normalizedData.restart_point as WorkflowRestartPoint | undefined;
-  const retryNote = normalizedData.retry_note;
   const contextOverride = options?.taskContext;
   let prContext = resolvePrReviewContext(task.name, normalizedData, defaultCwd, contextOverride);
 
@@ -352,7 +351,7 @@ export async function resolveTaskExecution(
       configuredStartStep,
       resumePoint,
       restartPoint,
-      retryNote,
+      data.retry_note,
     );
     if (reusedWorktree) {
       assertReusedWorktreeContext(task, reusedWorktree, contextOverride);

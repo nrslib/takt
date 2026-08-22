@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import type { WorkflowConfig } from '../core/models/index.js';
 import type { SelectorProviderInfo } from '../core/workflow/types.js';
 
 const workflowEngineError = new Error('workflow-engine-constructor-called');
+const mockObservabilityShutdown = vi.fn().mockResolvedValue(undefined);
+const mockWorkflowLoggerError = vi.fn();
 const mockWorkflowEngine = vi.fn().mockImplementation(function MockWorkflowEngine() {
   return {
     on: vi.fn(),
@@ -69,6 +72,12 @@ vi.mock('../agents/structured-caller.js', () => ({
   ProviderNeutralStructuredCaller: class {},
 }));
 
+vi.mock('../infra/observability/otelFoundation.js', () => ({
+  initializeOtelFoundation: vi.fn().mockResolvedValue({
+    shutdown: mockObservabilityShutdown,
+  }),
+}));
+
 vi.mock('../infra/config/index.js', () => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
@@ -102,13 +111,13 @@ vi.mock('../infra/providers/index.js', () => ({
 }));
 
 vi.mock('../shared/utils/index.js', () => ({
-  createLogger: vi.fn(() => ({ debug: vi.fn(), info: vi.fn(), error: vi.fn() })),
+  createLogger: vi.fn(() => ({ debug: vi.fn(), info: vi.fn(), error: mockWorkflowLoggerError })),
   notifySuccess: vi.fn(),
   notifyError: vi.fn(),
   preventSleep: vi.fn(),
+  isDebugEnabled: vi.fn(() => false),
   generateReportDir: vi.fn(() => 'test-report-dir'),
   isValidReportDirName: vi.fn(() => true),
-  getDebugPromptsLogFile: vi.fn(() => undefined),
 }));
 
 vi.mock('../core/logging/providerEventLogger.js', () => ({
@@ -387,6 +396,125 @@ describe('workflow execution canonical entrypoints', () => {
       '/tmp/project',
       'task',
       expect.objectContaining({ selectorProvider }),
+    );
+  });
+
+  it('Given a completed run, When terminal artifacts are committed, Then analysis is scheduled before observability shutdown', async () => {
+    const order: string[] = [];
+    mockObservabilityShutdown.mockImplementationOnce(async () => {
+      order.push('observability-shutdown');
+    });
+    mockWorkflowEngine.mockImplementationOnce(function CompletedWorkflowEngine() {
+      const engine = new EventEmitter() as EventEmitter & {
+        run: () => Promise<{ status: 'completed'; iteration: number }>;
+        removeAllListeners: () => EventEmitter;
+      };
+      engine.run = vi.fn(async () => {
+        const state = { status: 'completed', iteration: 1 };
+        engine.emit('workflow:complete', state);
+        return state;
+      });
+      return engine;
+    });
+    const loopAnalysisScheduler = vi.fn(() => {
+      order.push('analysis-scheduled');
+    });
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+
+    const result = await executeWorkflow({
+      name: 'default',
+      initialStep: 'plan',
+      maxSteps: 1,
+      steps: [{ name: 'plan', instruction: 'Plan the work' }],
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      provider: 'mock',
+      loopAnalysisScheduler,
+    });
+
+    expect(result.success).toBe(true);
+    expect(loopAnalysisScheduler).toHaveBeenCalledOnce();
+    expect(loopAnalysisScheduler).toHaveBeenCalledWith('/tmp/run');
+    expect(order).toEqual(['analysis-scheduled', 'observability-shutdown']);
+  });
+
+  it('Given workflow execution fails, When terminal artifacts are finalized, Then analysis is scheduled once without replacing the failure', async () => {
+    const loopAnalysisScheduler = vi.fn();
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+
+    await expect(executeWorkflow({
+      name: 'default',
+      initialStep: 'plan',
+      maxSteps: 1,
+      steps: [{ name: 'plan', instruction: 'Plan the work' }],
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      provider: 'mock',
+      loopAnalysisScheduler,
+    })).rejects.toBe(workflowEngineError);
+
+    expect(loopAnalysisScheduler).toHaveBeenCalledOnce();
+    expect(loopAnalysisScheduler).toHaveBeenCalledWith('/tmp/run');
+  });
+
+  it('Given bootstrap fails after the run begins, When failure artifacts are finalized, Then analysis is scheduled once', async () => {
+    const executionBundle = await import('../features/tasks/execute/workflowExecutionBundle.js');
+    vi.mocked(executionBundle.publishWorkflowExecutionBundle)
+      .mockImplementationOnce(() => {
+        throw new Error('bundle publication failed');
+      });
+    const loopAnalysisScheduler = vi.fn();
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+
+    await expect(executeWorkflow({
+      name: 'default',
+      initialStep: 'plan',
+      maxSteps: 1,
+      steps: [{ name: 'plan', instruction: 'Plan the work' }],
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      provider: 'mock',
+      loopAnalysisScheduler,
+    })).rejects.toThrow('bundle publication failed');
+
+    expect(loopAnalysisScheduler).toHaveBeenCalledOnce();
+    expect(loopAnalysisScheduler).toHaveBeenCalledWith('/tmp/run');
+  });
+
+  it('Given scheduling throws synchronously, When a completed source run returns, Then its successful result is preserved', async () => {
+    mockWorkflowEngine.mockImplementationOnce(function CompletedWorkflowEngine() {
+      const engine = new EventEmitter() as EventEmitter & {
+        run: () => Promise<{ status: 'completed'; iteration: number }>;
+        removeAllListeners: () => EventEmitter;
+      };
+      engine.run = vi.fn(async () => {
+        const state = { status: 'completed', iteration: 1 };
+        engine.emit('workflow:complete', state);
+        return state;
+      });
+      return engine;
+    });
+    const loopAnalysisScheduler = vi.fn(() => {
+      throw new Error('scheduler failed');
+    });
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+
+    const result = await executeWorkflow({
+      name: 'default',
+      initialStep: 'plan',
+      maxSteps: 1,
+      steps: [{ name: 'plan', instruction: 'Plan the work' }],
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      provider: 'mock',
+      loopAnalysisScheduler,
+    });
+
+    expect(result.success).toBe(true);
+    expect(loopAnalysisScheduler).toHaveBeenCalledOnce();
+    expect(mockWorkflowLoggerError).toHaveBeenCalledWith(
+      expect.stringMatching(/loop analysis/i),
+      expect.objectContaining({ error: 'scheduler failed' }),
     );
   });
 });

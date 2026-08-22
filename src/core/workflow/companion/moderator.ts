@@ -15,14 +15,12 @@ export interface ModeratedCompanionResult {
 export async function moderateCompanionResult(input: {
   readonly reviewerResult: CompanionReviewOutput;
   readonly task: string;
-  readonly cumulativeDiff: string;
-  readonly diffSummary: string;
+  readonly baselineSha: string;
   readonly implementerExplanation?: string;
   readonly runModerator: (request: {
     readonly reviewerResult: CompanionReviewOutput;
     readonly task: string;
-    readonly cumulativeDiff: string;
-    readonly diffSummary: string;
+    readonly baselineSha: string;
     readonly implementerExplanation?: string;
   }) => Promise<ModeratorResult>;
 }): Promise<ModeratedCompanionResult | undefined> {
@@ -31,8 +29,7 @@ export async function moderateCompanionResult(input: {
   const moderated = await input.runModerator({
     reviewerResult: input.reviewerResult,
     task: input.task,
-    cumulativeDiff: input.cumulativeDiff,
-    diffSummary: input.diffSummary,
+    baselineSha: input.baselineSha,
     ...(input.implementerExplanation === undefined
       ? {}
       : { implementerExplanation: input.implementerExplanation }),

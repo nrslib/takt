@@ -923,6 +923,12 @@ steps:
 
 Companion 默认禁用；在 `runtime.yaml` 设置 `companion.enabled: true` 才会运行 workflow 声明的 companion。
 
+在 `runtime.yaml` 设置 `companion.review_mode` 选择触发策略。默认值是 `completion`：
+implementer 成功响应完成后、workflow 继续前审查累计 diff，响应期间不使用 quiet、forced
+或 commit 触发。已接受的 finding 仍通过现有 follow-up prompt 传递。设置为 `live` 可保留
+现有的 quiet、forced、commit、queue 和 completion drain 行为。该设置只支持 global 或
+project 层级，不支持 step 或 Companion 定义级覆盖。
+
 ```yaml
 - name: implement
   persona: coder
@@ -937,7 +943,7 @@ Companion 默认禁用；在 `runtime.yaml` 设置 `companion.enabled: true` 才
 
 workflow transition rule 不能引用 `companion.*` state。companion finding 和 failure 是 advisory diagnostic；主 workflow 仍由普通 semantic condition 和 Phase 3 judgment 控制。定义文件按 `.takt/companions/` → `~/.takt/companions/` → `builtins/{language}/companions/` 查找，只能包含名称、描述、facet 引用和 `interval_ms`，不能包含 provider/tool 设置；`interval_ms` 必须是 1 到 `2,147,483,647` 的正整数。
 
-TAKT 观察 mutating tool event，并在 quiet period 或强制间隔后审查当前累计 diff。每个 round 使用新的 finding list；可选 moderator 按 round-local index 接受或拒绝 finding。已接受 finding 以 NDJSON 写入 `.takt/runs/{run}/companion/{step}/{companion}.jsonl`。在 implementer 每个 turn 边界，未传递的 finding 会直接嵌入 follow-up prompt，然后清空内存缓冲；implementer 决定是否处理并说明不处理原因。完成时停止新触发、排空 review round，只有 diff digest 未审查时才执行 completion review。取消通过 workflow 或 step abort signal 终止 follow-up loop；follow-up 的错误、限流或 blocked 会停止 follow-up，并继续使用最近一次成功的 implementer response。
+在 `live` mode，TAKT 观察 mutating tool event，并在 quiet period、强制间隔或 commit 触发后审查当前累计 diff。在 `completion` mode，TAKT 等待 implementer 响应边界再审查。每个 round 使用新的 finding list；可选 moderator 按 round-local index 接受或拒绝 finding。已接受 finding 以 NDJSON 写入 `.takt/runs/{run}/companion/{step}/{companion}.jsonl`。在 implementer 每个 turn 边界，未传递的 finding 会直接嵌入 follow-up prompt，然后清空内存缓冲；implementer 决定是否处理并说明不处理原因。完成时停止新触发、排空 review round，只有 diff digest 未审查时才执行 completion review。取消通过 workflow 或 step abort signal 终止 follow-up loop；follow-up 的错误、限流或 blocked 会停止 follow-up，并继续使用最近一次成功的 implementer response。
 
 ## 最佳实践
 

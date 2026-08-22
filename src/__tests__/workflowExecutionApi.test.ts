@@ -8,11 +8,13 @@ const {
   mockExecuteWorkflow,
   mockExecuteWorkflowForRun,
   mockSelectAndExecuteTask,
+  mockCreateLoopAnalysisScheduler,
 } = vi.hoisted(() => ({
   mockExecuteTaskWorkflow: vi.fn(),
   mockExecuteWorkflow: vi.fn(),
   mockExecuteWorkflowForRun: vi.fn(),
   mockSelectAndExecuteTask: vi.fn(),
+  mockCreateLoopAnalysisScheduler: vi.fn(),
 }));
 
 vi.mock('../features/tasks/execute/taskWorkflowExecution.js', () => ({
@@ -24,12 +26,20 @@ vi.mock('../features/tasks/execute/workflowExecution.js', () => ({
   executeWorkflowForRun: (...args: unknown[]) => mockExecuteWorkflowForRun(...args),
 }));
 
+vi.mock('../features/tasks/execute/loopAnalysis.js', () => ({
+  LOOP_ANALYSIS_WORKFLOW: 'loop-analysis',
+  createLoopAnalysisScheduler: (...args: unknown[]) => mockCreateLoopAnalysisScheduler(...args),
+}));
+
 vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
   selectAndExecuteTask: (...args: unknown[]) => mockSelectAndExecuteTask(...args),
 }));
 
 import { executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
-import { runWorkflowExecution } from '../features/tasks/execute/workflowExecutionApi.js';
+import {
+  runLoopAnalysisWorkflowExecution,
+  runWorkflowExecution,
+} from '../features/tasks/execute/workflowExecutionApi.js';
 
 describe('runWorkflowExecution', () => {
   beforeEach(() => {
@@ -48,6 +58,9 @@ describe('runWorkflowExecution', () => {
           mcpServers: request.mcpServers,
           provider: request.agentOverrides?.provider,
           model: request.agentOverrides?.model,
+          ...(request.loopAnalysisPublication === undefined
+            ? {}
+            : { loopAnalysisPublication: request.loopAnalysisPublication }),
         },
       );
     });
@@ -65,6 +78,7 @@ describe('runWorkflowExecution', () => {
       reportDirectory: '/repo/.takt/runs/run-1/reports',
       ndjsonLogPath: '/repo/.takt/runs/run-1/logs/session.ndjson',
     });
+    mockCreateLoopAnalysisScheduler.mockReturnValue(vi.fn());
   });
 
   it('should run a workflow through the application API without CLI routing', async () => {
@@ -275,10 +289,123 @@ describe('runWorkflowExecution', () => {
       { name: 'default', steps: [], maxSteps: 3 },
       'Run from watch path',
       '/repo',
-      { projectCwd: '/repo' },
+      expect.objectContaining({ projectCwd: '/repo' }),
       { ignoreIterationLimit: true },
     );
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('Given a normal workflow request, When execution is configured, Then the terminal hook receives the loop analysis scheduler', async () => {
+    const scheduler = vi.fn();
+    const publication = {
+      branch: 'takt/analyze-after-completion',
+      register: vi.fn(),
+      settle: vi.fn(),
+    };
+    mockCreateLoopAnalysisScheduler.mockReturnValueOnce(scheduler);
+
+    await runWorkflowExecution({
+      task: 'Analyze after completion',
+      cwd: '/repo',
+      projectCwd: '/repo',
+      workflowIdentifier: 'default',
+      outputMode: 'silent',
+      loopAnalysisPublication: publication,
+    });
+
+    expect(mockCreateLoopAnalysisScheduler).toHaveBeenCalledWith({
+      projectCwd: '/repo',
+      publication,
+    });
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      '/repo',
+      expect.objectContaining({ loopAnalysisScheduler: scheduler }),
+    );
+  });
+
+  it.each([
+    ['the builtin name', 'loop-analysis'],
+    ['an absolute path', '/repo/.takt/workflows/loop-analysis.yaml'],
+    ['a repertoire scope reference', '@nrslib/takt-ensemble/loop-analysis'],
+  ])(
+    'Given %s resolves to the loop analysis workflow, When it executes, Then no scheduler is created',
+    async (_label, workflowIdentifier) => {
+      mockExecuteTaskWorkflow.mockImplementationOnce(async (request, executor) => executor(
+        { name: 'loop-analysis', steps: [], maxSteps: 3 },
+        request.task,
+        request.cwd,
+        { projectCwd: request.projectCwd },
+      ));
+
+      await runWorkflowExecution({
+        task: 'Analyze a source run',
+        cwd: '/repo',
+        projectCwd: '/repo',
+        workflowIdentifier,
+        outputMode: 'silent',
+      });
+
+      expect(mockCreateLoopAnalysisScheduler).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'loop-analysis' }),
+        expect.any(String),
+        '/repo',
+        expect.not.objectContaining({ loopAnalysisScheduler: expect.anything() }),
+      );
+    },
+  );
+
+  it('Given an internal analysis execution resolves to an overridden workflow name, When it executes, Then no scheduler is created', async () => {
+    mockExecuteTaskWorkflow.mockImplementationOnce(async (request, executor) => executor(
+      { name: 'project-loop-analysis-override', steps: [], maxSteps: 3 },
+      request.task,
+      request.cwd,
+      { projectCwd: request.projectCwd },
+    ));
+
+    await runLoopAnalysisWorkflowExecution({
+      task: 'Analyze a source run',
+      cwd: '/repo',
+      projectCwd: '/repo',
+      workflowIdentifier: 'loop-analysis',
+      outputMode: 'silent',
+    });
+
+    expect(mockCreateLoopAnalysisScheduler).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'project-loop-analysis-override' }),
+      expect.any(String),
+      '/repo',
+      expect.not.objectContaining({ loopAnalysisScheduler: expect.anything() }),
+    );
+  });
+
+  it('Given an internal analysis execution, When its options are built, Then report persistence receives the publication sanitizer', async () => {
+    mockExecuteTaskWorkflow.mockImplementationOnce(async (request, executor) => executor(
+      { name: 'project-loop-analysis-override', steps: [], maxSteps: 3 },
+      request.task,
+      request.cwd,
+      { projectCwd: request.projectCwd },
+    ));
+
+    await runLoopAnalysisWorkflowExecution({
+      task: 'Analyze a source run',
+      cwd: '/repo',
+      projectCwd: '/repo',
+      workflowIdentifier: 'loop-analysis',
+      outputMode: 'silent',
+    });
+
+    const options = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      reportContentSanitizer?: (content: string) => string;
+    } | undefined;
+    expect(options?.reportContentSanitizer).toEqual(expect.any(Function));
+    const sanitized = options?.reportContentSanitizer?.(
+      'token=analysis-secret\nWindows path: C:/Users/jane/private/report.md',
+    );
+    expect(sanitized).not.toMatch(/analysis-secret|C:\/Users\/jane/);
   });
 });
 
@@ -349,6 +476,7 @@ describe('runWorkflowExecution silent output', () => {
       success: false,
       reason: 'Workflow "missing-workflow-for-silent-api" not found.',
     });
+    expect(mockCreateLoopAnalysisScheduler).not.toHaveBeenCalled();
     expectNoCliOutput(cliOutput);
   });
 
@@ -376,5 +504,37 @@ describe('runWorkflowExecution silent output', () => {
       reason: 'Workflow file not found: ./custom-workflow.yaml',
     });
     expectNoCliOutput(cliOutput);
+  });
+
+  it('Given a publication coordinator, When the actual task workflow adapter resolves a workflow, Then the scheduler receives that coordinator', async () => {
+    const projectCwd = await createProjectDirectory();
+    const scheduler = vi.fn();
+    const publication = {
+      branch: 'takt/analyze-after-publication',
+      register: vi.fn(),
+      settle: vi.fn(),
+    };
+    mockCreateLoopAnalysisScheduler.mockReturnValueOnce(scheduler);
+    mockExecuteWorkflow.mockResolvedValueOnce({ success: true });
+
+    await runWorkflowExecution({
+      task: 'Analyze after PR publication',
+      cwd: projectCwd,
+      projectCwd,
+      workflowIdentifier: 'default',
+      outputMode: 'silent',
+      loopAnalysisPublication: publication,
+    });
+
+    expect(mockCreateLoopAnalysisScheduler).toHaveBeenCalledWith({
+      projectCwd,
+      publication,
+    });
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'default' }),
+      'Analyze after PR publication',
+      projectCwd,
+      expect.objectContaining({ loopAnalysisScheduler: scheduler }),
+    );
   });
 });

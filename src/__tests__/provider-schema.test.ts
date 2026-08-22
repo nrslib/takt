@@ -334,12 +334,31 @@ describe('Claude terminal provider contract', () => {
 });
 
 describe('Schemas accept opencode provider', () => {
-  it('should accept assistant.gherkin in GlobalConfigSchema', () => {
-    const result = GlobalConfigSchema.parse({
-      assistant: { gherkin: true },
-    });
+  it.each([true, false, 'Y/n', 'y/N'] as const)(
+    'should accept assistant.formal_spec=%s in global and project schemas',
+    (formalSpec) => {
+      const raw = { assistant: { formal_spec: formalSpec } };
 
-    expect(result.assistant).toEqual({ gherkin: true });
+      expect(GlobalConfigSchema.parse(raw).assistant).toEqual({ formal_spec: formalSpec });
+      expect(ProjectConfigSchema.parse(raw).assistant).toEqual({ formal_spec: formalSpec });
+    },
+  );
+
+  it.each(['yes', 'Y/N', 1, null])(
+    'should reject unsupported assistant.formal_spec value %j',
+    (formalSpec) => {
+      const raw = { assistant: { formal_spec: formalSpec } };
+
+      expect(() => GlobalConfigSchema.parse(raw)).toThrow(/formal_spec|invalid/i);
+      expect(() => ProjectConfigSchema.parse(raw)).toThrow(/formal_spec|invalid/i);
+    },
+  );
+
+  it('should keep assistant.gherkin outside the formal config schemas', () => {
+    const raw = { assistant: { gherkin: true } };
+
+    expect(() => GlobalConfigSchema.parse(raw)).toThrow(/gherkin|unrecognized/i);
+    expect(() => ProjectConfigSchema.parse(raw)).toThrow(/gherkin|unrecognized/i);
   });
 
   it('should reject assistant.init_files in GlobalConfigSchema', () => {

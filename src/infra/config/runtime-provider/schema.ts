@@ -11,7 +11,9 @@
 import { z } from 'zod';
 import { PROVIDER_TYPES } from '../../../shared/types/provider.js';
 import { PermissionModeSchema } from '../../../core/models/schema-base.js';
+import { COMPANION_REVIEW_MODE_VALUES } from '../../../core/models/companion-types.js';
 import { RUNTIME_PROVIDER_VERSION } from './constants.js';
+import { McpSectionSchema } from './mcp-schema.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 
 const ProviderNameSchema = z.enum(PROVIDER_TYPES);
@@ -80,7 +82,23 @@ const CompanionAssignmentSchema = z
 
 const RuntimeCompanionPolicySchema = z
   .object({
+    enabled: z.boolean().optional(),
+    review_mode: z.enum(COMPANION_REVIEW_MODE_VALUES).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.enabled === undefined && value.review_mode === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'companion policy must specify at least one of `enabled` or `review_mode`',
+      });
+    }
+  });
+
+const RuntimeLoopAnalysisSchema = z
+  .object({
     enabled: z.boolean(),
+    output: z.enum(['file', 'pr-comment']).default('file'),
   })
   .strict();
 
@@ -118,16 +136,35 @@ const TargetsSchema = z
   })
   .strict();
 
+const ProviderAssignmentSetSchema = z
+  .object({
+    defaults: DefaultAssignmentSchema.optional(),
+    targets: TargetsSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.defaults === undefined && value.targets === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'provider assignment must specify `defaults` or `targets`',
+      });
+    }
+  });
+
 const ProviderSectionSchema = z
   .object({
     defaults: DefaultAssignmentSchema.optional(),
     profiles: z.record(z.string(), ProfileSchema).optional(),
     targets: TargetsSchema.optional(),
+    assignments: z.record(z.string(), ProviderAssignmentSetSchema).optional(),
+    directories: z.record(z.string(), z.string().min(1)).optional(),
     auto_routing: AutoRoutingSchema.optional(),
   })
   .strict();
 
 type RuntimeProviderSectionShape = z.infer<typeof ProviderSectionSchema>;
+type RuntimeProviderTargets = z.infer<typeof TargetsSchema>;
+type RuntimeProviderAssignmentSetShape = z.infer<typeof ProviderAssignmentSetSchema>;
 
 function addAssignmentProfiles(
   profiles: Set<string>,
@@ -160,17 +197,40 @@ function collectProfileClosure(
   return closure;
 }
 
+function withoutCompanionTargets(
+  targets: RuntimeProviderTargets | undefined,
+): RuntimeProviderTargets | undefined {
+  if (targets === undefined || targets.companions === undefined) {
+    return targets;
+  }
+  const remaining = { ...targets };
+  delete remaining.companions;
+  return remaining;
+}
+
+function hasTargetContent(targets: RuntimeProviderTargets | undefined): boolean {
+  return Object.values(targets ?? {}).some(
+    (targetMap) => targetMap !== undefined && Object.keys(targetMap).length > 0,
+  );
+}
+
 function getEffectiveProviderSection(
   section: RuntimeProviderSectionShape | undefined,
   companionEnabled: boolean,
 ): RuntimeProviderSectionShape | undefined {
-  const companionTargets = section?.targets?.companions;
-  if (section === undefined || companionEnabled || companionTargets === undefined) {
+  const hasCompanionTargets = section?.targets?.companions !== undefined
+    || Object.values(section?.assignments ?? {}).some(
+      (assignment) => assignment.targets?.companions !== undefined,
+    );
+  if (section === undefined || companionEnabled || !hasCompanionTargets) {
     return section;
   }
 
   const profiles = section.profiles ?? {};
-  const companionRoots = new Set(Object.values(companionTargets).map((target) => target.profile));
+  const companionRoots = new Set<string>();
+  for (const target of Object.values(section.targets?.companions ?? {})) {
+    companionRoots.add(target.profile);
+  }
   const nonCompanionRoots = new Set<string>();
   if (section.defaults !== undefined) {
     addAssignmentProfiles(nonCompanionRoots, section.defaults);
@@ -184,6 +244,24 @@ function getEffectiveProviderSection(
     Object.values(targetMap ?? {}).forEach((assignment) => {
       addAssignmentProfiles(nonCompanionRoots, assignment);
     });
+  }
+  for (const assignment of Object.values(section.assignments ?? {})) {
+    if (assignment.defaults !== undefined) {
+      addAssignmentProfiles(nonCompanionRoots, assignment.defaults);
+    }
+    for (const targetMap of [
+      assignment.targets?.personas,
+      assignment.targets?.tags,
+      assignment.targets?.steps,
+      assignment.targets?.internal_agents,
+    ]) {
+      Object.values(targetMap ?? {}).forEach((target) => {
+        addAssignmentProfiles(nonCompanionRoots, target);
+      });
+    }
+    for (const target of Object.values(assignment.targets?.companions ?? {})) {
+      companionRoots.add(target.profile);
+    }
   }
   if (section.auto_routing?.router_profile !== undefined) {
     nonCompanionRoots.add(section.auto_routing.router_profile);
@@ -202,13 +280,32 @@ function getEffectiveProviderSection(
       !companionClosure.has(name) || nonCompanionClosure.has(name)
     )),
   );
-  const targets = { ...section.targets };
-  delete targets.companions;
-  return {
+  const targets = withoutCompanionTargets(section.targets);
+  const effectiveSection: RuntimeProviderSectionShape = {
     ...section,
     profiles: effectiveProfiles,
     targets,
   };
+  if (section.assignments !== undefined) {
+    const assignments: Record<string, RuntimeProviderAssignmentSetShape> = {};
+    for (const [name, assignment] of Object.entries(section.assignments)) {
+      const remainingTargets = withoutCompanionTargets(assignment.targets);
+      const hasRemainingTargets = hasTargetContent(remainingTargets);
+      if (assignment.defaults === undefined && !hasRemainingTargets) {
+        continue;
+      }
+      assignments[name] = {
+        ...(assignment.defaults === undefined ? {} : { defaults: assignment.defaults }),
+        ...(hasRemainingTargets ? { targets: remainingTargets } : {}),
+      };
+    }
+    if (Object.keys(assignments).length > 0) {
+      effectiveSection.assignments = assignments;
+    } else {
+      delete effectiveSection.assignments;
+    }
+  }
+  return effectiveSection;
 }
 
 /** Determine whether a provider section has active runtime configuration. */
@@ -220,14 +317,17 @@ export function hasActiveProviderContent(
   if (effectiveSection === undefined) {
     return false;
   }
-  const hasTargets = Object.values(effectiveSection.targets ?? {}).some(
-    (targetMap) => targetMap !== undefined && Object.keys(targetMap).length > 0,
-  );
+  const hasTargets = hasTargetContent(effectiveSection.targets);
+  const hasAssignments = Object.values(effectiveSection.assignments ?? {}).some((assignment) => (
+    (assignment.defaults !== undefined && Object.keys(assignment.defaults).length > 0)
+    || hasTargetContent(assignment.targets)
+  ));
   const hasDefaults = effectiveSection.defaults !== undefined
     && Object.keys(effectiveSection.defaults).length > 0;
   return hasDefaults
     || (effectiveSection.profiles !== undefined && Object.keys(effectiveSection.profiles).length > 0)
     || hasTargets
+    || hasAssignments
     || (effectiveSection.auto_routing !== undefined
       && Object.keys(effectiveSection.auto_routing).length > 0);
 }
@@ -236,7 +336,9 @@ export const RuntimeProviderFileSchema = z
   .object({
     version: z.literal(RUNTIME_PROVIDER_VERSION),
     companion: RuntimeCompanionPolicySchema.optional(),
+    loop_analysis: RuntimeLoopAnalysisSchema.optional(),
     provider: ProviderSectionSchema.optional(),
+    mcp: McpSectionSchema.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -254,8 +356,10 @@ export type RuntimeProviderFile = z.infer<typeof RuntimeProviderFileSchema>;
 export type RuntimeProviderSection = z.infer<typeof ProviderSectionSchema>;
 export type RuntimeProviderProfile = z.infer<typeof ProfileSchema>;
 export type RuntimeProviderAssignment = z.infer<typeof AssignmentSchema>;
+export type RuntimeProviderAssignmentSet = z.infer<typeof ProviderAssignmentSetSchema>;
 export type RuntimeCompanionProviderAssignment = z.infer<typeof CompanionAssignmentSchema>;
 export type RuntimeProviderAutoRouting = z.infer<typeof AutoRoutingSchema>;
+export type { McpSection } from './mcp-schema.js';
 
 /** Remove disabled companion-only targets before mode detection and provider compilation. */
 export function getEffectiveRuntimeProviderFile(

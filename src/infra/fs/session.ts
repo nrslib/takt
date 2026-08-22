@@ -8,6 +8,7 @@ import { generateReportDir as buildReportDir } from '../../shared/utils/index.js
 import type {
   SessionLog,
   NdjsonRecord,
+  NdjsonCompanionReviewMode,
   NdjsonWorkflowStackEntry,
   NdjsonWorkflowStart,
 } from '../../shared/utils/index.js';
@@ -39,6 +40,7 @@ export type {
   NdjsonCompanionQueueCoalesced,
   NdjsonCompanionCall,
   NdjsonCompanionReviewSkipped,
+  NdjsonCompanionReviewMode,
   NdjsonCompanionReviewTrigger,
   NdjsonRecord,
 } from '../../shared/utils/index.js';
@@ -503,6 +505,7 @@ function requireCompanionReviewRoundFields(
   record: Readonly<Record<string, unknown>>,
 ): void {
   requireNdjsonString(record.step, 'step');
+  requireCompanionReviewMode(record.reviewMode);
   requireNdjsonString(record.companion, 'companion');
   requireCompanionReviewTrigger(record.trigger);
   requireNdjsonString(record.digest, 'digest');
@@ -514,6 +517,12 @@ function requireCompanionReviewRoundFields(
   requireOptionalCompanionZeroReason(record.zeroReason);
   requireOptionalNdjsonStringArray(record.runPathNamespace, 'runPathNamespace');
   requireNdjsonString(record.timestamp, 'timestamp');
+}
+
+function requireCompanionReviewMode(value: unknown): asserts value is NdjsonCompanionReviewMode {
+  if (value !== 'completion' && value !== 'live') {
+    throw new Error('NDJSON companion review mode is invalid');
+  }
 }
 
 function requireCompanionQueueCoalescedFields(

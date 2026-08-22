@@ -15,7 +15,14 @@ import {
   emitFixActionEvents,
   emitRebuttalEvents,
 } from '../../analytics/index.js';
-import type { StepResultEvent, ReviewFindingEvent, RoutingDecisionEvent } from '../../analytics/index.js';
+import type {
+  CompanionAnalyticsEvent,
+  CompanionReviewRoundAnalyticsEvent,
+  CompanionReviewRoundAnalyticsPayload,
+  StepResultEvent,
+  ReviewFindingEvent,
+  RoutingDecisionEvent,
+} from '../../analytics/index.js';
 import type { WorkflowStep, AgentResponse } from '../../../core/models/index.js';
 import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
@@ -209,13 +216,34 @@ export class AnalyticsEmitter {
   }
 
   onCompanionEvent(
-    eventName: 'companion:start' | 'companion:pool_selected' | 'companion:finding' | 'companion:fix_round' | 'companion:complete' | 'companion:review_round' | 'companion:queue_coalesced',
-    payload: Record<string, unknown> & { step: string },
+    ...args: CompanionEventArgs
   ): void {
+    const [eventName, payload] = args;
+    if (eventName === 'companion:start') {
+      writeAnalyticsEvent({
+        type: 'companion',
+        action: 'start',
+        ...payload,
+        runId: this.runSlug,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+    if (eventName === 'companion:review_round') {
+      const event: CompanionReviewRoundAnalyticsEvent = {
+        type: 'companion',
+        action: 'review_round',
+        ...payload,
+        runId: this.runSlug,
+        timestamp: new Date().toISOString(),
+      };
+      writeAnalyticsEvent(event);
+      return;
+    }
+
     writeAnalyticsEvent({
       type: 'companion',
-      action: eventName.slice('companion:'.length) as
-        'start' | 'pool_selected' | 'finding' | 'fix_round' | 'complete' | 'review_round' | 'queue_coalesced',
+      action: eventName.slice('companion:'.length) as CompanionAnalyticsEventBaseAction,
       ...payload,
       runId: this.runSlug,
       timestamp: new Date().toISOString(),
@@ -244,6 +272,34 @@ function countExpectedPhases(step: WorkflowStep, interactive: boolean): number {
 
 type AutoRoutingProviderInfo = StepProviderInfo & {
   providerSource: Extract<ProviderResolutionSource, `auto.${string}`>;
+};
+
+type CompanionEventName =
+  | 'companion:start'
+  | 'companion:pool_selected'
+  | 'companion:finding'
+  | 'companion:fix_round'
+  | 'companion:complete'
+  | 'companion:review_round'
+  | 'companion:queue_coalesced';
+
+type CompanionAnalyticsEventBaseAction = Exclude<
+  CompanionAnalyticsEvent['action'],
+  'start' | 'review_round'
+>;
+
+type CompanionEventArgs =
+  | [eventName: 'companion:start', payload: CompanionStartAnalyticsPayload]
+  | [eventName: 'companion:review_round', payload: CompanionReviewRoundAnalyticsPayload]
+  | [
+      eventName: Exclude<CompanionEventName, 'companion:start' | 'companion:review_round'>,
+      payload: Record<string, unknown> & { step: string },
+    ];
+
+type CompanionStartAnalyticsPayload = Record<string, unknown> & {
+  step: string;
+  companion: string;
+  reviewMode: 'completion' | 'live';
 };
 
 function isConsistentAutoRoutingDecision(providerInfo: StepProviderInfo): providerInfo is AutoRoutingProviderInfo {

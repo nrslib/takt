@@ -33,6 +33,8 @@ import type {
   ProviderType,
   StreamCallback,
 } from '../../../shared/types/provider.js';
+import { buildMcpServerSetIdentity } from '../../../infra/config/runtime-provider/mcp-schema.js';
+import { resolveMcpAssignment, type AgentExecutionContext } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 import type {
   WorkflowEngineOptions,
   PhaseName,
@@ -512,15 +514,15 @@ export class OptionsBuilder {
       workflowMeta,
       childProcessEnv: this.engineOptions.childProcessEnv,
       ...(this.getFailureDir === undefined ? {} : { failureDir: this.getFailureDir() }),
+      mcpAssignment: this.engineOptions.mcpAssignment,
     };
     return baseOptions;
   }
 
   /**
-   * report / status phase 用の base options。capability に依存する値（outputSchema、
-   * allowedTools、mcpServers）を一切載せないので、provider が未解決のままでも安全に
-   * 組み立てられる。capability 検査は Phase 1 の buildAgentOptions と
-   * StepExecutor の structured output 実行判定に残る。
+   * report / status phase 用の base options。structured output と tool 制約は
+   * phase ごとに組み立てるが、MCP は phase をまたぐ agent execution の一部なので
+   * Phase 1 と同じ解決済み server set を引き継ぐ。
    */
   private buildReadonlyPhaseBaseOptions(
     step: WorkflowStep,
@@ -528,6 +530,7 @@ export class OptionsBuilder {
     runtime?: RuntimeStepResolution,
   ): ResolvedRunAgentOptions {
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
+    const mcpServers = this.resolveMcpServersForStep(step, baseOptions.resolvedProvider);
     return {
       cwd: baseOptions.cwd,
       projectCwd: baseOptions.projectCwd,
@@ -548,6 +551,9 @@ export class OptionsBuilder {
       workflowMeta: baseOptions.workflowMeta,
       failureDir: baseOptions.failureDir,
       childProcessEnv: baseOptions.childProcessEnv,
+      mcpServers,
+      mcpAssignment: baseOptions.mcpAssignment,
+      mcpServerIdentity: this.resolveMcpServerIdentityForEffectiveServers(mcpServers),
     };
   }
 
@@ -577,27 +583,83 @@ export class OptionsBuilder {
     step: WorkflowStep,
     provider: ProviderType | undefined,
   ): Record<string, McpServerConfig> | undefined {
+    // runtime MCP mode forbids workflow-sourced `step.mcpServers` (order.md:118,120).
+    // The root-workflow bootstrap gate catches top-level steps, but sub-workflow
+    // engines are constructed via `new WorkflowEngine(...)` and bypass bootstrap,
+    // so this guard runs for every engine level (root + nested). Empty `mcpServers`
+    // is a no-op and allowed; session-boundary `engineOptions.mcpServers` (CLI/ACP)
+    // is not workflow-sourced and remains permitted.
+    if (this.engineOptions.mcpAssignment !== undefined) {
+      const stepMcpServers = step.mcpServers;
+      if (stepMcpServers !== undefined && Object.keys(stepMcpServers).length > 0) {
+        const workflowStack = this.getCurrentWorkflowStack();
+        const workflowName = workflowStack !== undefined && workflowStack.length > 0
+          ? workflowStack[workflowStack.length - 1]?.workflow
+          : this.getWorkflowName();
+        const workflowLabel = workflowName !== undefined ? `"${workflowName}"` : '(unknown workflow)';
+        throw new Error(
+          `Mixed MCP configuration detected: runtime MCP mode is active, but step "${step.name}" of workflow ${workflowLabel} declares workflow-sourced mcp_servers. Remove the step mcp_servers or migrate them to mcp.targets.steps.`,
+        );
+      }
+    }
+    const runtimeServers = this.resolveRuntimeMcpServersForStep(step);
     const sessionServers = resolveSessionMcpServersForProvider(
       this.engineOptions.mcpServers,
       provider,
       step.name,
     );
-    const stepServers = resolveMcpServersForProvider(step.mcpServers, provider);
-    if (!sessionServers) {
-      return stepServers;
+    const stepServers = this.engineOptions.mcpAssignment === undefined
+      ? resolveMcpServersForProvider(step.mcpServers, provider)
+      : undefined;
+    return mergeMcpServerMaps(runtimeServers, sessionServers, stepServers, step.name);
+  }
+
+  /**
+   * Resolve runtime MCP assignment (runtime-v1 only) for a step. Returns
+   * `undefined` when no `mcpAssignment` is configured or the resolved set is
+   * empty (MCP disabled). Fail-fast on unknown server names is handled inside
+   * `resolveMcpAssignment`.
+   */
+  private resolveRuntimeMcpServersForStep(
+    step: WorkflowStep,
+  ): Record<string, McpServerConfig> | undefined {
+    const section = this.engineOptions.mcpAssignment;
+    if (section === undefined) {
+      return undefined;
     }
-    if (!stepServers) {
-      return sessionServers;
+    const context = this.buildMcpAgentExecutionContext(step);
+    const resolved = resolveMcpAssignment(section, context);
+    if (!resolved.enabled) {
+      return undefined;
     }
-    for (const serverName of Object.keys(sessionServers)) {
-      if (Object.prototype.hasOwnProperty.call(stepServers, serverName)) {
-        throw new Error(`MCP server "${serverName}" is defined by both session and step "${step.name}"`);
-      }
-    }
+    return resolved.servers;
+  }
+
+  private buildMcpAgentExecutionContext(step: WorkflowStep): AgentExecutionContext {
+    const workflowStack = this.getCurrentWorkflowStack();
+    const leafWorkflowName = workflowStack !== undefined && workflowStack.length > 0
+      ? workflowStack[workflowStack.length - 1]?.workflow
+      : this.getWorkflowName();
+    const stepQualifiedName = leafWorkflowName !== undefined
+      ? `${leafWorkflowName}/${step.name}`
+      : step.name;
     return {
-      ...sessionServers,
-      ...stepServers,
+      persona: step.persona,
+      tags: step.tags ?? [],
+      stepQualifiedName,
+      isWorkflowCallNode: getWorkflowStepKind(step) === 'workflow_call',
+      isInternalAgent: false,
     };
+  }
+
+  /** Build the identity from the same effective server set passed to the provider. */
+  private resolveMcpServerIdentityForEffectiveServers(
+    mcpServers: Record<string, McpServerConfig> | undefined,
+  ): string | undefined {
+    if (mcpServers === undefined || Object.keys(mcpServers).length === 0) {
+      return undefined;
+    }
+    return buildMcpServerSetIdentity(mcpServers);
   }
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
@@ -634,14 +696,19 @@ export class OptionsBuilder {
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
 
+    const mcpServers = this.resolveMcpServersForStep(step, resolvedProvider);
+    const mcpServerIdentity = this.resolveMcpServerIdentityForEffectiveServers(mcpServers);
+
     return {
       ...baseOptions,
       workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
       sessionId: shouldResumeSession
-        ? this.getSessionId(buildSessionKey(step, { provider: resolvedProvider, model: resolvedModel }))
+        ? this.getSessionId(buildSessionKey(step, { provider: resolvedProvider, model: resolvedModel, mcpServerIdentity }))
         : undefined,
       allowedTools,
-      mcpServers: this.resolveMcpServersForStep(step, resolvedProvider),
+      mcpServers,
+      mcpServerIdentity,
+      mcpAssignment: this.engineOptions.mcpAssignment,
       outputSchema: supportsStructuredOutput === false ? undefined : step.structuredOutput?.schema,
     };
   }
@@ -778,6 +845,8 @@ export class OptionsBuilder {
     onProviderAttempt?: ReportPhaseRunnerContext['onProviderAttempt'],
   ): ReportPhaseRunnerContext & StatusJudgmentPhaseContext {
     const stepProvider = this.resolveStepProviderModel(step, runtime);
+    const mcpServers = this.resolveMcpServersForStep(step, stepProvider.provider);
+    const mcpServerIdentity = this.resolveMcpServerIdentityForEffectiveServers(mcpServers);
     const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
       this.getCurrentWorkflowStack() ?? [],
     );
@@ -795,10 +864,14 @@ export class OptionsBuilder {
       observabilityRunId: this.engineOptions.observabilityRunId,
       observabilityEnabled: this.engineOptions.observability?.enabled === true,
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
+      reportContentSanitizer: this.engineOptions.reportContentSanitizer,
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
       abortSignal: this.resolveAbortSignal(),
       ...(this.getFailureDir === undefined ? {} : { failureDir: this.getFailureDir() }),
+      mcpServers,
+      mcpAssignment: this.engineOptions.mcpAssignment,
+      mcpServerIdentity,
       onStream: this.buildProviderStream(
         step,
         stepProvider.provider,
@@ -815,7 +888,12 @@ export class OptionsBuilder {
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {
         const providerInfo = this.resolveStepProviderModel(step, runtime);
-        return buildSessionKey(step, { provider: providerInfo.provider, model: providerInfo.model });
+        const mcpServers = this.resolveMcpServersForStep(step, providerInfo.provider);
+        return buildSessionKey(step, {
+          provider: providerInfo.provider,
+          model: providerInfo.model,
+          mcpServerIdentity: this.resolveMcpServerIdentityForEffectiveServers(mcpServers),
+        });
       },
       buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),
       buildNewSessionReportOptions: (step, overrides) => this.buildNewSessionReportOptions(step, overrides, runtime),
@@ -838,4 +916,40 @@ export class OptionsBuilder {
 
     return this.engineOptions.structuredCaller;
   }
+}
+
+/**
+ * Merge runtime, session, and step MCP server maps. Conflicts between any two
+ * layers fail fast so the user sees a deterministic error instead of a silent
+ * override (order.md:115-118). `undefined` layers are skipped.
+ */
+function mergeMcpServerMaps(
+  runtime: Record<string, McpServerConfig> | undefined,
+  session: Record<string, McpServerConfig> | undefined,
+  step: Record<string, McpServerConfig> | undefined,
+  stepName: string,
+): Record<string, McpServerConfig> | undefined {
+  if (runtime === undefined && session === undefined && step === undefined) {
+    return undefined;
+  }
+  const merged: Record<string, McpServerConfig> = {};
+  for (const [label, map] of [
+    ['runtime', runtime],
+    ['session', session],
+    ['step', step],
+  ] as const) {
+    if (map === undefined) {
+      continue;
+    }
+    for (const serverName of Object.keys(map)) {
+      if (Object.prototype.hasOwnProperty.call(merged, serverName)) {
+        throw new Error(`MCP server "${serverName}" is defined by both ${label} and another source for step "${stepName}"`);
+      }
+      const server = map[serverName];
+      if (server !== undefined) {
+        merged[serverName] = server;
+      }
+    }
+  }
+  return merged;
 }

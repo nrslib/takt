@@ -30,7 +30,7 @@ interactive_preview_steps: 3  # 交互模式中的 step 预览数（0-10，默�
 auto_requeue_max_attempts: 0  # takt run 期间失败 workflow task 的自动 requeue 次数（非负整数，默认 0 = 禁用）
 ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exceed（默认 false）
 assistant:
-  gherkin: true               # 将最终任务指令生成为 Markdown + 聚焦的 Gherkin（默认启用；设为 false 可禁用）
+  formal_spec: 'y/N'          # Alloy/Quint 模式：true、false、Y/n 或 y/N（默认 y/N）
 # auto_fetch: false           # 创建 clone 前 fetch remote（默认 false）
 # base_branch: main           # 创建 clone 的基分支（默认使用 remote 默认分支）
 
@@ -189,7 +189,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` 并行任务数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | 交互模式中的 step 预览数 |
-| `assistant.gherkin` | boolean | `true` | 在 assistant 生成的最终任务指令中组织关键行为和不变量；未设置时默认启用，项目中的显式值优先于全局值 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` | 仅在存在适用要求时添加相应的 Alloy/Quint 指导；每项要求只使用所需记法，不在多种记法中重复同一要求，也不强制同时使用两种记法。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。项目显式值优先于全局值。Gherkin 指导始终启用。 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
@@ -256,7 +256,7 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 
 # 项目专属的 assistant 设置
 # assistant:
-#   gherkin: true              # 覆盖全局设置；设为 false 可禁用
+#   formal_spec: 'Y/n'         # 覆盖全局 Alloy/Quint 模式；TTY 下以 Yes 为默认值提问
 #   init_files:
 #     # 仅项目配置支持；交互 assistant 的初始上下文文件
 #     - docs/assistant-context.md
@@ -331,7 +331,7 @@ steps:
     model: provider/model:high
 ```
 
-`provider` 和 `model` 声明选择 TAKT run 的 provider、model 和 thinking level；它们不会导入 Pi CLI 设置。Pi 认证由 Pi SDK credential store 或 provider 原生环境变量单独处理。`provider_options.pi` 是加载 `extensions` 和 `no_*` discovery 控制的独立路径；显式资源源只在本次 TAKT run 中临时解析，不会写入 Pi 设置。
+`provider` 和 `model` 声明选择 TAKT run 的 provider、model 和 thinking level；它们不会导入 Pi CLI 设置。Pi 认证由 Pi SDK credential store 或 provider 原生环境变量单独处理。`provider_options.pi` 是加载 `extensions` 和 `no_*` discovery 控制的独立路径；没有版本限定的显式 npm source 会依次复用已有的 project scope、user scope，只有两者都无法成功加载时才使用 temporary resolution；带版本的 npm source 和非 npm source 始终使用 temporary resolution。显式资源不会写入 Pi 设置。
 
 ### Provider inactivity deadline 与 OpenCode execution guard
 
@@ -362,7 +362,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` 的迭代限制绕过 |
 | `base_branch` | string | - | 创建 clone 的基分支 |
 | `assistant.init_files` | string[] | - | 仅项目级的 assistant 初始上下文文件。路径必须相对于项目根；绝对路径、解析到项目根之外的路径，以及 `.env*`、`.npmrc`、`.pypirc`、`.netrc`、`*.pem`、`*.key` 和 `.git/**` 等敏感文件模式会被拒绝。路径不存在、指向目录或文件不可读时会明确报错。最多 16 个文件，每个最多 256 KiB，合计最多 1 MiB。未设置或为空时，TAKT 不会自动发现 `CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` 或其他文件。 |
-| `assistant.gherkin` | boolean | `true`（来自全局/默认值） | 项目级的任务指令 Gherkin 覆盖设置。未设置时使用全局值；全局也未设置时默认启用。显式设为 `false` 可禁用。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"`（来自全局/默认值） | 仅在存在适用要求时添加相应 Alloy/Quint 指导的项目级覆盖；每项要求只使用所需记法，不在多种记法中重复同一要求，也不强制同时使用两种记法。项目值优先于全局值。提示回答仅在当前会话中生效，恢复会话时重新解析。ACP 和非 TTY 不提问，使用配置的默认答案。Gherkin 始终启用。已弃用的 `assistant.gherkin` 会警告后忽略，不转换、不持久化，也不修改配置文件。 |
 | `provider_options` | object | - | provider 专属选项 |
 | `provider_profiles` | object | - | provider 专属权限 profile |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自动检测 | 覆盖全局 VCS provider |
@@ -517,9 +517,16 @@ Companion reviewer 默认禁用。使用顶层 `companion.enabled` 策略启用�
 version: 1
 companion:
   enabled: true
+  review_mode: completion # completion | live
 ```
 
+`companion` 策略至少要指定 `enabled` 或 `review_mode` 之一。像
+`companion: { review_mode: live }` 这样的仅指定 mode 的策略会被接受，并解析为
+`enabled: false`；空的 `companion: {}` 会被拒绝。
+
 全局与项目策略同时设置时使用逻辑 AND；项目的 `true` 不能重新启用全局禁用的 companion。省略的策略在层合并时是 neutral；两层都没有设置时 Companion 仍禁用。Companion target 和 provider capability 只在启用时解析/执行；禁用时仍会校验 companion 声明和 `targets.companions` 的结构，但不会解析或运行 companion provider。只有存在有效 `provider` section 时才启用 runtime 模式；只有 `version: 1` 的文件不会改变旧版 `config.yaml` provider 解析。
+
+`companion.review_mode` 默认是 `completion`。project 值优先于 global 值；project 未指定时继承 global 值。`completion` 在 implementer 成功响应后审查累计 diff，`live` 保留响应期间的 quiet、forced 和 commit 触发。只接受 `completion` 和 `live`；无效值会在加载 `runtime.yaml` 时失败。即使 `companion.enabled` 为 `false`，仍会验证 mode 的结构，但不会解析或执行 Companion provider。
 
 ### 配置示例
 
@@ -586,6 +593,44 @@ provider:
             tier: low
         fallback_profile: sol-high
 ```
+
+### 按目录选择 assignment
+
+`provider.assignments` 用于定义按项目目录选择的命名 provider 配置集合。每个 entry 必须至少包含
+`defaults` 或 `targets`，不能使用空 assignment。`defaults` 与顶层 `provider.defaults` 形状完全相同，必须
+在 `profile` 和 `ladder` 中选择一个。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
+`steps` 可以使用 `profile`、`pool` 或 `ladder`，`internal_agents` 只能使用 `profile` 或 `ladder`，
+而 `companions` 只能使用固定的 `profile`。
+
+`provider.directories` 将目录路径映射到 assignment 名称。匹配对象是启动时的 project 目录。路径键会先展开
+`~`、转换为绝对路径，并对存在的路径进行 realpath 等价的规范化，然后进行完全匹配；不支持前缀匹配和 glob。
+如果目录值引用了未定义的 assignment，加载时会快速失败。目录匹配成功后使用 assignment 的 `defaults`；如果
+省略，则回退到顶层 `provider.defaults`。如果 assignment 提供了 `targets`，它会整体替换顶层
+`provider.targets`，不会按 `personas` 等子 map 合并。省略 `targets` 的 assignment 会继续使用顶层
+`provider.targets`。`profiles` 和 `auto_routing` 继续共享。
+
+```yaml
+provider:
+  assignments:
+    project-sol:
+      defaults:
+        profile: sol-medium
+      targets:
+        personas:
+          coder:
+            profile: sol-medium
+        steps:
+          default/implement:
+            pool: sol-pool
+
+  directories:
+    ~/work/example: project-sol
+```
+
+global 与 project 层之间，`assignments` 遵循与 profile 相同的规则：同名 entry 由 project 整体替换，不同名称
+的 entry 共存。`directories` 在规范化后的键相同时由 project 优先，不同路径则共存。上述合并发生在目录
+assignment 选择之前。assignment 内的 profile、pool、ladder 引用与其他 runtime provider 引用一样会被校验，
+并在 agent 运行前快速失败。
 
 `provider.profiles` 保存命名的 provider/model/options 定义。`provider.defaults` 必须在每个有效 provider section 中选择一个固定 `profile` 或有序 `ladder`；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
 
@@ -955,7 +1000,7 @@ provider_options:
     no_context_files: true    # 禁用 Pi context-file discovery
 ```
 
-显式资源只在 TAKT run 中临时解析，不会写入 Pi 设置；隐式项目本地 extension 不会被信任或加载。带有内嵌凭据或包含 secret 的 query 参数的 extension URL 会被拒绝。
+没有版本限定的显式 npm source 会依次复用已有的 project scope、user scope 安装；两者都无法解析为启用的资源时，才使用 temporary resolution，并且不会向持久 scope 安装。带版本限定的 npm source 始终使用 temporary resolution。显式资源不会写入 Pi 设置；隐式 project-local Pi 资源不会被信任或加载，只有为显式 npm source 检测到的绝对路径可以从 project package storage 复用。带有内嵌凭据或包含 secret 的 query 参数的 extension URL 会被拒绝。
 
 <a id="workflow-categories"></a>
 
@@ -969,7 +1014,9 @@ provider_options:
 # ~/.takt/preferences/workflow-categories.yaml
 workflow_categories:
   Development:
-    workflows: [default, simple]
+    workflows:
+      - default: "标准编码工作流"   # 名称: 描述，在选择项标签中追加描述
+      - simple
     Backend:
       workflows: [dual-cqrs]
     Frontend:
@@ -987,6 +1034,7 @@ others_category_name: "Other Workflows"
 
 - **嵌套分类**：支持任意深度；除 `workflows` 外的 key 都作为子分类名称，不使用 `children:`。
 - **每类 workflow 列表**：`workflows:` 保存该分类显示的 workflow 名称。
+- **Workflow 描述**：把 `workflows:` 条目写成 `- 名称: 描述` 即可在选择项标签中追加简短说明（纯字符串条目仍然可用）。同一 workflow 列入多个分类时，每处都写相同的描述；同一文件内为同名 workflow 写不同描述会报 validation error。用户 overlay 按 workflow 名称覆盖 builtin，也可以添加仅用户存在的名称。
 - **Others 分类**：收集未列入任何分类的 workflow，可用 `show_others_category: false` 关闭。
 - **Builtin 过滤**：用 `enable_builtin_workflows: false` 关闭全部 builtin，或用 `disabled_builtins: [name1, name2]` 关闭指定名称。
 
@@ -1047,7 +1095,7 @@ logging:
   debug: true
 ```
 
-debug 日志以 NDJSON 写入 `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log`，prompt/response 日志写入同目录的 `debug-{timestamp}-prompts.jsonl`。
+常规 debug 日志按进程写入 `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log`，格式为 NDJSON。prompt/response 日志按 workflow run 写入 `.takt/runs/<run>/logs/<sessionId>-prompts.jsonl`。
 
 ### 详细控制台输出
 
@@ -1057,7 +1105,7 @@ logging:
   level: debug
 ```
 
-`logging.level: debug` 会启用 CLI 的详细输出和上面的 debug logger；`logging.debug: true`、`logging.trace: true` 或 `logging.level: debug` 任一设置都可以生成 debug 产物。
+`logging.level: debug` 会启用 CLI 的详细输出，以及上面按进程保存的常规 debug 日志和按 workflow run 保存的 prompt/response 日志；`logging.debug: true`、`logging.trace: true` 或 `logging.level: debug` 任一设置都可以生成这些产物。
 
 ## Companion Provider Target
 

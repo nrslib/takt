@@ -32,6 +32,10 @@ import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
 import { loadGlobalConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
 import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
+import {
+  omitDeprecatedAssistantGherkin,
+  warnDeprecatedAssistantGherkin,
+} from '../deprecatedAssistantConfig.js';
 export { validateCliPath } from './cliPathValidator.js';
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
@@ -102,7 +106,7 @@ export class GlobalConfigManager {
     }
     const configPath = getGlobalConfigPath();
 
-    const { parsedConfig, rawConfig, trace } = loadGlobalConfigTrace(
+    const loadedTrace = loadGlobalConfigTrace(
       configPath,
       (value: unknown) => {
         if (value == null) {
@@ -116,6 +120,14 @@ export class GlobalConfigManager {
       },
       PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
     );
+    const parsedWithoutLegacy = omitDeprecatedAssistantGherkin(loadedTrace.parsedConfig);
+    const rawWithoutLegacy = omitDeprecatedAssistantGherkin(loadedTrace.rawConfig);
+    if (parsedWithoutLegacy.ignored || rawWithoutLegacy.ignored) {
+      warnDeprecatedAssistantGherkin();
+    }
+    const parsedConfig = parsedWithoutLegacy.config;
+    const rawConfig = rawWithoutLegacy.config;
+    const { trace } = loadedTrace;
     assertValidGlobalConfig(parsedConfig, configPath, true);
     assertNoUnknownGlobalConfigKeys(rawConfig);
     const parsed = GlobalConfigSchema.parse(rawConfig);

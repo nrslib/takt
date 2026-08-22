@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
+import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
+import {
+  createPersistedTaskOrderRevisionMock,
+  MOCK_CREATED_TASK_DIR,
+} from './testUtils/orderRevisionTestHelpers.js';
 
 const {
-  mockExistsSync,
-  mockReadFileSync,
   mockSelectWorkflow,
   mockSelectOptionWithDefault,
   mockConfirm,
@@ -30,13 +33,15 @@ const {
   mockLoadAllStandaloneWorkflowsWithSources,
   mockPrepareTaskSpecDirectory,
   mockCleanupPreparedTaskSpec,
+  mockResolveTaskOrderContent,
+  mockPersistTaskOrderRevision,
+  mockCleanupPersistedTaskOrderRevision,
+  mockAssertReusableWorktreePath,
   mockDetectDefaultBranch,
   mockResolveBaseBranch,
   mockGetCurrentBranch,
   mockLocalBranchExists,
 } = vi.hoisted(() => ({
-  mockExistsSync: vi.fn(() => true),
-  mockReadFileSync: vi.fn(),
   mockSelectWorkflow: vi.fn(),
   mockSelectOptionWithDefault: vi.fn(),
   mockConfirm: vi.fn(),
@@ -73,16 +78,15 @@ const {
   mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}]])),
   mockPrepareTaskSpecDirectory: vi.fn(),
   mockCleanupPreparedTaskSpec: vi.fn(),
+  mockResolveTaskOrderContent: vi.fn(() => 'Do something'),
+  mockPersistTaskOrderRevision: vi.fn((projectDir: string, taskDir?: string): PersistedTaskOrderRevision =>
+    createPersistedTaskOrderRevisionMock(projectDir, taskDir)),
+  mockCleanupPersistedTaskOrderRevision: vi.fn(),
+  mockAssertReusableWorktreePath: vi.fn(),
   mockDetectDefaultBranch: vi.fn(() => 'main'),
   mockResolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   mockGetCurrentBranch: vi.fn(() => 'feature/retry-context'),
   mockLocalBranchExists: vi.fn(() => true),
-}));
-
-vi.mock('node:fs', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  existsSync: (...args: unknown[]) => mockExistsSync(...args),
-  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
 }));
 
 vi.mock('../features/workflowSelection/index.js', () => ({
@@ -106,6 +110,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
     info: (...args: unknown[]) => mockLogInfo(...args),
+    debug: vi.fn(),
     error: vi.fn(),
   }),
 }));
@@ -120,6 +125,7 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 vi.mock('../features/interactive/index.js', () => ({
+  resolveLanguage: (lang?: string) => lang === 'ja' ? 'ja' : 'en',
   findRunForTask: (...args: unknown[]) => mockFindRunForTask(...args),
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
   getRunPaths: vi.fn(() => ({ logsDir: '/tmp/logs', reportsDir: '/tmp/reports' })),
@@ -169,8 +175,14 @@ vi.mock('../features/tasks/attachments.js', () => ({
   cleanupPreparedTaskSpec: (...args: unknown[]) => mockCleanupPreparedTaskSpec(...args),
 }));
 
-vi.mock('../features/tasks/taskSpecFile.js', () => ({
-  readTaskSpecFile: (sourceOrderPath: string) => mockReadFileSync(sourceOrderPath, 'utf-8'),
+vi.mock('../features/tasks/orderRevision.js', () => ({
+  resolveTaskOrderContent: (...args: unknown[]) => mockResolveTaskOrderContent(...args),
+  persistTaskOrderRevision: (...args: unknown[]) => mockPersistTaskOrderRevision(...args),
+  cleanupPersistedTaskOrderRevision: (...args: unknown[]) => mockCleanupPersistedTaskOrderRevision(...args),
+}));
+
+vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
+  assertReusableWorktreePath: (...args: unknown[]) => mockAssertReusableWorktreePath(...args),
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
@@ -378,12 +390,7 @@ function expectStartReExecutionCalledWith(
   resumeMode: string,
   options: Record<string, unknown>,
 ): void {
-  expect(mockStartReExecution).toHaveBeenCalledWith(
-    taskRef,
-    allowedStatuses,
-    resumeMode,
-    options,
-  );
+  expect(mockStartReExecution).toHaveBeenCalledWith(taskRef, allowedStatuses, resumeMode, options);
 }
 
 function expectResumeCandidateIsDefault(): void {
@@ -430,11 +437,8 @@ const testAttachment = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockExistsSync.mockReturnValue(true);
-  mockReadFileSync.mockImplementation(() => {
-    throw new Error('readFileSync should not be called by default');
-  });
-
+  mockResolveTaskOrderContent.mockImplementation(() => 'Do something');
+  mockAssertReusableWorktreePath.mockImplementation(() => undefined);
   mockConfirm.mockResolvedValue(true);
   mockSelectWorkflow.mockResolvedValue('default');
   mockResolveWorkflowConfigValue.mockReturnValue(3);
@@ -461,7 +465,7 @@ beforeEach(() => {
       ?? null
     ),
   );
-  mockRunTaskRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
+  mockRunTaskRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A', source: 'go' });
   mockFindPreviousOrderContent.mockReturnValue(null);
   mockLoadRunSessionContext.mockReturnValue({
     task: 'Do something',
@@ -1084,10 +1088,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: defaultPlanRestartPoint,
       },
@@ -1197,13 +1201,16 @@ describe('retryFailedTask', () => {
       action: 'execute',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     }, cleanupAttachments));
 
     await retryFailedTask(task, '/project');
 
-    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+    expect(mockPersistTaskOrderRevision).toHaveBeenCalledWith(
       '/project',
-      ['Do something', '', '## 追加指示', '', 'Use [Image #1].'].join('\n'),
+      undefined,
+      'Use [Image #1].',
+      'en',
       [testAttachment],
     );
     expectStartReExecutionCalledWith(
@@ -1212,10 +1219,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: 'Use [Image #1].',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: '.takt/tasks/my-task',
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: defaultPlanRestartPoint,
       },
@@ -1230,6 +1237,7 @@ describe('retryFailedTask', () => {
       action: 'execute',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     }, cleanupAttachments));
     mockStartReExecution.mockImplementationOnce(() => {
       throw new Error('start failed');
@@ -1238,6 +1246,32 @@ describe('retryFailedTask', () => {
     await expect(retryFailedTask(task, '/project')).rejects.toThrow('start failed');
 
     expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+    expect(mockCleanupPersistedTaskOrderRevision).toHaveBeenCalledWith(expect.objectContaining({
+      created: true,
+      taskDirRelative: MOCK_CREATED_TASK_DIR,
+      taskDir: `/project/${MOCK_CREATED_TASK_DIR}`,
+    }));
+  });
+
+  it('should rollback the revision when the worktree disappears before retry state mutation', async () => {
+    const task = makeFailedTask();
+    mockAssertReusableWorktreePath.mockImplementation((_projectDir: string, candidatePath: string) => {
+      if (mockPersistTaskOrderRevision.mock.calls.length > 0) {
+        throw new Error(`Worktree was replaced before retry state mutation: ${candidatePath}`);
+      }
+    });
+
+    await expect(retryFailedTask(task, '/project')).rejects.toThrow(
+      'Worktree was replaced before retry state mutation',
+    );
+
+    expect(mockCleanupPersistedTaskOrderRevision).toHaveBeenCalledWith(expect.objectContaining({
+      created: true,
+      taskDirRelative: MOCK_CREATED_TASK_DIR,
+      taskDir: `/project/${MOCK_CREATED_TASK_DIR}`,
+    }));
+    expect(mockStartReExecution).not.toHaveBeenCalled();
+    expect(mockRequeueTask).not.toHaveBeenCalled();
   });
 
   it('should preserve task_dir order content when retry task has image attachments', async () => {
@@ -1246,21 +1280,27 @@ describe('retryFailedTask', () => {
       taskDir: '.takt/tasks/my-task',
       data: { task: 'Implement using only the files in `.takt/tasks/my-task`.', workflow: 'default' },
     });
-    mockReadFileSync.mockReturnValue(['Original order', 'Second line'].join('\n'));
+    mockResolveTaskOrderContent.mockReturnValue(['Original order', 'Second line'].join('\n'));
     mockRunTaskRetryMode.mockResolvedValue({
       action: 'save_task',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     });
 
     await retryFailedTask(task, '/project');
 
-    expect(mockReadFileSync).toHaveBeenCalledWith('/project/.takt/tasks/my-task/order.md', 'utf-8');
-    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+    expect(mockResolveTaskOrderContent).toHaveBeenCalledWith(
       '/project',
-      ['Original order', 'Second line', '', '## 追加指示', '', 'Use [Image #1].'].join('\n'),
+      '.takt/tasks/my-task',
+      'Implement using only the files in `.takt/tasks/my-task`.',
+    );
+    expect(mockPersistTaskOrderRevision).toHaveBeenCalledWith(
+      '/project',
+      '.takt/tasks/my-task',
+      'Use [Image #1].',
+      'en',
       [testAttachment],
-      { sourceTaskDir: '/project/.takt/tasks/my-task' },
     );
   });
 
@@ -1270,7 +1310,7 @@ describe('retryFailedTask', () => {
       taskDir: '.takt/tasks/my-task',
       data: { task: 'Implement using only the files in `.takt/tasks/my-task`.', workflow: 'default' },
     });
-    mockReadFileSync.mockReturnValue([
+    mockResolveTaskOrderContent.mockReturnValue([
       'Original order with [Image #1].',
       '',
       '## 添付画像',
@@ -1281,6 +1321,7 @@ describe('retryFailedTask', () => {
       action: 'save_task',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     });
 
     await retryFailedTask(task, '/project');
@@ -1290,7 +1331,7 @@ describe('retryFailedTask', () => {
       ['failed'],
       {
         startStep: undefined,
-        retryNote: 'Use [Image #2].',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
         taskDir: '.takt/tasks/my-task',
@@ -1298,35 +1339,22 @@ describe('retryFailedTask', () => {
         restartPoint: defaultPlanRestartPoint,
       },
     );
-    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+    expect(mockPersistTaskOrderRevision).toHaveBeenCalledWith(
       '/project',
-      [
-        'Original order with [Image #1].',
-        '',
-        '## 添付画像',
-        '',
-        '- [Image #1]: `attachments/image-1.png`',
-        '',
-        '## 追加指示',
-        '',
-        'Use [Image #2].',
-      ].join('\n'),
-      [{
-        ...testAttachment,
-        placeholder: '[Image #2]',
-        fileName: 'image-2.png',
-      }],
-      { sourceTaskDir: '/project/.takt/tasks/my-task' },
+      '.takt/tasks/my-task',
+      'Use [Image #1].',
+      'en',
+      [testAttachment],
     );
   });
 
-  it('should pass renumbered retry note when executing retry attachments directly', async () => {
+  it('should persist renumbered attachment references in the revised order', async () => {
     const task = makeFailedTask({
       content: 'Implement using only the files in `.takt/tasks/my-task`.',
       taskDir: '.takt/tasks/my-task',
       data: { task: 'Implement using only the files in `.takt/tasks/my-task`.', workflow: 'default' },
     });
-    mockReadFileSync.mockReturnValue([
+    mockResolveTaskOrderContent.mockReturnValue([
       'Original order with [Image #1].',
       '',
       '## 添付画像',
@@ -1337,6 +1365,7 @@ describe('retryFailedTask', () => {
       action: 'execute',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     });
 
     await retryFailedTask(task, '/project');
@@ -1347,7 +1376,7 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: 'Use [Image #2].',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
         taskDir: '.takt/tasks/my-task',
@@ -1376,10 +1405,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: 'selected-workflow',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: defaultPlanRestartPoint,
       },
@@ -1489,10 +1518,7 @@ describe('retryFailedTask', () => {
       'run-1',
       expect.any(Function),
     );
-    expect(mockFindPreviousOrderContent).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/my-task',
-      'run-1',
-    );
+    expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
   });
 
   it('should keep using task.runSlug for retry context when run meta is missing', async () => {
@@ -1505,10 +1531,7 @@ describe('retryFailedTask', () => {
 
     expect(mockFindRunForTask).not.toHaveBeenCalled();
     expect(mockLoadRunSessionContext).not.toHaveBeenCalled();
-    expect(mockFindPreviousOrderContent).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/my-task',
-      'run-1',
-    );
+    expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
   });
 
   it('should default to the first authored leaf inside the failed root workflow_call', async () => {
@@ -1633,10 +1656,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'implement', kind: 'agent' }],
@@ -1702,10 +1725,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: resumePoint,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: undefined,
       },
@@ -1723,10 +1746,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
       },
@@ -1745,10 +1768,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
@@ -1806,10 +1829,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'review', kind: 'agent' }],
@@ -1829,10 +1852,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
@@ -1841,7 +1864,7 @@ describe('retryFailedTask', () => {
     );
   });
 
-  it('should append instruction to existing retry note', async () => {
+  it('should clear an existing retry note for revised-order execution', async () => {
     const task = makeFailedTask({ data: { task: 'Do something', workflow: 'default', retry_note: '既存ノート' } });
 
     await retryFailedTask(task, '/project');
@@ -1852,10 +1875,10 @@ describe('retryFailedTask', () => {
       'retry',
       {
         startStep: undefined,
-        retryNote: '既存ノート\n\n追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: defaultPlanRestartPoint,
       },
@@ -2001,7 +2024,7 @@ describe('retryFailedTask', () => {
 
   it('should show deprecated config warning when selected run order uses legacy provider fields', async () => {
     const task = makeFailedTask();
-    mockFindPreviousOrderContent.mockReturnValue([
+    mockResolveTaskOrderContent.mockReturnValue([
       'steps:',
       '  - name: review',
       '    provider: codex',
@@ -2056,7 +2079,9 @@ describe('retryFailedTask', () => {
   });
 
   it('should throw when worktree directory does not exist', async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockAssertReusableWorktreePath.mockImplementationOnce((_projectDir: string, candidatePath: string) => {
+      throw new Error(`Worktree directory does not exist: ${candidatePath}`);
+    });
     const task = makeFailedTask();
 
     await expect(retryFailedTask(task, '/project')).rejects.toThrow('Worktree directory does not exist');
@@ -2085,7 +2110,7 @@ describe('retryFailedTask', () => {
 
   it('should requeue task via requeueTask when save_task action', async () => {
     const task = makeFailedTask();
-    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A', source: 'go' });
 
     const result = await retryFailedTask(task, '/project');
 
@@ -2095,10 +2120,10 @@ describe('retryFailedTask', () => {
       ['failed'],
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
@@ -2109,12 +2134,40 @@ describe('retryFailedTask', () => {
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
   });
 
+  it('should rerun the canonical task_dir unchanged for plain /retry', async () => {
+    const task = makeFailedTask({
+      taskDir: '.takt/tasks/my-task',
+      content: 'Legacy task text',
+      data: { task: 'Legacy task text', workflow: 'default' },
+    });
+    mockResolveTaskOrderContent.mockReturnValue('# Canonical order');
+    mockRunTaskRetryMode.mockResolvedValue({
+      action: 'execute',
+      task: '# Canonical order',
+      source: 'retry',
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockPersistTaskOrderRevision).not.toHaveBeenCalled();
+    expectStartReExecutionCalledWith(
+      'my-task',
+      ['failed'],
+      'retry',
+      expect.objectContaining({
+        taskDir: '.takt/tasks/my-task',
+        retryNote: undefined,
+      }),
+    );
+  });
+
   it('should promote image attachments for retry save_task requeue', async () => {
     const task = makeFailedTask();
     mockRunTaskRetryMode.mockResolvedValue({
       action: 'save_task',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     });
 
     await retryFailedTask(task, '/project');
@@ -2124,17 +2177,19 @@ describe('retryFailedTask', () => {
       ['failed'],
       {
         startStep: undefined,
-        retryNote: 'Use [Image #1].',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: '.takt/tasks/my-task',
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: defaultPlanRestartPoint,
       },
     );
-    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+    expect(mockPersistTaskOrderRevision).toHaveBeenCalledWith(
       '/project',
-      ['Do something', '', '## 追加指示', '', 'Use [Image #1].'].join('\n'),
+      undefined,
+      'Use [Image #1].',
+      'en',
       [testAttachment],
     );
   });
@@ -2143,7 +2198,7 @@ describe('retryFailedTask', () => {
     const task = makeFailedTask();
     mockConfirm.mockResolvedValue(false);
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
-    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A', source: 'go' });
 
     await retryFailedTask(task, '/project');
 
@@ -2152,10 +2207,10 @@ describe('retryFailedTask', () => {
       ['failed'],
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: 'selected-workflow',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: defaultPlanRestartPoint,
       },
@@ -2196,7 +2251,7 @@ describe('retryFailedTask', () => {
       ],
     });
     selectStartCandidate('Resume failed position: default > delegate > takt/coding > review [default]');
-    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A', source: 'go' });
 
     const task = makeFailedTask({
       data: {
@@ -2215,10 +2270,10 @@ describe('retryFailedTask', () => {
       ['failed'],
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: resumePoint,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: undefined,
       },
@@ -2228,7 +2283,7 @@ describe('retryFailedTask', () => {
 
   it('should persist a stateless nested restart path for Retry save_task', async () => {
     const task = configureNestedReviewRestart();
-    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A', source: 'go' });
 
     await retryFailedTask(task, '/project');
 
@@ -2237,10 +2292,10 @@ describe('retryFailedTask', () => {
       ['failed'],
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
       },
@@ -2249,7 +2304,7 @@ describe('retryFailedTask', () => {
 
   it('should not expose an effect-backed system step through Retry save_task selection', async () => {
     mockLoadWorkflowByIdentifier.mockReturnValue(effectWorkflowConfig);
-    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A', source: 'go' });
 
     await retryFailedTask(makeFailedTask(), '/project');
 
@@ -2259,10 +2314,10 @@ describe('retryFailedTask', () => {
       ['failed'],
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
@@ -2273,7 +2328,7 @@ describe('retryFailedTask', () => {
 
   it('should sanitize task name in requeue confirmation', async () => {
     const task = makeFailedTask({ name: 'bad\x1b[31m-task\n' });
-    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A', source: 'go' });
 
     await retryFailedTask(task, '/project');
 
@@ -2282,9 +2337,9 @@ describe('retryFailedTask', () => {
     expect(infoText).toContain('bad-task\\n');
   });
 
-  it('should requeue task with existing retry note appended when save_task', async () => {
+  it('should clear an existing retry note when revised order is requeued', async () => {
     const task = makeFailedTask({ data: { task: 'Do something', workflow: 'default', retry_note: '既存ノート' } });
-    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A', source: 'go' });
 
     await retryFailedTask(task, '/project');
 
@@ -2293,10 +2348,10 @@ describe('retryFailedTask', () => {
       ['failed'],
       {
         startStep: undefined,
-        retryNote: '既存ノート\n\n追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: defaultPlanRestartPoint,
       },

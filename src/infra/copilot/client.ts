@@ -92,6 +92,13 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
     args.push('--allow-all-tools', '--no-ask-user');
   }
 
+  // Runtime MCP adapter route (issue #1137): pass the adapter-prepared
+  // `--additional-mcp-config=@<path>` arg so the runtime-resolved MCP
+  // servers become the session's effective set (order.md:216-219).
+  if (options.preparedMcp?.args && options.preparedMcp.args.length > 0) {
+    args.push(...options.preparedMcp.args);
+  }
+
   // --share exports session transcript to a markdown file, which we parse
   // to extract the session ID for later resumption.
   if (options.shareFilePath) {

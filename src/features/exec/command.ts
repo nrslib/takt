@@ -1,7 +1,9 @@
 import { matchSlashCommand } from '../interactive/commandMatcher.js';
-import { readInteractiveInput } from '../interactive/interactiveInput.js';
+import { readPipedLine } from '../interactive/lineEditor.js';
 import type { ConversationMessage } from '../interactive/interactive.js';
 import {
+  cleanupImageAttachmentStore,
+  cleanupImageAttachmentStoreOnProcessExit,
   createSessionImageAttachmentStore,
   resolvePromptImageAttachments,
   type InteractiveImageAttachment,
@@ -11,8 +13,16 @@ import { formatRunSessionForPrompt } from '../interactive/runSessionReader.js';
 import type { TaskExecutionOptions } from '../tasks/index.js';
 import { SlashCommand } from '../../shared/constants.js';
 import { blankLine, info, success } from '../../shared/ui/index.js';
-import { debugLog, sanitizeTerminalText } from '../../shared/utils/index.js';
+import { debugLog, hasInteractiveTerminal, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { askExecAssistant, createExecSessionContext, shouldKeepExecSession } from './assistantSession.js';
+import {
+  createExecTuiConversation,
+  EXEC_GO_HANDOFF,
+  EXEC_SETUP_HANDOFF,
+} from './tuiConversation.js';
+import { runTuiConversation } from '../tui/conversationRunner.js';
+import { describeSessionModel } from '../tui/tuiSetup.js';
+import { getLabel } from '../../shared/i18n/index.js';
 import { applyExecOverrides, formatExecConfigSummary } from './configOps.js';
 import { EXEC_CONVERSATION_COMMAND_AVAILABILITY } from './commandAvailability.js';
 import { listExecPresets, saveLastUsedExecConfig } from './presetStore.js';
@@ -68,14 +78,6 @@ function buildUserControlledAttachmentPrompt(history: ConversationMessage[], inl
     ...userMessages,
     ...(normalizedInlineText.length > 0 ? [normalizedInlineText] : []),
   ].join('\n');
-}
-
-function cleanupExecImageAttachmentStore(attachmentStore: ImageAttachmentStore): void {
-  try {
-    attachmentStore.cleanup();
-  } catch (error) {
-    debugLog('exec', 'Failed to cleanup exec image attachment store', error instanceof Error ? error.message : String(error));
-  }
 }
 
 async function runGoCommand(
@@ -154,15 +156,27 @@ async function runExecConversation(
   let currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
   let ctx = createExecSessionContext(cwd, currentRuntimeConfig);
   let history: ConversationMessage[] = [];
-  const attachmentStore = createSessionImageAttachmentStore();
+  const attachmentStore = createSessionImageAttachmentStore(cwd);
+  // `/setup` opens readline selectors, and those end the process themselves when
+  // the user interrupts them (`shared/prompt/select.ts` exits with 130). The run
+  // never reaches its own teardown then, so the pasted images get a net that
+  // does not depend on this call returning.
+  const releaseExitCleanup = cleanupImageAttachmentStoreOnProcessExit(attachmentStore);
   try {
     info('Starting exec mode');
+    if (hasInteractiveTerminal()) {
+      // The conversation opens with the summary and the commands as its first
+      // lines, so printing them here as well would say everything twice.
+      await runExecTuiConversation();
+      return;
+    }
+
     info(formatExecConfigSummary(currentRuntimeConfig));
     info('/setup to edit configuration, /go to execute, /cancel to exit');
     blankLine();
 
     while (true) {
-      const input = await readInteractiveInput('Assistant> ', ctx.lang, EXEC_CONVERSATION_COMMAND_AVAILABILITY, attachmentStore);
+      const input = await readPipedLine('Assistant> ');
       if (input === null) {
         info('Cancelled');
         return;
@@ -173,27 +187,10 @@ async function runExecConversation(
       }
       const match = matchSlashCommand(trimmed, EXEC_CONVERSATION_COMMAND_AVAILABILITY);
       if (match?.command === SlashCommand.Setup) {
-        try {
-          const previousSessionConfig = currentRuntimeConfig.session;
-          const previousConfig = currentConfig;
-          const nextConfig = await runSetupMenu(cwd, currentConfig, ctx, providerModelDefaults);
-          if (!isSameExecConfig(previousConfig, nextConfig)) {
-            saveExecConfigForNextRun(nextConfig);
-          }
-          currentConfig = nextConfig;
-          currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
-          const nextSessionId = shouldKeepExecSession(previousSessionConfig, currentRuntimeConfig.session) ? ctx.sessionId : undefined;
-          ctx = createExecSessionContext(
-            cwd,
-            currentRuntimeConfig,
-            nextSessionId,
-            ctx.codexSkillInheritance,
-          );
-          info(formatExecConfigSummary(currentRuntimeConfig));
-        } catch (error) {
-          info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
-          blankLine();
-        }
+        // The same menu the TUI hands the terminal over for; running it from one
+        // place is what keeps the two front-ends on the same settings.
+        await applySetupMenu();
+        info(formatExecConfigSummary(currentRuntimeConfig));
         continue;
       }
 
@@ -232,7 +229,92 @@ async function runExecConversation(
       }
     }
   } finally {
-    cleanupExecImageAttachmentStore(attachmentStore);
+    // The shared teardown, which seals before it deletes: a paste that the input
+    // did not wait for would otherwise recreate the session directory right
+    // after it was removed. With the files gone the net comes down.
+    cleanupImageAttachmentStore(attachmentStore);
+    releaseExitCleanup();
+  }
+
+  /**
+   * The same conversation on the TUI. `/setup` and `/go` are hand-offs: Ink is
+   * unmounted for the settings menu and for the workflow run, and the session
+   * picks up again afterwards with what happened on record.
+   */
+  async function runExecTuiConversation(): Promise<void> {
+    const conversation = createExecTuiConversation({
+      cwd,
+      attachmentStore,
+      session: () => ctx,
+      systemPrompt: () => loadTemplate('exec_assistant_clarify', ctx.lang),
+      onTurn: (turn, sessionId) => {
+        history = [...history, ...turn];
+        ctx = { ...ctx, sessionId };
+      },
+    });
+
+    await runTuiConversation({
+      cwd,
+      lang: ctx.lang,
+      conversation,
+      initialEntries: [
+        { role: 'system', content: formatExecConfigSummary(currentRuntimeConfig) },
+        { role: 'system', content: '/setup to edit configuration, /go to execute, /cancel to exit' },
+      ],
+      submitMode: 'chat',
+      autoSubmit: false,
+      // Read per mount: `/setup` can point the session at another provider.
+      modelLabel: () => getLabel('tui.ui.model', ctx.lang, { value: describeSessionModel(ctx) }),
+      // Exec never reaches the post-summary selector: `/go` runs the workflow
+      // itself, through its own hand-off.
+      chooseAction: () => Promise.resolve(null),
+      continuePrompt: '',
+      onHandoff: async (id, goText) => {
+        if (id === EXEC_SETUP_HANDOFF) {
+          await applySetupMenu();
+          return { kind: 'continue', notice: formatExecConfigSummary(currentRuntimeConfig) };
+        }
+        if (id !== EXEC_GO_HANDOFF) {
+          throw new Error(`Unknown exec hand-off: ${id}`);
+        }
+        try {
+          ctx = await runGoCommand(
+            cwd,
+            currentRuntimeConfig,
+            history,
+            goText,
+            ctx,
+            agentOverrides,
+            attachmentStore,
+          );
+        } catch (error) {
+          info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+        }
+        return { kind: 'continue', notice: getLabel('tui.ui.runFinished', ctx.lang) };
+      },
+    });
+    info('Cancelled');
+  }
+
+  /** `/setup`, with whatever it changed written back into the running session. */
+  async function applySetupMenu(): Promise<void> {
+    try {
+      const previousSessionConfig = currentRuntimeConfig.session;
+      const previousConfig = currentConfig;
+      const nextConfig = await runSetupMenu(cwd, currentConfig, ctx, providerModelDefaults);
+      if (!isSameExecConfig(previousConfig, nextConfig)) {
+        saveExecConfigForNextRun(nextConfig);
+      }
+      currentConfig = nextConfig;
+      currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
+      const nextSessionId = shouldKeepExecSession(previousSessionConfig, currentRuntimeConfig.session)
+        ? ctx.sessionId
+        : undefined;
+      ctx = createExecSessionContext(cwd, currentRuntimeConfig, nextSessionId, ctx.codexSkillInheritance);
+    } catch (error) {
+      info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+      blankLine();
+    }
   }
 }
 

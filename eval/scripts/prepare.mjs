@@ -257,6 +257,11 @@ const TARGETS = [
     fixture: 'eval/fixtures/companion-family-boundary',
   },
   {
+    id: 'companion-testing-later-scan',
+    companion: 'testing-review-companion',
+    fixture: 'eval/fixtures/testing-review-observable-evidence',
+  },
+  {
     id: 'companion-evidence-boundary',
     companion: 'review-companion-moderator',
     fixture: 'eval/fixtures/companion-family-boundary',
@@ -264,13 +269,13 @@ const TARGETS = [
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {
     id: 'final-readiness-supervision',
-    workflow: 'review-fix-default',
+    workflow: 'final-gate',
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-supervision',
   },
   {
     id: 'final-readiness-supervision-phase2',
-    workflow: 'review-fix-default',
+    workflow: 'final-gate',
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-supervision',
     phase: 'phase2',
@@ -278,7 +283,7 @@ const TARGETS = [
   },
   {
     id: 'final-readiness-precision',
-    workflow: 'review-fix-default',
+    workflow: 'final-gate',
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-precision',
   },
@@ -649,7 +654,7 @@ async function main() {
     };
 
     const instruction = companionSystemPrompt !== undefined
-      ? `${companionSystemPrompt}\n\n## Supplied work-in-progress context\n${TASK_MARKER}\n\n## Prior findings and notes\n${PREV_MARKER}`
+      ? `${companionSystemPrompt}\n\n## Supplied work-in-progress context\n${TASK_MARKER}\n\n## Earlier call context\n${PREV_MARKER}`
       : resolvedPhase === 'phase2'
       ? new ReportInstructionBuilder(target, {
           cwd: runDir,

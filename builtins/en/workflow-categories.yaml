@@ -1,95 +1,95 @@
 workflow_categories:
   🚀 Quick Start:
     workflows:
-      - default
-      - maintenance
-      - simple
-      - pure
+      - default: "Development"
+      - maintenance: "Develop in line with existing code"
+      - simple: "Two-agent implement/review loop"
+      - review-fix: "Parallel review, then fix"
   🛠️ Development:
     workflows:
-      - default
-      - maintenance
-      - simple
-      - pure
+      - default: "Development"
+      - maintenance: "Develop in line with existing code"
+      - simple: "Two-agent implement/review loop"
+      - pure: "Two-agent loop without TAKT's bundled review perspectives"
   🔍 Review:
     workflows:
-      - review
-      - review-fix-default
-      - audit-unit
-      - audit-e2e
-      - audit-security
-      - audit-architecture
+      - review: "Parallel review"
+      - review-fix: "Parallel review, then fix"
+      - audit-unit: "Audit all unit tests and write an issue-ready report"
+      - audit-e2e: "Audit all E2E tests and write an issue-ready report"
+      - audit-security: "Read every file and check security"
+      - audit-architecture: "Audit the whole architecture and write an issue-ready report"
   🏗️ Infrastructure:
     workflows:
-      - terraform
+      - terraform: "Terraform development"
   🎵 TAKT Development:
     workflows:
-      - takt-default
-      - takt-default-team
-      - auto-improvement-loop
-      - review-takt-default
-      - review-fix-takt-default
+      - takt-default: "TAKT development"
+      - takt-default-team: "TAKT development with an implementation team"
+      - auto-improvement-loop: "Keep cycling through PRs, issues, and improvements"
+      - review-takt-default: "Parallel review for TAKT"
+      - review-fix-takt-default: "Parallel review and fix for TAKT"
   📦 Legacy:
     workflows:
-      - cli
+      - cli: "CLI development"
     ✨ Simple:
       workflows:
-        - simple-mini
-        - simple-frontend
-        - simple-backend
-        - simple-dual
-        - simple-cqrs
-        - simple-dual-cqrs
+        - simple-mini: "Light development without test writing"
+        - simple-frontend: "Simple frontend development"
+        - simple-backend: "Simple backend development"
+        - simple-dual: "Simple full-stack development"
+        - simple-cqrs: "Simple CQRS+ES backend development"
+        - simple-dual-cqrs: "Simple CQRS+ES full-stack development"
     ⚡ Mini:
       workflows:
-        - simple-mini
-        - frontend-mini
-        - backend-mini
-        - backend-cqrs-mini
-        - dual-mini
-        - dual-cqrs-mini
+        - simple-mini: "Light development without test writing"
+        - frontend-mini: "Light frontend development"
+        - backend-mini: "Light backend development"
+        - backend-cqrs-mini: "Light CQRS+ES backend development"
+        - dual-mini: "Light full-stack development"
+        - dual-cqrs-mini: "Light CQRS+ES full-stack development"
     🎨 Frontend:
       workflows:
-        - simple-frontend
-        - frontend
-        - frontend-mini
-        - frontend-maintenance
+        - simple-frontend: "Simple frontend development"
+        - frontend: "Frontend development"
+        - frontend-mini: "Light frontend development"
+        - frontend-maintenance: "Frontend maintenance development"
     ⚙️ Backend:
       workflows:
-        - simple-backend
-        - simple-cqrs
-        - backend
-        - backend-mini
-        - backend-maintenance
-        - backend-cqrs
-        - backend-cqrs-mini
+        - simple-backend: "Simple backend development"
+        - simple-cqrs: "Simple CQRS+ES backend development"
+        - backend: "Backend development"
+        - backend-mini: "Light backend development"
+        - backend-maintenance: "Backend maintenance development"
+        - backend-cqrs: "CQRS+ES backend development"
+        - backend-cqrs-mini: "Light CQRS+ES backend development"
     🔧 Dual:
       workflows:
-        - simple-dual
-        - simple-dual-cqrs
-        - dual
-        - dual-mini
-        - dual-cqrs
-        - dual-cqrs-mini
+        - simple-dual: "Simple full-stack development"
+        - simple-dual-cqrs: "Simple CQRS+ES full-stack development"
+        - dual: "Full-stack development"
+        - dual-mini: "Light full-stack development"
+        - dual-cqrs: "CQRS+ES full-stack development"
+        - dual-cqrs-mini: "Light CQRS+ES full-stack development"
     🔍 Review:
       workflows:
-        - review-frontend
-        - review-fix-frontend
-        - review-backend
-        - review-fix-backend
-        - review-dual
-        - review-fix-dual
-        - review-dual-cqrs
-        - review-fix-dual-cqrs
-        - review-backend-cqrs
-        - review-fix-backend-cqrs
-        - audit-architecture-frontend
-        - audit-architecture-backend
-        - audit-architecture-dual
+        - review-frontend: "Frontend review"
+        - review-fix-frontend: "Frontend review and fix"
+        - review-backend: "Backend review"
+        - review-fix-backend: "Backend review and fix"
+        - review-dual: "Full-stack review"
+        - review-fix-dual: "Full-stack review and fix"
+        - review-dual-cqrs: "CQRS+ES full-stack review"
+        - review-fix-dual-cqrs: "CQRS+ES full-stack review and fix"
+        - review-backend-cqrs: "CQRS+ES backend review"
+        - review-fix-backend-cqrs: "CQRS+ES backend review and fix"
+        - audit-architecture-frontend: "Audit the frontend structure and write an issue-ready report"
+        - audit-architecture-backend: "Audit the backend structure and write an issue-ready report"
+        - audit-architecture-dual: "Audit the full-stack structure and write an issue-ready report"
   Others:
     workflows:
-      - research
-      - deep-research
-      - magi
+      - research: "Research autonomously without asking"
+      - deep-research: "Follow new questions and dig deeper"
+      - magi: "Evangelion-inspired three-way majority vote"
 show_others_category: true
 others_category_name: Others

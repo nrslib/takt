@@ -27,10 +27,9 @@ import type { CompanionReviewRequest } from './review-queue.js';
 interface CompanionReviewRoundInput {
   readonly companionName: string;
   readonly diff: CompanionDiff;
+  readonly baselineSha: string;
   readonly trigger: CompanionReviewRequest['reason'];
   readonly observedGeneration: number;
-  readonly changedRegionsSincePreviousReview: readonly string[];
-  readonly diffSummary: string;
   readonly implementerExplanation?: string;
   readonly signal: AbortSignal;
   readonly task: string;
@@ -84,9 +83,7 @@ export async function executeCompanionReviewRound(
       companionName: input.companionName,
       task: input.task,
       stepName: input.stepName,
-      cumulativeDiff: input.diff.content,
-      changedSincePreviousReview: input.changedRegionsSincePreviousReview,
-      diffSummary: input.diffSummary,
+      baselineSha: input.baselineSha,
       implementerExplanation: input.implementerExplanation,
     }),
     REVIEW_OUTPUT_JSON_SCHEMA,
@@ -138,8 +135,7 @@ async function moderateReviewerResult(
   const moderated = await moderateCompanionResult({
     reviewerResult,
     task: input.task,
-    cumulativeDiff: input.diff.content,
-    diffSummary: input.diffSummary,
+    baselineSha: input.baselineSha,
     implementerExplanation: input.implementerExplanation,
     runModerator: async (request) => {
       const response = await input.callStructured(

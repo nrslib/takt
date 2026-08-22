@@ -17,7 +17,6 @@ export const DEFAULT_COMPANION_ENABLED = false;
 /** Slash commands recognized in interactive mode */
 export const SlashCommand = {
   Accept: '/accept',
-  Play: '/play',
   Go: '/go',
   Retry: '/retry',
   Replay: '/replay',

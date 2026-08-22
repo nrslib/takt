@@ -43,6 +43,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     imageAttachments: options.imageAttachments,
     failureDir: options.failureDir,
     childProcessEnv: options.childProcessEnv,
+    preparedMcp: options.preparedMcp,
   };
 }
 
@@ -51,6 +52,7 @@ export class CodexProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
@@ -77,6 +79,9 @@ export class CodexProvider implements Provider {
   setupIsolatedStructured(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
     const call = async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
+      // Isolated structured execution is intentionally strict-readonly and
+      // disables MCP. Clear both fields explicitly so a prepared runtime MCP
+      // configuration is never silently inherited by this provider path.
       const isolatedOptions: ProviderCallOptions = {
         ...options,
         sessionId: undefined,
@@ -84,6 +89,7 @@ export class CodexProvider implements Provider {
         permissionMode: 'readonly',
         allowedTools: [],
         mcpServers: undefined,
+        preparedMcp: undefined,
         imageAttachments: undefined,
         outputSchema: assertOutputSchema(options.outputSchema, 'codex'),
       };
