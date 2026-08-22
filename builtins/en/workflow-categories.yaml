@@ -1,117 +1,103 @@
 workflow_categories:
   🚀 Quick Start:
     workflows:
-      - default
-      - maintenance
-      - simple
-      - review-fix
+      - default: "Standard coding with adjudicated, verified review remediation"
+      - maintenance: "Contract-preserving maintenance development"
+      - simple: "Lightweight development with automatic domain facets"
+      - review-fix: "Multi-perspective review with verified remediation"
   🛠️ Development:
     workflows:
       - default
       - maintenance
       - simple
-      - pure
+      - pure: "Facet-free development that trusts model judgment"
   🔍 Review:
     workflows:
-      - review
+      - review: "Select and synthesize parallel specialist reviews"
       - review-fix
-      - audit-unit
-      - audit-e2e
-      - audit-security
-      - audit-architecture
+      - audit-unit: "Unit-test behavior and coverage audit"
+      - audit-e2e: "E2E user-flow and coverage audit"
+      - audit-security: "Full security audit across project files"
+      - audit-architecture: "Full architecture audit with an issue-ready report"
   🏗️ Infrastructure:
     workflows:
-      - terraform
+      - terraform: "Terraform IaC development from plan to completion"
   🎵 TAKT Development:
     workflows:
-      - takt-default
-      - takt-default-team
-      - auto-improvement-loop
-      - review-takt-default
-      - review-fix-takt-default
+      - takt-default: "Standard development with TAKT-specific facets"
+      - takt-default-team: "TAKT development with Team Leader execution"
+      - auto-improvement-loop: "Infinite loop for PRs, issues, and improvements"
+      - review-takt-default: "TAKT-focused multi-perspective review"
+      - review-fix-takt-default: "Review and fix with TAKT-specific facets"
   📦 Legacy:
     workflows:
-      - cli
+      - cli: "CLI development with injected CLI facets"
     ✨ Simple:
       workflows:
-        - simple-mini
-        - simple-frontend
-        - simple-backend
-        - simple-dual
-        - simple-cqrs
-        - simple-dual-cqrs
+        - simple-mini: "Lightweight mini development without dedicated test writing"
+        - simple-frontend: "Simple development with frontend knowledge"
+        - simple-backend: "Simple development with backend knowledge"
+        - simple-dual: "Simple development with frontend and backend knowledge"
+        - simple-cqrs: "Simple development with backend and CQRS+ES knowledge"
+        - simple-dual-cqrs: "Simple development with frontend, backend, and CQRS+ES knowledge"
     ⚡ Mini:
       workflows:
         - simple-mini
-        - frontend-mini
-        - backend-mini
-        - backend-cqrs-mini
-        - dual-mini
-        - dual-cqrs-mini
+        - frontend-mini: "Frontend-focused mini development"
+        - backend-mini: "Backend-focused mini development"
+        - backend-cqrs-mini: "CQRS+ES-focused mini backend development"
+        - dual-mini: "Frontend and backend mini development"
+        - dual-cqrs-mini: "CQRS+ES full-stack mini development"
     🎨 Frontend:
       workflows:
         - simple-frontend
-        - frontend
+        - frontend: "Frontend development with injected domain facets"
         - frontend-mini
-        - frontend-maintenance
+        - frontend-maintenance: "Frontend maintenance with existing-system facets"
     ⚙️ Backend:
       workflows:
         - simple-backend
         - simple-cqrs
-        - backend
+        - backend: "Backend development with injected domain facets"
         - backend-mini
-        - backend-maintenance
-        - backend-cqrs
+        - backend-maintenance: "Backend maintenance with existing-system facets"
+        - backend-cqrs: "Backend CQRS+ES development with injected facets"
         - backend-cqrs-mini
     🔧 Dual:
       workflows:
         - simple-dual
         - simple-dual-cqrs
-        - dual
+        - dual: "Frontend and backend development with injected facets"
         - dual-mini
-        - dual-cqrs
+        - dual-cqrs: "Frontend, backend, and CQRS+ES development"
         - dual-cqrs-mini
     🔍 Review:
       workflows:
-        - review-frontend
-        - review-fix-frontend
-        - review-backend
-        - review-fix-backend
-        - review-dual
-        - review-fix-dual
-        - review-dual-cqrs
-        - review-fix-dual-cqrs
-        - review-backend-cqrs
-        - review-fix-backend-cqrs
-        - audit-architecture-frontend
-        - audit-architecture-backend
-        - audit-architecture-dual
+        - review-frontend: "Frontend-focused structure and design review"
+        - review-fix-frontend: "Frontend-focused review and fix loop"
+        - review-backend: "Backend-focused structure and design review"
+        - review-fix-backend: "Backend-focused review and fix loop"
+        - review-dual: "Frontend and backend-focused review"
+        - review-fix-dual: "Frontend and backend review and fix loop"
+        - review-dual-cqrs: "Frontend and CQRS+ES-focused review"
+        - review-fix-dual-cqrs: "Frontend and CQRS+ES review and fix loop"
+        - review-backend-cqrs: "Backend and CQRS+ES-focused review"
+        - review-fix-backend-cqrs: "Backend and CQRS+ES review and fix loop"
+        - audit-architecture-frontend: "Frontend architecture audit with an issue-ready report"
+        - audit-architecture-backend: "Backend architecture audit with an issue-ready report"
+        - audit-architecture-dual: "Full-stack boundary and wiring audit with an issue-ready report"
   Others:
     workflows:
-      - research
-      - deep-research
-      - magi
+      - research: "Autonomous research without asking questions"
+      - deep-research: "Discovery-driven deep research with multi-perspective analysis"
+      - magi: "Three-perspective deliberation with majority decision"
 show_others_category: true
 others_category_name: Others
 
+# Descriptions for workflows not listed in any category (shared cores, etc.). A workflow name
+# cannot be described both in a workflows entry and in this map.
 workflow_descriptions:
-  audit-architecture: "Full architecture audit with an issue-ready report"
-  audit-architecture-backend: "Backend architecture audit with an issue-ready report"
-  audit-architecture-dual: "Full-stack boundary and wiring audit with an issue-ready report"
-  audit-architecture-frontend: "Frontend architecture audit with an issue-ready report"
-  audit-e2e: "E2E user-flow and coverage audit"
-  audit-security: "Full security audit across project files"
-  audit-unit: "Unit-test behavior and coverage audit"
-  auto-improvement-loop: "Infinite loop for PRs, issues, and improvements"
-  backend: "Backend development with injected domain facets"
-  backend-cqrs: "Backend CQRS+ES development with injected facets"
-  backend-cqrs-mini: "CQRS+ES-focused mini backend development"
-  backend-maintenance: "Backend maintenance with existing-system facets"
-  backend-mini: "Backend-focused mini development"
-  cli: "CLI development with injected CLI facets"
   compound-eye: "Multi-eye review that synthesizes independent responses"
-  deep-research: "Discovery-driven deep research with multi-perspective analysis"
-  default: "Standard coding with adjudicated, verified review remediation"
   development-core: "Shared development core from planning to final check"
   development-implement: "Fixed-facet implementation execution"
   development-implement-dynamic: "Dynamic-facet implementation execution"
@@ -120,49 +106,14 @@ workflow_descriptions:
   development-remediation-dynamic: "Dynamic-facet remediation and verification"
   development-remediation-team: "Finding convergence with Team Leader fixes"
   development-review: "Common review execution for development workflows"
-  dual: "Frontend and backend development with injected facets"
-  dual-cqrs: "Frontend, backend, and CQRS+ES development"
-  dual-cqrs-mini: "CQRS+ES full-stack mini development"
-  dual-mini: "Frontend and backend mini development"
   final-gate: "Judge requirement fulfillment and the next action"
-  frontend: "Frontend development with injected domain facets"
-  frontend-maintenance: "Frontend maintenance with existing-system facets"
-  frontend-mini: "Frontend-focused mini development"
   loop-analysis: "Review evidence-backed improvements to reduce avoidable loops"
-  magi: "Three-perspective deliberation with majority decision"
-  maintenance: "Contract-preserving maintenance development"
   mini-core: "Mini development core for planning, implementation, and review"
   peer-review: "Convergent specialist review with adjudication and fixes"
   peer-review-suite-base: "Shared reviewer suite with injectable domain context"
   peer-review-suite-cqrs: "Reviewer suite with CQRS and event-sourcing expertise"
   peer-review-suite-frontend: "Reviewer suite with frontend expertise"
   peer-review-suite-frontend-cqrs: "Reviewer suite with frontend and CQRS expertise"
-  pure: "Facet-free development that trusts model judgment"
-  research: "Autonomous research without asking questions"
-  review: "Select and synthesize parallel specialist reviews"
-  review-backend: "Backend-focused structure and design review"
-  review-backend-cqrs: "Backend and CQRS+ES-focused review"
-  review-dual: "Frontend and backend-focused review"
-  review-dual-cqrs: "Frontend and CQRS+ES-focused review"
-  review-fix: "Multi-perspective review with verified remediation"
-  review-fix-backend: "Backend-focused review and fix loop"
-  review-fix-backend-cqrs: "Backend and CQRS+ES review and fix loop"
-  review-fix-dual: "Frontend and backend review and fix loop"
-  review-fix-dual-cqrs: "Frontend and CQRS+ES review and fix loop"
-  review-fix-frontend: "Frontend-focused review and fix loop"
-  review-fix-takt-default: "Review and fix with TAKT-specific facets"
-  review-frontend: "Frontend-focused structure and design review"
   review-remediation: "Plan, fix, and verify review findings"
-  review-takt-default: "TAKT-focused multi-perspective review"
-  simple: "Lightweight development with automatic domain facets"
-  simple-backend: "Simple development with backend knowledge"
   simple-core: "Simple core for planning, testing, implementation, and review"
-  simple-cqrs: "Simple development with backend and CQRS+ES knowledge"
-  simple-dual: "Simple development with frontend and backend knowledge"
-  simple-dual-cqrs: "Simple development with frontend, backend, and CQRS+ES knowledge"
-  simple-frontend: "Simple development with frontend knowledge"
-  simple-mini: "Lightweight mini development without dedicated test writing"
-  takt-default: "Standard development with TAKT-specific facets"
-  takt-default-team: "TAKT development with Team Leader execution"
   takt-development-review: "TAKT-specific review execution"
-  terraform: "Terraform IaC development from plan to completion"

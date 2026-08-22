@@ -1227,7 +1227,9 @@ provider_options:
 # ~/.takt/preferences/workflow-categories.yaml（または workflow_categories_file で指定したファイル）
 workflow_categories:
   Development:
-    workflows: [default, simple]
+    workflows:
+      - default: "標準コーディングワークフロー"   # 名前: 説明 で選択ラベルに説明を併記
+      - simple
     Backend:
       workflows: [dual-cqrs]
     Frontend:
@@ -1235,9 +1237,9 @@ workflow_categories:
   Research:
     workflows: [research, magi]
 
+# カテゴリに列挙しない workflow の説明はトップレベルのマップに書く
 workflow_descriptions:
-  default: "標準コーディングワークフロー"
-  review: "多角的なコードレビュー"
+  development-core: "共有開発コア"
 
 show_others_category: true         # 未分類の workflow を表示（デフォルト: true）
 others_category_name: "Other Workflows"  # 未分類カテゴリの名前
@@ -1247,8 +1249,8 @@ others_category_name: "Other Workflows"  # 未分類カテゴリの名前
 
 - **ネストされたカテゴリ** — 階層的な整理のための無制限の深さ。カテゴリ配下の `workflows` 以外のキーはすべて子カテゴリ名として扱われます（`children:` キーはありません）
 - **カテゴリごとの workflow リスト** — 各カテゴリの `workflows:` に、そのグループに表示する workflow 名を並べる
+- **Workflow の説明** — `workflows:` のエントリを `- 名前: 説明` の形にすると選択ラベルに短い説明を併記します（文字列だけの従来形式も使えます）。複数カテゴリに列挙される workflow の説明は最初の1か所にだけ書き、同じファイル内で異なる説明を付けると validation error になります。カテゴリに列挙しない workflow の説明はトップレベルの `workflow_descriptions` マップに書きます（同名をエントリとマップの両方で説明することはできません）。ユーザー overlay は builtin を workflow 名単位で上書きでき、ユーザー固有の名前も追加可能
 - **その他カテゴリ** — いずれのカテゴリにも列挙されていない workflow を自動収集（`show_others_category: false` で無効化可能）
-- **Workflow の説明** — 一致する workflow の選択ラベルに短い説明を追加。ユーザー overlay は workflow 名単位で builtin を上書きでき、ユーザー固有の名前も追加可能
 - **ビルトイン workflow フィルタリング** — `enable_builtin_workflows: false` ですべてのビルトインを無効化、または `disabled_builtins: [name1, name2]` で名前指定で無効化
 
 ### カテゴリのリセット

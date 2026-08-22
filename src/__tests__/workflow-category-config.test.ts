@@ -174,14 +174,86 @@ workflow_categories:
     expect(config!.hasUserCategories).toBe(false);
   });
 
-  it('should load workflow descriptions from the category file', () => {
+  it('should load inline workflow descriptions from workflows entries', () => {
     writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
 workflow_categories:
   Quick Start:
     workflows:
+      - default: Standard coding workflow
+      - plain-name
+  Dev:
+    workflows:
       - default
+      - review: Multi-perspective review
+`);
+
+    const config = loadDefaultCategories(testDir);
+
+    expect(config!.workflowCategories).toEqual([
+      { name: 'Quick Start', workflows: ['default', 'plain-name'], children: [] },
+      { name: 'Dev', workflows: ['default', 'review'], children: [] },
+    ]);
+    expect(config!.workflowDescriptions).toEqual({
+      default: 'Standard coding workflow',
+      review: 'Multi-perspective review',
+    });
+  });
+
+  it('should accept the same description repeated for a workflow in multiple categories', () => {
+    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
+workflow_categories:
+  Quick Start:
+    workflows:
+      - default: Standard coding workflow
+  Dev:
+    workflows:
+      - default: Standard coding workflow
+`);
+
+    const config = loadDefaultCategories(testDir);
+
+    expect(config!.workflowDescriptions).toEqual({ default: 'Standard coding workflow' });
+  });
+
+  it('should reject conflicting inline descriptions for the same workflow in one file', () => {
+    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
+workflow_categories:
+  Quick Start:
+    workflows:
+      - default: First description
+  Dev:
+    workflows:
+      - default: Different description
+`);
+
+    expect(() => loadDefaultCategories(testDir)).toThrow(
+      'conflicting descriptions for workflow "default"',
+    );
+  });
+
+  it('should reject a workflows entry map with more than one key', () => {
+    expect(() => parseWorkflowCategoryOverlay({
+      workflow_categories: { Main: { workflows: [{ default: 'desc', extra: 'desc2' }] } },
+    }, 'test-categories.yaml')).toThrow(
+      'workflow entry map must have exactly one key in test-categories.yaml',
+    );
+  });
+
+  it('should reject an empty inline workflow description', () => {
+    expect(() => parseWorkflowCategoryOverlay({
+      workflow_categories: { Main: { workflows: [{ default: '   ' }] } },
+    }, 'test-categories.yaml')).toThrow(
+      'description must be a non-empty string in test-categories.yaml at Main > default',
+    );
+  });
+
+  it('should load workflow descriptions from the top-level map for unlisted workflows', () => {
+    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
+workflow_categories:
+  Quick Start:
+    workflows:
+      - default: Standard coding workflow
 workflow_descriptions:
-  default: Standard coding workflow
   user-only: User workflow description
 `);
 
@@ -193,19 +265,36 @@ workflow_descriptions:
     });
   });
 
-  it('should let user descriptions override builtin names and add user-only names', () => {
+  it('should reject a workflow described both inline and in the top-level map', () => {
+    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
+workflow_categories:
+  Quick Start:
+    workflows:
+      - default: Inline description
+workflow_descriptions:
+  default: Map description
+`);
+
+    expect(() => loadDefaultCategories(testDir)).toThrow(
+      'workflow "default" has a description in both a workflows entry and workflow_descriptions',
+    );
+  });
+
+  it('should let user overlay descriptions override builtin names and add user-only names', () => {
     writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
 workflow_categories:
   Main:
     workflows:
-      - default
+      - default: Builtin description
 workflow_descriptions:
-  default: Builtin description
   review: Builtin review description
 `);
     writeYaml(pathsState.userCategoriesPath, `
+workflow_categories:
+  Mine:
+    workflows:
+      - default: User description
 workflow_descriptions:
-  default: User description
   custom: User-only description
 `);
 
@@ -218,10 +307,12 @@ workflow_descriptions:
     });
   });
 
-  it('should load descriptions for the flat path when categories are unavailable', () => {
+  it('should load descriptions from the user overlay for the flat path', () => {
     writeYaml(pathsState.userCategoriesPath, `
-workflow_descriptions:
-  custom: User-only description
+workflow_categories:
+  Mine:
+    workflows:
+      - custom: User-only description
 `);
 
     expect(getWorkflowDescriptions(testDir)).toEqual({
@@ -229,7 +320,7 @@ workflow_descriptions:
     });
   });
 
-  it('should reject empty workflow descriptions', () => {
+  it('should reject empty workflow descriptions in the top-level map', () => {
     expect(() => parseWorkflowCategoryOverlay({
       workflow_descriptions: { default: '   ' },
     }, 'test-categories.yaml')).toThrow(

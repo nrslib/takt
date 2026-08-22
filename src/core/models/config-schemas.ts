@@ -72,15 +72,15 @@ export const ProviderRoutingSchema = z.object({
   steps: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
 }).strict().optional();
 
-/** Workflow category config schema (recursive) */
+/** Workflow category config schema (recursive). A workflows entry is a plain name or a `{ name: description }` pair. */
 export type WorkflowCategoryConfigNode = {
-  workflows?: string[];
-  [key: string]: WorkflowCategoryConfigNode | string[] | undefined;
+  workflows?: (string | Record<string, string>)[];
+  [key: string]: WorkflowCategoryConfigNode | (string | Record<string, string>)[] | undefined;
 };
 
 export const WorkflowCategoryConfigNodeSchema: z.ZodType<WorkflowCategoryConfigNode> = z.lazy(() =>
   z.object({
-    workflows: z.array(z.string()).optional(),
+    workflows: z.array(z.union([z.string(), z.record(z.string(), z.string())])).optional(),
   }).catchall(WorkflowCategoryConfigNodeSchema)
 );
 
