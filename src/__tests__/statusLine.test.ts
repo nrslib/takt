@@ -25,6 +25,7 @@ describe('StatusLine', () => {
 
   afterEach(() => {
     statusLine.stop();
+    vi.useRealTimers();
     Object.defineProperty(process.stdout, 'isTTY', { value: savedStdoutIsTTY, configurable: true });
     process.stdout.write = savedStdoutWrite;
     process.stderr.write = savedStderrWrite;
@@ -130,6 +131,22 @@ describe('StatusLine', () => {
     vi.advanceTimersByTime(100);
 
     expect(stdoutChunks.some((chunk) => chunk.includes('updated'))).toBe(true);
+  });
+
+  it('should defer start after suspending an inactive status line', () => {
+    vi.useFakeTimers();
+    statusLine.stop();
+    statusLine.suspend();
+    statusLine.start('deferred');
+
+    vi.advanceTimersByTime(100);
+
+    expect(stdoutChunks.some((chunk) => chunk.includes('deferred'))).toBe(false);
+
+    statusLine.resume();
+    vi.advanceTimersByTime(100);
+
+    expect(stdoutChunks.some((chunk) => chunk.includes('deferred'))).toBe(true);
   });
 
   it('should be safe to call stop multiple times', () => {

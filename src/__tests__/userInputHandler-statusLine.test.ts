@@ -20,6 +20,7 @@ describe('user input and StatusLine', () => {
   let savedStderrWrite: typeof process.stderr.write;
   let savedStdinPause: typeof process.stdin.pause;
   let savedNoTty: string | undefined;
+  let savedTouchTty: string | undefined;
   let stdoutChunks: string[];
 
   beforeEach(() => {
@@ -30,6 +31,7 @@ describe('user input and StatusLine', () => {
     savedStderrWrite = process.stderr.write;
     savedStdinPause = process.stdin.pause;
     savedNoTty = process.env.TAKT_NO_TTY;
+    savedTouchTty = process.env.TAKT_TEST_FLG_TOUCH_TTY;
     stdoutChunks = [];
 
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
@@ -58,6 +60,11 @@ describe('user input and StatusLine', () => {
     } else {
       process.env.TAKT_NO_TTY = savedNoTty;
     }
+    if (savedTouchTty === undefined) {
+      delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
+    } else {
+      process.env.TAKT_TEST_FLG_TOUCH_TTY = savedTouchTty;
+    }
     readlineMocks.createInterface.mockReset();
   });
 
@@ -82,6 +89,18 @@ describe('user input and StatusLine', () => {
     await expect(inputPromise).resolves.toBe('answer');
 
     vi.advanceTimersByTime(100);
+    expect(stdoutChunks.some((chunk) => chunk.includes('Running...'))).toBe(true);
+  });
+
+  it('should resume the status line when promptInput rejects during forced TTY validation', async () => {
+    process.env.TAKT_TEST_FLG_TOUCH_TTY = '1';
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    statusLine.start('Running...');
+
+    await expect(promptInput('Input')).rejects.toThrow('TAKT_TEST_FLG_TOUCH_TTY=1 requires a TTY');
+
+    vi.advanceTimersByTime(100);
+
     expect(stdoutChunks.some((chunk) => chunk.includes('Running...'))).toBe(true);
   });
 

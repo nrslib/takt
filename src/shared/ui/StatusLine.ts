@@ -73,7 +73,10 @@ class StatusLineImpl {
       this.suspendDepth++;
       return;
     }
-    if (!this.active) return;
+    if (!this.active) {
+      this.suspendDepth = 1;
+      return;
+    }
 
     const message = this.message;
     this.stop();

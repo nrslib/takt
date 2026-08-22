@@ -232,7 +232,9 @@ describe('StreamDisplay', () => {
       vi.useFakeTimers();
       try {
         const display = new StreamDisplay('test-agent', false);
-        display.showToolUse('Bash', { command: 'printf "first\\nsecond"\n echo third' });
+        display.showToolUse('Bash', {
+          command: `first   second\n third    fourth ${'x'.repeat(50)}`,
+        });
 
         vi.advanceTimersByTime(80);
 
@@ -241,6 +243,7 @@ describe('StreamDisplay', () => {
           .filter((chunk) => chunk.startsWith('\r  '));
         expect(spinnerWrites).toHaveLength(1);
         expect(spinnerWrites[0]).not.toContain('\n');
+        expect(spinnerWrites[0]).toContain(`first second third fourth ${'x'.repeat(31)}...`);
 
         display.flush();
       } finally {
@@ -270,8 +273,6 @@ describe('StreamDisplay', () => {
 
     it('should clear a spinner within a narrow terminal width', () => {
       vi.useFakeTimers();
-      const savedColumns = process.stdout.columns;
-      Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
       try {
         const display = new StreamDisplay('test-agent', false);
         display.showToolUse('Bash', { command: 'ls' });
@@ -282,10 +283,8 @@ describe('StreamDisplay', () => {
         const clearWrite = stdoutWriteSpy.mock.calls
           .map(([chunk]) => String(chunk))
           .find((chunk) => chunk === '\r\x1b[K');
-        expect(clearWrite).toBeDefined();
-        expect(clearWrite?.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(40);
+        expect(clearWrite).toBe('\r\x1b[K');
       } finally {
-        Object.defineProperty(process.stdout, 'columns', { value: savedColumns, configurable: true });
         vi.useRealTimers();
       }
     });
