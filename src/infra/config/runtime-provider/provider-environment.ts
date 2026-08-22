@@ -20,6 +20,8 @@ import { applyRuntimeProviderOverride } from './override.js';
 import { resolveRuntimeProviderFileWithOrigins } from './loader.js';
 import {
   determineProviderConfigMode,
+  hasActiveMcpSection,
+  hasActiveProviderSection,
   type ProviderConfigMode,
   type LegacyProviderSignal,
 } from './mode.js';
@@ -95,10 +97,28 @@ export function resolveRuntimeEnvironment(
       providerConfigMode: mode,
     };
   }
-  const section = runtimeFileForProviderResolution?.provider;
+  const section = hasActiveProviderSection(runtimeFileForProviderResolution)
+    ? runtimeFileForProviderResolution?.provider
+    : undefined;
+  const activeMcp = hasActiveMcpSection(runtimeFileForProviderResolution)
+    ? runtimeFileForProviderResolution?.mcp
+    : undefined;
+  // Runtime-v1 mode may be entered by an active `mcp` section alone (order.md:36:
+  // `mcp` is independent from `provider`). When no active `provider` section is present
+  // the provider bundle carries no runtime provider/model/options, but the mcp
+  // assignment still flows through `mcpAssignment` so the engine resolves
+  // effective servers per agent execution.
   if (section === undefined) {
-    // Unreachable: runtime-v1 mode requires an active provider section.
-    throw new Error('runtime-v1 mode resolved without a provider section');
+    const legacyEnvironment = compileProviderEnvironment({ kind: 'legacy', legacy: input.legacy });
+    return {
+      // MCP-only mode keeps the complete legacy provider environment and adds
+      // only the active runtime MCP assignment (docs/configuration.md).
+      providerEnvironment: { ...legacyEnvironment, mcpAssignment: activeMcp },
+      configProviderOptions: input.legacy.providerOptions,
+      companionEnabled,
+      companionReviewMode,
+      providerConfigMode: mode,
+    };
   }
   // The runtime-v1 bundle carries only the runtime.yaml `profiles.default`; re-apply the CLI/env
   // provider/model override the bootstrap already resolved so the main execution path honors an
@@ -108,6 +128,7 @@ export function resolveRuntimeEnvironment(
       compileProviderEnvironment({
         kind: 'runtime-v1',
         section,
+        mcp: activeMcp,
         resolutionContext: createRuntimeProviderResolutionContext(
           input.projectCwd,
           resolvedRuntimeFile.profileOrigins,

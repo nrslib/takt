@@ -19,7 +19,9 @@ import {
   RuntimeProviderFileSchema,
   type RuntimeProviderFile,
   type RuntimeProviderSection,
+  type McpSection,
 } from './schema.js';
+import { validateMcpSectionReferences } from './mcp-schema.js';
 
 /** Load and validate a single runtime.yaml. Returns undefined when the file is absent or empty. */
 export function loadRuntimeProviderFileAt(filePath: string): RuntimeProviderFile | undefined {
@@ -35,6 +37,9 @@ export function loadRuntimeProviderFileAt(filePath: string): RuntimeProviderFile
   if (!result.success) {
     // Global and project layers share the `runtime.yaml` filename; name the failing path.
     throw new Error(`Invalid ${filePath}: ${z.prettifyError(result.error)}`);
+  }
+  if (result.data.mcp !== undefined) {
+    validateMcpSectionReferences(result.data.mcp);
   }
   return result.data;
 }
@@ -86,6 +91,7 @@ function mergeRuntimeProviderFiles(
   project: RuntimeProviderFile,
 ): RuntimeProviderFile {
   const provider = mergeProviderSections(global.provider, project.provider);
+  const mcp = mergeMcpSections(global.mcp, project.mcp);
   const globalEnabled = global.companion?.enabled;
   const projectEnabled = project.companion?.enabled;
   const enabled = globalEnabled === undefined && projectEnabled === undefined
@@ -106,7 +112,21 @@ function mergeRuntimeProviderFiles(
     ...(companion === undefined ? {} : { companion }),
     ...(loopAnalysis === undefined ? {} : { loop_analysis: loopAnalysis }),
     ...(provider === undefined ? {} : { provider }),
+    ...(mcp === undefined ? {} : { mcp }),
   };
+}
+
+/**
+ * Merge the `mcp` section across the global and project layers. When both
+ * layers carry an `mcp` section, the project's section replaces the global one
+ * wholesale — same-name servers are not field-merged, and `defaults`/`targets`
+ * take the project value when present (order.md:108, plan MCP-MERGE).
+ */
+function mergeMcpSections(
+  global: McpSection | undefined,
+  project: McpSection | undefined,
+): McpSection | undefined {
+  return project ?? global;
 }
 
 function mergeProviderSections(

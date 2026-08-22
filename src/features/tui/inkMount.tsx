@@ -152,4 +152,3 @@ export async function mountInk<T>(
   }
   return outcome.value;
 }
-

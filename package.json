@@ -46,7 +46,7 @@
     "eval:prompts:implement-contract-traceability": "node eval/scripts/prepare.mjs implement-contract-traceability implementation-report-contract-traceability && node eval/scripts/run-evals.mjs implement-contract-traceability implementation-report-contract-traceability",
     "eval:prompts:follow-up-review-repair-regression": "node eval/scripts/prepare.mjs follow-up-review-repair-regression && node eval/scripts/run-evals.mjs follow-up-review-repair-regression",
     "eval:prompts:follow-up-testing-review-repair-regression": "node eval/scripts/prepare.mjs follow-up-testing-review-repair-regression && node eval/scripts/run-evals.mjs follow-up-testing-review-repair-regression",
-    "eval:prompts:contract-family-boundaries": "node eval/scripts/prepare.mjs fix-verifier-family-boundary companion-early-scan companion-evidence-boundary && node eval/scripts/run-evals.mjs fix-verifier-family-boundary companion-early-scan companion-evidence-boundary",
+    "eval:prompts:contract-family-boundaries": "node eval/scripts/prepare.mjs fix-verifier-family-boundary companion-early-scan companion-testing-later-scan companion-evidence-boundary && node eval/scripts/run-evals.mjs fix-verifier-family-boundary companion-early-scan companion-testing-later-scan companion-evidence-boundary",
     "eval:prompts:review-mode-authority": "node eval/scripts/prepare.mjs review-mode-authority && node eval/scripts/run-evals.mjs review-mode-authority",
     "eval:prompts:review-adjudication": "node eval/scripts/prepare.mjs review-adjudication && node eval/scripts/run-evals.mjs review-adjudication",
     "eval:prompts:review-adjudication-binding": "node eval/scripts/prepare.mjs review-adjudication-binding && node eval/scripts/run-evals.mjs review-adjudication-binding",

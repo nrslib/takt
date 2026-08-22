@@ -437,6 +437,32 @@ describe('resolveCompiledProviderEnvironment seam', () => {
     expect(env.tagConflictPolicy).toBe('last-wins');
   });
 
+  it('preserves legacy provider/model resolution when runtime.yaml activates MCP alone', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      mcp: {
+        servers: { tools: { type: 'stdio', command: 'tools-mcp' } },
+        defaults: { servers: ['tools'] },
+      },
+    });
+
+    const resolved = resolveRuntimeEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    });
+
+    expect(resolved.providerEnvironment.provider).toBe('codex');
+    expect(resolved.providerEnvironment.model).toBe('gpt-x');
+    expect(resolved.providerEnvironment.providerSource).toBe('global');
+    expect(resolved.providerEnvironment.mcpAssignment?.servers.tools).toEqual({
+      type: 'stdio',
+      command: 'tools-mcp',
+      args: undefined,
+      env: undefined,
+    });
+  });
+
   it('re-applies a CLI provider override on a runtime-v1 environment, dropping runtime model/options', () => {
     writeGlobalRuntimeFile({
       version: 1,

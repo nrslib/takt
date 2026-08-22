@@ -119,7 +119,7 @@ function teamLeaderStep(): TeamLeaderWorkflowStep {
 }
 
 describe('companion runtime lifecycle', () => {
-  it('passes the latest cumulative diff to each completion review', async () => {
+  it('rereads the latest diff for each completion review without embedding it in the prompt', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-companion-cumulative-diff-'));
     roots.push(cwd);
     let currentSnapshot = {
@@ -188,15 +188,20 @@ describe('companion runtime lifecycle', () => {
       await expect(runtime.complete(workflowState, 'part two complete', { followUpRound: 1 }))
         .resolves.toEqual({ findings: [] });
 
+      expect(diffReader.readDiff).toHaveBeenCalledTimes(3);
+      for (const [, baselineSha] of diffReader.readDiff.mock.calls) {
+        expect(baselineSha).toBe('baseline');
+      }
       expect(reviewPrompts).toHaveLength(2);
-      expect(reviewPrompts[0]).toContain('PART_ONE_CHANGE');
-      expect(reviewPrompts[0]).toContain('part-one-digest');
-      expect(reviewPrompts[0]).toContain('src/part-one.ts');
-      expect(reviewPrompts[1]).toContain('PART_ONE_CHANGE');
-      expect(reviewPrompts[1]).toContain('PART_TWO_CHANGE');
-      expect(reviewPrompts[1]).toContain('cumulative-digest');
-      expect(reviewPrompts[1]).toContain('src/part-one.ts');
-      expect(reviewPrompts[1]).toContain('src/part-two.ts');
+      for (const prompt of reviewPrompts) {
+        expect(prompt).toContain('"label":"baseline_sha","value":"baseline"');
+        expect(prompt).not.toContain('PART_ONE_CHANGE');
+        expect(prompt).not.toContain('PART_TWO_CHANGE');
+        expect(prompt).not.toContain('part-one-digest');
+        expect(prompt).not.toContain('cumulative-digest');
+        expect(prompt).not.toContain('src/part-one.ts');
+        expect(prompt).not.toContain('src/part-two.ts');
+      }
     } finally {
       runtime.stop();
     }

@@ -13,4 +13,3 @@ export function createInputLogMeta(input: string, sessionId: string | undefined)
     hasSession: sessionId !== undefined,
   };
 }
-

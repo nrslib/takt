@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Config } from '@opencode-ai/sdk/v2/types';
 import type { OpencodeClient as SdkOpencodeClient } from '@opencode-ai/sdk/v2';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
@@ -95,8 +96,9 @@ function buildSharedServerKey(
   model: string,
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
+  mcpIdentity?: string,
 ): string {
-  return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv)]);
+  return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '']);
 }
 
 function getSharedServerEntry(key: string): SharedServerEntry {
@@ -131,6 +133,7 @@ async function createSharedServer(
   model: string,
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
+  serverConfig?: Record<string, unknown>,
 ): Promise<SharedServer> {
   const port = await getFreePort();
   const registerListToolShim = await shouldRegisterListToolShim();
@@ -164,6 +167,9 @@ async function createSharedServer(
             prompt: loadTemplate('opencode_report_agent_prompt', 'en'),
           },
         },
+        ...(serverConfig !== undefined
+          ? { mcp: serverConfig as NonNullable<Config['mcp']> }
+          : {}),
       },
     }),
   );
@@ -194,9 +200,10 @@ export async function acquireOpenCodeClient(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   abortSignal?: AbortSignal,
   sessionId?: string,
+  preparedMcp?: { serverConfig?: Record<string, unknown>; identity?: string; dispose?: () => Promise<void> },
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
-  const key = buildSharedServerKey(model, apiKey, childProcessEnv);
+  const key = buildSharedServerKey(model, apiKey, childProcessEnv, preparedMcp?.identity);
   const entry = getSharedServerEntry(key);
   const sessionKey = sessionId ?? '';
   if (entry.initPromise !== undefined) {
@@ -206,7 +213,7 @@ export async function acquireOpenCodeClient(
   }
   if (entry.server !== undefined) return acquireSharedServer(entry.server, sessionKey, abortSignal);
 
-  entry.initPromise = createSharedServer(key, model, apiKey, childProcessEnv)
+  entry.initPromise = createSharedServer(key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig)
     .then((server) => {
       entry.server = server;
       server.onError((error) => invalidateSharedServer(server, error));

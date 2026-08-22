@@ -15,6 +15,8 @@ export interface MockCallOptions {
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   allowedTools?: string[];
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   /** Native structured-output schema requested by the caller. */
   outputSchema?: Record<string, unknown>;
   /** Fixed response content (optional, defaults to generic mock response) */

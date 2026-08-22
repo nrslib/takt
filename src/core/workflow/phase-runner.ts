@@ -58,6 +58,12 @@ export interface BasePhaseRunnerContext {
   getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   /** Run-local environment values passed to trusted child processes. */
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  /** MCP server set resolved for the current step and phase execution. */
+  mcpServers?: RunAgentOptions['mcpServers'];
+  /** Runtime MCP assignment section used to enforce runtime mode at the runner boundary. */
+  mcpAssignment?: RunAgentOptions['mcpAssignment'];
+  /** Identity of the resolved MCP server set for session/pool isolation. */
+  mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
   /** Interrupts active provider calls when the workflow is cancelled. */
   abortSignal?: AbortSignal;
   /** Run-local private directory for oversized provider failure details. */

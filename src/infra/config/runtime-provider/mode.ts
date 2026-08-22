@@ -8,7 +8,7 @@
  * than silently merging or preferring one side.
  */
 
-import { hasActiveProviderContent, type RuntimeProviderFile } from './schema.js';
+import { hasActiveProviderContent, type RuntimeProviderFile, type McpSection } from './schema.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 
 export type ProviderConfigMode = 'legacy' | 'runtime-v1';
@@ -35,11 +35,44 @@ export function hasActiveProviderSection(file: RuntimeProviderFile | undefined):
   );
 }
 
+/**
+ * True only when the runtime.yaml carries an `mcp` section with meaningful
+ * content. The `mcp` section is independent from `provider` — it may be active
+ * alone (order.md:36, plan MCP-LEGACY-GATE). Server definitions become active
+ * only when a default or positive target assignment references them.
+ */
+export function hasActiveMcpSection(file: RuntimeProviderFile | undefined): boolean {
+  return hasActiveMcpAssignments(file?.mcp);
+}
+
+/** Section-level variant: true only when a default or positive target assignment exists. */
+export function hasActiveMcpAssignments(mcp: McpSection | undefined): boolean {
+  if (!mcp) {
+    return false;
+  }
+  const hasDefaults = mcp.defaults !== undefined && mcp.defaults.servers.length > 0;
+  const hasTargetAssignments = [
+    mcp.targets?.personas,
+    mcp.targets?.tags,
+    mcp.targets?.steps,
+  ].some((targetMap) => Object.values(targetMap ?? {}).some(
+    (target) => (target.servers?.length ?? 0) > 0,
+  ));
+  return hasDefaults || hasTargetAssignments;
+}
+
 export function determineProviderConfigMode(
   input: DetermineProviderConfigModeInput,
 ): { mode: ProviderConfigMode } {
-  if (!hasActiveProviderSection(input.runtimeFile)) {
+  const hasProvider = hasActiveProviderSection(input.runtimeFile);
+  const hasMcp = hasActiveMcpSection(input.runtimeFile);
+  if (!hasProvider && !hasMcp) {
     return { mode: 'legacy' };
+  }
+  // An active MCP section can be layered on top of legacy provider/model
+  // resolution; runtime-v1 owns only the MCP assignment in this case.
+  if (!hasProvider && hasMcp) {
+    return { mode: 'runtime-v1' };
   }
   if (input.legacyProviderSignals.length > 0) {
     throw new Error(buildMixedConfigError(input.legacyProviderSignals));

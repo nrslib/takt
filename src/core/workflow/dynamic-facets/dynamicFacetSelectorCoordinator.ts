@@ -37,6 +37,7 @@ import type {
   StreamCallback,
 } from '../../../shared/types/provider.js';
 import { resolveSelectorPermissionMode } from '../selector-permission-resolution.js';
+import { resolveInternalAgentMcpServers } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 
 const log = createLogger('dynamic-facet-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
@@ -159,6 +160,7 @@ export class DynamicFacetSelectorCoordinator {
     let selectedIds: readonly string[];
     let snapshot: DynamicFacetSelectionSnapshot;
     try {
+      const mcp = resolveInternalAgentMcpServers(this.deps.engineOptions.mcpAssignment);
       response = await executeStructuredAgent(
         instruction,
         selectorContract.providerSchema,
@@ -183,6 +185,9 @@ export class DynamicFacetSelectorCoordinator {
             providerOptions: selectorProvider.providerOptions ?? {},
             ...resolveSelectorPermissionMode(selectorProvider.permissionMode),
           },
+          mcpServers: mcp.servers,
+          mcpServerIdentity: mcp.identity,
+          mcpAssignment: this.deps.engineOptions.mcpAssignment,
         },
       );
       signal?.throwIfAborted();
