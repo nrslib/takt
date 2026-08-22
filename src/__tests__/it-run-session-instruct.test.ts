@@ -88,7 +88,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     continuePrompt: 'Continue?',
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
-    playNoTask: 'No task',
     cancelled: 'Cancelled',
     actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
   })),

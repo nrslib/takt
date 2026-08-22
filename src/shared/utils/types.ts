@@ -328,17 +328,3 @@ export type NdjsonRecord =
   | NdjsonCompanionQueueCoalesced
   | NdjsonCompanionCall
   | NdjsonCompanionReviewSkipped;
-
-/** Record for debug prompt/response log (debug-*-prompts.jsonl) */
-export interface PromptLogRecord {
-  step: string;
-  phase: 1 | 2 | 3;
-  iteration: number;
-  scope: string;
-  phaseExecutionId: string;
-  prompt: string;
-  systemPrompt: string;
-  userInstruction: string;
-  response: string;
-  timestamp: string;
-}

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StepPreview } from '../infra/config/index.js';
 
@@ -104,7 +104,7 @@ import {
   invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
 import { resetScenario, setMockScenario } from '../infra/mock/index.js';
-import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
+import { resolveCloneBaseDir, TaskRunner, type TaskInfo } from '../infra/task/index.js';
 
 const CLI_MODEL = 'cli-list-selector-model';
 const WORKFLOW_NAME = 'dynamic-list-selector';
@@ -172,6 +172,11 @@ function createEnvironment(): TestEnvironment {
   mkdirSync(join(projectDir, '.takt'), { recursive: true });
   writeWorkflowFixture(projectDir);
   initializeGitRepository(projectDir);
+  const configDir = process.env.TAKT_CONFIG_DIR;
+  if (configDir === undefined) {
+    throw new Error('TAKT_CONFIG_DIR must be set by test setup.');
+  }
+  writeFileSync(join(configDir, 'config.yaml'), `worktree_dir: ${join(projectDir, 'worktrees')}\n`);
   return {
     projectDir,
     mockCallLogPath: join(projectDir, '.takt-mock-calls.ndjson'),
@@ -193,18 +198,24 @@ function terminalTaskResult(task: TaskInfo, success: boolean, projectDir: string
 }
 
 function createTerminalTask(projectDir: string, status: 'completed' | 'failed'): void {
+  const worktreePath = join(
+    resolveCloneBaseDir(projectDir),
+    basename(projectDir),
+    `${status}-task`,
+  );
+  mkdirSync(worktreePath, { recursive: true });
   const runner = new TaskRunner(projectDir);
   runner.addTask(`Task for ${status} list action`, {
     workflow: WORKFLOW_NAME,
-    worktree: false,
+    worktree: true,
     branch: 'main',
-    worktree_path: projectDir,
+    worktree_path: worktreePath,
   });
   const runningTask = runner.claimNextTasks(1)[0];
   if (runningTask === undefined) {
     throw new Error('Failed to claim integration task');
   }
-  const result = terminalTaskResult(runningTask, status === 'completed', projectDir);
+  const result = terminalTaskResult(runningTask, status === 'completed', worktreePath);
   if (status === 'completed') {
     runner.completeTask(result);
   } else {
@@ -294,6 +305,10 @@ describe('IT: CLI list selector overrides', () => {
     delete process.env.TAKT_MOCK_CALL_LOG;
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
+    rmSync(join(resolveCloneBaseDir(environment.projectDir), basename(environment.projectDir)), {
+      recursive: true,
+      force: true,
+    });
     rmSync(environment.projectDir, { recursive: true, force: true });
   });
 

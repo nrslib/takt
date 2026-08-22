@@ -1,5 +1,5 @@
 import type { ProviderRoutingEntry, WorkflowConfig } from '../../core/models/index.js';
-import { isNormalAgentWorkflowStep } from '../../core/models/types.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../core/models/types.js';
 import type { CompiledProviderEnvironment } from './runtime-provider/environment.js';
 import {
   collectReachableSteps,
@@ -13,7 +13,7 @@ import type { WorkflowCallResolver } from '../../core/workflow/types.js';
 function collectLocalCompanionNames(workflow: WorkflowConfig): string[] {
   const names = new Set<string>();
   for (const step of collectReachableSteps(workflow)) {
-    if (!isNormalAgentWorkflowStep(step) || step.companion === undefined) continue;
+    if (!isNormalOrTeamLeaderWorkflowStep(step) || step.companion === undefined) continue;
     for (const name of step.companion.fixed) names.add(name);
     for (const name of step.companion.pool) names.add(name);
     if (step.companion.moderator !== undefined) names.add(step.companion.moderator);

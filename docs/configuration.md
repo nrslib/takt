@@ -616,6 +616,55 @@ declarations and the structural validation of `targets.companions` remain in
 place, but no companion provider is resolved or executed — a workflow that
 declares companions runs without any companion provider configuration.
 
+### Post-run loop analysis
+
+Loop analysis is opt-in. Add the top-level `loop_analysis` section to analyze
+completed runs after their terminal artifacts have been finalized:
+
+```yaml
+version: 1
+loop_analysis:
+  enabled: true
+  output: file # file | pr-comment; defaults to file
+```
+
+When enabled, every successful, failed, or interrupted source run starts the
+builtin `loop-analysis` workflow asynchronously. The source run does not wait
+for analysis, and an analysis startup or execution failure does not change the
+source result. Analysis runs do not schedule another analysis run.
+Runs terminalized through manual force-fail are also scheduled immediately after
+their terminal artifacts are committed. Each source run creates at most one
+analysis job.
+
+If the process receives an OS-level forced termination (`SIGKILL`) after the
+terminal artifacts are committed but before the analysis job is persisted, that
+process cannot start the analysis itself. The dispatch claim is intentionally
+at-most-once, so force-failing the run from the task list is not an automatic
+recovery guarantee for a claim that was persisted immediately before the
+process was killed.
+
+The analyzer reads the source run's available JSONL logs, trace, monitor data,
+reports, saved workflow definition, and the facets referenced by each step. It
+expresses invariants shared by multiple steps as workflow-wide rules and
+step-specific problems as changes to the responsible facet. The reviewer can
+request explicit reanalysis up to two times when a proposal is unsupported,
+over-specialized, or targets the wrong workflow behavior. Reanalysis classifies
+each finding as addressed or unable to be addressed with evidence, withdraws
+the affected proposal in the latter case, and returns it to the reviewer. The
+final report is always written to the analysis run's `reports/loop-analysis.md`.
+
+With `output: pr-comment`, the same persisted report content is also posted when
+the source run has auto-PR enabled and its branch already has a pull request. If
+no pull request exists, only the report file is retained. Provider, model, and
+provider options are not valid inside `loop_analysis`; configure the analysis
+steps through normal runtime provider targets. When both runtime files define
+`loop_analysis`, the project section replaces the global section as a unit.
+
+Before publication, TAKT removes recognized secrets, credentials, tokens,
+personally identifiable data, absolute local paths, and runner-identifying
+metadata. If redaction changes the report, the sanitized content replaces the
+persisted report so the file and pull-request comment remain identical.
+
 Runtime mode is enabled by the presence of an active `provider` section, not by the file existing. A file that only contains `version: 1` is inactive and leaves the legacy `config.yaml` provider resolution in place.
 
 ### Configuration example
@@ -683,6 +732,49 @@ provider:
             tier: low
         fallback_profile: sol-high
 ```
+
+### Directory-specific assignments
+
+`provider.assignments` defines named provider configuration sets that can be selected for a
+project directory. Each entry must contain `defaults` or `targets`; an empty assignment is not
+valid. `defaults` has the same shape as top-level `provider.defaults` and must choose exactly one
+of `profile` or `ladder`. `targets` has the same shape as top-level `provider.targets`:
+`personas`, `tags`, and `steps` may use `profile`, `pool`, or `ladder`; `internal_agents` may use
+`profile` or `ladder`, while `companions` may use only a fixed `profile`.
+
+`provider.directories` maps a directory path to an assignment name. The lookup target is the
+startup project directory. Keys expand `~`, become absolute, and then receive realpath-equivalent
+normalization for existing paths before exact comparison. Prefix matching and globs are not used.
+An unknown assignment name in this map fails fast while loading. When a directory matches, the
+assignment's `defaults` are used; if omitted, top-level `provider.defaults` is used. If the
+assignment has `targets`, it replaces the entire top-level `provider.targets` map; individual
+target maps are not merged. An assignment that omits `targets` keeps the top-level
+`provider.targets`. `profiles` and `auto_routing` remain shared.
+
+```yaml
+provider:
+  assignments:
+    project-sol:
+      defaults:
+        profile: sol-medium
+      targets:
+        personas:
+          coder:
+            profile: sol-medium
+        steps:
+          default/implement:
+            pool: sol-pool
+
+  directories:
+    ~/work/example: project-sol
+```
+
+Across global and project layers, `assignments` follow the profile rule: a same-name project
+entry replaces the global entry wholesale, while differently named entries coexist. For
+`directories`, project wins when normalized keys are equal and otherwise both mappings remain.
+These merges happen before directory assignment selection. Profile, pool, and ladder references
+inside assignments are validated with the other runtime provider references and fail fast before
+an agent runs.
 
 `provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Optional `capabilities` names one provider-options preset or a list of presets applied in order. Presets resolve project → global → builtin, like workflow capabilities, and inline `options` override preset values. Optional `permission_mode` selects the provider's exact permission mode. Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
 
@@ -1073,6 +1165,25 @@ legacy mode it can also be set through `provider_routing`, deprecated
 `persona_providers`, project, or global config. The environment variable
 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
 
+#### Codex fast mode (`fast_mode`)
+
+Set the optional Codex fast-mode feature explicitly with `provider_options.codex.fast_mode`:
+
+```yaml
+provider_options:
+  codex:
+    fast_mode: true
+```
+
+Both `true` and `false` are explicit values. If the setting is omitted, TAKT does not send
+`features.fast_mode` to Codex and Codex keeps its own default. The environment override is
+`TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=true` or `TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=false`.
+
+The setting follows the existing provider-option leaf resolution and source attribution. It can
+come from a runtime profile, `provider_routing.personas`, `provider_routing.tags`,
+`provider_routing.steps`, project or global `provider_options`, or the environment override.
+`takt exec` uses the resolved runtime default provider options for its assistant session as well.
+
 #### Codex permission control (`permission_control`)
 
 Codex uses TAKT's permission mode mapping by default. This is equivalent to `permission_control: takt` and passes the resolved TAKT `permission_mode` to the Codex SDK as `sandboxMode`. `network_access`, when set, is also passed as `networkAccessEnabled`; when omitted, Codex keeps its default (`false`).
@@ -1262,7 +1373,7 @@ logging:
   debug: true
 ```
 
-Debug logs are written to `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` in NDJSON format, and prompt/response logs to `debug-{timestamp}-prompts.jsonl` in the same directory.
+General debug logs are process-scoped and written to `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` in NDJSON format. Prompt/response logs are workflow-run-scoped and written to `.takt/runs/<run>/logs/<sessionId>-prompts.jsonl`.
 
 ### Detailed Console Output
 
@@ -1274,7 +1385,7 @@ logging:
   level: debug
 ```
 
-This also enables the internal verbose console mode used by the CLI. `logging.level: debug` alone additionally enables the debug logger, so the `debug-{timestamp}.log` and `debug-{timestamp}-prompts.jsonl` artifacts above are produced without setting `logging.debug` separately. Any of `logging.debug: true`, `logging.trace: true`, or `logging.level: debug` enables them.
+This also enables the internal verbose console mode used by the CLI. `logging.level: debug` alone additionally enables both the process-scoped general debug log and workflow-run-scoped prompt/response logs described above without setting `logging.debug` separately. Any of `logging.debug: true`, `logging.trace: true`, or `logging.level: debug` enables them.
 
 ## Companion provider targets
 

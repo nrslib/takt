@@ -78,6 +78,7 @@ export type {
   OpenCodeGuardProfile,
   AgentWorkflowStep,
   NormalAgentWorkflowStep,
+  NormalOrTeamLeaderWorkflowStep,
   ParallelWorkflowStep,
   DynamicParallelFixedSubStep,
   DynamicParallelPoolSubStep,
@@ -132,6 +133,7 @@ export {
   getAllParallelSubSteps,
   isDynamicParallelSubSteps,
   isNormalAgentWorkflowStep,
+  isNormalOrTeamLeaderWorkflowStep,
 } from './workflow-types.js';
 
 

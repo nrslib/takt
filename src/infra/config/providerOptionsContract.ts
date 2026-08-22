@@ -4,6 +4,7 @@ import type { EnvSpec } from './env/config-env-overrides.js';
 const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options', type: 'json' },
   { path: 'provider_options.codex.base_url', type: 'string' },
+  { path: 'provider_options.codex.fast_mode', type: 'boolean' },
   { path: 'provider_options.codex.network_access', type: 'boolean' },
   { path: 'provider_options.codex.permission_control', type: 'string' },
   { path: 'provider_options.codex.reasoning_effort', type: 'string' },
@@ -56,6 +57,7 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options',
   'provider_options.codex',
   'provider_options.codex.base_url',
+  'provider_options.codex.fast_mode',
   'provider_options.codex.network_access',
   'provider_options.codex.permission_control',
   'provider_options.codex.reasoning_effort',
@@ -132,6 +134,7 @@ const PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATH_ENTRIES = [
 
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'codex.baseUrl',
+  'codex.fastMode',
   'codex.networkAccess',
   'codex.permissionControl',
   'codex.reasoningEffort',

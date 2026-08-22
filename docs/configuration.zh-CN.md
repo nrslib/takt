@@ -594,6 +594,44 @@ provider:
         fallback_profile: sol-high
 ```
 
+### 按目录选择 assignment
+
+`provider.assignments` 用于定义按项目目录选择的命名 provider 配置集合。每个 entry 必须至少包含
+`defaults` 或 `targets`，不能使用空 assignment。`defaults` 与顶层 `provider.defaults` 形状完全相同，必须
+在 `profile` 和 `ladder` 中选择一个。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
+`steps` 可以使用 `profile`、`pool` 或 `ladder`，`internal_agents` 只能使用 `profile` 或 `ladder`，
+而 `companions` 只能使用固定的 `profile`。
+
+`provider.directories` 将目录路径映射到 assignment 名称。匹配对象是启动时的 project 目录。路径键会先展开
+`~`、转换为绝对路径，并对存在的路径进行 realpath 等价的规范化，然后进行完全匹配；不支持前缀匹配和 glob。
+如果目录值引用了未定义的 assignment，加载时会快速失败。目录匹配成功后使用 assignment 的 `defaults`；如果
+省略，则回退到顶层 `provider.defaults`。如果 assignment 提供了 `targets`，它会整体替换顶层
+`provider.targets`，不会按 `personas` 等子 map 合并。省略 `targets` 的 assignment 会继续使用顶层
+`provider.targets`。`profiles` 和 `auto_routing` 继续共享。
+
+```yaml
+provider:
+  assignments:
+    project-sol:
+      defaults:
+        profile: sol-medium
+      targets:
+        personas:
+          coder:
+            profile: sol-medium
+        steps:
+          default/implement:
+            pool: sol-pool
+
+  directories:
+    ~/work/example: project-sol
+```
+
+global 与 project 层之间，`assignments` 遵循与 profile 相同的规则：同名 entry 由 project 整体替换，不同名称
+的 entry 共存。`directories` 在规范化后的键相同时由 project 优先，不同路径则共存。上述合并发生在目录
+assignment 选择之前。assignment 内的 profile、pool、ladder 引用与其他 runtime provider 引用一样会被校验，
+并在 agent 运行前快速失败。
+
 `provider.profiles` 保存命名的 provider/model/options 定义。`provider.defaults` 必须在每个有效 provider section 中选择一个固定 `profile` 或有序 `ladder`；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
 
 provider target 的覆盖优先级为：
@@ -1054,7 +1092,7 @@ logging:
   debug: true
 ```
 
-debug 日志以 NDJSON 写入 `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log`，prompt/response 日志写入同目录的 `debug-{timestamp}-prompts.jsonl`。
+常规 debug 日志按进程写入 `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log`，格式为 NDJSON。prompt/response 日志按 workflow run 写入 `.takt/runs/<run>/logs/<sessionId>-prompts.jsonl`。
 
 ### 详细控制台输出
 
@@ -1064,7 +1102,7 @@ logging:
   level: debug
 ```
 
-`logging.level: debug` 会启用 CLI 的详细输出和上面的 debug logger；`logging.debug: true`、`logging.trace: true` 或 `logging.level: debug` 任一设置都可以生成 debug 产物。
+`logging.level: debug` 会启用 CLI 的详细输出，以及上面按进程保存的常规 debug 日志和按 workflow run 保存的 prompt/response 日志；`logging.debug: true`、`logging.trace: true` 或 `logging.level: debug` 任一设置都可以生成这些产物。
 
 ## Companion Provider Target
 

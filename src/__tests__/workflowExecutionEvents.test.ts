@@ -1137,6 +1137,66 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(infoText).not.toContain('127.0.0.1:8787');
   });
 
+  it.each([
+    { fastMode: true, label: 'enabled' },
+    { fastMode: false, label: 'disabled' },
+  ])('verbose 時に Codex fast mode=%s と解決ソースを表示する', ({ fastMode, label }) => {
+    resetDebugLogger();
+    setVerboseConsole(true);
+    try {
+      const { engine, out } = createBridgeHarness({
+        currentProvider: 'codex',
+        configuredModel: 'gpt-5.2',
+      });
+      const step = {
+        name: 'review',
+        personaDisplayName: 'Reviewer',
+        instruction: '',
+      } as WorkflowStep;
+
+      engine.emit('step:start', step, 1, 'instruction', {
+        provider: 'codex',
+        model: 'gpt-5.2',
+        providerOptions: { codex: { fastMode } },
+        providerOptionsSources: { 'codex.fastMode': 'project' },
+      }, 'parent', step.name);
+
+      const infoLines = out.info.mock.calls.map(([value]) => String(value));
+      expect(infoLines).toContain(`Fast mode: ${label} (source: project)`);
+    } finally {
+      resetDebugLogger();
+    }
+  });
+
+  it('Codex fast mode が未指定ならサマリー行を表示しない', () => {
+    resetDebugLogger();
+    setVerboseConsole(true);
+    try {
+      const { engine, out } = createBridgeHarness({
+        currentProvider: 'codex',
+        configuredModel: 'gpt-5.2',
+      });
+      const step = {
+        name: 'review',
+        personaDisplayName: 'Reviewer',
+        instruction: '',
+      } as WorkflowStep;
+
+      engine.emit('step:start', step, 1, 'instruction', {
+        provider: 'codex',
+        model: 'gpt-5.2',
+        providerOptions: { codex: { reasoningEffort: 'high' } },
+      }, 'parent', step.name);
+
+      const fastModeLines = out.info.mock.calls
+        .map(([value]) => String(value))
+        .filter((line) => line.startsWith('Fast mode:'));
+      expect(fastModeLines).toEqual([]);
+    } finally {
+      resetDebugLogger();
+    }
+  });
+
   it('verbose 時に Claude SDK base URL を伏せて解決ソースを表示する', () => {
     resetDebugLogger();
     setVerboseConsole(true);

@@ -30,6 +30,7 @@ import {
   assertValidLocalBranchName,
   toLocalBranchRef,
 } from '../../shared/utils/gitBranchValidation.js';
+import type { LoopAnalysisPublicationCoordinator } from '../tasks/execute/loopAnalysisPublication.js';
 
 export interface TaskContent {
   task: string;
@@ -338,6 +339,7 @@ export async function runWorkflow(
   execCwd: string,
   options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'autoStrategy' | 'issueNumber' | 'prNumber'>,
   context: ExecutionContext,
+  loopAnalysisPublication?: LoopAnalysisPublicationCoordinator,
 ): Promise<boolean> {
   const safeWorkflow = sanitizeTerminalText(workflow);
   info(`Running workflow: ${safeWorkflow}`);
@@ -360,6 +362,9 @@ export async function runWorkflow(
       agentOverrides,
       traceTaskContext: buildPipelineTraceTaskContext(options, context),
       ...(context.prContext ? { prContext: context.prContext } : {}),
+      ...(loopAnalysisPublication === undefined
+        ? {}
+        : { loopAnalysisPublication }),
     });
   } finally {
     statusLine.stop();

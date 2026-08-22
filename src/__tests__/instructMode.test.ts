@@ -65,7 +65,12 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
+  getLabel: vi.fn((key: string, lang: string) => {
+    if (key === 'orderRevision.attachmentsHeading') {
+      return lang === 'ja' ? '添付画像' : 'Attachments';
+    }
+    return 'Mock label';
+  }),
   getLabelObject: vi.fn(() => ({
     intro: 'Instruct mode intro',
     resume: 'Resuming',
@@ -106,7 +111,6 @@ const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
 const mockLoadTemplate = vi.mocked(loadTemplate);
 const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
-const attachmentSessionDirs = new Set<string>();
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
 
@@ -130,25 +134,12 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
-  for (const sessionDir of attachmentSessionDirs) {
-    fs.rmSync(sessionDir, { recursive: true, force: true });
-  }
-  attachmentSessionDirs.clear();
   if (originalTmpDir === undefined) {
     delete process.env.TMPDIR;
   } else {
     process.env.TMPDIR = originalTmpDir;
   }
 });
-
-function createOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
-}
-
-function trackAttachmentSession(tempPath: string): void {
-  attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
-}
 
 function runTestInstructMode(overrides: Partial<InstructModeOptions> = {}) {
   return runInstructMode({
@@ -203,32 +194,16 @@ describe('runInstructMode', () => {
     expect(result.task).toBe('Add unit tests from suffix /go task.');
   });
 
-  it('should return action=save_task when user selects save task', async () => {
+  it('should return action=execute when user approves the revised order', async () => {
     setupRawStdin(toRawInputs(['describe task', '/go']));
     setupMockProvider(['response', 'Summarized task.']);
-    mockSelectOption.mockResolvedValue('save_task');
-
-    const result = await runTestInstructMode();
-
-    expect(result.action).toBe('save_task');
-    expect(result.task).toBe('Summarized task.');
-  });
-
-  it('should preserve pasted image attachments from the conversation loop', async () => {
-    setupRawStdin([
-      `use ${createOscImagePaste()}\r`,
-      '/go\r',
-    ]);
-    setupMockProvider(['response', 'Use [Image #1].']);
+    mockSelectOption.mockResolvedValue('execute');
 
     const result = await runTestInstructMode();
 
     expect(result.action).toBe('execute');
-    expect(result.task).toBe('Use [Image #1].');
-    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-    expect(result.attachments?.[0]?.tempPath).toBeDefined();
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
+    expect(result.source).toBe('go');
+    expect(result.task).toBe('Summarized task.');
   });
 
   it('should continue editing when user selects continue', async () => {
@@ -250,10 +225,10 @@ describe('runInstructMode', () => {
     expect(result.action).toBe('cancel');
   });
 
-  it('should exclude execute from action selector options', async () => {
+  it('should show Yes/No actions for an order revision proposal', async () => {
     setupRawStdin(toRawInputs(['task', '/go']));
     setupMockProvider(['response', 'Task summary.']);
-    mockSelectOption.mockResolvedValue('save_task');
+    mockSelectOption.mockResolvedValue('execute');
 
     await runTestInstructMode();
 
@@ -263,10 +238,10 @@ describe('runInstructMode', () => {
     expect(selectCall).toBeDefined();
     const options = selectCall![1] as Array<{ value: string }>;
     const values = options.map((o) => o.value);
-    expect(values).not.toContain('execute');
-    expect(values).toContain('save_task');
+    expect(values).toContain('execute');
     expect(values).toContain('continue');
     expect(values).not.toContain('create_issue');
+    expect(values).not.toContain('save_task');
   });
 
   it('should use dedicated instruct system prompt with task context', async () => {
@@ -470,14 +445,17 @@ describe('runInstructMode', () => {
 });
 
 describe('runInstructMode conversation routes', () => {
-  it('should return execute with the given task text on /play', async () => {
-    setupRawStdin(toRawInputs(['/play fix the login bug']));
-    setupMockProvider([]);
+  it('should not execute directly when a command this mode disabled is entered', async () => {
+    // `/accept` is not on the mode's list, so the line is ordinary text — the
+    // session reads the same list the front-end gates its commands with.
+    setupRawStdin(toRawInputs(['/accept fix the login bug', '/go']));
+    setupMockProvider(['I will consider the requested change.', 'Revised order body.']);
 
     const result = await runTestInstructMode();
 
     expect(result.action).toBe('execute');
-    expect(result.task).toBe('fix the login bug');
+    expect(result.task).toBe('Revised order body.');
+    expect(result.source).toBe('go');
   });
 
   it('should append user note to summary prompt on /go with note', async () => {
@@ -550,14 +528,15 @@ describe('runInstructMode conversation routes', () => {
     expect(result.action).toBe('cancel');
   });
 
-  it('should return execute with preceding text as task on end-of-line /play', async () => {
-    setupRawStdin(toRawInputs(['fix the login bug /play']));
-    setupMockProvider([]);
+  it('should not execute directly when a disabled command closes the line', async () => {
+    setupRawStdin(toRawInputs(['fix the login bug /accept', '/go']));
+    setupMockProvider(['I will consider the requested change.', 'Revised order body.']);
 
     const result = await runTestInstructMode();
 
     expect(result.action).toBe('execute');
-    expect(result.task).toBe('fix the login bug');
+    expect(result.task).toBe('Revised order body.');
+    expect(result.source).toBe('go');
   });
 
   it('should use preceding text as user note in summary on end-of-line /go', async () => {

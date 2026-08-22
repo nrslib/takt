@@ -57,7 +57,10 @@ program
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
   .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
-  .option('-c, --continue', 'Continue from the last assistant session');
+  .option('-c, --continue', 'Continue from the last assistant session')
+  // Declared in this order so the default stays undefined: neither flag means
+  // "TUI when a terminal is attached", which routing decides.
+  .option('--tui', 'Require the Ink-based TUI for the task conversation (fails without a TTY)');
 
 program
   .argument('[task]', 'Task to execute (or issue reference like "#6")')

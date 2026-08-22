@@ -15,7 +15,9 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 | `takt-default` | Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and final check that requirements are met. |
 | `takt-default-team` | TAKT development workflow that preserves takt-default's planning, testing, review, and final-gate contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets or companions, as required by the current schema constraints. |
 | `review` | Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results. |
-| `review-fix-default` | Multi-perspective review + fix loop (architecture, security, testing, and coding in parallel, followed by a supervisor checking whether requirements are met) |
+| `review-fix` | Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check. |
+
+The `default` and `takt-default` wrappers bind the generic or TAKT-specific external security-review facet pool only at the reviewer suite that consumes it; pool references are passed only to the consuming suite, and the shared development and peer-review workflow contracts remain unchanged. Dynamic facet selection semantics (selector ordering, parallel children, and resume behavior) are described in [Dynamic Facet Selection](./workflows.md#dynamic-facet-selection-facet-pools).
 
 ## All Builtin Workflows
 
@@ -26,13 +28,13 @@ Organized by category.
 | 🚀 Quick Start | `default` | Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met. |
 |  | `maintenance` | Maintenance development workflow that respects existing code and contracts outside the change scope and limits work to causally related changes. |
 |  | `simple` | A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included. |
-|  | `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
+|  | `review-fix` | Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check. |
 | 🛠️ Development | `default` | Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met. |
 |  | `maintenance` | Maintenance development workflow that respects existing code and contracts outside the change scope and limits work to causally related changes. |
 |  | `simple` | A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included. |
 |  | `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
 | 🔍 Review | `review` | Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results. |
-|  | `review-fix-default` | Multi-perspective review + fix loop (architecture, security, testing, and coding in parallel, followed by a supervisor checking whether requirements are met) |
+|  | `review-fix` | Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check. |
 |  | `audit-unit` | Comprehensive unit test audit. Enumerate behaviors and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-e2e` | Comprehensive E2E audit. Enumerate user flows and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-security` | Full security audit. Reads every project file one by one for security review |

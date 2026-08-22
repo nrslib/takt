@@ -66,6 +66,13 @@ describe('CT-CAP-3 capability-set leaf purification', () => {
     ])).toThrow(/capabilit|effort|capability leaf/i);
   });
 
+  it('should reject Codex fast_mode from a capability-set', () => {
+    writeCapabilitySet('fast-mode', 'codex:\n  fast_mode: true\n');
+    expect(() => normalize({}, [
+      { name: 'implement', instruction: '{task}', capabilities: 'provider-options/fast-mode.yaml' },
+    ])).toThrow(/codex\.fastMode.*not a capability leaf|resolved to no capability options/);
+  });
+
   it('should accept a capability-set when it carries only capability leaves', () => {
     writeCapabilitySet('caps', 'codex:\n  network_access: true\n  skills:\n    repo: true\n');
     expect(() => normalize({}, [

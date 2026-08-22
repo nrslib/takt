@@ -312,7 +312,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 ### Pi provider の session 境界
 
-TAKT の Pi provider は、現在の TAKT process 内だけで使う embedded な in-memory Pi SDK session を使用します。Pi の session JSONL ファイルを書き込まず、Pi CLI のグローバル `settings.json` も読み書きしません。そのため、デフォルト model、thinking level、shell、retry option などの Pi グローバル設定は TAKT に自動継承されません。
+TAKT の Pi provider は現在の TAKT process 内だけで使う embedded な in-memory Pi SDK session を使用します。Pi の session JSONL ファイルを書き込まず、Pi CLI のグローバル `settings.json` も読み書きしません。そのため、デフォルト model、thinking level、shell、retry option などの Pi グローバル設定は TAKT に自動継承されません。
 
 Pi のデフォルトとして使う model は TAKT の設定で明示してください。Pi の model には `:<thinking-level>` suffix を付けられます。例えば次のように設定します。
 
@@ -410,13 +410,13 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `sync_conflict_resolver` | object | - | sync conflict resolver ポリシー（グローバルを上書き） |
 | `observability` | object | - | プロジェクトレベルの OpenTelemetry opt-in 上書き。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
-プロジェクト設定の値は、両方が設定されている場合にグローバル設定を上書きします。
+プロジェクト設定の値は両方が設定されている場合にグローバル設定を上書きします。
 
 ### task 実行設定の環境変数上書き
 
 `auto_requeue_max_attempts` と `ignore_exceed` は
 `TAKT_AUTO_REQUEUE_MAX_ATTEMPTS` / `TAKT_IGNORE_EXCEED` でも設定できます。
-これらの値は、env 対応の他の task 実行設定と同じ優先順位で解決されます。
+これらの値は env 対応の他の task 実行設定と同じ優先順位で解決されます。
 
 1. 環境変数
 2. プロジェクト `.takt/config.yaml`
@@ -430,7 +430,7 @@ validation に失敗します。
 
 ## 環境変数上書き
 
-ほとんどの設定キーは、`TAKT_` に設定キーパスをアンダースコア区切り・大文字化して続けた環境変数で上書きできます。`logging.debug` は `TAKT_LOGGING_DEBUG`、`telemetry.routing_decisions` は `TAKT_TELEMETRY_ROUTING_DECISIONS` になります。よく使う例: `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS`、`TAKT_OBSERVABILITY_ENABLED`。環境変数の値は対応するファイルの値を上書きし、キーを持つ層で適用されます。グローバル専用キー（例: `logging`、`disabled_builtins`）はグローバル `~/.takt/config.yaml` 層で、プロジェクト上書き可能キー（例: `concurrency`、`telemetry.routing_decisions`）はプロジェクト `.takt/config.yaml` 層でも解決されます。
+ほとんどの設定キーは `TAKT_` に設定キーパスをアンダースコア区切り・大文字化して続けた環境変数で上書きできます。`logging.debug` は `TAKT_LOGGING_DEBUG`、`telemetry.routing_decisions` は `TAKT_TELEMETRY_ROUTING_DECISIONS` になります。よく使う例: `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS`、`TAKT_OBSERVABILITY_ENABLED`。環境変数の値は対応するファイルの値を上書きし、キーを持つ層で適用されます。グローバル専用キー（例: `logging`、`disabled_builtins`）はグローバル `~/.takt/config.yaml` 層で、プロジェクト上書き可能キー（例: `concurrency`、`telemetry.routing_decisions`）はプロジェクト `.takt/config.yaml` 層でも解決されます。
 
 設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。
 
@@ -438,7 +438,7 @@ validation に失敗します。
 
 TAKT は Claude、Codex、OpenCode、Pi、公式 DeepSeek Harness SDK、Cursor、Copilot、Kiro provider をサポートしています。Claude/Codex/OpenCode は各 SDK の認証情報、Pi は Pi SDK の credential store または provider 環境変数、DeepSeek Harness は公式の `DEEPSEEK_API_KEY` 環境変数、Kiro は API キーを使い、Cursor は API キーまたは `cursor-agent login` セッションで認証でき、Copilot は GitHub トークンを使います。
 
-グローバル設定 schema には、現在トップレベル provider として選択できない一部の legacy または provider integration 用 API key フィールドも残っています。これらのフィールドだけでは provider は有効になりません。選択した provider について、以下に記載した認証用の環境変数または設定キーを使用してください。
+グローバル設定 schema には現在トップレベル provider として選択できない一部の legacy または provider integration 用 API key フィールドも残っています。これらのフィールドだけでは provider は有効になりません。選択した provider について、以下に記載した認証用の環境変数または設定キーを使用してください。
 
 ### 環境変数（推奨）
 
@@ -540,7 +540,7 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 ## モデル解決
 
-provider と model の選択は、runtime モードでは `runtime.yaml` が所有し、CLI と環境変数の override も引き続き利用できます。legacy モードでは、以下に記載する `config.yaml` の provider、model、routing 設定が引き続きサポートされます。workflow YAML は provider や model を選択できず、`provider`、`model`、inline provider options を書くとロード境界で移行先を示すエラーになります。
+provider と model の選択は runtime モードでは `runtime.yaml` が所有し、CLI と環境変数の override も引き続き利用できます。legacy モードでは以下に記載する `config.yaml` の provider、model、routing 設定が引き続きサポートされます。workflow YAML は provider や model を選択できず、`provider`、`model`、inline provider options を書くとロード境界で移行先を示すエラーになります。
 
 workflow の `promotion` entry は `runtime.yaml` で選択された target ladder だけを進めます。provider、model、provider options、condition は指定できません。provider を選ばず tool、network、sandbox、skill の能力だけを要求する workflow の面として `capabilities` を使用します。
 
@@ -575,7 +575,7 @@ model: opus     # すべての step のデフォルトモデル（上書きさ�
 1. `~/.takt/runtime.yaml`
 2. `<project>/.takt/runtime.yaml`
 
-companion reviewer は既定で無効です。有効化する場合は、トップレベルの
+companion reviewer は既定で無効です。有効化する場合はトップレベルの
 `companion.enabled` を設定します。
 
 ```yaml
@@ -604,7 +604,46 @@ mode の構造は検証されますが、Companion provider の解決と実行�
 companion の provider target（`targets.companions`）とプロバイダ能力要件が適用されるのは
 companion が有効な間だけです。無効時も companion 宣言と `targets.companions` の構造検証は
 維持されますが、companion の provider 解決と実行は行われません — companion を宣言した
-ワークフローは、companion 用の provider 設定なしで実行できます。
+ワークフローは companion 用の provider 設定なしで実行できます。
+
+### run 完了後のループ分析
+
+ループ分析は opt-in 機能です。run の終端成果物が確定した後に分析するにはトップレベルの
+`loop_analysis` を追加します。
+
+```yaml
+version: 1
+loop_analysis:
+  enabled: true
+  output: file # file | pr-comment。既定値は file
+```
+
+有効時は成功・失敗・中断したすべての元 run から builtin の `loop-analysis` workflow を
+非同期で起動します。元 run は分析の完了を待たず、分析の起動・実行失敗も元 run の結果を
+変更しません。手動で force-fail した run も終端成果物の確定直後に分析対象になります。
+分析 run から別の分析 run は起動しません。同一 run の解析ジョブは1回だけ作成されます。
+
+終端成果物の確定直後にプロセスが OS の強制終了（`SIGKILL`）を受け、解析ジョブの永続化まで
+到達しなかった場合、そのプロセス自身から解析を起動することはできません。dispatch claim は意図的に
+at-most-once であるため、claim がプロセス終了直前に永続化されていた場合、task 一覧から run を
+force-fail しても、この状態を自動復旧できる保証はありません。
+
+分析 agent は元 run に存在する JSONL ログ、trace、monitor data、report、保存済みのワークフロー定義と、
+各 step が参照した facets を読みます。複数 step で共有する不変条件はワークフロー全体の rule、step 固有の
+問題は対応する facet の変更として提案します。reviewer は、根拠不足、過剰な個別最適化、対象となる
+ワークフロー動作の誤りがある場合、明示的な再分析を最大2回まで要求できます。再分析では各指摘を
+対応済みまたは根拠付きの対応不能に分類し、対応不能な案を撤回した上で再び reviewer が判定します。
+最終 report は常に分析 run の `reports/loop-analysis.md` へ保存されます。
+
+`output: pr-comment` の場合、元 run で auto-PR が有効で、その branch の PR が既に存在するときだけ、
+保存済み report と同一内容をコメントします。PR が存在しない場合は report ファイルだけを残します。
+`loop_analysis` 内に provider、model、provider options は指定できません。通常の runtime provider
+target で分析 step を割り当ててください。global と project の両方が `loop_analysis` を定義した場合、
+project のセクションが global のセクション全体を置き換えます。
+
+公開前に、TAKTは認識できたsecret、credential、token、個人識別情報、絶対ローカルパス、runnerを
+特定できるmetadataを除去します。除去によって内容が変わる場合は保存済みreportも安全化後の内容で
+置き換え、ファイルとPRコメントを同一に保ちます。
 
 runtime モードはファイルの存在ではなく、有効な `provider` セクションの有無で有効化されます。`version: 1` だけのファイルは inactive で、従来の `config.yaml` による provider 解決がそのまま使われます。
 
@@ -674,9 +713,49 @@ provider:
         fallback_profile: sol-high
 ```
 
+### ディレクトリ別 assignment
+
+`provider.assignments` には、起動ディレクトリごとに選択する名前付きの provider 設定セットを定義できます。
+各 entry は `defaults` または `targets` の少なくとも一方を持つ必要があり、空の assignment は指定できません。
+`defaults` はトップレベルの `provider.defaults` と同じく `profile` または `ladder` の一方を指定します。
+`targets` はトップレベルの `provider.targets` と同じ形で、`personas`、`tags`、`steps` は
+`profile`、`pool`、`ladder` のいずれか、`internal_agents` は `profile` または `ladder`、
+`companions` は固定 `profile` を指定できます。
+
+`provider.directories` はディレクトリパスから assignment 名への map です。照合対象は起動時の project
+ディレクトリで、キーは `~` を展開して絶対パス化した後、存在するパスについて realpath 相当に正規化して
+完全一致で照合します。前方一致や glob は使いません。値の assignment 名が未定義の場合は読み込み時に
+fail-fast します。ディレクトリが一致すると、assignment の `defaults`（省略時はトップレベルの
+`provider.defaults`）を使用し、assignment に `targets` がある場合はトップレベルの `provider.targets` 全体を
+置き換えます。`personas` だけを残すような map 単位のマージは行いません。`targets` を省略した assignment
+はトップレベルの `provider.targets` をそのまま引き継ぎます。`profiles` と `auto_routing` は共有されたままです。
+
+```yaml
+provider:
+  assignments:
+    project-sol:
+      defaults:
+        profile: sol-medium
+      targets:
+        personas:
+          coder:
+            profile: sol-medium
+        steps:
+          default/implement:
+            pool: sol-pool
+
+  directories:
+    ~/work/example: project-sol
+```
+
+global と project のレイヤーで `assignments` が定義されている場合、同名 entry は project が全体を置き換え、
+異なる名前は両方残ります。`directories` は正規化後の同じパスキーについて project が優先し、異なるパスは
+両方残ります。これらのマージは assignment の選択前に行われます。assignment 内の profile、pool、ladder
+参照も通常の runtime provider 参照と同じく、未定義なら agent 実行前に fail-fast します。
+
 `provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。任意の `capabilities` には provider-options preset 名、または適用順の preset 名リストを指定します。workflow の `capabilities` と同じ project → global → builtin の順で解決し、inline の `options` が preset より優先されます。任意の `permission_mode` は provider の正確な permission mode を設定します。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
 
-TAKT が所有する structured agent は常に fresh session で起動します。native structured output 対応 provider には schema を直接渡し、非対応 provider には JSON schema instruction を渡して返却 object を parse・validate します。TAKT は internal agent 専用の permission、tool、network、sandbox、skill、MCP、bypass policy を追加しません。role を制限する場合は `capabilities` と `permission_mode` の一方または両方を明示した profile を割り当てます。両方を省略した場合は、通常の provider 設定をそのまま使用します。
+TAKT が所有する structured agent は常に fresh session で起動します。native structured output 対応 provider には schema を直接渡し、非対応 provider には JSON schema instruction を渡して返却 object を parse・validate します。TAKT は internal agent 専用の permission、tool、network、sandbox、skill、MCP、bypass policy を追加しません。role を制限する場合は `capabilities` と `permission_mode` の一方または両方を明示した profile を割り当てます。両方を省略した場合は通常の provider 設定をそのまま使用します。
 
 有効な provider section では `provider.defaults` の指定が必須で、固定の `profile` または順序付きの `ladder` のいずれか一方だけを指定します。`pool` は指定できません。`provider.targets.personas`、`provider.targets.tags`、`provider.targets.steps` のエントリは、固定の `profile`、順序付きの `ladder`、または auto routing 用の `pool` のいずれか一方を指定できます。`pool` はこれらの明示的な workflow target に限り指定できます。`internal_agents` のエントリは固定の `profile` または順序付きの `ladder` を指定できますが、`pool` は指定できません。`companions` のエントリは固定の `profile` のみ指定でき、`pool` と `ladder` は指定できません。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
 
@@ -700,7 +779,7 @@ defaults
   < internal_agents.<agent>
 ```
 
-同じ優先度の target（例えば複数の一致する tag）が異なる provider を割り当てた場合は、暗黙に一方を選ばず fail-fast します。コマンドラインの `--provider` / `--model` は実行時 override であり、legacy と runtime のどちらのモードでも許可されます。
+同じ優先度の target（例えば複数の一致する tag）が異なる provider を割り当てた場合は暗黙に一方を選ばず fail-fast します。コマンドラインの `--provider` / `--model` は実行時 override であり、legacy と runtime のどちらのモードでも許可されます。
 
 auto routing の candidate は provider/model/options を重複記述せず `provider.profiles` を参照し、router 自身も `router_profile` で profile を参照します。pool・tier などの routing metadata は `provider.auto_routing` が所有します。router 出力の parse/schema 不整合や未知の profile 参照は、fallback で隠さず agent 実行前に fail-fast します。
 
@@ -735,7 +814,7 @@ the following legacy settings:
 
 ### 初回生成
 
-初回起動時、TAKT は `~/.takt/runtime.yaml` を atomic に生成し、既存ファイルは上書きしません。project 側の `.takt/runtime.yaml` は自動生成されません。新規環境では、選択された provider/model を `provider.profiles.default` と `provider.defaults.profile: default` として書き込みます。legacy provider 設定が既に存在する環境には inactive な `version: 1` ファイルだけを生成し、移行するまで動作は変わりません。
+初回起動時、TAKT は `~/.takt/runtime.yaml` を atomic に生成し、既存ファイルは上書きしません。project 側の `.takt/runtime.yaml` は自動生成されません。新規環境では選択された provider/model を `provider.profiles.default` と `provider.defaults.profile: default` として書き込みます。legacy provider 設定が既に存在する環境には inactive な `version: 1` ファイルだけを生成し、移行するまで動作は変わりません。
 
 ## Provider プロファイル
 
@@ -834,7 +913,7 @@ steps:
 
 各 routing entry では `provider`、`model`、`provider_options` を指定できます。これらは個別に省略できますが、各 entry には少なくとも 1 つ必要です。空の `provider_options` オブジェクトは受理されません。
 
-legacy モードの workflow step では、provider / model の優先順位は次のとおりです。
+legacy モードの workflow step では provider / model の優先順位は次のとおりです。
 
 ```text
 CLI / 環境変数の明示 override
@@ -854,7 +933,7 @@ workflow YAML には provider/model のレイヤーがありません。`interna
 
 ### Auto Routing
 
-legacy モードで TAKT に provider と model の両方を candidate list から選ばせる場合は、project `.takt/config.yaml` または global `~/.takt/config.yaml` に `auto_routing` を定義します。runtime モードでは `runtime.yaml` の `provider.auto_routing` と profile target を使用し、workflow YAML から auto routing を有効化・上書きすることはできません。workflow step 外の処理には legacy config の具体 provider/model、または runtime の default を使用します。
+legacy モードで TAKT に provider と model の両方を candidate list から選ばせる場合は project `.takt/config.yaml` または global `~/.takt/config.yaml` に `auto_routing` を定義します。runtime モードでは `runtime.yaml` の `provider.auto_routing` と profile target を使用し、workflow YAML から auto routing を有効化・上書きすることはできません。workflow step 外の処理には legacy config の具体 provider/model、または runtime の default を使用します。
 
 ```yaml
 provider: codex
@@ -897,11 +976,11 @@ auto_routing:
       implementation: implementation
 ```
 
-legacy モードでは、top-level の具体的な `provider` と `model` が default です。各 `auto_routing.candidates` は `provider` と `model` を直接保持します。candidate 選択が適用されるのは workflow の step 実行だけで、AI による task slug 生成や sync conflict resolver など workflow step context を持たない内部処理は top-level の具体値を使用します。legacy の `auto_routing.router` と candidates は default として暗黙に使用されません。
+legacy モードでは top-level の具体的な `provider` と `model` が default です。各 `auto_routing.candidates` は `provider` と `model` を直接保持します。candidate 選択が適用されるのは workflow の step 実行だけで、AI による task slug 生成や sync conflict resolver など workflow step context を持たない内部処理は top-level の具体値を使用します。legacy の `auto_routing.router` と candidates は default として暗黙に使用されません。
 
 assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）は auto routing を通りません。設定済みなら `takt_providers.assistant`、未設定なら top-level provider/model を解決し、この assistant 設定はその他の内部処理の default にはなりません。CLI の `--provider` / `--model` override が適用されるのはインタラクティブモードの計画会話だけで、instruct / retry には適用されません。解決可能な assistant または top-level provider がない場合、assistant は起動時に `Provider is not configured.` で失敗します。
 
-runtime モードでは、`provider.defaults` が runtime default の profile または ladder を選択します。auto routing は persona、tag、step の target が pool を明示的に選択した場合だけ適用されます。pool の candidate は `provider.profiles` を参照し、provider/model を直接保持しません。auto routing の hard rule は pool 選択時に `tags`、`steps`、`personas` の順に評価します。これとは別に、最終的な provider target の上書き優先順位は `defaults < personas < tags < steps` です。それ以外は `pool_rules` が candidate pool を選び、router は必要な tier だけを推定して TAKT が candidate を決定的に選びます。
+runtime モードでは `provider.defaults` が runtime default の profile または ladder を選択します。auto routing は persona、tag、step の target が pool を明示的に選択した場合だけ適用されます。pool の candidate は `provider.profiles` を参照し、provider/model を直接保持しません。auto routing の hard rule は pool 選択時に `tags`、`steps`、`personas` の順に評価します。これとは別に、最終的な provider target の上書き優先順位は `defaults < personas < tags < steps` です。それ以外は `pool_rules` が candidate pool を選び、router は必要な tier だけを推定して TAKT が candidate を決定的に選びます。
 
 candidate の `routing_tier` は `high`、`medium`、`low` のいずれかです。runtime profile が provider/model/options を保持するため、candidate はこれらを重複記述せず profile を参照します。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きでき、runtime の auto-routing target に到達するまで伝播します。
 
@@ -911,7 +990,7 @@ provider options は runtime profile、capability preset、既存の config/env 
 
 `provider_options` の優先順位は leaf ごとに解決されます。多くの leaf では env または CLI 起源の config leaf が他のすべてのソースより優先されます。例外は `base_url` です。workflow が特定の provider だけを明示的に proxy へ向けられるよう、`base_url` は step / workflow routing の設定を TAKT env override より優先します。`base_url` の順序は step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated の `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` > TAKT env override です。preview、doctor、validation、summary、report などの補助入口も、workflow 実行と同じ `base_url` 優先順位を使います。他の leaf は env / CLI config override の後に同じ step-to-global 順序で解決されます。
 
-安全のため、workflow YAML と project `.takt/config.yaml` で指定できる `base_url` は `127.0.0.1`、`127.x.x.x`、`localhost`、`*.localhost`、`::1` などの loopback host に限られます。非 loopback の provider base URL は、ユーザー管理の global config または `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` / `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL` / `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL` に設定してください。
+安全のため、workflow YAML と project `.takt/config.yaml` で指定できる `base_url` は `127.0.0.1`、`127.x.x.x`、`localhost`、`*.localhost`、`::1` などの loopback host に限られます。非 loopback の provider base URL はユーザー管理の global config または `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` / `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL` / `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL` に設定してください。
 
 `persona_providers` は既存 config のため引き続き使用できますが、新規設定では deprecated です。これは step の persona display name を使うため、raw `persona` キーではなく `persona_name` 由来の名前に一致することがあります。
 
@@ -925,7 +1004,7 @@ persona_providers:
         reasoning_effort: high
 ```
 
-capability の参照は、共有 YAML provider-options preset を名前で読み込めます。名前は `.takt/provider-options`、`~/.takt/provider-options`、`builtins/{lang}/provider-options` の順に first-match で解決されます。repertoire package からインストールされた workflow では、それらより先に package-local の `provider-options/` が参照されます。`@owner/repo/name` 形式の scoped ref は、別の repertoire package の `provider-options/` から `name` を解決します。workflow YAML で参照できるのは capability preset だけで、provider/model/options の定義は runtime profile（または既存の legacy config layer）に置きます。
+capability の参照は共有 YAML provider-options preset を名前で読み込めます。名前は `.takt/provider-options`、`~/.takt/provider-options`、`builtins/{lang}/provider-options` の順に first-match で解決されます。repertoire package からインストールされた workflow ではそれらより先に package-local の `provider-options/` が参照されます。`@owner/repo/name` 形式の scoped ref は別の repertoire package の `provider-options/` から `name` を解決します。workflow YAML で参照できるのは capability preset だけで、provider/model/options の定義は runtime profile（または既存の legacy config layer）に置きます。
 
 capability preset の解決は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
 
@@ -933,7 +1012,7 @@ provider option の leaf は環境変数でも上書きできます。OpenCode �
 
 これにより、表示名と provider 選択を分離したまま、runtime target が単一の workflow 内で provider や model を混在させることができます。
 
-以下の provider 固有オプション例は、互換性のために残る legacy `config.yaml` の option bag を示します。runtime モードでは `runtime.yaml` の `provider.profiles.<name>.options` に置き、workflow では対応する capability leaf だけを指定してください。
+以下の provider 固有オプション例は互換性のために残る legacy `config.yaml` の option bag を示します。runtime モードでは `runtime.yaml` の `provider.profiles.<name>.options` に置き、workflow では対応する capability leaf だけを指定してください。
 
 ### プロバイダー固有オプションの実用例
 
@@ -951,7 +1030,7 @@ provider_options:
 
 TAKT は `provider_options.claude.base_url` を `claude` と `claude-sdk` に `ANTHROPIC_BASE_URL` として渡します。`provider_options.codex.base_url` は Codex SDK constructor の `baseUrl` として渡します。`deepseek-harness` の `provider_options.deepseek_harness.base_url` は公式 Python SDK へ `DEEPSEEK_BASE_URL` として渡します。`claude-terminal`、`opencode`、`cursor`、`copilot`、`kiro`、`pi` は、別途文書化されるまでこの base URL 対応の対象外です。
 
-`ANTHROPIC_BASE_URL` や `OPENAI_BASE_URL` など provider-native の環境変数は provider 側の fallback 設定です。上記 provider では、TAKT の `provider_options.*.base_url` が明示的な TAKT config として provider-native 設定より優先されます。
+`ANTHROPIC_BASE_URL` や `OPENAI_BASE_URL` など provider-native の環境変数は provider 側の fallback 設定です。上記 provider では TAKT の `provider_options.*.base_url` が明示的な TAKT config として provider-native 設定より優先されます。
 
 外部の proxy / gateway サービス（OpenAI 互換または Anthropic 互換 API を話す任意のエンドポイント）へのルーティングにも使えます。ただし非 loopback host を許可する層（global config または `TAKT_PROVIDER_OPTIONS_*_BASE_URL` 環境変数）で設定する必要があります。workflow 層と project 層で受理されるのは loopback アドレスのみです。
 
@@ -1026,6 +1105,27 @@ provider_options:
 
 runtime profile または capability preset で設定できます。legacy モードでは `provider_routing`、deprecated の `persona_providers`、project、global config からも設定できます。環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` でも上書きできます。
 
+#### Codex の fast mode (`fast_mode`)
+
+`provider_options.codex.fast_mode` で Codex の fast mode を明示的に設定できます。
+
+```yaml
+provider_options:
+  codex:
+    fast_mode: true
+```
+
+`true` と `false` はどちらも明示値として扱われます。省略した場合、TAKT は
+`features.fast_mode` を Codex に渡さず、Codex 自身の既定値を維持します。環境変数では
+`TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=true` または
+`TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=false` を使用できます。
+
+この設定は既存の provider option leaf の解決順序と source attribution に従います。
+runtime profile、`provider_routing.personas`、`provider_routing.tags`、
+`provider_routing.steps`、project または global の `provider_options`、環境変数 override
+から設定できます。`takt exec` の assistant session も解決済み runtime default の
+provider options を使用します。
+
 #### Codex の permission control (`permission_control`)
 
 Codex はデフォルトで TAKT の permission mode マッピングを使います。これは `permission_control: takt` と同じで、解決済みの TAKT `permission_mode` を Codex SDK の `sandboxMode` へ渡します。`network_access` を指定した場合は `networkAccessEnabled` にも渡します。省略時は Codex の既定値（`false`）を維持します。
@@ -1038,11 +1138,11 @@ provider_options:
     permission_control: codex
 ```
 
-`permission_control: codex` では、通常の Codex 呼び出しと strict isolated structured 呼び出しの両方で TAKT は `sandboxMode` と `networkAccessEnabled` を渡しません。実効権限は Codex の `config.toml`、`default_permissions`、permission profile に委譲されます。非対話実行を成立させるため `approvalPolicy: never` は引き続き設定されます。`permission_control: codex` と `network_access` は併用できず、解決後に両方が残る設定は fail fast で拒否されます。明示的な opt-in のため、権限の結果は利用者の自己責任です。
+`permission_control: codex` では通常の Codex 呼び出しと strict isolated structured 呼び出しの両方で TAKT は `sandboxMode` と `networkAccessEnabled` を渡しません。実効権限は Codex の `config.toml`、`default_permissions`、permission profile に委譲されます。非対話実行を成立させるため `approvalPolicy: never` は引き続き設定されます。`permission_control: codex` と `network_access` は併用できず、解決後に両方が残る設定は fail fast で拒否されます。明示的な opt-in のため、権限の結果は利用者の自己責任です。
 
 #### Codex Skill の継承 (`skills`)
 
-TAKT workflow は repository scope と user scope の Codex Skill をデフォルトでは継承しません。workflow が環境依存の指示を利用すべき場合は、runtime profile または `enable-skills` capability で対象 scope を明示的に有効化します。`takt exec` は解決した capability を生成 workflow に保持しますが、provider/model/options は runtime 設定に残ります。後の実行で指定した `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` 環境変数は引き続き最優先です。
+TAKT workflow は repository scope と user scope の Codex Skill をデフォルトでは継承しません。workflow が環境依存の指示を利用すべき場合は runtime profile または `enable-skills` capability で対象 scope を明示的に有効化します。`takt exec` は解決した capability を生成 workflow に保持しますが、provider/model/options は runtime 設定に残ります。後の実行で指定した `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` 環境変数は引き続き最優先です。
 
 ```yaml
 provider_options:
@@ -1110,7 +1210,7 @@ provider_options:
 - `extensions` には npm package、Git source、local path を指定できます。
 - 明示した source は TAKT 実行時に temporary resolution され、Pi settings には永続化されません。
 - `no_extensions` は extension 探索を無効にしますが、`extensions` に列挙した source は読み込みます。
-- その他の `no_*` オプションは、それぞれ対応するリソース種別の探索を無効にします。
+- その他の `no_*` オプションはそれぞれ対応するリソース種別の探索を無効にします。
 - 暗黙の project-local Pi extension は信頼せず、読み込みません。
 - 明示した extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。
 - 認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。
@@ -1215,7 +1315,7 @@ logging:
   debug: true
 ```
 
-デバッグログは `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` に NDJSON 形式で出力され、プロンプト/レスポンスログは同じディレクトリの `debug-{timestamp}-prompts.jsonl` に出力されます。
+一般デバッグログはプロセス単位で `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` に NDJSON 形式で出力されます。プロンプト/レスポンスログは workflow run 単位で `.takt/runs/<run>/logs/<sessionId>-prompts.jsonl` に出力されます。
 
 ### 詳細コンソール出力
 
@@ -1227,7 +1327,7 @@ logging:
   level: debug
 ```
 
-これは CLI 内部の verbose console mode も有効にします。さらに `logging.level: debug` だけでデバッグロガーも有効になるため、上記の `debug-{timestamp}.log` と `debug-{timestamp}-prompts.jsonl` は `logging.debug` を別途設定しなくても出力されます。`logging.debug: true`、`logging.trace: true`、`logging.level: debug` のいずれかで有効になります。
+これは CLI 内部の verbose console mode も有効にします。さらに `logging.level: debug` だけで、上記のプロセス単位の一般デバッグログと workflow run 単位のプロンプト/レスポンスログが、`logging.debug` を別途設定しなくても出力されます。`logging.debug: true`、`logging.trace: true`、`logging.level: debug` のいずれかで有効になります。
 
 ## Companion の provider target
 
@@ -1248,7 +1348,7 @@ provider:
         profile: review
 ```
 
-Companion の structured call は、他の TAKT 所有 structured agent と同じ provider-neutral な fresh-session transport を使います。native structured output 対応 provider ではそれを使い、それ以外では検証付き JSON fallback を使います。Companion reviewer、moderator、selector の呼び出しは常に `readonly` permission mode で実行し、解決された profile に設定された permission mode は適用しません。
+Companion の structured call は他の TAKT 所有 structured agent と同じ provider-neutral な fresh-session transport を使います。native structured output 対応 provider ではそれを使い、それ以外では検証付き JSON fallback を使います。Companion reviewer、moderator、selector の呼び出しは常に `readonly` permission mode で実行し、解決された profile に設定された permission mode は適用しません。
 
 | Provider | 実装エージェントの tool event |
 |---|---:|
@@ -1261,4 +1361,4 @@ Companion の structured call は、他の TAKT 所有 structured agent と同�
 | `pi` | ライブ |
 | `cursor`、`copilot`、`kiro` | 利用不可 |
 
-ライブの tool event がない場合も、完了レビューとターン境界での指摘配達は動作します。
+ライブの tool event がない場合も完了レビューとターン境界での指摘配達は動作します。

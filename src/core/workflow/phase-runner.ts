@@ -52,6 +52,8 @@ export interface BasePhaseRunnerContext {
   observabilityEnabled?: boolean;
   /** Optional text sanitizer for observability span attributes */
   sanitizeObservabilityText?: (text: string) => string;
+  /** Sanitizes report content before it crosses the report-file persistence boundary. */
+  reportContentSanitizer?: (content: string) => string;
   /** Current workflow stack for observability span parity (phase/judge records) */
   getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   /** Run-local environment values passed to trusted child processes. */

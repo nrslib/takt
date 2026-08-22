@@ -10,6 +10,7 @@ import type {
   NormalAgentWorkflowStep,
   ResolvedCompanionDefinition,
   CompanionReviewMode,
+  TeamLeaderWorkflowStep,
   WorkflowState,
 } from '../../models/index.js';
 import { createSelectorContract, validateSelectorResponse } from '../selector-contract.js';
@@ -56,7 +57,7 @@ interface CompanionStepRuntimeDeps {
   readonly language: 'en' | 'ja';
   readonly task: string;
   readonly reviewMode: CompanionReviewMode;
-  readonly step: NormalAgentWorkflowStep;
+  readonly step: NormalAgentWorkflowStep | TeamLeaderWorkflowStep;
   readonly definitions: Readonly<Record<string, ResolvedCompanionDefinition>>;
   readonly providers: Readonly<Record<string, ProviderRoutingEntry>>;
   readonly selectorProvider?: SelectorProviderInfo;

@@ -41,12 +41,15 @@ import {
   DEFAULT_COMPANION_REVIEW_MODE,
   type CompanionReviewMode,
 } from '../../../core/models/companion-types.js';
+import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import { getEffectiveRuntimeProviderFile } from './schema.js';
 import { createRuntimeProviderResolutionContext } from './resolution-context.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 
 export interface ResolvedRuntimeEnvironment {
   providerEnvironment: CompiledProviderEnvironment;
+  /** Provider options resolved from config.yaml and environment variables. */
+  configProviderOptions?: StepProviderOptions;
   companionEnabled: boolean;
   companionReviewMode: CompanionReviewMode;
   providerConfigMode: ProviderConfigMode;
@@ -118,6 +121,7 @@ export function resolveRuntimeEnvironment(
         modelSource: input.legacy.modelSource,
       },
     ),
+    configProviderOptions: input.legacy.providerOptions,
     companionEnabled,
     companionReviewMode,
     providerConfigMode: mode,

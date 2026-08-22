@@ -30,6 +30,7 @@ export interface CodexProviderOptions {
   networkAccess?: boolean;
   permissionControl?: CodexPermissionControl;
   reasoningEffort?: CodexReasoningEffort;
+  fastMode?: boolean;
   guards?: ProviderGuardOptions;
   skills?: {
     repo?: boolean;

@@ -51,7 +51,7 @@ import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import {
   createLogger,
-  getDebugPromptsLogFile,
+  isDebugEnabled,
   isValidReportDirName,
   preventSleep,
 } from '../../../shared/utils/index.js';
@@ -131,6 +131,7 @@ export interface WorkflowExecutionBootstrap {
   companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
+  configProviderOptions: WorkflowExecutionOptions['providerOptions'];
   providerOptionsProviderSource: ProviderResolutionSource | undefined;
   providerPermissionMode: PermissionMode | undefined;
   autoRouting: WorkflowExecutionOptions['autoRouting'];
@@ -383,7 +384,13 @@ export async function createWorkflowExecutionBootstrap(
         handlerRef.current(event);
       };
 
-  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint || options.restartPoint);
+  const isRetry = Boolean(
+    options.resumeSource?.resumeMode
+      || options.startStep
+      || options.retryNote
+      || options.resumePoint
+      || options.restartPoint,
+  );
   const shouldLoadSavedSessions = isRetry && options.restartPoint === undefined;
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
@@ -518,7 +525,14 @@ export async function createWorkflowExecutionBootstrap(
       startTime: runBootstrap.startedAt,
     },
   );
-  const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);
+  const promptLogPath = isDebugEnabled()
+    ? join(runPaths.logsAbs, `${workflowSessionId}-prompts.jsonl`)
+    : undefined;
+  const sessionLogger = new SessionLogger(
+    ndjsonLogPath,
+    allowSensitiveData,
+    promptLogPath,
+  );
   if (options.interactiveMetadata) {
     sessionLogger.writeInteractiveMetadata(options.interactiveMetadata);
   }
@@ -677,7 +691,6 @@ export async function createWorkflowExecutionBootstrap(
         updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
     : (persona: string, personaSessionId: string | undefined) =>
         updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
-  const promptLogPath = getDebugPromptsLogFile() ?? undefined;
   const observabilityOptions = globalConfig.observability.enabled
     && (
       globalConfig.observability.sessionLogExporter
@@ -754,6 +767,7 @@ export async function createWorkflowExecutionBootstrap(
     companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,
+    configProviderOptions: resolvedRuntimeEnvironment.configProviderOptions,
     providerOptionsProviderSource: resolvedRuntimeEnvironment.providerConfigMode === 'runtime-v1'
       ? currentProviderSource
       : undefined,

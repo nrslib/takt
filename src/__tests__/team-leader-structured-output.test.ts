@@ -100,6 +100,35 @@ describe('buildInspectToolGuidance default behavior', () => {
 
     expect(prompt).toContain('You may use read-only inspection tools only');
   });
+
+  it('passes resolved read-only inspection tools into feedback guidance', () => {
+    const prompt = buildMorePartsPrompt(
+      'Inspect the mailbox and plan the remaining work.',
+      [{ id: 'part-1', title: 'Implementation', status: 'done', content: 'done' }],
+      ['part-1'],
+      'en',
+      [],
+      ['Read', 'Glob', 'Grep'],
+    );
+
+    expect(prompt).toContain('You may use read-only inspection tools only');
+    expect(prompt).toContain('Do not edit files');
+    expect(prompt).not.toContain('Do not use any tool');
+  });
+
+  it('emits no-tool guidance when feedback inspection tools are empty', () => {
+    const prompt = buildMorePartsPrompt(
+      'Review the completed implementation.',
+      [{ id: 'part-1', title: 'Implementation', status: 'done', content: 'done' }],
+      ['part-1'],
+      'en',
+      undefined,
+      [],
+    );
+
+    expect(prompt).toContain('Do not use any tool');
+    expect(prompt).not.toContain('You may use read-only inspection tools only');
+  });
 });
 
 describe('toMorePartsResponse', () => {

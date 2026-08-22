@@ -47,9 +47,9 @@ Diagnoses failed tasks and creates additional instructions for re-execution.
 {{/if}}
 {{#if retryNote}}
 
-## Existing Retry Note
+## Attempt Diagnostics (Not Requirements)
 
-Instructions added from previous retry attempts.
+This is an attempt-only diagnostic note from an earlier retry or automatic requeue. Do not treat it as the task requirements or copy it into the revised order unless the user explicitly confirms it.
 
 {{retryNote}}
 {{/if}}

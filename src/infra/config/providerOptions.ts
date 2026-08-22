@@ -34,6 +34,7 @@ type RawProviderOptions = {
     network_access?: boolean;
     permission_control?: CodexPermissionControl;
     reasoning_effort?: CodexReasoningEffort;
+    fast_mode?: boolean;
     guards?: RawProviderGuardOptions;
     skills?: {
       repo?: boolean;
@@ -337,6 +338,7 @@ export function normalizeProviderOptions(
     || options.codex?.network_access !== undefined
     || options.codex?.permission_control !== undefined
     || options.codex?.reasoning_effort !== undefined
+    || options.codex?.fast_mode !== undefined
     || options.codex?.guards !== undefined
     || options.codex?.skills?.repo !== undefined
     || options.codex?.skills?.user !== undefined
@@ -355,6 +357,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
+        : {}),
+      ...(options.codex.fast_mode !== undefined
+        ? { fastMode: options.codex.fast_mode }
         : {}),
       ...(options.codex.guards?.call_timeout_ms !== undefined
         ? { guards: { callTimeoutMs: options.codex.guards.call_timeout_ms } }
@@ -653,6 +658,9 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.codex.reasoningEffort !== undefined
           ? { reasoningEffort: layer.codex.reasoningEffort }
+          : {}),
+        ...(layer.codex.fastMode !== undefined
+          ? { fastMode: layer.codex.fastMode }
           : {}),
         ...(layer.codex.guards !== undefined
           ? { guards: { ...result.codex?.guards, ...layer.codex.guards } }
@@ -1049,6 +1057,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.codex?.reasoningEffort,
     resolveProviderOptionOrigin(originResolver, 'codex.reasoningEffort', source),
   );
+  const codexFastMode = selectProviderValue(
+    resolvedConfigOptions.codex?.fastMode,
+    personaOptions?.codex?.fastMode,
+    stepOptions?.codex?.fastMode,
+    resolveProviderOptionOrigin(originResolver, 'codex.fastMode', source),
+  );
   const codexBaseUrl = selectProviderValueByScope(
     resolvedConfigOptions.codex?.baseUrl,
     personaOptions?.codex?.baseUrl,
@@ -1281,6 +1295,7 @@ export function resolveEffectiveProviderOptions(
       || codexNetworkAccess !== undefined
       || codexPermissionControl !== undefined
       || codexReasoningEffort !== undefined
+      || codexFastMode !== undefined
       || codexCallTimeoutMs !== undefined
       || codexRepoSkills !== undefined
       || codexUserSkills !== undefined
@@ -1290,6 +1305,7 @@ export function resolveEffectiveProviderOptions(
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
             ...(codexPermissionControl !== undefined ? { permissionControl: codexPermissionControl } : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
+            ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
             ...(codexCallTimeoutMs !== undefined
               ? { guards: { callTimeoutMs: codexCallTimeoutMs } }
               : {}),
@@ -1582,6 +1598,7 @@ export const PROVIDER_OPTION_PATHS = [
   'claude.skills.enabled',
   'claude.guards.callTimeoutMs',
   'codex.baseUrl',
+  'codex.fastMode',
   'codex.networkAccess',
   'codex.permissionControl',
   'codex.reasoningEffort',

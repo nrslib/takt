@@ -29,7 +29,7 @@
 
 **AI コーディングエージェントの見張り番をやめる。**
 
-TAKT は、AI コーディングエージェントを再現可能な開発ワークフローとして動かす OSS CLI です。計画、実装、レビュー、修正ループ、人間への確認、権限、出力契約を YAML で定義し、隔離された worktree と追跡可能なログ付きでタスクを実行します。
+TAKT は AI コーディングエージェントを再現可能な開発ワークフローとして動かす OSS CLI です。計画、実装、レビュー、修正ループ、人間への確認、権限、出力契約を YAML で定義し、隔離された worktree と追跡可能なログ付きでタスクを実行します。
 
 1つのエージェントにプロセス全体を覚えさせるのではなく、TAKT は step ごとに役割、文脈、遷移ルールを与えます。AI はコードを書きますが、次に何をするかは workflow が決めます。
 
@@ -40,29 +40,27 @@ TAKT は、AI コーディングエージェントを再現可能な開発ワー
 - 積んだタスクを隔離された worktree で実行し、後からログとレポートを確認できる
 - Claude Code、Claude SDK、Codex SDK、OpenCode SDK、Pi SDK、公式 DeepSeek Harness SDK、Cursor、GitHub Copilot CLI、Kiro を provider として利用できる
 
-**T**AKT **A**gent **K**oordination **T**opology は、複数の AI エージェントをオーケストレーションし、レビューループ・プロンプト管理・ガードレールを与えるツールです。
+**T**AKT **A**gent **K**oordination **T**opology は複数の AI エージェントをレビューループ、プロンプト管理、step ごとの権限でオーケストレーションするツールです。
 
-AI と会話してやりたいことを決め、タスクとして積み、`takt run` で実行します。計画・実装・レビュー・修正のループは YAML の workflow ファイルで定義されており、エージェント任せにはしません。TAKT は Claude Code、Codex、OpenCode、Pi、公式 DeepSeek Harness SDK、Cursor、GitHub Copilot CLI、Kiro CLI を、役割・権限・文脈の異なるエージェントとして協調させます。
+AI と会話してやりたいことを決め、タスクとして積み、`takt run` で実行します。計画・実装・レビュー・修正のループは YAML の workflow ファイルで定義されており、エージェント任せにはしません。TAKT は Claude Code、Codex、OpenCode、Pi、公式 DeepSeek Harness SDK、Cursor、GitHub Copilot CLI、Kiro CLI を役割・権限・文脈の異なるエージェントとして協調させます。
 
-TAKT は AI コーディングワークフローを主な用途として提供していますが、コーディング以外でも、複数の AI エージェントを協調させたいタスクや、レビュー・判定・フィードバックループによってタスクの精度を高めたい場面で活用できます。
+TAKT は AI コーディングワークフローを主な用途として提供していますが、コーディング以外でも複数の AI エージェントを協調させたいタスクや、レビュー・判定・フィードバックループによってタスクの精度を高めたい場面で活用できます。
 
 TAKT は TAKT 自身で開発しています（ドッグフーディング）。
 
 ## なぜ TAKT か
 
-AI コーディングエージェントは強力ですが、そのままでは安定した開発プロセスにはなりません。長い作業では指示を忘れ、コンテキストが汚染され、実装とレビューの責務が混ざり、同じ指摘を人間が何度も繰り返すことになります。それは人を疲弊させます。
+AI コーディングエージェントはそのままでは安定した開発プロセスにはなりません。長い作業では指示を忘れ、コンテキストが汚染され、実装とレビューの責務が混ざり、同じ指摘を人間が何度も繰り返すことにもなります。
 
-プロンプトや `CLAUDE.md` やスキルにルールを書き足すことは助けになります。しかし、それだけではプロセスを強制できません。AI が守るかどうかを、AI 自身の振る舞いに委ねることになるからです。
+プロンプトや `CLAUDE.md` やスキルにルールを書き足すことは助けになります。しかし、それだけではプロセスを強制できません。AI が守るかどうかを AI 自身の振る舞いに委ねることになるからです。
 
-TAKT は、AI エージェントをただ信頼するのではなく、外側から制御する対象として扱います。
+TAKT は AI エージェントをただ信頼するのではなく、外側から制御する対象として扱います。
 
 workflow で工程を定義し、persona・policy・knowledge・instruction・output contract を step ごとに与え、実装、レビュー、修正、再レビューの流れを宣言的に管理します。責務・知識・制約を分け、必要な step の必要なエージェントにだけ渡すことで、コンテキストを肥大化させずにタスクの精度を高めます。
 
 レビューを飛ばせない構造にし、問題があれば修正へ戻し、必要なら人間に判断を戻します。タスクはワークツリーで隔離され、各 step の結果はログとレポートに残るため、タスクから PR までの流れを後から追跡できます。
 
-中核にあるのは「役割・工程・判定・フィードバックループを持つエージェントプロセス」を再利用可能な形で動かすことです。
-
-目的はシンプルです。人間の継続的な介入に依存せず、開発プロセスを再利用可能で、レビュー可能で、再現可能な仕組みにすることです。
+TAKT はこれらを役割、工程、判定、フィードバックループからなる再利用可能なエージェントプロセスとして動かします。人間の継続的な介入に依存せず、開発プロセスをレビュー可能で再現可能な仕組みに保ちます。
 
 ## 5分で試す
 
@@ -81,11 +79,11 @@ takt run
 takt list
 ```
 
-初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode`、`pi` などの SDK 経由 provider は Node.js と認証情報で動きます。`deepseek-harness` は Python 3.10+ と公式 SDK/runtime wheel も必要です。CLI 経由 provider を使う場合は、対応する外部 CLI が必要です。
+初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode`、`pi` などの SDK 経由 provider は Node.js と認証情報で動きます。`deepseek-harness` は Python 3.10+ と公式 SDK/runtime wheel も必要です。CLI 経由 provider を使う場合は対応する外部 CLI が必要です。
 
 ### 動画チュートリアル
 
-[文章版チュートリアル](./tutorial.ja.md)に沿って実際に操作する様子を、次の動画で確認できます。
+[文章版チュートリアル](./tutorial.ja.md)に沿って実際に操作する様子を次の動画で確認できます。
 
 | Chapter 1 | Chapter 2 |
 |-----------|-----------|
@@ -105,7 +103,7 @@ takt list
 
 ## 必要なもの
 
-TAKT の実行には Node.js `>=24.15.0` が必要です。
+TAKT の実行には Node.js `>=22.22.0` が必要です。
 
 利用するプロバイダーに応じて、外部 CLI のインストール要否が変わります。
 
@@ -137,7 +135,7 @@ python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
 - [GitHub CLI](https://cli.github.com/) (`gh`) — `takt #N` で GitHub Issue を使う場合に必要です
 - [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab`) — GitLab Issue/MR 連携に使います（リモート URL から自動検出）
 
-> **OAuth の利用について:** OAuth が利用可能かどうかはプロバイダーや用途によって異なります。TAKT を利用する際には、各プロバイダーの利用規約をご確認ください。
+> **OAuth の利用について:** OAuth が利用可能かどうかはプロバイダーや用途によって異なります。TAKT を利用する際には各プロバイダーの利用規約をご確認ください。
 
 ## クイックスタート
 
@@ -211,7 +209,7 @@ takt list
 
 ## 仕組み
 
-TAKT という名前は、オーケストラの指揮で拍を刻むために使われる「拍」「指揮棒の一振り」を意味するドイツ語の「タクト（Takt）」に由来しています。TAKT はユーザー向けにも実装名にも **workflow** と **step** を使います。
+TAKT という名前はオーケストラの指揮で拍を刻むために使われる「拍」「指揮棒の一振り」を意味するドイツ語の「タクト（Takt）」に由来しています。TAKT はユーザー向けにも実装名にも **workflow** と **step** を使います。
 
 workflow は step の並びで構成されます。YAML では `steps`、`initial_step`、`max_steps` を使います。各 step では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。最小の例は次の通りです。
 
@@ -250,8 +248,6 @@ steps:
 
 繰り返し使う step 定義は `.takt/steps/` に置き、workflow から `uses` で参照できます。探索順と上書き規則は [Workflow Guide](./workflows.ja.md) を参照してください。
 
-`default` / `takt-default` wrapper は、汎用または TAKT 固有の外部 security-review facet pool を、それを消費する reviewer suite だけへ束縛します。`takt-default-team` は同じ計画・テスト・レビュー・最終ゲート契約を使い、現行 schema 制約に合わせて実装・修正・再修正を dynamic facets と companion を使わない静的な Team Leader coder execution で行います。pool 参照は実際に消費する suite だけへ渡され、共有の development / peer-review workflow 契約は変更しません。`dynamic_facets` は通常の agent step と `parallel` の agent sub-step の両方で使え、dynamic parallel では participant selector の後に選択された子だけが facet selector を実行します。各子の固定 facet は維持され、`max_selected` まで pool 候補が追加され、空選択なら追加されません。対象の facet selector をすべて完了してから parallel の子を起動し、1件でも不正な選択があれば同じ parallel 親配下の子は起動しません。プロセスの resume では participant selector と facet selector を現在の pool に対して再実行します。
-
 workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `~/.takt/workflows/` → builtin です。
@@ -266,7 +262,8 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `pure` | ドメインファセットを注入しない最小 workflow。モデル自身の判断と SKILL 選択を信頼する。 |
 | `takt-default` | TAKT 自体の開発で実際に使われている workflow。CLI ツールの開発にそのまま活用できます。 |
 | `takt-default-team` | 実装・修正を Team Leader のタスク分解で実行する `takt-default` の派生。 |
-| `review` / `review-fix-default` | 多観点レビュー（fix ループなし / あり）。 |
+| `review` | 動的レビュワー選択と supervisor による統合を行う、コードを変更しない多観点レビュー。 |
+| `review-fix` | 動的レビュワー選択の後、標準 workflow と同じ裁定・検証付き修正ループと要件の最終確認で収束させる多観点レビュー。 |
 
 ドメイン特化ファミリー（`simple-*` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 系）は 📦 レガシーカテゴリで引き続き利用できます。
 
@@ -296,15 +293,9 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 `takt exec` は TAKT の対話型タスク入力モードを開始します。Assistant エージェントがリクエストを明確化し、`/go` で会話をワークフローに変換、Worker エージェントがタスクを実装、Review エージェントがレビュー、Replanning エージェントが必要に応じてユーザーに方針確認を行い、ループ検出が非生産的な繰り返しを防止します。
 
-exec は前回の設定から開始するか、初回実行時はデフォルト設定を使用します。プリセット名を渡すとそのプリセットから開始します。会話中に `/setup` でエージェント、ループ検出閾値、プリセット、参照する instruction / knowledge / policy ファセットを編集できます。ビルトイン/デフォルトプリセットはエージェントの役割、ファセット、ループ閾値のみを定義します。プロバイダとモデルは exec モード開始時に通常の TAKT 設定から解決され、Assistant ダイアログと `/setup` 表示で使われます。生成 workflow は tool / skill の要求に capabilities を使い、provider/model/options は runtime 設定に残します。`effort` は明示的に設定された場合のみ出力されます。Codex の repository Skill と user Skill は capability または runtime profile で制御します。
+exec は前回の設定から開始するか、初回実行時はデフォルト設定を使用します。プリセット名を渡すとそのプリセットから開始します。会話中に `/setup` でエージェント、ループ検出閾値、プリセット、参照ファセットを編集できます。`/go` を実行すると、TAKT は `.takt/exec/workflow.yaml` を生成し、通常のワークフローエンジンで実行します。`/cancel` で実行せずに終了します。入力行の編集中は画像添付（`/paste-image`、`Ctrl+V`、OSC 1337 インライン画像ペースト）が使えます。
 
-exec プリセットの解決順序はプロジェクト `.takt/exec/presets/` → グローバル `$TAKT_CONFIG_DIR/exec/presets/`（デフォルト `~/.takt/exec/presets/`）→ ビルトイン `builtins/exec/presets/` です。`/setup` での変更は `$TAKT_CONFIG_DIR/exec.yaml`（デフォルト `~/.takt/exec.yaml`）に保存されます。`/setup` ではプロジェクト/グローバルプリセットの保存・削除も可能で、作成されたファセットは `.takt/facets/` または `$TAKT_CONFIG_DIR/facets/`（デフォルト `~/.takt/facets/`）に保存されます。
-
-`/go` を実行すると、TAKT は `.takt/exec/workflow.yaml` を生成し、通常のワークフローエンジンで実行します。`/go` の後のインラインテキストは追加メモとして扱われます。会話やインラインタスクテキストなしで `/go` を実行した場合、ワークフローは生成されません。`/cancel` で実行せずに終了します。
-
-exec の入力行を編集中に画像を添付できます。macOS では `/paste-image` または `Ctrl+V` でクリップボード画像を添付でき、対応ターミナルでは OSC 1337 のインライン画像ペーストも使えます。TAKT は `[Image #N]` プレースホルダーを挿入します。そのプレースホルダーを Assistant へのメッセージや `/go` の追加メモで参照すると、その Assistant 依頼に画像が渡されます。同じセッションで添付されていないプレースホルダーは通常テキストとして扱われます。`/go` 実行時は、参照された保存済み画像だけが生成タスク仕様へコピーされ、添付セクションに列挙されます。対応形式は PNG、JPEG、GIF、WebP です。インライン画像とクリップボード画像は 10 MiB までです。未対応形式、インライン画像のファイル名拡張子と実データの不一致、上限超過、保存済み添付の一時パス消失、symlink、通常ファイルではない添付元はエラーになります。ネイティブ画像入力に対応しない provider には、プロンプト内のローカルパス参照として渡されます。
-
-通常のエージェントステップと並列サブステップで `session_key` を設定して、ペルソナセッションを共有または分離できます。ループ検出ジャッジは常に新しいセッションを使います。システムステップ、workflow_call ステップ、ループ検出ジャッジ、並列親ステップでは `session_key` を設定できません。TAKT はランタイムキーを `session_key` に解決済みプロバイダを付加して構築するため、値は他の生成されたセッションルートと衝突しない空でない文字列にする必要があります。
+プリセットの解決順序、`/setup` の保存先、画像の制限、`session_key` の挙動は [CLI Reference](./cli-reference.ja.md) の Instant Exec モードを参照してください。
 
 ## 設定
 
@@ -316,59 +307,11 @@ model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
 
-run metadata、session、trace、report などの run artifact は `.takt/runs/<run>/` 配下の通常ファイルとして保存されます。resume / requeue では、該当する run state と report を引き継ぎます。
+run metadata、session、trace、report などの run artifact は `.takt/runs/<run>/` 配下の通常ファイルとして保存されます。resume / requeue では該当する run state と report を引き継ぎます。
 
-以下の `config.yaml` 例は、引き続き利用できる legacy モードです。runtime モードでは provider/model/options と routing を `runtime.yaml` に置き、workflow YAML からは設定できません。runtime 側では `provider.targets` と `provider.auto_routing` を使用します。
+最小設定に加えて `config.yaml`（legacy モード）では内部エージェントの上書き（`takt_providers`）と候補プールから step ごとに provider/model を選択する `auto_routing`（`cost` / `balanced` / `performance` 戦略）を設定できます。オートルーティングの決定は `.takt/events/` に NDJSON としてローカル記録できます。記録はオプトイン（`takt telemetry enable` または `telemetry.routing_decisions`）で、TAKT がルーティング決定をアップロードすることはありません。runtime モードでは provider/model/options と routing を `runtime.yaml` に置きます（後述）。
 
-```yaml
-provider: codex          # workflow step 外と auto_routing がない場合に使用する
-model: gpt-5.6-sol
-takt_providers:
-  assistant:             # 省略可。interactive / instruct / retry は auto routing 対象外
-    provider: codex
-    model: gpt-5.6-sol
-auto_routing:
-  strategy: balanced   # cost, balanced, or performance
-  router:
-    provider: codex
-    model: gpt-5.6-luna
-  candidates:
-    - name: advanced
-      description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
-      provider: codex
-      model: gpt-5.6-sol
-      routing_tier: high
-    - name: coding
-      description: Implementation, tests, debugging, and refactoring
-      provider: codex
-      model: gpt-5.6-terra
-      routing_tier: medium
-    - name: lightweight
-      description: Formatting and small mechanical edits
-      provider: codex
-      model: gpt-5.6-luna
-      routing_tier: low
-  rules:
-    steps:
-      security-audit: advanced
-  default_pool: general
-  candidate_pools:
-    general:
-      candidates: [lightweight, coding, advanced]
-      fallback: advanced
-    implementation:
-      candidates: [coding, advanced]
-      fallback: advanced
-  pool_rules:
-    tags:
-      implementation: implementation
-```
-
-legacy モードでは AI による task slug 生成など workflow step context を持たない処理に具体的な top-level provider/model を使用します。runtime モードでは runtime default を使用します。`auto_routing.router` と candidates は暗黙の default ではありません。assistant 会話は legacy では `takt_providers.assistant`、runtime では internal-agent seat を使用します。CLI の provider/model override は対応するコマンドでのみ適用されます。
-
-オートルーティングの決定は `.takt/events/` に NDJSON としてローカル書き込みされます。TAKT がルーティング決定をアップロードすることはありません。ローカル記録はデフォルトで有効で、`telemetry.routing_decisions` で設定でき、`takt telemetry status|enable|disable` で確認・変更できます。
-
-provider の認証情報を直接使う場合は、CLI のインストールは不要です（Claude、Codex、OpenCode、Pi が対象）。`deepseek-harness` は Python 3.10+ と公式 SDK/runtime wheel を別途必要とします。
+provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude、Codex、OpenCode、Pi が対象）。`deepseek-harness` は Python 3.10+ と公式 SDK/runtime wheel を別途必要とします。
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)
@@ -382,19 +325,13 @@ export DEEPSEEK_API_KEY=...                 # 公式 DeepSeek Harness SDK
 # Pi は SDK の credential store または provider-native 環境変数を使用
 ```
 
+OpenCode の呼び出しには既定で 60 分の provider イベント無活動上限があります。タイマーは provider イベントごとにリセットされるため、イベントが届き続ける限り呼び出しは 60 分を超えて実行できます。上限は `provider_options.opencode.guards.call_timeout_ms`（最大 86,400,000 ms）で変更できます。guard プロファイルとモデル別上書きは [Configuration Guide](./configuration.ja.md) を参照してください。
+
 ### プロバイダー設定専用レイヤー（`runtime.yaml`）
 
-プロバイダー・モデル・プロバイダーオプション・自動ルーティング・内部エージェント割り当ては、`config.yaml` ではなく専用レイヤーに置けます。`~/.takt/runtime.yaml` と `<project>/.takt/runtime.yaml` があり、プロジェクト側が優先されます。workflow YAML には provider/model/options/routing の設定面がなく、削除された field、workflow-call override、target 付き promotion はロード時に移行案内つきで拒否されます。promotion は runtime target ladder だけを進めます。CLI・環境変数の上書きは引き続き利用でき、provider と model は runtime target 内で独立に解決されます。旧プロバイダーキーとの混在は、問題のファイルと移行先キーを示す診断つきで拒否されます。`runtime.yaml` がなければ `config.yaml` の legacy mode は従来どおり動作します。
+プロバイダー・モデル・プロバイダーオプション・自動ルーティング・内部エージェント割り当ては、`config.yaml` ではなく専用レイヤーに置けます。`~/.takt/runtime.yaml` と `<project>/.takt/runtime.yaml` があり、プロジェクト側が優先されます。workflow YAML には provider/model/options/routing の設定面がありません。runtime モードはファイルの存在ではなく、有効な `provider` セクションの有無で有効化されます。有効な `runtime.yaml` の provider セクションと旧プロバイダーキーの混在は、問題のファイルと移行先キーを示す診断つきで拒否されます。有効な provider セクションがなければ `config.yaml` の legacy モードは従来どおり動作します。
 
-companion reviewer は既定で無効です。有効化する場合は、`runtime.yaml` のトップレベルに次を設定します。
-
-```yaml
-version: 1
-companion:
-  enabled: true
-```
-
-global と project の両方に設定がある場合は論理積で合成するため、global 側の `false` を project 側で再有効化することはできません。レイヤー合成時に未指定の設定は中立として扱い、両方とも未指定なら companion は無効のままです。
+companion reviewer は既定で無効です。有効化する場合は `runtime.yaml` のトップレベルに `companion.enabled: true` を設定します。global と project の両方に設定がある場合は論理積で合成するため、global 側の `false` を project 側で再有効化することはできません。
 
 全設定項目・プロバイダープロファイル・モデル解決の詳細は [Configuration Guide](./configuration.ja.md) を参照してください。
 
@@ -464,7 +401,7 @@ workflow 定義は `workflows/` 配下に配置します。
 
 ## Spec-Driven Development を採用する場合
 
-TAKT は、フェーズ遷移を YAML の状態機械として宣言的に縛り、output contract で各フェーズの成果物を形式化し、並列レビューと fix ループで逸脱を戻します。この構造は、仕様駆動 (Spec-Driven Development, SDD) のように「spec を中心に置く」進め方を採るユーザーにとって特に活きやすい設計になっています。spec をしっかり定義しておけば、AI が勝手にフェーズを飛ばす / 受け入れ条件を落とす / 検証を通さず「完了」を宣言する、といった崩れ方が構造的に起きにくくなります。
+TAKT はフェーズ遷移を YAML の状態機械として宣言的に縛り、output contract で各フェーズの成果物を形式化し、並列レビューと fix ループで逸脱を戻します。この構造は spec を中心に置く仕様駆動開発 (Spec-Driven Development, SDD) と相性の良い設計です。spec を定義しておけば、workflow がフェーズ遷移を強制し、検出した逸脱を修正へ戻し、検証 gate を通るまで完了しません。
 
 SDD で進めたい場合の実装例として、コミュニティから [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) が提供されています。要件 → ギャップ分析 → 設計 → タスク → 実装 → 検証 の各フェーズをワークフローとして整備し、OpenSpec 形式の変更提案フローも同梱されています。1 コマンドで導入できます。
 

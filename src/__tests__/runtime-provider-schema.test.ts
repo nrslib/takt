@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 // New module under test (implemented in the following `implement` step).
 // Import errors here are expected until then.
-import { RuntimeProviderFileSchema } from '../infra/config/runtime-provider/schema.js';
+import {
+  getEffectiveRuntimeProviderFile,
+  RuntimeProviderFileSchema,
+} from '../infra/config/runtime-provider/schema.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -135,6 +138,67 @@ describe('RuntimeProviderFileSchema', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it('Given a disabled companion-only named assignment without top-level defaults, When parsed, Then it remains inactive', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        profiles: {
+          security: { provider: 'mock', model: 'mock-security' },
+        },
+        assignments: {
+          security: {
+            targets: { companions: { security: { profile: 'security' } } },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Given disabled companions, When applying the effective section, Then named companion targets and profiles are removed', () => {
+    const file = RuntimeProviderFileSchema.parse({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'mock', model: 'default-model' },
+          security: { provider: 'mock', model: 'mock-security' },
+        },
+        assignments: {
+          security: {
+            targets: { companions: { security: { profile: 'security' } } },
+          },
+        },
+      },
+    });
+
+    const effective = getEffectiveRuntimeProviderFile(file);
+
+    expect(effective?.provider?.assignments).toBeUndefined();
+    expect(effective?.provider?.profiles).toEqual({
+      default: { provider: 'mock', model: 'default-model' },
+    });
+  });
+
+  it('Given an active named assignment without top-level defaults, When parsed, Then it is rejected', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        profiles: {
+          default: { provider: 'mock', model: 'default-model' },
+        },
+        assignments: {
+          project: { defaults: { profile: 'default' } },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it('Given enabled companion-only targets without defaults, When parsed, Then it is rejected for missing defaults', () => {
@@ -289,6 +353,57 @@ describe('RuntimeProviderFileSchema', () => {
     const doc = fullExample();
     doc.provider.targets.personas.coder = {};
     const result = RuntimeProviderFileSchema.safeParse(doc);
+    expect(result.success).toBe(false);
+  });
+
+  it('Given named assignments with defaults and targets, When parsed, Then the documented forms are accepted', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'mock', model: 'default-model' },
+          selected: { provider: 'mock', model: 'selected-model' },
+        },
+        assignments: {
+          project: {
+            defaults: { ladder: ['default', 'selected'] },
+            targets: {
+              personas: { coder: { profile: 'selected' } },
+              companions: { security: { profile: 'selected' } },
+            },
+          },
+        },
+        directories: { '~/work/project': 'project' },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Given an empty named assignment, When parsed, Then it is rejected', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: { default: { provider: 'mock', model: 'default-model' } },
+        assignments: { empty: {} },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('Given an unknown key in a named assignment, When parsed, Then strict validation rejects it', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: { default: { provider: 'mock', model: 'default-model' } },
+        assignments: { project: { defaults: { profile: 'default' }, use: 'forbidden' } },
+      },
+    });
+
     expect(result.success).toBe(false);
   });
 

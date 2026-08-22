@@ -40,6 +40,25 @@ function companionWorkflow(): WorkflowConfig {
 }
 
 describe('CT-COMP-03 runtime-only companion provider resolution', () => {
+  it('should resolve companions referenced by a Team Leader step', () => {
+    const baseWorkflow = companionWorkflow();
+    const workflow = {
+      ...baseWorkflow,
+      steps: [{
+        ...baseWorkflow.steps[0],
+        teamLeader: { maxConcurrency: 1, timeoutMs: 900000 },
+      }],
+    } as unknown as WorkflowConfig;
+    const environment = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'default' },
+      profiles: { default: { provider: 'codex', model: 'default-model' } },
+    });
+
+    const resolved = resolveWorkflowCompanions(workflow, environment);
+
+    expect([...resolved.keys()].sort()).toEqual(['design-reviewer', 'security-reviewer']);
+  });
+
   it('should accept companions as the fifth strict provider target map', () => {
     const result = RuntimeProviderFileSchema.safeParse({
       version: 1,

@@ -2,8 +2,11 @@ export function runSmokeScript(
   script: string,
   args: string[],
   env: NodeJS.ProcessEnv,
-  options: { timeoutMs: number },
-): Promise<{ stdout: string; stderr: string; exitCode: 0 }>;
+  options: {
+    timeoutMs: number;
+    reportMarker?: string;
+  },
+): Promise<{ stdout: string; stderr: string; exitCode: 0; cleanup: Promise<void> }>;
 
 export interface SmokeCaseResult {
   name: string;

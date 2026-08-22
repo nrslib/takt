@@ -6,6 +6,7 @@ export default defineConfig({
     ...e2eBaseTestConfig,
     include: [
       'e2e/specs/direct-task.e2e.ts',
+      'e2e/specs/loop-analysis-worker.e2e.ts',
       'e2e/specs/add.e2e.ts',
       'e2e/specs/list-non-interactive.e2e.ts',
       'e2e/specs/cli-help.e2e.ts',
