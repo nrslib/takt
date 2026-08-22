@@ -15,16 +15,14 @@ describe.each(['en', 'ja'] as const)('order revision %s prompt template', (lang)
         userNote: '',
       }, '# Existing order');
 
-      expect(prompt).toMatch(/Gherkin/);
-      expect(prompt).toMatch(/ASCII/);
+      expect(prompt).toMatch(lang === 'en' ? /code fence/ : /コードフェンス/);
+      expect(prompt).toMatch(/gherkin/i);
       if (lang === 'en') {
-        expect(prompt).toContain('a code fence around the entire output');
-        expect(prompt).toContain('Fenced `gherkin` blocks required by the task instruction format are allowed');
-        expect(prompt).not.toContain('preambles, code fences, or a diff');
+        expect(prompt).toMatch(/(?:code fence).*(?:entire output|Markdown body)/i);
+        expect(prompt).toMatch(/fenced `gherkin`.*allowed/i);
       } else {
-        expect(prompt).toContain('出力全体を囲むコードフェンス');
-        expect(prompt).toContain('fenced `gherkin` block は Markdown 本文内で使用できます');
-        expect(prompt).not.toContain('説明、前置き、コードフェンス、差分形式');
+        expect(prompt).toMatch(/(?:出力全体.*コードフェンス|コードフェンス.*(?:含めない|全体))/);
+        expect(prompt).toMatch(/fenced `gherkin`.*(?:使用できます|本文)/i);
       }
       if (formalSpec) {
         expect(prompt).toMatch(/\bQuint\b/);

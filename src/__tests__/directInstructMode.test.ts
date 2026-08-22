@@ -10,6 +10,7 @@ const {
   mockLoadTemplate,
   mockSelectOption,
   mockConfirm,
+  mockResolveFormalSpecModeWithoutPrompt,
 } = vi.hoisted(() => ({
   mockResolveWorkflowConfigValues: vi.fn(),
   mockInitializeSession: vi.fn(),
@@ -18,6 +19,7 @@ const {
   mockLoadTemplate: vi.fn(),
   mockSelectOption: vi.fn(),
   mockConfirm: vi.fn(),
+  mockResolveFormalSpecModeWithoutPrompt: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -56,6 +58,10 @@ vi.mock('../shared/prompt/index.js', () => ({
 
 vi.mock('../shared/prompt/confirm.js', () => ({
   confirm: mockConfirm,
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', () => ({
+  resolveFormalSpecModeWithoutPrompt: mockResolveFormalSpecModeWithoutPrompt,
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -104,6 +110,7 @@ describe('runDirectInstructMode', () => {
     mockInitializeSession.mockReturnValue({ sessionId: 'session-1' });
     mockLoadTemplate.mockReturnValue('direct instruct system prompt');
     mockRunConversationLoop.mockResolvedValue({ action: 'execute', task: 'Add regression coverage' });
+    mockResolveFormalSpecModeWithoutPrompt.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -216,6 +223,20 @@ describe('runDirectInstructMode', () => {
     expect(options.map((option) => option.value)).toEqual(['execute', 'continue']);
     expect(mockConfirm).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    'passes resolved formal specification mode=%s without prompting',
+    async (formalSpec) => {
+      mockResolveFormalSpecModeWithoutPrompt.mockReturnValue(formalSpec);
+
+      await runDirectInstructMode(buildOptions(null));
+
+      const strategy = mockRunConversationLoop.mock.calls[0]?.[2] as { formalSpec: boolean };
+      expect(mockResolveFormalSpecModeWithoutPrompt).toHaveBeenCalledWith('/project');
+      expect(strategy.formalSpec).toBe(formalSpec);
+      expect(mockConfirm).not.toHaveBeenCalled();
+    },
+  );
 
   it('Given the conversation returns image attachments, When direct instruct completes, Then attachments are preserved', async () => {
     const cleanupAttachments = vi.fn();

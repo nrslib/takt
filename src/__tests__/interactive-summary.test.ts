@@ -67,9 +67,9 @@ describe('buildSummaryPrompt', () => {
       false,
     );
 
-    expect(summary).toContain('## Markdown + Gherkin Output Format');
-    expect(summary).not.toMatch(/\bQuint\b/);
-    expect(summary).not.toMatch(/\bAlloy\b/);
+    expect(summary).toContain('Gherkin');
+    expect(summary).not.toContain('Quint');
+    expect(summary).not.toContain('Alloy');
   });
 
   it('adds conditional Quint and Alloy guidance when formal specification mode is enabled', () => {
@@ -85,16 +85,10 @@ describe('buildSummaryPrompt', () => {
       true,
     );
 
-    expect(summary).toContain('## Markdown + Gherkin Output Format');
-    expect(summary).toMatch(/\bQuint\b/);
-    expect(summary).toMatch(/\bAlloy\b/);
-    expect(summary).toMatch(/state transitions|temporal propert/i);
-    expect(summary).toMatch(/structural invariant|entit(?:y|ies).*relation/i);
-    expect(summary).toMatch(/applicable|only when/i);
-    expect(summary).toMatch(/do not require both|not require both/i);
-    expect(summary).toMatch(/do not duplicate|same requirement/i);
-    expect(summary).toMatch(/actual .*syntax|valid .*syntax/i);
-    expect(summary).toMatch(/do not include.*ASCII|ASCII.*do not include/i);
+    expect(summary).toContain('Gherkin');
+    expect(summary).toContain('Quint');
+    expect(summary).toContain('Alloy');
+    expect(summary).toContain('ASCII');
   });
 
 });

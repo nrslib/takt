@@ -10,6 +10,7 @@ const {
   mockSelectOption,
   mockGetLabel,
   mockGetLabelObject,
+  mockResolveFormalSpecModeWithoutPrompt,
 } = vi.hoisted(() => ({
   mockResolveWorkflowConfigValues: vi.fn(),
   mockResolveConfigValues: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockSelectOption: vi.fn(),
   mockGetLabel: vi.fn(),
   mockGetLabelObject: vi.fn(),
+  mockResolveFormalSpecModeWithoutPrompt: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -52,6 +54,10 @@ vi.mock('../shared/i18n/index.js', () => ({
 vi.mock('../shared/ui/index.js', () => ({
   blankLine: vi.fn(),
   info: vi.fn(),
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', () => ({
+  resolveFormalSpecModeWithoutPrompt: mockResolveFormalSpecModeWithoutPrompt,
 }));
 
 import { runInstructMode } from '../features/tasks/list/instructMode.js';
@@ -112,6 +118,7 @@ describe('assistant provider entry gates', () => {
     mockSelectOption.mockResolvedValue('continue');
     mockGetLabel.mockReturnValue('Retry intro');
     mockGetLabelObject.mockReturnValue(instructUi);
+    mockResolveFormalSpecModeWithoutPrompt.mockReturnValue(false);
   });
 
   it('Given top-level provider is unset, When instruct starts, Then provider resolution is deferred to initializeSession', async () => {
@@ -145,6 +152,39 @@ describe('assistant provider entry gates', () => {
     expect(mockInitializeSession).toHaveBeenCalledWith('/project', 'retry');
     expect(mockRunConversationLoop).toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    'passes resolved formal specification mode=%s to instruct conversation',
+    async (formalSpec) => {
+      mockResolveFormalSpecModeWithoutPrompt.mockReturnValue(formalSpec);
+
+      await runInstructMode({
+        cwd: '/project',
+        branchContext: 'branch context',
+        branchName: 'feature-branch',
+        taskName: 'my-task',
+        taskContent: 'Do something',
+        retryNote: '',
+      });
+
+      const strategy = mockRunConversationLoop.mock.calls[0]?.[2] as { formalSpec: boolean };
+      expect(mockResolveFormalSpecModeWithoutPrompt).toHaveBeenCalledWith('/project');
+      expect(strategy.formalSpec).toBe(formalSpec);
+    },
+  );
+
+  it.each([false, true])(
+    'passes resolved formal specification mode=%s to retry conversation',
+    async (formalSpec) => {
+      mockResolveFormalSpecModeWithoutPrompt.mockReturnValue(formalSpec);
+
+      await runTaskRetryMode('/project', buildRetryContext());
+
+      const strategy = mockRunConversationLoop.mock.calls[0]?.[2] as { formalSpec: boolean };
+      expect(mockResolveFormalSpecModeWithoutPrompt).toHaveBeenCalledWith('/project');
+      expect(strategy.formalSpec).toBe(formalSpec);
+    },
+  );
 
   it('Given initializeSession rejects missing provider, When instruct starts, Then the error propagates', async () => {
     mockInitializeSession.mockImplementation(() => {
