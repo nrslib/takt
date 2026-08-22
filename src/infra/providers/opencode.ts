@@ -176,6 +176,7 @@ export class OpenCodeProvider implements Provider {
         permissionMode: 'readonly',
         allowedTools: [],
         mcpServers: undefined,
+        preparedMcp: undefined,
         imageAttachments: undefined,
         outputSchema: assertOutputSchema(options.outputSchema, 'opencode'),
       };

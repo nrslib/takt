@@ -826,9 +826,9 @@ the following legacy settings:
 
 On first launch TAKT generates `~/.takt/runtime.yaml` atomically and never overwrites an existing file; the project `.takt/runtime.yaml` is never generated automatically. A fresh environment is written with the selected provider/model as `provider.profiles.default` plus `provider.defaults.profile: default`. An environment that already has legacy provider settings receives only an inactive `version: 1` file, so its behavior does not change until you migrate.
 
-## Runtime MCP Configuration (runtime.yaml.mcp)
+## Runtime MCP Configuration in `runtime.yaml`
 
-`runtime.yaml` also owns MCP server definitions and their assignment to agents. The `mcp` section is a top-level sibling of `provider` (order.md:36) — it may be active alone (no `provider` section) so MCP servers are injected while provider/model resolution stays on the legacy `config.yaml` path.
+The `mcp` section in `runtime.yaml` owns MCP server definitions and their assignment to agents. It is a top-level sibling of `provider` (order.md:36) and may be active alone (without a `provider` section), so MCP servers are injected while provider/model resolution stays on the legacy `config.yaml` path.
 
 ### Configuration example
 
@@ -933,11 +933,11 @@ Incompatible transports are never silently converted to another transport, and s
 
 MCP configuration also must not be mixed across the legacy and runtime modes:
 
-- No active `runtime.yaml.mcp`: the workflow `mcp_servers` and `workflow_mcp_servers` policy are used.
-- Active `runtime.yaml.mcp`: only the runtime MCP assignment is used.
+- No active `mcp` section in `runtime.yaml`: the workflow `mcp_servers` and `workflow_mcp_servers` policy are used.
+- Active `mcp` section in `runtime.yaml`: only the runtime MCP assignment is used.
 - Runtime MCP and workflow `mcp_servers` coexisting: TAKT fails fast, naming the workflow/step and the migration target.
 
-In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — that belongs to `runtime.yaml.mcp`.
+In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — those belong to the `mcp` section in `runtime.yaml`.
 
 | Legacy setting | Runtime destination |
 |---|---|

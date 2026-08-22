@@ -598,13 +598,19 @@ export async function createWorkflowExecutionBootstrap(
   const providerEnvironment = resolvedRuntimeEnvironment.providerEnvironment;
   const companionEnabled = resolvedRuntimeEnvironment.companionEnabled;
   // Legacy workflow MCP mode (`mcp_servers` / `workflow_mcp_servers`) must not
-  // coexist with an active `runtime.yaml.mcp` section (order.md:112-118).
-  // Collect legacy MCP signals from the workflow and fail-fast on mix.
+  // coexist with an active `mcp` section in `runtime.yaml` (order.md:112-118).
+  // Collect legacy MCP signals from the reachable workflow graph and fail-fast on mix
+  // before any agent starts.
   if (providerEnvironment.mcpAssignment !== undefined) {
     assertNoMixedWorkflowMcpConfiguration(
       providerEnvironment.mcpAssignment,
       workflowConfig,
       globalConfig.workflowMcpServers,
+      {
+        workflowCallResolver: options.workflowCallResolver,
+        projectCwd,
+        lookupCwd: cwd,
+      },
     );
   }
   const currentProvider = providerEnvironment.provider;

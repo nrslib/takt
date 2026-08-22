@@ -27,11 +27,15 @@ import {
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
-import { createLogger } from '../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
 import { buildWrappedSystemPrompt } from './runner-prompt.js';
 import { extractPersonaName } from './persona-spec.js';
-import { createMcpAdapter, type PreparedProviderMcp } from '../infra/providers/mcp/index.js';
+import {
+  createMcpAdapter,
+  type PreparedProviderMcp,
+  type ProviderMcpContext,
+} from '../infra/providers/mcp/index.js';
 import { type ResolvedMcpServers } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { redactMcpServerForLog, buildMcpServerSetIdentity } from '../infra/config/runtime-provider/mcp-schema.js';
 
@@ -235,6 +239,36 @@ export class AgentRunner {
     };
   }
 
+  private static buildMcpPrepareContext(
+    options: RunAgentOptions,
+    permissionMode: RunAgentOptions['permissionMode'],
+  ): ProviderMcpContext {
+    return {
+      cwd: options.cwd,
+      ...(options.abortSignal !== undefined ? { abortSignal: options.abortSignal } : {}),
+      ...(options.projectCwd !== undefined ? { sourcePath: options.projectCwd } : {}),
+      ...(options.childProcessEnv !== undefined ? { childProcessEnv: options.childProcessEnv } : {}),
+      ...(permissionMode !== undefined ? { permissionMode } : {}),
+    };
+  }
+
+  /** The runner owns PreparedProviderMcp disposal; provider clients only consume it. */
+  private static async disposePreparedMcp(
+    preparedMcp: PreparedProviderMcp | undefined,
+  ): Promise<void> {
+    if (preparedMcp === undefined) {
+      return;
+    }
+    try {
+      await preparedMcp.dispose();
+    } catch (error) {
+      // Cleanup failures must not replace the provider result or original failure.
+      log.debug('Failed to clean up prepared MCP configuration', {
+        error: getErrorMessage(error),
+      });
+    }
+  }
+
   private static resolvePermissionMode(
     resolvedProvider: ProviderType,
     options: RunAgentOptions,
@@ -308,7 +342,7 @@ export class AgentRunner {
       options.onDispatch?.(resolution.permissionMode);
       return await agent.call(task, callOptions);
     } finally {
-      await preparedMcp?.dispose();
+      await AgentRunner.disposePreparedMcp(preparedMcp);
     }
   }
 
@@ -395,7 +429,7 @@ export class AgentRunner {
         if (agentConfig) {
           const preparedForCurrentRun = preparedMcp;
           preparedMcp = undefined;
-          await preparedForCurrentRun?.dispose();
+          await AgentRunner.disposePreparedMcp(preparedForCurrentRun);
           return await this.runCustom(agentConfig, task, options);
         }
 
@@ -428,7 +462,7 @@ export class AgentRunner {
       options.onDispatch?.(resolution.permissionMode);
       return await agent.call(task, callOptions);
     } finally {
-      await preparedMcp?.dispose();
+      await AgentRunner.disposePreparedMcp(preparedMcp);
     }
   }
 
@@ -472,11 +506,7 @@ export class AgentRunner {
         identity,
       };
       const prepared = await adapter.prepare(resolved, {
-        cwd: options.cwd,
-        ...(options.abortSignal !== undefined ? { abortSignal: options.abortSignal } : {}),
-        ...(options.projectCwd !== undefined ? { sourcePath: options.projectCwd } : {}),
-        ...(options.childProcessEnv !== undefined ? { childProcessEnv: options.childProcessEnv } : {}),
-        ...(permissionMode !== undefined ? { permissionMode } : {}),
+        ...AgentRunner.buildMcpPrepareContext(options, permissionMode),
       });
       log.debug('Prepared MCP adapter (empty set, runtime mode)', {
         provider,
@@ -494,13 +524,10 @@ export class AgentRunner {
       identity,
     };
     adapter.validate(resolved, { sourcePath: options.projectCwd });
-    const prepared = await adapter.prepare(resolved, {
-      cwd: options.cwd,
-      ...(options.abortSignal !== undefined ? { abortSignal: options.abortSignal } : {}),
-      ...(options.projectCwd !== undefined ? { sourcePath: options.projectCwd } : {}),
-      ...(options.childProcessEnv !== undefined ? { childProcessEnv: options.childProcessEnv } : {}),
-      ...(permissionMode !== undefined ? { permissionMode } : {}),
-    });
+    const prepared = await adapter.prepare(
+      resolved,
+      AgentRunner.buildMcpPrepareContext(options, permissionMode),
+    );
     // Log the resolved MCP server configuration through the secret-redaction
     // helper so env/header secret values are never written to logs
     // (order.md:110, ARCH-NEW-6). Only server names and transports are

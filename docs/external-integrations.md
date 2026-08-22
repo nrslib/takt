@@ -27,11 +27,11 @@ Bundles that implement a software development methodology on top of TAKT — pre
 TAKT has two MCP configuration modes:
 
 - **Legacy workflow mode**: MCP servers are declared per-step through `mcp_servers` and allowed through the `workflow_mcp_servers` config policy. This is what the community integrations above use.
-- **Runtime MCP mode**: MCP servers are defined and assigned in `runtime.yaml.mcp` (`servers`, `defaults`, `targets`). Provider/model resolution stays on `config.yaml` when only the `mcp` section is active.
+- **Runtime MCP mode**: MCP servers are defined and assigned in the `mcp` section of `runtime.yaml` (`servers`, `defaults`, `targets`). Provider/model resolution stays on `config.yaml` when only the `mcp` section is active.
 
-The two modes must not be mixed. When an active `runtime.yaml.mcp` section coexists with a workflow `mcp_servers` declaration or the `workflow_mcp_servers` policy, TAKT fails fast before any agent runs and reports the workflow/step and the migration target:
+The two modes must not be mixed. When an active `mcp` section in `runtime.yaml` coexists with a workflow `mcp_servers` declaration or the `workflow_mcp_servers` policy, TAKT fails fast before any agent runs and reports the workflow/step and the migration target:
 
 - workflow `mcp_servers` policy → `mcp.targets`
 - step `mcp_servers` map → `mcp.targets.steps`
 
-In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — those belong to `runtime.yaml.mcp`. See [Configuration > Runtime MCP Configuration](./configuration.md#runtime-mcp-configuration-runtimeyamlmcp) for the schema, effective server resolution, provider transport compatibility, and migration details.
+In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — those belong to the `mcp` section in `runtime.yaml`. See [Configuration > Runtime MCP Configuration](./configuration.md#runtime-mcp-configuration-in-runtimeyaml) for the schema, effective server resolution, provider transport compatibility, and migration details.

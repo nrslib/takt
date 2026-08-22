@@ -123,6 +123,7 @@ export class ClaudeTerminalProvider implements Provider {
           internalAgentIsolation: 'strict-readonly',
           allowedTools: [],
           mcpServers: undefined,
+          preparedMcp: undefined,
           imageAttachments: undefined,
           outputSchema: assertOutputSchema(options.outputSchema, 'claude-terminal'),
         };

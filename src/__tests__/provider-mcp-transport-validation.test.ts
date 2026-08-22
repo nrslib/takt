@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 // New modules under test (implemented in the following `implement` step).
 import { createMcpAdapter, type ResolvedMcpServers } from '../infra/providers/mcp/index.js';
 import { getProvider } from '../infra/providers/index.js';
@@ -17,10 +16,6 @@ import { getProvider } from '../infra/providers/index.js';
  *   - 未対応 provider で mcpServers を log.info 無視する
  *   - サーバを黙って除外する
  */
-
-function readModuleSource(path: string): string {
-  return readFileSync(new URL(path, import.meta.url), 'utf-8');
-}
 
 function serversWith(overrides: ResolvedMcpServers['servers']): ResolvedMcpServers {
   return {
@@ -105,29 +100,15 @@ describe('ProviderMcpAdapter transport validation (MCP-TRANSPORT-VALIDATE)', () 
     expect(() => adapter.validate(servers)).toThrow(/unsupported/);
   });
 
-  it('Given the cursor provider adapter, When servers are assigned, Then it fails fast instead of log.info-ignoring them (要件30,108)', () => {
-    const adapter = createMcpAdapter('cursor');
+  it.each(['cursor', 'kiro', 'copilot'] as const)('Given the %s provider adapter, When a stdio server is assigned, Then validation accepts it and preparation materializes it instead of dropping it (要件30,108)', async (provider) => {
+    const adapter = createMcpAdapter(provider);
     const servers = serversWith({
       'common-tools': { type: 'stdio', command: 'srv' },
     });
-    // The adapter must not silently drop the server; it must either accept (with isolation) or fail-fast.
-    // Per order.md:207, a CLI version that cannot isolate must fail-fast.
     expect(() => adapter.validate(servers)).not.toThrow();
-  });
-
-  it('Given the cursor provider source, When read, Then it does NOT contain the legacy log.info "does not support mcpServers; ignoring"', () => {
-    const source = readModuleSource('../infra/providers/cursor.ts');
-    expect(source).not.toContain('does not support mcpServers; ignoring');
-  });
-
-  it('Given the kiro provider source, When read, Then it does NOT contain the legacy log.info "does not support mcpServers; ignoring"', () => {
-    const source = readModuleSource('../infra/providers/kiro.ts');
-    expect(source).not.toContain('does not support mcpServers; ignoring');
-  });
-
-  it('Given the copilot provider source, When read, Then it does NOT contain the legacy log.info "does not support mcpServers in non-interactive mode; ignoring"', () => {
-    const source = readModuleSource('../infra/providers/copilot.ts');
-    expect(source).not.toContain('does not support mcpServers in non-interactive mode; ignoring');
+    const prepared = await adapter.prepare(servers, { cwd: '/tmp/provider-mcp-transport-validation' });
+    expect(prepared.args ?? prepared.sdkOptions ?? prepared.config ?? prepared.serverConfig ?? prepared.configRoot).toBeDefined();
+    await prepared.dispose();
   });
 
   it('Given a provider that does not declare a transport in its capability, When validating that transport, Then the adapter fails fast rather than guessing a different transport (要件70)', () => {
@@ -140,5 +121,20 @@ describe('ProviderMcpAdapter transport validation (MCP-TRANSPORT-VALIDATE)', () 
       'legacy-events': { type: 'sse', url: 'http://legacy.local/sse' },
     });
     expect(() => adapter.validate(servers)).toThrow(/sse/);
+  });
+
+  it('Given an MCP-incompatible provider, When validating an assigned server, Then the unified error names provider/server/transport/source', () => {
+    const adapter = createMcpAdapter('pi');
+    const servers = serversWith({
+      'local-tools': { type: 'stdio', command: 'srv' },
+    });
+    const validate = (): void => adapter.validate(servers, {
+      sourcePath: '<project>/.takt/runtime.yaml',
+    });
+    expect(validate).toThrow(/Provider "pi"/);
+    expect(validate).toThrow(/local-tools/);
+    expect(validate).toThrow(/stdio/);
+    expect(validate).toThrow(/Supported transports: \(none\)/);
+    expect(validate).toThrow(/runtime\.yaml/);
   });
 });

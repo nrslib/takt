@@ -14,6 +14,11 @@ import type {
   WorkflowMcpServersConfig,
 } from '../../../core/models/config-types.js';
 import type { McpServerConfig } from '../../../core/models/index.js';
+import type { WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import { getAllParallelSubSteps } from '../../../core/models/index.js';
+import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
+import { getWorkflowReference } from '../../../core/workflow/workflow-reference.js';
+import type { WorkflowCallResolver } from '../../../core/workflow/types.js';
 import type { ProviderOptionsSource } from '../../../core/workflow/provider-options-trace.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
@@ -25,6 +30,7 @@ import {
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import type { LegacyProviderEnvironmentInput } from './environment.js';
 import type { LegacyProviderSignal } from './mode.js';
+import type { McpAssignmentSection } from './mcp-assignment.js';
 
 function isNonEmptyRecord(value: Record<string, unknown> | undefined): boolean {
   return value !== undefined && Object.keys(value).length > 0;
@@ -207,45 +213,84 @@ export function collectLegacyMcpSignals(input: LegacyMcpSignalInput): LegacyProv
   return signals;
 }
 
-/** Minimal workflow shape needed to collect legacy workflow MCP signals. */
-export interface WorkflowMcpSignalSource {
-  name: string;
-  steps: ReadonlyArray<{
-    name: string;
-    mcpServers?: Record<string, McpServerConfig>;
-  }>;
+export interface WorkflowMcpSignalTraversalOptions {
+  /** Resolve child workflows reachable through workflow_call steps. */
+  workflowCallResolver?: WorkflowCallResolver;
+  /** Project root passed to the same resolver used by workflow execution. */
+  projectCwd?: string;
+  /** Lookup directory passed to the same resolver used by workflow execution. */
+  lookupCwd?: string;
 }
 
 /** Collect all legacy workflow MCP signals used by the bootstrap mixed-mode gate. */
 export function collectWorkflowLegacyMcpSignals(
-  workflowConfig: WorkflowMcpSignalSource,
+  workflowConfig: WorkflowConfig,
   workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined,
+  options: WorkflowMcpSignalTraversalOptions = {},
 ): LegacyProviderSignal[] {
-  const signals = collectLegacyMcpSignals({
-    workflowMcpServersPolicy,
-    workflowStepMcpServers: undefined,
-    workflowName: workflowConfig.name,
-    workflowStepName: undefined,
-  });
+  const signals: LegacyProviderSignal[] = [];
+  const visited = new Set<string>();
 
-  for (const step of workflowConfig.steps) {
-    if (step.mcpServers === undefined || Object.keys(step.mcpServers).length === 0) {
-      continue;
-    }
+  function visitStep(step: WorkflowStep, parentWorkflow: WorkflowConfig): void {
     signals.push(...collectLegacyMcpSignals({
       workflowMcpServersPolicy: undefined,
       workflowStepMcpServers: step.mcpServers,
-      workflowName: workflowConfig.name,
+      workflowName: parentWorkflow.name,
       workflowStepName: step.name,
     }));
+
+    if (
+      isWorkflowCallStep(step)
+      && options.workflowCallResolver !== undefined
+      && options.projectCwd !== undefined
+      && options.lookupCwd !== undefined
+    ) {
+      const childWorkflow = options.workflowCallResolver({
+        parentWorkflow,
+        step,
+        projectCwd: options.projectCwd,
+        lookupCwd: options.lookupCwd,
+      });
+      if (childWorkflow !== null) {
+        visitWorkflow(childWorkflow, false);
+      }
+    }
+
+    const parallelSteps = step.parallel === undefined
+      ? []
+      : getAllParallelSubSteps(step.parallel);
+    for (const parallelStep of parallelSteps) {
+      visitStep(parallelStep, parentWorkflow);
+    }
   }
 
+  function visitWorkflow(workflow: WorkflowConfig, includePolicy: boolean): void {
+    const reference = getWorkflowReference(workflow);
+    if (visited.has(reference)) {
+      return;
+    }
+    visited.add(reference);
+
+    if (includePolicy) {
+      signals.push(...collectLegacyMcpSignals({
+        workflowMcpServersPolicy,
+        workflowStepMcpServers: undefined,
+        workflowName: workflow.name,
+        workflowStepName: undefined,
+      }));
+    }
+    for (const step of workflow.steps) {
+      visitStep(step, workflow);
+    }
+  }
+
+  visitWorkflow(workflowConfig, true);
   return signals;
 }
 
 /** Fail fast when runtime MCP assignment and legacy workflow MCP are mixed. */
 export function assertNoMixedMcpConfiguration(
-  mcpAssignment: object | undefined,
+  mcpAssignment: McpAssignmentSection | undefined,
   legacyMcpSignals: readonly LegacyProviderSignal[],
 ): void {
   if (mcpAssignment === undefined || legacyMcpSignals.length === 0) {
@@ -264,12 +309,13 @@ export function assertNoMixedMcpConfiguration(
 
 /** Apply the production mixed-MCP gate to a workflow and its legacy settings. */
 export function assertNoMixedWorkflowMcpConfiguration(
-  mcpAssignment: object | undefined,
-  workflowConfig: WorkflowMcpSignalSource,
+  mcpAssignment: McpAssignmentSection | undefined,
+  workflowConfig: WorkflowConfig,
   workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined,
+  options: WorkflowMcpSignalTraversalOptions = {},
 ): void {
   assertNoMixedMcpConfiguration(
     mcpAssignment,
-    collectWorkflowLegacyMcpSignals(workflowConfig, workflowMcpServersPolicy),
+    collectWorkflowLegacyMcpSignals(workflowConfig, workflowMcpServersPolicy, options),
   );
 }

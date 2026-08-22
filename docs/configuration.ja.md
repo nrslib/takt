@@ -804,9 +804,9 @@ the following legacy settings:
 
 初回起動時、TAKT は `~/.takt/runtime.yaml` を atomic に生成し、既存ファイルは上書きしません。project 側の `.takt/runtime.yaml` は自動生成されません。新規環境では選択された provider/model を `provider.profiles.default` と `provider.defaults.profile: default` として書き込みます。legacy provider 設定が既に存在する環境には inactive な `version: 1` ファイルだけを生成し、移行するまで動作は変わりません。
 
-## Runtime MCP 設定（runtime.yaml.mcp）
+## `runtime.yaml` の Runtime MCP 設定
 
-`runtime.yaml` は MCP server の定義と agent への割り当ても管理します。`mcp` セクションは `provider` と並ぶトップレベルの兄弟です（order.md:36）。`provider` セクションなしで単独で有効化でき、provider/model 解析は legacy `config.yaml` 経路のまま MCP server を注入できます。
+`runtime.yaml` の `mcp` セクションは MCP server の定義と agent への割り当てを管理します。`provider` と並ぶトップレベルの兄弟であり（order.md:36）、`provider` セクションなしでも単独で有効化できます。その場合も provider/model 解析は legacy `config.yaml` 経路のまま MCP server を注入できます。
 
 ### 設定例
 
@@ -911,11 +911,11 @@ global と project 両方の `runtime.yaml` が `mcp` セクションを持つ�
 
 MCP 設定も legacy と runtime の混在を許しません。
 
-- 有効な `runtime.yaml.mcp` がない場合: workflow の `mcp_servers` と `workflow_mcp_servers` ポリシーを使用します。
-- 有効な `runtime.yaml.mcp` がある場合: runtime MCP assignment だけを使用します。
+- `runtime.yaml` に有効な `mcp` セクションがない場合: workflow の `mcp_servers` と `workflow_mcp_servers` ポリシーを使用します。
+- `runtime.yaml` に有効な `mcp` セクションがある場合: runtime MCP assignment だけを使用します。
 - runtime MCP と workflow `mcp_servers` が同時に存在する場合: 該当 workflow/step と移行先を示して fail-fast します。
 
-runtime MCP モードでは、workflow から MCP server の command、URL、header、env を指定できません。これらは `runtime.yaml.mcp` が所有します。
+runtime MCP モードでは、workflow から MCP server の command、URL、header、env を指定できません。これらは `runtime.yaml` の `mcp` セクションが所有します。
 
 | 既存設定 | 移行先 |
 |---|---|

@@ -1,7 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, chmodSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 // Modules under test (implemented in the following `implement` step).
 import {
   resolveRuntimeProviderFile,
@@ -95,7 +97,7 @@ describe('runtime MCP integration: loader → mode → resolveMcpAssignment (MCP
     ]);
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: projectDir, projectConfigDir: projectDir });
     expect(resolved?.mcp).toBeDefined();
-    expect(hasActiveMcpSection(resolved as never)).toBe(true);
+    expect(hasActiveMcpSection(resolved)).toBe(true);
 
     const assignment = resolveMcpAssignment(resolved!.mcp!, baseCtx({ persona: 'release-manager' }));
     expect(assignment.serverNames.sort()).toEqual(['common', 'github']);
@@ -218,7 +220,7 @@ describe('runtime MCP integration: loader → mode → resolveMcpAssignment (MCP
   it('Given an inactive mcp section (empty), When mode is determined, Then it is NOT active', () => {
     writeRuntimeYaml(projectDir, ['version: 1']);
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: projectDir, projectConfigDir: projectDir });
-    expect(hasActiveMcpSection(resolved as never)).toBe(false);
+    expect(hasActiveMcpSection(resolved)).toBe(false);
   });
 
   it('Given mcp active and provider active together, When loaded, Then both sections survive independently', () => {
@@ -242,54 +244,71 @@ describe('runtime MCP integration: loader → mode → resolveMcpAssignment (MCP
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: projectDir, projectConfigDir: projectDir });
     expect(resolved?.provider?.profiles?.default?.provider).toBe('mock');
     expect(resolved?.mcp?.servers?.common).toMatchObject({ command: 'common-srv' });
-    expect(hasActiveMcpSection(resolved as never)).toBe(true);
+    expect(hasActiveMcpSection(resolved)).toBe(true);
   });
 });
 
 describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () => {
-  let fixtureDir: string;
-  let serverPath: string;
+  const fixtureRunner = join(
+    process.cwd(),
+    'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts',
+  );
 
-  beforeEach(() => {
-    fixtureDir = mkdtempSync(join(tmpdir(), 'takt-mcp-fixture-'));
-    serverPath = join(fixtureDir, 'echo-server.js');
-    // A deterministic stdio MCP server fixture that echoes a known nonce.
-    // It reads JSON-RPC on stdin and responds with a fixed tool result.
-    writeFileSync(serverPath, [
-      "const { stdin, stdout } = process;",
-      "let buffer = '';",
-      "stdin.setEncoding('utf-8');",
-      "stdin.on('data', (chunk) => {",
-      "  buffer += chunk;",
-      "  let idx;",
-      "  while ((idx = buffer.indexOf('\\n')) >= 0) {",
-      "    const line = buffer.slice(0, idx);",
-      "    buffer = buffer.slice(idx + 1);",
-      "    if (line.trim() === '') continue;",
-      "    let msg;",
-      "    try { msg = JSON.parse(line); } catch { continue; }",
-      "    if (msg.method === 'initialize') {",
-      "      stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'echo', version: '0.0.1' } } }) + '\\n');",
-      "    } else if (msg.method === 'tools/list') {",
-      "      stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'echo_nonce', description: 'Echo a fixed nonce' }] } }) + '\\n');",
-      "    } else if (msg.method === 'tools/call') {",
-      "      stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'NONCE:fixed-test-nonce' }] } }) + '\\n');",
-      "    }",
-      "  }",
-      "});",
-    ].join('\n'), 'utf-8');
-    chmodSync(serverPath, 0o755);
-  });
+  it('Given the repository-hosted stdio MCP fixture, When initialized and called through the MCP client, Then it returns an observable deterministic tool result', async () => {
+    const fixtureWorkspace = mkdtempSync(join(process.cwd(), '.tmp-takt-mcp-fixture-workspace-'));
+    mkdirSync(join(fixtureWorkspace, '.takt'), { recursive: true });
+    writeFileSync(join(fixtureWorkspace, '.takt', 'config.yaml'), 'branch_name_strategy: romaji\n', 'utf-8');
+    const client = new Client({ name: 'takt-runtime-mcp-test-client', version: '1.0.0' });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [
+        'node_modules/.bin/vite-node',
+        '--config',
+        'src/__tests__/helpers/vite-node.config.ts',
+        fixtureRunner,
+      ],
+      cwd: process.cwd(),
+      env: {
+        ...getDefaultEnvironment(),
+        ...(process.env.TAKT_CONFIG_DIR !== undefined
+          ? { TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR }
+          : {}),
+      },
+      stderr: 'pipe',
+    });
 
-  afterEach(() => {
-    rmSync(fixtureDir, { recursive: true, force: true });
-  });
+    try {
+      await client.connect(transport);
+      const tools = await client.listTools();
+      const result = await client.callTool({
+        name: 'takt_enqueue_task',
+        arguments: {
+          cwd: fixtureWorkspace,
+          task: 'Runtime MCP fixture task',
+          workflow: 'default',
+          worktree: false,
+          autoPr: false,
+        },
+      });
 
-  it('Given a deterministic stdio MCP server fixture, When the fixture file is read, Then it exists and is executable', () => {
-    expect(existsSync(serverPath)).toBe(true);
-    const content = readFileSync(serverPath, 'utf-8');
-    expect(content).toContain('echo_nonce');
-    expect(content).toContain('NONCE:fixed-test-nonce');
+      expect(tools.tools.map((tool) => tool.name)).toEqual(['takt_enqueue_task']);
+      expect(result.isError).toBeUndefined();
+      const content = result.content;
+      const firstContent = Array.isArray(content) ? content[0] : undefined;
+      const resultText = firstContent !== null
+        && typeof firstContent === 'object'
+        && firstContent !== undefined
+        && 'text' in firstContent
+        ? firstContent.text
+        : undefined;
+      expect(JSON.parse(String(resultText))).toEqual(expect.objectContaining({
+        tasksFile: join(fixtureWorkspace, '.takt', 'tasks.yaml'),
+        workflow: 'default',
+      }));
+    } finally {
+      await client.close();
+      rmSync(fixtureWorkspace, { recursive: true, force: true });
+    }
   });
 
   it('Given a runtime.yaml referencing the fixture, When loaded and resolved, Then the fixture server is in the effective set', () => {
@@ -302,7 +321,10 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         '    echo:',
         '      command: node',
         '      args:',
-        `        - ${serverPath}`,
+        '        - node_modules/.bin/vite-node',
+        '        - --config',
+        '        - src/__tests__/helpers/vite-node.config.ts',
+        `        - ${fixtureRunner}`,
         '  defaults:',
         '    servers:',
         '      - echo',

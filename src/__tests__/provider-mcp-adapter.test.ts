@@ -36,11 +36,18 @@ function resolvedServers(): ResolvedMcpServers {
 }
 
 describe('ProviderMcpAdapter interface boundary (MCP-ADAPTER-SPLIT)', () => {
-  it('Given an adapter created for claude-sdk, When called with resolved servers and a minimal context, Then it does not require target selector context', () => {
+  it('Given an adapter created for claude-sdk, When called with resolved servers and a minimal context, Then it does not require target selector context', async () => {
     // Adapter unit test must work without target context — adapter does not know target selectors.
     const adapter = createMcpAdapter('claude-sdk');
-    expect(typeof adapter.validate).toBe('function');
-    expect(typeof adapter.prepare).toBe('function');
+    const servers = resolvedServers();
+    expect(() => adapter.validate(servers)).not.toThrow();
+    const prepared = await adapter.prepare(servers, {
+      cwd: '/tmp/test',
+      abortSignal: new AbortController().signal,
+    });
+    expect(prepared.sdkOptions?.strictMcpConfig).toBe(true);
+    expect(prepared.sdkOptions?.mcpServers).toBeDefined();
+    await prepared.dispose();
   });
 
   it('Given an adapter, When validated with an empty server set, Then it treats it as MCP-disabled and does not throw', () => {

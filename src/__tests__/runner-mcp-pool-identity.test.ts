@@ -190,7 +190,7 @@ describe('Runner MCP pool identity propagation (MCP-POOL-IDENTITY-MISSING)', () 
     expect(observedIdentities[0]).not.toBe(observedIdentities[1]);
   });
 
-  it('Given no mcpServerIdentity, When runAgent executes with mcpServers, Then the runner computes a fallback identity from mcpServers (境界値)', async () => {
+  it('Given no mcpServerIdentity, When runAgent executes with mcpServers, Then different server structures receive different fallback identities (境界値)', async () => {
     const { runAgent } = await import('../agents/runner.js');
     await runAgent(undefined, 'task', {
       cwd: '/tmp',
@@ -202,12 +202,21 @@ describe('Runner MCP pool identity propagation (MCP-POOL-IDENTITY-MISSING)', () 
       },
       mcpServers,
     });
-    // The fallback identity is computed from the effective server structure,
-    // so it is never empty and isolates different command/transport settings.
-    expect(observedIdentities).toContain(
-      '["common-tools",{"type":"stdio","command":"srv-a","args":[]}]',
-    );
+    await runAgent(undefined, 'task', {
+      cwd: '/tmp',
+      resolvedExecution: {
+        provider: 'opencode',
+        model: 'sonnet',
+        providerOptions: {},
+        permissionMode: 'readonly',
+      },
+      mcpServers: {
+        'common-tools': { type: 'stdio', command: 'srv-b' },
+      },
+    });
+    expect(observedIdentities).toHaveLength(2);
     expect(observedIdentities[0]).not.toBe('');
+    expect(observedIdentities[0]).not.toBe(observedIdentities[1]);
   });
 
   it('Given the same mcpServerIdentity, When runAgent executes opencode twice, Then the adapter receives equal identities (stable pool key)', async () => {

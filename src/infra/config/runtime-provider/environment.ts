@@ -50,7 +50,6 @@ import {
 } from './resolution-context.js';
 import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile } from './policy.js';
 import { hasActiveProviderContent, type McpSection } from './schema.js';
-import type { McpAssignmentSection } from './mcp-assignment.js';
 import type {
   RuntimeCompanionProviderAssignment,
   RuntimeProviderAssignment,
@@ -91,7 +90,7 @@ export interface CompiledProviderEnvironment {
    * section from `runtime.yaml` so the engine can resolve effective servers
    * per agent execution (issue #1137). Undefined in legacy mode.
    */
-  mcpAssignment?: McpAssignmentSection | undefined;
+  mcpAssignment?: McpSection | undefined;
   companions?: Record<string, ProviderRoutingEntry>;
   /**
    * Every stage of each `ladder` assignment (issue #1208), so the promotion seam can advance a
@@ -189,7 +188,7 @@ export function compileRuntimeProviderEnvironment(
       permissionMode: undefined,
       tagConflictPolicy: 'fail-fast',
       internalAgents: undefined,
-      mcpAssignment: mcp as McpAssignmentSection | undefined,
+      mcpAssignment: mcp,
       providerLadders: undefined,
     };
   }
@@ -224,7 +223,7 @@ export function compileRuntimeProviderEnvironment(
     permissionMode: defaults?.permissionMode,
     tagConflictPolicy: 'fail-fast',
     internalAgents,
-    mcpAssignment: mcp as McpAssignmentSection | undefined,
+    mcpAssignment: mcp,
     ...(companions === undefined ? {} : { companions }),
     providerLadders,
   };

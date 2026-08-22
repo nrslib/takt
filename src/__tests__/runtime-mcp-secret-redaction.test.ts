@@ -5,6 +5,7 @@ import {
   redactMcpServerForLog,
   buildMcpServerIdentity,
 } from '../infra/config/runtime-provider/mcp-schema.js';
+import type { McpServerConfig } from '../core/models/workflow-provider-options.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -32,6 +33,26 @@ describe('redactMcpServerForLog (MCP-ENV secret redaction)', () => {
 
     expect(JSON.stringify(redactMcpServerForLog(stdio))).not.toContain('resolved-secret');
     expect(JSON.stringify(redactMcpServerForLog(remote))).not.toContain('resolved-secret');
+  });
+
+  it('Given copied interpolated server configs, When redacted for log, Then copies retain the safe source association', () => {
+    const resolved = interpolateMcpEnv({
+      type: 'stdio',
+      command: 'mcp-${MCP_COPY_SECRET}',
+      args: ['--token', '${MCP_COPY_SECRET}'],
+    }, { MCP_COPY_SECRET: 'copied-secret' });
+    const copies: McpServerConfig[] = [
+      { ...resolved },
+      JSON.parse(JSON.stringify(resolved)) as McpServerConfig,
+    ];
+
+    for (const copy of copies) {
+      expect(JSON.stringify(redactMcpServerForLog(copy))).not.toContain('copied-secret');
+      expect(buildMcpServerIdentity('common', copy)).toBe(
+        buildMcpServerIdentity('common', resolved),
+      );
+      expect(buildMcpServerIdentity('common', copy)).not.toContain('copied-secret');
+    }
   });
 
   it('Given a stdio server with env, When redacted for log, Then env values are replaced with placeholder', () => {
@@ -82,7 +103,7 @@ describe('redactMcpServerForLog (MCP-ENV secret redaction)', () => {
     expect(JSON.stringify(result)).not.toContain('hidden-key');
   });
 
-  it('Given a stdio server with args containing secrets, When redacted for log, Then args are preserved (args are not secret)', () => {
+  it('Given a stdio server with non-authentication args, When redacted for log, Then those args are preserved', () => {
     const result = redactMcpServerForLog({
       type: 'stdio',
       command: 'srv',

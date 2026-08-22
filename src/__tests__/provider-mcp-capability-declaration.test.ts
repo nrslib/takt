@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
 // New modules under test (implemented in the following `implement` step).
 import { getProvider, ProviderRegistry } from '../infra/providers/index.js';
 import {
@@ -24,35 +23,11 @@ import {
  *   このファイルは新規の宣言ベース capability 契約を検証する。
  */
 
-function readModuleSource(path: string): string {
-  return readFileSync(new URL(path, import.meta.url), 'utf-8');
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe('Provider MCP capability declaration (MCP-CAPABILITY-DECLARE)', () => {
-  it('Given the provider-capabilities module, Then it does NOT contain a fixed MCP_SERVER_PROVIDERS set', () => {
-    const source = readModuleSource('../infra/providers/provider-capabilities.ts');
-    expect(source).not.toContain('MCP_SERVER_PROVIDERS');
-    expect(source).not.toContain('new Set<ProviderType>([');
-  });
-
-  it('Given the provider-capabilities module, Then providerSupportsMcpServers is derived from the provider implementation', () => {
-    const source = readModuleSource('../infra/providers/provider-capabilities.ts');
-    // The capability must be resolved from the provider instance, not from a fixed set.
-    expect(source).toContain('supportedMcpTransports');
-    expect(source).toContain('getProvider(');
-  });
-
-  it('Given the Provider interface, Then it declares supportedMcpTransports as a readonly set', () => {
-    const source = readModuleSource('../infra/providers/types.ts');
-    expect(source).toContain('supportedMcpTransports');
-    // The transport declaration must be a ReadonlySet (or readonly array) so it is fixed per provider.
-    expect(source).toMatch(/supportedMcpTransports.*Readonly/);
-  });
-
   it('Given claude-sdk provider, Then it declares stdio/sse/http transports', () => {
     const provider = getProvider('claude-sdk');
     const transports = provider.supportedMcpTransports;
@@ -84,6 +59,9 @@ describe('Provider MCP capability declaration (MCP-CAPABILITY-DECLARE)', () => {
     const provider = getProvider('cursor');
     const transports = provider.supportedMcpTransports;
     expect(transports).toBeDefined();
+    expect(transports!.has('stdio')).toBe(true);
+    expect(transports!.has('http')).toBe(true);
+    expect(transports!.has('sse')).toBe(false);
   });
 
   it('Given mock provider, Then it declares stdio transport for fixture support', () => {

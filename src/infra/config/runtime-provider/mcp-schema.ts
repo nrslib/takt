@@ -139,8 +139,12 @@ export function validateMcpSectionReferences(section: McpSection): void {
   }
 }
 
-const ENV_REF_PATTERN = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
-const ORIGINAL_MCP_SERVER = new WeakMap<object, McpServerConfig>();
+const ENV_REF_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const SAFE_MCP_SERVER_SOURCE = '__taktMcpSafeSource' as const;
+
+type McpServerWithSafeSource = McpServerConfig & {
+  __taktMcpSafeSource?: McpServerConfig;
+};
 
 function interpolateString(value: string, env: NodeJS.ProcessEnv): string {
   return value.replace(ENV_REF_PATTERN, (match, name: string) => {
@@ -187,7 +191,8 @@ export function interpolateMcpEnv(
   server: McpServerConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): McpServerConfig {
-  const originalServer = ORIGINAL_MCP_SERVER.get(server) ?? server;
+  const existingSafeSource = getMcpServerSafeSource(server);
+  const safeSource = existingSafeSource ?? buildMcpServerLogSafeSource(server);
   let resolvedServer: McpServerConfig;
   if (isStdio(server)) {
     resolvedServer = {
@@ -209,8 +214,24 @@ export function interpolateMcpEnv(
       headers: interpolateRecord((server as McpHttpServerConfig).headers, env),
     };
   }
-  ORIGINAL_MCP_SERVER.set(resolvedServer, originalServer);
+  if (existingSafeSource !== undefined || hasEnvironmentReference(server)) {
+    return attachMcpServerSafeSource(resolvedServer, safeSource);
+  }
   return resolvedServer;
+}
+
+function hasEnvironmentReference(server: McpServerConfig): boolean {
+  const values = isStdio(server)
+    ? [
+        server.command,
+        ...(server.args ?? []),
+        ...Object.values(server.env ?? {}),
+      ]
+    : [
+        server.url,
+        ...Object.values(server.headers ?? {}),
+      ];
+  return values.some((value) => value.includes('${'));
 }
 
 /** Placeholder used in place of secret values in log-safe representations. */
@@ -266,12 +287,42 @@ function redactRecord(
   return result;
 }
 
+function buildMcpServerLogSafeSource(server: McpServerConfig): McpServerConfig {
+  if (isStdio(server)) {
+    return {
+      type: 'stdio',
+      command: server.command,
+      args: redactMcpArgs(server.args),
+      env: redactRecord(server.env),
+    };
+  }
+  const remote = isSse(server) ? server : (server as McpHttpServerConfig);
+  return {
+    type: remote.type,
+    url: redactMcpUrl(remote.url),
+    headers: redactRecord(remote.headers),
+  };
+}
+
+function getMcpServerSafeSource(server: McpServerConfig): McpServerConfig | undefined {
+  return (server as McpServerWithSafeSource)[SAFE_MCP_SERVER_SOURCE];
+}
+
+function attachMcpServerSafeSource(
+  server: McpServerConfig,
+  safeSource: McpServerConfig,
+): McpServerConfig {
+  const result = { ...server } as McpServerWithSafeSource;
+  result[SAFE_MCP_SERVER_SOURCE] = safeSource;
+  return result;
+}
+
 /**
  * Return a log-safe representation of a server entry. Environment/header values,
  * URL userinfo, and authentication argument values are redacted (order.md:110).
  */
 export function redactMcpServerForLog(server: McpServerConfig): Record<string, unknown> {
-  const logSafeSource = ORIGINAL_MCP_SERVER.get(server) ?? server;
+  const logSafeSource = getMcpServerSafeSource(server) ?? buildMcpServerLogSafeSource(server);
   if (isStdio(logSafeSource)) {
     return {
       type: 'stdio',
@@ -298,7 +349,7 @@ export function buildMcpServerIdentity(
   serverName: string,
   server: McpServerConfig,
 ): string {
-  const identitySource = ORIGINAL_MCP_SERVER.get(server) ?? server;
+  const identitySource = getMcpServerSafeSource(server) ?? buildMcpServerLogSafeSource(server);
   if (isStdio(identitySource)) {
     return JSON.stringify([
       serverName,

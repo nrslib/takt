@@ -1,9 +1,17 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+const runHeadlessCliMock = vi.hoisted(() => vi.fn());
+vi.mock('../infra/claude-headless/headless-spawn.js', async () => {
+  const actual = await vi.importActual<typeof import('../infra/claude-headless/headless-spawn.js')>(
+    '../infra/claude-headless/headless-spawn.js',
+  );
+  return { ...actual, runHeadlessCli: runHeadlessCliMock };
+});
 // New modules under test (implemented in the following `implement` step).
 import { createMcpAdapter, type ResolvedMcpServers, type ProviderMcpContext } from '../infra/providers/mcp/index.js';
+import { callClaudeHeadless } from '../infra/claude-headless/client.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -44,6 +52,7 @@ function baseContext(overrides: Partial<ProviderMcpContext> = {}): ProviderMcpCo
 describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
   beforeEach(() => {
     workDir = mkdtempSync(join(tmpdir(), 'takt-mcp-cleanup-'));
+    runHeadlessCliMock.mockReset();
   });
 
   afterEach(() => {
@@ -149,6 +158,26 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     const prepared = await adapter.prepare(resolvedServers(), baseContext());
     await prepared.dispose();
     await expect(prepared.dispose()).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['startup failure', new Error('MCP startup failed')],
+    ['abort', Object.assign(new Error('aborted'), { name: 'AbortError' })],
+    ['timeout', new Error('MCP startup timeout')],
+  ] as const)('Given a prepared Claude provider MCP config, When provider execution ends through %s, Then the provider path cleans the temporary config', async (_path, error) => {
+    const adapter = createMcpAdapter('claude');
+    const prepared = await adapter.prepare(resolvedServers(), baseContext());
+    const path = prepared.path;
+    expect(path).toBeDefined();
+    runHeadlessCliMock.mockRejectedValueOnce(error);
+
+    const response = await callClaudeHeadless('cleanup-test', 'run', {
+      cwd: workDir,
+      preparedMcp: prepared,
+    });
+
+    expect(response.status).toBe('error');
+    expect(existsSync(path!)).toBe(false);
   });
 
   it('Given an MCP-disabled server set, When prepared, Then no temp artifacts are created and dispose is a no-op', async () => {

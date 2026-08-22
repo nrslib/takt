@@ -2,7 +2,12 @@
  * Shared helpers for provider MCP adapters (issue #1137).
  */
 
-import type { ResolvedMcpServers, ProviderMcpValidationContext } from './types.js';
+import type {
+  ProviderMcpAdapter,
+  ProviderMcpContext,
+  ResolvedMcpServers,
+  ProviderMcpValidationContext,
+} from './types.js';
 import { getProvider } from '../index.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../../shared/types/agent-failure.js';
@@ -25,8 +30,13 @@ export function validateTransports(
     if (Object.keys(servers.servers).length === 0) {
       return;
     }
+    const firstEntry = Object.entries(servers.servers)[0];
+    if (firstEntry === undefined) {
+      return;
+    }
+    const [serverName, server] = firstEntry;
     throw new Error(
-      buildUnsupportedError(provider, 'unknown', undefined, context),
+      buildUnsupportedError(provider, serverName, server.type ?? 'stdio', context),
     );
   }
   for (const [name, server] of Object.entries(servers.servers)) {
@@ -39,6 +49,24 @@ export function validateTransports(
   }
 }
 
+/** Adapter used for providers whose capability set intentionally has no MCP transport. */
+export function createUnsupportedMcpAdapter(provider: ProviderType): ProviderMcpAdapter {
+  return {
+    validate(servers, context) {
+      validateTransports(provider, servers, context);
+    },
+    async prepare(servers: ResolvedMcpServers, context: ProviderMcpContext) {
+      validateTransports(provider, servers, {
+        ...(context.sourcePath !== undefined ? { sourcePath: context.sourcePath } : {}),
+      });
+      return { dispose: noopDispose };
+    },
+    classifyFailure(error) {
+      return classifyMcpFailure(error);
+    },
+  };
+}
+
 function buildUnsupportedError(
   provider: ProviderType,
   serverName: string,
@@ -46,7 +74,7 @@ function buildUnsupportedError(
   context: ProviderMcpValidationContext | undefined,
 ): string {
   const supported = getProvider(provider).supportedMcpTransports;
-  const supportedList = supported === undefined
+  const supportedList = supported === undefined || supported.size === 0
     ? '(none)'
     : [...supported].join(', ');
   const transportPart = transport === undefined

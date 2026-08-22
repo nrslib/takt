@@ -17,6 +17,7 @@ import { createCursorMcpAdapter } from './cursor.js';
 import { createCopilotMcpAdapter } from './copilot.js';
 import { createKiroMcpAdapter } from './kiro.js';
 import { createMockMcpAdapter } from './mock.js';
+import { createUnsupportedMcpAdapter } from './adapter.js';
 
 export type {
   ProviderMcpAdapter,
@@ -50,7 +51,7 @@ export function createMcpAdapter(provider: ProviderType): ProviderMcpAdapter {
       return createMockMcpAdapter();
     case 'pi':
     case 'deepseek-harness':
-      throw new Error(`Provider "${provider}" does not support MCP runtime assignments`);
+      return createUnsupportedMcpAdapter(provider);
     default: {
       const exhaustive: never = provider;
       throw new Error(`Unsupported provider for MCP adapter: ${String(exhaustive)}`);

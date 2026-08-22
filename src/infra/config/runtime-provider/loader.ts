@@ -118,13 +118,7 @@ function mergeMcpSections(
   global: McpSection | undefined,
   project: McpSection | undefined,
 ): McpSection | undefined {
-  if (global === undefined) {
-    return project;
-  }
-  if (project === undefined) {
-    return global;
-  }
-  return project;
+  return project ?? global;
 }
 
 function mergeProviderSections(
