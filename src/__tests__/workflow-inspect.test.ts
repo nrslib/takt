@@ -423,7 +423,9 @@ workflow_mcp_servers:
     expect(richAgentBlock).toContain(join(projectDir, '.takt/facets/instructions/retry-instruction.md'));
     expectResolvedLine(richAgentBlock, 'provider', 'mock', 'project');
     expectResolvedLine(richAgentBlock, 'model', 'config-model', 'project');
-    expectResolvedLine(richAgentBlock, 'permissionMode', 'edit', 'step');
+    // The step's required mode equals the profile resolution, so the floor is
+    // not applied and the profile's own source is reported.
+    expectResolvedLine(richAgentBlock, 'permissionMode', 'edit', 'default');
   });
 
   it('dynamic parallel の固定・pool step と selector を表示する', async () => {
@@ -2350,6 +2352,46 @@ steps:
     expect(output).not.toContain('Workflow inspect: cycle-b');
     expect(output).not.toContain('Workflow inspected:');
     expect(mockError).toHaveBeenCalled();
+  });
+
+  it('path-based workflow_call の循環もロード時に検出して fail-fast する', async () => {
+    // 相対パス参照の循環もロード時の cycle 検出で error になる。
+    // buildInspectPlan 側の循環ガードは load 側の検出が変わった場合の
+    // 二重防護で、公開経路からは到達しない。
+    const workflowPath = writeFile(projectDir, '.takt/workflows/path-cycle-a.yaml', `name: path-cycle-a
+subworkflow:
+  callable: true
+  returns: [done]
+initial_step: call-b
+max_steps: 1
+steps:
+  - name: call-b
+    kind: workflow_call
+    call: ./path-cycle-b.yaml
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeFile(projectDir, '.takt/workflows/path-cycle-b.yaml', `name: path-cycle-b
+subworkflow:
+  callable: true
+  returns: [done]
+initial_step: call-a
+max_steps: 1
+steps:
+  - name: call-a
+    kind: workflow_call
+    call: ./path-cycle-a.yaml
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(inspectWorkflowCommand(workflowPath, projectDir)).rejects.toThrow('Workflow validation failed');
+
+    const output = renderedOutput();
+    expect(output).toContain('recursive workflow_call cycle detected');
+    expect(output).not.toContain('Workflow inspected:');
   });
 
   it('必須引数を持つ callable workflow を discovery mode で表示する', async () => {

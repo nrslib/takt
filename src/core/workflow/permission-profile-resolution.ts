@@ -108,26 +108,17 @@ const PERMISSION_MODE_RANK: Record<PermissionMode, number> = {
   full: 2,
 };
 
-function applyRequiredPermissionFloor(
-  resolvedMode: PermissionMode,
-  requiredMode?: PermissionMode,
-): PermissionMode {
-  if (!requiredMode) {
-    return resolvedMode;
-  }
-  return PERMISSION_MODE_RANK[requiredMode] > PERMISSION_MODE_RANK[resolvedMode]
-    ? requiredMode
-    : resolvedMode;
-}
-
 function applyRequiredPermissionFloorWithSource(
   resolvedMode: PermissionMode,
   requiredMode: PermissionMode | undefined,
   source: ProviderResolutionSource,
 ): ResolvedPermissionMode {
-  const value = applyRequiredPermissionFloor(resolvedMode, requiredMode);
+  // The floor only becomes the source when it actually raises the mode; an
+  // equal profile value keeps its own resolution source.
+  const floorApplied = requiredMode !== undefined
+    && PERMISSION_MODE_RANK[requiredMode] > PERMISSION_MODE_RANK[resolvedMode];
   return {
-    value,
-    source: value === requiredMode && requiredMode !== undefined ? 'step' : source,
+    value: floorApplied ? requiredMode : resolvedMode,
+    source: floorApplied ? 'step' : source,
   };
 }

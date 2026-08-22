@@ -108,6 +108,7 @@ export function inheritWorkflowConfigMetadata(source: object, target: object): v
     WORKFLOW_OPAQUE_REF,
     WORKFLOW_BUNDLE_NODE_ID,
     WORKFLOW_CONFIG_ERROR_TRANSLATOR,
+    WORKFLOW_RESOLVED_SECTIONS,
   ]) {
     const descriptor = Object.getOwnPropertyDescriptor(source, key);
     if (!descriptor) continue;
