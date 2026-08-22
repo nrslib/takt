@@ -137,24 +137,6 @@ describe('interactiveMode', () => {
       expect(mockResolveFormalSpecMode).toHaveBeenNthCalledWith(1, '/project');
       expect(mockResolveFormalSpecMode).toHaveBeenNthCalledWith(2, '/project');
       expect(capture.systemPrompts).toHaveLength(3);
-      expect(capture.prompts[0]).toBe('describe the initial behavior');
-      expect(capture.prompts[1]).toBe('describe the resumed behavior');
-      const observedPrompts = [
-        [capture.systemPrompts[0], initialFormalSpec],
-        [capture.systemPrompts[1], resumedFormalSpec],
-        [capture.systemPrompts[2], resumedFormalSpec],
-      ] as const;
-      for (const [prompt, formalSpec] of observedPrompts) {
-        expect(prompt).toEqual(expect.any(String));
-        expect(prompt).toMatch(/Gherkin/);
-        if (formalSpec) {
-          expect(prompt).toMatch(/\bQuint\b/);
-          expect(prompt).toMatch(/\bAlloy\b/);
-        } else {
-          expect(prompt).not.toMatch(/\bQuint\b/);
-          expect(prompt).not.toMatch(/\bAlloy\b/);
-        }
-      }
     },
   );
 

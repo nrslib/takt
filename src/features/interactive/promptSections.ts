@@ -9,6 +9,20 @@ function getSourceContextGuidance(lang: 'en' | 'ja'): string {
   return loadTemplate('parts/source_context_section_guidance', lang);
 }
 
+function getUserCommentGuidance(lang: 'en' | 'ja'): string {
+  return loadTemplate('parts/user_comment_section_guidance', lang);
+}
+
+/**
+ * Labels a conversational message as a user comment. Providers without a real
+ * system prompt (codex prepends it to the user turn) lose the assistant-mode
+ * role text in the noise, and a bare "fix X" message then reads as an
+ * implementation request — the label keeps it conversation material.
+ */
+export function frameUserComment(lang: 'en' | 'ja', userMessage: string): string {
+  return `## ${getLabel('interactive.userCommentLabel', lang)}\n${getUserCommentGuidance(lang)}\n\n${userMessage}`;
+}
+
 export function formatLiteralBlock(content: string): string {
   const longestFence = [...content.matchAll(/`+/g)].reduce((max, match) => {
     return Math.max(max, match[0].length);

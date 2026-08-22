@@ -24,6 +24,7 @@ import { DEFAULT_INTERACTIVE_TOOLS } from './interactiveApplication.js';
 import { formatStepPreviews } from './interactive-summary.js';
 import type { WorkflowContext } from './interactive-summary-types.js';
 import {
+  frameUserComment,
   prependSourceContext,
   prependSourceContextGuardToSystemPrompt,
 } from './promptSections.js';
@@ -142,7 +143,7 @@ export function createAssistantConversationPlan(
       allowedTools: grillMe ? GRILL_ME_INTERACTIVE_TOOLS : DEFAULT_INTERACTIVE_TOOLS,
       ...(grillMe ? { permissionMode: 'readonly' as const } : {}),
       transformPrompt: (message: string, sourceContext?: string) =>
-        prependSourceContext(ctx.lang, message, sourceContext),
+        prependSourceContext(ctx.lang, frameUserComment(ctx.lang, message), sourceContext),
       introMessage: getLabel(grillMe ? 'interactive.ui.introGrillMe' : 'interactive.ui.intro', ctx.lang),
       initialPromptContext: assistantInitContext,
       summaryPromptContext: assistantInitContext,

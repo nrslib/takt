@@ -8,6 +8,7 @@
 # ===== Interactive Mode UI =====
 interactive:
   sourceContextLabel: "Source Context"
+  userCommentLabel: "User Comment"
   conversationLabel: "Conversation:"
   noTranscript: "(No local transcript. Summarize the current session context.)"
   formalSpecPrompt: "Enable formal specification mode (Alloy, Quint)? Change the default with assistant.formal_spec."

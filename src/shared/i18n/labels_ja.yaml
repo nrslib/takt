@@ -8,6 +8,7 @@
 # ===== Interactive Mode UI =====
 interactive:
   sourceContextLabel: "Source Context"
+  userCommentLabel: "ユーザーからのコメント"
   conversationLabel: "会話:"
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   formalSpecPrompt: "形式仕様モード（Alloy, Quint）を有効にしますか？ 既定値は assistant.formal_spec で変更できます。"
