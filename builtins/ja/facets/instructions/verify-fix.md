@@ -6,6 +6,7 @@
 
 {{include:instructions/fix-plan-validity}}
 {{include:instructions/repair-verification-path-check}}
+{{include:instructions/quality-gate-causality}}
 
 **検証手順:**
 1. Report Directory の最新レビューレポートで、計画が対象とした問題と受入条件を確認する

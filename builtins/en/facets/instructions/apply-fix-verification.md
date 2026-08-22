@@ -9,6 +9,8 @@ Correct every gap found by the latest completion verification and finish the fin
 **Previous fix report:**
 {report:fix-report.md}
 
+{{include:instructions/quality-gate-causality}}
+
 **Procedure after a verifier return:**
 1. Map every verified gap to a completion obligation in the plan
 2. Do not split problems with the same cause, condition, and acceptance criteria based only on physical code locations or file paths

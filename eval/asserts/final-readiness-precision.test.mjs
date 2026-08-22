@@ -73,6 +73,16 @@ OLD-REVIEW-readme-L1 は今回の範囲外であり、修正対象はありま�
   assert.equal(assertFinalReadinessPrecision(output).pass, true);
 });
 
+test('does not reopen a finding only because a superseded report requested a fix', () => {
+  const output = `
+# 最終判定: APPROVE
+
+OLD-REVIEW-readme-L1 は必要以上の拡張であり、修正対象にしない。
+前段レポートは「修正が必要」と記載していますが、後続の裁定と現在のコードを優先しました。
+`;
+  assert.equal(assertFinalReadinessPrecision(output).pass, true);
+});
+
 test('rejects APPROVE when the prior finding is omitted', () => {
   assert.equal(assertFinalReadinessPrecision('## Result: APPROVE').pass, false);
 });
@@ -112,6 +122,26 @@ test('rejects a newly unresolved problem in an approved result', () => {
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
 });
 
+test('rejects an unresolved problem regardless of its ID format', () => {
+  const output = approvedOutput('CODE-NEW-runtime-L9 remains open and requires a fix.');
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});
+
+test('rejects an unresolved problem stated without an ID', () => {
+  const output = approvedOutput('実行時設定の問題は未解消であり、修正が必要です。');
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});
+
+test('rejects remaining work described with ordinary Japanese wording', () => {
+  const output = approvedOutput('実行時設定の問題が残存しており、直す必要があります。');
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});
+
+test('rejects a required response described without fix terminology', () => {
+  const output = approvedOutput('追加対応が必要な問題があります。');
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});
+
 test('rejects contradictory APPROVE and REJECT results', () => {
   const output = `${approvedOutput()}\n## 結果: REJECT`;
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
@@ -120,4 +150,11 @@ test('rejects contradictory APPROVE and REJECT results', () => {
 test('rejects the removed MERGEABLE result vocabulary', () => {
   const output = approvedOutput().replace('Result: APPROVE', 'Result: MERGEABLE');
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});
+
+test('accepts the CLI provider JSON wrapper', () => {
+  const output = JSON.stringify({
+    output: '# 判定: APPROVE（要件充足）\n\nOLD-REVIEW-readme-L1 は必要以上の拡張であり、修正対象にしない。',
+  });
+  assert.equal(assertFinalReadinessPrecision(output).pass, true);
 });

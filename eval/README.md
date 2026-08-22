@@ -86,8 +86,11 @@ repair-induced regression from an initially missed consumer, and enumerating
 the distinct reachable terminal results of one newly exposed projection. It
 needs both CLI logins and is excluded from the default suite run; invoke it with
 `npm run eval:prompts:follow-up-review-repair-regression`. It shares its fixture
-with `follow-up-testing-review-repair-regression`, which measures whether test
-findings remain within the same repair scope.
+with `follow-up-testing-review-repair-regression`. That suite executes the
+production review sequence for each model: testing review followed by
+`review-adjudication`. It measures whether adjudication verifies omissions
+within the testing perspective while findings outside the current repair scope
+remain excluded.
 
 ## Suites
 
@@ -125,7 +128,7 @@ findings remain within the same repair scope.
 | `implement-contract-traceability` | default / implement | implement-contract-traceability | whether implementation preserves named contract identities from plan and tests |
 | `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims, distinguishes repair-induced defects from adjacent omissions, and enumerates distinct reachable terminal outcomes; measured on Opus, Luna Max, and Sol High |
-| `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection for a problem already selected for repair, refuse to count an assertion that pins the forbidden result as coverage, and reject adjacent or structure-freezing test expansion |
+| `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review -> review-adjudication | follow-up-review-repair-regression | whether review-adjudication recovers in-perspective omissions, verifies reviewer evidence, keeps regression detection within the selected repair scope, and excludes adjacent or structure-freezing test expansion; measured on Opus 5, Luna Max, and Sol High |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from the current remediation scope, keeps required same-cause paths and diff-induced regressions in scope, and excludes even severe horizontal improvements from the fix plan |
 | `review-adjudication-binding` | peer-review / follow-up security-review | review-adjudication-binding | whether Opus 5, Luna Max, and Sol High keep three out-of-scope findings non-blocking, reopen only with an allowed basis, and distinguish bare ESC or unconstrained repository-owned rules from a reproduced OSC terminal effect |
 | `security-review-method` | peer-review / initial security-review | security-review-method | whether Opus 5, Luna Max, and Sol High approve unchanged boundaries and bound SQL, reject verified SQL injection, authorization bypass, credential exposure, and helper-mediated command injection, and keep repository-author-controlled size alone non-blocking |
@@ -133,6 +136,9 @@ findings remain within the same repair scope.
 | `final-readiness-supervision` | final-gate / supervise Phase 1 | final-readiness-supervision | whether the supervisor identifies a newly discovered required consumer from the unmet acceptance criteria and avoids unrelated exploration |
 | `final-readiness-preservation` | final-gate / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the unresolved finding and does not reopen a previously excluded documentation request |
 | `final-readiness-precision` | final-gate / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
+| `fix-verification-scope` | review-remediation / fix-verifier | fix-verification-scope | whether completion verification accepts satisfied planned conditions while recording, but not selecting for repair, a broad-gate failure with no causal connection to the current change |
+| `fix-verification-current-diff-regression` | review-remediation / fix-verifier | fix-verification-current-diff-regression | whether completion verification marks a broad-gate failure incomplete when the current diff caused the regression |
+| `fix-verification-preserved-condition` | review-remediation / fix-verifier | fix-verification-preserved-condition | whether completion verification marks a repair incomplete when it breaks an existing condition that the plan requires preserving |
 
 The `coding` suite requires both Claude and Codex CLI logins and is excluded
 from the default suite run. Invoke it explicitly with

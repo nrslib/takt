@@ -9,6 +9,8 @@
 **前回の修正報告:**
 {report:fix-report.md}
 
+{{include:instructions/quality-gate-causality}}
+
 **差し戻し時の手順:**
 1. 検証で確認された全不足を、計画の完了義務へ対応付ける
 2. 物理的なコード位置やファイルパスだけを根拠に、同じ原因・条件・受入条件を持つ問題を分けない

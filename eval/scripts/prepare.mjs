@@ -207,6 +207,29 @@ const TARGETS = [
     fixture: 'eval/fixtures/follow-up-review-repair-regression',
   },
   {
+    id: 'follow-up-testing-review-repair-regression-phase2',
+    workflow: 'peer-review',
+    via: 'reviewers',
+    step: 'testing-review',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+    phase: 'phase2',
+    targetFile: 'testing-review.md',
+  },
+  {
+    id: 'follow-up-review-adjudication-repair-regression',
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+  },
+  {
+    id: 'follow-up-review-adjudication-repair-regression-phase2',
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+    phase: 'phase2',
+    targetFile: 'review-resolution.md',
+  },
+  {
     id: 'review-adjudication-binding',
     workflow: 'peer-review',
     via: 'reviewers',
@@ -259,10 +282,29 @@ const TARGETS = [
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-precision',
   },
+  {
+    id: 'fix-verification-scope',
+    workflow: 'review-remediation',
+    step: 'fix-verifier',
+    fixture: 'eval/fixtures/fix-verification-scope',
+  },
+  {
+    id: 'fix-verification-current-diff-regression',
+    workflow: 'review-remediation',
+    step: 'fix-verifier',
+    fixture: 'eval/fixtures/fix-verification-current-diff-regression',
+  },
+  {
+    id: 'fix-verification-preserved-condition',
+    workflow: 'review-remediation',
+    step: 'fix-verifier',
+    fixture: 'eval/fixtures/fix-verification-preserved-condition',
+  },
 ];
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
+process.env.TAKT_CONFIG_DIR = resolve(scriptDir, '../config');
 
 const {
   loadWorkflowByIdentifier,

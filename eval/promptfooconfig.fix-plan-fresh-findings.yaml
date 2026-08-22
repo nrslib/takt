@@ -53,8 +53,8 @@ tests:
       - type: llm-rubric
         metric: fix-plan/report-freshness
         value: |
-          見出し、表形式、文言ではなく、計画の対象選択と実行可能な振る舞いを判定する。MERGE-NEW-cache-key-L2 と REGRESSION-NEW-cache-delete-L21 を、同じキャッシュキー正規化の原因から生じる2つの指摘として1つの修正単位へまとめ、OLD-REVIEW-readme-L1 を除外し、報告例だけで止まらず set、get、has、delete を含む src/cache.js の一貫した正規化修正を計画した場合だけ合格とする。前者が既に修正対象となった問題と同じ条件を破る利用箇所、後者が修正によって生じた退行であることを保持する。特定の列名、英語ラベル、分類値の表記は合否に使わない。
+          MERGE-NEW-cache-key-L2 と REGRESSION-NEW-cache-delete-L21 を、同じキャッシュキー正規化の原因から生じる2つの指摘として1つの修正単位へまとめ、OLD-REVIEW-readme-L1 を除外し、報告例だけで止まらず set、get、has、delete を含む src/cache.js の一貫した正規化修正を計画した場合だけ合格とする。
 
-          計画は src/application.js の inspectCache() から開始し、import と呼び出しを consumer-a.js、consumer-b.js、consumer-c.js、state-transfer.js、view-a.js、view-b.js まで追跡する。各利用箇所の役割をファイル名ではなくコードと呼び出し元から推定し、各経路を編集対象または確認だけ行う利用箇所に分類する。キーがアプリケーション入口をどのように流れるかを説明しない経路一覧は不十分とする。Cache を通じてすでに正しい利用箇所は、対称性だけを理由に編集せず検証する。検証は不正なキーの振る舞いを保持しながら、大文字小文字と空白を変えたキーを、永続化の往復を含む入口から到達する異なる操作と表現のすべてで実行する。
+          src/application.js の inspectCache() と、そこから import・呼び出しされる consumer-a.js、consumer-b.js、consumer-c.js、state-transfer.js、view-a.js、view-b.js を実際の呼び出しとデータフローで接続し、各利用箇所を編集対象または確認だけ行う利用箇所に分類する。説明の順序は問わないが、ファイル名の一覧だけで接続済みとしてはならない。Cache を通じてすでに正しい利用箇所は、対称性だけを理由に編集せず検証する。検証は不正なキーの振る舞いを保持しながら、大文字小文字と空白を変えたキーを、永続化の往復を含む入口から到達する異なる操作と表現で実行する。
 
           同じ条件を場所ごとの修正へ分割する、外側の入口を未確認のまま内側の利用箇所で止まる、接続と役割の証拠なしに固定の経路を提示する、裁定済みのドキュメント項目を復活させる、正しい利用箇所を不要に編集する、または隣接契約の作業を提案した場合は不合格とする。

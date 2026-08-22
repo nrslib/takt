@@ -204,11 +204,11 @@ steps:
       review_knowledge_additions:
         $param: review_knowledge_additions
     rules:
-      - condition: ACTIONABLE FINDINGS
+      - condition: Problems require repair
         next: remediation
-      - condition: NO ACTIONABLE FINDINGS
+      - condition: No problems require repair
         next: final-gate
-      - condition: REPLAN REQUIRED
+      - condition: The entire task must be replanned
         return: need_replan
   - name: final-gate
     uses: peer-review-final-gate

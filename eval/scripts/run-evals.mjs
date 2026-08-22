@@ -24,11 +24,15 @@
  *         review-adjudication, review-adjudication-report, final-readiness-supervision,
  *         final-readiness-preservation,
  *         final-readiness-precision,
+ *         fix-verification-scope,
+ *         fix-verification-current-diff-regression,
+ *         fix-verification-preserved-condition,
  *         task-instruction-gherkin
  *         (default: all except suites that require optional CLI authentication)
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -77,12 +81,17 @@ const SUITES = {
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
   'final-readiness-precision': 'promptfooconfig.final-readiness-precision.yaml',
+  'fix-verification-scope': 'promptfooconfig.fix-verification-scope.yaml',
+  'fix-verification-current-diff-regression': 'promptfooconfig.fix-verification-current-diff-regression.yaml',
+  'fix-verification-preserved-condition': 'promptfooconfig.fix-verification-preserved-condition.yaml',
   'task-instruction-gherkin': 'promptfooconfig.task-instruction-gherkin.yaml',
 };
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const evalDir = resolve(scriptDir, '..');
 const repoRoot = resolve(evalDir, '..');
+const promptfooConfigDir = join(repoRoot, '.tmp', 'promptfoo');
+mkdirSync(promptfooConfigDir, { recursive: true });
 
 const args = process.argv.slice(2);
 const firstFlagIndex = args.findIndex((a) => a.startsWith('-'));
@@ -111,6 +120,7 @@ for (const name of names) {
 // codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
 // review-impact-path-coverage と follow-up-review-repair-regression、follow-up-testing-review-repair-regression も claude（opus）と
 // codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
+// fix-verification 系の対照スイートも同じ3モデルを使うため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
   'coding',
   'rescan',
@@ -127,6 +137,9 @@ const DEFAULT_EXCLUDED = new Set([
   'initial-review-external-identity-wiring',
   'review-adjudication-binding',
   'security-review-method',
+  'fix-verification-scope',
+  'fix-verification-current-diff-regression',
+  'fix-verification-preserved-condition',
   'write-tests-default-priority',
   'write-tests-default-priority-codex',
 ]);
@@ -139,6 +152,10 @@ for (const name of selected) {
   const result = spawnSync('npx', ['promptfoo', 'eval', '-c', config, '--no-progress-bar', ...flags], {
     stdio: 'inherit',
     cwd: repoRoot,
+    env: {
+      ...process.env,
+      PROMPTFOO_CONFIG_DIR: promptfooConfigDir,
+    },
   });
   summary.push({ name, code: result.status ?? 1 });
 }

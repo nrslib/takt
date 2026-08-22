@@ -6,6 +6,7 @@ Independently verify whether the implementation fulfills the fix plan. Do not ed
 
 {{include:instructions/fix-plan-validity}}
 {{include:instructions/repair-verification-path-check}}
+{{include:instructions/quality-gate-causality}}
 
 **Verification procedure:**
 1. Inspect the latest reviewer reports in the Report Directory to confirm the problems and acceptance criteria covered by the plan

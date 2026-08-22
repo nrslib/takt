@@ -1,7 +1,7 @@
 ```markdown
 # Review Finding Decision
 
-## Result: ACTIONABLE FINDINGS / NO ACTIONABLE FINDINGS / REPLAN REQUIRED
+## Result: Problems require repair / No problems require repair / The entire task must be replanned
 
 ## Decision Summary
 {Reports inspected, number of problems to repair, number of findings not selected for repair, and key evidence}
@@ -25,7 +25,7 @@
 - {None, or conflicting requirements, plan decisions, or findings and why replanning is required}
 ```
 
-- Record every submitted finding ID exactly once in Decision for Each Finding
+- Record every submitted finding ID exactly once in Decision for Each Finding. When verification confirms an omission, identify its source using the actual reviewer report name, such as `testing-review.md (not reported)`
 - Group findings only when their cause, violated condition, and acceptance criteria are the same
 - Include in Problems to Repair only problems this change must resolve. Do not copy an item merely because it exists in history
 - Omit Problems to Repair when no repair is required
