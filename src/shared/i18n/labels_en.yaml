@@ -8,11 +8,13 @@
 # ===== Interactive Mode UI =====
 interactive:
   sourceContextLabel: "Source Context"
+  userCommentLabel: "User Comment"
   conversationLabel: "Conversation:"
   noTranscript: "(No local transcript. Summarize the current session context.)"
+  formalSpecPrompt: "Enable formal specification mode (Alloy, Quint)? Change the default with assistant.formal_spec."
   ui:
-    intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /play (run now), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
-    introGrillMe: "Grill Me mode - resolve requirement decisions one question at a time. The assistant will suggest /go when the requirements are ready. Commands: /go (create instruction & run), /play (run now), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
+    intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
+    introGrillMe: "Grill Me mode - resolve requirement decisions one question at a time. The assistant will suggest /go when the requirements are ready. Commands: /go (create instruction & run), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
     introQuiet: "Quiet mode - describe your task. Instructions will be generated without further questions."
     introPassthrough: "Passthrough mode - describe your task. Your input will be passed directly as the task."
     resume: "Resuming previous session"
@@ -30,7 +32,6 @@ interactive:
       continue: "Continue editing"
     cancelled: "Cancelled"
     acceptNoAssistant: "No assistant response found. Please describe your task first."
-    playNoTask: "Please specify task content: /play <task>"
     retryNoOrder: "No previous order (order.md) found. /retry is only available during retry."
     retryUnavailable: "/retry is only available in Retry mode from `takt list`."
     pasteImageUnavailable: "/paste-image is only available for image attachment during interactive input."
@@ -68,7 +69,6 @@ interactive:
     timestamp: "Executed: {timestamp}"
   commands:
     accept: "Accept latest assistant response"
-    play: "Run a task immediately"
     go: "Create instruction & run"
     retry: "Review & rerun with previous instructions"
     replay: "Rerun immediately with previous instructions"
@@ -257,3 +257,35 @@ issue:
     none: "None"
     custom: "Custom input"
     customPrompt: "Enter label name"
+
+# ===== Ink TUI =====
+tui:
+  ui:
+    thinking: "Thinking..."
+    hint: "Enter: send  Shift+Enter: newline  Tab: complete  ↑↓: move/history  Ctrl+C: cancel"
+    placeholder: "Type a task, / for commands"
+    queuedHint: "↑ to edit the queued line"
+    queuedMore: "+{count} more queued"
+    interruptHint: "(Esc to interrupt)"
+    responseInterrupted: "Response interrupted."
+    instructionInterrupted: "Instruction generation interrupted."
+    runFinished: "The workflow run finished. Describe the next task, or /cancel to leave."
+    taskSaved: "The task was saved. Describe the next task, or /cancel to leave."
+    issueCreated: "The issue was created. Describe the next task, or /cancel to leave."
+    promptHint: "Enter: confirm  Esc: cancel"
+    promptKeepHint: "Enter: confirm  empty Enter: keep the current value  Esc: cancel"
+    promptPlaceholder: "Type your answer"
+    model: "Model: {value}"
+    passthroughHint: "Enter: run as-is  Shift+Enter: newline  Ctrl+C: cancel"
+  errors:
+    requiresTty: "--tui requires an interactive terminal. Run takt from a TTY or drop --tui."
+    exitedEarly: "The TUI exited before the task conversation finished."
+    providerNotConfigured: "No provider is configured. Set one in ~/.takt/config.yaml or pass --provider."
+    workflowNotFound: "Workflow not found: {workflow}"
+    messageRequired: "Type a message first."
+    taskTextRequired: "Task text is required."
+    emptyAiResponse: "The assistant returned no response."
+    noConversation: "No conversation yet. Describe your task first."
+    instructionFailed: "Failed to create the task instruction."
+    unsupportedCommand: "That command is not available in the TUI."
+    imagePasteFailed: "The image could not be pasted."

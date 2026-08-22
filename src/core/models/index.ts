@@ -74,6 +74,7 @@ export type {
   WorkflowConfig,
   WorkflowState,
   CompanionSelection,
+  CompanionReviewMode,
   ResolvedCompanionDefinition,
   CompanionFindingSeverity,
   CompanionFinding,

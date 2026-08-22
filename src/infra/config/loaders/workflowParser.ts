@@ -44,6 +44,7 @@ import {
   registerWorkflowFragmentErrorSource,
 } from './workflowRawParser.js';
 import type { WorkflowTrustInfo } from './workflowTrustSource.js';
+import { attachWorkflowResolvedSections } from './workflowSourceMetadata.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { validateDynamicParallelContracts } from '../../../core/workflow/dynamic-parallel/validator.js';
 import { resolveWorkflowWideRules } from './workflowAllStepsRuleResolver.js';
@@ -220,6 +221,12 @@ export function normalizeWorkflowConfig(
     interactiveMode: parsed.interactive_mode,
     ...(facetPools === undefined ? {} : { facetPools }),
   };
+  attachWorkflowResolvedSections(config, {
+    policies: resolvedPoliciesWithSource,
+    knowledge: resolvedKnowledgeWithSource,
+    instructions: resolvedInstructionsWithSource,
+    'output-contracts': resolvedReportFormatsWithSource,
+  });
   registerWorkflowFragmentErrorSource(config, parsedRaw, workflowPath ?? workflowDir);
   return config;
   } catch (error) {

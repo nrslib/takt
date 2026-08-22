@@ -87,6 +87,28 @@ describe('traced config boundaries', () => {
     }
   });
 
+  it('global and project config traces preserve assistant.formal_spec and its origin', () => {
+    const tempDir = join(tmpdir(), `takt-traced-formal-spec-${randomUUID()}`);
+    const projectConfigPath = join(tempDir, 'project', '.takt', 'config.yaml');
+    const globalConfigPath = join(tempDir, 'global', 'config.yaml');
+    mkdirSync(join(tempDir, 'project', '.takt'), { recursive: true });
+    mkdirSync(join(tempDir, 'global'), { recursive: true });
+    writeFileSync(projectConfigPath, ['assistant:', "  formal_spec: 'Y/n'"].join('\n'), 'utf-8');
+    writeFileSync(globalConfigPath, ['assistant:', "  formal_spec: 'y/N'"].join('\n'), 'utf-8');
+
+    try {
+      const projectResult = loadProjectConfigTrace(projectConfigPath, []);
+      const globalResult = loadGlobalConfigTrace(globalConfigPath, (value) => value, []);
+
+      expect(projectResult.rawConfig).toMatchObject({ assistant: { formal_spec: 'Y/n' } });
+      expect(projectResult.trace.getOrigin('assistant.formal_spec')).toBe('local');
+      expect(globalResult.rawConfig).toMatchObject({ assistant: { formal_spec: 'y/N' } });
+      expect(globalResult.trace.getOrigin('assistant.formal_spec')).toBe('global');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('project traced schema は非許可 env を runtime bridge でも無視する', () => {
     process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_ALLOWED_TOOLS = '["Bash"]';
 

@@ -18,6 +18,7 @@ import type {
   McpServerConfig,
   PermissionMode,
 } from '../models/types.js';
+import type { CompanionReviewMode } from '../models/companion-types.js';
 import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
@@ -45,6 +46,7 @@ import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection
 import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
 import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-command-runner.js';
+import type { McpAssignmentSection } from '../../infra/config/runtime-provider/mcp-assignment.js';
 import type { CompanionDiffReader } from './companion/diff-reader.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
@@ -358,6 +360,7 @@ export interface WorkflowEvents {
   'companion:start': (payload: {
     step: string;
     companion: string;
+    reviewMode: CompanionReviewMode;
   }) => void;
   'companion:pool_selected': (payload: {
     step: string;
@@ -383,6 +386,7 @@ export interface WorkflowEvents {
   }) => void;
   'companion:review_round': (payload: {
     step: string;
+    reviewMode: CompanionReviewMode;
     companion: string;
     trigger: CompanionReviewTrigger;
     digest: string;
@@ -549,6 +553,12 @@ export interface WorkflowEngineOptions {
   onAskUserQuestion?: AskUserQuestionHandler;
   /** MCP servers supplied by the application boundary for every phase-1 agent step. */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Runtime MCP assignment section (runtime-v1 only, issue #1137). The engine
+   * resolves effective MCP servers per agent execution via
+   * `OptionsBuilder.resolveMcpServersForStep`. Undefined in legacy mode.
+   */
+  mcpAssignment?: McpAssignmentSection;
   /** Callback when iteration limit is reached - returns additional iterations or null to stop */
   onIterationLimit?: IterationLimitCallback;
   /** Ignore workflow maxSteps and keep running */
@@ -612,6 +622,7 @@ export interface WorkflowEngineOptions {
   internalAgentSeats?: InternalAgentSeats;
   /** runtime.yaml から解決済みの companion ごとの実行環境。 */
   companionEnabled?: boolean;
+  companionReviewMode?: CompanionReviewMode;
   companionProviders?: Readonly<Record<string, ProviderRoutingEntry>>;
   companionDiffReader?: CompanionDiffReader;
   /**

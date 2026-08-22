@@ -105,6 +105,7 @@ describe('completion retry workflow contract', () => {
       minRetry: 0,
       maxRetry: 4,
       retryInstruction: 'Close only the supplied gaps.',
+      retryInstructionRef: 'retry',
     });
   });
 
@@ -119,6 +120,7 @@ describe('completion retry workflow contract', () => {
       minRetry: 0,
       maxRetry: 4,
       retryInstruction: 'Close only the supplied gaps.',
+      retryInstructionRef: 'retry',
     });
   });
 
@@ -153,10 +155,13 @@ describe('completion retry workflow contract', () => {
       { lang: 'en' },
     );
 
-    expect(config.steps[0]?.parallel?.[0]?.completionRetry).toEqual({
+    const parallelSubSteps = config.steps[0]?.parallel;
+    const firstSubStep = Array.isArray(parallelSubSteps) ? parallelSubSteps[0] : undefined;
+    expect(firstSubStep?.completionRetry).toEqual({
       minRetry: 0,
       maxRetry: 4,
       retryInstruction: 'Close only the supplied gaps.',
+      retryInstructionRef: 'retry',
     });
   });
 
@@ -190,6 +195,7 @@ describe('completion retry workflow contract', () => {
       minRetry: 0,
       maxRetry: 4,
       retryInstruction: 'Close only the supplied gaps.',
+      retryInstructionRef: 'retry',
     });
   });
 

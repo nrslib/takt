@@ -140,20 +140,31 @@ function validateReferences(
     }
   };
 
-  if (section.defaults) {
-    assertAssignment(section.defaults, 'defaults');
-  }
-
-  const targets = section.targets;
-  if (targets) {
-    for (const [mapName, map] of Object.entries(targets)) {
+  const assertTargetMaps = (
+    targets: RuntimeProviderSection['targets'] | undefined,
+    referencedBy: string,
+  ): void => {
+    for (const [mapName, map] of Object.entries(targets ?? {})) {
       if (map === undefined) {
         continue;
       }
       for (const [key, assignment] of Object.entries(map)) {
-        assertAssignment(assignment, `targets.${mapName}.${key}`);
+        assertAssignment(assignment, `${referencedBy}.${mapName}.${key}`);
       }
     }
+  };
+
+  if (section.defaults) {
+    assertAssignment(section.defaults, 'defaults');
+  }
+
+  assertTargetMaps(section.targets, 'targets');
+
+  for (const [assignmentName, assignmentSet] of Object.entries(section.assignments ?? {})) {
+    if (assignmentSet.defaults !== undefined) {
+      assertAssignment(assignmentSet.defaults, `assignments.${assignmentName}.defaults`);
+    }
+    assertTargetMaps(assignmentSet.targets, `assignments.${assignmentName}.targets`);
   }
 
   const autoRouting = section.auto_routing;

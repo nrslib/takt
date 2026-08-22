@@ -115,7 +115,14 @@ async function buildSpawnArgs(
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
   const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
   const session = resolveSessionArgs(options);
-  const preparedMcpConfig = await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers);
+  // Runtime MCP adapter route (issue #1137): when the runner prepared MCP
+  // material, consume `preparedMcp.args` (`--strict-mcp-config`/`--mcp-config`)
+  // so temp-file ownership and cleanup live in the adapter. Fall back to the
+  // legacy `prepareClaudeMcpConfig` only when runtime MCP is not in use.
+  const preparedMcp = options.preparedMcp;
+  const legacyMcpConfig = preparedMcp === undefined
+    ? await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers)
+    : { path: undefined, cleanup: async () => {} };
   const args: string[] = [
     '-p',
     '--verbose',
@@ -150,8 +157,10 @@ async function buildSpawnArgs(
     args.push('--json-schema', JSON.stringify(options.outputSchema));
   }
 
-  if (preparedMcpConfig.path) {
-    args.push('--mcp-config', preparedMcpConfig.path);
+  if (preparedMcp?.args && preparedMcp.args.length > 0) {
+    args.push(...preparedMcp.args);
+  } else if (legacyMcpConfig.path) {
+    args.push('--mcp-config', legacyMcpConfig.path);
   }
 
   const settings = buildSettingsArg(options);
@@ -161,10 +170,20 @@ async function buildSpawnArgs(
 
   args.push(...session.args);
   args.push('--', prompt);
+  const cleanup = async () => {
+    const results = await Promise.allSettled([
+      legacyMcpConfig.cleanup(),
+      ...(preparedMcp === undefined ? [] : [preparedMcp.dispose()]),
+    ]);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') {
+      throw failed.reason;
+    }
+  };
   return {
     args,
     expectedSessionId: session.sessionId,
-    cleanup: preparedMcpConfig.cleanup,
+    cleanup,
   };
 }
 
@@ -213,7 +232,11 @@ export async function callClaudeHeadless(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<AgentResponse> {
-  let cleanup: (() => Promise<void>) | undefined;
+  // Keep adapter disposal reachable even when argument construction fails
+  // before buildSpawnArgs can return its combined cleanup callback.
+  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined
+    ? undefined
+    : () => options.preparedMcp!.dispose();
   let response: AgentResponse;
 
   try {

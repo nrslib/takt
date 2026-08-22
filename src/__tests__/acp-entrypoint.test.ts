@@ -237,7 +237,7 @@ describe('ACP package entrypoint', () => {
         });
         const promptResponse = await agent.request(methods.agent.session.prompt, {
           sessionId: sessionResponse.sessionId,
-          prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+          prompt: [{ type: 'text', text: 'Implement ACP support' }],
         });
         return {
           initializeResponse,
@@ -771,7 +771,7 @@ steps:
           });
           return agent.request(methods.agent.session.prompt, {
             sessionId: sessionResponse.sessionId,
-            prompt: [{ type: 'text', text: '/play Run ACP smoke' }],
+            prompt: [{ type: 'text', text: 'Run ACP smoke' }],
           });
         });
 
@@ -815,7 +815,7 @@ steps:
             });
             const promptResponse = await agent.request(methods.agent.session.prompt, {
               sessionId: sessionResponse.sessionId,
-              prompt: [{ type: 'text', text: '/play Run ACP stdio smoke' }],
+              prompt: [{ type: 'text', text: 'Run ACP stdio smoke' }],
             });
             return { initializeResponse, sessionResponse, promptResponse };
           }),

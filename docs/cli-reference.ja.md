@@ -23,6 +23,7 @@
 | `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
 | `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
+| `--tui` | 端末ではこれが既定の姿で、stdin と stdout が TTY ならフラグの有無にかかわらずタスク会話は Ink が描画し、パイプ入力では従来のリーダーが使われる。このフラグはその前提を明示するだけで、TTY がない場合はフォールバックせず `--tui requires an interactive terminal` で失敗する。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断（キューに残っている行はそのまま次のターンとして送信される）。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する |
 
 正式オプションは `--workflow` です。
 
@@ -47,7 +48,7 @@ takt hello
 1. workflow を選択
 2. インタラクティブモードを選択（assistant / grill-me / persona / quiet / passthrough）
 3. AI との会話でタスク内容を精緻化
-4. `/go` でタスク指示を確定（`/go 追加の指示` のように追記も可能）、または `/play <task>` でタスクを即座に実行
+4. `/go` でタスク指示を確定（`/go 追加の指示` のように追記も可能）
 5. 実行（workflow 実行、PR 作成）
 
 ### インタラクティブモードの種類
@@ -109,7 +110,7 @@ takt --task "Fix bug"
 takt --task "Add authentication" --workflow dual
 ```
 
-**注意:** 引数として文字列を渡す場合（例: `takt "Add login feature"`）は、初期メッセージとしてインタラクティブモードに入ります。
+**注意:** 引数として文字列を渡す場合（例: `takt "Add login feature"`）は初期メッセージとしてインタラクティブモードに入ります。
 
 ## ACP Agent
 
@@ -119,7 +120,7 @@ takt --task "Add authentication" --workflow dual
 takt-acp
 ```
 
-ACP session の `cwd` は絶対パスである必要があります。TAKT はこのディレクトリを会話の基点かつ workflow project root として扱います。既定の `session/prompt` は enqueue-first の会話入口です。「タスクに積んで」「pending task にして」のような依頼は、`worktree: true` の pending タスクとして `.takt/tasks.yaml` に追加され、後で `takt run` で実行できます。direct workflow execution は「そのまま実行して」「今すぐ実行して」のように明示された場合だけ行います。曖昧な依頼は会話として扱われます。ACP の主 UX は `/go` や `/play` に依存しません。`/go` は session の `defaultAction` に従い既定では enqueue され、`/play <task>` は互換用の明示 direct execution command として残ります。
+ACP session の `cwd` は絶対パスである必要があります。TAKT はこのディレクトリを会話の基点かつ workflow project root として扱います。既定の `session/prompt` は enqueue-first の会話入口です。「タスクに積んで」「pending task にして」のような依頼は`worktree: true` の pending タスクとして `.takt/tasks.yaml` に追加され、後で `takt run` で実行できます。direct workflow execution は「そのまま実行して」「今すぐ実行して」のように明示された場合だけ行います。曖昧な依頼は会話として扱われます。ACP の主 UX は `/go` に依存しません。`/go` は session の `defaultAction` に従い、既定では enqueue されます。
 
 ACP prompt がタスクを作成または直接実行する場合、会話結果が workflow を明示しない限り `default` workflow を使います。
 
@@ -135,7 +136,7 @@ ACP prompt がタスクを作成または直接実行する場合、会話結果
 takt-mcp
 ```
 
-Codex では、`~/.codex/config.toml`、または trusted project の project-scoped `.codex/config.toml` に stdio MCP server を追加します。
+Codex では`~/.codex/config.toml`、または trusted project の project-scoped `.codex/config.toml` に stdio MCP server を追加します。
 
 ```toml
 [mcp_servers.takt]
@@ -188,7 +189,7 @@ MCP はタスクの enqueue だけを担当します。pending タスクの実�
 
 ## Instant Exec モード
 
-`takt exec` は、workflow YAML を手で書かずに TAKT の対話型タスク入力モードを開始します。アシスタントエージェントが依頼を明確化し、`/go` で会話を生成 workflow に変換し、ワーカーエージェントが実装し、レビューエージェントが結果をレビューし、必要な場合だけ再計画エージェントがユーザーに方向性を確認し、ループ検知が不毛な反復を防ぎます。
+`takt exec` はworkflow YAML を手で書かずに TAKT の対話型タスク入力モードを開始します。アシスタントエージェントが依頼を明確化し、`/go` で会話を生成 workflow に変換し、ワーカーエージェントが実装し、レビューエージェントが結果をレビューし、必要な場合だけ再計画エージェントがユーザーに方向性を確認し、ループ検知が不毛な反復を防ぎます。
 
 ```bash
 takt exec          # 前回設定を使用（初回はデフォルト）
@@ -196,7 +197,7 @@ takt exec backend  # 名前付きプリセットで開始
 takt exec --list   # 利用可能な exec プリセットを表示
 ```
 
-プリセットの探索順は project `.takt/exec/presets/`、global `$TAKT_CONFIG_DIR/exec/presets/`（未設定時は `~/.takt/exec/presets/`）、builtin `builtins/exec/presets/` です。builtin/default プリセットは、エージェントの役割、facet、ループ検知しきい値だけを定義します。provider と model は exec モード開始時に通常の TAKT 設定から解決され、assistant 対話と `/setup` 表示で使われます。生成 workflow は tool / skill の要求に capabilities を使い、provider/model/options は `runtime.yaml`（または既存の legacy config）に残します。`effort` は明示設定された場合だけ出力されます。Codex の repository Skill と user Skill は scope ごとに設定省略時に継承され、解決した capability が生成 workflow に出力されます。`/setup` で変更した設定は、次回起動用の設定として `$TAKT_CONFIG_DIR/exec.yaml`（未設定時は `~/.takt/exec.yaml`）に保存されます。
+プリセットの探索順は project `.takt/exec/presets/`、global `$TAKT_CONFIG_DIR/exec/presets/`（未設定時は `~/.takt/exec/presets/`）、builtin `builtins/exec/presets/` です。builtin/default プリセットはエージェントの役割、facet、ループ検知しきい値だけを定義します。provider と model は exec モード開始時に通常の TAKT 設定から解決され、assistant 対話と `/setup` 表示で使われます。生成 workflow は tool / skill の要求に capabilities を使い、provider/model/options は `runtime.yaml`（または既存の legacy config）に残します。`effort` は明示設定された場合だけ出力されます。Codex の repository Skill と user Skill は scope ごとに設定省略時に継承され、解決した capability が生成 workflow に出力されます。`/setup` で変更した設定は次回起動用の設定として `$TAKT_CONFIG_DIR/exec.yaml`（未設定時は `~/.takt/exec.yaml`）に保存されます。
 
 exec モード内の主なコマンド:
 
@@ -210,9 +211,9 @@ exec モード内の主なコマンド:
 
 `/setup` では project/global プリセットの保存・削除ができます。Instruction、Knowledge、Policy は通常の facet 参照で、作成した facet は `.takt/facets/{instructions,knowledge,policies}/` または `$TAKT_CONFIG_DIR/facets/{instructions,knowledge,policies}/`（未設定時は `~/.takt/facets/{instructions,knowledge,policies}/`）に保存されます。
 
-`/go` 実行時、TAKT は `.takt/exec/workflow.yaml` を生成し、既存の workflow engine で実行します。事前の会話もインラインのタスク本文もない `/go` は、workflow を作成する前に拒否されます。完了後は review result report を読み戻し、exec assistant セッションへ注入して最終サマリを返します。
+`/go` 実行時、TAKT は `.takt/exec/workflow.yaml` を生成し、既存の workflow engine で実行します。事前の会話もインラインのタスク本文もない `/go` はworkflow を作成する前に拒否されます。完了後は review result report を読み戻し、exec assistant セッションへ注入して最終サマリを返します。
 
-exec 入力の編集中に画像を添付できます。macOS では `/paste-image` または `Ctrl+V` でクリップボード画像を添付でき、対応ターミナルでは OSC 1337 のインライン画像ペーストも使えます。TAKT は `[Image #N]` プレースホルダーを挿入します。画像は、現在の Assistant メッセージまたは `/go <note>` がそのプレースホルダーを参照した場合だけ Assistant 依頼に送信されます。同じセッションで添付されていないプレースホルダーは通常テキストとして扱われます。`/go` 実行時は、参照された保存済み画像だけが生成タスク仕様へコピーされ、添付セクションに列挙されます。対応形式は PNG、JPEG、GIF、WebP です。インライン画像とクリップボード画像は 10 MiB までです。未対応形式、インライン画像のファイル名拡張子と実データの不一致、上限超過、保存済み添付の一時パス消失、symlink、通常ファイルではない添付元はエラーになります。ネイティブ画像入力に対応しない provider には、プロンプト内のローカルパス参照として渡されます。
+exec 入力の編集中に画像を添付できます。macOS では `/paste-image` または `Ctrl+V` でクリップボード画像を添付でき、対応ターミナルでは OSC 1337 のインライン画像ペーストも使えます。TAKT は `[Image #N]` プレースホルダーを挿入します。画像は現在の Assistant メッセージまたは `/go <note>` がそのプレースホルダーを参照した場合だけ Assistant 依頼に送信されます。同じセッションで添付されていないプレースホルダーは通常テキストとして扱われます。`/go` 実行時は参照された保存済み画像だけが生成タスク仕様へコピーされ、添付セクションに列挙されます。対応形式は PNG、JPEG、GIF、WebP です。インライン画像とクリップボード画像は 10 MiB までです。未対応形式、インライン画像のファイル名拡張子と実データの不一致、上限超過、保存済み添付の一時パス消失、symlink、通常ファイルではない添付元はエラーになります。ネイティブ画像入力に対応しない provider にはプロンプト内のローカルパス参照として渡されます。
 
 生成される exec workflow は `session_key` でワーカーエージェント、レビューエージェント、再計画エージェントのセッションを分離します。ループ検知 judge は常に新しいセッションを使います。ユーザー定義 workflow では通常の agent step と parallel sub-step にだけ `session_key` を指定できます。system step、workflow_call step、loop-monitor judge、parallel parent step では指定できません。実際のセッションキーは解決済み provider を付けた形になります。
 
@@ -336,7 +337,7 @@ takt --pipeline --task "Fix bug" --skip-git
 takt --pipeline --task "Fix bug" --quiet
 ```
 
-Pipeline モードでは、`--auto-pr` を指定しない限り PR は作成されません。
+Pipeline モードでは`--auto-pr` を指定しない限り PR は作成されません。
 
 **GitHub 連携:** GitHub Actions で TAKT を使用する場合は [takt-action](https://github.com/nrslib/takt-action) を参照してください。PR レビューやタスク実行を自動化できます。
 

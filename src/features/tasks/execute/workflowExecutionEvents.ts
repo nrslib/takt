@@ -23,6 +23,7 @@ import { createLogger, notifyWarning, playWarningSound } from '../../../shared/u
 import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type { ExceededInfo, WorkflowExecutionEvent, WorkflowExecutionOptions } from './types.js';
 import type { AnalyticsStepContext } from './analyticsEmitter.js';
+import type { CompanionReviewRoundAnalyticsPayload } from '../../analytics/index.js';
 import { detectStepType, isQuietMode } from './workflowExecutionBootstrap.js';
 import {
   buildWorkflowScopeIdentity,
@@ -870,8 +871,9 @@ export function bindWorkflowExecutionEvents(
     );
   });
   deps.engine.on('companion:review_round', (payload) => {
-    const summary = {
+    const analyticsPayload = {
       step: payload.step,
+      reviewMode: payload.reviewMode,
       companion: payload.companion,
       trigger: payload.trigger,
       digest: payload.digest,
@@ -880,12 +882,12 @@ export function bindWorkflowExecutionEvents(
       ...(payload.runPathNamespace === undefined
         ? {}
         : { runPathNamespace: payload.runPathNamespace }),
-    };
-    deps.analyticsEmitter.onCompanionEvent('companion:review_round', summary);
+    } satisfies CompanionReviewRoundAnalyticsPayload;
+    deps.analyticsEmitter.onCompanionEvent('companion:review_round', analyticsPayload);
     persistCompanionAudit('companion_review_round', () => deps.sessionLogger.onCompanionReviewRound(payload));
     emitWorkflowExecutionEvent(
       deps.eventSink,
-      { type: 'companion', action: 'review_round', ...summary },
+      { type: 'companion', action: 'review_round', ...analyticsPayload },
       onEventSinkFailure,
       eventSinkDispatchState,
     );

@@ -14,10 +14,10 @@ import {
 import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { readInteractiveInput } from './interactiveInput.js';
-import type { CommandAvailability } from './slashCommandRegistry.js';
+import { readPipedLine } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
 import { matchSlashCommand } from './commandMatcher.js';
+import type { CommandAvailability } from './slashCommandRegistry.js';
 import { SlashCommand } from '../../shared/constants.js';
 import {
   type WorkflowContext,
@@ -33,11 +33,10 @@ import {
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
 import {
   createInputLogMeta,
-  createPlayCommandLogMeta,
   createSessionLogMeta,
 } from './conversationLogMeta.js';
+import { resolvePreviousOrder } from './conversationPlan.js';
 import { prependInitialPromptContext } from './promptSections.js';
-import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import {
   buildInteractiveResultWithAttachments,
@@ -103,7 +102,7 @@ export interface SummaryPromptOptions {
   readonly workflowContext?: WorkflowContext;
   readonly sourceContext?: string;
   readonly promptContext?: string;
-  readonly gherkin: boolean;
+  readonly formalSpec: boolean;
   readonly userNote: string;
 }
 
@@ -119,10 +118,19 @@ export type SummaryTaskNormalizer = (
   attachments: readonly InteractiveImageAttachment[],
 ) => NormalizedSummaryTask;
 
+export interface ConversationPromptConfiguration {
+  readonly systemPrompt: string;
+  readonly formalSpec: boolean;
+}
+
 /** Strategy for customizing conversation loop behavior */
 export interface ConversationStrategy {
   /** System prompt for AI calls */
   systemPrompt: string;
+  /** Resolved formal specification mode for this conversation session. */
+  formalSpec: boolean;
+  /** Resolve prompt configuration after the user selects another session. */
+  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
   /** Allowed tools for AI calls */
   allowedTools: string[];
   /** Permission mode for AI calls. */
@@ -160,7 +168,7 @@ export interface ConversationStrategy {
 /**
  * Run the shared conversation loop.
  *
- * Handles: EOF, /play, /accept, /retry, /go (summary), /cancel, regular AI messaging.
+ * Handles: EOF, /accept, /retry, /replay, /go (summary), /cancel, regular AI messaging.
  * The Strategy object controls system prompt, tool access, and prompt transformation.
  */
 export async function runConversationLoop(
@@ -170,17 +178,21 @@ export async function runConversationLoop(
   workflowContext: WorkflowContext | undefined,
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
-  const gherkin = shouldUseGherkinTaskInstructions(cwd);
   const history: ConversationMessage[] = initialInput?.userMessage
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
   const sourceContext = initialInput?.sourceContext;
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
   let sessionId = ctx.sessionId;
+  let activePromptConfiguration: ConversationPromptConfiguration = {
+    systemPrompt: strategy.systemPrompt,
+    formalSpec: strategy.formalSpec,
+  };
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
   const attachmentStore = createSessionImageAttachmentStore(
+    cwd,
     initialInput?.attachments,
     strategy.initialImageAttachmentIndex,
   );
@@ -256,12 +268,12 @@ export async function runConversationLoop(
 
     const commandAvailability: CommandAvailability = {
       enableRetryCommand: strategy.enableRetryCommand,
-      hasPreviousOrder: !!strategy.previousOrderContent,
+      hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
       enabledCommands: strategy.enabledCommands,
     };
 
     while (true) {
-      const input = await readInteractiveInput(chalk.green('> '), ctx.lang, commandAvailability, attachmentStore);
+      const input = await readPipedLine(chalk.green('> '));
 
       if (input === null) {
         blankLine();
@@ -291,7 +303,11 @@ export async function runConversationLoop(
           strategy.transformPrompt(trimmed, sourceContext),
           shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
         );
-        const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
+        const result = await doCallAI(
+          promptWithTransform,
+          activePromptConfiguration.systemPrompt,
+          strategy.allowedTools,
+        );
         if (result) {
           shouldSendInitialPromptContext = false;
           if (!result.success) {
@@ -322,32 +338,20 @@ export async function runConversationLoop(
           }, attachmentStore);
         }
 
-        case SlashCommand.Play: {
-          if (!match.text) {
-            info(ui.playNoTask);
-            continue;
-          }
-          log.info('Play command', createPlayCommandLogMeta(match.text));
-          return buildInteractiveResultWithAttachments({
-            action: 'execute',
-            task: match.text,
-            ...(strategy.trackResultSource ? { source: 'play' as const } : {}),
-          }, attachmentStore);
-        }
-
         case SlashCommand.Retry: {
           if (!strategy.enableRetryCommand) {
             info(ui.retryUnavailable);
             continue;
           }
-          if (!strategy.previousOrderContent) {
+          const retryOrder = resolvePreviousOrder(strategy.previousOrderContent);
+          if (retryOrder === undefined) {
             info(ui.retryNoOrder);
             continue;
           }
           log.info('Retry command — using previous order.md');
           const selectedAction = strategy.selectRetryAction
-            ? await handleSummaryAction(strategy.previousOrderContent, 'retry', strategy.selectRetryAction)
-            : await handleSummaryAction(strategy.previousOrderContent, 'retry');
+            ? await handleSummaryAction(retryOrder, 'retry', strategy.selectRetryAction)
+            : await handleSummaryAction(retryOrder, 'retry');
           if (selectedAction === null) {
             continue;
           }
@@ -371,7 +375,7 @@ export async function runConversationLoop(
               workflowContext,
               sourceContext,
               promptContext: strategy.summaryPromptContext,
-              gherkin,
+              formalSpec: activePromptConfiguration.formalSpec,
               userNote,
             })
             : buildSummaryPrompt(
@@ -383,7 +387,7 @@ export async function runConversationLoop(
               workflowContext,
               sourceContext,
               strategy.summaryPromptContext,
-              gherkin,
+              activePromptConfiguration.formalSpec,
             );
           if (!summaryPrompt) {
             info(ui.noConversation);
@@ -430,7 +434,8 @@ export async function runConversationLoop(
         }
 
         case SlashCommand.Replay: {
-          if (!strategy.previousOrderContent) {
+          const replayOrder = resolvePreviousOrder(strategy.previousOrderContent);
+          if (replayOrder === undefined) {
             const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
             info(replayNoOrder);
             continue;
@@ -438,7 +443,7 @@ export async function runConversationLoop(
           log.info('Replay command');
           return buildInteractiveResultWithAttachments({
             action: 'execute',
-            task: strategy.previousOrderContent,
+            task: replayOrder,
             ...(strategy.trackResultSource ? { source: 'replay' as const } : {}),
           }, attachmentStore);
         }
@@ -452,6 +457,9 @@ export async function runConversationLoop(
           const selectedId = await selectRecentSession(cwd, ctx.lang);
           if (selectedId) {
             sessionId = selectedId;
+            if (strategy.resolveResumedSessionConfiguration) {
+              activePromptConfiguration = await strategy.resolveResumedSessionConfiguration();
+            }
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }
           continue;

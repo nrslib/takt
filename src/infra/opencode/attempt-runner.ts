@@ -1016,6 +1016,7 @@ export class OpenCodeAttemptRunner {
       options.childProcessEnv,
       options.abortSignal,
       sessionId ?? provisionalKey,
+      options.preparedMcp,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -2168,6 +2169,11 @@ export class OpenCodeAttemptRunner {
   } finally {
     removeServerInvalidationListener?.();
     release?.();
+    try {
+      await options.preparedMcp?.dispose?.();
+    } catch (error) {
+      log.debug('Failed to clean up OpenCode MCP config', { error: getErrorMessage(error) });
+    }
   }
   }
   async compactSession(options: OpenCodeCompactSessionOptions): Promise<void> {

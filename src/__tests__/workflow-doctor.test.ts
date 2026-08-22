@@ -341,6 +341,49 @@ steps:
     await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
 
     expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('disabled-companion.yaml'));
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('Companion review mode: completion'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('displays the resolved live companion review mode for an enabled workflow', async () => {
+    writeWorkflow(projectDir, '.takt/companions/security-reviewer.yaml', `name: security-reviewer
+description: security review
+interval_ms: 60000
+`);
+    writeWorkflow(projectDir, '.takt/runtime.yaml', `version: 1
+companion:
+  enabled: true
+  review_mode: live
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: mock
+      model: mock-model
+    security:
+      provider: mock
+      model: mock-security
+  targets:
+    companions:
+      security-reviewer:
+        profile: security
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/live-companion.yaml', `name: live-companion
+max_steps: 1
+initial_step: implement
+steps:
+  - name: implement
+    instruction: implement
+    companion: [security-reviewer]
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('Companion review mode: live'));
     expect(mockError).not.toHaveBeenCalled();
   });
 

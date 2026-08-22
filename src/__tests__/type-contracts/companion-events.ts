@@ -5,6 +5,20 @@ declare const emitCompanionEvent: CompanionEventEmitter;
 emitCompanionEvent('companion:start', {
   step: 'implement',
   companion: 'security-reviewer',
+  reviewMode: 'completion',
+});
+
+// @ts-expect-error Companion start events require a review mode.
+emitCompanionEvent('companion:start', {
+  step: 'implement',
+  companion: 'security-reviewer',
+});
+
+emitCompanionEvent('companion:start', {
+  step: 'implement',
+  companion: 'security-reviewer',
+  // @ts-expect-error Companion review modes are restricted to declared values.
+  reviewMode: 'automatic',
 });
 
 emitCompanionEvent('companion:pool_selected', {
@@ -34,6 +48,7 @@ emitCompanionEvent('companion:complete', {
 
 emitCompanionEvent('companion:review_round', {
   step: 'implement',
+  reviewMode: 'live',
   companion: 'security-reviewer',
   trigger: 'quiet',
   digest: 'digest-1',
@@ -62,6 +77,7 @@ emitCompanionEvent('companion:queue_coalesced', {
 
 emitCompanionEvent('companion:review_round', {
   step: 'implement',
+  reviewMode: 'completion',
   companion: 'security-reviewer',
   // @ts-expect-error Companion review rounds require a declared trigger value.
   trigger: 'manual',

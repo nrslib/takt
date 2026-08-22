@@ -11,7 +11,7 @@ import type {
   WorkflowEvents,
 } from '../types.js';
 import type { AgentResponse } from '../../models/index.js';
-import type { CompanionFinding } from '../../models/companion-types.js';
+import type { CompanionFinding, CompanionReviewMode } from '../../models/companion-types.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 
 type CompanionEventName = Extract<keyof WorkflowEvents, `companion:${string}`>;
@@ -27,11 +27,12 @@ export class CompanionEventPublisher {
   constructor(
     private readonly step: string,
     private readonly emit: CompanionEventEmitter,
+    private readonly reviewMode: CompanionReviewMode,
     private readonly runPathNamespace: readonly string[] = [],
   ) {}
 
   start(companion: string): void {
-    this.emit('companion:start', { step: this.step, companion });
+    this.emit('companion:start', { step: this.step, companion, reviewMode: this.reviewMode });
   }
 
   poolSelected(selected: readonly string[], rationale: string): void {
@@ -82,6 +83,7 @@ export class CompanionEventPublisher {
   }): void {
     this.emit('companion:review_round', {
       step: this.step,
+      reviewMode: this.reviewMode,
       ...input,
       ...this.scopePayload(),
     });

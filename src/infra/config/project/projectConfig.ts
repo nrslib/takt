@@ -61,6 +61,10 @@ import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfig
 import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
+import {
+  omitDeprecatedAssistantGherkin,
+  warnDeprecatedAssistantGherkin,
+} from '../deprecatedAssistantConfig.js';
 
 export type { ProjectConfig as ProjectLocalConfig } from '../types.js';
 
@@ -69,10 +73,18 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 export function loadProjectConfig(projectDir: string): ProjectConfig {
   const configPath = getProjectConfigPath(projectDir);
-  const { parsedConfig, rawConfig, trace } = loadProjectConfigTrace(
+  const loadedTrace = loadProjectConfigTrace(
     configPath,
     PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
   );
+  const parsedWithoutLegacy = omitDeprecatedAssistantGherkin(loadedTrace.parsedConfig);
+  const rawWithoutLegacy = omitDeprecatedAssistantGherkin(loadedTrace.rawConfig);
+  if (parsedWithoutLegacy.ignored || rawWithoutLegacy.ignored) {
+    warnDeprecatedAssistantGherkin();
+  }
+  const parsedConfig = parsedWithoutLegacy.config;
+  const rawConfig = rawWithoutLegacy.config;
+  const { trace } = loadedTrace;
   setCachedProjectConfigTrace(projectDir, trace);
   assertValidProjectConfig(parsedConfig, configPath, true);
   assertValidProjectConfig(rawConfig, configPath);

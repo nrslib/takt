@@ -30,6 +30,7 @@ import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
 import type { InstructModeResult, InstructUIText } from './instructModeTypes.js';
 import { attachImageAttachmentCleanup } from './imageAttachments.js';
+import { runTuiTaskConversation } from '../tui/runTuiTask.js';
 import {
   buildOrderRevisionPrompt,
   createOrderRevisionSelector,
@@ -41,6 +42,8 @@ import {
   type PullRequestContext,
 } from '../../core/workflow/pr-context.js';
 import { SlashCommand } from '../../shared/constants.js';
+import { hasInteractiveTerminal } from '../../shared/utils/index.js';
+import { resolveFormalSpecModeWithoutPrompt } from './taskInstructionFormat.js';
 
 /** Failure information for a retry task */
 export interface RetryFailureInfo {
@@ -172,6 +175,7 @@ async function runRetryConversation(
     ctx.lang,
     loadTemplate('score_retry_system_prompt', ctx.lang, templateVars),
   );
+  const formalSpec = resolveFormalSpecModeWithoutPrompt(cwd);
 
   const retryIntro = getLabel('retry.ui.intro', ctx.lang);
   const subjectLabel = formatRetrySubjectLabel(retryContext.subject.kind, ctx.lang);
@@ -181,6 +185,7 @@ async function runRetryConversation(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
+    formalSpec,
     allowedTools: RETRY_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),
@@ -209,7 +214,13 @@ async function runRetryConversation(
     ...(reviseOrder ? { trackResultSource: true } : {}),
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({
+      cwd,
+      plan: { ctx, strategy },
+      workflowContext: retryContext.workflowContext,
+    })
+    : await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
 
   if (result.action === 'cancel') {
     return attachImageAttachmentCleanup({

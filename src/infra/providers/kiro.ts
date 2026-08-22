@@ -10,9 +10,6 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
   if (options.allowedTools && options.allowedTools.length > 0) {
     log.info('Kiro provider does not support allowedTools; ignoring');
   }
-  if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
-    log.info('Kiro provider does not support mcpServers; ignoring');
-  }
   if (options.maxTurns !== undefined) {
     log.info('Kiro provider does not support maxTurns; ignoring');
   }
@@ -36,12 +33,14 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
     kiroCliPath: resolveKiroCliPath(),
     agent: options.providerOptions?.kiro?.agent,
     childProcessEnv: options.childProcessEnv,
+    preparedMcp: options.preparedMcp,
   };
 }
 
 export class KiroProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

@@ -275,21 +275,13 @@ export class InstructionBuilder {
     ) return instructions;
     const language = this.context.language ?? 'en';
     const companionCopy = getCompanionInstructionCopy(language);
-    const section = language === 'ja'
-      ? [
-          `## ${companionCopy.heading}`,
-          `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
-          '各ファイルの実装完了後、テスト実行前、作業完了宣言の直前に新規レコードを確認してください。',
-          companionCopy.evidenceGuard,
-          '指摘は参考情報です。現在のコードで検証し、対応するかどうかは自分で判断してください。対応しない場合は理由を応答に書いてください。',
-        ].join('\n')
-      : [
-          `## ${companionCopy.heading}`,
-          `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
-          'Read new records after finishing each file, before running tests, and before declaring completion.',
-          companionCopy.evidenceGuard,
-          'Findings are advisory. Verify them against the current code and decide whether to act. Explain in your response why you do not address a finding.',
-        ].join('\n');
+    const section = [
+      `## ${companionCopy.heading}`,
+      `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
+      companionCopy.reviewDelivery[this.context.companion.reviewMode],
+      companionCopy.evidenceGuard,
+      companionCopy.advisoryNotice,
+    ].join('\n');
     return [instructions, '', section].join('\n');
   }
 }

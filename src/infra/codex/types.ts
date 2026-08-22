@@ -59,4 +59,6 @@ export interface CodexCallOptions {
   /** Directory for full oversized failure text, written as private 0600 files; omission disables persistence. */
   failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
 }

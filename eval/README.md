@@ -244,6 +244,7 @@ npm run eval:prompts:scope-discipline
 npm run eval:prompts:implement-contract-traceability
 npm run eval:prompts:follow-up-review-repair-regression
 npm run eval:prompts:follow-up-testing-review-repair-regression
+npm run eval:prompts:contract-family-boundaries
 npm run eval:prompts:review-adjudication
 npm run eval:prompts:security-review-method
 npm run eval:prompts:task-instruction-gherkin

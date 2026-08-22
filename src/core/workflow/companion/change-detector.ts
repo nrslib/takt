@@ -28,8 +28,6 @@ export class CompanionChangeDetector {
   private dirtySince: number | undefined;
   private lastChangeAt: number | undefined;
   private lastReviewedDigest: string | undefined;
-  private lastReviewedFileFingerprints: Readonly<Record<string, string>> | undefined;
-  private lastReviewedHunkFingerprints: Readonly<Record<string, string>> | undefined;
   private generation = 0;
   private immediateGeneration: number | undefined;
 
@@ -81,27 +79,7 @@ export class CompanionChangeDetector {
 
   markReviewed(snapshot: CompanionDiff, observedGeneration: number): void {
     this.lastReviewedDigest = snapshot.digest;
-    this.lastReviewedFileFingerprints = { ...snapshot.fileFingerprints };
-    this.lastReviewedHunkFingerprints = { ...snapshot.hunkFingerprints };
     this.consumeThrough(observedGeneration);
-  }
-
-  changedRegionsSinceLastReview(snapshot: CompanionDiff): string[] {
-    const previousFiles = this.lastReviewedFileFingerprints;
-    const previousHunks = this.lastReviewedHunkFingerprints;
-    if (previousFiles === undefined || previousHunks === undefined) {
-      return regionsForInitialReview(snapshot);
-    }
-    const changedHunks = changedFingerprintKeys(previousHunks, snapshot.hunkFingerprints);
-    const hunkFiles = new Set([
-      ...Object.keys(previousHunks),
-      ...Object.keys(snapshot.hunkFingerprints),
-    ].map(regionFile));
-    const changedFilesWithoutHunks = changedFingerprintKeys(
-      previousFiles,
-      snapshot.fileFingerprints,
-    ).filter((path) => !hunkFiles.has(path));
-    return [...changedHunks, ...changedFilesWithoutHunks];
   }
 
   getTriggerCandidate(quietIntervalMs: number): CompanionChangeCandidate | undefined {
@@ -165,26 +143,4 @@ export class CompanionChangeDetector {
   private isMutatingTool(tool: string): boolean {
     return MUTATING_TOOLS.has(tool);
   }
-}
-
-function regionsForInitialReview(snapshot: CompanionDiff): string[] {
-  const regions = Object.keys(snapshot.hunkFingerprints);
-  const filesWithHunks = new Set(regions.map(regionFile));
-  return [
-    ...regions,
-    ...snapshot.changedFiles.filter((path) => !filesWithHunks.has(path)),
-  ];
-}
-
-function changedFingerprintKeys(
-  previous: Readonly<Record<string, string>>,
-  current: Readonly<Record<string, string>>,
-): string[] {
-  return [...new Set([...Object.keys(previous), ...Object.keys(current)])]
-    .filter((key) => previous[key] !== current[key]);
-}
-
-function regionFile(region: string): string {
-  const marker = /:(?:deleted-)?\d+-\d+$/u.exec(region);
-  return marker === null ? region : region.slice(0, marker.index);
 }

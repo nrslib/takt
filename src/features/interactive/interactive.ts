@@ -16,34 +16,23 @@ import {
   type SessionState,
 } from '../../infra/config/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { loadTemplate } from '../../shared/prompts/index.js';
 import {
   displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
-import { prependSourceContext } from './promptSections.js';
-import { initializeSession } from './sessionInitialization.js';
-import { loadAssistantInitContext } from './assistantInitFiles.js';
+import { createAssistantConversationPlan } from './conversationPlan.js';
 import {
   type WorkflowContext,
   type ConversationMessage,
-  formatStepPreviews,
   buildSummaryPrompt as buildInteractiveSummaryPrompt,
   type InteractiveModeAction,
   type SummaryActionValue,
-  type PostSummaryAction,
-  buildSummaryActionOptions,
-  selectSummaryAction,
+  createPostSummaryActionSelector,
 } from './interactive-summary.js';
-import {
-  DEFAULT_INTERACTIVE_TOOLS,
-  buildConversationSummaryPrompt,
-} from './interactiveApplication.js';
-import { type RunSessionContext, formatRunSessionForPrompt } from './runSessionReader.js';
+import { buildConversationSummaryPrompt } from './interactiveApplication.js';
+import type { RunSessionContext } from './runSessionReader.js';
 import type { ImageAttachmentCleanupOwner, InteractiveImageAttachment } from './imageAttachments.js';
-import { getAssistantSessionPersona } from './assistantMode.js';
-
-const GRILL_ME_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
+import { resolveFormalSpecMode } from './taskInstructionFormat.js';
 
 /** Shape of interactive UI text */
 export interface InteractiveUIText {
@@ -63,7 +52,6 @@ export interface InteractiveUIText {
   };
   cancelled: string;
   acceptNoAssistant: string;
-  playNoTask: string;
   retryNoOrder: string;
   retryUnavailable: string;
   pasteImageUnavailable: string;
@@ -127,7 +115,7 @@ export function buildSummaryPrompt(
   userNote: string,
   lang: 'en' | 'ja',
   promptContext?: string,
-  gherkin?: boolean,
+  formalSpec?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -138,18 +126,18 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
-  gherkin?: boolean,
+  formalSpec?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
   userNoteOrHasSession: string | boolean,
   lang: 'en' | 'ja',
   promptContextOrNoTranscript?: string,
-  conversationLabelOrGherkin?: string | boolean,
+  conversationLabelOrFormalSpec?: string | boolean,
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
-  gherkin?: boolean,
+  formalSpec?: boolean,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -157,11 +145,11 @@ export function buildSummaryPrompt(
       userNoteOrHasSession,
       lang,
       promptContextOrNoTranscript ?? '',
-      typeof conversationLabelOrGherkin === 'string' ? conversationLabelOrGherkin : '',
+      typeof conversationLabelOrFormalSpec === 'string' ? conversationLabelOrFormalSpec : '',
       workflowContext,
       sourceContext,
       promptContext,
-      gherkin,
+      formalSpec,
     );
   }
 
@@ -170,7 +158,7 @@ export function buildSummaryPrompt(
     userNoteOrHasSession,
     lang,
     promptContextOrNoTranscript,
-    typeof conversationLabelOrGherkin === 'boolean' ? conversationLabelOrGherkin : false,
+    typeof conversationLabelOrFormalSpec === 'boolean' ? conversationLabelOrFormalSpec : false,
   );
 }
 
@@ -213,63 +201,29 @@ export async function interactiveMode(
   options?: InteractiveModeOptions,
 ): Promise<InteractiveModeResult> {
   const assistantMode = options?.assistantMode ?? 'assistant';
-  const baseCtx = initializeSession(cwd, getAssistantSessionPersona(assistantMode), {
-    provider: options?.provider,
-    model: options?.model,
+  const initialFormalSpec = await resolveFormalSpecMode(cwd);
+  const { ctx, strategy } = createAssistantConversationPlan(cwd, {
+    assistantMode,
+    formalSpec: initialFormalSpec,
+    ...(workflowContext ? { workflowContext } : {}),
+    ...(runSessionContext ? { runSessionContext } : {}),
+    ...(options?.provider ? { provider: options.provider } : {}),
+    ...(options?.model ? { model: options.model } : {}),
+    ...(sessionId ? { sessionId } : {}),
   });
-  const ctx = sessionId ? { ...baseCtx, sessionId } : baseCtx;
 
   displayAndClearSessionState(cwd, ctx.lang);
 
-  const hasPreview = !!workflowContext?.stepPreviews?.length;
-  const hasRunSession = !!runSessionContext;
-  const runPromptVars = hasRunSession
-    ? formatRunSessionForPrompt(runSessionContext)
-    : { runTask: '', runWorkflow: '', runStatus: '', runStepLogs: '', runReports: '' };
-
-  const systemPrompt = loadTemplate('score_interactive_system_prompt', ctx.lang, {
-    grillMe: assistantMode === 'grill-me',
-    hasWorkflowPreview: hasPreview,
-    workflowStructure: workflowContext?.workflowStructure ?? '',
-    stepDetails: hasPreview ? formatStepPreviews(workflowContext!.stepPreviews!, ctx.lang) : '',
-    hasRunSession,
-    ...runPromptVars,
-  });
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
-  const assistantInitContext = loadAssistantInitContext(cwd);
 
   const excludeActions = options?.excludeActions;
   const selectAction = excludeActions?.length
-    ? (task: string): Promise<PostSummaryAction | null> =>
-        selectSummaryAction(
-          task,
-          ui.proposed,
-          ui.actionPrompt,
-          buildSummaryActionOptions(
-            {
-              execute: ui.actions.execute,
-              createIssue: ui.actions.createIssue,
-              saveTask: ui.actions.saveTask,
-              continue: ui.actions.continue,
-            },
-            ['create_issue'],
-            excludeActions,
-          ),
-        )
+    ? createPostSummaryActionSelector(ui.proposed, ui, excludeActions)
     : undefined;
 
   return runConversationLoop(cwd, ctx, {
-    systemPrompt,
-    allowedTools: assistantMode === 'grill-me'
-      ? GRILL_ME_INTERACTIVE_TOOLS
-      : DEFAULT_INTERACTIVE_TOOLS,
-    ...(assistantMode === 'grill-me' ? { permissionMode: 'readonly' as const } : {}),
-    transformPrompt: (userMessage: string, sourceContext?: string) =>
-      prependSourceContext(ctx.lang, userMessage, sourceContext),
-    introMessage: assistantMode === 'grill-me' ? ui.introGrillMe : ui.intro,
+    ...strategy,
     selectAction,
-    initialPromptContext: assistantInitContext,
-    summaryPromptContext: assistantInitContext,
   }, workflowContext, initialInput);
 }
 
@@ -282,6 +236,7 @@ export {
   type SummaryActionValue,
   selectPostSummaryAction,
   buildSummaryActionOptions,
+  createPostSummaryActionSelector,
   selectSummaryAction,
   formatTaskHistorySummary,
   normalizeTaskHistorySummary,
@@ -296,5 +251,5 @@ export interface InteractiveModeResult extends ImageAttachmentCleanupOwner {
   /** Images pasted during interactive input and referenced by placeholder. */
   attachments?: InteractiveImageAttachment[];
   /** The command path that produced this result. */
-  source?: 'go' | 'retry' | 'replay' | 'accept' | 'play';
+  source?: 'go' | 'retry' | 'replay' | 'accept';
 }

@@ -17,6 +17,8 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 | `review` | Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results. |
 | `review-fix` | Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check. |
 
+The `default` and `takt-default` wrappers bind the generic or TAKT-specific external security-review facet pool only at the reviewer suite that consumes it; pool references are passed only to the consuming suite, and the shared development and peer-review workflow contracts remain unchanged. Dynamic facet selection semantics (selector ordering, parallel children, and resume behavior) are described in [Dynamic Facet Selection](./workflows.md#dynamic-facet-selection-facet-pools).
+
 ## All Builtin Workflows
 
 Organized by category.

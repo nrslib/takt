@@ -21,6 +21,7 @@ import {
   renderMenuWithViewport,
 } from './select-viewport.js';
 import { ESCAPE_SEQUENCE_TIMEOUT_MS, KeyInputDecoder } from './select-key-input.js';
+import { statusLine } from '../ui/StatusLine.js';
 
 const MAX_STDIN_CHUNK_BYTES = 64 * 1024;
 
@@ -386,20 +387,25 @@ export async function selectOption<T extends string>(
 ): Promise<T | null> {
   if (options.length === 0) return null;
 
-  const { selectedIndex, finalOptions } = await interactiveSelect(message, options, 0, true, callbacks);
+  statusLine.suspend();
+  try {
+    const { selectedIndex, finalOptions } = await interactiveSelect(message, options, 0, true, callbacks);
 
-  if (selectedIndex === finalOptions.length || selectedIndex === -1) {
+    if (selectedIndex === finalOptions.length || selectedIndex === -1) {
+      return null;
+    }
+
+    const selected = finalOptions[selectedIndex];
+    if (selected && callbacks?.showConfirmation !== false) {
+      console.log(chalk.green(`  ✓ ${selected.label}`));
+    }
+
+    if (selected) return selected.value;
+
     return null;
+  } finally {
+    statusLine.resume();
   }
-
-  const selected = finalOptions[selectedIndex];
-  if (selected && callbacks?.showConfirmation !== false) {
-    console.log(chalk.green(`  ✓ ${selected.label}`));
-  }
-
-  if (selected) return selected.value;
-
-  return null;
 }
 
 /**
@@ -413,25 +419,30 @@ export async function selectOptionWithDefault<T extends string>(
 ): Promise<T | null> {
   if (options.length === 0) return defaultValue;
 
-  const defaultIndex = options.findIndex((opt) => opt.value === defaultValue);
-  const initialIndex = defaultIndex >= 0 ? defaultIndex : 0;
+  statusLine.suspend();
+  try {
+    const defaultIndex = options.findIndex((opt) => opt.value === defaultValue);
+    const initialIndex = defaultIndex >= 0 ? defaultIndex : 0;
 
-  const decoratedOptions: SelectOptionItem<T>[] = options.map((opt) => ({
-    ...opt,
-    label: opt.value === defaultValue ? `${opt.label} ${chalk.green('(default)')}` : opt.label,
-  }));
+    const decoratedOptions: SelectOptionItem<T>[] = options.map((opt) => ({
+      ...opt,
+      label: opt.value === defaultValue ? `${opt.label} ${chalk.green('(default)')}` : opt.label,
+    }));
 
-  const { selectedIndex } = await interactiveSelect(message, decoratedOptions, initialIndex, true);
+    const { selectedIndex } = await interactiveSelect(message, decoratedOptions, initialIndex, true);
 
-  if (selectedIndex === options.length || selectedIndex === -1) {
-    return null;
+    if (selectedIndex === options.length || selectedIndex === -1) {
+      return null;
+    }
+
+    const selected = options[selectedIndex];
+    if (selected) {
+      console.log(chalk.green(`  ✓ ${selected.label}`));
+      return selected.value;
+    }
+
+    return defaultValue;
+  } finally {
+    statusLine.resume();
   }
-
-  const selected = options[selectedIndex];
-  if (selected) {
-    console.log(chalk.green(`  ✓ ${selected.label}`));
-    return selected.value;
-  }
-
-  return defaultValue;
 }

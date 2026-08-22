@@ -212,7 +212,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => {
     playWarningSound: vi.fn(),
     preventSleep: vi.fn(),
     isDebugEnabled: vi.fn().mockReturnValue(false),
-    writePromptLog: vi.fn(),
     generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
     isValidReportDirName: vi.fn().mockImplementation((value: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)),
   };

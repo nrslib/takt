@@ -20,6 +20,7 @@ export type {
   NdjsonCompanionQueueCoalesced,
   NdjsonCompanionCall,
   NdjsonCompanionReviewSkipped,
+  NdjsonCompanionReviewMode,
   NdjsonCompanionReviewTrigger,
   NdjsonRecord,
 } from './session.js';

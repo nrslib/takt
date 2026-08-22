@@ -25,6 +25,7 @@ import {
 } from '../../interactive/promptSections.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
+import { runTuiTaskConversation } from '../../tui/runTuiTask.js';
 import {
   buildOrderRevisionPrompt,
   createOrderRevisionSelector,
@@ -38,6 +39,8 @@ import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 import { renderPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
 import { SlashCommand } from '../../../shared/constants.js';
+import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
+import { resolveFormalSpecModeWithoutPrompt } from '../../interactive/taskInstructionFormat.js';
 
 export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
@@ -146,6 +149,7 @@ export async function runInstructMode(
   const canonicalOrderContent = (previousOrderContent ?? options.taskContent).trim();
   const globalConfig = resolveWorkflowConfigValues(cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
+  const formalSpec = resolveFormalSpecModeWithoutPrompt(cwd);
 
   const baseCtx = initializeSession(cwd, 'instruct');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };
@@ -164,6 +168,7 @@ export async function runInstructMode(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
+    formalSpec,
     allowedTools: INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),
@@ -185,7 +190,9 @@ export async function runInstructMode(
     trackResultSource: true,
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({ cwd, plan: { ctx, strategy }, workflowContext })
+    : await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
 
   return toInstructModeResult(result);
 }

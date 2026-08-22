@@ -58,6 +58,8 @@ export interface DecomposeTaskOptions {
   abortSignal?: RunAgentOptions['abortSignal'];
   failureDir?: RunAgentOptions['failureDir'];
   mcpServers?: RunAgentOptions['mcpServers'];
+  mcpAssignment?: RunAgentOptions['mcpAssignment'];
+  mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
   inspectTools?: string[];
   inspectGuidance?: boolean;
   onPromptResolved?: (promptParts: {
@@ -121,6 +123,8 @@ export async function requestDecompositionRawResponse(
       },
       ...(options.inspectTools === undefined ? {} : { allowedTools: options.inspectTools }),
       mcpServers: options.mcpServers,
+      mcpAssignment: options.mcpAssignment,
+      mcpServerIdentity: options.mcpServerIdentity,
       onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
@@ -223,6 +227,8 @@ export async function requestMorePartsRawResponse(
       },
       ...(options.inspectTools === undefined ? {} : { allowedTools: options.inspectTools }),
       mcpServers: options.mcpServers,
+      mcpAssignment: options.mcpAssignment,
+      mcpServerIdentity: options.mcpServerIdentity,
       onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,

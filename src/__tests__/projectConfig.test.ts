@@ -5,7 +5,7 @@
  * including empty array round-trip behavior.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
@@ -26,7 +26,7 @@ type ObservabilityConfigForTest = {
 type ProjectConfigWithAssistant = ProjectLocalConfig & {
   assistant?: {
     initFiles?: string[];
-    gherkin?: boolean;
+    formalSpec?: boolean | 'Y/n' | 'y/N';
   };
 };
 
@@ -157,10 +157,10 @@ describe('projectConfig', () => {
     });
   });
 
-  describe('assistant Gherkin task instructions', () => {
+  describe('assistant formal specification mode', () => {
     it.each([
       ['absent assistant config', ''],
-      ['assistant config without Gherkin', 'assistant: {}'],
+      ['assistant config without formal specification mode', 'assistant: {}'],
     ])('should keep assistant undefined for %s', (_label, yaml) => {
       if (yaml) {
         writeFileSync(join(testDir, '.takt', 'config.yaml'), yaml, 'utf-8');
@@ -173,39 +173,82 @@ describe('projectConfig', () => {
 
     it.each([
       ['absent assistant config', undefined],
-      ['assistant config without Gherkin', {}],
-    ] as const)('should not save a Gherkin key for %s', (_label, assistant) => {
+      ['assistant config without formal specification mode', {}],
+    ] as const)('should not save a formal_spec key for %s', (_label, assistant) => {
       const config: ProjectConfigWithAssistant = assistant === undefined ? {} : { assistant };
 
       saveProjectConfig(testDir, config);
 
       const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
-      expect(raw).not.toContain('gherkin:');
+      expect(raw).not.toContain('formal_spec:');
     });
 
-    it('should load assistant.gherkin from project config', () => {
-      writeFileSync(
-        join(testDir, '.takt', 'config.yaml'),
-        ['assistant:', '  gherkin: true'].join('\n'),
-        'utf-8',
-      );
+    it.each([true, false, 'Y/n', 'y/N'] as const)(
+      'should load assistant.formal_spec=%s from project config',
+      (formalSpec) => {
+        writeFileSync(
+          join(testDir, '.takt', 'config.yaml'),
+          ['assistant:', `  formal_spec: ${JSON.stringify(formalSpec)}`].join('\n'),
+          'utf-8',
+        );
+
+        const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+        expect(loaded.assistant).toEqual({ formalSpec });
+      },
+    );
+
+    it.each([true, false, 'Y/n', 'y/N'] as const)(
+      'should preserve assistant.formal_spec=%s in save/load cycle',
+      (formalSpec) => {
+        const config: ProjectConfigWithAssistant = {
+          assistant: { formalSpec },
+        };
+
+        saveProjectConfig(testDir, config);
+
+        const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+        const reloaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+        expect(raw).toContain('formal_spec:');
+        expect(reloaded.assistant?.formalSpec).toBe(formalSpec);
+      },
+    );
+
+    it('should warn and ignore assistant.gherkin without changing the project config file', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const original = ['assistant:', '  gherkin: true'].join('\n');
+      writeFileSync(configPath, original, 'utf-8');
+      const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
 
       const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
 
-      expect(loaded.assistant).toEqual({ gherkin: true });
+      expect(warning).toHaveBeenCalledOnce();
+      expect(String(warning.mock.calls[0]?.[0])).toMatch(/assistant\.gherkin/);
+      expect(String(warning.mock.calls[0]?.[0])).toMatch(/deprecated|廃止/i);
+      expect(loaded.assistant?.formalSpec).toBeUndefined();
+      expect(readFileSync(configPath, 'utf-8')).toBe(original);
     });
 
-    it.each([true, false])('should preserve assistant.gherkin=%s in save/load cycle', (gherkin) => {
-      const config: ProjectConfigWithAssistant = {
-        assistant: { gherkin },
-      };
+    it('should keep explicit formal_spec when assistant.gherkin is also present', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const original = ['assistant:', '  gherkin: true', '  formal_spec: false'].join('\n');
+      writeFileSync(configPath, original, 'utf-8');
+      const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
 
-      saveProjectConfig(testDir, config);
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
 
-      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
-      const reloaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
-      expect(raw).toContain(`gherkin: ${gherkin}`);
-      expect(reloaded.assistant?.gherkin).toBe(gherkin);
+      expect(warning).toHaveBeenCalledOnce();
+      expect(loaded.assistant?.formalSpec).toBe(false);
+      expect(readFileSync(configPath, 'utf-8')).toBe(original);
+    });
+
+    it.each([
+      ['formal_spec', "formal_spec: 'Y/n'"],
+      ['gherkin', 'gherkin: true'],
+    ])('should reject top-level %s as an unknown project setting', (_key, yaml) => {
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), yaml, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(new RegExp(_key));
     });
   });
 

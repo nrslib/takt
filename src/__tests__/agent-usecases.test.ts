@@ -200,6 +200,110 @@ describe('agent-usecases', () => {
     );
   });
 
+  it('should resolve runtime MCP assignment for internal agents and forward resolved servers to runAgent (order.md:106,76-80)', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { selected_ids: ['a'] }));
+    const mcpAssignment = {
+      servers: {
+        common: { command: 'common-srv' },
+        excluded: { command: 'excluded-srv' },
+      },
+      defaults: { servers: ['common', 'excluded'] },
+      targets: {
+        internal_agents: { selector: { exclude: ['excluded'] } },
+      },
+    } as unknown as import('../infra/config/runtime-provider/mcp-assignment.js').McpAssignmentSection;
+
+    await executeIsolatedStructuredInternalAgent(
+      'selector system prompt',
+      'select reviewers',
+      { type: 'object' },
+      {
+        cwd: '/tmp',
+        resolution: {
+          provider: 'mock',
+          model: undefined,
+          providerOptions: {},
+        },
+        mcpAssignment,
+      },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith(
+      undefined,
+      'select reviewers',
+      expect.objectContaining({
+        mcpServers: expect.objectContaining({
+          common: expect.objectContaining({ command: 'common-srv' }),
+        }),
+      }),
+    );
+    const callOptions = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(callOptions?.mcpServers).not.toHaveProperty('excluded');
+  });
+
+  it('should propagate runtime MCP defaults to an isolated structured internal agent', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { selected_ids: ['a'] }));
+    const mcpAssignment = {
+      servers: { common: { command: 'common-srv' } },
+      defaults: { servers: ['common'] },
+    } as unknown as import('../infra/config/runtime-provider/mcp-assignment.js').McpAssignmentSection;
+
+    await executeIsolatedStructuredInternalAgent(
+      'assistant system prompt',
+      'assist',
+      { type: 'object' },
+      {
+        cwd: '/tmp',
+        resolution: {
+          provider: 'mock',
+          model: undefined,
+          providerOptions: {},
+        },
+        mcpAssignment,
+      },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith(
+      undefined,
+      'assist',
+      expect.objectContaining({
+        mcpServers: expect.objectContaining({
+          common: expect.objectContaining({ command: 'common-srv' }),
+        }),
+      }),
+    );
+  });
+
+  it('should return empty mcpServers when runtime MCP assignment yields an empty effective set', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { selected_ids: ['a'] }));
+    const mcpAssignment = {
+      servers: { common: { command: 'common-srv' } },
+      defaults: { servers: ['common'] },
+      targets: { internal_agents: { selector: { exclude: ['common'] } } },
+    } as unknown as import('../infra/config/runtime-provider/mcp-assignment.js').McpAssignmentSection;
+
+    await executeIsolatedStructuredInternalAgent(
+      'selector system prompt',
+      'select reviewers',
+      { type: 'object' },
+      {
+        cwd: '/tmp',
+        resolution: {
+          provider: 'mock',
+          model: undefined,
+          providerOptions: {},
+        },
+        mcpAssignment,
+      },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith(
+      undefined,
+      'select reviewers',
+      expect.objectContaining({ mcpServers: {} }),
+    );
+  });
+
   it('routes OpenCode internal structured execution through setupIsolatedStructured', async () => {
     const actualRunner = await vi.importActual<typeof import('../agents/runner.js')>(
       '../agents/runner.js',

@@ -9,6 +9,7 @@ import type {
   CompanionFinding,
   NormalAgentWorkflowStep,
   ResolvedCompanionDefinition,
+  CompanionReviewMode,
   TeamLeaderWorkflowStep,
   WorkflowState,
 } from '../../models/index.js';
@@ -55,6 +56,7 @@ interface CompanionStepRuntimeDeps {
   readonly runPathNamespace: readonly string[];
   readonly language: 'en' | 'ja';
   readonly task: string;
+  readonly reviewMode: CompanionReviewMode;
   readonly step: NormalAgentWorkflowStep | TeamLeaderWorkflowStep;
   readonly definitions: Readonly<Record<string, ResolvedCompanionDefinition>>;
   readonly providers: Readonly<Record<string, ProviderRoutingEntry>>;
@@ -91,6 +93,7 @@ export class CompanionStepRuntime {
     this.events = new CompanionEventPublisher(
       deps.step.name,
       deps.emitEvent,
+      deps.reviewMode,
       deps.runPathNamespace,
     );
     this.structuredCaller = new CompanionStructuredCaller({
@@ -158,7 +161,9 @@ export class CompanionStepRuntime {
   }
 
   observe(event: StreamEvent): void {
-    this.scheduler?.observe(event);
+    if (this.deps.reviewMode === 'live') {
+      this.scheduler?.observe(event);
+    }
   }
 
   composeOptions(options: RunAgentOptions): RunAgentOptions {
@@ -227,13 +232,17 @@ export class CompanionStepRuntime {
     this.currentFollowUpRound = 0;
     this.latestImplementerExplanation = undefined;
     this.events.beginAttempt();
-    this.scheduler?.start();
+    if (this.deps.reviewMode === 'live') {
+      this.scheduler?.start();
+    }
   }
 
   beginFollowUpRound(sequence: number, findingCount: number): void {
     this.currentFollowUpRound = sequence - 1;
     this.events.fixRound(sequence, findingCount);
-    this.scheduler?.start();
+    if (this.deps.reviewMode === 'live') {
+      this.scheduler?.start();
+    }
   }
 
   stop = (): void => {
@@ -280,7 +289,6 @@ export class CompanionStepRuntime {
       this.deps.cwd,
       this.deps.abortSignal,
     );
-    const initialSnapshot = await this.readSnapshot(this.deps.abortSignal);
     for (const { name, definition } of resolved) {
       this.active.set(name, definition);
       this.detectors.set(name, new CompanionChangeDetector({
@@ -289,27 +297,29 @@ export class CompanionStepRuntime {
         now: Date.now,
         readDiff: async () => this.readSnapshot(this.deps.abortSignal),
       }));
-      this.events.start(name);
     }
-    this.scheduler = new CompanionTriggerScheduler({
-      detectors: this.detectors,
-      intervals: [...this.active.values()].map(({ intervalMs }) => intervalMs),
-      allowGitCommit: this.deps.step.allowGitCommit === true,
-      queue: this.queue,
-      initialSnapshot,
-      readSnapshot: () => this.readSnapshot(this.deps.abortSignal),
-      isAborted: () => this.deps.abortSignal?.aborted === true,
-      onError: () => log.warn('Companion live review failed; the change remains unreviewed', {
-        step: this.deps.step.name,
-      }),
-      onSkipped: ({ companionName, reason, candidate }) => this.emitReviewSkipped({
-        companion: companionName,
-        phase: this.currentFollowUpRound === 0 ? 'live' : 'fix',
-        reason,
-        ...(this.currentFollowUpRound === 0 ? {} : { fixRound: this.currentFollowUpRound }),
-        observedGeneration: candidate.observedGeneration,
-      }),
-    });
+    if (this.deps.reviewMode === 'live') {
+      const initialSnapshot = await this.readSnapshot(this.deps.abortSignal);
+      this.scheduler = new CompanionTriggerScheduler({
+        detectors: this.detectors,
+        intervals: [...this.active.values()].map(({ intervalMs }) => intervalMs),
+        allowGitCommit: this.deps.step.allowGitCommit === true,
+        queue: this.queue,
+        initialSnapshot,
+        readSnapshot: () => this.readSnapshot(this.deps.abortSignal),
+        isAborted: () => this.deps.abortSignal?.aborted === true,
+        onError: () => log.warn('Companion live review failed; the change remains unreviewed', {
+          step: this.deps.step.name,
+        }),
+        onSkipped: ({ companionName, reason, candidate }) => this.emitReviewSkipped({
+          companion: companionName,
+          phase: this.currentFollowUpRound === 0 ? 'live' : 'fix',
+          reason,
+          ...(this.currentFollowUpRound === 0 ? {} : { fixRound: this.currentFollowUpRound }),
+          observedGeneration: candidate.observedGeneration,
+        }),
+      });
+    }
     this.completionCoordinator = new CompanionCompletionCoordinator({
       activeNames: () => [...this.active.keys()],
       detectors: this.detectors,
@@ -329,7 +339,10 @@ export class CompanionStepRuntime {
         observedGeneration: candidate.observedGeneration,
       }),
     });
-    this.scheduler.start();
+    this.scheduler?.start();
+    for (const name of this.active.keys()) {
+      this.events.start(name);
+    }
   }
 
   private async runSelector(request: {
@@ -374,10 +387,9 @@ export class CompanionStepRuntime {
     const result = await executeCompanionReviewRound({
       companionName,
       diff,
+      baselineSha: this.baselineSha,
       trigger: request.reason,
       observedGeneration,
-      changedRegionsSincePreviousReview: detector.changedRegionsSinceLastReview(diff),
-      diffSummary: summarizeDiff(diff),
       implementerExplanation: this.latestImplementerExplanation,
       signal,
       task: this.deps.task,
@@ -544,15 +556,4 @@ export class CompanionStepRuntime {
       error: safeExternalErrorMessage(error),
     });
   }
-}
-
-function summarizeDiff(diff: CompanionDiff): string {
-  return truncateUtf8(JSON.stringify({
-    digest: diff.digest,
-    changedLines: diff.changedLines,
-    changedFiles: diff.changedFiles,
-    changedRegions: Object.keys(diff.hunkFingerprints),
-    omittedBytes: diff.omittedBytes,
-    truncated: diff.truncated,
-  }), ROUND_CONTEXT_MAX_BYTES).value;
 }

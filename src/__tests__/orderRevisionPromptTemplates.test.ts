@@ -2,6 +2,38 @@ import { describe, expect, it } from 'vitest';
 import { buildOrderRevisionPrompt } from '../features/interactive/orderRevisionMode.js';
 
 describe.each(['en', 'ja'] as const)('order revision %s prompt template', (lang) => {
+  it.each([false, true])(
+    'applies the task instruction notation contract when formalSpec=%s',
+    (formalSpec) => {
+      const prompt = buildOrderRevisionPrompt({
+        history: [{ role: 'user', content: 'add a requirement' }],
+        hasSession: false,
+        lang,
+        noTranscriptNote: '',
+        conversationLabel: 'Conversation',
+        formalSpec,
+        userNote: '',
+      }, '# Existing order');
+
+      expect(prompt).toMatch(lang === 'en' ? /code fence/ : /コードフェンス/);
+      expect(prompt).toMatch(/gherkin/i);
+      if (lang === 'en') {
+        expect(prompt).toMatch(/(?:code fence).*(?:entire output|Markdown body)/i);
+        expect(prompt).toMatch(/fenced `gherkin`.*allowed/i);
+      } else {
+        expect(prompt).toMatch(/(?:出力全体.*コードフェンス|コードフェンス.*(?:含めない|全体))/);
+        expect(prompt).toMatch(/fenced `gherkin`.*(?:使用できます|本文)/i);
+      }
+      if (formalSpec) {
+        expect(prompt).toMatch(/\bQuint\b/);
+        expect(prompt).toMatch(/\bAlloy\b/);
+      } else {
+        expect(prompt).not.toMatch(/\bQuint\b/);
+        expect(prompt).not.toMatch(/\bAlloy\b/);
+      }
+    },
+  );
+
   it('keeps canonical content inside a nonce-delimited section', () => {
     const canonicalOrderContent = [
       '# Existing order',
@@ -17,7 +49,7 @@ describe.each(['en', 'ja'] as const)('order revision %s prompt template', (lang)
       lang,
       noTranscriptNote: '',
       conversationLabel: 'Conversation',
-      gherkin: false,
+      formalSpec: false,
       userNote: '',
     }, canonicalOrderContent);
 
