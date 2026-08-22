@@ -6,11 +6,11 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 - Review existing test files and understand the expected behavior
 - Implement production code to satisfy the plan requirements and contract map, using existing tests as executable evidence rather than as the upper bound of scope
 - Omit additional tests only after confirming that existing tests directly cover each contract ID's intended valid behavior and applicable counterexamples, boundary states, representative failure paths, and required integration paths. Otherwise add or strengthen tests; if that cannot be done in scope, record the specific unverified reason in the completion evidence
-- If test modifications are needed, document the reasons in the Decisions output contract before modifying
+- If test modifications are needed, document the reasons in the decision record before modifying
 
 {{include:instructions/implement-common}}
 
-**Scope output contract (create at the start of implementation):**
+**Change-scope record (create at the start of implementation):**
 ```markdown
 # Change Scope Declaration
 
@@ -30,7 +30,7 @@ Small / Medium / Large
 - {Affected modules or features}
 ```
 
-**Decisions output contract (at implementation completion, only if decisions were made):**
+**Decision record (at implementation completion, only if decisions were made):**
 ```markdown
 # Decision Log
 

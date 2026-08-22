@@ -1,8 +1,8 @@
-# Follow-up security review: insufficient blocking evidence
+# 修正後セキュリティレビュー: 阻害問題とするには証拠が不足する場合
 
-Review a diff that loads repository-author-controlled rule files without a configured size limit and writes repository-derived labels to terminal output. The measurements show only these facts:
+リポジトリ作成者が管理するルールファイルをサイズ上限の設定なしで読み込み、リポジトリ由来のラベルを端末へ出力する差分をレビューしてください。測定で確認できた事実は次だけです。
 
-- A 12 MiB rule file was accepted. No existing quantitative limit was identified, and no resource exhaustion or provider-cost impact was reproduced.
-- A label containing one lone `ESC` byte reached the captured output stream. No CSI or OSC payload and no concrete terminal effect was reproduced.
+- 12 MiB のルールファイルを受理した。既存の定量的な上限は確認できず、資源枯渇やプロバイダー費用への影響も再現していない。
+- 単独の `ESC` バイトを1つ含むラベルが取得した出力ストリームへ到達した。CSI または OSC のペイロードも、具体的な端末効果も再現していない。
 
-The latest report directory contains the prior findings and their dispositions. There is no other new defect evidence. Produce the follow-up security-review result; non-blocking warnings are allowed.
+最新のレポートディレクトリには、以前の指摘とその判断が記録されています。他に新しい欠陥の証拠はありません。修正後セキュリティレビューの結果を記録してください。阻害しない注意事項は記載して構いません。

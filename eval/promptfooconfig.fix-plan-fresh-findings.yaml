@@ -1,20 +1,35 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: review-remediation / fix-plan canonical review resolution.
+# TAKT ファセット評価: 修正計画が確定済みのレビュー裁定を使用する。
 
-description: 'TAKT facet eval: fix-plan consumes the canonical review resolution'
+description: 'TAKT ファセット評価: 修正計画が確定済みのレビュー裁定を使用する'
 
 prompts:
   - file://prompts/fix-plan-fresh-findings.phase1.md
 
 providers:
-  - id: openai:codex-sdk
-    label: codex
+  - id: file://providers/cli-review.mjs
+    label: claude-opus-5
     config:
+      cli: claude
+      model: claude-opus-5
       working_dir: fixtures/fix-plan-fresh-findings
-      sandbox_mode: read-only
-      approval_policy: never
-      skip_git_repo_check: true
-      model_reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/fix-plan-fresh-findings
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/fix-plan-fresh-findings
+      isolate_working_dir: true
 
 defaultTest:
   options:
@@ -26,8 +41,11 @@ defaultTest:
         skip_git_repo_check: true
         model_reasoning_effort: low
 
+evaluateOptions:
+  maxConcurrency: 3
+
 tests:
-  - description: 'fix-plan: plan actionable resolution findings and exclude adjudicated non-actionable work'
+  - description: '修正計画: 修正対象の指摘を計画し、非修正対象を除外する'
     vars:
       task: file://cases/fix-plan-fresh-findings-task.md
       previous_response: ''
@@ -35,8 +53,8 @@ tests:
       - type: llm-rubric
         metric: fix-plan/report-freshness
         value: |
-          Judge the plan's target selection and executable behavior, not headings, table shape, or exact wording. Pass only if it treats MERGE-NEW-cache-key-L2 as the sole actionable finding, excludes OLD-REVIEW-readme-L1, and plans one coherent normalization fix in src/cache.js that covers set, get, has, and delete rather than stopping at the reported get example.
+          見出し、表形式、文言ではなく、計画の対象選択と実行可能な振る舞いを判定する。MERGE-NEW-cache-key-L2 と REGRESSION-NEW-cache-delete-L21 を、同じキャッシュキー正規化の原因から生じる2つの指摘として1つの修正単位へまとめ、OLD-REVIEW-readme-L1 を除外し、報告例だけで止まらず set、get、has、delete を含む src/cache.js の一貫した正規化修正を計画した場合だけ合格とする。前者が既に修正対象となった問題と同じ条件を破る利用箇所、後者が修正によって生じた退行であることを保持する。特定の列名、英語ラベル、分類値の表記は合否に使わない。
 
-          The plan must start from inspectCache() in src/application.js, follow its imports and calls through consumer-a.js, consumer-b.js, consumer-c.js, state-transfer.js, view-a.js, and view-b.js, infer each consumer's lifecycle role from its code and caller rather than its filename, and classify each path as an edit target or a verify-only consumer. A path inventory without explaining how the key flows through the application entry is insufficient. Consumers already correct through Cache should be verified rather than edited merely for symmetry. Verification must exercise a case-and-whitespace-variant key across every distinct operation and representation reached by that entry, including the persisted round trip, while preserving invalid-key behavior.
+          計画は src/application.js の inspectCache() から開始し、import と呼び出しを consumer-a.js、consumer-b.js、consumer-c.js、state-transfer.js、view-a.js、view-b.js まで追跡する。各利用箇所の役割をファイル名ではなくコードと呼び出し元から推定し、各経路を編集対象または確認だけ行う利用箇所に分類する。キーがアプリケーション入口をどのように流れるかを説明しない経路一覧は不十分とする。Cache を通じてすでに正しい利用箇所は、対称性だけを理由に編集せず検証する。検証は不正なキーの振る舞いを保持しながら、大文字小文字と空白を変えたキーを、永続化の往復を含む入口から到達する異なる操作と表現のすべてで実行する。
 
-          Fail if it splits the same invariant into location-by-location repairs, stops at an inner consumer while leaving an outer layer unexamined, presents fixed paths without connection and classification evidence, revives the adjudicated documentation item, edits correct consumers without need, or proposes work in a neighboring contract.
+          同じ条件を場所ごとの修正へ分割する、外側の入口を未確認のまま内側の利用箇所で止まる、接続と役割の証拠なしに固定の経路を提示する、裁定済みのドキュメント項目を復活させる、正しい利用箇所を不要に編集する、または隣接契約の作業を提案した場合は不合格とする。

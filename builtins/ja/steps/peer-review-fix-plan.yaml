@@ -24,7 +24,8 @@ knowledge:
   $param: fix_knowledge
 pass_previous_response: false
 instruction:
-  $param: plan_instruction
+  - $param: plan_instruction
+  - review-remediation-problem-tracking
 output_contracts:
   report:
     - name: fix-plan.md

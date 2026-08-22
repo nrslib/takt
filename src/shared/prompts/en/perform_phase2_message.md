@@ -17,13 +17,11 @@
 - **Only respond with the report content.**
 - **TAKT will save your response body to the report file.** Do not write the report file yourself.
 - **Use only the Report Directory files listed below.** Do not search or open reports outside that directory.
-Note: This section is metadata. Follow the language used in the rest of the prompt.
-
-## Workflow Context
+## Execution Context
 {{reportContext}}
 {{#if hasTask}}
 
-## Original Task Context
+## Original Request
 
 The following is the original task given to this workflow. Treat it as the authoritative source of requirements:
 
@@ -31,23 +29,23 @@ The following is the original task given to this workflow. Treat it as the autho
 {{/if}}
 {{#if hasLastResponse}}
 
-## Previous Work Context
-The following is the output from Phase 1 (your main work). Use this as context to generate the report:
+## Work Result
+Use the following work result to produce the report:
 
 {{lastResponse}}
 {{/if}}
 {{#if hasCompletionRetryDiagnostic}}
 
-## Completion Retry Diagnostic
+## Missed-Path Check
 
-This diagnostic is only context for this Phase 2 report. Do not convert it into a finding or status, and do not claim that it was part of the reviewer response:
+The following information is only for deciding what was checked. Do not present it as part of the work result:
 
 {{completionRetryDiagnostic}}
 {{/if}}
 
-## Instructions
+## Output
 
-Respond with the results of the work you just completed as a report. **Tools are not available in this phase. Respond with the report content directly as text.**
+Present the work result above in the required report format. **Do not use tools for this response; answer directly with the report text.**
 **Respond with only the report content (no status tags, no commentary). You cannot use the Write tool or any other tools.**
 {{#if hasReportOutput}}
 

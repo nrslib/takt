@@ -1,4 +1,4 @@
-Add the following section immediately after Defect-Family Final State in the fix-plan format above.
+Add the following section immediately after Repair Units in the fix-plan format above.
 
 ## Requirement Scenarios (conditional)
 

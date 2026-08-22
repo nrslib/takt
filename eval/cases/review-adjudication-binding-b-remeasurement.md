@@ -1,5 +1,5 @@
-# Follow-up security review: repeated observation
+# 修正後セキュリティレビュー: 同じ観測の反復
 
-Review the cumulative change after the latest adjudication. There is no remediation diff and no new behavioral change. The only additional evidence is that the same probe was run 100 more times and again observed one lone `ESC` byte in the captured terminal byte stream.
+最新の裁定後にある累積変更をレビューしてください。修正差分も新しい振る舞いの変更もありません。追加された証拠は、同じ確認をさらに100回実行し、取得した端末バイト列で単独の `ESC` バイトを再び1つ観測したことだけです。
 
-The probe did not contain a CSI or OSC payload, did not change displayed text or the terminal title, did not access the clipboard, and did not reproduce any other terminal effect. Use the latest `review-resolution.md` dispositions and produce the follow-up security-review result.
+確認用入力に CSI または OSC のペイロードはなく、表示文字列や端末タイトルは変化せず、クリップボードへのアクセスも他の端末効果も再現していません。最新の `review-resolution.md` に記録された判断を使い、修正後セキュリティレビューの結果を記録してください。

@@ -1,9 +1,0 @@
-# Architecture Review
-
-## Result: REJECT
-
-| finding_id | family_tag | Severity | Location | Responsible source | Observable invariant | Problem | Suggested fix |
-|------------|------------|----------|----------|--------------------|----------------------|---------|---------------|
-| ARCH-NEW-channel-normalization-L2 | execution-channel-validation | Medium | `src/execution.js:2` | `normalizeChannel` in `src/channel.js` | Accepted `local` and `cloud` strings are normalized once and retained by every execution path. | `buildExecution` duplicates the supported-channel predicate instead of using `normalizeChannel`, so the execution entry owns validation outside the shared responsibility boundary. This is a confirmed DRY and boundary defect on the changed execution path. | Add a transaction-style atomic boundary around normalization and execution creation so no partial state can escape. |
-| ARCH-NEW-channel-type-error-L2 | channel-input-error | Medium | `src/channel.js:2` | `normalizeChannel` in `src/channel.js` | Every unsupported input, including non-string values, fails with `Error("Unsupported channel")` rather than an incidental `TypeError`. | `normalizeChannel` invokes `trim()` before checking the supported input domain, so `null` and numeric inputs fail with `TypeError` instead of the stable unsupported-channel error. | Validate the input type before normalization. |
-| ARCH-NEW-build-label-dup-L1 | build-label-duplication | Critical | `src/build-label.js:1` | Build-label formatting | CLI and API build labels use one formatting responsibility. | `cliBuildLabel` and `apiBuildLabel` are exact duplicate formatting implementations. This is a technically valid maintainability observation in an unchanged build-label contract, not part of channel normalization. | Extract a shared build-label formatter. |

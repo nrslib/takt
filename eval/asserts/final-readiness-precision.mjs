@@ -1,6 +1,6 @@
 import { hasFinalDecision } from './final-readiness-decision.mjs';
 
-const NON_ACTIONABLE_FINDING = 'OLD-REVIEW-readme-L1';
+const EXCLUDED_FINDING = 'OLD-REVIEW-readme-L1';
 
 function hasNearbyEvidence(output, anchor, evidence) {
   let index = output.indexOf(anchor);
@@ -12,23 +12,23 @@ function hasNearbyEvidence(output, anchor, evidence) {
   return false;
 }
 
-function hasNearbyReopening(output, anchor) {
+function hasNearbyRepairRequirement(output, anchor) {
   const lines = output.split(/\r?\n/);
   return lines.some((line, index) => line.includes(anchor)
-    && /(?:remains?\s+open|requires?\s+(?:a\s+)?fix|(?:is|remains?|becomes?)\s+actionable|再開(?:する|が必要)|修正(?:が)?必要)/i
+    && /(?:remains?\s+open|requires?\s+(?:a\s+)?fix|selected\s+for\s+repair|再開(?:する|が必要)|修正(?:が)?必要|修正対象(?:にする|とする))/i
       .test([lines[index - 1], line, lines[index + 1]].filter(Boolean).join(' ')));
 }
 
 export default function assertFinalReadinessPrecision(output) {
   const checks = [
     ['approve', hasFinalDecision(output, 'APPROVE')],
-    ['no-actionable-family', !/(FINAL-(?:NEW|PERSIST)-[^\s|]+)/i.test(output)],
-    ['non-actionable-preserved', hasNearbyEvidence(
+    ['no-new-repair-problem', !/(FINAL-(?:NEW|PERSIST)-[^\s|]+)/i.test(output)],
+    ['excluded-finding-preserved', hasNearbyEvidence(
       output,
-      NON_ACTIONABLE_FINDING,
-      /(false_positive|overreach|out_of_scope|no_issue_after_verification|environment_unverified|非修正対象(?:として)?(?:維持|扱)|非\s*actionable\s*(?:です|である|であり|で(?=[、。\s]|$)|として(?:維持|扱))|actionable\s+findings?\s*(?:は|が)?\s*(?:ありません|ない|なし)|再開[^。\n]*(?:しない|せず|ない|なし)|(?:not|without)\s+reopen|(?:is|remains?)\s+non-actionable)/i,
+      EXCLUDED_FINDING,
+      /(?:根拠なし|必要以上の拡張|今回の範囲外|確認後は問題なし|修正対象(?:にしない|ではない|ではありません|なし)|unsupported|unnecessary expansion|outside this task|no issue after verification|not selected for repair|(?:not|without)\s+reopen)/i,
     )],
-    ['old-finding-not-reopened', !hasNearbyReopening(output, NON_ACTIONABLE_FINDING)],
+    ['old-finding-not-selected-for-repair', !hasNearbyRepairRequirement(output, EXCLUDED_FINDING)],
     ['not-rejected', !hasFinalDecision(output, 'REJECT') && !hasFinalDecision(output, 'BLOCKED')],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);

@@ -9,7 +9,7 @@
  *         frontend-coder,
  *         cqrs-coder, fix-closure, fix-plan-fresh-findings,
  *         fix-plan-boundary-preflight, fix-plan-cause-check, fix-plan-bounded-proof,
- *         review-family-closure,
+ *         review-impact-path-coverage,
  *         initial-review-contract-discovery,
  *         initial-review-external-identity-wiring,
  *         testing-review-observable-evidence,
@@ -21,7 +21,7 @@
  *         write-tests-contract-traceability,
  *         implement-contract-traceability,
  *         implementation-report-contract-traceability,
- *         review-adjudication, final-readiness-supervision,
+ *         review-adjudication, review-adjudication-report, final-readiness-supervision,
  *         final-readiness-preservation,
  *         final-readiness-precision,
  *         task-instruction-gherkin
@@ -45,12 +45,11 @@ const SUITES = {
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
   'fix-closure': 'promptfooconfig.fix-closure.yaml',
   'fix-self-scan': 'promptfooconfig.fix-self-scan.yaml',
-  'fix-loop-convergence': 'promptfooconfig.fix-loop-convergence.yaml',
   'fix-plan-fresh-findings': 'promptfooconfig.fix-plan-fresh-findings.yaml',
   'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
   'fix-plan-cause-check': 'promptfooconfig.fix-plan-cause-check.yaml',
   'fix-plan-bounded-proof': 'promptfooconfig.fix-plan-bounded-proof.yaml',
-  'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
+  'review-impact-path-coverage': 'promptfooconfig.review-impact-path-coverage.yaml',
   'initial-review-contract-discovery': 'promptfooconfig.initial-review-contract-discovery.yaml',
   'initial-review-external-identity-wiring': 'promptfooconfig.initial-review-external-identity-wiring.yaml',
   'testing-review-observable-evidence': 'promptfooconfig.testing-review-observable-evidence.yaml',
@@ -73,11 +72,8 @@ const SUITES = {
   'follow-up-testing-review-repair-regression': 'promptfooconfig.follow-up-testing-review-repair-regression.yaml',
   'review-adjudication-binding': 'promptfooconfig.review-adjudication-binding.yaml',
   'security-review-method': 'promptfooconfig.security-review-method.yaml',
-  'review-mode-authority': 'promptfooconfig.review-mode-authority.yaml',
-  'fix-verifier-family-boundary': 'promptfooconfig.fix-verifier-family-boundary.yaml',
-  'companion-early-scan': 'promptfooconfig.companion-early-scan.yaml',
-  'companion-evidence-boundary': 'promptfooconfig.companion-evidence-boundary.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
+  'review-adjudication-report': 'promptfooconfig.review-adjudication-report.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
   'final-readiness-precision': 'promptfooconfig.final-readiness-precision.yaml',
@@ -103,8 +99,6 @@ for (const name of names) {
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
 // fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
 // codex 前提のデフォルト実行からは除外し、明示的に呼び出す。
-// fix-loop-convergence も claude（opus）と codex（Luna Max / Sol High）の
-// 両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
 // initial-review-external-identity-wiring も同じ2つの外部 CLI で3モデルを使うため、
 // デフォルト実行から除外して明示的に呼び出す。
 // review-adjudication-binding も同じ2つの外部 CLI で3モデルを使うため、
@@ -113,16 +107,23 @@ for (const name of names) {
 // デフォルト実行から除外して明示的に呼び出す。
 // fix-plan-cause-check も claude（opus）と codex（gpt-5.6-luna）の
 // 両ログインが必要な二重測定スイートのため、明示的に呼び出す。
-// fix-plan-bounded-proof も claude（opus）と codex（Luna Max / Sol High）の
-// 両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
+// fix-plan-bounded-proof、fix-plan-fresh-findings、review-adjudication も claude（opus）と
+// codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
+// review-impact-path-coverage と follow-up-review-repair-regression、follow-up-testing-review-repair-regression も claude（opus）と
+// codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
   'coding',
   'rescan',
   'rescan-coding',
   'fix-self-scan',
-  'fix-loop-convergence',
   'fix-plan-cause-check',
   'fix-plan-bounded-proof',
+  'fix-plan-fresh-findings',
+  'review-impact-path-coverage',
+  'follow-up-review-repair-regression',
+  'follow-up-testing-review-repair-regression',
+  'review-adjudication',
+  'review-adjudication-report',
   'initial-review-external-identity-wiring',
   'review-adjudication-binding',
   'security-review-method',

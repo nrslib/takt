@@ -12,4 +12,4 @@ Treat the loop as stalled or diverging when the same cause and evidence repeat, 
 
 Require replanning only when evidence shows that the plan's assumptions, repair boundary, method, or verification capability are insufficient or inconsistent and a plan change can address the problem. Implementation or evidence gaps alone do not justify replanning.
 
-Choose the outcome supplied by the output contract that matches the current evidence. Do not report convergence while completion conditions remain unmet. When evidence shows that repeating the same review or repair cannot resolve the loop, choose the outcome that stops that repetition.
+Choose the supplied outcome that matches the current evidence. Do not report convergence while completion conditions remain unmet. When evidence shows that repeating the same review or repair cannot resolve the loop, choose the outcome that stops that repetition.

@@ -22,7 +22,8 @@ knowledge:
 required_permission_mode: edit
 pass_previous_response: false
 instruction:
-  $param: fix_instruction
+  - $param: fix_instruction
+  - review-remediation-problem-tracking
 output_contracts:
   report:
     - name: fix-report.md

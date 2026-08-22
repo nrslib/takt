@@ -609,7 +609,7 @@ describe('ArpeggioRunner integration', () => {
     expect(state.status).toBe('completed');
     expect(phaseStarts).toHaveLength(3);
     expect(phaseStarts.every((instruction) => instruction.includes('previous=Prior batch result'))).toBe(true);
-    expect(phaseStarts.every((instruction) => instruction.includes('Source:'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('Source:'))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('{previous_response}'))).toBe(true);
   });
 

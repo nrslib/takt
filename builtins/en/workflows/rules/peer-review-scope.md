@@ -1,0 +1,9 @@
+In reviewer steps, derive the review scope from the current change request and problems already confirmed for remediation.
+
+- In the initial review, inspect every presented change target and inspect paths affected by the same cause and observable condition in the same round. Do not treat names, types, or file proximity alone as proof that problems are the same.
+- In a post-remediation review, inspect unresolved findings, their repairs, and paths directly affected by those repairs. You may report regressions caused by the repair, consumers that must migrate for a changed contract to work, and unvisited consumers that violate the same condition as an already accepted problem. For each new finding, record why it belongs to this scope and the evidence you verified. Do not restart general discovery in unchanged areas or expand into adjacent improvements.
+- Consolidate problems only when their cause, violated observable condition, and reason to change are the same. Keep problems separate when they protect different conditions even if they share a responsible source.
+- If post-remediation reviews repeatedly find another location that violates the same observable condition for the same cause after the problem was reported as fixed, do not treat that as evidence of convergence. Treat the earlier impact-path inspection as incomplete and recheck the actual paths related to that problem.
+- Do not include a technically valid problem in remediation when its necessity cannot be derived from the current change request or a previously accepted remediation target.
+
+The review mode is `{var:review_mode}`. Treat `initial` as an initial review and `follow_up` as a post-remediation review. Only for `unspecified`, treat a directly executed reviewer step with execution count `{step_iteration}` as initial at 1 and post-remediation at 2 or later. If the mode cannot be determined, use the post-remediation boundary and do not restart general discovery.

@@ -1,20 +1,35 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: peer-review / review-adjudication evidence-based finding disposition.
+# TAKT ファセット評価: ピアレビューの指摘を証拠に基づいて裁定する。
 
-description: 'TAKT facet eval: review finding adjudication precision and recall'
+description: 'TAKT ファセット評価: レビュー指摘の裁定精度と網羅性'
 
 prompts:
   - file://prompts/review-adjudication.phase1.md
 
 providers:
-  - id: openai:codex-sdk
-    label: codex
+  - id: file://providers/cli-review.mjs
+    label: claude-opus-5
     config:
+      cli: claude
+      model: claude-opus-5
       working_dir: fixtures/review-adjudication
-      sandbox_mode: read-only
-      approval_policy: never
-      skip_git_repo_check: true
-      model_reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/review-adjudication
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/review-adjudication
+      isolate_working_dir: true
 
 defaultTest:
   options:
@@ -27,39 +42,43 @@ defaultTest:
         skip_git_repo_check: true
         model_reasoning_effort: low
 
+evaluateOptions:
+  maxConcurrency: 3
+
 tests:
-  - description: 'adjudication: separate valid observations from authorized remediation'
+  - description: '裁定: 妥当な観察と今回の修正対象を分離する'
     vars:
       task: file://cases/review-adjudication-task.md
       previous_response: ''
     assert:
-      - type: javascript
-        metric: review/adjudication-quality
-        value: file://asserts/review-adjudication.mjs
       - type: llm-rubric
-        metric: review/adjudication-authority
+        metric: review/adjudication-scope
         value: |
-          Judge the decision semantics, not headings, column names, table shape, or exact wording. Pass only if the adjudication explicitly separates technical validity from authority to remediate:
+          見出し、列名、表形式、文言ではなく、裁定の意味を判定する。裁定が技術的妥当性と今回の修正対象を明示的に分離し、次をすべて満たす場合だけ合格とする。
 
-          - The channel-normalization defect is actionable because it directly violates the accepted normalization behavior and leaves a required execution consumer unmigrated. The architecture report's transaction suggestion is not promoted into acceptance criteria.
-          - The exact duplication in src/build-label.js is acknowledged as a technically valid observation but remains out of scope because it belongs to a separate unchanged contract. Its Critical label must not create remediation authority, and it must not enter an actionable family or fix planning.
-          - The README expansion, unsupported secret-leak claim, and environment-only Windows request remain non-actionable for their evidence-based reasons.
-          - Every actionable family has an explicit authorization basis and remediation boundary. The result remains blocking while any actionable family remains; it is not waived because findings were recorded, are old or new, or have any particular severity.
+          - channel 正規化の欠陥は受理済み動作へ直接違反するため修正対象とする。コーディングとアーキテクチャの重複指摘は同じ原因として統合し、アーキテクチャ報告の transaction 提案を受入条件へ昇格させない。
+          - 修正が作成した worker 実行経路の欠陥は、同じ正規化の問題に属する一方で、修正によって生じた退行であることを初回指摘と区別する。初回レビュー時にはその経路が存在しなかったことを説明する。
+          - `ARCH-NEW-channel-type-error-L2` を漏れなく裁定する。この主要ケースは厳密なエラークラスやメッセージを約束しないため、より強いエラー形式の要求は修正対象にしない。
+          - src/build-label.js の完全な重複を技術的に妥当な観察として認めるが、変更されていない別契約に属するため対象外に保つ。Critical という重大度だけで修正対象にせず、修正計画に含めない。
+          - README 拡張、根拠のない secret-leak 主張、環境だけを根拠にする Windows 要求は、それぞれの証拠上の理由により非修正対象に保つ。
+          - 修正対象には、要求または修正履歴から導ける理由と修正境界を記録する。未解消の修正対象が残る間は差し止めを維持し、記録済み、新旧、重大度を理由に免除しない。特定の列名、英語ラベル、分類値の表記は合否に使わない。
 
-  - description: 'adjudication: merge a different path and submitted family tag into the recorded family'
+  - description: '裁定: 同じ原因を持つ別経路の重複指摘を統合する'
     vars:
-      task: file://cases/review-adjudication-family-merge-task.md
+      task: file://cases/review-adjudication-problem-merge-task.md
       previous_response: ''
     assert:
-      - type: regex
-        metric: review/existing-family-merge
-        value: 'JUDGEMENT: candidate=ARCH-NEW-channel-normalization-L2; decision=merge; target_family=FAM-channel-normalization\s*$'
+      - type: llm-rubric
+        metric: review/existing-problem-merge
+        value: |
+          見出し、識別子、分類ラベル、末尾の固定文言ではなく判断内容を評価する。ARCH-NEW-channel-normalization-L2 と CODE-NEW-channel-normalization-L2 が、同じ原因と受入条件を持つ重複指摘として1つの修正対象へ統合されている場合だけ合格とする。ARCH-NEW-channel-type-error-L2 は漏れなく検討するが、タスクは不正な文字列の即時失敗だけを要求し、文字列以外の値に安定したエラークラスやメッセージを要求しないため修正対象にしない。
 
-  - description: 'adjudication: keep a different invariant under the same responsible source separate'
+  - description: '裁定: 同じ担当箇所にある別の条件を分離する'
     vars:
-      task: file://cases/review-adjudication-family-separation-task.md
+      task: file://cases/review-adjudication-problem-separation-task.md
       previous_response: ''
     assert:
-      - type: regex
-        metric: review/different-invariant-separation
-        value: 'JUDGEMENT: candidate=ARCH-NEW-channel-type-error-L2; decision=separate; target_family=(?!FAM-channel-normalization(?:\s|$))\S+\s*$'
+      - type: llm-rubric
+        metric: review/different-condition-separation
+        value: |
+          見出し、識別子、分類ラベル、末尾の固定文言ではなく判断内容を評価する。ARCH-NEW-channel-type-error-L2 を修正対象として漏れなく扱い、受理値の正規化とは異なるエラー形式の要件として別の修正単位に分けた場合だけ合格とする。normalizeChannel という担当箇所が共通することだけを統合根拠にしてはならない。
