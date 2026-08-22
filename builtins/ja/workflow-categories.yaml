@@ -1,16 +1,16 @@
 workflow_categories:
   🚀 クイックスタート:
     workflows:
-      - default: "迷ったらこれ。標準の開発をする"
+      - default: "標準の開発をする"
       - maintenance: "保守開発をする"
       - simple: "実装とレビューの2体でループする"
       - review-fix: "並列レビューを行い修正する"
   🛠️ 開発:
     workflows:
-      - default: "迷ったらこれ。標準の開発をする"
+      - default: "標準の開発をする"
       - maintenance: "保守開発をする"
       - simple: "実装とレビューの2体でループする"
-      - pure: "そのまま開発する"
+      - pure: "そのまま2体ループで開発する"
   🔍 レビュー:
     workflows:
       - review: "並列レビューをする"
@@ -21,7 +21,7 @@ workflow_categories:
       - audit-architecture: "アーキテクチャを全件監査し、Issue向けレポートを作る"
   🏗️ インフラストラクチャ:
     workflows:
-      - terraform: "Terraformの開発をplanから完了まで行う"
+      - terraform: "Terraformを開発する"
   🎵 TAKT開発:
     workflows:
       - takt-default: "TAKTを開発する"
