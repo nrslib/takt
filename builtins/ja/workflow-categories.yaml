@@ -1,13 +1,13 @@
 workflow_categories:
   🚀 クイックスタート:
     workflows:
-      - default: "標準の開発をする"
+      - default: "開発をする"
       - maintenance: "保守開発をする"
       - simple: "実装とレビューの2体でループする"
       - review-fix: "並列レビューを行い修正する"
   🛠️ 開発:
     workflows:
-      - default: "標準の開発をする"
+      - default: "開発をする"
       - maintenance: "保守開発をする"
       - simple: "実装とレビューの2体でループする"
       - pure: "そのまま2体ループで開発する"

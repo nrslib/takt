@@ -1,13 +1,13 @@
 workflow_categories:
   🚀 Quick Start:
     workflows:
-      - default: "Standard development"
+      - default: "Development"
       - maintenance: "Maintenance development"
       - simple: "Two-agent implement/review loop"
       - review-fix: "Parallel review, then fix"
   🛠️ Development:
     workflows:
-      - default: "Standard development"
+      - default: "Development"
       - maintenance: "Maintenance development"
       - simple: "Two-agent implement/review loop"
       - pure: "Develop as-is in a two-agent loop"
