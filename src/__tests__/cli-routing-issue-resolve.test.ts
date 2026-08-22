@@ -47,6 +47,7 @@ const {
       description: 'test workflow',
       workflowStructure: '',
       stepPreviews: [],
+      companionReviewMode: 'completion',
     }),
   ),
   mockResolveAgentOverrides: vi.fn(),
@@ -214,7 +215,7 @@ beforeEach(() => {
   }
   // Default setup
   mockDetermineWorkflow.mockResolvedValue('default');
-  mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] });
+  mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [], companionReviewMode: 'completion' });
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockPassthroughMode.mockResolvedValue({ action: 'execute', task: 'passthrough task' });
   mockQuietMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
@@ -478,6 +479,7 @@ describe('Issue resolution in routing', () => {
         description: 'test workflow',
         workflowStructure: '',
         stepPreviews: [],
+        companionReviewMode: 'completion',
         firstStep: {
           personaContent: 'You are a coder.',
           personaDisplayName: 'Coder',
@@ -552,6 +554,7 @@ describe('Issue resolution in routing', () => {
         description: 'test workflow',
         workflowStructure: '',
         stepPreviews: [],
+        companionReviewMode: 'completion',
         firstStep: {
           personaContent: 'You are a coder.',
           personaDisplayName: 'Coder',
