@@ -90,6 +90,6 @@ workflow_categories:
     workflows:
       - research: "Research autonomously without asking"
       - deep-research: "Follow new questions and dig deeper"
-      - magi: "Analyze from three angles and decide by majority"
+      - magi: "Evangelion-inspired three-way majority vote"
 show_others_category: true
 others_category_name: Others
