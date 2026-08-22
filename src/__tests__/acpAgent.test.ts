@@ -387,7 +387,12 @@ describe('TAKT ACP agent adapter', () => {
         });
 
         expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
-        expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toBe('describe parser states');
+        // #1460: assistant conversation input is framed as a user comment so
+        // fix-shaped remarks are not misread as implementation requests. The
+        // original ACP protocol text must survive inside the framed prompt.
+        const sentPrompt = mockCallAIWithRetry.mock.calls[0]?.[0] as string;
+        expect(sentPrompt).toContain('describe parser states');
+        expect(sentPrompt).toContain('## User Comment');
         const systemPrompt = mockCallAIWithRetry.mock.calls[0]?.[1] as string;
         expect(systemPrompt).toMatch(/Gherkin/);
         if (expectedFormalSpec) {
