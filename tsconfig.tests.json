@@ -32,6 +32,7 @@
     "src/__tests__/interactive-mode.test.ts",
     "src/__tests__/interactive.test.ts",
     "src/__tests__/mock-scenario-stream-chunks.test.ts",
+    "src/__tests__/npmTestEntrypoint.test.ts",
     "src/__tests__/releaseVerificationWiring.test.ts",
     "src/__tests__/retry-mode-flow.test.ts",
     "src/__tests__/retrySlashCommand.test.ts",

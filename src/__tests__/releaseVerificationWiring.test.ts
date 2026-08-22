@@ -35,6 +35,7 @@ import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 import { selectNpmTestRuns } from '../../scripts/run-npm-test.mjs';
+import { BIRPC_REMEASURE_ON_CI_ENV } from '../../scripts/vitest-birpc-noise.mjs';
 import {
   RELEASE_GATE_SCRIPTS,
   RELEASE_LOG_RELATIVE_PATH,
@@ -47,6 +48,7 @@ interface PackageManifest {
 
 interface CiWorkflowStep {
   run?: string;
+  env?: Record<string, string>;
 }
 
 interface CiWorkflowJob {
@@ -75,6 +77,9 @@ const manifest = JSON.parse(
 ) as PackageManifest;
 const ciWorkflow = parseYaml(
   readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+) as CiWorkflow;
+const prCommentWorkflow = parseYaml(
+  readFileSync(new URL('../../.github/workflows/pr-comment-commands.yml', import.meta.url), 'utf8'),
 ) as CiWorkflow;
 
 const integrationBoundaryNames = new Set([
@@ -264,6 +269,29 @@ describe('release verification wiring', () => {
       'test:e2e:all',
     ]);
     expect(new Set(RELEASE_GATE_SCRIPTS).size).toBe(RELEASE_GATE_SCRIPTS.length);
+  });
+
+  it('should keep the eight-runner unit matrix on the main pull-request workflow', () => {
+    const unitShardJob = ciWorkflow.jobs?.['test-shard'];
+    const commentCiJob = prCommentWorkflow.jobs?.ci;
+
+    expect(unitShardJob?.name).toBe('test shard (${{ matrix.shard }}/8)');
+    expect(unitShardJob?.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(unitShardJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
+      'npm run test:unit:parallel -- --shard=${{ matrix.shard }}/8',
+    );
+    expect(commentCiJob?.strategy).toBeUndefined();
+    expect(commentCiJob?.steps?.map((step) => step.run).filter(Boolean)).toContain('npm run test');
+  });
+
+  it('should opt in to birpc re-measurement only on the auxiliary /ci job', () => {
+    const commentCiJob = prCommentWorkflow.jobs?.ci;
+    const testStep = commentCiJob?.steps?.find((step) => step.run === 'npm run test');
+    const e2eStep = commentCiJob?.steps?.find((step) => step.run === 'npm run test:e2e:mock');
+
+    expect(testStep?.env?.[BIRPC_REMEASURE_ON_CI_ENV]).toBe('1');
+    expect(e2eStep?.env?.[BIRPC_REMEASURE_ON_CI_ENV]).toBeUndefined();
+    expect(JSON.stringify(ciWorkflow)).not.toContain(BIRPC_REMEASURE_ON_CI_ENV);
   });
 
   it('should run light integration and isolated heavy integration shards as pull-request gates', () => {

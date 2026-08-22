@@ -59,7 +59,7 @@ The pull request owns full heavy integration execution, but work must not be han
 | Timeout increase alone is treated as resolving a hang, contention, or infinite loop | REJECT |
 | A heavy test is removed from unit without being connected to another gate | REJECT |
 
-Keep heavy integration at one worker per runner. Full local execution is serial; pull-request CI scales out across four isolated shard runners and separate runners for each serial group instead of adding workers within one runner.
+Keep heavy integration at one worker per runner. Full local execution is serial; pull-request CI scales out across six isolated shard runners and separate runners for each serial group instead of adding workers within one runner.
 
 | Execution Mode | Judgment |
 |----------------|----------|

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { availableParallelism } from 'node:os';
 import { basename, isAbsolute, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -11,11 +12,16 @@ import {
 } from './test-classification.mjs';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
 import { runTeedCommand } from './teed-command.mjs';
-import { isBirpcNoiseOnlyFailure } from './vitest-birpc-noise.mjs';
+import {
+  BIRPC_REMEASURE_ON_CI_ENV,
+  isBirpcNoiseOnlyFailure,
+} from './vitest-birpc-noise.mjs';
 
-const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
+const MAX_LOCAL_UNIT_SHARDS = 8;
+// Keep headroom for the npm parent, the OS, and test setup on low-core machines.
+const LOCAL_PARALLELISM_HEADROOM = 2;
 const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
-const INTEGRATION_NOTICE = '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.';
+const INTEGRATION_NOTICE = '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". The main pull-request CI workflow and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.';
 const PARALLEL_TEST_SCRIPTS = new Set([
   'test:unit:parallel',
   'test:it:light',
@@ -75,9 +81,21 @@ const VITEST_OPTIONAL_BOOLEAN_OPTIONS = new Set([
   '--silent',
 ]);
 
-export function selectNpmTestRuns(args) {
+export function resolveLocalUnitShardCount(availableParallelismCount) {
+  if (!Number.isInteger(availableParallelismCount) || availableParallelismCount < 1) {
+    throw new RangeError(`availableParallelism must be a positive integer: ${availableParallelismCount}`);
+  }
+  return Math.min(
+    MAX_LOCAL_UNIT_SHARDS,
+    Math.max(1, availableParallelismCount - LOCAL_PARALLELISM_HEADROOM),
+  );
+}
+
+export function selectNpmTestRuns(args, unitShardCount) {
   if (args.length === 0) {
-    return UNIT_SHARDS.map((shard) => ({
+    const resolvedUnitShardCount = unitShardCount
+      ?? resolveLocalUnitShardCount(availableParallelism());
+    return createUnitShardRuns(resolvedUnitShardCount).map((shard) => ({
       npmArgs: ['run', 'test:unit:parallel', '--', `--shard=${shard}`, ...NO_ARG_UNIT_RUN_OPTIONS],
     }));
   }
@@ -93,6 +111,16 @@ export function selectNpmTestRuns(args) {
     buildTargetedRun('test:it:heavy:serial:git', targets.shared, targets.serialGit),
     buildTargetedRun('test:it:heavy:serial:workflow', targets.shared, targets.serialWorkflow),
   ].filter((run) => run !== undefined);
+}
+
+function createUnitShardRuns(unitShardCount) {
+  if (!Number.isInteger(unitShardCount) || unitShardCount < 1) {
+    throw new RangeError(`unitShardCount must be a positive integer: ${unitShardCount}`);
+  }
+  return Array.from(
+    { length: unitShardCount },
+    (_, index) => `${index + 1}/${unitShardCount}`,
+  );
 }
 
 function buildDefaultRuns(shared) {
@@ -259,9 +287,14 @@ async function runNpmCommand(npmArgs) {
 
 async function remeasureBirpcNoiseShards(results, runCommand) {
   const isCI = Boolean(process.env.CI);
+  const remeasureOnCI = process.env[BIRPC_REMEASURE_ON_CI_ENV] === '1';
   const settled = [];
   for (const { run, result } of results) {
-    if (result.code === 0 || !isBirpcNoiseOnlyFailure({ output: result.output, isCI })) {
+    if (result.code === 0 || !isBirpcNoiseOnlyFailure({
+      output: result.output,
+      isCI,
+      remeasureOnCI,
+    })) {
       settled.push({ run, result });
       continue;
     }
@@ -295,11 +328,11 @@ export async function executeNpmTestRuns(runs, runCommand) {
   return results.sort((left, right) => left.index - right.index);
 }
 
-export async function runNpmTest(args, runCommand = runNpmCommand) {
+export async function runNpmTest(args, runCommand = runNpmCommand, unitShardCount) {
   if (!hasExplicitTargets(splitTestTargets(args))) {
     console.log(INTEGRATION_NOTICE);
   }
-  const results = await executeNpmTestRuns(selectNpmTestRuns(args), runCommand);
+  const results = await executeNpmTestRuns(selectNpmTestRuns(args, unitShardCount), runCommand);
 
   const failed = (await remeasureBirpcNoiseShards(results, runCommand))
     .filter(({ result }) => result.code !== 0);
