@@ -130,6 +130,35 @@ describe('validateRuntimeProviderSection — unknown reference fail-fast (C10)',
     };
     expect(() => validateRuntimeProviderSection(section)).toThrow(/provider.*model|model.*provider/i);
   });
+
+  it('fails fast on a profile referenced by a named assignment default', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'real' },
+      profiles: { real: { provider: 'mock', model: 'm' } },
+      assignments: { project: { defaults: { profile: 'ghost' } } },
+    };
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/ghost|unknown profile/i);
+  });
+
+  it('fails fast on a pool referenced by a named assignment target', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'real' },
+      profiles: { real: { provider: 'mock', model: 'm' } },
+      assignments: {
+        project: { targets: { steps: { implement: { pool: 'missing' } } } },
+      },
+    };
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/missing|unknown pool/i);
+  });
+
+  it('fails fast on a ladder profile referenced by a named assignment default', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'real' },
+      profiles: { real: { provider: 'mock', model: 'm' } },
+      assignments: { project: { defaults: { ladder: ['missing'] } } },
+    };
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/missing|unknown profile/i);
+  });
 });
 
 describe('validateRuntimeProviderSection — auto_routing references (C9/C10)', () => {

@@ -701,6 +701,45 @@ provider:
         fallback_profile: sol-high
 ```
 
+### ディレクトリ別 assignment
+
+`provider.assignments` には、起動ディレクトリごとに選択する名前付きの provider 設定セットを定義できます。
+各 entry は `defaults` または `targets` の少なくとも一方を持つ必要があり、空の assignment は指定できません。
+`defaults` はトップレベルの `provider.defaults` と同じく `profile` または `ladder` の一方を指定します。
+`targets` はトップレベルの `provider.targets` と同じ形で、`personas`、`tags`、`steps`、`internal_agents` は
+`profile`、`pool`、`ladder`、`companions` は固定 `profile` を指定できます。
+
+`provider.directories` はディレクトリパスから assignment 名への map です。照合対象は起動時の project
+ディレクトリで、キーは `~` を展開して絶対パス化した後、存在するパスについて realpath 相当に正規化して
+完全一致で照合します。前方一致や glob は使いません。値の assignment 名が未定義の場合は読み込み時に
+fail-fast します。ディレクトリが一致すると、assignment の `defaults`（省略時はトップレベルの
+`provider.defaults`）を使用し、assignment に `targets` がある場合はトップレベルの `provider.targets` 全体を
+置き換えます。`personas` だけを残すような map 単位のマージは行いません。`targets` を省略した assignment
+はトップレベルの `provider.targets` をそのまま引き継ぎます。`profiles` と `auto_routing` は共有されたままです。
+
+```yaml
+provider:
+  assignments:
+    project-sol:
+      defaults:
+        profile: sol-medium
+      targets:
+        personas:
+          coder:
+            profile: sol-medium
+        steps:
+          default/implement:
+            pool: sol-pool
+
+  directories:
+    ~/work/example: project-sol
+```
+
+global と project のレイヤーで `assignments` が定義されている場合、同名 entry は project が全体を置き換え、
+異なる名前は両方残ります。`directories` は正規化後の同じパスキーについて project が優先し、異なるパスは
+両方残ります。これらのマージは assignment の選択前に行われます。assignment 内の profile、pool、ladder
+参照も通常の runtime provider 参照と同じく、未定義なら agent 実行前に fail-fast します。
+
 `provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。任意の `capabilities` には provider-options preset 名、または適用順の preset 名リストを指定します。workflow の `capabilities` と同じ project → global → builtin の順で解決し、inline の `options` が preset より優先されます。任意の `permission_mode` は provider の正確な permission mode を設定します。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
 
 TAKT が所有する structured agent は常に fresh session で起動します。native structured output 対応 provider には schema を直接渡し、非対応 provider には JSON schema instruction を渡して返却 object を parse・validate します。TAKT は internal agent 専用の permission、tool、network、sandbox、skill、MCP、bypass policy を追加しません。role を制限する場合は `capabilities` と `permission_mode` の一方または両方を明示した profile を割り当てます。両方を省略した場合は通常の provider 設定をそのまま使用します。
