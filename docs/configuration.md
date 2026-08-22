@@ -726,8 +726,8 @@ provider:
 project directory. Each entry must contain `defaults` or `targets`; an empty assignment is not
 valid. `defaults` has the same shape as top-level `provider.defaults` and must choose exactly one
 of `profile` or `ladder`. `targets` has the same shape as top-level `provider.targets`:
-`personas`, `tags`, `steps`, and `internal_agents` may use `profile`, `pool`, or `ladder`, while
-`companions` may use only a fixed `profile`.
+`personas`, `tags`, and `steps` may use `profile`, `pool`, or `ladder`; `internal_agents` may use
+`profile` or `ladder`, while `companions` may use only a fixed `profile`.
 
 `provider.directories` maps a directory path to an assignment name. The lookup target is the
 startup project directory. Keys expand `~`, become absolute, and then receive realpath-equivalent

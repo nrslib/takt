@@ -706,8 +706,9 @@ provider:
 `provider.assignments` には、起動ディレクトリごとに選択する名前付きの provider 設定セットを定義できます。
 各 entry は `defaults` または `targets` の少なくとも一方を持つ必要があり、空の assignment は指定できません。
 `defaults` はトップレベルの `provider.defaults` と同じく `profile` または `ladder` の一方を指定します。
-`targets` はトップレベルの `provider.targets` と同じ形で、`personas`、`tags`、`steps`、`internal_agents` は
-`profile`、`pool`、`ladder`、`companions` は固定 `profile` を指定できます。
+`targets` はトップレベルの `provider.targets` と同じ形で、`personas`、`tags`、`steps` は
+`profile`、`pool`、`ladder` のいずれか、`internal_agents` は `profile` または `ladder`、
+`companions` は固定 `profile` を指定できます。
 
 `provider.directories` はディレクトリパスから assignment 名への map です。照合対象は起動時の project
 ディレクトリで、キーは `~` を展開して絶対パス化した後、存在するパスについて realpath 相当に正規化して

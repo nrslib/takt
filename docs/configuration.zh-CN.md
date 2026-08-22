@@ -592,8 +592,8 @@ provider:
 `provider.assignments` 用于定义按项目目录选择的命名 provider 配置集合。每个 entry 必须至少包含
 `defaults` 或 `targets`，不能使用空 assignment。`defaults` 与顶层 `provider.defaults` 形状完全相同，必须
 在 `profile` 和 `ladder` 中选择一个。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
-`steps`、`internal_agents` 可以使用 `profile`、`pool` 或 `ladder`，而 `companions` 只能使用固定的
-`profile`。
+`steps` 可以使用 `profile`、`pool` 或 `ladder`，`internal_agents` 只能使用 `profile` 或 `ladder`，
+而 `companions` 只能使用固定的 `profile`。
 
 `provider.directories` 将目录路径映射到 assignment 名称。匹配对象是启动时的 project 目录。路径键会先展开
 `~`、转换为绝对路径，并对存在的路径进行 realpath 等价的规范化，然后进行完全匹配；不支持前缀匹配和 glob。
