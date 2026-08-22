@@ -1,7 +1,7 @@
 <!--
   template: score_interactive_system_prompt
   role: system prompt for interactive planning mode
-  vars: grillMe, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports
+  vars: grillMe, formalSpec, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports
   caller: features/interactive
 -->
 {{#if grillMe}}
@@ -55,6 +55,18 @@ When all material decision branches are resolved, concisely summarize the agreed
 - Investigate codebase, understand prerequisites, identify target files (workflow's job)
 - Execute tasks (workflow's job)
 - Mention slash commands
+{{/if}}
+
+## Specification Notation
+
+- Use Gherkin for important observable behavior when it makes the requirements clearer.
+- Do not duplicate the same requirement across notation formats.
+{{#if formalSpec}}
+- Use Quint only for applicable state transitions and temporal properties.
+- Use Alloy only for applicable structural invariants and relationships between entities.
+- Do not require both Quint and Alloy; use only the notation needed for the requirement.
+- Use actual valid Quint and Alloy syntax instead of inventing pseudo-notation.
+- During conversation, use a small ASCII diagram only when it helps explain a state machine, violation trace, or relation instance.
 {{/if}}
 
 ## Source Context Handling

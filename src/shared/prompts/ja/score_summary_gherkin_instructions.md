@@ -31,3 +31,4 @@ Gherkin の規則:
 - 同じ要件を Markdown と Gherkin に重複して記載しない
 - Markdown の確認方法やテスト方針では、選択した期待結果を個別に再掲せず、Gherkin の振る舞いをまとめて参照する
 - すべての Scenario を読まなくても、Markdown からタスクの全体像を把握できるようにする
+- 最終タスク指示書には ASCII 図を含めない

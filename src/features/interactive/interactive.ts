@@ -18,6 +18,7 @@ import {
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
+  type ConversationPromptConfiguration,
   displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
@@ -42,6 +43,7 @@ import {
 import { type RunSessionContext, formatRunSessionForPrompt } from './runSessionReader.js';
 import type { ImageAttachmentCleanupOwner, InteractiveImageAttachment } from './imageAttachments.js';
 import { getAssistantSessionPersona } from './assistantMode.js';
+import { resolveFormalSpecMode } from './taskInstructionFormat.js';
 
 const GRILL_ME_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
 
@@ -127,7 +129,7 @@ export function buildSummaryPrompt(
   userNote: string,
   lang: 'en' | 'ja',
   promptContext?: string,
-  gherkin?: boolean,
+  formalSpec?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -138,18 +140,18 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
-  gherkin?: boolean,
+  formalSpec?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
   userNoteOrHasSession: string | boolean,
   lang: 'en' | 'ja',
   promptContextOrNoTranscript?: string,
-  conversationLabelOrGherkin?: string | boolean,
+  conversationLabelOrFormalSpec?: string | boolean,
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
-  gherkin?: boolean,
+  formalSpec?: boolean,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -157,11 +159,11 @@ export function buildSummaryPrompt(
       userNoteOrHasSession,
       lang,
       promptContextOrNoTranscript ?? '',
-      typeof conversationLabelOrGherkin === 'string' ? conversationLabelOrGherkin : '',
+      typeof conversationLabelOrFormalSpec === 'string' ? conversationLabelOrFormalSpec : '',
       workflowContext,
       sourceContext,
       promptContext,
-      gherkin,
+      formalSpec,
     );
   }
 
@@ -170,7 +172,7 @@ export function buildSummaryPrompt(
     userNoteOrHasSession,
     lang,
     promptContextOrNoTranscript,
-    typeof conversationLabelOrGherkin === 'boolean' ? conversationLabelOrGherkin : false,
+    typeof conversationLabelOrFormalSpec === 'boolean' ? conversationLabelOrFormalSpec : false,
   );
 }
 
@@ -227,14 +229,22 @@ export async function interactiveMode(
     ? formatRunSessionForPrompt(runSessionContext)
     : { runTask: '', runWorkflow: '', runStatus: '', runStepLogs: '', runReports: '' };
 
-  const systemPrompt = loadTemplate('score_interactive_system_prompt', ctx.lang, {
-    grillMe: assistantMode === 'grill-me',
-    hasWorkflowPreview: hasPreview,
-    workflowStructure: workflowContext?.workflowStructure ?? '',
-    stepDetails: hasPreview ? formatStepPreviews(workflowContext!.stepPreviews!, ctx.lang) : '',
-    hasRunSession,
-    ...runPromptVars,
-  });
+  const resolvePromptConfiguration = async (): Promise<ConversationPromptConfiguration> => {
+    const formalSpec = await resolveFormalSpecMode(cwd);
+    return {
+      formalSpec,
+      systemPrompt: loadTemplate('score_interactive_system_prompt', ctx.lang, {
+        grillMe: assistantMode === 'grill-me',
+        formalSpec,
+        hasWorkflowPreview: hasPreview,
+        workflowStructure: workflowContext?.workflowStructure ?? '',
+        stepDetails: hasPreview ? formatStepPreviews(workflowContext!.stepPreviews!, ctx.lang) : '',
+        hasRunSession,
+        ...runPromptVars,
+      }),
+    };
+  };
+  const promptConfiguration = await resolvePromptConfiguration();
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const assistantInitContext = loadAssistantInitContext(cwd);
 
@@ -259,7 +269,8 @@ export async function interactiveMode(
     : undefined;
 
   return runConversationLoop(cwd, ctx, {
-    systemPrompt,
+    ...promptConfiguration,
+    resolveResumedSessionConfiguration: resolvePromptConfiguration,
     allowedTools: assistantMode === 'grill-me'
       ? GRILL_ME_INTERACTIVE_TOOLS
       : DEFAULT_INTERACTIVE_TOOLS,

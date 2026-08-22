@@ -1,7 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
 const {
   mockCallAIWithRetry,
@@ -27,9 +24,10 @@ vi.mock('../features/interactive/interactiveApplication.js', async (importOrigin
 
 import { createConversationSession } from '../features/interactive/conversationSession.js';
 
-function createSession(cwd = '/repo') {
+function createSession(cwd = '/repo', formalSpec = false) {
   return createConversationSession({
     cwd,
+    formalSpec,
     ctx: {
       provider: {
         setup: vi.fn(),
@@ -150,7 +148,7 @@ describe('conversation session application API', () => {
       'include progress updates',
       'en',
       'summary context',
-      true,
+      false,
     );
     expect(result).toEqual({
       kind: 'workflow_execution_requested',
@@ -163,65 +161,39 @@ describe('conversation session application API', () => {
     });
   });
 
-  it.each([
-    ['unset', undefined, true],
-    ['enabled', true, true],
-    ['disabled', false, false],
-  ] as const)('should pass %s project Gherkin mode to ACP task instruction generation', async (_label, configured, expected) => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-gherkin-acp-'));
-    if (configured !== undefined) {
-      mkdirSync(join(projectDir, '.takt'), { recursive: true });
-      writeFileSync(
-        join(projectDir, '.takt', 'config.yaml'),
-        ['assistant:', `  gherkin: ${configured}`].join('\n'),
-        'utf-8',
-      );
-    }
-    const session = createSession(projectDir);
+  it.each([false, true])(
+    'should pass resolved formal specification mode=%s to ACP task instruction generation',
+    async (formalSpec) => {
+      const session = createSession('/repo', formalSpec);
 
-    try {
       await session.createTaskInstruction({ userNote: 'implement ACP support' });
 
-      expect(mockBuildSummaryPrompt.mock.calls[0]?.[4]).toBe(expected);
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-    }
-  });
+      expect(mockBuildSummaryPrompt.mock.calls[0]?.[4]).toBe(formalSpec);
+    },
+  );
 
-  it.each([
-    ['unset', undefined, true],
-    ['project false', false, false],
-  ] as const)('should apply %s to the actual ACP summary prompt', async (_label, configured, expectedEnabled) => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-gherkin-acp-prompt-'));
-    if (configured !== undefined) {
-      mkdirSync(join(projectDir, '.takt'), { recursive: true });
-      writeFileSync(
-        join(projectDir, '.takt', 'config.yaml'),
-        ['assistant:', `  gherkin: ${configured}`].join('\n'),
-        'utf-8',
+  it.each([false, true])(
+    'should apply resolved formal specification mode=%s to the actual ACP summary prompt',
+    async (formalSpec) => {
+      const actualInteractiveApplication = await vi.importActual<typeof import('../features/interactive/interactiveApplication.js')>(
+        '../features/interactive/interactiveApplication.js',
       );
-    }
-    const actualInteractiveApplication = await vi.importActual<typeof import('../features/interactive/interactiveApplication.js')>(
-      '../features/interactive/interactiveApplication.js',
-    );
-    mockBuildSummaryPrompt.mockImplementation(actualInteractiveApplication.buildConversationSummaryPrompt);
+      mockBuildSummaryPrompt.mockImplementation(actualInteractiveApplication.buildConversationSummaryPrompt);
 
-    try {
-      const session = createSession(projectDir);
+      const session = createSession('/repo', formalSpec);
       await session.createTaskInstruction({ userNote: 'implement ACP support' });
 
       const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
-      if (expectedEnabled) {
-        expect(prompt).toContain('## Markdown + Gherkin Output Format');
+      expect(prompt).toContain('## Markdown + Gherkin Output Format');
+      if (formalSpec) {
+        expect(prompt).toMatch(/\bQuint\b/);
+        expect(prompt).toMatch(/\bAlloy\b/);
       } else {
-        expect(prompt).not.toContain('## Markdown + Gherkin Output Format');
-        expect(prompt).not.toContain('Write these in a fenced `gherkin` block:');
-        expect(prompt).not.toContain('Do not duplicate the same requirement in Markdown and Gherkin');
+        expect(prompt).not.toMatch(/\bQuint\b/);
+        expect(prompt).not.toMatch(/\bAlloy\b/);
       }
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it('should create a task instruction through the semantic API without a slash command', async () => {
     const session = createSession();
@@ -246,7 +218,7 @@ describe('conversation session application API', () => {
       'worktree で実行できるように積んで',
       'en',
       'summary context',
-      true,
+      false,
     );
     expect(mockCallAIWithRetry).toHaveBeenCalledWith(
       'summary prompt',
@@ -447,7 +419,7 @@ describe('conversation session application API', () => {
       'summarize',
       'en',
       'summary context',
-      true,
+      false,
     );
   });
 });

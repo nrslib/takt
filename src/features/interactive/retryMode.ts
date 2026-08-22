@@ -181,6 +181,7 @@ async function runRetryConversation(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
+    formalSpec: false,
     allowedTools: RETRY_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),

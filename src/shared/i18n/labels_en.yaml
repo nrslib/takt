@@ -10,6 +10,7 @@ interactive:
   sourceContextLabel: "Source Context"
   conversationLabel: "Conversation:"
   noTranscript: "(No local transcript. Summarize the current session context.)"
+  formalSpecPrompt: "Enable formal specification mode (Alloy, Quint)? Change the default with assistant.formal_spec."
   ui:
     intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /play (run now), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
     introGrillMe: "Grill Me mode - resolve requirement decisions one question at a time. The assistant will suggest /go when the requirements are ready. Commands: /go (create instruction & run), /play (run now), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"

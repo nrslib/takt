@@ -31,7 +31,7 @@ interactive_preview_steps: 3  # インタラクティブモードでの step プ
 auto_requeue_max_attempts: 0  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、デフォルト: 0 = 無効）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用（デフォルト: false）
 assistant:
-  gherkin: true               # 最終指示書を Markdown + 要所の Gherkin で生成（デフォルト: true、無効化は false）
+  formal_spec: 'y/N'          # Alloy／Quint モード: true, false, Y/n, y/N（デフォルト: y/N）
 # auto_fetch: false           # クローン作成前にリモートを fetch（デフォルト: false）
 # base_branch: main           # クローン作成のベースブランチ（デフォルト: リモートのデフォルトブランチ）
 
@@ -190,7 +190,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` の並列タスク数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
-| `assistant.gherkin` | boolean | `true` | assistant 対話から生成する最終指示書で、重要な観測可能動作、状態遷移、境界、失敗、不変条件を最小数の Gherkin Scenario に整理します。未設定時は有効で、プロジェクト設定で明示した値がグローバル値より優先されます。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` | Alloy／Quint のガイダンスを有効化します。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。プロジェクトの明示値がグローバル値より優先されます。Gherkin のガイダンスは独立して常時有効です。 |
 | `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
@@ -257,7 +257,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 # プロジェクト固有の assistant 設定
 # assistant:
-#   gherkin: true              # global 設定を上書き。false で無効化
+#   formal_spec: 'Y/n'         # global の Alloy／Quint モードを上書き。TTY では Yes を既定に質問
 #   init_files:
 #     # project config 専用。インタラクティブ assistant モードの初期コンテキストファイル
 #     - docs/assistant-context.md
@@ -398,7 +398,7 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
-| `assistant.gherkin` | boolean | `true`（global 設定またはデフォルト由来） | グローバル設定を上書きする設定です。quiet モードを含む assistant 対話から最終指示書を生成するとき、背景、範囲、実装詳細、設計意図、制約、確認方法は Markdown に残し、重要な観測可能動作、状態遷移、境界、失敗、不変条件だけを最小数の Gherkin Scenario で整理するよう要約エージェントへ指示します。未設定の場合はグローバル値、どちらも未設定の場合は `true` になります。`false` を明示すると無効化できます。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"`（global 設定またはデフォルト由来） | Alloy／Quint のガイダンスに対するプロジェクト上書きです。プロジェクト値がグローバル値より優先されます。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは常時有効です。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |

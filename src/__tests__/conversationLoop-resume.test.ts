@@ -165,6 +165,7 @@ function createSessionContext(overrides: Partial<SessionContext> = {}): SessionC
 const defaultStrategy = {
   systemPrompt: 'test system prompt',
   allowedTools: ['Read'],
+  formalSpec: false,
   transformPrompt: (msg: string) => msg,
   introMessage: 'Test intro',
 };
@@ -486,12 +487,17 @@ describe('/resume command', () => {
     mockSelectRecentSession.mockResolvedValue(null);
 
     const ctx = createSessionContext();
+    const resolveResumedSessionConfiguration = vi.fn();
 
     // When
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      resolveResumedSessionConfiguration,
+    }, undefined, undefined);
 
     // Then: selectRecentSession called but returned null
     expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en');
+    expect(resolveResumedSessionConfiguration).not.toHaveBeenCalled();
 
     // Then: cancelled
     expect(result.action).toBe('cancel');
@@ -522,6 +528,42 @@ describe('/resume command', () => {
     expect(capture.sessionIds[0]).toBe('resumed-session-xyz');
     expect(result.action).toBe('cancel');
   });
+
+  it.each([false, true])(
+    'should apply resumed formal specification mode=%s to regular and summary prompts',
+    async (formalSpec) => {
+      setupRawStdin(toRawInputs(['/resume', 'describe parser states', '/go add rollback plan']));
+      mockSelectRecentSession.mockResolvedValue('resumed-session-xyz');
+      const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue({
+        systemPrompt: `resumed system prompt formalSpec=${formalSpec}`,
+        formalSpec,
+      });
+      const { provider, capture } = createScenarioProvider([
+        { content: 'Which transitions can fail?' },
+        { content: 'Generated task instruction.' },
+      ]);
+      const ctx = createSessionContext({
+        provider: provider as SessionContext['provider'],
+      });
+
+      const result = await runConversationLoop('/test', ctx, {
+        ...defaultStrategy,
+        formalSpec: !formalSpec,
+        resolveResumedSessionConfiguration,
+      }, undefined, undefined);
+
+      expect(result.action).toBe('execute');
+      expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
+      expect(capture.systemPrompts[0]).toBe(`resumed system prompt formalSpec=${formalSpec}`);
+      if (formalSpec) {
+        expect(capture.prompts[1]).toMatch(/\bQuint\b/);
+        expect(capture.prompts[1]).toMatch(/\bAlloy\b/);
+      } else {
+        expect(capture.prompts[1]).not.toMatch(/\bQuint\b/);
+        expect(capture.prompts[1]).not.toMatch(/\bAlloy\b/);
+      }
+    },
+  );
 
   it('should keep inline /go text as user note after resuming a session', async () => {
     setupRawStdin(toRawInputs(['/resume', '/go add rollback plan']));
@@ -621,19 +663,7 @@ describe('/go command', () => {
     });
   });
 
-  it.each([
-    ['unset', undefined, true],
-    ['project false', false, false],
-  ] as const)('should apply %s to the real summary prompt', async (_label, projectGherkin, expectedEnabled) => {
-    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-real-summary-'));
-    if (projectGherkin !== undefined) {
-      fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
-      fs.writeFileSync(
-        path.join(projectDir, '.takt', 'config.yaml'),
-        ['assistant:', `  gherkin: ${projectGherkin}`].join('\n'),
-        'utf-8',
-      );
-    }
+  it.each([false, true])('should apply resolved formal specification mode=%s to the real summary prompt', async (formalSpec) => {
     setupRawStdin(toRawInputs(['/go improve parser behavior']));
     const { provider, capture } = createScenarioProvider([
       { content: 'Generated task instruction.' },
@@ -642,31 +672,24 @@ describe('/go command', () => {
       provider: provider as SessionContext['provider'],
     });
 
-    try {
-      const result = await runConversationLoop(projectDir, ctx, defaultStrategy, undefined, undefined);
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      formalSpec,
+    }, undefined, undefined);
 
-      expect(result.action).toBe('execute');
-      if (expectedEnabled) {
-        expect(capture.prompts[0]).toContain('## Markdown + Gherkin Output Format');
-      } else {
-        expect(capture.prompts[0]).not.toContain('## Markdown + Gherkin Output Format');
-        expect(capture.prompts[0]).not.toContain('Write these in a fenced `gherkin` block:');
-        expect(capture.prompts[0]).not.toContain('Do not duplicate the same requirement in Markdown and Gherkin');
-      }
-    } finally {
-      fs.rmSync(projectDir, { recursive: true, force: true });
+    expect(result.action).toBe('execute');
+    expect(capture.prompts[0]).toContain('## Markdown + Gherkin Output Format');
+    if (formalSpec) {
+      expect(capture.prompts[0]).toMatch(/\bQuint\b/);
+      expect(capture.prompts[0]).toMatch(/\bAlloy\b/);
+    } else {
+      expect(capture.prompts[0]).not.toMatch(/\bQuint\b/);
+      expect(capture.prompts[0]).not.toMatch(/\bAlloy\b/);
     }
   });
 
-  it('should include Markdown and Gherkin rules in assistant summaries when project config enables them', async () => {
+  it('should pass the resolved formal specification mode to the summary builder', async () => {
     const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
-    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-assistant-'));
-    fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
-    fs.writeFileSync(
-      path.join(projectDir, '.takt', 'config.yaml'),
-      ['assistant:', '  gherkin: true'].join('\n'),
-      'utf-8',
-    );
     setupRawStdin(toRawInputs(['/go improve parser behavior']));
     const { provider } = createScenarioProvider([
       { content: 'Generated task instruction.' },
@@ -680,21 +703,50 @@ describe('/go command', () => {
       sessionId: undefined,
     };
 
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      formalSpec: true,
+    }, undefined, undefined);
+
+    expect(result.action).toBe('execute');
+    expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
+      expect.any(Array),
+      false,
+      'en',
+      expect.any(String),
+      expect.any(String),
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+  });
+
+  it('should keep the session value instead of re-resolving project config inside the conversation loop', async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-formal-spec-session-value-'));
+    fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, '.takt', 'config.yaml'),
+      ['assistant:', '  formal_spec: false'].join('\n'),
+      'utf-8',
+    );
+    setupRawStdin(toRawInputs(['/go improve parser behavior']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Generated task instruction.' },
+    ]);
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'],
+    });
+
     try {
-      const result = await runConversationLoop(projectDir, ctx, defaultStrategy, undefined, undefined);
+      const result = await runConversationLoop(projectDir, ctx, {
+        ...defaultStrategy,
+        formalSpec: true,
+      }, undefined, undefined);
 
       expect(result.action).toBe('execute');
-      expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
-        expect.any(Array),
-        false,
-        'en',
-        expect.any(String),
-        expect.any(String),
-        undefined,
-        undefined,
-        undefined,
-        true,
-      );
+      expect(capture.prompts[0]).toMatch(/\bQuint\b/);
+      expect(capture.prompts[0]).toMatch(/\bAlloy\b/);
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }

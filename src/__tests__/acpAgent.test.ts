@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -11,10 +11,12 @@ const {
   mockSelectAndExecuteTask,
   mockExecuteDefaultAction,
   mockCallAIWithRetry,
+  mockConfirm,
 } = vi.hoisted(() => ({
   mockSelectAndExecuteTask: vi.fn(),
   mockExecuteDefaultAction: vi.fn(),
   mockCallAIWithRetry: vi.fn(),
+  mockConfirm: vi.fn(),
 }));
 
 vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
@@ -27,6 +29,11 @@ vi.mock('../app/cli/routing.js', () => ({
 
 vi.mock('../features/interactive/aiCaller.js', () => ({
   callAIWithRetry: (...args: unknown[]) => mockCallAIWithRetry(...args),
+}));
+
+vi.mock('../shared/prompt/confirm.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  confirm: (...args: unknown[]) => mockConfirm(...args),
 }));
 
 import { createTaktAcpAgent, mapTaktAcpUpdateToSessionUpdate } from '../app/acp/agent.js';
@@ -59,6 +66,7 @@ function createRealConversationSessionForAcp(input: {
   return createConversationSession({
     cwd: input.cwd,
     outputMode: input.outputMode,
+    formalSpec: false,
     ctx: {
       provider: {
         setup: vi.fn(),
@@ -326,6 +334,77 @@ describe('TAKT ACP agent adapter', () => {
       cwd: '/repo',
     }));
   });
+
+  it.each([
+    ['Y/n', true],
+    ['y/N', false],
+  ] as const)(
+    'should preserve ACP protocol input and apply the %s formal specification default without reading stdin',
+    async (formalSpecSetting, expectedFormalSpec) => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-acp-formal-spec-boundary-'));
+      const originalIsTTY = process.stdin.isTTY;
+      const originalNoTty = process.env.TAKT_NO_TTY;
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        ['provider: mock', 'assistant:', `  formal_spec: ${formalSpecSetting}`].join('\n'),
+        'utf-8',
+      );
+      const sendSessionUpdate = vi.fn();
+      Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+      delete process.env.TAKT_NO_TTY;
+      const stdinOnSpy = vi.spyOn(process.stdin, 'on');
+      mockCallAIWithRetry.mockResolvedValue({
+        result: {
+          success: true,
+          content: 'Which parser states matter?',
+          sessionId: 'provider-session-1',
+        },
+        sessionId: 'provider-session-1',
+      });
+
+      try {
+        const agent = createTaktAcpAgent({
+          runWorkflowExecution: vi.fn(),
+          sendSessionUpdate,
+        });
+        const { sessionId } = await agent.handleSessionNew(newSessionParams({ cwd: projectDir }));
+
+        const result = await agent.handleSessionPrompt({
+          sessionId,
+          prompt: [{ type: 'text', text: 'describe parser states' }],
+        });
+
+        expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+        expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toBe('describe parser states');
+        const systemPrompt = mockCallAIWithRetry.mock.calls[0]?.[1] as string;
+        expect(systemPrompt).toMatch(/Gherkin/);
+        if (expectedFormalSpec) {
+          expect(systemPrompt).toMatch(/\bQuint\b/);
+          expect(systemPrompt).toMatch(/\bAlloy\b/);
+        } else {
+          expect(systemPrompt).not.toMatch(/\bQuint\b/);
+          expect(systemPrompt).not.toMatch(/\bAlloy\b/);
+        }
+        expect(mockConfirm).not.toHaveBeenCalled();
+        expect(stdinOnSpy.mock.calls.filter(([event]) => event === 'data')).toEqual([]);
+        expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+          kind: 'agent_message',
+          text: 'Which parser states matter?',
+        });
+        expect(result).toEqual({ stopReason: 'end_turn' });
+      } finally {
+        stdinOnSpy.mockRestore();
+        Object.defineProperty(process.stdin, 'isTTY', { value: originalIsTTY, configurable: true });
+        if (originalNoTty === undefined) {
+          delete process.env.TAKT_NO_TTY;
+        } else {
+          process.env.TAKT_NO_TTY = originalNoTty;
+        }
+        rmSync(projectDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('should reject session/new when cwd is missing', async () => {
     const agent = createTaktAcpAgent({

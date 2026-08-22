@@ -6,6 +6,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createMockProvider } from './helpers/stdinSimulator.js';
 
 // ── Mocks ──────────────────────────────────────────────
 
@@ -54,14 +55,20 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectOptionWithDefault: vi.fn(),
 }));
 
+vi.mock('../shared/prompt/confirm.js', () => ({
+  confirm: vi.fn(),
+}));
+
 import { getProvider } from '../infra/providers/index.js';
 import { selectOptionWithDefault, selectOption } from '../shared/prompt/index.js';
 import { info } from '../shared/ui/index.js';
+import { confirm } from '../shared/prompt/confirm.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOptionWithDefault = vi.mocked(selectOptionWithDefault);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
+const mockConfirm = vi.mocked(confirm);
 const attachmentSessionDirs = new Set<string>();
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
@@ -622,7 +629,8 @@ describe('personaMode', () => {
 
   it('should summarize initial /go task text without prior conversation', async () => {
     setupRawStdin(toRawInputs(['/go add regression coverage', '/cancel']));
-    setupMockProvider(['Add regression coverage for the shared /go path.']);
+    const { provider, capture } = createMockProvider(['Add regression coverage for the shared /go path.']);
+    mockGetProvider.mockReturnValue(provider);
     mockSelectOption.mockResolvedValue('execute');
 
     const result = await personaMode('/project', mockFirstStep);
@@ -631,6 +639,9 @@ describe('personaMode', () => {
       action: 'execute',
       task: 'Add regression coverage for the shared /go path.',
     });
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(capture.prompts[0]).toMatch(/Gherkin/);
+    expect(capture.prompts[0]).not.toMatch(/\bQuint\b|\bAlloy\b/);
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
   });

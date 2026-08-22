@@ -13,7 +13,7 @@ export function buildConversationSummaryPrompt(
   userNote: string,
   lang: 'en' | 'ja',
   promptContext?: string,
-  gherkin = false,
+  formalSpec = false,
 ): string {
   const trimmedNote = userNote.trim();
   const summaryHistory = trimmedNote
@@ -28,6 +28,6 @@ export function buildConversationSummaryPrompt(
     undefined,
     undefined,
     promptContext,
-    gherkin,
+    formalSpec,
   );
 }

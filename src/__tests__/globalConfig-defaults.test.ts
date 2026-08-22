@@ -35,6 +35,11 @@ type ObservabilityConfigForTest = {
   usageEventsPhase?: boolean;
 };
 
+type FormalSpecSetting = boolean | 'Y/n' | 'y/N';
+type GlobalConfigWithFormalSpec = ReturnType<typeof loadGlobalConfig> & {
+  assistant?: { formalSpec?: FormalSpecSetting };
+};
+
 let taktEnvSnapshot: TaktEnvSnapshot;
 
 describe('loadGlobalConfig', () => {
@@ -71,15 +76,33 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewSteps).toBeUndefined();
   });
 
-  it.each([true, false])('should load assistant.gherkin=%s from global config.yaml', (gherkin) => {
-    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
-    writeFileSync(
-      getGlobalConfigPath(),
-      ['assistant:', `  gherkin: ${gherkin}`].join('\n'),
-      'utf-8',
-    );
+  it.each([true, false, 'Y/n', 'y/N'] as const)(
+    'should load assistant.formal_spec=%s from global config.yaml',
+    (formalSpec) => {
+      mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        ['assistant:', `  formal_spec: ${JSON.stringify(formalSpec)}`].join('\n'),
+        'utf-8',
+      );
 
-    expect(loadGlobalConfig().assistant).toEqual({ gherkin });
+      expect(loadGlobalConfig().assistant).toEqual({ formalSpec });
+    },
+  );
+
+  it('should warn and ignore assistant.gherkin without changing the global config file', () => {
+    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+    const original = ['language: en', 'assistant:', '  gherkin: false'].join('\n');
+    writeFileSync(getGlobalConfigPath(), original, 'utf-8');
+    const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+
+    const loaded = loadGlobalConfig() as GlobalConfigWithFormalSpec;
+
+    expect(warning).toHaveBeenCalledOnce();
+    expect(String(warning.mock.calls[0]?.[0])).toMatch(/assistant\.gherkin/);
+    expect(String(warning.mock.calls[0]?.[0])).toMatch(/deprecated|廃止/i);
+    expect(loaded.assistant?.formalSpec).toBeUndefined();
+    expect(readFileSync(getGlobalConfigPath(), 'utf-8')).toBe(original);
   });
 
   it.each(['codex', 'claude'])('should accept an external %s selector base_url in global config', (provider) => {
@@ -403,20 +426,25 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('model: haiku');
   });
 
-  it.each([true, false])('should preserve assistant.gherkin=%s when saving global config', (gherkin) => {
-    const taktDir = join(testHomeDir, '.takt');
-    mkdirSync(taktDir, { recursive: true });
-    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+  it.each([true, false, 'Y/n', 'y/N'] as const)(
+    'should preserve assistant.formal_spec=%s when saving global config',
+    (formalSpec: FormalSpecSetting) => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
 
-    saveGlobalConfig({
-      ...loadGlobalConfig(),
-      assistant: { gherkin },
-    });
-    invalidateGlobalConfigCache();
+      saveGlobalConfig({
+        ...loadGlobalConfig(),
+        assistant: { formalSpec } as NonNullable<ReturnType<typeof loadGlobalConfig>['assistant']> & {
+          formalSpec: FormalSpecSetting;
+        },
+      });
+      invalidateGlobalConfigCache();
 
-    expect(loadGlobalConfig().assistant).toEqual({ gherkin });
-    expect(readFileSync(getGlobalConfigPath(), 'utf-8')).toContain(`gherkin: ${gherkin}`);
-  });
+      expect(loadGlobalConfig().assistant).toEqual({ formalSpec });
+      expect(readFileSync(getGlobalConfigPath(), 'utf-8')).toContain('formal_spec:');
+    },
+  );
 
   it('should persist selector provider options when saving global config', () => {
     const taktDir = join(testHomeDir, '.takt');

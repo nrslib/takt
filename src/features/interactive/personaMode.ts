@@ -56,6 +56,7 @@ export async function personaMode(
 
   return runConversationLoop(cwd, ctx, {
     systemPrompt: prependSourceContextGuardToSystemPrompt(ctx.lang, firstStep.personaContent),
+    formalSpec: false,
     allowedTools,
     transformPrompt: (msg, sourceContext) => prependSourceContext(ctx.lang, msg, sourceContext),
     introMessage,

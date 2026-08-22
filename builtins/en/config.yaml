@@ -65,7 +65,8 @@ language: en        # UI language: en | ja
 # Interactive mode
 # interactive_preview_steps: 3 # Number of step previews in interactive mode (0-10)
 # assistant:
-#   gherkin: true              # Generate final task instructions as Markdown + focused Gherkin (default: true; set false to disable)
+#   formal_spec: 'y/N'         # true/false never asks; Y/n or y/N asks on TTY with that default (unset: y/N). Non-TTY uses the default answer.
+# Gherkin guidance is always enabled. Deprecated assistant.gherkin is warned about and ignored without migration.
 
 # Provider routing for workflow steps (recommended)
 # provider_routing:

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConversationStrategy, SessionContext } from '../features/interactive/conversationLoop.js';
 import type { WorkflowContext } from '../features/interactive/interactive-summary.js';
 
@@ -9,6 +9,7 @@ const {
   mockRunConversationLoop,
   mockLoadTemplate,
   mockSelectOption,
+  mockConfirm,
 } = vi.hoisted(() => ({
   mockResolveWorkflowConfigValues: vi.fn(),
   mockInitializeSession: vi.fn(),
@@ -16,6 +17,7 @@ const {
   mockRunConversationLoop: vi.fn(),
   mockLoadTemplate: vi.fn(),
   mockSelectOption: vi.fn(),
+  mockConfirm: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -52,6 +54,10 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectOption: mockSelectOption,
 }));
 
+vi.mock('../shared/prompt/confirm.js', () => ({
+  confirm: mockConfirm,
+}));
+
 vi.mock('../shared/ui/index.js', () => ({
   blankLine: vi.fn(),
   info: vi.fn(),
@@ -77,6 +83,7 @@ const runSessionContext = {
     { filename: 'fix.md', content: 'failed report' },
   ],
 };
+const originalIsTTY = process.stdin.isTTY;
 
 function buildOptions(previousOrderContent: string | null) {
   return {
@@ -92,10 +99,15 @@ function buildOptions(previousOrderContent: string | null) {
 describe('runDirectInstructMode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
     mockResolveWorkflowConfigValues.mockReturnValue({ language: 'en', provider: 'mock' });
     mockInitializeSession.mockReturnValue({ sessionId: 'session-1' });
     mockLoadTemplate.mockReturnValue('direct instruct system prompt');
     mockRunConversationLoop.mockResolvedValue({ action: 'execute', task: 'Add regression coverage' });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process.stdin, 'isTTY', { value: originalIsTTY, configurable: true });
   });
 
   it('Given top-level provider is unset, When direct instruct starts, Then provider resolution is deferred to initializeSession', async () => {
@@ -193,6 +205,7 @@ describe('runDirectInstructMode', () => {
       expect.objectContaining({ lang: 'en', personaName: 'instruct' }),
       expect.objectContaining({
         systemPrompt: expect.any(String),
+        formalSpec: false,
         allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
         previousOrderContent: '# Previous Order',
       }),
@@ -201,6 +214,7 @@ describe('runDirectInstructMode', () => {
     );
     const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string }>;
     expect(options.map((option) => option.value)).toEqual(['execute', 'continue']);
+    expect(mockConfirm).not.toHaveBeenCalled();
   });
 
   it('Given the conversation returns image attachments, When direct instruct completes, Then attachments are preserved', async () => {

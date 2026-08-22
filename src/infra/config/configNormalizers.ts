@@ -16,6 +16,7 @@ import type { ProviderPermissionProfiles } from '../../core/models/provider-prof
 import type {
   AssistantConfig,
   AutoRoutingConfig,
+  FormalSpecSetting,
   WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
@@ -523,28 +524,28 @@ export function normalizePipelineConfig(raw: {
 }
 
 export function normalizeAssistantConfig(
-  raw: { init_files?: string[]; gherkin?: boolean } | undefined,
+  raw: { init_files?: string[]; formal_spec?: FormalSpecSetting } | undefined,
 ): AssistantConfig | undefined {
   const initFiles = raw?.init_files?.length ? raw.init_files : undefined;
-  if (initFiles === undefined && raw?.gherkin === undefined) {
+  if (initFiles === undefined && raw?.formal_spec === undefined) {
     return undefined;
   }
   return {
     ...(initFiles !== undefined ? { initFiles } : {}),
-    ...(raw?.gherkin !== undefined ? { gherkin: raw.gherkin } : {}),
+    ...(raw?.formal_spec !== undefined ? { formalSpec: raw.formal_spec } : {}),
   };
 }
 
 export function denormalizeAssistantConfig(
   config: AssistantConfig | undefined,
-): { init_files?: string[]; gherkin?: boolean } | undefined {
+): { init_files?: string[]; formal_spec?: FormalSpecSetting } | undefined {
   const initFiles = config?.initFiles?.length ? config.initFiles : undefined;
-  if (initFiles === undefined && config?.gherkin === undefined) {
+  if (initFiles === undefined && config?.formalSpec === undefined) {
     return undefined;
   }
   return {
     ...(initFiles !== undefined ? { init_files: initFiles } : {}),
-    ...(config?.gherkin !== undefined ? { gherkin: config.gherkin } : {}),
+    ...(config?.formalSpec !== undefined ? { formal_spec: config.formalSpec } : {}),
   };
 }
 

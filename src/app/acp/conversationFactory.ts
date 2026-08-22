@@ -10,11 +10,14 @@ import {
   type ConversationSession,
 } from '../../features/interactive/conversationSession.js';
 import type { AcpConversationSessionOptions } from './types.js';
+import { resolveFormalSpecModeWithoutPrompt } from '../../features/interactive/taskInstructionFormat.js';
 
 export function createDefaultConversationSession(options: AcpConversationSessionOptions): ConversationSession {
   const baseCtx = initializeSession(options.cwd, 'interactive');
+  const formalSpec = resolveFormalSpecModeWithoutPrompt(options.cwd);
   const systemPrompt = loadTemplate('score_interactive_system_prompt', baseCtx.lang, {
     grillMe: false,
+    formalSpec,
     hasWorkflowPreview: false,
     workflowStructure: '',
     stepDetails: '',
@@ -28,6 +31,7 @@ export function createDefaultConversationSession(options: AcpConversationSession
   const assistantInitContext = loadAssistantInitContext(options.cwd);
   return createConversationSession({
     ...options,
+    formalSpec,
     ctx: baseCtx,
     strategy: {
       systemPrompt,

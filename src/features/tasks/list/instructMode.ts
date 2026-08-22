@@ -164,6 +164,7 @@ export async function runInstructMode(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
+    formalSpec: false,
     allowedTools: INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),

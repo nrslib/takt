@@ -14,12 +14,21 @@ import * as path from 'node:path';
 
 // ── Mocks ─────────────────────────────────────────────────────────────
 
+const { mockResolveFormalSpecMode } = vi.hoisted(() => ({
+  mockResolveFormalSpecMode: vi.fn(),
+}));
+
 vi.mock('../features/interactive/conversationLoop.js', () => ({
   callAIWithRetry: vi.fn(),
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveFormalSpecMode: (cwd: string) => mockResolveFormalSpecMode(cwd),
 }));
 
 vi.mock('../features/interactive/sessionInitialization.js', () => ({
@@ -95,6 +104,7 @@ function createMissingImageAttachment() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockResolveFormalSpecMode.mockResolvedValue(false);
 });
 
 // =================================================================
@@ -102,19 +112,8 @@ beforeEach(() => {
 // =================================================================
 
 describe('quietMode: summary AI session isolation', () => {
-  it.each([
-    ['unset', undefined, true],
-    ['project false', false, false],
-  ] as const)('should apply %s to the actual quiet summary prompt', async (_label, configured, expectedEnabled) => {
-    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-quiet-gherkin-prompt-'));
-    if (configured !== undefined) {
-      fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
-      fs.writeFileSync(
-        path.join(projectDir, '.takt', 'config.yaml'),
-        ['assistant:', `  gherkin: ${configured}`].join('\n'),
-        'utf-8',
-      );
-    }
+  it.each([false, true])('should resolve once and apply formal specification mode=%s to the quiet summary prompt', async (formalSpec) => {
+    mockResolveFormalSpecMode.mockResolvedValue(formalSpec);
     const actualInteractive = await vi.importActual<typeof import('../features/interactive/interactive.js')>(
       '../features/interactive/interactive.js',
     );
@@ -126,20 +125,20 @@ describe('quietMode: summary AI session isolation', () => {
     });
     mockSelectPostSummaryAction.mockResolvedValue('execute');
 
-    try {
-      const result = await quietMode(projectDir, { userMessage: 'fix the bug' });
+    const result = await quietMode('/repo', { userMessage: 'fix the bug' });
 
-      expect(result.action).toBe('execute');
-      const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
-      if (expectedEnabled) {
-        expect(prompt).toContain('## Markdown + Gherkin Output Format');
-      } else {
-        expect(prompt).not.toContain('## Markdown + Gherkin Output Format');
-        expect(prompt).not.toContain('Write these in a fenced `gherkin` block:');
-        expect(prompt).not.toContain('Do not duplicate the same requirement in Markdown and Gherkin');
-      }
-    } finally {
-      fs.rmSync(projectDir, { recursive: true, force: true });
+    expect(result.action).toBe('execute');
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledOnce();
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledWith('/repo');
+    expect(mockBuildSummaryPrompt.mock.calls[0]?.[8]).toBe(formalSpec);
+    const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
+    expect(prompt).toContain('## Markdown + Gherkin Output Format');
+    if (formalSpec) {
+      expect(prompt).toMatch(/\bQuint\b/);
+      expect(prompt).toMatch(/\bAlloy\b/);
+    } else {
+      expect(prompt).not.toMatch(/\bQuint\b/);
+      expect(prompt).not.toMatch(/\bAlloy\b/);
     }
   });
 

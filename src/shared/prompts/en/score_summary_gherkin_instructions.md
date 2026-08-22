@@ -31,3 +31,4 @@ For Gherkin:
 - Do not duplicate the same requirement in Markdown and Gherkin
 - In Markdown verification or test guidance, refer to the Gherkin behavior collectively instead of restating each selected outcome
 - Preserve the overall task context in Markdown so the document remains understandable without reading every Scenario
+- Do not include ASCII diagrams in the final task instruction
