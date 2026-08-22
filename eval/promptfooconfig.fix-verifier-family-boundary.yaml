@@ -29,8 +29,9 @@ tests:
           requires migrating the CLI normalization consumer but the source has
           not done so (an `incomplete` implementation gap), while the accepted
           review family also requires the persisted-job consumer and the plan
-          omits that path (a `plan_invalid` plan gap). The final result must be
-          `plan_invalid`, while still listing the implementation gap so the next
-          plan/fix cycle does not lose it. Fail if passing tests alone verifies
+          omits that path (a `plan_invalid` plan gap). Both gaps must be retained
+          independently so the next plan/fix cycle does not lose either one.
+          Overall workflow-result selection is not part of this Phase 1
+          source-discovery evaluation. Fail if passing tests alone verifies
           completion, if the two classes are collapsed, or if an adjacent
           telemetry-label issue is added.

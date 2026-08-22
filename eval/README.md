@@ -49,6 +49,20 @@ logins, is excluded from the default suite run, and asserts on a fixed
 machine-readable `JUDGEMENT:` line — invoke it explicitly
 (`npm run eval:prompts:fix-loop-convergence`).
 
+The `fix-verifier-model-matrix` command checks two separate responsibilities on
+Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3: Phase 1 derives and
+records source-backed state and path gaps, while Phase 3 applies workflow-owned
+routing when plan defects coexist with implementation or evidence gaps. It
+requires Claude, Codex, and opencode logins and is excluded from the default
+suite run. Invoke it explicitly with
+`npm run eval:prompts:fix-verifier-model-matrix`. The corresponding
+`fix-verifier-state-closure` and `fix-verifier-state-routing` suites keep
+single-provider regressions in the default prompt gate. The Codex and opencode
+eval providers have no total wall-clock limit. They terminate only after 15
+minutes with no JSON or diagnostic event; override those inactivity windows
+with `CODEX_REVIEW_IDLE_TIMEOUT_SECONDS` and
+`OPENCODE_REVIEW_IDLE_TIMEOUT_SECONDS` when needed.
+
 The `fix-plan-cause-check` suite uses the same two providers and one-at-a-time
 execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with
@@ -103,6 +117,9 @@ Run it through `npm run eval:prompts:security-review-method`.
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
 | `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether repeated failures switch from local patches to a structural fix, history is preserved across retries, new regressions are found, and the monitor chooses the correct next step, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
+| `fix-verifier-state-closure` | review-remediation / fix-verifier | fix-verifier-state-closure | whether verification derives every applicable terminal state from the source of truth, separates a plan omission from an implementation gap, retains both findings, and excludes an adjacent contract |
+| `fix-verifier-state-routing` | review-remediation / fix-verifier status judgement | fix-verifier-state-closure | whether workflow-owned rules route a report containing both a plan defect and an implementation gap to fix-plan |
+| `fix-verifier-model-matrix` | review-remediation / fix-verifier | fix-verifier-state-closure | source-derived state closure and workflow-owned mixed-gap routing measured separately on Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3 |
 | `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes a duplicate review update from possible causes and declines to serialize parallel execution until the cause is confirmed, measured on both Claude Opus and Codex Luna Max |
 | `fix-plan-bounded-proof` | peer-review / fix-plan | fix-plan-bounded-proof | whether Opus 5, Luna Max, and Sol High turn broad format, consumer, and boundary claims into source-backed concrete rows for report variants, helper limits, absence states, branch identity, and locale consumers |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the accepted group of findings, covers every affected use of the same rule, and does not revive findings that were excluded |
@@ -301,7 +318,7 @@ eval/
 - More planted bugs: each fixture bug should map to a specific policy line,
   and get one `metric:`-labelled assertion (recall). Clean cases guard
   precision.
-- Phase 3 (status judgment) is a good next target: cheap, single-shot, and
+- Phase 3 (status judgement) is a good next target: cheap, single-shot, and
   promptfoo-friendly (assert the emitted `[STEP:N]` tag).
 - Language note: prompts are exported in the language resolved from your TAKT
   config (currently whatever `~/.takt/config.yaml` says). Assertions must
