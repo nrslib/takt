@@ -166,8 +166,8 @@ function buildInstructionContext(
       companionReviewMode: providerResolution.companionReviewMode,
       cwd,
       step,
-      runSlug: 'preview',
-      runPathNamespace: [],
+      getRunSlug: () => 'preview',
+      getRunPathNamespace: () => [],
     }),
   };
 }

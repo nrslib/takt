@@ -1243,8 +1243,8 @@ export class StepExecutor {
         companionReviewMode: this.deps.companionReviewMode,
         cwd: this.deps.getCwd(),
         step,
-        runSlug: this.deps.getRunId(),
-        runPathNamespace: this.deps.getRunPathNamespace(),
+        getRunSlug: () => this.deps.getRunId(),
+        getRunPathNamespace: () => this.deps.getRunPathNamespace(),
       }),
     }).build();
     return instruction;

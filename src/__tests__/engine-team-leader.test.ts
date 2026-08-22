@@ -494,6 +494,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       projectCwd: tmpDir,
       provider: 'mock',
       companionEnabled: true,
+      companionReviewMode: 'live',
       companionProviders: { reviewer: { provider: 'mock' } },
       companionDiffReader,
     });

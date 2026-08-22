@@ -8,8 +8,8 @@ export function buildCompanionInstructionContext(input: {
   readonly companionReviewMode: CompanionReviewMode;
   readonly cwd: string;
   readonly step: WorkflowStep;
-  readonly runSlug: string;
-  readonly runPathNamespace: readonly string[];
+  readonly getRunSlug: () => string;
+  readonly getRunPathNamespace: () => readonly string[];
 }): InstructionContext['companion'] | undefined {
   if (
     !input.companionEnabled
@@ -21,8 +21,8 @@ export function buildCompanionInstructionContext(input: {
   return {
     mailboxDirectory: buildCompanionMailboxDirectory({
       cwd: input.cwd,
-      runSlug: input.runSlug,
-      runPathNamespace: input.runPathNamespace,
+      runSlug: input.getRunSlug(),
+      runPathNamespace: input.getRunPathNamespace(),
       stepName: input.step.name,
     }),
     reviewMode: input.companionReviewMode,
