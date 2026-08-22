@@ -15,15 +15,17 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm run build` | `tsc` (+ opencode-probe tsconfig) plus copies of `src/shared/prompts/{en,ja}/**/*.md`, `src/shared/i18n/*.yaml`, and `src/core/runtime/presets/*.sh` into `dist/`. Skipping any copy breaks runtime resolution. |
 | `npm run watch` | TypeScript incremental build (no asset copy). |
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
-| `npm test` | Fast unit gate: type-contracts tsc, then 4 shards launched **concurrently** (`Promise.all` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration tests; the output names the follow-up command. |
+| `npm test` | Fast unit gate: type-contracts tsc, the test type-check (`tsconfig.tests.json`), then 4 shards launched **concurrently** (`Promise.all` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration tests; the output names the follow-up command. |
 | `npm run test:it` | Light integration gate for real filesystem, bounded storage, and multi-component contracts. Run after implementation. |
 | `npm run test:it:heavy` | Full heavy integration gate for real child processes, Git, complete engines, integration/regression/performance suites, and serial groups. Local execution uses one worker; PR CI shards across isolated runners. |
 | `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the correct unit, light-IT, heavy-parallel-IT, or heavy-serial-IT runner. For an added or changed IT, also run `releaseVerificationWiring.test.ts` by itself. Always target-run an added or changed heavy IT before handoff. |
 | `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |
 | `npm run test:opencode-probe` | Deterministic OpenCode probe smoke gate (11 cases, no API cost). Standalone; not part of routine gates or `check:release`. |
-| `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts`. |
+| `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `TAKT_E2E_PROVIDER=mock npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts` — **without that env var the specs run against the real provider** (`provider: claude` in `e2e/fixtures/config.e2e.yaml`) and cost API credits. |
 | `npm run test:e2e:provider:{claude,claude-sdk,codex,opencode,cursor}` | E2E against a real provider (slow, costs API credits). |
 | `npm run check:release` | Full pre-release gate: build + lint + fast 4-shard unit + light IT + heavy IT + e2e. |
+
+**Vitest strips types, so a test only gets type-checked if it is listed in `tsconfig.tests.json`.** Add the test you wrote or changed to that list; if an older test does not type-check yet, fix it first rather than leaving it off.
 
 ### Test pool behavior (worth knowing before "fixing" flakes)
 
@@ -140,4 +142,4 @@ builtins/{en,ja}/       Bundled facets + workflows (read from dist/ at runtime)
 - Prefer simple code over defensive fallback-heavy logic. TAKT is a local tool: no audit trails, tamper-resistance, or security theater.
 - Filenames mostly `kebab-case`. Conventional Commit style with occasional `(#issue)` suffix.
 - Don't commit secrets; provider keys live in env vars or `~/.takt/config.yaml`.
-- A TAKT review pass is recommended before a PR: `takt -t "#<PR>" -w review-takt-default`. For CodeRabbit comments: judge each, act on the valid ones, resolve every thread; don't post replies.
+- For CodeRabbit comments: judge each, act on the valid ones, resolve every thread; don't post replies.

@@ -167,6 +167,7 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
     throw new Error(`Scenario entry [${index}] "failure_category" is invalid`);
   }
   const streamEvents = validateStreamEvents(obj.stream_events, index);
+  const textChunks = validateTextChunks(obj.text_chunks, index);
   const fileWrites = validateFileWrites(obj.file_writes, index);
 
   return {
@@ -179,6 +180,7 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
     delayMs: obj.delay_ms as number | undefined,
     waitForAbort: obj.wait_for_abort as boolean | undefined,
     ...(streamEvents === undefined ? {} : { streamEvents }),
+    ...(textChunks === undefined ? {} : { textChunks }),
     ...(fileWrites === undefined ? {} : { fileWrites }),
   };
 }
@@ -211,6 +213,33 @@ function validateStreamEvents(
       tool: record.tool,
       id: record.id,
       input: record.input as Record<string, unknown>,
+    };
+  });
+}
+
+function validateTextChunks(
+  value: unknown,
+  entryIndex: number,
+): ScenarioEntry['textChunks'] {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`Scenario entry [${entryIndex}] "text_chunks" must be an array`);
+  }
+  return value.map((chunk, chunkIndex) => {
+    if (typeof chunk !== 'object' || chunk === null || Array.isArray(chunk)) {
+      throw new Error(`Scenario entry [${entryIndex}] text_chunks[${chunkIndex}] must be an object`);
+    }
+    const record = chunk as Record<string, unknown>;
+    if (typeof record.text !== 'string') {
+      throw new Error(`Scenario entry [${entryIndex}] text_chunks[${chunkIndex}] must have a "text" string`);
+    }
+    const delayMs = record.delay_ms;
+    if (delayMs !== undefined && typeof delayMs !== 'number') {
+      throw new Error(`Scenario entry [${entryIndex}] text_chunks[${chunkIndex}] "delay_ms" must be a number if provided`);
+    }
+    return {
+      text: record.text,
+      ...(delayMs === undefined ? {} : { delayMs }),
     };
   });
 }

@@ -294,12 +294,17 @@ export function selectSummaryAction(
   return selectOption<PostSummaryAction>(actionPrompt, options);
 }
 
-export function selectPostSummaryAction(
-  task: string,
+/**
+ * Action selector for a finished summary, with the run's withheld actions
+ * applied. Shared so the readline loop and the TUI offer the same list in the
+ * same order rather than each assembling one.
+ */
+export function createPostSummaryActionSelector(
   proposedLabel: string,
   ui: InteractiveSummaryUIText,
-): Promise<PostSummaryAction | null> {
-  return selectSummaryAction(
+  excludeActions: readonly SummaryActionValue[] = [],
+): (task: string) => Promise<PostSummaryAction | null> {
+  return (task: string) => selectSummaryAction(
     task,
     proposedLabel,
     ui.actionPrompt,
@@ -311,8 +316,18 @@ export function selectPostSummaryAction(
         continue: ui.actions.continue,
       },
       ['create_issue'],
+      excludeActions,
     ),
   );
+}
+
+/** The same selector, for a run that withholds nothing. */
+export function selectPostSummaryAction(
+  task: string,
+  proposedLabel: string,
+  ui: InteractiveSummaryUIText,
+): Promise<PostSummaryAction | null> {
+  return createPostSummaryActionSelector(proposedLabel, ui)(task);
 }
 
 /**

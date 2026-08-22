@@ -23,7 +23,9 @@ import { selectOption } from '../../../shared/prompt/index.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { blankLine, info } from '../../../shared/ui/index.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
+import { runTuiTaskConversation } from '../../tui/runTuiTask.js';
 import type { InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
+import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
 import {
   renderPullRequestContext,
   type PullRequestContext,
@@ -111,7 +113,13 @@ export async function runDirectInstructMode(
     previousOrderContent: options.previousOrderContent ?? undefined,
   };
 
-  const result = await runConversationLoop(options.cwd, ctx, strategy, options.workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({
+      cwd: options.cwd,
+      plan: { ctx, strategy },
+      workflowContext: options.workflowContext,
+    })
+    : await runConversationLoop(options.cwd, ctx, strategy, options.workflowContext, undefined);
   if (result.action === 'cancel') {
     return attachImageAttachmentCleanup({
       action: 'cancel',

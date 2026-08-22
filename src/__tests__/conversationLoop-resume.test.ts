@@ -8,7 +8,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
+import {
+  resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig,
+  type AssistantCliOverrides,
+  type AssistantProviderConfig,
+} from '../core/config/provider-resolution.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -22,7 +26,7 @@ import {
 } from './helpers/stdinSimulator.js';
 
 const { mockResolveAssistantConfigLayers } = vi.hoisted(() => ({
-  mockResolveAssistantConfigLayers: vi.fn(() => ({
+  mockResolveAssistantConfigLayers: vi.fn((_projectDir: string): AssistantProviderConfig => ({
     local: { provider: 'mock' },
     global: {},
   })),
@@ -49,11 +53,11 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
-  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: { provider?: string; model?: string }) =>
+  resolveAssistantConfigLayers: (projectDir: string) => mockResolveAssistantConfigLayers(projectDir),
+  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: AssistantCliOverrides) =>
     realResolveAssistantProviderModelFromConfig(
       mockResolveAssistantConfigLayers(projectDir),
-      cliOverrides as never,
+      cliOverrides,
     ),
 }));
 
@@ -116,7 +120,6 @@ vi.mock('../shared/i18n/index.js', () => ({
     continuePrompt: 'Continue?',
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
-    playNoTask: 'No task for /play',
     retryNoOrder: 'No previous order found.',
     retryUnavailable: '/retry is not available in this mode.',
     cancelled: 'Cancelled',
@@ -138,7 +141,6 @@ const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockLogInfo = vi.mocked(logInfo);
 const mockLogError = vi.mocked(logError);
-const attachmentSessionDirs = new Set<string>();
 
 // --- Helpers ---
 
@@ -182,48 +184,7 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
-  for (const sessionDir of attachmentSessionDirs) {
-    fs.rmSync(sessionDir, { recursive: true, force: true });
-  }
-  attachmentSessionDirs.clear();
 });
-
-function createOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
-}
-
-function createInvalidSizeOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length + 1}:${imageData.toString('base64')}\x07`;
-}
-
-function trackAttachmentSession(tempPath: string): void {
-  attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
-}
-
-function createIsolatedTmpRoot(prefix: string): string {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  attachmentSessionDirs.add(tmpRoot);
-  return tmpRoot;
-}
-
-function listTaktTempSessionDirs(): Set<string> {
-  const taktTempRoot = path.join(os.tmpdir(), 'takt');
-  if (!fs.existsSync(taktTempRoot)) {
-    return new Set();
-  }
-  return new Set(
-    fs.readdirSync(taktTempRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(taktTempRoot, entry.name)),
-  );
-}
-
-function expectNoNewTaktTempSessionDirs(previous: Set<string>): void {
-  const leaked = [...listTaktTempSessionDirs()].filter((sessionDir) => !previous.has(sessionDir));
-  expect(leaked).toEqual([]);
-}
 
 function createMissingImageAttachment() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-missing-image-'));
@@ -602,21 +563,6 @@ describe('/resume command', () => {
     expect(result.action).toBe('cancel');
   });
 
-  it('should complete /r to /resume when retry and replay are unavailable', async () => {
-    // Given: /r → Tab → Enter completes to /resume, then /cancel exits
-    setupRawStdin(toRawInputs(['/r\t', '/cancel']));
-    setupProvider([]);
-
-    const ctx = createSessionContext();
-
-    // When
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
-
-    // Then
-    expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en');
-    expect(result.action).toBe('cancel');
-  });
-
   it('should complete /r to /retry when retry is available', async () => {
     // Given: /r → Tab → Enter completes to /retry, then /cancel exits
     setupRawStdin(toRawInputs(['/r\t', '/cancel']));
@@ -641,11 +587,10 @@ describe('/resume command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
-  it('does not turn disabled /accept or /play into execution results in a guarded mode', async () => {
-    setupRawStdin(toRawInputs(['/accept', '/play run it', '/go']));
+  it('does not turn a disabled /accept into an execution result in a guarded mode', async () => {
+    setupRawStdin(toRawInputs(['/accept', '/go']));
     const { provider } = createScenarioProvider([
       { content: 'Assistant response to accept text' },
-      { content: 'Assistant response to play text' },
       { content: 'Revised order body' },
     ]);
     const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
@@ -817,95 +762,6 @@ describe('/go command', () => {
     expect(capture.prompts[3]).toContain('First generated order');
   });
 
-  it('should return pasted image attachments after image input and /go', async () => {
-    setupRawStdin([
-      `use ${createOscImagePaste()} please\r`,
-      '/go\r',
-    ]);
-
-    const { provider, capture } = createScenarioProvider([
-      { content: 'AI response using [Image #1].' },
-      { content: 'Generated task using [Image #1].' },
-    ]);
-
-    const ctx: SessionContext = {
-      provider: provider as SessionContext['provider'],
-      providerType: 'mock' as SessionContext['providerType'],
-      model: undefined,
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    };
-
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
-
-    expect(capture.callCount).toBe(2);
-    expect(capture.imageAttachments[0]).toBeUndefined();
-    expect(capture.imageAttachments[1]).toBeUndefined();
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('Generated task using [Image #1].');
-    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-    expect(result.attachments?.[0]).not.toHaveProperty('relativePath');
-    expect(result.attachments?.[0]?.tempPath).toBeDefined();
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
-  });
-
-  it('should cleanup pasted image session directory when input processing throws after image paste', async () => {
-    const tmpRoot = createIsolatedTmpRoot('takt-conversation-cleanup-');
-    const originalTmpDir = process.env.TMPDIR;
-    process.env.TMPDIR = tmpRoot;
-    const previousSessionDirs = listTaktTempSessionDirs();
-    setupRawStdin([
-      `use ${createOscImagePaste()} ${createInvalidSizeOscImagePaste()}\r`,
-    ]);
-    const ctx = createSessionContext();
-
-    try {
-      await expect(
-        runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined),
-      ).rejects.toThrow('Pasted inline image data does not match its declared size.');
-
-      expectNoNewTaktTempSessionDirs(previousSessionDirs);
-    } finally {
-      if (originalTmpDir === undefined) {
-        delete process.env.TMPDIR;
-      } else {
-        process.env.TMPDIR = originalTmpDir;
-      }
-    }
-  });
-
-  it('should pass image attachment bodies only to native image providers', async () => {
-    setupRawStdin([
-      `use ${createOscImagePaste()} please\r`,
-      '/go\r',
-    ]);
-
-    const { provider, capture } = createScenarioProvider([
-      { content: 'AI response using [Image #1].' },
-      { content: 'Generated task using [Image #1].' },
-    ], { supportsNativeImageInput: true });
-
-    const ctx: SessionContext = {
-      provider: provider as SessionContext['provider'],
-      providerType: 'codex' as SessionContext['providerType'],
-      model: undefined,
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    };
-
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
-
-    expect(capture.callCount).toBe(2);
-    expect(capture.imageAttachments[0]?.[0]?.placeholder).toBe('[Image #1]');
-    expect(capture.imageAttachments[0]?.[0]?.path).toBeDefined();
-    expect(capture.imageAttachments[1]?.[0]?.placeholder).toBe('[Image #1]');
-    expect(result.action).toBe('execute');
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-  });
-
   it('should report missing stored images in regular input and continue without calling AI', async () => {
     setupRawStdin(toRawInputs(['inspect [Image #1]', '/cancel']));
     const missingAttachment = createMissingImageAttachment();
@@ -948,30 +804,6 @@ describe('/go command', () => {
     expect(capture.callCount).toBe(0);
     expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('missing-image.png'));
     expect(result.action).toBe('cancel');
-  });
-
-  it('should not create formal task assets when image input is cancelled', async () => {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-cancel-image-test-'));
-    try {
-      setupRawStdin([
-        `use ${createOscImagePaste()} please\r`,
-        '/cancel\r',
-      ]);
-
-      setupProvider(['AI response using [Image #1].']);
-      const ctx = createSessionContext();
-
-      const result = await runConversationLoop(projectRoot, ctx, defaultStrategy, undefined, undefined);
-
-      expect(result.action).toBe('cancel');
-      expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-      expect(result.attachments?.[0]?.tempPath).toBeDefined();
-      trackAttachmentSession(result.attachments![0]!.tempPath);
-      expect(fs.existsSync(path.join(projectRoot, '.takt', 'tasks'))).toBe(false);
-      expect(fs.existsSync(path.join(projectRoot, '.takt', 'runs'))).toBe(false);
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true });
-    }
   });
 
   it('should include assistant init context only in the first regular AI prompt', async () => {
@@ -1074,8 +906,8 @@ describe('/go command', () => {
 });
 
 describe('conversation logging', () => {
-  it('should log only non-sensitive metadata for initial input, session state, and play task', async () => {
-    setupRawStdin(toRawInputs(['/play secret implementation details']));
+  it('should log only non-sensitive metadata for initial input and session state', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
     setupProvider([]);
 
     const ctx = createSessionContext({ sessionId: 'sensitive-session-id' });
@@ -1088,10 +920,7 @@ describe('conversation logging', () => {
       { sourceContext: 'secret prefilled input' },
     );
 
-    expect(result).toEqual({
-      action: 'execute',
-      task: 'secret implementation details',
-    });
+    expect(result).toEqual({ action: 'cancel', task: '' });
     expect(mockLogger.debug).toHaveBeenCalledWith(
       'Loaded initial input as source context without auto-submitting to AI',
       {
@@ -1100,10 +929,6 @@ describe('conversation logging', () => {
         hasSession: true,
       },
     );
-    expect(mockLogger.info).toHaveBeenCalledWith('Play command', {
-      hasTaskText: true,
-      taskLength: 'secret implementation details'.length,
-    });
     expect(mockLogger.debug).not.toHaveBeenCalledWith(
       'Loaded initial input as source context without auto-submitting to AI',
       expect.objectContaining({
@@ -1114,12 +939,6 @@ describe('conversation logging', () => {
       'Sending to AI',
       expect.objectContaining({
         sessionId: 'sensitive-session-id',
-      }),
-    );
-    expect(mockLogger.info).not.toHaveBeenCalledWith(
-      'Play command',
-      expect.objectContaining({
-        task: 'secret implementation details',
       }),
     );
   });

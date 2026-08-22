@@ -720,6 +720,49 @@ provider:
         fallback_profile: sol-high
 ```
 
+### Directory-specific assignments
+
+`provider.assignments` defines named provider configuration sets that can be selected for a
+project directory. Each entry must contain `defaults` or `targets`; an empty assignment is not
+valid. `defaults` has the same shape as top-level `provider.defaults` and must choose exactly one
+of `profile` or `ladder`. `targets` has the same shape as top-level `provider.targets`:
+`personas`, `tags`, and `steps` may use `profile`, `pool`, or `ladder`; `internal_agents` may use
+`profile` or `ladder`, while `companions` may use only a fixed `profile`.
+
+`provider.directories` maps a directory path to an assignment name. The lookup target is the
+startup project directory. Keys expand `~`, become absolute, and then receive realpath-equivalent
+normalization for existing paths before exact comparison. Prefix matching and globs are not used.
+An unknown assignment name in this map fails fast while loading. When a directory matches, the
+assignment's `defaults` are used; if omitted, top-level `provider.defaults` is used. If the
+assignment has `targets`, it replaces the entire top-level `provider.targets` map; individual
+target maps are not merged. An assignment that omits `targets` keeps the top-level
+`provider.targets`. `profiles` and `auto_routing` remain shared.
+
+```yaml
+provider:
+  assignments:
+    project-sol:
+      defaults:
+        profile: sol-medium
+      targets:
+        personas:
+          coder:
+            profile: sol-medium
+        steps:
+          default/implement:
+            pool: sol-pool
+
+  directories:
+    ~/work/example: project-sol
+```
+
+Across global and project layers, `assignments` follow the profile rule: a same-name project
+entry replaces the global entry wholesale, while differently named entries coexist. For
+`directories`, project wins when normalized keys are equal and otherwise both mappings remain.
+These merges happen before directory assignment selection. Profile, pool, and ladder references
+inside assignments are validated with the other runtime provider references and fail fast before
+an agent runs.
+
 `provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Optional `capabilities` names one provider-options preset or a list of presets applied in order. Presets resolve project → global → builtin, like workflow capabilities, and inline `options` override preset values. Optional `permission_mode` selects the provider's exact permission mode. Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
 
 TAKT-owned structured agents always start a fresh session. Providers with native structured output receive the schema directly; other providers receive a JSON schema instruction, and TAKT parses and validates the returned object. TAKT does not add internal-agent-specific permission, tool, network, sandbox, skill, MCP, or bypass policy. Assign a profile with `capabilities`, `permission_mode`, or both when a role needs restrictions. If both are omitted, normal provider configuration is used unchanged.
