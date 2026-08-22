@@ -33,6 +33,9 @@ const agentDir = join(root, 'agent');
 const extensionPath = join(root, 'platform-probe.js');
 const projectPackageRoot = join(cwd, '.pi', 'npm', 'node_modules', 'project-probe');
 const projectExtensionPath = join(projectPackageRoot, 'index.js');
+const brokenProjectPackageRoot = join(cwd, '.pi', 'npm', 'node_modules', 'broken-probe');
+const brokenUserPackageRoot = join(agentDir, 'npm', 'node_modules', 'broken-probe');
+const brokenUserExtensionPath = join(brokenUserPackageRoot, 'index.js');
 const implicitExtensionPath = join(cwd, '.pi', 'extensions', 'implicit-probe.js');
 
 try {
@@ -77,6 +80,23 @@ export default function projectProbe(pi) {
   });
 }
 `, 'utf8');
+  await mkdir(brokenProjectPackageRoot, { recursive: true });
+  await writeFile(join(brokenProjectPackageRoot, 'package.json'), JSON.stringify({
+    name: 'broken-probe',
+    version: '1.0.0',
+  }, null, 2), 'utf8');
+  await mkdir(brokenUserPackageRoot, { recursive: true });
+  await writeFile(join(brokenUserPackageRoot, 'package.json'), JSON.stringify({
+    name: 'broken-probe',
+    version: '1.0.0',
+    type: 'module',
+    pi: { extensions: ['./index.js'] },
+  }, null, 2), 'utf8');
+  await writeFile(brokenUserExtensionPath, `
+export default function userProbe(pi) {
+  pi.on('session_start', () => {});
+}
+`, 'utf8');
   await mkdir(join(cwd, '.pi', 'extensions'), { recursive: true });
   await writeFile(implicitExtensionPath, `
 export default function implicitProbe(pi) {
@@ -105,6 +125,52 @@ export default function implicitProbe(pi) {
   assert.equal(projectInstallPath, projectPackageRoot);
 
   const operationalPackageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+  const brokenProjectInstallPath = projectLookupManager.getInstalledPath('npm:broken-probe', 'project');
+  assert.equal(brokenProjectInstallPath, brokenProjectPackageRoot);
+  const brokenProjectResources = await operationalPackageManager.resolveExtensionSources(
+    [brokenProjectInstallPath],
+    { temporary: true },
+  );
+  assert.deepEqual(
+    brokenProjectResources.extensions.filter((resource) => resource.enabled).map((resource) => resource.path),
+    [brokenProjectPackageRoot],
+  );
+  const brokenProjectLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    additionalExtensionPaths: brokenProjectResources.extensions
+      .filter((resource) => resource.enabled)
+      .map((resource) => resource.path),
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+  });
+  await brokenProjectLoader.reload();
+  assert.ok(brokenProjectLoader.getExtensions().errors.length > 0);
+
+  const brokenUserInstallPath = operationalPackageManager.getInstalledPath('npm:broken-probe', 'user');
+  assert.equal(brokenUserInstallPath, brokenUserPackageRoot);
+  const brokenUserResources = await operationalPackageManager.resolveExtensionSources(
+    [brokenUserInstallPath],
+    { temporary: true },
+  );
+  const brokenUserLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    additionalExtensionPaths: brokenUserResources.extensions
+      .filter((resource) => resource.enabled)
+      .map((resource) => resource.path),
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+  });
+  await brokenUserLoader.reload();
+  assert.deepEqual(brokenUserLoader.getExtensions().errors, []);
+
   const projectResources = await operationalPackageManager.resolveExtensionSources(
     [projectInstallPath],
     { temporary: true },

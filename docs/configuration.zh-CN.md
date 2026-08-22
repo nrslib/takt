@@ -331,7 +331,7 @@ steps:
     model: provider/model:high
 ```
 
-`provider` 和 `model` 声明选择 TAKT run 的 provider、model 和 thinking level；它们不会导入 Pi CLI 设置。Pi 认证由 Pi SDK credential store 或 provider 原生环境变量单独处理。`provider_options.pi` 是加载 `extensions` 和 `no_*` discovery 控制的独立路径；显式资源源只在本次 TAKT run 中临时解析，不会写入 Pi 设置。
+`provider` 和 `model` 声明选择 TAKT run 的 provider、model 和 thinking level；它们不会导入 Pi CLI 设置。Pi 认证由 Pi SDK credential store 或 provider 原生环境变量单独处理。`provider_options.pi` 是加载 `extensions` 和 `no_*` discovery 控制的独立路径；没有版本限定的显式 npm source 会依次复用已有的 project scope、user scope，只有两者都无法成功加载时才使用 temporary resolution；带版本的 npm source 和非 npm source 始终使用 temporary resolution。显式资源不会写入 Pi 设置。
 
 ### Provider inactivity deadline 与 OpenCode execution guard
 
