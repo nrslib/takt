@@ -14,8 +14,11 @@
   "include": [
     "src/__tests__/ai-caller-output-mode.test.ts",
     "src/__tests__/assistant-provider-parity.test.ts",
+    "src/__tests__/cli-command-registration.test.ts",
     "src/__tests__/cli-routing-issue-resolve.test.ts",
     "src/__tests__/cli-routing-tui.test.ts",
+    "src/__tests__/commands-workflow.test.ts",
+    "src/__tests__/completion-retry-workflow-schema.test.ts",
     "src/__tests__/conversation-plan.test.ts",
     "src/__tests__/conversation-session-failure.test.ts",
     "src/__tests__/conversationLoop-resume.test.ts",
@@ -36,6 +39,8 @@
     "src/__tests__/retry-mode-flow.test.ts",
     "src/__tests__/retrySlashCommand.test.ts",
     "src/__tests__/runtime-internal-agent-assistant.test.ts",
+    "src/__tests__/selector-guidance-resolution.test.ts",
+    "src/__tests__/team-leader-schema-loader.test.ts",
     "src/__tests__/tui-conversation-view.test.tsx",
     "src/__tests__/tui-conversation.test.ts",
     "src/__tests__/tui-display-text.test.ts",
@@ -46,7 +51,9 @@
     "src/__tests__/tui-prompt-screen.test.tsx",
     "src/__tests__/tui-run.test.ts",
     "src/__tests__/tui-task-conversation.test.ts",
-    "src/__tests__/tui-terminal-ownership.test.ts"
+    "src/__tests__/tui-terminal-ownership.test.ts",
+    "src/__tests__/workflow-inspect.test.ts",
+    "src/__tests__/workflowCallResolver.test.ts"
   ],
   "exclude": []
 }

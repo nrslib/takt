@@ -449,7 +449,10 @@ steps:
     );
 
     expect(childWorkflow).not.toBeNull();
-    const facetSelector = childWorkflow!.steps[0]?.dynamicFacets?.selector;
+    const childFirstStep = childWorkflow!.steps[0];
+    const facetSelector = childFirstStep !== undefined && 'dynamicFacets' in childFirstStep
+      ? childFirstStep.dynamicFacets?.selector
+      : undefined;
     expect(facetSelector).toEqual({
       persona: 'Selector persona content',
       personaRef: 'selector-persona',

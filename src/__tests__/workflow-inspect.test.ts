@@ -110,7 +110,7 @@ function stepBlock(output: string, stepName: string): string {
   if (startIndentMatch === null) {
     throw new Error(`step block indentation not found: ${stepName}`);
   }
-  const startIndent = startIndentMatch[1].length;
+  const startIndent = startIndentMatch[1]!.length;
   const end = lines.findIndex((line, index) => (
     index > start
     && (
@@ -159,7 +159,7 @@ function facetBlocks(output: string, ref: string): string[] {
     if (startIndentMatch === null) {
       throw new Error(`facet block indentation not found: ${ref}`);
     }
-    const startIndent = startIndentMatch[1].length;
+    const startIndent = startIndentMatch[1]!.length;
     const end = lines.findIndex((line, index) => (
       index > start
       && lineContent(line).match(new RegExp(`^ {${startIndent}}(?:- ref:|[^ ]+:)`)) !== null

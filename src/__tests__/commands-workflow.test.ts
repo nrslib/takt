@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 const mockInitWorkflowCommand = vi.fn();
 const mockDoctorWorkflowCommand = vi.fn();
@@ -106,16 +106,16 @@ describe('CLI workflow command', () => {
     const doctorCommand = commandMocks.get('root.workflow.doctor');
     const inspectCommand = commandMocks.get('root.workflow.inspect');
 
-    expect(initCommand?.argument.mock.calls[0]?.[0]).toBe('<name>');
-    const optionNames = initCommand?.option.mock.calls.map(([name]) => name);
+    expect((initCommand?.argument as Mock).mock.calls[0]?.[0]).toBe('<name>');
+    const optionNames = (initCommand?.option as Mock).mock.calls.map(([name]) => name as string);
     expect(optionNames).toEqual(expect.arrayContaining([
       '--description <text>',
       '--steps <count>',
       '--template <kind>',
       '--global',
     ]));
-    expect(doctorCommand?.argument.mock.calls[0]?.[0]).toBe('[targets...]');
-    expect(inspectCommand?.argument.mock.calls[0]?.[0]).toBe('[target]');
+    expect((doctorCommand?.argument as Mock).mock.calls[0]?.[0]).toBe('[targets...]');
+    expect((inspectCommand?.argument as Mock).mock.calls[0]?.[0]).toBe('[target]');
   });
 
   it('should delegate init action to workflow authoring feature', async () => {
