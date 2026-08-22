@@ -306,8 +306,11 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         workflow: 'default',
       }));
     } finally {
-      await client.close();
-      rmSync(fixtureWorkspace, { recursive: true, force: true });
+      try {
+        await client.close();
+      } finally {
+        rmSync(fixtureWorkspace, { recursive: true, force: true });
+      }
     }
   });
 

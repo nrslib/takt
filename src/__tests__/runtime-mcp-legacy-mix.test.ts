@@ -253,6 +253,28 @@ describe('compileProviderEnvironment: mcp-only runtime-v1 (MCP-MODE)', () => {
     expect(env.mcpAssignment).toBeUndefined();
   });
 
+  it('Given an mcp section with servers only (no defaults/targets), When compiled, Then mcpAssignment stays undefined so legacy workflow mcp_servers coexists without the mixed gate', () => {
+    const serversOnly: McpSection = {
+      servers: { a: { command: 'x' } },
+    };
+    const inactive = compileProviderEnvironment({
+      kind: 'runtime-v1',
+      section: undefined,
+      mcp: serversOnly,
+    });
+    expect(inactive.mcpAssignment).toBeUndefined();
+
+    const withProviderSection = compileProviderEnvironment({
+      kind: 'runtime-v1',
+      section: {
+        defaults: { profile: 'default' },
+        profiles: { default: { provider: 'mock', model: 'm' } },
+      },
+      mcp: serversOnly,
+    });
+    expect(withProviderSection.mcpAssignment).toBeUndefined();
+  });
+
   it('Given an inactive provider section and an active mcp section, When compiled, Then it uses MCP-only mode', () => {
     const env = compileProviderEnvironment({
       kind: 'runtime-v1',

@@ -15,6 +15,7 @@ import type {
 } from './types.js';
 import { validateTransports, onceDispose, classifyMcpFailure } from './adapter.js';
 import { prepareClaudeMcpConfig } from '../../claude/mcp-config.js';
+import { stripMcpServerInternalMetadata } from '../../config/runtime-provider/mcp-schema.js';
 
 export type ClaudeCliProvider = 'claude' | 'claude-terminal';
 
@@ -35,7 +36,14 @@ export function createClaudeCliMcpAdapter(provider: ClaudeCliProvider): Provider
         // whether to call `prepare` at all for an empty set.
         return { dispose: () => Promise.resolve(), args: ['--strict-mcp-config'] };
       }
-      const prepared = await prepareClaudeMcpConfig(servers.servers);
+      // prepareClaudeMcpConfig serializes whole server objects, so internal
+      // metadata must not survive into the temp `--mcp-config` file.
+      const serializableServers = Object.fromEntries(
+        Object.entries(servers.servers).map(
+          ([name, server]) => [name, stripMcpServerInternalMetadata(server)],
+        ),
+      );
+      const prepared = await prepareClaudeMcpConfig(serializableServers);
       const args: string[] = ['--strict-mcp-config'];
       if (prepared.path !== undefined) {
         args.push('--mcp-config', prepared.path);

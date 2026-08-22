@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 // New modules under test (implemented in the following `implement` step).
 import { createMcpAdapter, type ResolvedMcpServers } from '../infra/providers/mcp/index.js';
 import { getProvider } from '../infra/providers/index.js';
@@ -107,8 +109,17 @@ describe('ProviderMcpAdapter transport validation (MCP-TRANSPORT-VALIDATE)', () 
     });
     expect(() => adapter.validate(servers)).not.toThrow();
     const prepared = await adapter.prepare(servers, { cwd: '/tmp/provider-mcp-transport-validation' });
-    expect(prepared.args ?? prepared.sdkOptions ?? prepared.config ?? prepared.serverConfig ?? prepared.configRoot).toBeDefined();
-    await prepared.dispose();
+    try {
+      // The assigned server must survive into the materialized provider
+      // config with its transport intact — not merely produce some artifact.
+      const configPath = prepared.path ?? join(prepared.configRoot ?? '', '.cursor', 'mcp.json');
+      const payload = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+        mcpServers?: Record<string, { command?: string }>;
+      };
+      expect(payload.mcpServers?.['common-tools']?.command).toBe('srv');
+    } finally {
+      await prepared.dispose();
+    }
   });
 
   it('Given a provider that does not declare a transport in its capability, When validating that transport, Then the adapter fails fast rather than guessing a different transport (要件70)', () => {

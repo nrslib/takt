@@ -8,7 +8,7 @@
  * than silently merging or preferring one side.
  */
 
-import { hasActiveProviderContent, type RuntimeProviderFile } from './schema.js';
+import { hasActiveProviderContent, type RuntimeProviderFile, type McpSection } from './schema.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 
 export type ProviderConfigMode = 'legacy' | 'runtime-v1';
@@ -42,7 +42,11 @@ export function hasActiveProviderSection(file: RuntimeProviderFile | undefined):
  * only when a default or positive target assignment references them.
  */
 export function hasActiveMcpSection(file: RuntimeProviderFile | undefined): boolean {
-  const mcp = file?.mcp;
+  return hasActiveMcpAssignments(file?.mcp);
+}
+
+/** Section-level variant: true only when a default or positive target assignment exists. */
+export function hasActiveMcpAssignments(mcp: McpSection | undefined): boolean {
   if (!mcp) {
     return false;
   }

@@ -50,6 +50,7 @@ import {
 } from './resolution-context.js';
 import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile } from './policy.js';
 import { hasActiveProviderContent, type McpSection } from './schema.js';
+import { hasActiveMcpAssignments } from './mode.js';
 import type {
   RuntimeCompanionProviderAssignment,
   RuntimeProviderAssignment,
@@ -188,7 +189,7 @@ export function compileRuntimeProviderEnvironment(
       permissionMode: undefined,
       tagConflictPolicy: 'fail-fast',
       internalAgents: undefined,
-      mcpAssignment: mcp,
+      mcpAssignment: hasActiveMcpAssignments(mcp) ? mcp : undefined,
       providerLadders: undefined,
     };
   }
@@ -223,7 +224,7 @@ export function compileRuntimeProviderEnvironment(
     permissionMode: defaults?.permissionMode,
     tagConflictPolicy: 'fail-fast',
     internalAgents,
-    mcpAssignment: mcp,
+    mcpAssignment: hasActiveMcpAssignments(mcp) ? mcp : undefined,
     ...(companions === undefined ? {} : { companions }),
     providerLadders,
   };

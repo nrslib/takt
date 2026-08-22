@@ -318,6 +318,20 @@ function attachMcpServerSafeSource(
 }
 
 /**
+ * Return the server without the internal log-safe-source metadata. Provider
+ * boundaries that serialize whole server objects (rather than projecting known
+ * fields) must strip the metadata so it never reaches provider config files.
+ */
+export function stripMcpServerInternalMetadata(server: McpServerConfig): McpServerConfig {
+  if (getMcpServerSafeSource(server) === undefined) {
+    return server;
+  }
+  const result = { ...server } as McpServerWithSafeSource;
+  delete result[SAFE_MCP_SERVER_SOURCE];
+  return result as McpServerConfig;
+}
+
+/**
  * Return a log-safe representation of a server entry. Environment/header values,
  * URL userinfo, and authentication argument values are redacted (order.md:110).
  */

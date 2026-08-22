@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 // New modules under test (implemented in the following `implement` step).
 import { createMcpAdapter, type ResolvedMcpServers, type ProviderMcpContext } from '../infra/providers/mcp/index.js';
+import { interpolateMcpEnv } from '../infra/config/runtime-provider/mcp-schema.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -118,6 +119,33 @@ describe('Claude headless CLI adapter (MCP-CLAUDE-HEADLESS)', () => {
     expect(existsSync(path)).toBe(true);
     await prepared.dispose();
     expect(existsSync(path)).toBe(false);
+  });
+
+  it('Given a resolved server carrying log-safe-source metadata, When prepared, Then the temp config contains only the public server fields', async () => {
+    const adapter = createMcpAdapter('claude');
+    const interpolated = interpolateMcpEnv(
+      { type: 'stdio', command: '${MCP_TEST_CMD}' },
+      { MCP_TEST_CMD: 'srv' } as NodeJS.ProcessEnv,
+    );
+    const servers: ResolvedMcpServers = {
+      enabled: true,
+      servers: { 'common-tools': interpolated },
+      serverNames: ['common-tools'],
+      identity: 'common-tools:stdio',
+    };
+    const prepared = await adapter.prepare(servers, baseContext());
+    try {
+      const path = (prepared as { path?: string }).path;
+      if (path === undefined) {
+        throw new Error('Expected a Claude MCP config path');
+      }
+      const raw = readFileSync(path, 'utf-8');
+      expect(raw).not.toContain('__taktMcpSafeSource');
+      const payload = JSON.parse(raw) as { mcpServers: Record<string, Record<string, unknown>> };
+      expect(payload.mcpServers['common-tools']).toEqual({ type: 'stdio', command: 'srv' });
+    } finally {
+      await prepared.dispose();
+    }
   });
 
   it('Given the claude adapter, When prepared with empty servers, Then --mcp-config is NOT added but --strict-mcp-config is (order.md:152,166)', async () => {
