@@ -1213,7 +1213,7 @@ provider_options:
 
 **推奨（正）の YAML キー**（同梱の `builtins/{lang}/workflow-categories.yaml` と一致）: トップレベル **`workflow_categories`**、各カテゴリオブジェクト直下の **`workflows`** 配列に **workflow 名**（各 workflow YAML の `name` フィールド。ビルトインなら `default` など）を列挙します。ファイルパスではありません。
 
-カテゴリ構造には正準キーの **`workflow_categories`** と **`workflows`** を使います。加えて、トップレベルの任意設定 `workflow_descriptions` / `show_others_category` / `others_category_name` も使えます。削除済みの旧カテゴリキーは受理されません。指定すると validation error になります。
+カテゴリ構造には正準キーの **`workflow_categories`** と **`workflows`** を使います。加えて、トップレベルの任意設定 `show_others_category` / `others_category_name` も使えます。削除済みの旧カテゴリキーは受理されません。指定すると validation error になります。
 
 ### 設定方法
 
@@ -1228,7 +1228,7 @@ provider_options:
 workflow_categories:
   Development:
     workflows:
-      - default: "標準コーディングワークフロー"   # 名前: 説明 で選択ラベルに説明を併記
+      - default: "標準の開発をする"   # 名前: 説明 で選択ラベルに説明を併記
       - simple
     Backend:
       workflows: [dual-cqrs]
@@ -1236,10 +1236,6 @@ workflow_categories:
       workflows: [dual]
   Research:
     workflows: [research, magi]
-
-# カテゴリに列挙しない workflow の説明はトップレベルのマップに書く
-workflow_descriptions:
-  development-core: "共有開発コア"
 
 show_others_category: true         # 未分類の workflow を表示（デフォルト: true）
 others_category_name: "Other Workflows"  # 未分類カテゴリの名前
@@ -1249,7 +1245,7 @@ others_category_name: "Other Workflows"  # 未分類カテゴリの名前
 
 - **ネストされたカテゴリ** — 階層的な整理のための無制限の深さ。カテゴリ配下の `workflows` 以外のキーはすべて子カテゴリ名として扱われます（`children:` キーはありません）
 - **カテゴリごとの workflow リスト** — 各カテゴリの `workflows:` に、そのグループに表示する workflow 名を並べる
-- **Workflow の説明** — `workflows:` のエントリを `- 名前: 説明` の形にすると選択ラベルに短い説明を併記します（文字列だけの従来形式も使えます）。複数カテゴリに列挙される workflow の説明は最初の1か所にだけ書き、同じファイル内で異なる説明を付けると validation error になります。カテゴリに列挙しない workflow の説明はトップレベルの `workflow_descriptions` マップに書きます（同名をエントリとマップの両方で説明することはできません）。ユーザー overlay は builtin を workflow 名単位で上書きでき、ユーザー固有の名前も追加可能
+- **Workflow の説明** — `workflows:` のエントリを `- 名前: 説明` の形にすると選択ラベルに短い説明を併記します（文字列だけの従来形式も使えます）。複数カテゴリに列挙される workflow にはどのカテゴリでも同じ説明を書いてください。同じファイル内で異なる説明を付けると validation error になります。ユーザー overlay は builtin を workflow 名単位で上書きでき、ユーザー固有の名前も追加可能
 - **その他カテゴリ** — いずれのカテゴリにも列挙されていない workflow を自動収集（`show_others_category: false` で無効化可能）
 - **ビルトイン workflow フィルタリング** — `enable_builtin_workflows: false` ですべてのビルトインを無効化、または `disabled_builtins: [name1, name2]` で名前指定で無効化
 

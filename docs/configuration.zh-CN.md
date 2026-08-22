@@ -1017,10 +1017,6 @@ workflow_categories:
   Research:
     workflows: [research, magi]
 
-# 未列入任何分类的 workflow 的描述写在顶层 map 中
-workflow_descriptions:
-  development-core: "共享开发核心"
-
 show_others_category: true
 others_category_name: "Other Workflows"
 ```
@@ -1031,7 +1027,7 @@ others_category_name: "Other Workflows"
 
 - **嵌套分类**：支持任意深度；除 `workflows` 外的 key 都作为子分类名称，不使用 `children:`。
 - **每类 workflow 列表**：`workflows:` 保存该分类显示的 workflow 名称。
-- **Workflow 描述**：把 `workflows:` 条目写成 `- 名称: 描述` 即可在选择项标签中追加简短说明（纯字符串条目仍然可用）。同一 workflow 列入多个分类时只写一次描述；同一文件内为同名 workflow 写不同描述会报 validation error。未列入任何分类的 workflow 的描述写在顶层 `workflow_descriptions` map 中（同一名称不能同时用条目和 map 描述）。用户 overlay 按 workflow 名称覆盖 builtin，也可以添加仅用户存在的名称。
+- **Workflow 描述**：把 `workflows:` 条目写成 `- 名称: 描述` 即可在选择项标签中追加简短说明（纯字符串条目仍然可用）。同一 workflow 列入多个分类时，每处都写相同的描述；同一文件内为同名 workflow 写不同描述会报 validation error。用户 overlay 按 workflow 名称覆盖 builtin，也可以添加仅用户存在的名称。
 - **Others 分类**：收集未列入任何分类的 workflow，可用 `show_others_category: false` 关闭。
 - **Builtin 过滤**：用 `enable_builtin_workflows: false` 关闭全部 builtin，或用 `disabled_builtins: [name1, name2]` 关闭指定名称。
 

@@ -1,119 +1,95 @@
 workflow_categories:
   🚀 クイックスタート:
     workflows:
-      - default: "裁定・検証付きレビューを行う標準コーディングワークフロー"
-      - maintenance: "既存コードと契約を尊重する保守開発ワークフロー"
-      - simple: "ドメインファセットを自動選択する軽量開発ワークフロー"
-      - review-fix: "多角レビューと裁定・検証付き修正の収束ループ"
+      - default: "迷ったらこれ。標準の開発をする"
+      - maintenance: "保守開発をする"
+      - simple: "実装とレビューの2体でループする"
+      - review-fix: "並列レビューを行い修正する"
   🛠️ 開発:
     workflows:
-      - default
-      - maintenance
-      - simple
-      - pure: "ファセットなしで判断力を信頼する素の開発ワークフロー"
+      - default: "迷ったらこれ。標準の開発をする"
+      - maintenance: "保守開発をする"
+      - simple: "実装とレビューの2体でループする"
+      - pure: "そのまま開発する"
   🔍 レビュー:
     workflows:
-      - review: "専門レビュアーを選び、並列レビューを統合"
-      - review-fix
-      - audit-unit: "ユニットテストの振る舞いと不足を監査"
-      - audit-e2e: "E2Eのユーザーフローとカバレッジ不足を監査"
-      - audit-security: "全ファイルを対象にセキュリティを監査"
-      - audit-architecture: "アーキテクチャ全体を監査し、Issue向けレポートを作成"
+      - review: "並列レビューをする"
+      - review-fix: "並列レビューを行い修正する"
+      - audit-unit: "ユニットテストを全件監査し、Issue向けレポートを作る"
+      - audit-e2e: "E2Eテストを全件監査し、Issue向けレポートを作る"
+      - audit-security: "全ファイルを1つずつ読んでセキュリティを調べる"
+      - audit-architecture: "アーキテクチャを全件監査し、Issue向けレポートを作る"
   🏗️ インフラストラクチャ:
     workflows:
-      - terraform: "planから完了までを行うTerraform IaC開発"
+      - terraform: "Terraformの開発をplanから完了まで行う"
   🎵 TAKT開発:
     workflows:
-      - takt-default: "TAKT固有ファセットを使う標準開発ワークフロー"
-      - takt-default-team: "Team Leader実行へ切り替えたTAKT開発ワークフロー"
-      - auto-improvement-loop: "PR・Issue・改善タスクを巡回する自動ループ"
-      - review-takt-default: "TAKT開発向けの多角レビュー"
-      - review-fix-takt-default: "TAKT固有ファセットを注入するレビュー・修正ワークフロー"
+      - takt-default: "TAKTを開発する"
+      - takt-default-team: "Team Leaderに実装を任せてTAKTを開発する"
+      - auto-improvement-loop: "PR・Issue・改善タスクを巡回して処理し続ける"
+      - review-takt-default: "TAKTを並列レビューする"
+      - review-fix-takt-default: "TAKTを並列レビューして修正する"
   📦 レガシー:
     workflows:
-      - cli: "CLI向けファセットを注入する開発ワークフロー"
+      - cli: "CLIを開発する"
     ✨ Simple:
       workflows:
-        - simple-mini: "テスト作成を省いた軽量なMini開発"
-        - simple-frontend: "フロントエンド知識を注入するシンプル開発"
-        - simple-backend: "バックエンド知識を注入するシンプル開発"
-        - simple-dual: "フロントエンドとバックエンド知識を注入するシンプル開発"
-        - simple-cqrs: "バックエンドとCQRS+ES知識を注入するシンプル開発"
-        - simple-dual-cqrs: "フロントエンド・バックエンド・CQRS+ES対応のシンプル開発"
+        - simple-mini: "テスト作成を省いて軽く開発する"
+        - simple-frontend: "フロントエンドをシンプルに開発する"
+        - simple-backend: "バックエンドをシンプルに開発する"
+        - simple-dual: "フルスタックをシンプルに開発する"
+        - simple-cqrs: "CQRS+ESのバックエンドをシンプルに開発する"
+        - simple-dual-cqrs: "CQRS+ESのフルスタックをシンプルに開発する"
     ⚡ Mini:
       workflows:
-        - simple-mini
-        - frontend-mini: "フロントエンド向けのMini開発ワークフロー"
-        - backend-mini: "バックエンド向けのMini開発ワークフロー"
-        - backend-cqrs-mini: "CQRS+ES向けのMini開発ワークフロー"
-        - dual-mini: "フロントエンド・バックエンド向けのMini開発"
-        - dual-cqrs-mini: "CQRS+ES対応のフルスタックMini開発"
+        - simple-mini: "テスト作成を省いて軽く開発する"
+        - frontend-mini: "フロントエンドを軽く開発する"
+        - backend-mini: "バックエンドを軽く開発する"
+        - backend-cqrs-mini: "CQRS+ESのバックエンドを軽く開発する"
+        - dual-mini: "フルスタックを軽く開発する"
+        - dual-cqrs-mini: "CQRS+ESのフルスタックを軽く開発する"
     🎨 フロントエンド:
       workflows:
-        - simple-frontend
-        - frontend: "フロントエンド向けファセットを注入する開発ワークフロー"
-        - frontend-mini
-        - frontend-maintenance: "既存フロントエンド向けの保守開発ワークフロー"
+        - simple-frontend: "フロントエンドをシンプルに開発する"
+        - frontend: "フロントエンドを開発する"
+        - frontend-mini: "フロントエンドを軽く開発する"
+        - frontend-maintenance: "フロントエンドを保守開発する"
     ⚙️ バックエンド:
       workflows:
-        - simple-backend
-        - simple-cqrs
-        - backend: "バックエンド向けファセットを注入する開発ワークフロー"
-        - backend-mini
-        - backend-maintenance: "既存バックエンド向けの保守開発ワークフロー"
-        - backend-cqrs: "バックエンドとCQRS+ES向けの開発ワークフロー"
-        - backend-cqrs-mini
+        - simple-backend: "バックエンドをシンプルに開発する"
+        - simple-cqrs: "CQRS+ESのバックエンドをシンプルに開発する"
+        - backend: "バックエンドを開発する"
+        - backend-mini: "バックエンドを軽く開発する"
+        - backend-maintenance: "バックエンドを保守開発する"
+        - backend-cqrs: "CQRS+ESのバックエンドを開発する"
+        - backend-cqrs-mini: "CQRS+ESのバックエンドを軽く開発する"
     🔧 デュアル:
       workflows:
-        - simple-dual
-        - simple-dual-cqrs
-        - dual: "フロントエンドとバックエンド向けの開発ワークフロー"
-        - dual-mini
-        - dual-cqrs: "フロントエンド・バックエンド・CQRS+ES向けの開発"
-        - dual-cqrs-mini
+        - simple-dual: "フルスタックをシンプルに開発する"
+        - simple-dual-cqrs: "CQRS+ESのフルスタックをシンプルに開発する"
+        - dual: "フルスタックを開発する"
+        - dual-mini: "フルスタックを軽く開発する"
+        - dual-cqrs: "CQRS+ESのフルスタックを開発する"
+        - dual-cqrs-mini: "CQRS+ESのフルスタックを軽く開発する"
     🔍 レビュー:
       workflows:
-        - review-frontend: "フロントエンド特化の構造・設計レビュー"
-        - review-fix-frontend: "フロントエンド特化レビューと修正ループ"
-        - review-backend: "バックエンド特化の構造・設計レビュー"
-        - review-fix-backend: "バックエンド特化レビューと修正ループ"
-        - review-dual: "フロントエンド・バックエンド特化のレビュー"
-        - review-fix-dual: "フロントエンド・バックエンド特化レビューと修正ループ"
-        - review-dual-cqrs: "フロントエンド・CQRS+ES特化のレビュー"
-        - review-fix-dual-cqrs: "フロントエンド・CQRS+ES特化レビューと修正ループ"
-        - review-backend-cqrs: "バックエンドとCQRS+ES特化のレビュー"
-        - review-fix-backend-cqrs: "バックエンド・CQRS+ES特化レビューと修正ループ"
-        - audit-architecture-frontend: "フロントエンドの境界を監査し、Issue向けレポートを作成"
-        - audit-architecture-backend: "バックエンドの境界を監査し、Issue向けレポートを作成"
-        - audit-architecture-dual: "フルスタックの境界と配線を監査し、Issue向けレポートを作成"
+        - review-frontend: "フロントエンドをレビューする"
+        - review-fix-frontend: "フロントエンドをレビューして修正する"
+        - review-backend: "バックエンドをレビューする"
+        - review-fix-backend: "バックエンドをレビューして修正する"
+        - review-dual: "フルスタックをレビューする"
+        - review-fix-dual: "フルスタックをレビューして修正する"
+        - review-dual-cqrs: "CQRS+ESのフルスタックをレビューする"
+        - review-fix-dual-cqrs: "CQRS+ESのフルスタックをレビューして修正する"
+        - review-backend-cqrs: "CQRS+ESのバックエンドをレビューする"
+        - review-fix-backend-cqrs: "CQRS+ESのバックエンドをレビューして修正する"
+        - audit-architecture-frontend: "フロントエンドの構成を監査し、Issue向けレポートを作る"
+        - audit-architecture-backend: "バックエンドの構成を監査し、Issue向けレポートを作る"
+        - audit-architecture-dual: "フルスタックの構成を監査し、Issue向けレポートを作る"
   その他:
     workflows:
-      - research: "質問せず自律的に調査を実行するワークフロー"
-      - deep-research: "新たな問いを追跡する発見駆動の深掘り調査"
-      - magi: "3つの観点で分析し、多数決で判定する合議システム"
+      - research: "質問せずに自律的に調査する"
+      - deep-research: "見つかった問いを追って深く調査する"
+      - magi: "エヴァンゲリオンインスパイア"
 show_others_category: true
 others_category_name: その他
-
-# カテゴリに列挙されないワークフロー（共有コア等）の説明。同じ名前を workflows エントリと
-# このマップの両方で説明することはできません。
-workflow_descriptions:
-  compound-eye: "2つの独立した視点で結果を統合する複眼レビュー"
-  development-core: "計画から要件確認までを担う共有開発コア"
-  development-implement: "固定ファセットを使う実装実行"
-  development-implement-dynamic: "動的ファセットを使う実装実行"
-  development-implement-team: "Team Leader による実装実行"
-  development-remediation: "裁定済み指摘を固定ファセットで修正・検証"
-  development-remediation-dynamic: "裁定済み指摘を動的ファセットで修正・検証"
-  development-remediation-team: "修正をTeam Leaderで行う指摘収束ループ"
-  development-review: "標準開発向けの共通レビュー実行"
-  final-gate: "コードと報告から要件充足と次の対応を判定"
-  loop-analysis: "完了実行を分析し、回避可能なループを減らす改善案を検討"
-  mini-core: "計画・実装・並列レビューを行うMini開発コア"
-  peer-review: "専門並列レビューと裁定・修正を行う収束ワークフロー"
-  peer-review-suite-base: "ドメイン文脈を注入できる共通レビュースイート"
-  peer-review-suite-cqrs: "CQRS・イベントソーシング対応のレビュースイート"
-  peer-review-suite-frontend: "フロントエンド専門レビュー対応のレビュースイート"
-  peer-review-suite-frontend-cqrs: "フロントエンド・CQRS対応のレビュースイート"
-  review-remediation: "レビュー指摘を計画・修正・検証する収束ループ"
-  simple-core: "計画・テスト・実装・レビューを担うSimpleコア"
-  takt-development-review: "TAKT固有のレビュー実行"

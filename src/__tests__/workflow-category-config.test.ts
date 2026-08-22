@@ -247,55 +247,20 @@ workflow_categories:
     );
   });
 
-  it('should load workflow descriptions from the top-level map for unlisted workflows', () => {
-    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
-workflow_categories:
-  Quick Start:
-    workflows:
-      - default: Standard coding workflow
-workflow_descriptions:
-  user-only: User workflow description
-`);
-
-    const config = loadDefaultCategories(testDir);
-
-    expect(config!.workflowDescriptions).toEqual({
-      default: 'Standard coding workflow',
-      'user-only': 'User workflow description',
-    });
-  });
-
-  it('should reject a workflow described both inline and in the top-level map', () => {
-    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
-workflow_categories:
-  Quick Start:
-    workflows:
-      - default: Inline description
-workflow_descriptions:
-  default: Map description
-`);
-
-    expect(() => loadDefaultCategories(testDir)).toThrow(
-      'workflow "default" has a description in both a workflows entry and workflow_descriptions',
-    );
-  });
-
   it('should let user overlay descriptions override builtin names and add user-only names', () => {
     writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
 workflow_categories:
   Main:
     workflows:
       - default: Builtin description
-workflow_descriptions:
-  review: Builtin review description
+      - review: Builtin review description
 `);
     writeYaml(pathsState.userCategoriesPath, `
 workflow_categories:
   Mine:
     workflows:
       - default: User description
-workflow_descriptions:
-  custom: User-only description
+      - custom: User-only description
 `);
 
     const config = getWorkflowCategories(testDir);
@@ -320,20 +285,10 @@ workflow_categories:
     });
   });
 
-  it('should reject empty workflow descriptions in the top-level map', () => {
+  it('should reject the removed workflow_descriptions key', () => {
     expect(() => parseWorkflowCategoryOverlay({
-      workflow_descriptions: { default: '   ' },
-    }, 'test-categories.yaml')).toThrow(
-      'description must be a non-empty string in test-categories.yaml at workflow_descriptions > default',
-    );
-  });
-
-  it('should reject empty workflow names in the top-level descriptions map', () => {
-    expect(() => parseWorkflowCategoryOverlay({
-      workflow_descriptions: { '   ': 'Valid description' },
-    }, 'test-categories.yaml')).toThrow(
-      'workflow name must be a non-empty string in test-categories.yaml at workflow_descriptions',
-    );
+      workflow_descriptions: { default: 'Standard coding workflow' },
+    }, 'test-categories.yaml')).toThrow();
   });
 
   it('should use builtin categories when user overlay file is missing', () => {

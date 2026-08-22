@@ -1270,7 +1270,7 @@ Organize workflows into categories for better UI presentation in the `takt` work
 
 **Canonical YAML keys** (recommended, matches bundled `builtins/{lang}/workflow-categories.yaml`): top-level **`workflow_categories`**, and under each category object the **`workflows`** array listing **workflow names** (the `name` field from each workflow YAML, e.g. builtin `default`), not file paths.
 
-Category structure uses the canonical keys **`workflow_categories`** and **`workflows`**; the file also accepts the optional top-level settings `workflow_descriptions`, `show_others_category`, and `others_category_name` shown above. Removed legacy category keys are not accepted and cause a validation error.
+Category structure uses the canonical keys **`workflow_categories`** and **`workflows`**; the file also accepts the optional top-level settings `show_others_category` and `others_category_name` shown above. Removed legacy category keys are not accepted and cause a validation error.
 
 ### Configuration
 
@@ -1294,10 +1294,6 @@ workflow_categories:
   Research:
     workflows: [research, magi]
 
-# Descriptions for workflows not listed in any category go in the top-level map
-workflow_descriptions:
-  development-core: "Shared development core"
-
 show_others_category: true         # Show uncategorized workflows (default: true)
 others_category_name: "Other Workflows"  # Name for uncategorized category
 ```
@@ -1306,7 +1302,7 @@ others_category_name: "Other Workflows"  # Name for uncategorized category
 
 - **Nested categories** — unlimited depth for hierarchical organization; under a category, every key other than `workflows` is treated as a child category name (there is no `children:` key)
 - **Per-category workflow lists** — under each category, `workflows:` holds workflow names to show in that group
-- **Workflow descriptions** — write a `workflows:` entry as `- name: description` to append a short description to its selection label (plain string entries still work). For a workflow listed in multiple categories, write the description once; conflicting descriptions for the same workflow in one file are rejected as a validation error. Descriptions for workflows not listed in any category go in the top-level `workflow_descriptions` map (a name cannot be described both inline and in the map). User overlay entries override builtin entries by workflow name and may add user-only names
+- **Workflow descriptions** — write a `workflows:` entry as `- name: description` to append a short description to its selection label (plain string entries still work). For a workflow listed in multiple categories, write the same description at each occurrence; conflicting descriptions for the same workflow in one file are rejected as a validation error. User overlay entries override builtin entries by workflow name and may add user-only names
 - **Others category** — collects workflows not listed under any category (disable with `show_others_category: false`)
 - **Builtin workflow filtering** — turn off all builtins with `enable_builtin_workflows: false`, or specific names with `disabled_builtins: [name1, name2]`
 
