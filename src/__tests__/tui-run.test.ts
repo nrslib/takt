@@ -654,6 +654,37 @@ describe('runTui', () => {
       await expect(run).resolves.toMatchObject({ result: { action: 'cancel' } });
     });
 
+    it('should put the line the last mount was writing back into the next one', async () => {
+      const tree = scriptRender();
+      const dispatch = vi.fn().mockResolvedValue(undefined);
+      mockCreateTuiConversation.mockReturnValue({ resumeSession: vi.fn(), commandAvailability: {} });
+      const run = startRun({ dispatch });
+      await waitForMount(tree, 1);
+
+      const first = tree.conversationProps();
+      // Nothing carried into the first mount, and a half-written line out of it.
+      expect(first.initialDraft).toBeUndefined();
+      first.onExit(
+        { kind: 'result', result: { action: 'execute', task: 'ship it' } },
+        { history: ['ship it'], queue: [], draft: { text: 'half typed', cursor: 5 } },
+      );
+      await waitForMount(tree, 2);
+
+      const second = tree.conversationProps();
+      expect(second.initialDraft).toEqual({ text: 'half typed', cursor: 5 });
+
+      // An empty prompt carries nothing, and the mount after it starts blank.
+      second.onExit({ kind: 'result', result: { action: 'execute', task: 'again' } }, { history: [], queue: [] });
+      await waitForMount(tree, 3);
+      expect(tree.conversationProps().initialDraft).toBeUndefined();
+
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await expect(run).resolves.toMatchObject({ result: { action: 'cancel' } });
+    });
+
     it('should report what the finished run recorded about itself', async () => {
       const tree = scriptRender();
       // The shape the run actually writes (SessionState), so the greeting is

@@ -114,7 +114,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - 端末幅を超える長文を入力し、末尾が画面に残る（折り返される）こと・入力ボックスが縦に伸びて最下部に張り付いたままであることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-queue.json`（遅延ストリーミング + 2件目の応答）で、応答中に入力できること・Enter がキューへ積まれヒントが出ること・応答完了後にキューが自動送信されることを確認する。
     - 同シナリオで、キュー投入後の ↑ がキュー項目をドラフトへ戻して編集できることを確認する。
-    - 同シナリオで、ストリーミング中に次の行をキューへ積んでから Esc を押すと、応答が中断され「Response interrupted.」が出たうえでキューが即送信され、その応答が返ることを確認する（Claude Code と同じく中断でキューは破棄されない）。
+    - 同シナリオで、ストリーミング中に次の行をキューへ積んでから Esc を押すと、応答が中断され「Response interrupted.」が出たうえでキューが即送信され、その応答が返ることを確認する（中断してもキューは破棄されない仕様）。
     - `takt list` から completed タスクの Instruct を選び（ワークフロー再利用確認は Enter）、会話が Ink で開くこと・イントロが `/replay` を案内すること・`/replay` で前回 order がそのまま再実行され（`TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-instruct.json`）タスクが完了して一覧へ戻ることを確認する。
     - PTY 上で `takt exec backend` を起動し、会話が Ink（枠付き入力ボックス）で行われること・`/setup` で Ink が閉じて従来のセレクタが出ること（画面に入力ボックスの枠が残らない）を確認する。
     - PTY なし（`runTakt`）で `--tui` を実行し、exit 1 と `--tui requires an interactive terminal` を確認する。

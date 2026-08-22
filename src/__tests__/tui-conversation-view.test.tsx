@@ -7,6 +7,7 @@ import {
 } from '../features/tui/ConversationView.js';
 import type { InteractiveModeResult } from '../features/interactive/interactive.js';
 import type { PastedImage } from '../features/interactive/inlineImagePaste.js';
+import type { EditorDraft } from '../features/tui/editorState.js';
 import type { TranscriptEntry } from '../features/tui/TranscriptEntryView.js';
 import type {
   TuiConversation,
@@ -183,6 +184,7 @@ function createScriptedConversation(
 interface RenderOverrides {
   readonly autoSubmit?: boolean;
   readonly initialHistory?: readonly string[];
+  readonly initialDraft?: EditorDraft;
   readonly initialQueue?: readonly string[];
   readonly modelLabel?: string;
   readonly residentSession?: boolean;
@@ -203,6 +205,7 @@ function renderConversation(
       submitMode={submitMode}
       autoSubmit={overrides.autoSubmit ?? false}
       initialHistory={overrides.initialHistory ?? []}
+      initialDraft={overrides.initialDraft}
       initialQueue={overrides.initialQueue ?? []}
       residentSession={overrides.residentSession ?? false}
       modelLabel={overrides.modelLabel ?? MODEL_LABEL}
@@ -535,6 +538,93 @@ describe('ConversationView', () => {
       const frame = app.lastFrame() ?? '';
       expect(frame).toContain('❯ queued one');
       expect(frame).not.toContain(UI.queuedHint);
+
+      app.unmount();
+    });
+
+    it('should leave the half-typed line alone when the queue goes out', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+      await startBusyTurn(app);
+
+      for (const line of ['queued one', 'queued two']) {
+        app.stdin.write(line);
+        await flushFrames();
+        app.stdin.write(ENTER);
+        await flushFrames();
+      }
+
+      // Still typing when the answer lands, with the caret left inside the word.
+      app.stdin.write('half typed');
+      await flushFrames();
+      app.stdin.write(ARROW_LEFT.repeat(5));
+      await flushFrames();
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+
+      // The queue went out on its own; only what the user handed over is sent.
+      expect(conversation.submitCalls).toHaveLength(2);
+      expect(conversation.submitCalls[1]?.text).toBe('queued one\nqueued two');
+
+      // The draft is still there, and the caret is still where it was left: the
+      // next character lands inside the word rather than at the end.
+      expect(app.lastFrame() ?? '').toContain('❯ half typed');
+      app.stdin.write('X');
+      await flushFrames();
+      expect(app.lastFrame() ?? '').toContain('❯ half Xtyped');
+
+      app.unmount();
+    });
+
+    it.each([
+      {
+        name: 'a hand-off',
+        input: '/go',
+        command: { kind: 'handoff', id: 'exec-go' } as TuiLocalCommand,
+        expected: { kind: 'handoff', id: 'exec-go' },
+      },
+      {
+        name: 'the session picker',
+        input: '/resume',
+        command: { kind: 'resume_session' } as TuiLocalCommand,
+        expected: { kind: 'resume_session' },
+      },
+    ])('should hand the half-typed line over when the queue reaches $name', async ({
+      input,
+      command,
+      expected,
+    }) => {
+      const conversation = createScriptedConversation(
+        new Map<string, TuiLocalCommand>([[input, command]]),
+        NO_ORDER_COMMANDS,
+      );
+      const onExit = vi.fn();
+      const app = renderConversation(conversation, 'chat', onExit);
+      await flushFrames();
+      await startBusyTurn(app);
+
+      // The command waits behind the answer, and the next line is still being
+      // written when the answer lands and the queue moves.
+      app.stdin.write(input);
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('half typed');
+      await flushFrames();
+      app.stdin.write(ARROW_LEFT.repeat(5));
+      await flushFrames();
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+
+      // The mount ends, and what the user had reached goes with it so the next
+      // one can put it back.
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(
+        expected,
+        expect.objectContaining({ draft: { text: 'half typed', cursor: 5 } }),
+      );
 
       app.unmount();
     });
@@ -943,6 +1033,38 @@ describe('ConversationView', () => {
       expect(frame).toContain(UI.responseInterrupted);
       expect(frame).toContain('❯ queued line');
       expect(frame).not.toContain(UI.queuedHint);
+
+      app.unmount();
+    });
+
+    it('should leave the half-typed line alone when the interrupt drains the queue', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('a question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('queued line');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+
+      // Esc arrives with the next line half typed and the caret inside it.
+      app.stdin.write('half typed');
+      await flushFrames();
+      app.stdin.write(ARROW_LEFT.repeat(5));
+      await flushFrames();
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      expect(conversation.submitCalls).toHaveLength(2);
+      expect(conversation.submitCalls[1]?.text).toBe('queued line');
+
+      app.stdin.write('X');
+      await flushFrames();
+      expect(app.lastFrame() ?? '').toContain('❯ half Xtyped');
 
       app.unmount();
     });
@@ -1359,6 +1481,23 @@ describe('ConversationView', () => {
     app.stdin.write(ENTER);
     await flushFrames();
     expect(conversation.submitCalls[0]?.text).toBe('keep this');
+
+    app.unmount();
+  });
+
+  it('should start with the carried draft and its caret where it was left', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn(), {
+      initialDraft: { text: 'half typed', cursor: 5 },
+    });
+    await flushFrames();
+
+    expect(app.lastFrame() ?? '').toContain('❯ half typed');
+
+    // Typing continues from the caret, not from the end of the restored line.
+    app.stdin.write('X');
+    await flushFrames();
+    expect(app.lastFrame() ?? '').toContain('❯ half Xtyped');
 
     app.unmount();
   });

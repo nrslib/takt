@@ -19,6 +19,7 @@ import {
   type ConversationCarryOver,
   type ConversationExit,
 } from './ConversationView.js';
+import type { EditorDraft } from './editorState.js';
 import { mountInk } from './inkMount.js';
 import type { TranscriptEntry } from './TranscriptEntryView.js';
 import type { InteractiveResultSource, TuiConversation } from './tuiConversation.js';
@@ -80,6 +81,12 @@ export async function runTuiConversation(
   // Lines the user submitted while the last mount was busy and that its exit cut
   // short: they were sent, so they are carried over rather than dropped.
   let queue: readonly string[] = [];
+  /**
+   * The line the last mount was in the middle of. A selector or a hand-off can
+   * come out of the queue while the user is still typing, and the words they
+   * had reached by then are theirs to keep.
+   */
+  let draft: EditorDraft | undefined;
 
   /**
    * What happens once the conversation has decided on something. Leaving ends
@@ -120,6 +127,7 @@ export async function runTuiConversation(
         submitMode={options.submitMode}
         autoSubmit={autoSubmit}
         initialHistory={history}
+        initialDraft={draft}
         initialQueue={queue}
         modelLabel={options.modelLabel()}
         // A caller that carries decisions out mounts this view again, so the
@@ -139,6 +147,7 @@ export async function runTuiConversation(
 
     history = settled.carried.history;
     queue = settled.carried.queue;
+    draft = settled.carried.draft;
     // The transcript is already in the scrollback; printing it again doubles it.
     initialEntries = [];
     autoSubmit = false;

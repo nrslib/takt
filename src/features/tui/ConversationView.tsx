@@ -10,6 +10,7 @@ import {
   commitEditorInput,
   createEditorState,
   replaceEditorText,
+  type EditorDraft,
   type EditorState,
 } from './editorState.js';
 import { resolvePromptContentWidth } from './promptLayout.js';
@@ -51,10 +52,20 @@ export type ConversationExit =
   | { kind: 'handoff'; id: string; text?: string }
   | { kind: 'failed'; error: unknown };
 
-/** What survives a mount: the recall history and the lines still waiting. */
+/**
+ * What survives a mount: the recall history, the lines still waiting, and the
+ * line that was being written when the mount ended.
+ */
 export interface ConversationCarryOver {
   readonly history: readonly string[];
   readonly queue: readonly string[];
+  /**
+   * Absent when the prompt stood empty. That is a state the prompt is really
+   * in, not a draft that failed to come along: a mount that ends on a typed
+   * command has already taken the draft, and one that ends on a queued command
+   * hands over whatever the user had reached by then.
+   */
+  readonly draft?: EditorDraft;
 }
 
 export interface ConversationViewProps {
@@ -72,6 +83,12 @@ export interface ConversationViewProps {
    * caller and handed back on the next mount.
    */
   readonly initialHistory: readonly string[];
+  /**
+   * The line the mount before this one was in the middle of, put back with its
+   * caret. `undefined` says there was none — every mount answers this, so a
+   * draft is never dropped by omission.
+   */
+  readonly initialDraft: EditorDraft | undefined;
   /** Provider and model this session calls, shown under the prompt. */
   readonly modelLabel: string;
   /**
@@ -109,6 +126,7 @@ export function ConversationView({
   submitMode,
   autoSubmit,
   initialHistory,
+  initialDraft,
   modelLabel,
   residentSession,
   initialQueue,
@@ -119,7 +137,13 @@ export function ConversationView({
   );
   // Ink can deliver several keypresses before React re-renders, so the ref is the
   // authoritative buffer that handlers read and edit; the state is its render mirror.
-  const editorRef = useRef<EditorState>({ ...createEditorState(''), history: initialHistory });
+  const editorRef = useRef<EditorState>({
+    ...createEditorState(initialDraft?.text ?? ''),
+    // Put back where the caret stood, not at the end of the line: the user was
+    // in the middle of the sentence when the selector took the terminal.
+    cursor: initialDraft?.cursor ?? 0,
+    history: initialHistory,
+  });
   const [editor, setEditorView] = useState<EditorState>(editorRef.current);
   const [completionIndex, setCompletionIndex] = useState(0);
   const [streamingRaw, setStreamingRaw] = useState('');
@@ -194,7 +218,14 @@ export function ConversationView({
       conversation.sealImages();
       finalExitRef.current = true;
     }
-    onExit(next, { history: editorRef.current.history, queue: queueRef.current });
+    const { text, cursor, history } = editorRef.current;
+    onExit(next, {
+      history,
+      queue: queueRef.current,
+      // Only a line that is actually standing there travels: an empty prompt
+      // has nothing to hand over.
+      ...(text === '' ? {} : { draft: { text, cursor } }),
+    });
   }, [conversation, onExit]);
 
   // A teardown started outside this view must stop an in-flight submission from
@@ -307,13 +338,19 @@ export function ConversationView({
     }
   }, [conversation, exit, submitMode]);
 
+  /**
+   * Opens a turn for `text`, leaving the prompt alone.
+   *
+   * The draft belongs to the key handler: this runs for a queued line too, and
+   * by then the user may well be typing the next one. Clearing the buffer here
+   * would take that half-written line away from them.
+   */
   const startSubmission = useCallback((text: string) => {
     // The seeded auto-submit carries no note of its own; its user line is already
     // in the initial transcript, so an empty row would just be noise.
     if (text !== '') {
       setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
     }
-    updateEditor(commitEditorInput(editorRef.current, text));
     setNotice(null);
     setStreamingRaw('');
     setIsBusy(true);
@@ -326,7 +363,7 @@ export function ConversationView({
       isInstruction: submitMode === 'summarize' || isInstructionRequest(text),
     };
     trackPendingWork({ controller, completion: runSubmission(text, controller, submissionId) });
-  }, [runSubmission, submitMode, trackPendingWork, updateEditor]);
+  }, [runSubmission, submitMode, trackPendingWork]);
 
   /**
    * Esc while a call is running. The call is aborted, and whatever was typed
@@ -416,16 +453,14 @@ export function ConversationView({
         });
         return;
       case 'resume_session':
-        // Consumed here, so the command is committed to the history and leaves
-        // the prompt; the next mount starts with an empty draft.
+        // Consumed here, so the command is on record and the picker opens over a
+        // prompt that no longer shows it.
         setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
-        updateEditor(commitEditorInput(editorRef.current, text));
         setNotice(null);
         void finishRun({ kind: 'resume_session' });
         return;
       case 'handoff':
         setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
-        updateEditor(commitEditorInput(editorRef.current, text));
         setNotice(null);
         void finishRun({
           kind: 'handoff',
@@ -436,18 +471,19 @@ export function ConversationView({
       // Neither of these ends the mount, so whatever was queued behind them
       // still has to go out.
       case 'paste_image':
-        updateEditor(commitEditorInput(editorRef.current, text));
+        // The placeholder lands wherever the caret is: typed on its own the
+        // prompt is empty by now, and out of the queue it joins the line the
+        // user is writing, which is where they would want the image.
         captureClipboardImage();
         drainQueueRef.current();
         return;
       case 'notice':
         setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
-        updateEditor(commitEditorInput(editorRef.current, text));
         setNotice(toSingleLineText(command.message));
         drainQueueRef.current();
         return;
     }
-  }, [captureClipboardImage, finishRun, updateEditor]);
+  }, [captureClipboardImage, finishRun]);
 
   /** One queued or typed line, sent exactly as if it had just been typed. */
   const submitLine = useCallback((text: string) => {
@@ -589,14 +625,19 @@ export function ConversationView({
       // Read from the ref, not the rendered flag: two Enters can arrive before
       // React re-renders, and the second must still see the call the first one
       // started.
-      if (inFlightRef.current !== null) {
-        // Leaving the conversation must not wait behind the queue.
-        const command = conversation.resolveLocalCommand(text);
-        if (command?.kind === 'cancel') {
-          applyLocalCommand(command, text);
-          return;
-        }
-        updateEditor(commitEditorInput(editorRef.current, text));
+      const busy = inFlightRef.current !== null;
+      // Leaving the conversation must not wait behind the queue.
+      const leaving = busy ? conversation.resolveLocalCommand(text) : null;
+      // The one place the draft is handed over, and so the only one that clears
+      // it. Everything downstream — a queued line going out, a command coming
+      // back off the queue — runs while the user may be typing the next line,
+      // and that line is theirs to keep.
+      updateEditor(commitEditorInput(editorRef.current, text));
+      if (leaving?.kind === 'cancel') {
+        applyLocalCommand(leaving, text);
+        return;
+      }
+      if (busy) {
         writeQueue([...queueRef.current, text]);
         return;
       }

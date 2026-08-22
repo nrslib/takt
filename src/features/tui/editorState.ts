@@ -31,6 +31,18 @@ export interface EditorState {
   readonly draftBeforeHistory: string | null;
 }
 
+/**
+ * A line still being written, taken out of the buffer it lives in.
+ *
+ * Only the two things a reader of the prompt can see are carried: what stands
+ * there and where the caret is. The recall history is the mount's own and
+ * travels separately.
+ */
+export interface EditorDraft {
+  readonly text: string;
+  readonly cursor: number;
+}
+
 export type EditorKey =
   | { readonly kind: 'insert'; readonly text: string }
   | { readonly kind: 'newline' }
