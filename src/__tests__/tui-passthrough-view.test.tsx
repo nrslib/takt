@@ -335,8 +335,8 @@ describe('PassthroughView', () => {
     // An interrupt is the user ending the capture, so this one is stopped
     // rather than waited out.
     app.stdin.write(CTRL_C);
-    await flushFrames();
-    expect(captureSignal.aborted).toBe(true);
+    await vi.waitFor(() => expect(captureSignal.aborted).toBe(true));
+    // The capture ignores the abort, so nothing has settled yet.
     expect(onDone).not.toHaveBeenCalled();
 
     // The capture ignores the abort, so the second Ctrl+C must not wait for it.

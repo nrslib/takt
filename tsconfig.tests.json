@@ -20,6 +20,7 @@
     "src/__tests__/conversation-session-failure.test.ts",
     "src/__tests__/conversationLoop-resume.test.ts",
     "src/__tests__/conversationSession.test.ts",
+    "src/__tests__/e2e-terminal-output.test.ts",
     "src/__tests__/exec-assistant-failure.test.ts",
     "src/__tests__/exec-command.test.ts",
     "src/__tests__/exec-tui-conversation.test.ts",

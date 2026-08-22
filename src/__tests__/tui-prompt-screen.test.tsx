@@ -9,6 +9,7 @@ import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
 import { PromptScreen } from '../features/tui/PromptScreen.js';
 
+const QUESTION = 'Assistant> ';
 const ENTER = '\r';
 const ESC = '\x1b';
 const CTRL_C = '\x03';
@@ -16,72 +17,71 @@ const CTRL_K = '\x0b';
 const ARROW_LEFT = '\x1b[D';
 const BACKSPACE = '\x7f';
 
-function flushFrames(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 50));
-}
+type PromptApp = ReturnType<typeof render>;
 
-function renderScreen(onDone: (answer: string | null) => void, initialText = '') {
-  return render(
+/**
+ * Ink subscribes to stdin in an effect, so a key written before the question is
+ * on screen would go nowhere. Waiting for the frame is the observable form of
+ * "this screen is listening".
+ */
+async function renderScreen(
+  onDone: (answer: string | null) => void,
+  initialText = '',
+): Promise<PromptApp> {
+  const app = render(
     <PromptScreen
-      question="Assistant> "
+      question={QUESTION}
       hint="Enter: answer"
       placeholder="Type an answer"
       initialText={initialText}
       onDone={onDone}
     />,
   );
+  await vi.waitFor(() => expect(app.lastFrame() ?? '').toContain(QUESTION.trimEnd()));
+  return app;
 }
 
 describe('PromptScreen', () => {
   it('should hand back the typed answer on Enter', async () => {
     const onDone = vi.fn();
-    const app = renderScreen(onDone);
-    await flushFrames();
+    const app = await renderScreen(onDone);
 
     app.stdin.write('takt-default');
-    await flushFrames();
+    await vi.waitFor(() => expect(app.lastFrame() ?? '').toContain('takt-default'));
     app.stdin.write(ENTER);
-    await flushFrames();
 
-    expect(onDone).toHaveBeenCalledExactlyOnceWith('takt-default');
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledExactlyOnceWith('takt-default'));
     app.unmount();
   });
 
   it('should hand back nothing on Esc and on Ctrl+C', async () => {
     const onEsc = vi.fn();
-    const first = renderScreen(onEsc, 'seeded');
-    await flushFrames();
+    const first = await renderScreen(onEsc, 'seeded');
     first.stdin.write(ESC);
-    await flushFrames();
-    expect(onEsc).toHaveBeenCalledExactlyOnceWith(null);
+    await vi.waitFor(() => expect(onEsc).toHaveBeenCalledExactlyOnceWith(null));
     first.unmount();
 
     const onInterrupt = vi.fn();
-    const second = renderScreen(onInterrupt, 'seeded');
-    await flushFrames();
+    const second = await renderScreen(onInterrupt, 'seeded');
     second.stdin.write(CTRL_C);
-    await flushFrames();
-    expect(onInterrupt).toHaveBeenCalledExactlyOnceWith(null);
+    await vi.waitFor(() => expect(onInterrupt).toHaveBeenCalledExactlyOnceWith(null));
     second.unmount();
   });
 
   it('should edit the answer with the keys every buffer shares', async () => {
     const onDone = vi.fn();
-    const app = renderScreen(onDone, 'keep this cut that');
-    await flushFrames();
+    const app = await renderScreen(onDone, 'keep this cut that');
 
+    // The caret walks back over ' cut that', and Ctrl+K takes the rest of the
+    // line with it; Backspace then removes the space it left behind.
     for (let index = 0; index < 8; index += 1) {
       app.stdin.write(ARROW_LEFT);
     }
-    await flushFrames();
     app.stdin.write(CTRL_K);
-    await flushFrames();
     app.stdin.write(BACKSPACE);
-    await flushFrames();
     app.stdin.write(ENTER);
-    await flushFrames();
 
-    expect(onDone).toHaveBeenCalledExactlyOnceWith('keep this');
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledExactlyOnceWith('keep this'));
     app.unmount();
   });
 });

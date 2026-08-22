@@ -10,8 +10,8 @@ import headless from '@xterm/headless';
 import { spawn as spawnPty, type IPty } from 'node-pty';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stripAnsi } from '../../src/shared/utils/text.js';
 import { injectProviderArgs } from './takt-runner.js';
+import { createTerminalOutput } from './terminal-output.js';
 import { waitFor } from './wait.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -91,7 +91,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
   const provider = options.injectProvider === false ? undefined : process.env.TAKT_E2E_PROVIDER;
   const args = injectProviderArgs(options.args, provider);
 
-  let raw = '';
+  const received = createTerminalOutput();
   let exitCode: number | null = null;
 
   // A real VT is the only honest judge of what survived the app's own erases.
@@ -116,7 +116,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
   /** What the emulator refused, kept so a screen read can say why it is stale. */
   let terminalWriteError: unknown;
   pty.onData((chunk) => {
-    raw += chunk;
+    received.push(chunk);
     terminalDrained = terminalDrained
       .then(() => new Promise<void>((resolve) => terminal.write(chunk, resolve)))
       // A refused write must not leave the chain rejected: every later screen
@@ -129,17 +129,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
     exitCode = code;
   });
 
-  // `raw` only grows, so the sanitized form is cached and extended rather than
-  // recomputed from the whole byte history on every poll.
-  let sanitized = '';
-  let sanitizedFrom = 0;
-  const output = (): string => {
-    if (sanitizedFrom !== raw.length) {
-      sanitized += stripAnsi(raw.slice(sanitizedFrom));
-      sanitizedFrom = raw.length;
-    }
-    return sanitized;
-  };
+  const output = (): string => received.text();
 
   async function drainTerminal(): Promise<void> {
     await terminalDrained;

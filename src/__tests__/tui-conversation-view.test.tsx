@@ -286,6 +286,56 @@ describe('ConversationView', () => {
     resumed.unmount();
   });
 
+  it('should keep a real store usable across a command hand-off and its remount', async () => {
+    // Exec's `/setup` and `/go` leave through a hand-off, and exec has no
+    // dispatch of its own, so this runs the way that run mounts the view.
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'takt-cv-setup-'));
+    const store = createImageAttachmentStore({ tmpRoot, sessionId: 'session-1' });
+    const scripted = createScriptedConversation(
+      new Map<string, TuiLocalCommand>([['/setup', { kind: 'handoff', id: 'exec-setup' }]]),
+      NO_ORDER_COMMANDS,
+    );
+    const conversation = {
+      ...scripted,
+      sealImages: () => store.seal(),
+      saveInlineImage: async (image: PastedImage): Promise<string> => {
+        const saved = await store.saveImage(image.data, image.mimeType);
+        return saved.placeholder;
+      },
+    };
+    // Pasted earlier in this mount, so its file has to outlive the hand-off.
+    const pastedBefore = await store.saveImage(PNG_BYTES, 'image/png');
+
+    const onExit = vi.fn();
+    const app = renderConversation(conversation, 'chat', onExit, { residentSession: false });
+    await flushFrames();
+
+    app.stdin.write('/setup');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+    expect(onExit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'handoff', id: 'exec-setup' }),
+      expect.anything(),
+    );
+    app.unmount();
+    await flushFrames();
+
+    // The menu ran on the bare terminal and the conversation is mounted again.
+    const resumed = renderConversation(conversation, 'chat', vi.fn(), { residentSession: false });
+    await flushFrames();
+    resumed.stdin.write(INLINE_IMAGE_PASTE);
+    await flushFrames();
+
+    // Both files are there: nothing sealed the store on the way through.
+    expect(readdirSync(join(tmpRoot, 'session-1', 'attachments'))).toHaveLength(2);
+    expect(existsSync(pastedBefore.tempPath)).toBe(true);
+
+    resumed.unmount();
+    cleanupImageAttachmentStore(store);
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
   it('should leave a real store usable after a hand-off unmount', async () => {
     // The store the orchestrator owns, wired exactly as the run wires it.
     const tmpRoot = mkdtempSync(join(tmpdir(), 'takt-cv-handoff-'));
