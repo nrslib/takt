@@ -188,7 +188,7 @@ describe('companion runtime lifecycle', () => {
       await expect(runtime.complete(workflowState, 'part two complete', { followUpRound: 1 }))
         .resolves.toEqual({ findings: [] });
 
-      expect(diffReader.readDiff).toHaveBeenCalledTimes(3);
+      expect(diffReader.readDiff).toHaveBeenCalledTimes(2);
       for (const [, baselineSha] of diffReader.readDiff.mock.calls) {
         expect(baselineSha).toBe('baseline');
       }
