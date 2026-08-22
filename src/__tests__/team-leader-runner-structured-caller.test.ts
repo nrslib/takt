@@ -3480,14 +3480,17 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect(Buffer.byteLength(result.response.error ?? '', 'utf8')).toBeLessThanOrEqual(
         MAX_AGENT_FAILURE_MESSAGE_BYTES,
       );
-      for (const marker of markers.slice(1)) {
+      // Both timed-out parts and the failed continuation keep their truncation
+      // markers in the bounded content summary; the error carries only the
+      // first failed part's bounded message.
+      for (const marker of markers) {
         expect(result.response.content).toContain(marker);
       }
-      expect(result.response.error).toContain(markers[1]);
+      expect(result.response.error).toContain(markers[0]);
       expect(result.response.error).not.toContain(markers[2]);
       expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
       const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
-      expect(continuationInstruction).toContain('Timed-out part: part-2');
+      expect(continuationInstruction).toContain('Timed-out part: part-1, part-2');
     });
 
     it.each([
