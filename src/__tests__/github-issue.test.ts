@@ -89,7 +89,7 @@ describe('commentOnIssue GitHub boundary', () => {
   it('コメント投稿コマンドの失敗理由を返し、再試行しない', () => {
     const body = 'secret task instructions';
     const error = Object.assign(new Error(`Command failed: ${body}`), {
-      stderr: `permission denied: ${body}`,
+      stderr: 'permission denied',
     });
     execFileSync
       .mockReturnValueOnce('')
@@ -99,7 +99,7 @@ describe('commentOnIssue GitHub boundary', () => {
 
     expect(result).toMatchObject({
       success: false,
-      error: expect.stringContaining('permission denied'),
+      error: 'permission denied',
     });
     if (result.success !== false) {
       throw new Error('Expected commentOnIssue to return a failure result');
@@ -110,6 +110,58 @@ describe('commentOnIssue GitHub boundary', () => {
       command === 'gh' && Array.isArray(args) && args[0] === 'issue' && args[1] === 'comment');
     expect(commentCalls).toHaveLength(1);
     expect(JSON.stringify(commentCalls[0]?.[1])).not.toContain(body);
+  });
+
+  it.each([
+    { label: '完全一致', stderr: (body: string) => `permission denied: ${body}` },
+    { label: 'JSONエスケープ', stderr: (body: string) => `permission denied: ${JSON.stringify(body)}` },
+    { label: '部分引用', stderr: (body: string) => `permission denied: "${body.slice(0, 18)}..."` },
+    { label: '切り詰めた本文', stderr: (body: string) => `permission denied: ${body.slice(0, -8)}` },
+  ])('stderrに$labelの本文が含まれる場合は本文を返さない', ({ stderr }) => {
+    const body = 'secret task "instructions"\nwith private details';
+    const error = Object.assign(new Error('command failed'), { stderr: stderr(body) });
+    execFileSync
+      .mockReturnValueOnce('')
+      .mockImplementationOnce(() => { throw error; });
+
+    const result = commentOnIssue(999, body, '/project');
+
+    expect(result).toEqual({ success: false, error: 'permission denied' });
+    expect(mockLogError).toHaveBeenCalledWith('Issue comment failed', {
+      issueNumber: 999,
+      error: 'permission denied',
+    });
+  });
+
+  it.each([
+    { label: '本文を含む認証ステータス', body: 'ordinary task text', stderr: 'HTTP 401: ordinary task text', expected: 'authentication failed' },
+    { label: '404', body: 'private note', stderr: 'HTTP 404: issue not found', expected: 'issue not found' },
+    { label: '改行を含むネットワーク', body: 'private note', stderr: 'connection\nrefused: github.com', expected: 'network error' },
+    { label: 'rate limit', body: 'private note', stderr: 'HTTP 403: API rate limit exceeded', expected: 'rate limit exceeded' },
+    { label: '単独のrate limit言及', body: 'private note', stderr: 'permission denied: Documented rate limit fallback behavior for issue 429.', expected: 'permission denied' },
+    { label: 'helper対象外の429形式', body: 'private note', stderr: 'permission denied: status: 429', expected: 'permission denied' },
+    { label: 'リモートサービス', body: 'private note', stderr: 'HTTP 503: Service Unavailable', expected: 'remote service error' },
+    { label: '裸の401を含むIssue解決エラー', body: 'private note', stderr: 'Could not resolve to an Issue with the number of 401.', expected: 'issue not found' },
+    { label: '8文字未満の部分引用', body: 'XissueY', stderr: 'not found: issue', expected: 'issue not found' },
+    { label: 'フォールバック文字列との衝突', body: 'XIssue comment command failedY', stderr: 'unexpected: Issue comment command failed', expected: 'Issue comment command failed' },
+    { label: '非英語メッセージ', body: 'private note', stderr: '認証が必要です', expected: 'Issue comment command failed' },
+    { label: '未知のエラー', body: 'private note', stderr: 'unexpected: private note details', expected: 'Issue comment command failed' },
+    { label: 'stderr上限超過', body: 'private note', stderr: `${'x'.repeat(20_000)} HTTP 401`, expected: 'Issue comment command failed' },
+  ])('stderrの$labelを固定理由へ分類し、stderrや本文を返さない', ({ body, stderr, expected }) => {
+    const error = Object.assign(new Error('command failed'), { stderr });
+    execFileSync
+      .mockReturnValueOnce('')
+      .mockImplementationOnce(() => { throw error; });
+
+    const result = commentOnIssue(999, body, '/project');
+
+    expect(result).toEqual({ success: false, error: expected });
+    expect(mockLogError).toHaveBeenCalledWith('Issue comment failed', {
+      issueNumber: 999,
+      error: expected,
+    });
+    expect(JSON.stringify(result)).not.toContain(body);
+    expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(body);
   });
 
   it.each([
@@ -130,7 +182,7 @@ describe('commentOnIssue GitHub boundary', () => {
     });
   });
 
-  it('本文が空の場合はstderrをそのままtrimして返す', () => {
+  it('本文が空の場合も許可済みの失敗理由を返す', () => {
     const error = Object.assign(new Error('command failed'), { stderr: ' permission denied \n' });
     execFileSync
       .mockReturnValueOnce('')
