@@ -49,7 +49,14 @@ export function installImmediateSigintExit(
     }
   };
 
+  const onPause = (): void => {
+    if (!cleanedUp) {
+      stdin.resume();
+    }
+  };
+
   stdin.on('data', onData);
+  stdin.on('pause', onPause);
   stdin.resume();
 
   const cleanup = (): void => {
@@ -58,6 +65,7 @@ export function installImmediateSigintExit(
     }
     cleanedUp = true;
     stdin.removeListener('data', onData);
+    stdin.removeListener('pause', onPause);
     stdin.pause();
     if (enabledRawMode && typeof stdin.setRawMode === 'function') {
       stdin.setRawMode(false);

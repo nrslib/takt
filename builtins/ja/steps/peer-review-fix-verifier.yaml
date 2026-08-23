@@ -24,4 +24,3 @@ output_contracts:
   report:
     - name: fix-verification.md
       format: fix-verification
-      use_judge: false

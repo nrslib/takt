@@ -6,6 +6,7 @@ import { basename, extname, join } from 'node:path';
 import {
   OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
   PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+  PROMPT_LOG_FILE_SUFFIX,
   PROVIDER_EVENTS_LOG_FILE_SUFFIX,
   USAGE_EVENTS_LOG_FILE_SUFFIX,
 } from '../../../core/logging/contracts.js';
@@ -47,6 +48,7 @@ const RUN_LOG_SIDECAR_FILE_SUFFIXES = Object.freeze([
   USAGE_EVENTS_LOG_FILE_SUFFIX,
   PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
   OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+  PROMPT_LOG_FILE_SUFFIX,
 ]);
 
 class FileTaskRunForceFailStorage implements WorkflowRunForceFailHandle {

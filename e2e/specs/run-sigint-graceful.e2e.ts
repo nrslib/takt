@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import {
   createIsolatedEnv,
@@ -10,6 +10,7 @@ import {
   type IsolatedEnv,
 } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
+import { startTaktPty, type TaktPtySession } from '../helpers/takt-pty-runner';
 import { cleanupChildProcess, cleanupTestResource, waitFor, waitForClose } from '../helpers/wait.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,6 +21,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
   let child: ReturnType<typeof spawn> | undefined;
+  let ptySession: TaktPtySession | undefined;
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
@@ -34,11 +36,95 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
   });
 
   afterEach(async () => {
-    await cleanupChildProcess(child);
-    child = undefined;
-    cleanupTestResource('testRepo', () => testRepo.cleanup());
-    cleanupTestResource('isolatedEnv', () => isolatedEnv.cleanup());
+    try {
+      await cleanupChildProcess(child);
+    } finally {
+      child = undefined;
+      try {
+        await ptySession?.dispose();
+      } finally {
+        ptySession = undefined;
+        try {
+          cleanupTestResource('testRepo', () => testRepo.cleanup());
+        } finally {
+          cleanupTestResource('isolatedEnv', () => isolatedEnv.cleanup());
+        }
+      }
+    }
   });
+
+  it('should honor terminal Ctrl+C after shared stdin is paused during concurrent execution', async () => {
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/run-sigint-paused-stdin.json');
+    const preloadPath = resolve(__dirname, '../fixtures/preload/pause-stdin-after-data-listener.mjs');
+
+    const tasksFile = join(testRepo.path, '.takt', 'tasks.yaml');
+    const pauseTriggerPath = join(testRepo.path, '.takt', 'pause-stdin.trigger');
+    mkdirSync(join(testRepo.path, '.takt'), { recursive: true });
+
+    const now = new Date().toISOString();
+    writeFileSync(
+      tasksFile,
+      [
+        'tasks:',
+        '  - name: paused-stdin-a',
+        '    status: pending',
+        '    content: "E2E paused stdin task A"',
+        `    workflow: "${workflowPath}"`,
+        `    created_at: "${now}"`,
+        '    started_at: null',
+        '    completed_at: null',
+        '    owner_pid: null',
+        '  - name: paused-stdin-b',
+        '    status: pending',
+        '    content: "E2E paused stdin task B"',
+        `    workflow: "${workflowPath}"`,
+        `    created_at: "${now}"`,
+        '    started_at: null',
+        '    completed_at: null',
+        '    owner_pid: null',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    ptySession = startTaktPty({
+      args: ['run', '--provider', 'mock'],
+      cwd: testRepo.path,
+      injectProvider: false,
+      env: {
+        ...isolatedEnv.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+        TAKT_E2E_PAUSE_STDIN_TRIGGER: pauseTriggerPath,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+    });
+
+    const workersFilled = await waitFor(
+      () => {
+        try {
+          const parsed = parseYaml(readFileSync(tasksFile, 'utf-8')) as {
+            tasks?: Array<{ status?: string }>;
+          };
+          return parsed.tasks?.filter((task) => task.status === 'running').length === 2;
+        } catch {
+          return false;
+        }
+      },
+      30_000,
+      20,
+    );
+    expect(workersFilled, `output:\n${ptySession.output()}`).toBe(true);
+
+    writeFileSync(pauseTriggerPath, '', 'utf-8');
+    await ptySession.waitForOutput('[e2e] stdin paused', 10_000);
+
+    const startedAt = Date.now();
+    ptySession.write('\u0003');
+    const exitCode = await ptySession.waitForExit(10_000);
+
+    expect([0, 130]).toContain(exitCode);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  }, 60_000);
 
   it('should stop scheduling new clone work after SIGINT and exit cleanly', async () => {
     const binPath = resolve(__dirname, '../../bin/takt');

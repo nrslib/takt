@@ -52,6 +52,13 @@ type WithResolved = {
   resolvedModel?: string;
 };
 
+function expectPhase3Isolation(options: unknown): void {
+  expect(options).toEqual(expect.objectContaining({ allowedTools: [] }));
+  expect(options).not.toHaveProperty('mcpServers');
+  expect(options).not.toHaveProperty('mcpAssignment');
+  expect(options).not.toHaveProperty('mcpServerIdentity');
+}
+
 describe('judge runAgent provider/model resolution (#556)', () => {
   const judgeBase: JudgeStatusOptions & WithResolved = {
     cwd: '/repo',
@@ -59,6 +66,12 @@ describe('judge runAgent provider/model resolution (#556)', () => {
     provider: 'codex',
     resolvedProvider: 'codex',
     resolvedModel: 'gpt-5.2-codex',
+    mcpServers: { review: { command: 'review-mcp' } },
+    mcpAssignment: {
+      servers: { review: { command: 'review-mcp' } },
+      defaults: { servers: ['review'] },
+    },
+    mcpServerIdentity: 'review-mcp-identity',
   };
 
   beforeEach(() => {
@@ -74,6 +87,12 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         provider: 'codex',
         resolvedProvider: 'codex',
         resolvedModel: 'gpt-5.2-codex',
+        mcpServers: { review: { command: 'review-mcp' } },
+        mcpAssignment: {
+          servers: { review: { command: 'review-mcp' } },
+          defaults: { servers: ['review'] },
+        },
+        mcpServerIdentity: 'review-mcp-identity',
       };
       await evaluateCondition('agent output', [{ index: 0, text: 'a' }], opts);
 
@@ -88,6 +107,7 @@ describe('judge runAgent provider/model resolution (#556)', () => {
           }),
         }),
       );
+      expectPhase3Isolation(vi.mocked(runAgent).mock.calls[0]?.[2]);
     });
   });
 
@@ -101,6 +121,12 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         provider: 'codex',
         resolvedProvider: 'codex',
         resolvedModel: 'gpt-5.2-codex',
+        mcpServers: { review: { command: 'review-mcp' } },
+        mcpAssignment: {
+          servers: { review: { command: 'review-mcp' } },
+          defaults: { servers: ['review'] },
+        },
+        mcpServerIdentity: 'review-mcp-identity',
       };
       await runTagJudgeStage(
         'tag instruction',
@@ -119,6 +145,7 @@ describe('judge runAgent provider/model resolution (#556)', () => {
           }),
         }),
       );
+      expectPhase3Isolation(vi.mocked(runAgent).mock.calls[0]?.[2]);
     });
   });
 
@@ -167,6 +194,32 @@ describe('judge runAgent provider/model resolution (#556)', () => {
           }),
         }),
       );
+      for (const call of vi.mocked(runAgent).mock.calls) {
+        expectPhase3Isolation(call[2]);
+      }
+    });
+
+    it('keeps the explicit no-tools boundary when the provider profile declares tools', async () => {
+      vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no structured step'));
+      vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('', { content: 'no tag' }));
+      vi.mocked(runAgent).mockResolvedValueOnce(doneResponse(
+        'ignored',
+        { matched_index: 2, reason: 'second condition' },
+      ));
+
+      await judgeStatus('structured', 'tag', [
+        { label: 'a' },
+        { label: 'b' },
+      ], {
+        cwd: '/repo',
+        stepName: 'review',
+        resolvedProvider: 'claude',
+        resolvedProviderOptions: { claude: { allowedTools: ['Read'] } },
+      });
+
+      for (const call of vi.mocked(runAgent).mock.calls) {
+        expectPhase3Isolation(call[2]);
+      }
     });
   });
 });

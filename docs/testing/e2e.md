@@ -196,7 +196,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
       - グローバル `config.yaml` 不在の環境で `takt add` を2回実行し、`takt run --provider mock` を実行する。
       - タスク実行完了後に `.takt/tasks/` 配下の2タスクディレクトリ生成、`.takt/.gitignore` 生成、`.takt/tasks.yaml` に2件の completed 履歴が残ることを確認する。
 - Run tasks graceful shutdown on SIGINT（`e2e/specs/run-sigint-graceful.e2e.ts`）
-  - 目的: `takt run` を並列実行中に `Ctrl+C` した際、新規クローン投入を止めてグレースフルに終了することを確認。
+  - 目的: `takt run` を並列実行中に `Ctrl+C` した際、新規クローン投入を止めてグレースフルに終了することと、共有 stdin が pause された後も実 PTY の Ctrl+C を受信できることを確認。
   - LLM: 呼び出さない（`--provider mock` 固定）
   - 手順（ユーザー行動/コマンド）:
     - `.takt/tasks.yaml` に `worktree: true` の pending タスクを3件投入する（`concurrency: 2`）。
@@ -205,6 +205,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt run --provider mock` を起動し、`=== Running Workflow:` が出たら `Ctrl+C` を送る。
     - 3件目タスク（`sigint-c`）が開始されないことを確認する。
     - `=== Tasks Summary ===` 以降に新規タスク開始やクローン作成ログが出ないことを確認する。
+    - 実 PTY 上で mock provider を待機させた2タスクを並列実行し、共有 stdin を pause した後に Ctrl+C バイトを送って、プロセスが速やかに終了することを確認する。
 - Runtime config injection with provider（`e2e/specs/runtime-config-provider.e2e.ts`）
   - 目的: `config.yaml` の `runtime.prepare` が provider 呼び出し前に反映される正例と未設定時のenv未注入をmockで確認し、任意の実provider E2Eでは子プロセスへの伝播も確認。
   - LLM: 通常CIでは呼び出さない（mockでprovider呼び出し時のruntime環境を検証）。`TAKT_E2E_PROVIDER` が `claude` / `claude-sdk` / `codex` / `opencode` の場合のみ、実コマンド伝播の追加テストを実行。
