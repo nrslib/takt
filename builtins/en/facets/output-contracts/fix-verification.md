@@ -13,7 +13,7 @@
 
 Do not treat adjudication's merger into an existing family alone as evidence for the current path. Update the current path and cumulative count only when this completed verification finds the invariant `incomplete` on the merged path.
 
-Compare carried values by their semantic contract. Mechanical decision values such as identifiers, counts, enums, and path sets must be preserved. Human-readable descriptions may correct typos or vary notation when the responsibility, state, and path meaning remain equivalent; those differences alone do not cause `incomplete` or `plan_invalid`. Treat missing meaning, a changed responsibility, or a changed path set as a mismatch.
+Compare carried values according to what each column says. Keep identifiers, numbers, fixed choices, and lists of paths unchanged. When copying a row, copy the value in every column with a fixed list of values exactly; do not put a word from a result or summary outside the table into that table cell. Only human-readable description columns may be reworded when the responsibility, state, and path meaning remain equivalent; those differences alone do not cause `incomplete` or `plan_invalid`. Treat missing meaning, a changed responsibility, or a changed path list as a mismatch.
 
 ## Fix Unit Compatibility
 | Fix Unit | Target Findings | Compatibility of Assumptions, Methods, and Evidentiary Power | Decision |
