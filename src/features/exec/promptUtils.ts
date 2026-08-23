@@ -1,8 +1,8 @@
-import { readInteractiveInput } from '../interactive/interactiveInput.js';
+import { readPipedLine } from '../interactive/lineEditor.js';
+import { runTuiPrompt } from '../tui/runTuiPrompt.js';
 import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../../shared/prompt/index.js';
-import { sanitizeTerminalText } from '../../shared/utils/index.js';
+import { hasInteractiveTerminal, sanitizeTerminalText } from '../../shared/utils/index.js';
 import type { SessionContext } from '../interactive/aiCaller.js';
-import { EXEC_TEXT_INPUT_COMMAND_AVAILABILITY } from './commandAvailability.js';
 import { execLabel, type ExecLanguage } from './labels.js';
 
 export async function selectExecOption<T extends string>(
@@ -25,8 +25,23 @@ export async function selectMultipleExecOptions<T extends string>(
   });
 }
 
+/**
+ * A terminal answers on the TUI; piped input keeps the readline reader the
+ * non-interactive callers and the E2E suite depend on.
+ */
+export function askExecQuestion(
+  question: string,
+  lang: SessionContext['lang'],
+  emptyKeepsCurrent: boolean,
+): Promise<string | null> {
+  if (hasInteractiveTerminal()) {
+    return runTuiPrompt({ lang, question, emptyKeepsCurrent });
+  }
+  return readPipedLine(question);
+}
+
 export async function promptTextOrCancel(prompt: string, current: string, lang: SessionContext['lang']): Promise<string | null> {
-  const input = await readInteractiveInput(`${prompt} (${sanitizeTerminalText(current)}): `, lang, EXEC_TEXT_INPUT_COMMAND_AVAILABILITY);
+  const input = await askExecQuestion(`${prompt} (${sanitizeTerminalText(current)}): `, lang, true);
   if (input === null) {
     return null;
   }
@@ -40,7 +55,7 @@ export async function promptText(prompt: string, current: string, lang: SessionC
 }
 
 export async function promptInteger(prompt: string, current: number, lang: SessionContext['lang']): Promise<number> {
-  const input = await readInteractiveInput(`${prompt} (${current}): `, lang, EXEC_TEXT_INPUT_COMMAND_AVAILABILITY);
+  const input = await askExecQuestion(`${prompt} (${current}): `, lang, true);
   if (input === null || input.trim().length === 0) {
     return current;
   }

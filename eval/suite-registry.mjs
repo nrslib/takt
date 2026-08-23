@@ -45,6 +45,7 @@ const CLASSIFICATIONS = [
     suites: [
       'fix-verifier-family-boundary',
       'companion-early-scan',
+      'companion-testing-later-scan',
       'companion-evidence-boundary',
       'review-mode-authority',
     ],

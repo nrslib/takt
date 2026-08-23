@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -11,10 +11,12 @@ const {
   mockSelectAndExecuteTask,
   mockExecuteDefaultAction,
   mockCallAIWithRetry,
+  mockConfirm,
 } = vi.hoisted(() => ({
   mockSelectAndExecuteTask: vi.fn(),
   mockExecuteDefaultAction: vi.fn(),
   mockCallAIWithRetry: vi.fn(),
+  mockConfirm: vi.fn(),
 }));
 
 vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
@@ -27,6 +29,11 @@ vi.mock('../app/cli/routing.js', () => ({
 
 vi.mock('../features/interactive/aiCaller.js', () => ({
   callAIWithRetry: (...args: unknown[]) => mockCallAIWithRetry(...args),
+}));
+
+vi.mock('../shared/prompt/confirm.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  confirm: (...args: unknown[]) => mockConfirm(...args),
 }));
 
 import { createTaktAcpAgent, mapTaktAcpUpdateToSessionUpdate } from '../app/acp/agent.js';
@@ -59,6 +66,7 @@ function createRealConversationSessionForAcp(input: {
   return createConversationSession({
     cwd: input.cwd,
     outputMode: input.outputMode,
+    formalSpec: false,
     ctx: {
       provider: {
         setup: vi.fn(),
@@ -121,7 +129,7 @@ async function captureElicitationRequest(
 
   await agent.handleSessionPrompt({
     sessionId,
-    prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+    prompt: [{ type: 'text', text: 'Implement ACP support' }],
   });
 
   const request = createElicitation.mock.calls[0]?.[0] as CreateElicitationRequest | undefined;
@@ -194,11 +202,22 @@ describe('TAKT ACP agent adapter', () => {
   });
 
   it.each([
-    { type: 'companion' as const, action: 'start' as const, step: 'prepare', companion: 'security' },
+    { type: 'companion' as const, action: 'start' as const, step: 'prepare', companion: 'security', reviewMode: 'completion' as const },
     { type: 'companion' as const, action: 'pool_selected' as const, step: 'select', selected: ['security'], rationale: 'selected' },
     { type: 'companion' as const, action: 'finding' as const, step: 'review', companion: 'security', severity: 'must_fix' as const },
     { type: 'companion' as const, action: 'fix_round' as const, step: 'repair', sequence: 2, findingCount: 1 },
     { type: 'companion' as const, action: 'complete' as const, step: 'finalize', completionSettled: true, completionFailure: false, followUpRounds: 1 },
+    {
+      type: 'companion' as const,
+      action: 'review_round' as const,
+      step: 'review',
+      companion: 'security',
+      reviewMode: 'live' as const,
+      trigger: 'quiet' as const,
+      digest: 'digest-1',
+      changedLines: 4,
+      findingCount: 1,
+    },
   ])(
     'should map companion $action events to ACP updates while preserving the step',
     (event) => {
@@ -326,6 +345,82 @@ describe('TAKT ACP agent adapter', () => {
       cwd: '/repo',
     }));
   });
+
+  it.each([
+    ['Y/n', true],
+    ['y/N', false],
+  ] as const)(
+    'should preserve ACP protocol input and apply the %s formal specification default without reading stdin',
+    async (formalSpecSetting, expectedFormalSpec) => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-acp-formal-spec-boundary-'));
+      const originalIsTTY = process.stdin.isTTY;
+      const originalNoTty = process.env.TAKT_NO_TTY;
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        ['provider: mock', 'assistant:', `  formal_spec: ${formalSpecSetting}`].join('\n'),
+        'utf-8',
+      );
+      const sendSessionUpdate = vi.fn();
+      Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+      delete process.env.TAKT_NO_TTY;
+      const stdinOnSpy = vi.spyOn(process.stdin, 'on');
+      mockCallAIWithRetry.mockResolvedValue({
+        result: {
+          success: true,
+          content: 'Which parser states matter?',
+          sessionId: 'provider-session-1',
+        },
+        sessionId: 'provider-session-1',
+      });
+
+      try {
+        const agent = createTaktAcpAgent({
+          runWorkflowExecution: vi.fn(),
+          sendSessionUpdate,
+        });
+        const { sessionId } = await agent.handleSessionNew(newSessionParams({ cwd: projectDir }));
+
+        const result = await agent.handleSessionPrompt({
+          sessionId,
+          prompt: [{ type: 'text', text: 'describe parser states' }],
+        });
+
+        expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+        // #1460: assistant conversation input is framed as a user comment so
+        // fix-shaped remarks are not misread as implementation requests. The
+        // original ACP protocol text must survive inside the framed prompt.
+        const sentPrompt = mockCallAIWithRetry.mock.calls[0]?.[0] as string;
+        expect(sentPrompt).toContain('describe parser states');
+        expect(sentPrompt).toContain('## User Comment');
+        const systemPrompt = mockCallAIWithRetry.mock.calls[0]?.[1] as string;
+        expect(systemPrompt).toMatch(/Gherkin/);
+        if (expectedFormalSpec) {
+          expect(systemPrompt).toMatch(/\bQuint\b/);
+          expect(systemPrompt).toMatch(/\bAlloy\b/);
+        } else {
+          expect(systemPrompt).not.toMatch(/\bQuint\b/);
+          expect(systemPrompt).not.toMatch(/\bAlloy\b/);
+        }
+        expect(mockConfirm).not.toHaveBeenCalled();
+        expect(stdinOnSpy.mock.calls.filter(([event]) => event === 'data')).toEqual([]);
+        expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+          kind: 'agent_message',
+          text: 'Which parser states matter?',
+        });
+        expect(result).toEqual({ stopReason: 'end_turn' });
+      } finally {
+        stdinOnSpy.mockRestore();
+        Object.defineProperty(process.stdin, 'isTTY', { value: originalIsTTY, configurable: true });
+        if (originalNoTty === undefined) {
+          delete process.env.TAKT_NO_TTY;
+        } else {
+          process.env.TAKT_NO_TTY = originalNoTty;
+        }
+        rmSync(projectDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('should reject session/new when cwd is missing', async () => {
     const agent = createTaktAcpAgent({
@@ -515,7 +610,7 @@ describe('TAKT ACP agent adapter', () => {
 
     await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Use docs MCP' }],
+      prompt: [{ type: 'text', text: 'Use docs MCP' }],
     });
 
     expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
@@ -557,7 +652,7 @@ describe('TAKT ACP agent adapter', () => {
 
     await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Use docs MCP' }],
+      prompt: [{ type: 'text', text: 'Use docs MCP' }],
     });
 
     expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
@@ -1980,7 +2075,7 @@ describe('TAKT ACP agent adapter', () => {
 
     const result = await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(result).toEqual({
@@ -2011,7 +2106,7 @@ describe('TAKT ACP agent adapter', () => {
 
     await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
@@ -2060,7 +2155,7 @@ describe('TAKT ACP agent adapter', () => {
 
     await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
@@ -2204,7 +2299,7 @@ describe('TAKT ACP agent adapter', () => {
 
     await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
@@ -2260,7 +2355,7 @@ describe('TAKT ACP agent adapter', () => {
 
     await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
@@ -2316,7 +2411,7 @@ describe('TAKT ACP agent adapter', () => {
 
     await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
@@ -2371,7 +2466,7 @@ describe('TAKT ACP agent adapter', () => {
 
     const promptPromise = agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
     await workflowStarted;
     await agent.handleSessionCancel({ sessionId });
@@ -2437,7 +2532,7 @@ describe('TAKT ACP agent adapter', () => {
 
     const promptPromise = agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
     await workflowStarted;
     await agent.handleSessionCancel({ sessionId });
@@ -2508,7 +2603,7 @@ describe('TAKT ACP agent adapter', () => {
 
     const promptPromise = agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
     await confirmationUpdateStarted;
     await agent.handleSessionCancel({ sessionId });
@@ -2566,7 +2661,7 @@ describe('TAKT ACP agent adapter', () => {
 
     const result = await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(result.stopReason).toBe('refusal');
@@ -2629,7 +2724,7 @@ describe('TAKT ACP agent adapter', () => {
 
     await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
@@ -2674,7 +2769,7 @@ describe('TAKT ACP agent adapter', () => {
 
     await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(createElicitation).not.toHaveBeenCalled();
@@ -2706,7 +2801,7 @@ describe('TAKT ACP agent adapter', () => {
 
     const result = await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     expect(result).toEqual({ stopReason: 'refusal' });
@@ -2773,7 +2868,7 @@ describe('TAKT ACP agent adapter', () => {
     const { sessionId } = await agent.handleSessionNew(newSessionParams());
     const promptPromise = agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     await workflowStarted;

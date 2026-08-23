@@ -32,6 +32,9 @@ export interface JudgeStatusOptions {
   projectCwd?: string;
   language?: Language;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  mcpServers?: RunAgentOptions['mcpServers'];
+  mcpAssignment?: RunAgentOptions['mcpAssignment'];
+  mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
   abortSignal?: AbortSignal;
   failureDir?: RunAgentOptions['failureDir'];
   onStream?: StreamCallback;
@@ -66,6 +69,9 @@ export interface TagJudgeRunOptions {
   onStream?: StreamCallback;
   onActivity?: () => void;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  mcpServers?: RunAgentOptions['mcpServers'];
+  mcpAssignment?: RunAgentOptions['mcpAssignment'];
+  mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
   abortSignal?: AbortSignal;
   failureDir?: RunAgentOptions['failureDir'];
   stepName: string;
@@ -96,6 +102,9 @@ export async function runTagJudgeStage(
       onStream: runOptions.onStream,
       onActivity: runOptions.onActivity,
       childProcessEnv: runOptions.childProcessEnv,
+      mcpServers: runOptions.mcpServers,
+      mcpAssignment: runOptions.mcpAssignment,
+      mcpServerIdentity: runOptions.mcpServerIdentity,
       abortSignal: runOptions.abortSignal,
       failureDir: runOptions.failureDir,
       onPromptResolved: runOptions.onPromptResolved,
@@ -152,6 +161,9 @@ export interface EvaluateConditionOptions {
   permissionMode?: PermissionMode;
   projectCwd?: string;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  mcpServers?: RunAgentOptions['mcpServers'];
+  mcpAssignment?: RunAgentOptions['mcpAssignment'];
+  mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
   abortSignal?: AbortSignal;
   failureDir?: RunAgentOptions['failureDir'];
   onStream?: RunAgentOptions['onStream'];
@@ -208,6 +220,9 @@ export async function evaluateCondition(
         permissionMode: options.permissionMode,
       },
       childProcessEnv: options.childProcessEnv,
+      mcpServers: options.mcpServers,
+      mcpAssignment: options.mcpAssignment,
+      mcpServerIdentity: options.mcpServerIdentity,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
       onStream: options.onStream,
@@ -295,6 +310,9 @@ async function runAiJudgeStage(
       permissionMode: options.permissionMode,
       projectCwd: options.projectCwd,
       childProcessEnv: options.childProcessEnv,
+      mcpServers: options.mcpServers,
+      mcpAssignment: options.mcpAssignment,
+      mcpServerIdentity: options.mcpServerIdentity,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
       onStream: options.onStream,
@@ -344,6 +362,9 @@ export async function runJudgeFallbackStages(
       onStream: options.onStream,
       onActivity: options.onActivity,
       childProcessEnv: options.childProcessEnv,
+      mcpServers: options.mcpServers,
+      mcpAssignment: options.mcpAssignment,
+      mcpServerIdentity: options.mcpServerIdentity,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
       stepName: options.stepName,
@@ -405,6 +426,9 @@ export async function judgeStatus(
         onStream: options.onStream,
         onActivity: options.onActivity,
         childProcessEnv: options.childProcessEnv,
+        mcpServers: options.mcpServers,
+        mcpAssignment: options.mcpAssignment,
+        mcpServerIdentity: options.mcpServerIdentity,
         abortSignal: options.abortSignal,
         failureDir: options.failureDir,
         onPromptResolved: options.onStructuredPromptResolved,

@@ -259,6 +259,20 @@ workflow
     );
   });
 
+workflow
+  .command('inspect')
+  .description('Inspect workflow configuration and resolution sources')
+  .argument('[target]', 'Workflow name or YAML path')
+  .action(async (target?: string) => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { inspectWorkflowCommand } = await import('../../features/workflowAuthoring/inspect.js');
+    await inspectWorkflowCommand(
+      target,
+      getCliExecutionContext().cwd,
+      resolveAgentOverrides(program),
+    );
+  });
+
 const workflowBundle = workflow
   .command('bundle')
   .description('Manage immutable workflow execution bundles');

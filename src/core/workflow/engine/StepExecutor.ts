@@ -18,11 +18,12 @@ import type {
   WorkflowConfig,
   WorkflowWideRule,
   WorkflowResumePointEntry,
-  NormalAgentWorkflowStep,
+  CompanionReviewMode,
+  NormalOrTeamLeaderWorkflowStep,
   ResolvedFacetPool,
   ResolvedFacetContent,
 } from '../../models/types.js';
-import { isNormalAgentWorkflowStep } from '../../models/types.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
 import type {
   PhaseName,
   PhasePromptParts,
@@ -98,7 +99,7 @@ import {
   runPhase1WithEmptyRecovery,
   type Phase1Attempt,
 } from './phase1-empty-recovery.js';
-import { buildCompanionMailboxDirectory } from '../companion/mailbox.js';
+import { buildCompanionInstructionContext } from '../companion/instruction-context.js';
 import { runCompanionFixLoop } from '../companion/fix-loop.js';
 import { CompanionStepRuntime } from '../companion/step-runtime.js';
 import type { CompanionAgentPurpose } from '../companion/review-runner.js';
@@ -200,6 +201,7 @@ export interface StepExecutorDeps {
   readonly getRunId: () => string;
   readonly getRunPathNamespace: () => readonly string[];
   readonly companionEnabled: boolean;
+  readonly companionReviewMode: CompanionReviewMode;
   readonly companionDefinitions?: WorkflowConfig['companions'];
   readonly companionProviders?: WorkflowEngineOptions['companionProviders'];
   readonly companionSelectorProvider?: WorkflowEngineOptions['selectorProvider'];
@@ -393,6 +395,9 @@ export class StepExecutor {
                 failureDir: judgeOptions.failureDir,
                 onStream: judgeOptions.onStream,
                 onActivity: judgeOptions.onActivity,
+                mcpServers: judgeOptions.mcpServers,
+                mcpAssignment: judgeOptions.mcpAssignment,
+                mcpServerIdentity: judgeOptions.mcpServerIdentity,
                 resolution: {
                   provider,
                   model: judgeProviderInfo.model,
@@ -695,7 +700,7 @@ export class StepExecutor {
     return fixLoop.phaseResponse;
   }
 
-  private resolveDynamicFacetPool(step: NormalAgentWorkflowStep): ResolvedFacetPool | undefined {
+  private resolveDynamicFacetPool(step: NormalOrTeamLeaderWorkflowStep): ResolvedFacetPool | undefined {
     if (step.dynamicFacets === undefined) return undefined;
     return this.deps.getFacetPool?.(step.dynamicFacets.pool);
   }
@@ -707,7 +712,8 @@ export class StepExecutor {
     stepIteration: number,
     context?: DynamicFacetSelectionContext,
   ): Promise<AgentWorkflowStep> {
-    if (!isNormalAgentWorkflowStep(step) || step.dynamicFacets === undefined) {
+    const dynamicFacetStep = isNormalOrTeamLeaderWorkflowStep(step) ? step : undefined;
+    if (dynamicFacetStep === undefined || dynamicFacetStep.dynamicFacets === undefined) {
       return step;
     }
     if (this.deps.dynamicFacetSelectorCoordinator === undefined) {
@@ -715,14 +721,14 @@ export class StepExecutor {
         `Configuration error: step "${step.name}" has dynamic_facets but no dynamic facet selector coordinator is configured`,
       );
     }
-    const pool = this.resolveDynamicFacetPool(step);
+    const pool = this.resolveDynamicFacetPool(dynamicFacetStep);
     if (pool === undefined) {
       throw new Error(
-        `Configuration error: step "${step.name}" references unknown facet pool "${step.dynamicFacets.pool}"`,
+        `Configuration error: step "${step.name}" references unknown facet pool "${dynamicFacetStep.dynamicFacets.pool}"`,
       );
     }
     const result = await this.deps.dynamicFacetSelectorCoordinator.resolveDynamicFacets(
-      step,
+      dynamicFacetStep,
       state,
       task,
       pool,
@@ -733,6 +739,115 @@ export class StepExecutor {
       policyContents: result.effectivePolicyContents.map((content) => ({ content })),
       knowledgeContents: result.effectiveKnowledgeContents.map((content) => ({ content })),
     } as AgentWorkflowStep;
+  }
+
+  async createCompanionRuntime(
+    step: NormalOrTeamLeaderWorkflowStep,
+    task: string,
+    state: WorkflowState,
+    abortSignal?: AbortSignal,
+  ): Promise<CompanionStepRuntime | undefined> {
+    if (!this.deps.companionEnabled) {
+      if (step.companion !== undefined) {
+        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+          step: step.name,
+          phase: 'initial',
+          reason: 'companion_disabled',
+          runPathNamespace: [...this.deps.getRunPathNamespace()],
+        });
+      }
+      return undefined;
+    }
+    if (step.companion === undefined) {
+      emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+        step: step.name,
+        phase: 'initial',
+        reason: 'companion_not_configured',
+        runPathNamespace: [...this.deps.getRunPathNamespace()],
+      });
+      return undefined;
+    }
+
+    const companionDefinitions = this.deps.companionDefinitions;
+    const companionProviders = this.deps.companionProviders;
+    const companionDiffReader = this.deps.companionDiffReader;
+    const runtimeAbortSignal = abortSignal ?? this.resolveAbortSignal();
+    state.companion = {
+      completionSettled: false,
+      followUpRounds: 0,
+    };
+    try {
+      if (
+        companionDefinitions === undefined
+        || companionProviders === undefined
+        || companionDiffReader === undefined
+      ) {
+        throw new Error(`Companion runtime configuration is missing for step "${step.name}"`);
+      }
+      return await CompanionStepRuntime.create({
+        cwd: this.deps.getCwd(),
+        projectCwd: this.deps.getProjectCwd(),
+        failureDir: this.deps.getFailureDir(),
+        runSlug: this.deps.getRunId(),
+        runPathNamespace: this.deps.getRunPathNamespace(),
+        language: this.deps.getLanguage() ?? 'en',
+        task,
+        step,
+        definitions: companionDefinitions,
+        providers: companionProviders,
+        selectorProvider: this.deps.companionSelectorProvider,
+        diffReader: companionDiffReader,
+        reviewMode: this.deps.companionReviewMode,
+        abortSignal: runtimeAbortSignal,
+        buildProviderCallCallbacks: ({
+          agentName,
+          purpose,
+          callSequence,
+          provider,
+        }) => this.deps.optionsBuilder.buildProviderCallCallbacks(
+          step,
+          provider.provider,
+          provider.model,
+          buildCompanionExecutionUnitKey({
+            stepName: step.name,
+            agentName,
+            purpose,
+            callSequence,
+          }),
+        ),
+        emitEvent: this.deps.emitEvent,
+        recordUsage: (name, companionProvider, success, usage) => {
+          this.deps.recordSynthesizedAgentUsage(
+            `companion:${name}`,
+            {
+              provider: companionProvider.provider,
+              model: companionProvider.model,
+              providerOptions: companionProvider.providerOptions,
+            },
+            success,
+            usage,
+          );
+        },
+      });
+    } catch (error) {
+      runtimeAbortSignal?.throwIfAborted();
+      const reason = safeExternalErrorMessage(error);
+      state.companion = {
+        ...requireActiveCompanionState(state, step.name),
+        completionFailure: true,
+        reason,
+      };
+      emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+        step: step.name,
+        phase: 'initial',
+        reason: 'companion_runtime_unavailable',
+        runPathNamespace: [...this.deps.getRunPathNamespace()],
+      });
+      log.warn(
+        `Companion startup failed for "${step.name}"; main step will continue without completion review: ${reason}`,
+      );
+      return undefined;
+    }
   }
 
   private writeSnapshot(
@@ -1061,7 +1176,12 @@ export class StepExecutor {
     fallbackContext?: FallbackContext,
     transaction?: InstructionBuildTransaction,
   ): string {
-    this.ensurePreviousResponseSnapshot(state, step.name, stepIteration, transaction);
+    const suppressPreviousResponse = state.pendingFallback !== undefined
+      && (state.lastOutput?.status === 'error' || state.lastOutput?.status === 'rate_limited');
+    const includePreviousResponse = !suppressPreviousResponse;
+    if (includePreviousResponse) {
+      this.ensurePreviousResponseSnapshot(state, step.name, stepIteration, transaction);
+    }
     const policySnapshot = this.writeFacetSnapshot(
       'policy',
       step.name,
@@ -1093,7 +1213,7 @@ export class StepExecutor {
       cwd: this.deps.getCwd(),
       projectCwd: this.deps.getProjectCwd(),
       userInputs: state.userInputs,
-      previousOutput: getPreviousOutput(state),
+      previousOutput: includePreviousResponse ? getPreviousOutput(state) : undefined,
       reportDir,
       reportsRootDir,
       resumeReportConsumerKey,
@@ -1115,24 +1235,20 @@ export class StepExecutor {
         ? knowledgeSnapshot.content.map((content) => ({ content, sourcePath: knowledgeSnapshot.sourcePath }))
         : step.knowledgeContents,
       knowledgeSourcePath: knowledgeSnapshot?.sourcePath,
-      previousResponseSourcePath: state.previousResponseSourcePath,
+      previousResponseSourcePath: includePreviousResponse
+        ? state.previousResponseSourcePath
+        : undefined,
       fallbackContext,
       workflowState: state,
       ...(step.engineSynthesized === true ? {} : { workflowRules: this.deps.getWorkflowRules() }),
-      ...(!this.deps.companionEnabled
-        || !isNormalAgentWorkflowStep(step)
-        || step.companion === undefined
-        ? {}
-        : {
-            companion: {
-              mailboxDirectory: buildCompanionMailboxDirectory({
-                cwd: this.deps.getCwd(),
-                runSlug: this.deps.getRunId(),
-                runPathNamespace: this.deps.getRunPathNamespace(),
-                stepName: step.name,
-              }),
-            },
-          }),
+      companion: buildCompanionInstructionContext({
+        companionEnabled: this.deps.companionEnabled,
+        companionReviewMode: this.deps.companionReviewMode,
+        cwd: this.deps.getCwd(),
+        step,
+        getRunSlug: () => this.deps.getRunId(),
+        getRunPathNamespace: () => this.deps.getRunPathNamespace(),
+      }),
     }).build();
     return instruction;
   }
@@ -1350,107 +1466,12 @@ export class StepExecutor {
     );
 
     // Phase 1: main execution (Write excluded if step has report)
-    let companionRuntime: CompanionStepRuntime | undefined;
-    if (isNormalAgentWorkflowStep(executableStep)) {
-      if (!this.deps.companionEnabled && executableStep.companion !== undefined) {
-        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
-          step: step.name,
-          phase: 'initial',
-          reason: 'companion_disabled',
-          runPathNamespace: [...this.deps.getRunPathNamespace()],
-        });
-      } else if (this.deps.companionEnabled && executableStep.companion === undefined) {
-        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
-          step: step.name,
-          phase: 'initial',
-          reason: 'companion_not_configured',
-          runPathNamespace: [...this.deps.getRunPathNamespace()],
-        });
-      }
-    }
-    if (
-      this.deps.companionEnabled
-      && isNormalAgentWorkflowStep(executableStep)
-      && executableStep.companion !== undefined
-    ) {
-      const companionDefinitions = this.deps.companionDefinitions;
-      const companionProviders = this.deps.companionProviders;
-      const companionDiffReader = this.deps.companionDiffReader;
-      state.companion = {
-        completionSettled: false,
-        followUpRounds: 0,
-      };
-      try {
-        if (
-          companionDefinitions === undefined
-          || companionProviders === undefined
-          || companionDiffReader === undefined
-        ) {
-          throw new Error(`Companion runtime configuration is missing for step "${step.name}"`);
-        }
-        companionRuntime = await CompanionStepRuntime.create({
-          cwd: this.deps.getCwd(),
-          projectCwd: this.deps.getProjectCwd(),
-          failureDir: this.deps.getFailureDir(),
-          runSlug: this.deps.getRunId(),
-          runPathNamespace: this.deps.getRunPathNamespace(),
-          language: this.deps.getLanguage() ?? 'en',
-          task,
-          step: executableStep,
-          definitions: companionDefinitions,
-          providers: companionProviders,
-          selectorProvider: this.deps.companionSelectorProvider,
-          diffReader: companionDiffReader,
-          abortSignal: this.resolveAbortSignal(),
-          buildProviderCallCallbacks: ({
-            agentName,
-            purpose,
-            callSequence,
-            provider,
-          }) => this.deps.optionsBuilder.buildProviderCallCallbacks(
-            executableStep,
-            provider.provider,
-            provider.model,
-            buildCompanionExecutionUnitKey({
-              stepName: step.name,
-              agentName,
-              purpose,
-              callSequence,
-            }),
-          ),
-          emitEvent: this.deps.emitEvent,
-          recordUsage: (name, companionProvider, success, usage) => {
-            this.deps.recordSynthesizedAgentUsage(
-              `companion:${name}`,
-              {
-                provider: companionProvider.provider,
-                model: companionProvider.model,
-                providerOptions: companionProvider.providerOptions,
-              },
-              success,
-              usage,
-            );
-          },
-        });
-      } catch (error) {
-        this.resolveAbortSignal()?.throwIfAborted();
-        const reason = safeExternalErrorMessage(error);
-        state.companion = {
-          ...requireActiveCompanionState(state, step.name),
-          completionFailure: true,
-          reason,
-        };
-        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
-          step: step.name,
-          phase: 'initial',
-          reason: 'companion_runtime_unavailable',
-          runPathNamespace: [...this.deps.getRunPathNamespace()],
-        });
-        log.warn(
-          `Companion startup failed for "${step.name}"; main step will continue without completion review: ${reason}`,
-        );
-      }
-    }
+    const companionStep = isNormalOrTeamLeaderWorkflowStep(executableStep)
+      ? executableStep
+      : undefined;
+    const companionRuntime = companionStep === undefined
+      ? undefined
+      : await this.createCompanionRuntime(companionStep, task, state);
     using activeCompanionRuntime = companionRuntime;
     const baseAgentOptions = activeCompanionRuntime?.composeOptions(builtAgentOptions)
       ?? builtAgentOptions;
@@ -1513,6 +1534,9 @@ export class StepExecutor {
                   onActivity: agentOptions.onActivity,
                   onPromptResolved,
                   workflowMeta: agentOptions.workflowMeta,
+                  mcpServers: agentOptions.mcpServers,
+                  mcpAssignment: agentOptions.mcpAssignment,
+                  mcpServerIdentity: agentOptions.mcpServerIdentity,
                 }).then((response) => {
                   const freshResponse = { ...response };
                   delete freshResponse.sessionId;

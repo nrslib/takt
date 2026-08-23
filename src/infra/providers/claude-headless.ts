@@ -28,6 +28,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     skillsEnabled,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
+    preparedMcp: options.preparedMcp,
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
     sandbox: claudeOptions?.sandbox,
@@ -43,6 +44,8 @@ export class ClaudeHeadlessProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'sse', 'http']);
+  readonly supportsStrictMcpConfig = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
@@ -73,6 +76,7 @@ export class ClaudeHeadlessProvider implements Provider {
         internalAgentIsolation: 'strict-readonly',
         allowedTools: [],
         mcpServers: undefined,
+        preparedMcp: undefined,
         imageAttachments: undefined,
         outputSchema: assertOutputSchema(options.outputSchema, 'claude-headless'),
       };

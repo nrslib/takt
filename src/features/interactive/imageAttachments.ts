@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ImageAttachmentReference, StoredImageAttachment } from '../../shared/types/image-attachments.js';
 import { debugLog } from '../../shared/utils/index.js';
@@ -16,6 +15,12 @@ export interface ImageAttachmentStore {
   saveImage(data: Buffer, mimeType: string): Promise<InteractiveImageAttachment>;
   listAttachments(): InteractiveImageAttachment[];
   cleanup(): void;
+  /**
+   * Stop accepting images. A capture that was still running when the run ended
+   * would otherwise write its file after the owner enumerated and cleaned up,
+   * leaving a temp file behind; already saved images are untouched.
+   */
+  seal(): void;
 }
 
 export interface ImageAttachmentCleanupOwner {
@@ -26,6 +31,7 @@ export interface ImageAttachmentStoreOptions {
   tmpRoot: string;
   sessionId: string;
   initialAttachments?: readonly InteractiveImageAttachment[];
+  initialAttachmentIndex?: number;
 }
 
 const PRIVATE_FILE_MODE = 0o600;
@@ -61,12 +67,46 @@ function validateImageAttachmentSessionId(sessionId: string): void {
   }
 }
 
+function resolveInitialAttachmentIndex(attachments: readonly InteractiveImageAttachment[]): number {
+  return attachments.reduce((maxIndex, attachment) => {
+    const placeholderIndex = /\[Image #(\d+)\]/.exec(attachment.placeholder)?.[1];
+    const fileNameIndex = /^image-(\d+)\.[A-Za-z0-9]+$/.exec(attachment.fileName)?.[1];
+    return Math.max(maxIndex, Number(placeholderIndex ?? 0), Number(fileNameIndex ?? 0));
+  }, 0);
+}
+
 export function cleanupImageAttachmentStore(attachmentStore: ImageAttachmentStore): void {
   try {
+    // Sealed first: a capture that ignored its abort would otherwise recreate the
+    // session directory right after it was removed.
+    attachmentStore.seal();
     attachmentStore.cleanup();
   } catch (error) {
     debugLog('interactive', 'Failed to cleanup image attachment store', error instanceof Error ? error.message : String(error));
   }
+}
+
+/**
+ * Cleans the store up if the process ends before its owner can.
+ *
+ * A readline selector ends the process itself when the user interrupts it
+ * (`shared/prompt/select.ts` calls `process.exit(130)`), so a run that is
+ * waiting on one never reaches its own teardown and the files a paste left in
+ * the temp directory would survive it. `exit` handlers can only do synchronous
+ * work, which is exactly what sealing and removing the directory need.
+ *
+ * Returns the release for the owner to call once it has taken the files back.
+ */
+export function cleanupImageAttachmentStoreOnProcessExit(
+  attachmentStore: ImageAttachmentStore,
+): () => void {
+  const cleanupOnExit = (): void => {
+    cleanupImageAttachmentStore(attachmentStore);
+  };
+  process.once('exit', cleanupOnExit);
+  return () => {
+    process.off('exit', cleanupOnExit);
+  };
 }
 
 function createImageAttachmentResultCleanup(attachmentStore: ImageAttachmentStore): () => void {
@@ -108,8 +148,11 @@ export function cleanupInteractiveResultAttachments(result: ImageAttachmentClean
 export function buildInteractiveResultWithAttachments(
   result: InteractiveModeResult,
   attachmentStore: ImageAttachmentStore,
+  attachmentsOverride?: readonly InteractiveImageAttachment[],
 ): InteractiveModeResult {
-  const attachments = attachmentStore.listAttachments();
+  const attachments = attachmentsOverride
+    ? [...attachmentsOverride]
+    : attachmentStore.listAttachments();
   const resultWithAttachments = {
     ...result,
     ...(attachments.length > 0 ? { attachments } : {}),
@@ -130,13 +173,24 @@ export function createImageAttachmentStore(
   let attachments: InteractiveImageAttachment[] = options.initialAttachments
     ? [...options.initialAttachments]
     : [];
-  const sessionDir = path.join(options.tmpRoot, 'takt', options.sessionId);
-  const taktTmpDir = path.dirname(sessionDir);
+  let nextAttachmentIndex = Math.max(
+    options.initialAttachmentIndex ?? 0,
+    resolveInitialAttachmentIndex(attachments),
+  );
+  const sessionDir = path.join(options.tmpRoot, options.sessionId);
   const attachmentDir = path.join(sessionDir, 'attachments');
+
+  let sealed = false;
 
   return {
     async saveImage(data: Buffer, mimeType: string): Promise<InteractiveImageAttachment> {
-      const index = attachments.length + 1;
+      if (sealed) {
+        throw new Error('Image attachment store is sealed; the run already ended.');
+      }
+      // Numbered past whatever the run already carries: a revision that starts
+      // with attachments must not hand out a placeholder one of them owns.
+      const index = nextAttachmentIndex + 1;
+      nextAttachmentIndex = index;
       const fileName = `image-${index}.${extensionForMimeType(mimeType)}`;
       const tempPath = path.join(attachmentDir, fileName);
       const attachment: InteractiveImageAttachment = {
@@ -145,7 +199,6 @@ export function createImageAttachmentStore(
         fileName,
       };
 
-      ensurePrivateDirectory(taktTmpDir);
       ensurePrivateDirectory(sessionDir);
       ensurePrivateDirectory(attachmentDir);
       writeNewPrivateFileWithMode(tempPath, data, PRIVATE_FILE_MODE);
@@ -160,16 +213,30 @@ export function createImageAttachmentStore(
     cleanup(): void {
       fs.rmSync(sessionDir, { recursive: true, force: true });
     },
+
+    seal(): void {
+      sealed = true;
+    },
   };
 }
 
+/**
+ * A pasted image has to be readable by the provider that is asked to look at
+ * it, and a provider that sandboxes its file access can only reach the project
+ * it was pointed at — the OS temp directory is outside every such sandbox. The
+ * files therefore live under the project's own `.takt/`, which `.takt/.gitignore`
+ * already keeps out of version control, and are deleted when the run ends.
+ */
 export function createSessionImageAttachmentStore(
+  cwd: string,
   initialAttachments?: readonly InteractiveImageAttachment[],
+  initialAttachmentIndex?: number,
 ): ImageAttachmentStore {
   return createImageAttachmentStore({
-    tmpRoot: os.tmpdir(),
+    tmpRoot: path.join(cwd, '.takt', 'tmp', 'images'),
     sessionId: randomUUID(),
     ...(initialAttachments ? { initialAttachments } : {}),
+    ...(initialAttachmentIndex === undefined ? {} : { initialAttachmentIndex }),
   });
 }
 
@@ -180,9 +247,11 @@ export function createImagePasteHandler(attachmentStore: ImageAttachmentStore): 
   };
 }
 
-export function createClipboardImagePasteHandler(attachmentStore: ImageAttachmentStore): () => Promise<string> {
-  return async () => {
-    const image = await readClipboardImage();
+export function createClipboardImagePasteHandler(
+  attachmentStore: ImageAttachmentStore,
+): (abortSignal?: AbortSignal) => Promise<string> {
+  return async (abortSignal?: AbortSignal) => {
+    const image = await readClipboardImage(abortSignal);
     const attachment = await attachmentStore.saveImage(image.data, image.mimeType);
     return attachment.placeholder;
   };

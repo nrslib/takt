@@ -4,6 +4,7 @@
  * Uses @openai/codex-sdk for native TypeScript integration.
  */
 
+import './codex-spawn-guard.js';
 import {
   Codex,
   type CodexOptions,
@@ -373,9 +374,9 @@ export class CodexClient {
     let standardRetryCount = 0;
     let timeoutRetryCount = 0;
     let refusalRetryCount = 0;
-    let skillConfig: CodexOptions['config'] | undefined;
+    let codexSkillConfig: CodexOptions['config'] | undefined;
     try {
-      skillConfig = options.skills
+      codexSkillConfig = options.skills
         ? buildCodexSkillConfig({
             cwd: options.cwd,
             env: { ...process.env, ...options.childProcessEnv },
@@ -396,6 +397,18 @@ export class CodexClient {
       );
       return errorResponse;
     }
+    // Runtime MCP adapter route (issue #1137): merge prepared MCP `mcp_servers`
+    // into the Codex CLI config so resolved servers become the thread's
+    // effective MCP set (order.md:177-182). The adapter materializes the
+    // provider-native config shape; cast through `unknown` because the SDK's
+    // `CodexConfigValue` is not exported and the structure is provider-native.
+    const preparedMcpConfig = options.preparedMcp?.config;
+    if (preparedMcpConfig?.mcp_servers !== undefined) {
+      codexSkillConfig = {
+        ...(codexSkillConfig ?? {}),
+        mcp_servers: preparedMcpConfig.mcp_servers,
+      } as unknown as CodexOptions['config'];
+    }
 
     const codexEnvironment = buildEnvWithNestedObservabilitySnapshot(
       process.env,
@@ -403,10 +416,13 @@ export class CodexClient {
     ) as Record<string, string>;
     const shellPath = codexEnvironment.PATH;
     const codexConfig: CodexOptions['config'] = {
-      ...(skillConfig ?? {}),
+      ...(codexSkillConfig ?? {}),
       ...(options.reasoningEffort === undefined
         ? {}
         : { model_reasoning_effort: options.reasoningEffort }),
+      ...(options.fastMode === undefined
+        ? {}
+        : { features: { fast_mode: options.fastMode } }),
       model_reasoning_summary: 'auto',
       ...(shellPath === undefined
         ? {}

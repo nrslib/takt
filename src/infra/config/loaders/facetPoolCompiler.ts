@@ -83,7 +83,12 @@ function resolveCandidate(
         `Configuration error: facet pool candidate "${candidate.id}" references unknown policy "${ref}"`,
       );
     }
-    return { content: resolved.content, ...(resolved.sourcePath === undefined ? {} : { sourcePath: resolved.sourcePath }) };
+    return {
+      content: resolved.content,
+      ...(resolved.sourcePath === undefined ? {} : { sourcePath: resolved.sourcePath }),
+      ...(resolved.refName === undefined ? {} : { refName: resolved.refName }),
+      ...(resolved.literalContent === undefined ? {} : { literalContent: resolved.literalContent }),
+    };
   });
   const resolvedKnowledgeContents: ResolvedFacetContent[] = knowledgeRefs.map((ref) => {
     const resolved = resolveRefToContentWithSource(ref, sections.knowledge, baseDir, 'knowledge', context, resolveOptions);
@@ -92,7 +97,12 @@ function resolveCandidate(
         `Configuration error: facet pool candidate "${candidate.id}" references unknown knowledge "${ref}"`,
       );
     }
-    return { content: resolved.content, ...(resolved.sourcePath === undefined ? {} : { sourcePath: resolved.sourcePath }) };
+    return {
+      content: resolved.content,
+      ...(resolved.sourcePath === undefined ? {} : { sourcePath: resolved.sourcePath }),
+      ...(resolved.refName === undefined ? {} : { refName: resolved.refName }),
+      ...(resolved.literalContent === undefined ? {} : { literalContent: resolved.literalContent }),
+    };
   });
   return {
     id: candidate.id,

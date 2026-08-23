@@ -5,7 +5,7 @@ import {
 import type {
   AgentResponse,
   DynamicFacetSelectionSnapshot,
-  NormalAgentWorkflowStep,
+  AgentWorkflowStep,
   ResolvedFacetPool,
   WorkflowResumePointEntry,
   WorkflowState,
@@ -36,6 +36,8 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../../shared/types/provider.js';
+import { resolveSelectorPermissionMode } from '../selector-permission-resolution.js';
+import { resolveInternalAgentMcpServers } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 
 const log = createLogger('dynamic-facet-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
@@ -55,7 +57,7 @@ export interface DynamicFacetSelectorCoordinatorDeps {
   ) => Promise<void>;
   readonly getReportDirectory: () => string;
   readonly getReportsRootDirectory: () => string;
-  readonly getReportNames: (step: NormalAgentWorkflowStep, state: WorkflowState) => readonly string[];
+  readonly getReportNames: (step: AgentWorkflowStep, state: WorkflowState) => readonly string[];
   readonly getCwd: () => string;
   readonly inputReader?: SelectorInputReader;
 }
@@ -76,7 +78,7 @@ export class DynamicFacetSelectorCoordinator {
   constructor(private readonly deps: DynamicFacetSelectorCoordinatorDeps) {}
 
   async resolveDynamicFacets(
-    step: NormalAgentWorkflowStep,
+    step: AgentWorkflowStep,
     state: WorkflowState,
     task: string,
     pool: ResolvedFacetPool,
@@ -131,7 +133,7 @@ export class DynamicFacetSelectorCoordinator {
       workflowName: state.workflowName,
       stepName: step.name,
       workflowCallPath: identityPath,
-      isReentry: previous !== undefined,
+      ...(previous === undefined ? {} : { previousSnapshot: previous }),
       stepIteration,
       reportDirectory: inputs.reportDirectory,
       reportNames: inputs.reportNames,
@@ -158,6 +160,7 @@ export class DynamicFacetSelectorCoordinator {
     let selectedIds: readonly string[];
     let snapshot: DynamicFacetSelectionSnapshot;
     try {
+      const mcp = resolveInternalAgentMcpServers(this.deps.engineOptions.mcpAssignment);
       response = await executeStructuredAgent(
         instruction,
         selectorContract.providerSchema,
@@ -180,9 +183,11 @@ export class DynamicFacetSelectorCoordinator {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions ?? {},
-            permissionMode: selectorProvider.permissionMode ?? 'readonly',
-            permissionModeSource: selectorProvider.permissionMode === undefined ? 'synthetic' : 'explicit',
+            ...resolveSelectorPermissionMode(selectorProvider.permissionMode),
           },
+          mcpServers: mcp.servers,
+          mcpServerIdentity: mcp.identity,
+          mcpAssignment: this.deps.engineOptions.mcpAssignment,
         },
       );
       signal?.throwIfAborted();
@@ -279,7 +284,7 @@ export class DynamicFacetSelectorCoordinator {
     pool: ResolvedFacetPool,
     snapshot: DynamicFacetSelectionSnapshot,
     selectedIds: readonly string[],
-    step: NormalAgentWorkflowStep,
+    step: AgentWorkflowStep,
   ): DynamicFacetSelectionResult {
     const fixed: FixedFacets = {
       policyContents: step.policyContents ?? [],
@@ -306,7 +311,7 @@ export class DynamicFacetSelectorCoordinator {
   }
 
   private logSelection(
-    step: NormalAgentWorkflowStep,
+    step: AgentWorkflowStep,
     identity: string,
     snapshot: DynamicFacetSelectionSnapshot,
     selectionSource: 'selector',

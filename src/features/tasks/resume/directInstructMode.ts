@@ -23,11 +23,14 @@ import { selectOption } from '../../../shared/prompt/index.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { blankLine, info } from '../../../shared/ui/index.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
+import { runTuiTaskConversation } from '../../tui/runTuiTask.js';
 import type { InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
+import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
 import {
   renderPullRequestContext,
   type PullRequestContext,
 } from '../../../core/workflow/pr-context.js';
+import { resolveFormalSpecModeWithoutPrompt } from '../../interactive/taskInstructionFormat.js';
 
 export interface DirectInstructModeOptions {
   readonly cwd: string;
@@ -84,6 +87,7 @@ export async function runDirectInstructMode(
 ): Promise<InstructModeResult> {
   const globalConfig = resolveWorkflowConfigValues(options.cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
+  const formalSpec = resolveFormalSpecModeWithoutPrompt(options.cwd);
 
   const baseCtx = initializeSession(options.cwd, 'instruct');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };
@@ -102,6 +106,7 @@ export async function runDirectInstructMode(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
+    formalSpec,
     allowedTools: DIRECT_INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),
@@ -110,7 +115,13 @@ export async function runDirectInstructMode(
     previousOrderContent: options.previousOrderContent ?? undefined,
   };
 
-  const result = await runConversationLoop(options.cwd, ctx, strategy, options.workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({
+      cwd: options.cwd,
+      plan: { ctx, strategy },
+      workflowContext: options.workflowContext,
+    })
+    : await runConversationLoop(options.cwd, ctx, strategy, options.workflowContext, undefined);
   if (result.action === 'cancel') {
     return attachImageAttachmentCleanup({
       action: 'cancel',

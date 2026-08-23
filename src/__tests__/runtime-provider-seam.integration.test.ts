@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
@@ -9,6 +9,11 @@ import {
 } from '../infra/config/runtime-provider/provider-environment.js';
 import type { LegacyProviderEnvironmentInput } from '../infra/config/runtime-provider/environment.js';
 import type { LegacyProviderSignal } from '../infra/config/runtime-provider/mode.js';
+import {
+  invalidateAllResolvedConfigCache,
+  invalidateGlobalConfigCache,
+  resolveProviderOptionsWithTrace,
+} from '../infra/config/index.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 
@@ -43,6 +48,7 @@ import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 import type { StructuredCaller } from '../agents/structured-caller.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { runWorkflowExecution } from '../features/tasks/execute/workflowExecutionApi.js';
 import {
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -79,6 +85,10 @@ function writeGlobalRuntimeFile(content: unknown): void {
     join(getGlobalConfigDir(), RUNTIME_PROVIDER_FILENAME),
     stringifyYaml(content),
   );
+}
+
+function companionReviewMode(value: unknown): string | undefined {
+  return (value as { companionReviewMode?: string } | undefined)?.companionReviewMode;
 }
 
 describe('resolveCompiledProviderEnvironment seam', () => {
@@ -126,6 +136,74 @@ describe('resolveCompiledProviderEnvironment seam', () => {
       tags: { 'high-stakes': { provider: 'claude', model: 'sonnet' } },
       steps: { 'wf/impl': { provider: 'cursor', model: 'cur-m' } },
     });
+  });
+
+  it('carries runtime profile fast_mode through the compiled defaults and routing entries', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'codex', model: 'gpt-default', options: { fast_mode: false } },
+          persona: { provider: 'codex', model: 'gpt-persona', options: { fast_mode: true } },
+          tag: { provider: 'codex', model: 'gpt-tag', options: { fast_mode: false } },
+          step: { provider: 'codex', model: 'gpt-step', options: { fast_mode: true } },
+        },
+        targets: {
+          personas: { coder: { profile: 'persona' } },
+          tags: { 'high-stakes': { profile: 'tag' } },
+          steps: { 'wf/impl': { profile: 'step' } },
+        },
+      },
+    });
+
+    const env = resolveCompiledProviderEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    });
+
+    expect(env.providerOptions).toEqual({ codex: { fastMode: false } });
+    expect(env.personaProviders?.coder?.providerOptions).toEqual({ codex: { fastMode: true } });
+    expect(env.providerRouting?.tags?.['high-stakes']?.providerOptions)
+      .toEqual({ codex: { fastMode: false } });
+    expect(env.providerRouting?.steps?.['wf/impl']?.providerOptions)
+      .toEqual({ codex: { fastMode: true } });
+  });
+
+  it.each([true, false])('keeps config/env provider options separate from runtime profile options (%s)', (envFastMode) => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'codex', model: 'gpt-default', options: { fast_mode: false } },
+        },
+      },
+    });
+    const previous = process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = String(envFastMode);
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    try {
+      const configProviderOptions = resolveProviderOptionsWithTrace(projectCwd).value;
+      const resolved = resolveRuntimeEnvironment({
+        projectCwd,
+        legacy: { ...legacyInput, providerOptions: configProviderOptions },
+        legacySignals: [],
+      });
+
+      expect(resolved.providerEnvironment.providerOptions).toEqual({ codex: { fastMode: false } });
+      expect(resolved.configProviderOptions?.codex?.fastMode).toBe(envFastMode);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = previous;
+      }
+      invalidateGlobalConfigCache();
+      invalidateAllResolvedConfigCache();
+    }
   });
 
   it('resolves explicit capabilities and permission_mode while leaving omitted profiles unconstrained', () => {
@@ -212,7 +290,7 @@ describe('resolveCompiledProviderEnvironment seam', () => {
   it('skips companion target semantic resolution when companion is disabled', () => {
     writeGlobalRuntimeFile({
       version: 1,
-      companion: { enabled: false },
+      companion: { enabled: false, review_mode: 'live' },
       provider: {
         defaults: { profile: 'default' },
         profiles: { default: { provider: 'codex', model: 'gpt-default' } },
@@ -229,6 +307,7 @@ describe('resolveCompiledProviderEnvironment seam', () => {
     });
 
     expect(resolved.companionEnabled).toBe(false);
+    expect(companionReviewMode(resolved)).toBe('live');
     expect(resolved.providerEnvironment.provider).toBe('codex');
     expect(resolved.providerEnvironment.companions).toBeUndefined();
   });
@@ -259,6 +338,34 @@ describe('resolveCompiledProviderEnvironment seam', () => {
 
     expect(resolved.companionEnabled).toBe(false);
     expect(resolved.providerEnvironment.model).toBe('project-model');
+  });
+
+  it('resolves project review_mode over global while preserving the companion enabled AND', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      companion: { enabled: false, review_mode: 'live' },
+      provider: {
+        defaults: { profile: 'global' },
+        profiles: { global: { provider: 'codex', model: 'global-model' } },
+      },
+    });
+    writeFileSync(join(projectCwd, '.takt', RUNTIME_PROVIDER_FILENAME), stringifyYaml({
+      version: 1,
+      companion: { enabled: true, review_mode: 'completion' },
+      provider: {
+        defaults: { profile: 'project' },
+        profiles: { project: { provider: 'codex', model: 'project-model' } },
+      },
+    }));
+
+    const resolved = resolveRuntimeEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    });
+
+    expect(companionReviewMode(resolved)).toBe('completion');
+    expect(resolved.companionEnabled).toBe(false);
   });
 
   it('does not activate runtime-v1 mode for a disabled companion-only target', () => {
@@ -310,6 +417,7 @@ describe('resolveCompiledProviderEnvironment seam', () => {
 
     const env = resolved.providerEnvironment;
     expect(resolved.companionEnabled).toBe(false);
+    expect(companionReviewMode(resolved)).toBe('completion');
     expect(env.provider).toBe('codex');
     expect(env.providerSource).toBe('global');
     expect(env.model).toBe('gpt-x');
@@ -327,6 +435,32 @@ describe('resolveCompiledProviderEnvironment seam', () => {
 
     expect(env.providerSource).toBe('global');
     expect(env.tagConflictPolicy).toBe('last-wins');
+  });
+
+  it('preserves legacy provider/model resolution when runtime.yaml activates MCP alone', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      mcp: {
+        servers: { tools: { type: 'stdio', command: 'tools-mcp' } },
+        defaults: { servers: ['tools'] },
+      },
+    });
+
+    const resolved = resolveRuntimeEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    });
+
+    expect(resolved.providerEnvironment.provider).toBe('codex');
+    expect(resolved.providerEnvironment.model).toBe('gpt-x');
+    expect(resolved.providerEnvironment.providerSource).toBe('global');
+    expect(resolved.providerEnvironment.mcpAssignment?.servers.tools).toEqual({
+      type: 'stdio',
+      command: 'tools-mcp',
+      args: undefined,
+      env: undefined,
+    });
   });
 
   it('re-applies a CLI provider override on a runtime-v1 environment, dropping runtime model/options', () => {
@@ -624,4 +758,134 @@ describe('providerLadders end-to-end from runtime.yaml (issue #1208)', () => {
       resolvedModel: 'opus',
     });
   });
+});
+
+describe('runtime provider options through workflow execution', () => {
+  let workflowProjectCwd: string;
+  let originalFastMode: string | undefined;
+  let originalProvider: string | undefined;
+  let originalModel: string | undefined;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    workflowProjectCwd = mkdtempSync(join(tmpdir(), 'takt-seam-workflow-'));
+    mkdirSync(join(workflowProjectCwd, '.takt', 'workflows', 'personas'), { recursive: true });
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
+      [
+        'name: runtime-provider-handoff',
+        'description: runtime provider option handoff integration test',
+        'max_steps: 1',
+        'initial_step: plan',
+        'steps:',
+        '  - name: plan',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    rules:',
+        '      - condition: when(true)',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'personas', 'planner.md'),
+      'You are planner.',
+      'utf-8',
+    );
+
+    originalFastMode = process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+    originalProvider = process.env.TAKT_PROVIDER;
+    originalModel = process.env.TAKT_MODEL;
+    delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+    delete process.env.TAKT_PROVIDER;
+    delete process.env.TAKT_MODEL;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+  });
+
+  afterEach(() => {
+    if (originalFastMode === undefined) {
+      delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+    } else {
+      process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = originalFastMode;
+    }
+    if (originalProvider === undefined) {
+      delete process.env.TAKT_PROVIDER;
+    } else {
+      process.env.TAKT_PROVIDER = originalProvider;
+    }
+    if (originalModel === undefined) {
+      delete process.env.TAKT_MODEL;
+    } else {
+      process.env.TAKT_MODEL = originalModel;
+    }
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    rmSync(workflowProjectCwd, { recursive: true, force: true });
+  });
+
+  it.each([
+    [false, true],
+    [true, false],
+  ])(
+    'hands the environment winner to workflow consumers (profile=%s, env=%s)',
+    async (profileFastMode, envFastMode) => {
+      writeGlobalRuntimeFile({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: {
+              provider: 'codex',
+              model: 'gpt-runtime',
+              options: { fast_mode: profileFastMode },
+            },
+          },
+        },
+      });
+      process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = String(envFastMode);
+      invalidateGlobalConfigCache();
+      invalidateAllResolvedConfigCache();
+      mockRunAgentSequence([makeResponse({ persona: 'planner', content: 'done' })]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+      try {
+        const result = await runWorkflowExecution({
+          task: 'test runtime provider option handoff',
+          cwd: workflowProjectCwd,
+          projectCwd: workflowProjectCwd,
+          workflowIdentifier: 'runtime-provider-handoff',
+          outputMode: 'silent',
+        });
+
+        expect(result.success).toBe(true);
+        expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+        const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[2];
+        expect(agentOptions?.resolvedProviderOptions).toMatchObject({
+          codex: { fastMode: envFastMode },
+        });
+
+        const ndjsonLogPath = result.ndjsonLogPath;
+        expect(ndjsonLogPath).toBeDefined();
+        const records = readFileSync(ndjsonLogPath!, 'utf-8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        const stepStart = records.find((record) => record.type === 'step_start');
+        expect(stepStart).toMatchObject({
+          providerOptions: { codex: { fastMode: envFastMode } },
+          providerOptionsSources: { 'codex.fastMode': 'env' },
+        });
+      } finally {
+        if (originalFastMode === undefined) {
+          delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+        } else {
+          process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = originalFastMode;
+        }
+        invalidateGlobalConfigCache();
+        invalidateAllResolvedConfigCache();
+      }
+    },
+  );
 });

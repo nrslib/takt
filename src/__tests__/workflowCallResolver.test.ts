@@ -449,10 +449,15 @@ steps:
     );
 
     expect(childWorkflow).not.toBeNull();
-    const facetSelector = childWorkflow!.steps[0]?.dynamicFacets?.selector;
+    const childFirstStep = childWorkflow!.steps[0];
+    const facetSelector = childFirstStep !== undefined && 'dynamicFacets' in childFirstStep
+      ? childFirstStep.dynamicFacets?.selector
+      : undefined;
     expect(facetSelector).toEqual({
       persona: 'Selector persona content',
+      personaRef: 'selector-persona',
       instruction: 'Selector guidance content',
+      instructionRef: 'selector-guidance',
     });
     const parallel = childWorkflow!.steps[1]?.parallel;
     if (parallel === undefined || Array.isArray(parallel)) {
@@ -460,7 +465,9 @@ steps:
     }
     expect(parallel.selection.selector).toEqual({
       persona: 'Selector persona content',
+      personaRef: 'selector-persona',
       instruction: 'Selector guidance content',
+      instructionRef: 'selector-guidance',
     });
     expect(JSON.stringify(childWorkflow)).not.toContain('$param');
   });

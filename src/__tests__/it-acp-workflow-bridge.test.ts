@@ -195,7 +195,7 @@ describe('ACP conversation to workflow integration', () => {
     const { sessionId } = await agent.handleSessionNew({ cwd: '/repo', mcpServers: [] });
     const promptPromise = agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: 'Implement ACP support' }],
     });
 
     await workflowStarted;

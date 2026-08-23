@@ -5,7 +5,6 @@
  * The worktree is preserved after initial execution, so no clone creation is needed.
  */
 
-import * as fs from 'node:fs';
 import type { TaskFailure, TaskListItem } from '../../../infra/task/index.js';
 import {
   TaskRunner,
@@ -23,12 +22,18 @@ import {
   getRunPaths,
   formatRunSessionForPrompt,
   runTaskRetryMode,
-  findPreviousOrderContent,
+  resolveLanguage,
   type RetryContext,
   type RetryFailureInfo,
   type RetryRunInfo,
 } from '../../interactive/index.js';
 import { cleanupInteractiveResultAttachments } from '../../interactive/imageAttachments.js';
+import {
+  cleanupPersistedTaskOrderRevision,
+  persistTaskOrderRevision,
+  resolveTaskOrderContent,
+  type PersistedTaskOrderRevision,
+} from '../orderRevision.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
 import {
   appendRetryNote,
@@ -39,15 +44,12 @@ import {
   selectWorkflowWithOptionalReuse,
 } from './requeueHelpers.js';
 import { prepareTaskForExecution } from './prepareTaskForExecution.js';
-import {
-  cleanupPreparedRetryTaskSpec,
-  prepareRetryTaskSpecWithAttachments,
-} from '../retryTaskSpecAttachments.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
 import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
+import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
 import {
   selectTaskRetryStart,
   type TaskRetryStartSelection,
@@ -262,13 +264,11 @@ function resolveFailureStepForRequeueNote(
   return undefined;
 }
 
-function resolveWorktreePath(task: TaskListItem): string {
+function resolveWorktreePath(projectDir: string, task: TaskListItem): string {
   if (!task.worktreePath) {
     throw new Error(`Worktree path is not set for task: ${task.name}`);
   }
-  if (!fs.existsSync(task.worktreePath)) {
-    throw new Error(`Worktree directory does not exist: ${task.worktreePath}`);
-  }
+  assertReusableWorktreePath(projectDir, task.worktreePath);
   return task.worktreePath;
 }
 
@@ -291,7 +291,12 @@ async function prepareFailedTaskRetrySelection(
   }
 
   const failure = requireFailedTaskFailure(task);
-  const worktreePath = resolveWorktreePath(task);
+  const worktreePath = resolveWorktreePath(projectDir, task);
+  const previousOrderContent = resolveTaskOrderContent(
+    projectDir,
+    task.taskDir,
+    task.data?.task ?? task.content,
+  );
 
   displayFailureInfo(task, failure);
 
@@ -329,7 +334,6 @@ async function prepareFailedTaskRetrySelection(
     return null;
   }
 
-  const previousOrderContent = findPreviousOrderContent(worktreePath, matchedSlug);
   if (hasDeprecatedProviderConfig(previousOrderContent)) {
     warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
   }
@@ -366,6 +370,7 @@ export async function requeueFailedTask(
       step: selection.failedStep,
     }),
   );
+  assertReusableWorktreePath(projectDir, selection.worktreePath);
   const runner = new TaskRunner(projectDir);
   runner.requeueTask(
     task.name,
@@ -406,6 +411,7 @@ export async function retryFailedTask(
     ? buildRetryRunInfo(selection.worktreePath, selection.matchedSlug)
     : null;
   const previewCount = resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps');
+  const lang = resolveLanguage(resolveWorkflowConfigValue(selection.worktreePath, 'language'));
   const workflowDesc = getWorkflowDescription(
     selection.selectedWorkflow,
     projectDir,
@@ -440,13 +446,28 @@ export async function retryFailedTask(
       return false;
     }
 
-    const retryNote = appendRetryNote(task.data?.retry_note, retryResult.task);
-    const preparedSpec = prepareRetryTaskSpecWithAttachments(projectDir, task.content, retryNote, retryResult.attachments, task.taskDir);
-    const executionRetryNote = preparedSpec ? preparedSpec.retryNote : retryNote;
-    const taskDir = preparedSpec?.taskDirRelative;
+    // User-authored requirements are stored in order.md. Existing retry_note
+    // is retained only for historical/automatic attempt diagnostics.
+    const executionRetryNote = retryResult.source === 'go'
+      ? undefined
+      : task.data?.retry_note;
+    let revision: PersistedTaskOrderRevision | undefined;
     const runner = new TaskRunner(projectDir);
-    if (retryResult.action === 'save_task') {
-      try {
+    let taskInfo: ReturnType<TaskRunner['startReExecution']> | undefined;
+    try {
+      assertReusableWorktreePath(projectDir, selection.worktreePath);
+      if (retryResult.source === 'go') {
+        revision = persistTaskOrderRevision(
+          projectDir,
+          task.taskDir,
+          retryResult.task,
+          lang,
+          retryResult.attachments,
+        );
+      }
+      const taskDir = revision?.taskDirRelative ?? task.taskDir;
+      assertReusableWorktreePath(projectDir, selection.worktreePath);
+      if (retryResult.action === 'save_task') {
         runner.requeueTask(
           task.name,
           ['failed'],
@@ -460,16 +481,9 @@ export async function retryFailedTask(
             restartPoint: selection.selectedRestartPoint,
           },
         );
-      } catch (error) {
-        cleanupPreparedRetryTaskSpec(preparedSpec);
-        throw error;
+        info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
+        return true;
       }
-      info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
-      return true;
-    }
-
-    let taskInfo: ReturnType<TaskRunner['startReExecution']>;
-    try {
       taskInfo = runner.startReExecution(
         task.name,
         ['failed'],
@@ -485,8 +499,11 @@ export async function retryFailedTask(
         },
       );
     } catch (error) {
-      cleanupPreparedRetryTaskSpec(preparedSpec);
+      cleanupPersistedTaskOrderRevision(revision);
       throw error;
+    }
+    if (taskInfo === undefined) {
+      throw new Error('Retry task execution did not produce task state.');
     }
     const taskForExecution = prepareTaskForExecution(taskInfo, selection.selectedWorkflow);
 

@@ -2,7 +2,7 @@
 
 contract family の同一性は、有効な role instruction に記載された定義を使い、この権限ポリシーでは定義し直さない。名前、型、近接性だけを、family をまとめる根拠にも分ける根拠にもしない。
 
-active contract family の担当箇所、同じ意味を別名で再構築する重複実装、未確認・未移行 consumer を特定する bounded horizontal comparison は、その family を閉じるための証拠収集として許可する。比較中に隣接する別 family の問題を観察しても、それ自体は finding 化、Companion の修正要求、修正計画への追加を許可しない。
+active contract family の担当箇所、同じ意味を別名で再構築する重複実装、未確認・未移行 consumer を特定する bounded horizontal comparison は、その family を閉じるための証拠収集として許可する。比較中に隣接する別 family の問題を観察しても、それ自体は finding 化や修正計画への追加を許可しない。
 
 ## Role ごとの権限
 
@@ -12,8 +12,6 @@ active contract family の担当箇所、同じ意味を別名で再構築する
 | Follow-up review | accepted family の未確認 consumer、必須 migration、修正退行を確認 | 一般探索の再開、新しい隣接 family |
 | Review adjudication | 提出済み candidate の妥当性と同一 family の境界を確認 | 一般初回探索、candidate のない新規 finding |
 | Final preservation | 宣言済み actionable family の未移行、旧経路、片側更新、修正退行を merge blocker として確認 | 新しい family の発見・追加 |
-| Companion | 提供された cumulative diff と context 内で active family の早期候補を報告 | 隠れた repository 経路を確認済みと主張、別 family の修正要求 |
-| Companion Moderator | 提出済み Companion evidence を accept、merge、downgrade、reject | early scan、repository 探索、新しい finding、family 完了保証 |
 
 follow-up で新しい finding を許可する Authorization Basis は次の4つだけとする。すべての新しい finding に Authorization Basis と Reason Absent（初回レビューに含まれなかった理由）を記録する。
 
@@ -26,7 +24,7 @@ follow-up で新しい finding を許可する Authorization Basis は次の4つ
 
 通常経路と isolated failure path が同じ不変条件、担当箇所、同じ原因で変更される理由を共有する場合は1つの family として扱う。bounded horizontal comparison で見つけた隣接・別 family は、4つの Authorization Basis のいずれにも該当しない限り new finding にせず、修正範囲にも入れない。`direct_acceptance_criterion_violation` も、既に提示された acceptance contract family と identity を共有する場合に限る。異なる担当箇所または同じ原因で変更される理由を必要とする問題は final/follow-up で新しい family にしない。
 
-Companion は、権限のない隣接・別 family を `must_fix`、`should_fix`、`nit`、または実質的な修正要求を残す note に昇格させない。Moderator はそのような指摘を `reject` する。Review Adjudication は技術的に妥当な指摘でも修正権限がなければ `out_of_scope` とし、actionable family や fix plan へ伝播させない。
+Review Adjudication は技術的に妥当な指摘でも修正権限がなければ `out_of_scope` とし、actionable family や fix plan へ伝播させない。
 
 ## Review mode
 

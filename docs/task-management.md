@@ -1,6 +1,6 @@
-[日本語](./task-management.ja.md)
-
 # Task Management
+
+[English](./task-management.md) | [日本語](./task-management.ja.md) | [简体中文](./task-management.zh-CN.md)
 
 ## Overview
 
@@ -195,6 +195,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 |--------|-------------|
 | **View diff** | Show full diff against the default branch in a pager |
 | **Instruct** | Open an AI conversation to craft additional instructions, then re-execute |
+| **Create PR** | Commit, push, and create a pull request from the task branch |
 | **Merge from root** | Merge the root branch HEAD into the task branch; conflicts are auto-resolved with AI |
 | **Pull from remote** | Pull the latest changes from remote origin (fast-forward only) |
 | **Try merge** | Squash merge (stages changes without committing, for manual review) |
@@ -207,6 +208,8 @@ The list view shows all tasks organized by status (pending, running, completed, 
 |--------|-------------|
 | **Requeue** | Select a resume or restart position and return the task to `pending` without a conversation |
 | **Retry** | Open a retry conversation with failure context, then re-execute |
+| **Instruct** | Open an AI conversation against the run's working tree to craft additional instructions, then requeue |
+| **Create PR** | Commit, push, and create a pull request from the failed run's changes |
 | **Delete** | Remove the failed task record |
 
 ### Actions for Pending Tasks
@@ -230,7 +233,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 
 ### Actions for PR-Failed Tasks
 
-Tasks with `pr_failed` status (workflow succeeded but PR creation or push failed) show the PR error message and offer the same actions as completed tasks.
+Tasks with `pr_failed` status (workflow succeeded but PR creation or push failed) show the PR error message and offer the same actions as completed tasks, except **Create PR**.
 
 ### Instruct Mode
 
@@ -248,17 +251,19 @@ You can discuss what additional changes are needed, and the AI helps refine the 
 
 To re-execute immediately, use `/accept` (use the latest assistant response) or `/replay` (resubmit the previous order). Use `/cancel` to discard and return to the list.
 
+**Instruct** on a failed task uses the same conversation, targeting the run's uncommitted working tree instead of a committed branch. Its conversation is additionally pre-loaded with a summary of the final adjudication report (fulfilled requirements, unresolved findings, unverified gates) and an overview of the working-tree diff.
+
 ### Retry Mode
 
 When you select **Retry** on a failed task, TAKT:
 
 1. Displays failure details (failed step, error message, last agent message)
 2. Prompts you to select a workflow
-3. Prompts you to choose a start position: **Resume failed position** or **Restart from**
+3. Prompts you to choose a start position from a single tree
 4. Opens a retry conversation pre-loaded with failure context, run session data, and workflow structure
 5. Lets you refine instructions with AI assistance
 
-**Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. With Retry and Requeue you choose between **Resume** (continue from the failure point, preserving execution state) and **Restart** (start a new execution from any step of your choice). Steps nested under `workflow_call` sub-workflows can also be selected as the start position.
+**Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. The start-position prompt presents the workflow as a tree: when a valid resume position exists, the top row is **Resume failed position** (continue from the failure point, preserving execution state), and every authored step is listed below as a selectable leaf. `workflow_call` sub-workflows appear as non-selectable headings that indent their child steps, so you always confirm a leaf step — a sub-workflow itself cannot be chosen. When a valid Resume position is available, the Resume row is initially selected; otherwise the preferred selectable leaf for the failed root step is initially selected. Choosing any leaf restarts a new execution from that step.
 
 After a requeue, execution uses a new namespace, so its ledger is not inherited and starts empty.
 

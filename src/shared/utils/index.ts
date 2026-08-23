@@ -7,6 +7,7 @@ export * from './debug.js';
 export * from './delay.js';
 export * from './entrypoint.js';
 export * from './error.js';
+export * from './interactive-terminal.js';
 export * from './notification.js';
 export * from './pathBoundary.js';
 export * from './reportDir.js';

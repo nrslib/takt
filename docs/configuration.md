@@ -1,6 +1,6 @@
 # Configuration
 
-[日本語](./configuration.ja.md)
+[English](./configuration.md) | [日本語](./configuration.ja.md) | [简体中文](./configuration.zh-CN.md)
 
 This document is a reference for all TAKT configuration options. For a quick start, see the main [README](../README.md).
 For phase-level usage events and analysis, see the [Observability Guide](./observability.md).
@@ -31,7 +31,7 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 auto_requeue_max_attempts: 0  # Auto-requeue failed workflow tasks during takt run (non-negative integer, default: 0 = disabled)
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed (default: false)
 assistant:
-  gherkin: false              # Generate final task instructions as Markdown + focused Gherkin
+  formal_spec: 'y/N'          # Alloy/Quint mode: true, false, Y/n, or y/N (default: y/N)
 # auto_fetch: false           # Fetch remote before cloning (default: false)
 # base_branch: main           # Base branch for clone creation (default: remote default branch)
 
@@ -190,7 +190,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` |
 | `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks |
 | `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
-| `assistant.gherkin` | boolean | `false` | Organize important observable behavior, state transitions, boundaries, failures, and invariants in a minimal number of Gherkin scenarios in final task instructions generated from assistant conversations. An explicit project value overrides the global value. |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` | Adds Alloy/Quint guidance only for applicable requirements. Use only the notation needed for each requirement; do not duplicate the same requirement across notations or require both. `true` and `false` are used without prompting. On a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. An explicit project value overrides the global value. Gherkin guidance is always enabled independently. |
 | `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into the worktree before retry / re-execution; set `false` to keep the worktree copy |
@@ -255,10 +255,11 @@ auto_requeue_max_attempts: 1  # Auto-requeue failed workflow tasks during takt r
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed
 # base_branch: main           # Base branch for clone creation (overrides global, default: remote default branch)
 
-# Explicit initial context files for interactive assistant mode only (project config only)
+# Project-specific assistant settings
 # assistant:
-#   gherkin: true              # Generate final task instructions as Markdown + focused Gherkin
+#   formal_spec: 'Y/n'         # Override global Alloy/Quint mode; prompts on TTY with Yes as default
 #   init_files:
+#     # Project config only; initial context files for interactive assistant mode
 #     - docs/assistant-context.md
 #     - .takt/assistant-notes.md
 
@@ -332,7 +333,7 @@ steps:
 
 The `provider` and `model` declarations select the provider, model, and thinking level for a TAKT run; they do not import Pi CLI settings. Pi authentication is handled separately through the Pi SDK credential store or provider-native environment variables. The boundary avoids unintended writes to global settings and keeps project-local configuration trustworthy and predictable.
 
-`provider_options.pi` is a separate path for loading Pi resources such as `extensions` and `no_*` discovery controls. These options do not declare authentication, model, or thinking level. Explicit resource sources are resolved temporarily for the TAKT run and are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
+`provider_options.pi` is a separate path for loading Pi resources such as `extensions` and `no_*` discovery controls. These options do not declare authentication, model, or thinking level. Bare explicit npm sources reuse an existing project-scope install, then an existing user-scope install, and fall back to temporary resolution only when neither candidate loads successfully; version-qualified npm sources and non-npm sources are always resolved temporarily. Explicit sources are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
 
 ### Provider inactivity deadline and OpenCode execution guards
 
@@ -402,7 +403,7 @@ Project config accepts most global keys and overrides their global values (e.g. 
 | `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
-| `assistant.gherkin` | boolean | `false` | Project override for final task instructions generated from assistant conversations, including quiet mode. When enabled, TAKT keeps background, scope, implementation details, design intent, constraints, and verification in Markdown, and asks the summarizer to use a minimal number of Gherkin scenarios only for important observable behavior, state transitions, boundaries, failures, and invariants. When unset, TAKT uses the global value; when both are unset, it defaults to `false`. |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` (from global/default) | Project override for Alloy/Quint guidance, applied only to applicable requirements. Use only the notation needed for each requirement; do not duplicate the same requirement across notations or require both. Project values take precedence over global values. Answers to `"Y/n"` or `"y/N"` prompts are session-local and are resolved again when a conversation is resumed; ACP and non-TTY execution never prompt and use the configured default answer. Gherkin guidance remains always enabled. The deprecated `assistant.gherkin` key produces a warning and is ignored without conversion, persistence, or file modification. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
@@ -441,6 +442,8 @@ Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incomin
 ## API Key Configuration
 
 TAKT supports Claude, Codex, OpenCode, Pi, the official DeepSeek Harness SDK, Cursor, Copilot, and Kiro providers. Claude/Codex/OpenCode use their SDK credentials, Pi uses the Pi SDK credential store or provider environment variables, DeepSeek Harness uses the official `DEEPSEEK_API_KEY` environment variable, Kiro uses an API key, Cursor can use either API key or existing `cursor-agent login` session, and Copilot uses a GitHub token.
+
+The global configuration schema also retains API-key fields for some legacy or provider integrations that are not currently selectable as top-level providers. These fields do not activate a provider by themselves; use the authentication variables and keys documented for the selected provider below.
 
 ### Environment Variables (Recommended)
 
@@ -587,18 +590,80 @@ Companion reviewers are disabled by default. Enable them with the top-level
 version: 1
 companion:
   enabled: true
+  review_mode: completion # completion | live
 ```
+
+The `companion` policy must specify at least one of `enabled` or `review_mode`.
+A mode-only policy such as `companion: { review_mode: live }` is accepted and
+resolves to `enabled: false`; an empty `companion: {}` policy is rejected.
 
 When both global and project policies are specified, their values are combined
 with logical AND; a project value of `true` cannot re-enable a globally disabled
 companion. An omitted policy is neutral during layer merging, and Companion
 remains disabled when neither layer specifies one.
 
+`companion.review_mode` defaults to `completion`. The project value overrides the
+global value, and a project omission inherits the global value. `completion`
+reviews the cumulative diff after a successful implementer response; `live`
+preserves quiet, forced, and commit-triggered reviews during the response. Only
+`completion` and `live` are accepted, and invalid values fail while loading
+`runtime.yaml`. The mode is validated even when `companion.enabled` is `false`,
+but no Companion provider is resolved or executed in that case.
+
 Companion provider targets (`targets.companions`) and provider capability
 requirements apply only while companions are enabled. When disabled, companion
 declarations and the structural validation of `targets.companions` remain in
 place, but no companion provider is resolved or executed — a workflow that
 declares companions runs without any companion provider configuration.
+
+### Post-run loop analysis
+
+Loop analysis is opt-in. Add the top-level `loop_analysis` section to analyze
+completed runs after their terminal artifacts have been finalized:
+
+```yaml
+version: 1
+loop_analysis:
+  enabled: true
+  output: file # file | pr-comment; defaults to file
+```
+
+When enabled, every successful, failed, or interrupted source run starts the
+builtin `loop-analysis` workflow asynchronously. The source run does not wait
+for analysis, and an analysis startup or execution failure does not change the
+source result. Analysis runs do not schedule another analysis run.
+Runs terminalized through manual force-fail are also scheduled immediately after
+their terminal artifacts are committed. Each source run creates at most one
+analysis job.
+
+If the process receives an OS-level forced termination (`SIGKILL`) after the
+terminal artifacts are committed but before the analysis job is persisted, that
+process cannot start the analysis itself. The dispatch claim is intentionally
+at-most-once, so force-failing the run from the task list is not an automatic
+recovery guarantee for a claim that was persisted immediately before the
+process was killed.
+
+The analyzer reads the source run's available JSONL logs, trace, monitor data,
+reports, saved workflow definition, and the facets referenced by each step. It
+expresses invariants shared by multiple steps as workflow-wide rules and
+step-specific problems as changes to the responsible facet. The reviewer can
+request explicit reanalysis up to two times when a proposal is unsupported,
+over-specialized, or targets the wrong workflow behavior. Reanalysis classifies
+each finding as addressed or unable to be addressed with evidence, withdraws
+the affected proposal in the latter case, and returns it to the reviewer. The
+final report is always written to the analysis run's `reports/loop-analysis.md`.
+
+With `output: pr-comment`, the same persisted report content is also posted when
+the source run has auto-PR enabled and its branch already has a pull request. If
+no pull request exists, only the report file is retained. Provider, model, and
+provider options are not valid inside `loop_analysis`; configure the analysis
+steps through normal runtime provider targets. When both runtime files define
+`loop_analysis`, the project section replaces the global section as a unit.
+
+Before publication, TAKT removes recognized secrets, credentials, tokens,
+personally identifiable data, absolute local paths, and runner-identifying
+metadata. If redaction changes the report, the sanitized content replaces the
+persisted report so the file and pull-request comment remain identical.
 
 Runtime mode is enabled by the presence of an active `provider` section, not by the file existing. A file that only contains `version: 1` is inactive and leaves the legacy `config.yaml` provider resolution in place.
 
@@ -668,6 +733,49 @@ provider:
         fallback_profile: sol-high
 ```
 
+### Directory-specific assignments
+
+`provider.assignments` defines named provider configuration sets that can be selected for a
+project directory. Each entry must contain `defaults` or `targets`; an empty assignment is not
+valid. `defaults` has the same shape as top-level `provider.defaults` and must choose exactly one
+of `profile` or `ladder`. `targets` has the same shape as top-level `provider.targets`:
+`personas`, `tags`, and `steps` may use `profile`, `pool`, or `ladder`; `internal_agents` may use
+`profile` or `ladder`, while `companions` may use only a fixed `profile`.
+
+`provider.directories` maps a directory path to an assignment name. The lookup target is the
+startup project directory. Keys expand `~`, become absolute, and then receive realpath-equivalent
+normalization for existing paths before exact comparison. Prefix matching and globs are not used.
+An unknown assignment name in this map fails fast while loading. When a directory matches, the
+assignment's `defaults` are used; if omitted, top-level `provider.defaults` is used. If the
+assignment has `targets`, it replaces the entire top-level `provider.targets` map; individual
+target maps are not merged. An assignment that omits `targets` keeps the top-level
+`provider.targets`. `profiles` and `auto_routing` remain shared.
+
+```yaml
+provider:
+  assignments:
+    project-sol:
+      defaults:
+        profile: sol-medium
+      targets:
+        personas:
+          coder:
+            profile: sol-medium
+        steps:
+          default/implement:
+            pool: sol-pool
+
+  directories:
+    ~/work/example: project-sol
+```
+
+Across global and project layers, `assignments` follow the profile rule: a same-name project
+entry replaces the global entry wholesale, while differently named entries coexist. For
+`directories`, project wins when normalized keys are equal and otherwise both mappings remain.
+These merges happen before directory assignment selection. Profile, pool, and ladder references
+inside assignments are validated with the other runtime provider references and fail fast before
+an agent runs.
+
 `provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Optional `capabilities` names one provider-options preset or a list of presets applied in order. Presets resolve project → global → builtin, like workflow capabilities, and inline `options` override preset values. Optional `permission_mode` selects the provider's exact permission mode. Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
 
 TAKT-owned structured agents always start a fresh session. Providers with native structured output receive the schema directly; other providers receive a JSON schema instruction, and TAKT parses and validates the returned object. TAKT does not add internal-agent-specific permission, tool, network, sandbox, skill, MCP, or bypass policy. Assign a profile with `capabilities`, `permission_mode`, or both when a role needs restrictions. If both are omitted, normal provider configuration is used unchanged.
@@ -730,6 +838,124 @@ the following legacy settings:
 ### First-run generation
 
 On first launch TAKT generates `~/.takt/runtime.yaml` atomically and never overwrites an existing file; the project `.takt/runtime.yaml` is never generated automatically. A fresh environment is written with the selected provider/model as `provider.profiles.default` plus `provider.defaults.profile: default`. An environment that already has legacy provider settings receives only an inactive `version: 1` file, so its behavior does not change until you migrate.
+
+## Runtime MCP Configuration in `runtime.yaml`
+
+The `mcp` section in `runtime.yaml` owns MCP server definitions and their assignment to agents. It is a top-level sibling of `provider` (order.md:36) and may be active alone (without a `provider` section), so MCP servers are injected while provider/model resolution stays on the legacy `config.yaml` path.
+
+### Configuration example
+
+```yaml
+version: 1
+
+mcp:
+  servers:
+    common-tools:
+      type: stdio
+      command: common-mcp-server
+      args: []
+      env:
+        API_TOKEN: "${COMMON_MCP_API_TOKEN}"
+    github:
+      type: http
+      url: https://api.githubcopilot.com/mcp/
+      headers:
+        Authorization: "Bearer ${GITHUB_TOKEN}"
+
+  defaults:
+    servers:
+      - common-tools
+
+  targets:
+    personas:
+      release-manager:
+        servers:
+          - github
+    tags:
+      github:
+        servers:
+          - github
+    steps:
+      release/create-pr:
+        servers:
+          - github
+    internal_agents:
+      selector:
+        exclude:
+          - common-tools
+```
+
+### Schema
+
+| Field | Type | Description |
+|---|---|---|
+| `mcp.servers` | `{ <name>: ServerEntry }` | Named MCP server definitions (`stdio` / `sse` / `http`). Defining a server here alone does not enable it — it must be assigned through `defaults` or `targets`. |
+| `mcp.defaults.servers` | `string[]` | Servers applied to every agent execution (normal steps, parallel agents, fan-in, internal agents, sub-workflow leaf steps). |
+| `mcp.targets.personas` | `{ <persona>: { servers?, exclude? } }` | Per-persona additions/exclusions. |
+| `mcp.targets.tags` | `{ <tag>: { servers?, exclude? } }` | Per-tag additions/exclusions. |
+| `mcp.targets.steps` | `{ <leaf-workflow>/<step>: { servers?, exclude? } }` | Per-step additions/exclusions. Control nodes (`workflow_call` etc.) are not resolution targets. |
+| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | Exclusions applied to both internal agents (`selector` and `assistant`). Only `selector.exclude` is accepted. |
+
+Server entries:
+
+| Transport | Required fields | Optional fields |
+|---|---|---|
+| `stdio` | `command` | `args`, `env` |
+| `sse` | `url` | `headers` |
+| `http` | `url` | `headers` |
+
+### Effective server resolution
+
+```text
+effective servers
+  = defaults.servers
+  + matched targets.servers
+  - matched targets.exclude
+```
+
+- Server names are de-duplicated.
+- `exclude` takes priority over additions.
+- A `targets` entry referencing an unknown server name fails fast before any agent runs.
+- `mcp.servers` definitions alone do not enable a server; it must be assigned through `defaults` or `targets`.
+
+### Global/project merge
+
+When both the global and project `runtime.yaml` carry an `mcp` section, the project section replaces the global one wholesale — same-name servers are not field-merged, and `defaults`/`targets` take the project value when present. This mirrors the `provider` section merge rule.
+
+### Environment variable interpolation
+
+`${NAME}` references in `command`, `args`, `env`, `url`, and `headers` are resolved against `process.env` before agent startup. An undefined required environment variable fails fast; TAKT never silently substitutes an empty string. Resolved secret values (env, headers) are never written to logs or error messages.
+
+### Provider transport compatibility
+
+Each provider declares the transports it supports. When a resolved server uses an unsupported transport, TAKT fails fast before agent startup and reports the provider, server, transport, supported transports, and the runtime.yaml source path.
+
+| Provider | Supported transports |
+|---|---|
+| `claude` / `claude-sdk` / `claude-terminal` | `stdio`, `sse`, `http` |
+| `codex` | `stdio`, `http` |
+| `opencode` | `stdio`, `http` |
+| `cursor` | `stdio`, `http` |
+| `copilot` | `stdio`, `http` |
+| `kiro` | `stdio`, `http` |
+| `mock` | `stdio` |
+
+Incompatible transports are never silently converted to another transport, and servers are never silently dropped.
+
+### Legacy workflow MCP mode and migration
+
+MCP configuration also must not be mixed across the legacy and runtime modes:
+
+- No active `mcp` section in `runtime.yaml`: the workflow `mcp_servers` and `workflow_mcp_servers` policy are used.
+- Active `mcp` section in `runtime.yaml`: only the runtime MCP assignment is used.
+- Runtime MCP and workflow `mcp_servers` coexisting: TAKT fails fast, naming the workflow/step and the migration target.
+
+In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — those belong to the `mcp` section in `runtime.yaml`.
+
+| Legacy setting | Runtime destination |
+|---|---|
+| workflow `mcp_servers` policy | `mcp.targets` |
+| step `mcp_servers` map | `mcp.targets.steps` |
 
 ## Provider Profiles
 
@@ -1057,6 +1283,25 @@ legacy mode it can also be set through `provider_routing`, deprecated
 `persona_providers`, project, or global config. The environment variable
 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
 
+#### Codex fast mode (`fast_mode`)
+
+Set the optional Codex fast-mode feature explicitly with `provider_options.codex.fast_mode`:
+
+```yaml
+provider_options:
+  codex:
+    fast_mode: true
+```
+
+Both `true` and `false` are explicit values. If the setting is omitted, TAKT does not send
+`features.fast_mode` to Codex and Codex keeps its own default. The environment override is
+`TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=true` or `TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=false`.
+
+The setting follows the existing provider-option leaf resolution and source attribution. It can
+come from a runtime profile, `provider_routing.personas`, `provider_routing.tags`,
+`provider_routing.steps`, project or global `provider_options`, or the environment override.
+`takt exec` uses the resolved runtime default provider options for its assistant session as well.
+
 #### Codex permission control (`permission_control`)
 
 Codex uses TAKT's permission mode mapping by default. This is equivalent to `permission_control: takt` and passes the resolved TAKT `permission_mode` to the Codex SDK as `sandboxMode`. `network_access`, when set, is also passed as `networkAccessEnabled`; when omitted, Codex keeps its default (`false`).
@@ -1139,10 +1384,12 @@ provider_options:
 ```
 
 - `extensions` accepts npm packages, Git sources, and local paths.
-- Explicit sources are resolved temporarily for the TAKT run and are not persisted into Pi settings.
+- Bare explicit npm sources reuse an existing project-scope install first, then an existing user-scope install; when neither can be resolved to enabled resources, TAKT falls back to temporary resolution without installing into either persistent scope. Version-qualified npm sources are always resolved temporarily.
+- Explicit non-npm sources are resolved temporarily for the TAKT run.
+- Explicit sources are not persisted into Pi settings.
 - `no_extensions` disables extension discovery but still loads the sources listed in `extensions`.
 - The other `no_*` options disable discovery of their respective resource types.
-- Implicit project-local Pi extensions are not trusted or loaded.
+- Implicit project-local Pi resources are not trusted or loaded; only the absolute path discovered for an explicitly configured npm source can be reused from project package storage.
 - Explicit extensions execute inside the TAKT process, so configure only trusted local paths and package sources.
 - Extension URLs containing embedded credentials or secret-bearing query parameters are rejected.
 
@@ -1170,7 +1417,9 @@ Categories can be configured in:
 # ~/.takt/preferences/workflow-categories.yaml (or the file set by workflow_categories_file)
 workflow_categories:
   Development:
-    workflows: [default, simple]
+    workflows:
+      - default: "Standard coding workflow"   # name: description adds it to the selection label
+      - simple
     Backend:
       workflows: [dual-cqrs]
     Frontend:
@@ -1186,6 +1435,7 @@ others_category_name: "Other Workflows"  # Name for uncategorized category
 
 - **Nested categories** — unlimited depth for hierarchical organization; under a category, every key other than `workflows` is treated as a child category name (there is no `children:` key)
 - **Per-category workflow lists** — under each category, `workflows:` holds workflow names to show in that group
+- **Workflow descriptions** — write a `workflows:` entry as `- name: description` to append a short description to its selection label (plain string entries still work). For a workflow listed in multiple categories, write the same description at each occurrence; conflicting descriptions for the same workflow in one file are rejected as a validation error. User overlay entries override builtin entries by workflow name and may add user-only names
 - **Others category** — collects workflows not listed under any category (disable with `show_others_category: false`)
 - **Builtin workflow filtering** — turn off all builtins with `enable_builtin_workflows: false`, or specific names with `disabled_builtins: [name1, name2]`
 
@@ -1246,7 +1496,7 @@ logging:
   debug: true
 ```
 
-Debug logs are written to `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` in NDJSON format, and prompt/response logs to `debug-{timestamp}-prompts.jsonl` in the same directory.
+General debug logs are process-scoped and written to `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` in NDJSON format. Prompt/response logs are workflow-run-scoped and written to `.takt/runs/<run>/logs/<sessionId>-prompts.jsonl`.
 
 ### Detailed Console Output
 
@@ -1258,7 +1508,7 @@ logging:
   level: debug
 ```
 
-This also enables the internal verbose console mode used by the CLI. `logging.level: debug` alone additionally enables the debug logger, so the `debug-{timestamp}.log` and `debug-{timestamp}-prompts.jsonl` artifacts above are produced without setting `logging.debug` separately. Any of `logging.debug: true`, `logging.trace: true`, or `logging.level: debug` enables them.
+This also enables the internal verbose console mode used by the CLI. `logging.level: debug` alone additionally enables both the process-scoped general debug log and workflow-run-scoped prompt/response logs described above without setting `logging.debug` separately. Any of `logging.debug: true`, `logging.trace: true`, or `logging.level: debug` enables them.
 
 ## Companion provider targets
 

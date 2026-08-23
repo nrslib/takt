@@ -1,5 +1,5 @@
 name: development-implement-dynamic
-description: Dynamic-facet implementation execution for experimental development workflows.
+description: Dynamic-facet implementation execution for the shared development workflows.
 subworkflow:
   callable: true
   visibility: internal
@@ -23,6 +23,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: implement
+    scope_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: coder-scope
 facet_pools:
   coding-facets:
     uses: coding-facets
@@ -40,6 +44,8 @@ steps:
         $param: development_knowledge
       implementation_instruction:
         $param: implementation_instruction
+      scope_report_format:
+        $param: scope_report_format
     dynamic_facets:
       pool:
         $param: implementation_pool

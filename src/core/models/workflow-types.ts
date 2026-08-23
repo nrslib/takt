@@ -115,6 +115,8 @@ export interface OutputContractItem {
   formatRef?: string;
   useJudge?: boolean;
   order?: string;
+  /** 解決前の order 参照名（facet ref）。 */
+  orderRef?: string;
 }
 
 export type OutputContractEntry = OutputContractItem;
@@ -220,6 +222,8 @@ export interface DynamicParallelSelectionSnapshot {
 export interface ResolvedFacetContent {
   readonly content: string;
   readonly sourcePath?: string;
+  readonly refName?: string;
+  readonly literalContent?: true;
 }
 
 export interface ResolvedFacetPoolCandidate {
@@ -246,7 +250,9 @@ export interface DynamicFacetsConfig {
 export interface SelectorGuidance {
   readonly persona?: string;
   readonly personaPath?: string;
+  readonly personaRef?: string;
   readonly instruction: string;
+  readonly instructionRef?: string;
 }
 
 export const MAX_COMPLETION_RETRY = 4;
@@ -255,6 +261,7 @@ export interface CompletionRetryConfig {
   readonly minRetry: number;
   readonly maxRetry: number;
   readonly retryInstruction: string;
+  readonly retryInstructionRef?: string;
 }
 
 export interface DynamicFacetSelectionSnapshot {
@@ -402,7 +409,8 @@ export interface TeamLeaderWorkflowStep extends AgentWorkflowStepBase {
   concurrency?: never;
   arpeggio?: never;
   teamLeader: TeamLeaderConfig;
-  dynamicFacets?: never;
+  dynamicFacets?: DynamicFacetsConfig;
+  companion?: CompanionSelection;
 }
 
 export type AgentWorkflowStep =
@@ -410,6 +418,8 @@ export type AgentWorkflowStep =
   | ParallelWorkflowStep
   | ArpeggioWorkflowStep
   | TeamLeaderWorkflowStep;
+
+export type NormalOrTeamLeaderWorkflowStep = NormalAgentWorkflowStep | TeamLeaderWorkflowStep;
 
 export interface SystemWorkflowStep extends WorkflowStepBase {
   kind: 'system';
@@ -491,6 +501,12 @@ export function isNormalAgentWorkflowStep(step: WorkflowStep): step is NormalAge
   );
 }
 
+export function isNormalOrTeamLeaderWorkflowStep(
+  step: WorkflowStep,
+): step is NormalOrTeamLeaderWorkflowStep {
+  return isNormalAgentWorkflowStep(step) || step.teamLeader !== undefined;
+}
+
 export interface ArpeggioMergeStepConfig {
   readonly strategy: 'concat' | 'custom';
   readonly separator?: string;
@@ -523,7 +539,9 @@ export interface LoopMonitorRule {
 export interface LoopMonitorJudge {
   persona?: string;
   personaPath?: string;
+  personaRef?: string;
   instruction?: string;
+  instructionRef?: string;
   rules: LoopMonitorRule[];
 }
 

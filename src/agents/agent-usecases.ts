@@ -5,8 +5,11 @@ import {
 } from '../infra/providers/provider-capabilities.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
 import type { Language } from '../core/models/types.js';
-import type { ProviderActivityCallback, ProviderType } from '../shared/types/provider.js';
-import type { StreamCallback } from '../shared/types/provider.js';
+import type { ProviderActivityCallback, ProviderType, StreamCallback } from '../shared/types/provider.js';
+import {
+  resolveInternalAgentMcpServers,
+  type McpAssignmentSection,
+} from '../infra/config/runtime-provider/mcp-assignment.js';
 
 export {
   evaluateCondition,
@@ -50,6 +53,14 @@ export interface ResolvedInternalAgentOptions {
     readonly model: string | undefined;
     readonly providerOptions: StepProviderOptions;
   };
+  /**
+   * Runtime MCP assignment section (runtime-v1 only). When provided, the
+   * internal agent resolves its effective MCP server set via
+   * `resolveMcpAssignment` with `isInternalAgent: true`, then forwards the
+   * resolved servers to `runAgent` so `defaults.servers` and
+   * `internal_agents.selector.exclude` apply (order.md:106,76-80).
+   */
+  readonly mcpAssignment?: McpAssignmentSection;
 }
 
 export async function executeIsolatedStructuredInternalAgent(
@@ -63,8 +74,10 @@ export async function executeIsolatedStructuredInternalAgent(
     resolution,
     agentName,
     persona,
+    mcpAssignment,
     ...executionOptions
   } = options;
+  const mcp = resolveInternalAgentMcpServers(mcpAssignment);
   return runAgent(persona, instruction, {
     ...executionOptions,
     executionProfile: 'isolated-structured',
@@ -73,7 +86,9 @@ export async function executeIsolatedStructuredInternalAgent(
     internalSystemPrompt: systemPrompt,
     internalAgentIsolation: 'strict-readonly',
     allowedTools: [],
-    mcpServers: {},
+    mcpServers: mcp.servers,
+    mcpServerIdentity: mcp.identity,
+    mcpAssignment,
     bypassPermissions: false,
     resolvedExecution: {
       provider: resolution.provider,

@@ -6,6 +6,7 @@ import type {
   StreamCallback,
 } from '../../shared/types/provider.js';
 import type { PermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
+import type { PreparedProviderMcp } from './mcp/types.js';
 
 export interface AgentSetup {
   name: string;
@@ -25,6 +26,14 @@ export interface ProviderCallOptions {
   model?: string;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Provider-prepared MCP material (issue #1137). When the resolved MCP server
+   * set is non-empty, `AgentRunner` runs `validate` → `prepare` before the
+   * provider call and passes the result here so each provider's `toXxxOptions`
+   * can merge the provider-specific config (SDK options, CLI args, temp files)
+   * into its call. `dispose` is owned by the runner and invoked in a `finally`.
+   */
+  preparedMcp?: PreparedProviderMcp;
   maxTurns?: number;
   permissionMode?: PermissionMode;
   providerOptions?: StepProviderOptions;
@@ -64,6 +73,15 @@ export interface Provider {
   /** Whether this provider has a dedicated strict structured execution path. */
   supportsIsolatedStructuredExecution?: boolean;
   supportsNativeImageInput: boolean;
+  /**
+   * MCP transports this provider implementation actually supports. Replaces
+   * the fixed `MCP_SERVER_PROVIDERS` set (issue #1137). An empty/undefined set
+   * means MCP is not supported; the engine and adapter use this to fail-fast
+   * on unsupported transports instead of silently dropping servers.
+   */
+  supportedMcpTransports?: ReadonlySet<'stdio' | 'sse' | 'http'>;
+  /** Whether runtime MCP mode can suppress ambient MCP configuration. */
+  supportsStrictMcpConfig?: boolean;
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
   supportsPermissionControls?(): boolean;
   keepsAllowedToolWithoutEdit(tool: string): boolean;

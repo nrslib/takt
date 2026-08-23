@@ -381,7 +381,7 @@ describe('Pipeline Integration Tests', () => {
     expect(exitCode).toBe(3);
   });
 
-  it.each(['backend-mini', 'default-mini'])('should complete %s through the shared mini core', async (workflow) => {
+  it.each(['backend-mini', 'frontend-mini'])('should complete %s through the shared mini core', async (workflow) => {
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },

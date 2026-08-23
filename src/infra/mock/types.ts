@@ -15,6 +15,8 @@ export interface MockCallOptions {
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   allowedTools?: string[];
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   /** Native structured-output schema requested by the caller. */
   outputSchema?: Record<string, unknown>;
   /** Fixed response content (optional, defaults to generic mock response) */
@@ -53,5 +55,10 @@ export interface ScenarioEntry {
     id: string;
     input: Record<string, unknown>;
   }>;
+  /**
+   * Stream the response text as several `text` events instead of one.
+   * Reproduces gradual provider output; the chunks do not change `content`.
+   */
+  textChunks?: Array<{ text: string; delayMs?: number }>;
   fileWrites?: Array<{ path: string; content: string }>;
 }

@@ -14,8 +14,21 @@ import * as path from 'node:path';
 
 // ── Mocks ─────────────────────────────────────────────────────────────
 
+const { mockResolveFormalSpecMode } = vi.hoisted(() => ({
+  mockResolveFormalSpecMode: vi.fn(),
+}));
+
 vi.mock('../features/interactive/conversationLoop.js', () => ({
   callAIWithRetry: vi.fn(),
+}));
+
+vi.mock('../infra/config/global/globalConfig.js', () => ({
+  loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveFormalSpecMode: (cwd: string) => mockResolveFormalSpecMode(cwd),
 }));
 
 vi.mock('../features/interactive/sessionInitialization.js', () => ({
@@ -91,6 +104,7 @@ function createMissingImageAttachment() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockResolveFormalSpecMode.mockResolvedValue(false);
 });
 
 // =================================================================
@@ -98,6 +112,36 @@ beforeEach(() => {
 // =================================================================
 
 describe('quietMode: summary AI session isolation', () => {
+  it.each([false, true])('should resolve once and apply formal specification mode=%s to the quiet summary prompt', async (formalSpec) => {
+    mockResolveFormalSpecMode.mockResolvedValue(formalSpec);
+    const actualInteractive = await vi.importActual<typeof import('../features/interactive/interactive.js')>(
+      '../features/interactive/interactive.js',
+    );
+    mockBuildSummaryPrompt.mockImplementation(actualInteractive.buildSummaryPrompt);
+    mockInitializeSession.mockReturnValue(createMockSessionContext(undefined));
+    mockCallAIWithRetry.mockResolvedValue({
+      result: { content: 'Generated task instruction.', success: true },
+      sessionId: undefined,
+    });
+    mockSelectPostSummaryAction.mockResolvedValue('execute');
+
+    const result = await quietMode('/repo', { userMessage: 'fix the bug' });
+
+    expect(result.action).toBe('execute');
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledOnce();
+    expect(mockResolveFormalSpecMode).toHaveBeenCalledWith('/repo');
+    expect(mockBuildSummaryPrompt.mock.calls[0]?.[8]).toBe(formalSpec);
+    const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
+    expect(prompt).toContain('## Markdown + Gherkin Output Format');
+    if (formalSpec) {
+      expect(prompt).toMatch(/\bQuint\b/);
+      expect(prompt).toMatch(/\bAlloy\b/);
+    } else {
+      expect(prompt).not.toMatch(/\bQuint\b/);
+      expect(prompt).not.toMatch(/\bAlloy\b/);
+    }
+  });
+
   it('should pass sessionId as undefined to callAIWithRetry even when ctx carries an active sessionId', async () => {
     // Given: initializeSession returns a ctx with an active session
     const ctxWithSession = createMockSessionContext('active-session-123');

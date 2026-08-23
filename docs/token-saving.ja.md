@@ -2,7 +2,7 @@
 
 [English](./token-saving.md)
 
-トークン節約は、まず baseline を測ってから行います。トークン数が減っても、retry、loop 回数、所要時間、provider cost が増えるなら改善ではありません。
+トークン節約はまず baseline を測ってから行います。トークン数が減っても、retry、loop 回数、所要時間、provider cost が増えるなら改善ではありません。
 
 ## まず計測する
 
@@ -25,7 +25,7 @@ npm run analyze:usage -- .takt/runs/<run>
 
 ## Workflow のコストを下げる
 
-- フルの plan/review loop が不要な task では、`*-mini` など軽量な builtin workflow を選びます。
+- フルの plan/review loop が不要な task では`*-mini` など軽量な builtin workflow を選びます。
 - [`provider_routing`](./configuration.ja.md) で低リスクな step を安価または高速な provider/model に振り分けます。
 - 高価な model は final review や難しい implementation step など、必要な step だけに使います。
 - 大きすぎる task は TAKT 実行前に分割し、planning/review context を小さくします。

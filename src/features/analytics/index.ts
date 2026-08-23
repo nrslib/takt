@@ -9,6 +9,8 @@ export type {
   StepResultEvent,
   RoutingDecisionEvent,
   CompanionAnalyticsEvent,
+  CompanionReviewRoundAnalyticsEvent,
+  CompanionReviewRoundAnalyticsPayload,
 } from './events.js';
 
 export {

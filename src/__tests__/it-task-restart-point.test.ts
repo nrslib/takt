@@ -325,23 +325,29 @@ function buildNestedRestartPoint(projectDir: string): WorkflowRestartPoint {
   };
 }
 
-async function selectRestartPath(
+// The tree picker presents every authored leaf in a single prompt; a leaf row's
+// label is the step name indented by depth. Select the `occurrence`-th leaf whose
+// step name matches, using DFS order to disambiguate same-named leaves that live
+// under different workflow_call branches.
+async function selectRestartLeaf(
   root: NonNullable<ReturnType<typeof loadWorkflowByIdentifier>>,
   projectDir: string,
-  labels: string[],
+  leafName: string,
+  occurrence = 0,
 ): Promise<WorkflowRestartPoint> {
-  let labelIndex = 0;
   const selected = await selectTaskRetryStart(root, {
     projectCwd: projectDir,
     lookupCwd: projectDir,
   }, async (_message, options) => {
-    const label = labels[labelIndex]!;
-    labelIndex += 1;
-    const option = options.find((candidate) => candidate.label === label);
-    if (option === undefined) {
-      throw new Error(`Expected retry option: ${label}`);
+    const serialized = JSON.stringify(leafName);
+    const matches = options.filter(
+      (candidate) => candidate.selectable !== false && candidate.label.trim() === serialized,
+    );
+    const target = matches[occurrence];
+    if (target === undefined) {
+      throw new Error(`Expected retry leaf "${leafName}" #${occurrence}`);
     }
-    return option.value;
+    return target.value;
   });
   if (selected?.selection.kind !== 'restart') {
     throw new Error('Expected restart selection');
@@ -926,7 +932,7 @@ describe('task restart persistence and execution resolution', () => {
     await expect(resolveTaskExecution(pending, projectDir)).rejects.toThrow(/restart.*publish/i);
   });
 
-  it('should fail queued revalidation when a selected terminal workflow_call target disappears', async () => {
+  it('should fail queued revalidation when a persisted terminal workflow_call target disappears', async () => {
     const projectDir = createProject();
     writeNestedWorkflows(projectDir, 'review');
     writeFailedTask(projectDir);
@@ -934,9 +940,11 @@ describe('task restart persistence and execution resolution', () => {
     if (root === null) {
       throw new Error('Expected default workflow');
     }
-    const restartPoint = await selectRestartPath(root, projectDir, [
-      'Restart from: "default" > "delegate"',
-    ]);
+    // The tree picker no longer confirms a workflow_call, so a terminal-call
+    // restart point can only originate from a legacy saved task; build it directly.
+    const restartPoint: WorkflowRestartPoint = {
+      stack: [buildWorkflowRestartPointEntry(root, 'delegate', 'workflow_call', 1)],
+    };
     const runner = new TaskRunner(projectDir);
     runner.requeueTask(
       'nested-retry',
@@ -958,7 +966,7 @@ describe('task restart persistence and execution resolution', () => {
     await expect(resolveTaskExecution(pending, projectDir)).rejects.toThrow(/unknown workflow.*coding/i);
   });
 
-  it('should fail queued revalidation when a selected terminal workflow_call target becomes non-callable', async () => {
+  it('should fail queued revalidation when a persisted terminal workflow_call target becomes non-callable', async () => {
     const projectDir = createProject();
     writeNestedWorkflows(projectDir, 'review');
     writeFailedTask(projectDir);
@@ -966,9 +974,9 @@ describe('task restart persistence and execution resolution', () => {
     if (root === null) {
       throw new Error('Expected default workflow');
     }
-    const restartPoint = await selectRestartPath(root, projectDir, [
-      'Restart from: "default" > "delegate"',
-    ]);
+    const restartPoint: WorkflowRestartPoint = {
+      stack: [buildWorkflowRestartPointEntry(root, 'delegate', 'workflow_call', 1)],
+    };
     const runner = new TaskRunner(projectDir);
     runner.requeueTask(
       'nested-retry',
@@ -1046,12 +1054,10 @@ describe('task restart persistence and execution resolution', () => {
     }
 
     const restartPoints = [];
-    for (const [rootStep, leaf] of [['left', 'leaf-a'], ['right', 'leaf-b']] as const) {
-      restartPoints.push(await selectRestartPath(root, projectDir, [
-        `Browse child workflow from: "args-root" > "${rootStep}"`,
-        `Browse child workflow from: "args-root" > "${rootStep}" > "router" > "route"`,
-        `Restart from: "args-root" > "${rootStep}" > "router" > "route" > "${leaf}" > "finish"`,
-      ]));
+    // DFS order presents the "finish" leaf under left (leaf-a) before the one
+    // under right (leaf-b); occurrence disambiguates the same-named leaves.
+    for (let occurrence = 0; occurrence < 2; occurrence += 1) {
+      restartPoints.push(await selectRestartLeaf(root, projectDir, 'finish', occurrence));
     }
     expect(restartPoints.map((point) => point.stack[2]?.workflow)).toEqual(['leaf-a', 'leaf-b']);
     for (const restartPoint of restartPoints) {
@@ -1093,14 +1099,8 @@ describe('task restart persistence and execution resolution', () => {
     if (root === null) {
       throw new Error('Expected identity-root workflow');
     }
-    const leftRestartPoint = await selectRestartPath(root, projectDir, [
-      'Browse child workflow from: "identity-root" > "left"',
-      'Restart from: "identity-root" > "left" > "shared" > "review"',
-    ]);
-    const rightRestartPoint = await selectRestartPath(root, projectDir, [
-      'Browse child workflow from: "identity-root" > "right"',
-      'Restart from: "identity-root" > "right" > "shared" > "review"',
-    ]);
+    const leftRestartPoint = await selectRestartLeaf(root, projectDir, 'review', 0);
+    const rightRestartPoint = await selectRestartLeaf(root, projectDir, 'review', 1);
     const runner = new TaskRunner(projectDir);
     runner.requeueTask(
       'nested-retry',

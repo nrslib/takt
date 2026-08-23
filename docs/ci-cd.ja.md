@@ -53,7 +53,7 @@ jobs:
 
 Pipeline モードにはタスクソースが必須です。`--task`、`--issue`、`--pr` のいずれかを指定してください。いずれも指定しない場合、TAKT は exit code `2` で終了します。
 
-Pipeline モードでは、`--auto-pr` を明示的に指定しない限り PR は作成**されません**。`--auto-pr` を `--skip-git` と併用した場合、PR は作成されず、TAKT は警告を出力します。終了コードはワークフローの結果に従います（ワークフロー自体が成功した場合のみ `0`）。
+Pipeline モードでは`--auto-pr` を明示的に指定しない限り PR は作成**されません**。`--auto-pr` を `--skip-git` と併用した場合、PR は作成されず、TAKT は警告を出力します。終了コードはワークフローの結果に従います（ワークフロー自体が成功した場合のみ `0`）。
 
 ### Pipeline の全オプション
 
@@ -122,7 +122,7 @@ takt --pipeline --task "Fix bug" --quiet
 
 ## Exit Code
 
-Pipeline モードは、CI スクリプトが失敗の種類を区別できるように細分化された exit code を返します。
+Pipeline モードはCI スクリプトが失敗の種類を区別できるように細分化された exit code を返します。
 
 | Code | 意味 |
 |------|------|
@@ -136,7 +136,7 @@ Pipeline モードは、CI スクリプトが失敗の種類を区別できる�
 
 ## Pipeline テンプレート変数
 
-`~/.takt/config.yaml` の pipeline 設定では、コミットメッセージと PR 本文をカスタマイズするためのテンプレート変数をサポートしています。
+`~/.takt/config.yaml` の pipeline 設定ではコミットメッセージと PR 本文をカスタマイズするためのテンプレート変数をサポートしています。
 
 ```yaml
 pipeline:
@@ -159,7 +159,7 @@ pipeline:
 
 ## その他の CI システム
 
-GitHub Actions 以外の CI システムでは、TAKT をグローバルにインストールして pipeline モードを直接使用します。
+GitHub Actions 以外の CI システムではTAKT をグローバルにインストールして pipeline モードを直接使用します。
 
 ```bash
 # takt のインストール
@@ -173,7 +173,7 @@ takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 
 ## 環境変数
 
-CI 環境での認証には、該当する場合は適切な API キー環境変数を設定してください。これらは他のツールとの衝突を避けるため TAKT 固有のプレフィックスを使用しますが、公式 provider が指定する名前は例外です。公式 DeepSeek Harness SDK は `DEEPSEEK_API_KEY` と `DEEPSEEK_BASE_URL` を使用します。
+CI 環境での認証には該当する場合は適切な API キー環境変数を設定してください。これらは他のツールとの衝突を避けるため TAKT 固有のプレフィックスを使用しますが、公式 provider が指定する名前は例外です。公式 DeepSeek Harness SDK は `DEEPSEEK_API_KEY` と `DEEPSEEK_BASE_URL` を使用します。
 
 ```bash
 # Claude（Anthropic）用

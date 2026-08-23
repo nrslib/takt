@@ -237,6 +237,34 @@ function facetKnowledge(config: WorkflowConfig, poolName: string, candidateId: s
   return content;
 }
 
+function selectorStepName(instruction: string): string {
+  const stepName = instruction.match(/(?:^|\n)Step:\n([^\n]+)(?:\n|$)/)?.[1];
+  if (stepName === undefined) {
+    throw new Error('Missing selector step name');
+  }
+  return stepName;
+}
+
+function parallelFacetSelection(instruction: string, internalAgentName: string | undefined): string[] {
+  if (internalAgentName === 'dynamic-parallel-selector') {
+    return ['pool-security'];
+  }
+  if (internalAgentName !== 'dynamic-facet-selector') {
+    throw new Error(`Unexpected selector agent name: ${internalAgentName}`);
+  }
+  const stepName = selectorStepName(instruction);
+  switch (stepName) {
+    case 'security':
+    case 'fixed-security':
+      return ['web'];
+    case 'frontend':
+    case 'pool-security':
+      return ['cli'];
+    default:
+      throw new Error(`Unexpected selector step name: ${stepName}`);
+  }
+}
+
 function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
   const security = {
     name: 'security',
@@ -751,15 +779,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   it('should execute dynamic parallel fixed children with independent facet selection (DFP-016)', async () => {
     const config = makeDynamicParallelFixedFacetWorkflow();
     const selectorKinds: string[] = [];
-    let facetSelectionCount = 0;
     const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options?.outputSchema !== undefined) {
-        const kind = selectorKinds.length === 0 ? 'participant' : 'facet';
+        const kind = options.internalAgentName === 'dynamic-parallel-selector' ? 'participant' : 'facet';
         selectorKinds.push(kind);
-        const selectedIds = kind === 'participant'
-          ? ['pool-security']
-          : facetSelectionCount++ === 0 ? ['web'] : ['cli'];
+        const selectedIds = parallelFacetSelection(instruction, options.internalAgentName);
         return makeResponse({
           persona: 'selector',
           structuredOutput: { selected_ids: selectedIds, rationale: `${kind} selection` },
@@ -833,12 +858,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   it('should select facets independently for each static parallel child and compose each child base (DFP-004, DFP-005)', async () => {
     const config = makeStaticParallelFacetWorkflow();
     const facetSelectorInstructions: string[] = [];
-    let facetSelectionCount = 0;
     const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options?.outputSchema !== undefined) {
         facetSelectorInstructions.push(instruction);
-        const selectedIds = facetSelectionCount++ === 0 ? ['web'] : ['cli'];
+        const selectedIds = parallelFacetSelection(instruction, options.internalAgentName);
         return makeResponse({
           persona: 'selector',
           structuredOutput: { selected_ids: selectedIds, rationale: 'child-specific selection' },
@@ -917,15 +941,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       occurrence: 1,
     };
     const selectorKinds: string[] = [];
-    let facetSelectionCount = 0;
     const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options?.outputSchema !== undefined) {
-        const isFacetSelector = selectorKinds.length > 0;
+        const isFacetSelector = options.internalAgentName === 'dynamic-facet-selector';
         selectorKinds.push(isFacetSelector ? 'facet' : 'participant');
-        const selectedIds = !isFacetSelector
-          ? ['pool-security']
-          : facetSelectionCount++ === 0 ? ['web'] : ['cli'];
+        const selectedIds = parallelFacetSelection(instruction, options.internalAgentName);
         return makeResponse({
           persona: 'selector',
           structuredOutput: { selected_ids: selectedIds, rationale: 'current run selection' },
@@ -1819,12 +1840,17 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     const controller = new AbortController();
     const usage = vi.fn();
+    const providerStarted = createDeferred();
+    let providerSignal: AbortSignal | undefined;
     vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => {
-      if (options?.abortSignal !== controller.signal) {
-        throw new Error('Engine abort signal did not reach selector provider');
+      const abortSignal = options?.abortSignal;
+      if (abortSignal === undefined) {
+        throw new Error('Engine did not provide an abort signal to the selector provider');
       }
+      providerSignal = abortSignal;
       await new Promise<void>((resolve) => {
-        options.abortSignal.addEventListener('abort', () => resolve(), { once: true });
+        abortSignal.addEventListener('abort', () => resolve(), { once: true });
+        providerStarted.resolve();
       });
       return makeResponse({
         persona: 'selector',
@@ -1841,13 +1867,21 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       onDelegatedAgentUsage: usage,
     });
     const run = engine.run();
-    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledTimes(1));
+    await Promise.race([
+      providerStarted.promise,
+      run.then((state) => {
+        throw new Error(`Engine completed before selector provider started: ${state.status}`);
+      }),
+    ]);
 
     controller.abort(new Error('selector provider aborted'));
     const state = await run;
 
     expect(state.status).toBe('aborted');
     expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(providerSignal?.aborted).toBe(true);
+    expect(providerSignal?.reason).toBeInstanceOf(Error);
+    expect(providerSignal?.reason).toMatchObject({ message: 'selector provider aborted' });
     expect(usage).toHaveBeenCalledTimes(1);
     expect(usage.mock.calls[0]?.[1]).toMatchObject({ success: false });
     expect(state.dynamicParallelSelections).toEqual(new Map());

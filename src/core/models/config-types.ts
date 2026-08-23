@@ -144,15 +144,17 @@ export interface TaktProvidersConfig {
   selector?: TaktSelectorProviderConfigEntry;
 }
 
+export type FormalSpecSetting = boolean | 'Y/n' | 'y/N';
+
 export interface AssistantConfig {
   initFiles?: string[];
-  /** Generate final task instructions as human-readable Markdown with focused Gherkin scenarios. */
-  gherkin?: boolean;
+  /** Enable Alloy and Quint guidance, or ask with the configured default in interactive sessions. */
+  formalSpec?: FormalSpecSetting;
 }
 
 export interface GlobalAssistantConfig {
-  /** Generate final task instructions as human-readable Markdown with focused Gherkin scenarios. */
-  gherkin?: boolean;
+  /** Enable Alloy and Quint guidance, or ask with the configured default in interactive sessions. */
+  formalSpec?: FormalSpecSetting;
 }
 
 /** Step-specific quality gates override */

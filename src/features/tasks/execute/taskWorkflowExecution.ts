@@ -142,6 +142,7 @@ export async function executeTaskWorkflow(
     initialIterationOverride,
     currentTaskIssueNumber,
     prContext,
+    loopAnalysisPublication,
   } = options;
   const traceTaskMetadata = resolveTraceTaskMetadata(options);
   const workflowConfig = loadWorkflowByIdentifier(
@@ -187,6 +188,7 @@ export async function executeTaskWorkflow(
       : {
           provider: agentOverrides.provider,
           model: agentOverrides.model,
+          autoStrategy: agentOverrides.autoStrategy,
           providerSource: agentOverrides.providerSource,
           modelSource: agentOverrides.modelSource,
         },
@@ -218,6 +220,9 @@ export async function executeTaskWorkflow(
     currentTaskIssueNumber,
     traceTaskMetadata,
     ...(prContext ? { prContext } : {}),
+    ...(loopAnalysisPublication === undefined
+      ? {}
+      : { loopAnalysisPublication }),
   });
 }
 

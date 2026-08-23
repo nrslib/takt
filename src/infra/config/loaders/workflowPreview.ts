@@ -1,4 +1,5 @@
 import type { InteractiveMode, PermissionMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import { DEFAULT_COMPANION_REVIEW_MODE } from '../../../core/models/companion-types.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { InternalAgentSeats, TagRoutingConflictPolicy } from '../../../core/models/config-types.js';
@@ -84,6 +85,7 @@ interface PreviewProviderResolution extends ProviderModelResolutionContext {
   /** runtime.yaml internal_agents の解決済み seat。合成ロールの表示を実行時と一致させる。 */
   internalAgentSeats: InternalAgentSeats | undefined;
   companionEnabled: boolean;
+  companionReviewMode: ReturnType<typeof resolveAuxiliaryRuntimeEnvironment>['companionReviewMode'];
   selectorProvider?: SelectorProviderInfo;
 }
 
@@ -319,6 +321,7 @@ function resolvePreviewProviderResolution(
     profileScopedProviderOptions: runtimeEnvironment.providerConfigMode === 'runtime-v1',
     internalAgentSeats: env.internalAgents,
     companionEnabled: runtimeEnvironment.companionEnabled,
+    companionReviewMode: runtimeEnvironment.companionReviewMode,
     ...(selectorResolution.applies
       ? { selectorProvider: selectorResolution.selectorProvider }
       : {}),
@@ -431,10 +434,17 @@ export function getWorkflowDescription(
   stepPreviews: StepPreview[];
   interactiveMode?: InteractiveMode;
   firstStep?: FirstStepInfo;
+  companionReviewMode: PreviewProviderResolution['companionReviewMode'];
 } {
   const workflow = loadWorkflowByIdentifier(identifier, projectCwd, { lookupCwd });
   if (!workflow) {
-    return { name: identifier, description: '', workflowStructure: '', stepPreviews: [] };
+    return {
+      name: identifier,
+      description: '',
+      workflowStructure: '',
+      stepPreviews: [],
+      companionReviewMode: DEFAULT_COMPANION_REVIEW_MODE,
+    };
   }
   return getWorkflowDescriptionFromConfig(
     workflow,
@@ -460,6 +470,7 @@ export function getWorkflowDescriptionFromConfig(
   stepPreviews: StepPreview[];
   interactiveMode?: InteractiveMode;
   firstStep?: FirstStepInfo;
+  companionReviewMode: PreviewProviderResolution['companionReviewMode'];
 } {
   const resolution = resolvePreviewProviderResolution(
     projectCwd,
@@ -476,6 +487,7 @@ export function getWorkflowDescriptionFromConfig(
       ? buildStepPreviews(workflow, previewCount, projectCwd, resolution, workflowBundleResourceRoot)
       : [],
     interactiveMode: workflow.interactiveMode,
+    companionReviewMode: resolution.companionReviewMode,
     firstStep: buildFirstStepInfo(workflow, projectCwd, resolution, workflowBundleResourceRoot),
   };
 }

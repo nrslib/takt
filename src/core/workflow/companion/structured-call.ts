@@ -99,6 +99,7 @@ export class CompanionStructuredCaller {
         try {
           return await executeStructuredAgent(prompt, schema, {
             name: request.agentName,
+            persona: request.agentName,
             cwd: options.cwd,
             projectCwd: options.projectCwd,
             failureDir: options.failureDir,

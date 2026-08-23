@@ -1,0 +1,149 @@
+name: review
+description: Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+max_steps: 10
+initial_step: gather
+
+steps:
+  - name: gather
+    uses: review-gather-with-clarification-to-reviewers
+    rules:
+      - condition: Review target information gathered
+        next: reviewers
+      - condition: Cannot identify review target, insufficient info
+        next: ABORT
+        appendix: |
+          Clarifications needed:
+          - {Question 1}
+          - {Question 2}
+
+  - name: reviewers
+    kind: workflow_call
+    call: development-review
+    rules:
+      - condition: COMPLETE
+        next: review-synthesis
+      - condition: needs_fix
+        next: supervise
+      - condition: ABORT
+        next: ABORT
+
+  - name: review-synthesis
+    capabilities: readonly
+    tags:
+      - review
+      - final-gate
+      - supervise
+    edit: false
+    persona: supervisor
+    policy:
+      - contract-change
+      - review
+    pass_previous_response: false
+    rules:
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: COMPLETE
+    instruction: &review_synthesis_instruction |
+      ## Review Results
+      {previous_response}
+
+      **This is a review-only workflow.** Do NOT run tests or builds.
+      Your role is to synthesize the review results and produce a final summary.
+
+      **Tasks:**
+      1. Read `review-target.md` and every reviewer report present in the Report Directory. Do not assume an optional reviewer report exists.
+      2. Synthesize all available review results
+      3. Produce a consolidated review summary with overall verdict
+
+      **Review Summary output contract:**
+      ```markdown
+      # Review Summary
+
+      ## Overall Verdict: APPROVE / REJECT
+
+      ## Summary
+      {2-3 sentences consolidating all review results}
+
+      ## Review Results
+      | Review | Result | Key Findings |
+      |--------|--------|--------------|
+      | Each available review | APPROVE/REJECT | {Brief finding} |
+
+      ## Issues Requiring Attention
+      | # | Severity | Source | Location | Issue |
+      |---|----------|--------|----------|-------|
+      | 1 | High | Security | `file:line` | Description |
+
+      ## Improvement Suggestions
+      - {Consolidated suggestions from all reviews}
+      ```
+    output_contracts: &review_synthesis_output_contracts
+      report:
+        - name: review-summary.md
+          format: |
+            ```markdown
+            # Review Summary
+
+            ## Overall Verdict: APPROVE / REJECT
+
+            ## Summary
+            {2-3 sentences consolidating all review results}
+
+            ## Review Results
+            | Review | Result | Key Findings |
+            |--------|--------|--------------|
+            | Each available review | APPROVE/REJECT | {Overview} |
+
+            ## Current Iteration Findings (new)
+            | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |
+            |---|------------|----------|--------|----------|-------|----------------|
+            | 1 | SUM-NEW-src-file-L42 | High | Security | `file:line` | Description | Suggestion |
+
+            ## Carry-over Findings (persists)
+            | # | finding_id | Source | Previous Evidence | Current Evidence | Issue |
+            |---|------------|--------|-------------------|------------------|-------|
+            | 1 | SUM-PERSIST-src-file-L77 | Architecture | `file:line` | `file:line` | Description |
+
+            ## Resolved Findings (resolved)
+            | finding_id | Source | Resolution Evidence |
+            |------------|--------|---------------------|
+            | SUM-RESOLVED-src-file-L10 | Testing | `file:line` |
+
+            ## Improvement Suggestions
+            - {Consolidated suggestions from all reviews}
+
+            ## Rejection Gate
+            - REJECT is valid only when at least one finding exists in `new` or `persists`
+            - Findings without `finding_id` are invalid
+            ```
+
+  - name: supervise
+    capabilities: readonly
+    tags:
+      - review
+      - supervise
+    edit: false
+    persona: supervisor
+    policy:
+      - contract-change
+      - review
+    pass_previous_response: false
+    rules:
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: COMPLETE
+    instruction: *review_synthesis_instruction
+    output_contracts: *review_synthesis_output_contracts

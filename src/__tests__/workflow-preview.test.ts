@@ -37,11 +37,18 @@ describe('getWorkflowDescription', () => {
     } as WorkflowConfig;
   }
 
-  function writePreviewRuntime(projectDir: string, assignStepPool: boolean): void {
+  function writePreviewRuntime(
+    projectDir: string,
+    assignStepPool: boolean,
+    companionReviewMode?: 'completion' | 'live',
+  ): void {
     const configDir = join(projectDir, '.takt');
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'runtime.yaml'), [
       'version: 1',
+      ...(companionReviewMode === undefined
+        ? []
+        : ['companion:', '  enabled: true', `  review_mode: ${companionReviewMode}`]),
       'provider:',
       '  defaults:',
       '    profile: default',
@@ -217,6 +224,20 @@ describe('getWorkflowDescription', () => {
 
     expect(description.stepPreviews[0]).toMatchObject({ model: 'gpt-default' });
     expect(description.stepPreviews[0]).toMatchObject({ provider: 'mock' });
+    expect(description.companionReviewMode).toBe('completion');
+  });
+
+  it('workflow descriptionへresolved live companion review modeを保持する', () => {
+    const projectDir = createProject();
+    const globalConfigDir = createProject();
+    writePreviewRuntime(projectDir, false, 'live');
+    const description = withGlobalConfigDirOverride(globalConfigDir, () => getWorkflowDescriptionFromConfig(
+      createProgrammaticPreviewWorkflow(),
+      projectDir,
+      1,
+    ));
+
+    expect(description.companionReviewMode).toBe('live');
   });
 
   it('明示的なruntime pool割当は動的provider/modelを固定値としてpreviewしない', () => {

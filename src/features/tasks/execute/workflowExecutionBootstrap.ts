@@ -51,7 +51,7 @@ import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import {
   createLogger,
-  getDebugPromptsLogFile,
+  isDebugEnabled,
   isValidReportDirName,
   preventSleep,
 } from '../../../shared/utils/index.js';
@@ -79,11 +79,14 @@ import type { WorkflowExecutionOptions } from './types.js';
 import {
   resolveRuntimeEnvironment,
 } from '../../../infra/config/runtime-provider/provider-environment.js';
+import type { CompanionReviewMode } from '../../../core/models/companion-types.js';
 import {
+  assertNoMixedWorkflowMcpConfiguration,
   collectLegacyProviderSignals,
   selectConfigTaktProviders,
 } from '../../../infra/config/runtime-provider/legacy-signals.js';
 import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
+import type { McpAssignmentSection } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
 import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
@@ -126,9 +129,11 @@ export interface WorkflowExecutionBootstrap {
   internalAgentSeats: InternalAgentSeats | undefined;
   selectorProvider: WorkflowExecutionOptions['selectorProvider'];
   companionEnabled: boolean;
+  companionReviewMode: CompanionReviewMode;
   companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
+  configProviderOptions: WorkflowExecutionOptions['providerOptions'];
   providerOptionsProviderSource: ProviderResolutionSource | undefined;
   providerPermissionMode: PermissionMode | undefined;
   autoRouting: WorkflowExecutionOptions['autoRouting'];
@@ -148,6 +153,12 @@ export interface WorkflowExecutionBootstrap {
   traceReportMode: TraceReportMode;
   promptLogPath?: string;
   operationJournal: WorkflowOperationJournalContext;
+  /**
+   * Runtime MCP assignment section (runtime-v1 only, issue #1137). Passed to
+   * the workflow engine so `OptionsBuilder` can resolve effective MCP servers
+   * per agent step.
+   */
+  mcpAssignment: McpAssignmentSection | undefined;
 }
 
 export interface WorkflowExecutionResumeLineage {
@@ -381,7 +392,13 @@ export async function createWorkflowExecutionBootstrap(
         handlerRef.current(event);
       };
 
-  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint || options.restartPoint);
+  const isRetry = Boolean(
+    options.resumeSource?.resumeMode
+      || options.startStep
+      || options.retryNote
+      || options.resumePoint
+      || options.restartPoint,
+  );
   const shouldLoadSavedSessions = isRetry && options.restartPoint === undefined;
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
@@ -471,6 +488,7 @@ export async function createWorkflowExecutionBootstrap(
     'telemetry',
     'observability',
     'autoRouting',
+    'workflowMcpServers',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
@@ -516,7 +534,14 @@ export async function createWorkflowExecutionBootstrap(
       startTime: runBootstrap.startedAt,
     },
   );
-  const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);
+  const promptLogPath = isDebugEnabled()
+    ? join(runPaths.logsAbs, `${workflowSessionId}-prompts.jsonl`)
+    : undefined;
+  const sessionLogger = new SessionLogger(
+    ndjsonLogPath,
+    allowSensitiveData,
+    promptLogPath,
+  );
   if (options.interactiveMetadata) {
     sessionLogger.writeInteractiveMetadata(options.interactiveMetadata);
   }
@@ -574,6 +599,22 @@ export async function createWorkflowExecutionBootstrap(
   });
   const providerEnvironment = resolvedRuntimeEnvironment.providerEnvironment;
   const companionEnabled = resolvedRuntimeEnvironment.companionEnabled;
+  // Legacy workflow MCP mode (`mcp_servers` / `workflow_mcp_servers`) must not
+  // coexist with an active `mcp` section in `runtime.yaml` (order.md:112-118).
+  // Collect legacy MCP signals from the reachable workflow graph and fail-fast on mix
+  // before any agent starts.
+  if (providerEnvironment.mcpAssignment !== undefined) {
+    assertNoMixedWorkflowMcpConfiguration(
+      providerEnvironment.mcpAssignment,
+      workflowConfig,
+      globalConfig.workflowMcpServers,
+      {
+        workflowCallResolver: options.workflowCallResolver,
+        projectCwd,
+        lookupCwd: cwd,
+      },
+    );
+  }
   const currentProvider = providerEnvironment.provider;
   // Fail fast when neither the legacy config nor a runtime.yaml profile resolves a provider.
   // A runtime-v1 pool default legitimately leaves the fixed provider unset (auto routing
@@ -675,7 +716,6 @@ export async function createWorkflowExecutionBootstrap(
         updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
     : (persona: string, personaSessionId: string | undefined) =>
         updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
-  const promptLogPath = getDebugPromptsLogFile() ?? undefined;
   const observabilityOptions = globalConfig.observability.enabled
     && (
       globalConfig.observability.sessionLogExporter
@@ -748,9 +788,11 @@ export async function createWorkflowExecutionBootstrap(
     internalAgentSeats: providerEnvironment.internalAgents,
     selectorProvider,
     companionEnabled,
+    companionReviewMode: resolvedRuntimeEnvironment.companionReviewMode,
     companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,
+    configProviderOptions: resolvedRuntimeEnvironment.configProviderOptions,
     providerOptionsProviderSource: resolvedRuntimeEnvironment.providerConfigMode === 'runtime-v1'
       ? currentProviderSource
       : undefined,
@@ -770,6 +812,7 @@ export async function createWorkflowExecutionBootstrap(
     traceReportMode,
     ...(promptLogPath === undefined ? {} : { promptLogPath }),
     operationJournal,
+    mcpAssignment: providerEnvironment.mcpAssignment,
   };
 }
 

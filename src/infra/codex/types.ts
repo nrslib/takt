@@ -30,6 +30,7 @@ export interface CodexCallOptions {
   sessionId?: string;
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
+  fastMode?: boolean;
   systemPrompt?: string;
   /** Permission mode for the TAKT-controlled sandbox */
   permissionMode?: PermissionMode;
@@ -58,4 +59,6 @@ export interface CodexCallOptions {
   /** Directory for full oversized failure text, written as private 0600 files; omission disables persistence. */
   failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
 }
