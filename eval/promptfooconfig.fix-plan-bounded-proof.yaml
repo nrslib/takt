@@ -1,12 +1,12 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT facet eval: fix-plan concretizes bounded inputs, states, helpers, and consumers'
+description: 'TAKT ファセット評価: 修正計画が根拠のある入力、状態、処理、利用箇所を具体化する'
 
 prompts:
   - file://prompts/fix-plan-bounded-proof.phase1.md
 
 providers:
   - id: file://providers/cli-review.mjs
-    label: claude-opus
+    label: claude-opus-5
     config:
       cli: claude
       model: claude-opus-5
@@ -44,7 +44,7 @@ evaluateOptions:
   repeat: 3
 
 tests:
-  - description: 'fix-plan: replace umbrella coverage with source-backed concrete state rows'
+  - description: '修正計画: 包括表現を使わず根拠のある状態と経路を具体化する'
     vars:
       task: file://cases/fix-plan-bounded-proof-task.md
       previous_response: ''
@@ -52,17 +52,17 @@ tests:
       - type: llm-rubric
         metric: fix-plan/bounded-proof
         value: |
-          Judge the plan's source-backed behavioral coverage, not headings, table shape, row order, or exact wording. Bullets or prose pass when every required state remains independently traceable.
+          見出し、表形式、行順、厳密な文言ではなく、コード上の根拠に基づく振る舞いの確認範囲を評価する。必要な状態を個別に追跡できれば、箇条書きや文章でもよい。
 
-          Pass only if all eight requirements below are satisfied conjunctively:
+          次の8条件をすべて満たす場合だけ合格とする。
 
-          1. Evidence: for every group, identify the actual source path and function or artifact that supports the claim, and trace caller/data flow rather than merely listing case names.
-          2. Report contracts: identify `supervisor-validation.md`, `review-decision.md`, and `summary.md` from the recorded artifacts; cover their supported English and Japanese headings; require a header-only findings table to produce zero findings; apply validation > decision > summary primary priority; route the same structured primary summary to failed-instruct context and PR body; and ignore rather than combine an unknown report.
-          3. Run resolution: distinguish saved slug, matching run within displayed positions 1 through 10, matching run at position 11 or later, and no matching run. State that `findRunForTask` incorrectly delegates to the 10-item `listRecentRuns`, and that no-match must leave slug, report, and order empty instead of reading the latest unrelated run.
-          4. PR branch identity: distinguish missing branch, matching non-detached branch, mismatched branch, and detached `HEAD`; state the expected return/result for each and require zero confirm/commit/push/PR side effects for every invalid state.
-          5. Prompt consumers: trace both `prompts/en/failed-instruct.md` and `prompts/ja/failed-instruct.md` from a real command entry through `buildProviderPrompt` to the provider call; preserve hostile evidence as literal data in both; and treat the already-covered English path as verify-only unless evidence requires a code edit.
-          6. Actionability: turn the discoveries into bounded edit or verify-only targets, implementation constraints, observable expected results, and a regression or disproof that fails for the current bug. A source inventory without these plan details fails.
-          7. Precision: do not add a locale, report type, unreachable archive preview, legacy/future state, or mechanical cross-product that the fixture does not support. Do not edit a correct consumer merely for symmetry.
-          8. Completeness: every state above must be independently checkable as source -> input/state -> path/constraint -> consumer/terminal -> expected result -> disproof. Umbrella wording cannot substitute for a member or state.
+          1. 根拠: 各問題について、主張を支える実際の source path と関数または成果物を特定し、case 名の列挙ではなく caller と data flow を追う。
+          2. report 契約: 記録済み成果物から `supervisor-validation.md`、`review-decision.md`、`summary.md` を特定し、サポート対象の英語・日本語見出しを扱う。見出しだけの findings table は指摘0件とする。primary の優先順位を validation、decision、summary の順にし、同じ構造化済み primary summary を failed-instruct context と PR 本文へ渡す。未知の report は結合せず無視する。
+          3. run 解決: 保存済み slug、表示位置1〜10の一致 run、位置11以降の一致 run、該当なしを区別する。`findRunForTask` が10件限定の `listRecentRuns` へ誤って委譲していることを示し、該当なしでは無関係な最新 run を読まず slug、report、order を空にする。
+          4. PR branch identity: branch 欠落、一致する非 detached branch、不一致 branch、detached `HEAD` を区別する。各状態の戻り値または結果を示し、無効な状態では confirm、commit、push、PR の副作用を一切起こさない。
+          5. prompt 利用経路: `prompts/en/failed-instruct.md` と `prompts/ja/failed-instruct.md` の両方を、実在する command 入口から `buildProviderPrompt` を経て provider 呼び出しまで追う。敵対的な証拠を両方で literal data として保持し、既に確認済みの英語経路はコード変更の根拠がない限り確認だけにする。
+          6. 実行可能性: 調査結果を、範囲を限定した変更対象または確認だけの対象、実装上の制約、観測可能な期待結果、現在の不具合で失敗する回帰検出または反証へ落とし込む。source 一覧だけでは不合格とする。
+          7. 精度: fixture が根拠を持たない locale、report type、到達不能な archive preview、legacy または将来状態、機械的な直積を追加しない。正しい利用箇所を対称性だけで編集しない。
+          8. 完全性: 上記の各状態を source、入力または状態、経路または制約、consumer または terminal、期待結果、反証の順で個別に確認できるようにする。包括表現で具体的な状態を代替しない。
 
-          Any factual invention or omission makes the overall result fail. The rubric is semantic: do not require a literal Markdown table when the same independently testable coverage is present in another form.
+          事実の捏造または必要事項の欠落があれば不合格とする。意味を評価し、同じ内容を個別に検証できる別形式があれば Markdown table 自体は要求しない。

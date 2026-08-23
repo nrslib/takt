@@ -6,6 +6,7 @@ Independently verify whether the implementation fulfills the fix plan. Do not ed
 
 {{include:instructions/fix-plan-validity}}
 {{include:instructions/repair-verification-path-check}}
+{{include:instructions/quality-gate-causality}}
 
 Inspect independently needed reports, sources of truth, and direct call paths together in the same evidence pass where possible. This governs execution order and does not authorize broader exploration. Do not serialize reads or searches that are independent of one another behind progress updates, and do not continue checking for absent optional history or tests that are unnecessary for the decision. Once the required evidence is available, return the output-contract result; do not end the response with progress updates only.
 

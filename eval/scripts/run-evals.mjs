@@ -9,7 +9,9 @@
  *         frontend-coder,
  *         cqrs-coder, fix-closure, fix-plan-fresh-findings,
  *         fix-plan-boundary-preflight, fix-plan-cause-check, fix-plan-bounded-proof,
- *         review-family-closure,
+ *         fix-verifier-family-boundary, fix-verifier-state-closure, fix-verifier-state-routing,
+ *         fix-verifier-model-matrix, fix-verifier-routing-model-matrix,
+ *         review-impact-path-coverage,
  *         initial-review-contract-discovery,
  *         initial-review-external-identity-wiring,
  *         testing-review-observable-evidence,
@@ -21,14 +23,18 @@
  *         write-tests-contract-traceability,
  *         implement-contract-traceability,
  *         implementation-report-contract-traceability,
- *         review-adjudication, final-readiness-supervision,
+ *         review-adjudication, review-adjudication-report, final-readiness-supervision,
  *         final-readiness-preservation,
  *         final-readiness-precision,
+ *         fix-verification-scope,
+ *         fix-verification-current-diff-regression,
+ *         fix-verification-preserved-condition,
  *         task-instruction-gherkin
  *         (default: all except suites that require optional CLI authentication)
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -45,12 +51,16 @@ const SUITES = {
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
   'fix-closure': 'promptfooconfig.fix-closure.yaml',
   'fix-self-scan': 'promptfooconfig.fix-self-scan.yaml',
-  'fix-loop-convergence': 'promptfooconfig.fix-loop-convergence.yaml',
   'fix-plan-fresh-findings': 'promptfooconfig.fix-plan-fresh-findings.yaml',
   'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
   'fix-plan-cause-check': 'promptfooconfig.fix-plan-cause-check.yaml',
   'fix-plan-bounded-proof': 'promptfooconfig.fix-plan-bounded-proof.yaml',
-  'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
+  'fix-verifier-family-boundary': 'promptfooconfig.fix-verifier-family-boundary.yaml',
+  'fix-verifier-state-closure': 'promptfooconfig.fix-verifier-state-closure.yaml',
+  'fix-verifier-state-routing': 'promptfooconfig.fix-verifier-state-routing.yaml',
+  'fix-verifier-model-matrix': 'promptfooconfig.fix-verifier-model-matrix.yaml',
+  'fix-verifier-routing-model-matrix': 'promptfooconfig.fix-verifier-routing-model-matrix.yaml',
+  'review-impact-path-coverage': 'promptfooconfig.review-impact-path-coverage.yaml',
   'initial-review-contract-discovery': 'promptfooconfig.initial-review-contract-discovery.yaml',
   'initial-review-external-identity-wiring': 'promptfooconfig.initial-review-external-identity-wiring.yaml',
   'testing-review-observable-evidence': 'promptfooconfig.testing-review-observable-evidence.yaml',
@@ -73,25 +83,22 @@ const SUITES = {
   'follow-up-testing-review-repair-regression': 'promptfooconfig.follow-up-testing-review-repair-regression.yaml',
   'review-adjudication-binding': 'promptfooconfig.review-adjudication-binding.yaml',
   'security-review-method': 'promptfooconfig.security-review-method.yaml',
-  'review-mode-authority': 'promptfooconfig.review-mode-authority.yaml',
-  'fix-verifier-family-boundary': 'promptfooconfig.fix-verifier-family-boundary.yaml',
-  'fix-verifier-state-closure': 'promptfooconfig.fix-verifier-state-closure.yaml',
-  'fix-verifier-state-routing': 'promptfooconfig.fix-verifier-state-routing.yaml',
-  'fix-verifier-model-matrix': 'promptfooconfig.fix-verifier-model-matrix.yaml',
-  'fix-verifier-routing-model-matrix': 'promptfooconfig.fix-verifier-routing-model-matrix.yaml',
-  'companion-early-scan': 'promptfooconfig.companion-early-scan.yaml',
-  'companion-testing-later-scan': 'promptfooconfig.companion-testing-later-scan.yaml',
-  'companion-evidence-boundary': 'promptfooconfig.companion-evidence-boundary.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
+  'review-adjudication-report': 'promptfooconfig.review-adjudication-report.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
   'final-readiness-precision': 'promptfooconfig.final-readiness-precision.yaml',
+  'fix-verification-scope': 'promptfooconfig.fix-verification-scope.yaml',
+  'fix-verification-current-diff-regression': 'promptfooconfig.fix-verification-current-diff-regression.yaml',
+  'fix-verification-preserved-condition': 'promptfooconfig.fix-verification-preserved-condition.yaml',
   'task-instruction-gherkin': 'promptfooconfig.task-instruction-gherkin.yaml',
 };
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const evalDir = resolve(scriptDir, '..');
 const repoRoot = resolve(evalDir, '..');
+const promptfooConfigDir = join(repoRoot, '.tmp', 'promptfoo');
+mkdirSync(promptfooConfigDir, { recursive: true });
 
 const args = process.argv.slice(2);
 const firstFlagIndex = args.findIndex((a) => a.startsWith('-'));
@@ -108,8 +115,6 @@ for (const name of names) {
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
 // fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
 // codex 前提のデフォルト実行からは除外し、明示的に呼び出す。
-// fix-loop-convergence も claude（opus）と codex（Luna Max / Sol High）の
-// 両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
 // initial-review-external-identity-wiring も同じ2つの外部 CLI で3モデルを使うため、
 // デフォルト実行から除外して明示的に呼び出す。
 // review-adjudication-binding も同じ2つの外部 CLI で3モデルを使うため、
@@ -118,21 +123,32 @@ for (const name of names) {
 // デフォルト実行から除外して明示的に呼び出す。
 // fix-plan-cause-check も claude（opus）と codex（gpt-5.6-luna）の
 // 両ログインが必要な二重測定スイートのため、明示的に呼び出す。
-// fix-plan-bounded-proof も claude（opus）と codex（Luna Max / Sol High）の
-// 両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
+// fix-plan-bounded-proof、fix-plan-fresh-findings、review-adjudication も claude（opus）と
+// codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
+// review-impact-path-coverage と follow-up-review-repair-regression、follow-up-testing-review-repair-regression も claude（opus）と
+// codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
+// fix-verification 系の対照スイートも同じ3モデルを使うため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
   'coding',
   'rescan',
   'rescan-coding',
   'fix-self-scan',
-  'fix-loop-convergence',
   'fix-verifier-model-matrix',
   'fix-verifier-routing-model-matrix',
   'fix-plan-cause-check',
   'fix-plan-bounded-proof',
+  'fix-plan-fresh-findings',
+  'review-impact-path-coverage',
+  'follow-up-review-repair-regression',
+  'follow-up-testing-review-repair-regression',
+  'review-adjudication',
+  'review-adjudication-report',
   'initial-review-external-identity-wiring',
   'review-adjudication-binding',
   'security-review-method',
+  'fix-verification-scope',
+  'fix-verification-current-diff-regression',
+  'fix-verification-preserved-condition',
   'write-tests-default-priority',
   'write-tests-default-priority-codex',
 ]);
@@ -145,6 +161,10 @@ for (const name of selected) {
   const result = spawnSync('npx', ['promptfoo', 'eval', '-c', config, '--no-progress-bar', ...flags], {
     stdio: 'inherit',
     cwd: repoRoot,
+    env: {
+      ...process.env,
+      PROMPTFOO_CONFIG_DIR: promptfooConfigDir,
+    },
   });
   summary.push({ name, code: result.status ?? 1 });
 }

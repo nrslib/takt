@@ -47,6 +47,8 @@ export interface TeamLeaderConfig {
   partPersona?: string;
   /** Resolved absolute path for part persona */
   partPersonaPath?: string;
+  /** Raw persona reference for part agents */
+  partPersonaRef?: string;
   partTags?: string[];
   /** Allowed tools for part agents */
   partAllowedTools?: string[];

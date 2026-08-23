@@ -6,11 +6,11 @@ Provide one source of truth for independent judgments about architecture.
 
 | Principle | Criterion |
 |-----------|-----------|
-| Check applicability | Apply the policy only to the original requirement, changed contract, and real impact paths |
+| Check applicability | Apply these criteria only to the original requirement, changed contract, and real impact paths |
 | Use evidence | Judge only conditions confirmed by code, contracts, or evidence |
 | Preserve ownership boundaries | Distinguish the responsible owner from observable effects |
 | Keep the scope bounded | Judge only the scope causally related to the request |
-| Centralize judgment | This policy is authoritative; Knowledge examples do not grant judgment authority |
+| Use consistent grounds | Do not add a judgment criterion from an example that cannot be derived from the original requirement, changed contract, or real impact paths |
 
 ## Architecture Criteria
 

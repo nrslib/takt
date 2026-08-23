@@ -2,7 +2,7 @@
 
 ## Decomposition Feasibility
 
-Before splitting a task into multiple parts, assess whether decomposition is appropriate. Conditions that prohibit decomposition and exclusion criteria are defined in the Task Decomposition Policy. This section explains the underlying reasoning.
+Before splitting a task into multiple parts, assess whether decomposition is appropriate from responsibilities, shared state, dependency order, and verifiability. This section explains the underlying reasoning.
 
 ### Decision Criteria Table (Rationale)
 

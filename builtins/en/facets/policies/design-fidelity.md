@@ -15,7 +15,7 @@ When a design reference is provided, match UI appearance, structure, and wording
 
 ## Applicability
 
-This policy applies when the task order or its referenced materials include a design reference (UI samples, mockups, design files, etc.). When no design reference is provided, this policy does not apply.
+Apply the criteria below only when the task order or its referenced materials include a design reference such as UI samples, mockups, or design files. Otherwise treat them as out of scope.
 
 ## Judgment Criteria
 

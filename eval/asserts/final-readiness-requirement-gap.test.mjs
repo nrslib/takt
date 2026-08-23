@@ -46,6 +46,16 @@ Test logs are not required for this decision.
   assert.equal(assertFinalReadinessRequirementGap(output).pass, true);
 });
 
+test('accepts an explicit statement that machine-gate records are not decision grounds', () => {
+  const output = `
+## 判定: REJECT
+
+プロジェクト設定の source フィールドが返されていないため未充足です。
+機械ゲートの実行結果・記録の有無は、本判定の根拠にも差し戻し理由にもしていません。
+`;
+  assert.equal(assertFinalReadinessRequirementGap(output).pass, true);
+});
+
 test('rejects an unrelated unmet project-configuration row without source', () => {
   const output = `
 # 最終判定: REJECT
@@ -126,4 +136,22 @@ The project configuration result is missing the required source field.
 `;
 
   assert.equal(assertFinalReadinessRequirementGap(output).pass, false);
+});
+
+test('accepts an unimplemented project source in a CLI provider wrapper', () => {
+  const output = JSON.stringify({
+    output: "## 判定: REJECT（差し戻し）\n\nプロジェクト設定入口の `source: 'project'` が未実装です。",
+  });
+  assert.equal(assertFinalReadinessRequirementGap(output).pass, true);
+});
+
+test('accepts project context and the missing source on separate lines', () => {
+  const output = `
+## 判定: REJECT
+
+CLI・プロジェクト設定双方の mode 正規化は充足しています。
+
+- 根拠: fromProjectConfig の返却値が \`{ mode: normalizeMode(config.mode) }\` のみで、\`source: 'project'\` を含まない。
+`;
+  assert.equal(assertFinalReadinessRequirementGap(output).pass, true);
 });

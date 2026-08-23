@@ -1,5 +1,5 @@
-Review the cumulative implementation of provider-independent control nodes and resumable nested job execution.
+プロバイダーに依存しない制御ノードと、再開可能な入れ子ジョブ実行の累積実装をレビューしてください。
 
-Control nodes delegate to child jobs without introducing a provider dependency, and every externally visible representation must preserve that distinction. Nested job names are user supplied, and every reachable branch of a saved execution must identify and resume the same logical job after restart. Existing executable-task behavior and public compatibility must remain intact.
+制御ノードはプロバイダー依存を持ち込まずに子ジョブへ処理を委譲し、外部から見えるすべての表現でもその区別を維持しなければなりません。入れ子ジョブの名前は利用者が指定します。保存された実行の到達可能なすべての分岐は、再起動後も同じ論理ジョブを識別して再開しなければなりません。既存の実行可能タスクの振る舞いと公開互換性は維持してください。
 
-Treat this as the initial review. Determine the changed contracts and their consumer boundaries from actual references, calls, and data flow. Report every confirmed blocking problem, classify examined clean or adjacent paths, and do not require changes to a neighboring contract.
+これは初回レビューです。実際の参照、呼び出し、データフローから、変更された契約と利用側の境界を特定してください。確認できた阻害問題をすべて報告し、確認して問題がなかった経路と隣接する経路を区別し、別の契約の変更は要求しないでください。

@@ -96,9 +96,16 @@ watchdog_pid=$!
 status=0
 wait "$codex_pid" || status=$?
 codex_pid=''
-kill -TERM "$watchdog_pid" 2>/dev/null || true
-wait "$watchdog_pid" 2>/dev/null || true
-watchdog_pid=''
+watchdog_status=0
+if [ -n "$watchdog_pid" ]; then
+  kill -TERM "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || watchdog_status=$?
+  watchdog_pid=''
+  if [ "$watchdog_status" -ne 0 ] && [ "$watchdog_status" -ne 143 ]; then
+    echo "codex review watchdog failed (exit ${watchdog_status})" >&2
+    exit 125
+  fi
+fi
 if [ -f "$idle_marker" ]; then
   echo "codex review made no observable progress for ${idle_timeout_seconds}s" >&2
   exit 124

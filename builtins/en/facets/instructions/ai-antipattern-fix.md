@@ -15,4 +15,4 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 
 Do not conclude that no change is needed without showing the verification result for each target file. For generated output or specification synchronization, verify the source or specification before reaching a conclusion; otherwise state what could not be verified and why.
 
-Record the inspected files, searches, changes, tests, and other verification according to the supplied output contract.
+Record the inspected files, searches, changes, tests, and other verification in the requested format.

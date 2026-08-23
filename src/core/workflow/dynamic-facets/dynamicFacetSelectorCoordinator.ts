@@ -36,6 +36,7 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../../shared/types/provider.js';
+import { resolveSelectorPermissionMode } from '../selector-permission-resolution.js';
 import { resolveInternalAgentMcpServers } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 
 const log = createLogger('dynamic-facet-selector');
@@ -182,8 +183,7 @@ export class DynamicFacetSelectorCoordinator {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions ?? {},
-            permissionMode: selectorProvider.permissionMode ?? 'readonly',
-            permissionModeSource: selectorProvider.permissionMode === undefined ? 'synthetic' : 'explicit',
+            ...resolveSelectorPermissionMode(selectorProvider.permissionMode),
           },
           mcpServers: mcp.servers,
           mcpServerIdentity: mcp.identity,

@@ -1,7 +1,7 @@
-# Follow-up security review: remediation regression
+# 修正後セキュリティレビュー: 修正による退行
 
-Review the cumulative change after the latest adjudication. A remediation made after that adjudication changed `sanitizeTerminalOutput` from removing OSC sequences to returning repository-controlled text unchanged.
+最新の裁定後にある累積変更をレビューしてください。その裁定後の修正により、`sanitizeTerminalOutput` は OSC シーケンスを除去する処理から、リポジトリが指定する文字列を変更せず返す処理へ変わりました。
 
-A reproduction supplies the repository title `build\u001b]0;BUILD PASSED\u0007failed`. The changed execution path writes that value to an xterm-compatible terminal, and the captured run shows that the terminal title becomes `BUILD PASSED` while the real command is still failing. The reproduction uses the normal repository-title input and the normal renderer; it does not patch the terminal or construct an external target.
+再現ではリポジトリタイトルとして `build\u001b]0;BUILD PASSED\u0007failed` を渡します。変更後の実行経路はこの値を xterm 互換端末へ書き込み、実際のコマンドが失敗中でも端末タイトルが `BUILD PASSED` へ変わることを実行結果で確認しています。通常のリポジトリタイトル入力と通常の描画処理を使っており、端末の改変や人工的な外部対象の作成は行っていません。
 
-Relate this evidence to the immediately preceding disposition in the latest `review-resolution.md` and produce the follow-up security-review result.
+この証拠を最新の `review-resolution.md` にある直前の判断と対応付け、修正後セキュリティレビューの結果を記録してください。

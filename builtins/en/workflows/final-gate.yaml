@@ -4,10 +4,6 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
-      position: before_instruction
-    - ref: invariant-recurrence
-      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
@@ -45,11 +41,14 @@ steps:
     persona:
       $param: supervisor_persona
     policy:
-      $param: supervise_policy
+      - review
+      - $param: supervise_policy
     knowledge:
       $param: supervise_knowledge
     pass_previous_response: false
-    instruction: supervise
+    instruction:
+      - supervise
+      - review-remediation-problem-tracking
     output_contracts:
       report:
         - name: supervisor-validation.md

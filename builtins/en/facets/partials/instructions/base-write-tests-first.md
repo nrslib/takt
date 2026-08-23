@@ -8,7 +8,7 @@ Refer only to reports in the Report Directory shown in Workflow Context. Do not 
 {{include:instructions/test-contract-discrimination}}
 
 **Test boundaries:**
-- Decide whether to create, update, or delete tests from observable contracts, and apply test-related judgment criteria when the current prompt provides them
+- Decide whether to create, update, or delete tests from observable contracts, and follow test-related judgment criteria supplied by the task
 - Failures caused by not-yet-implemented production code are expected at this stage; fix test defects that would remain afterward
 
 {{include:instructions/post-edit-self-scan}}

@@ -50,6 +50,7 @@ export interface ResolvedFacetContent {
   sourcePath?: string;
   facetType?: FacetType;
   refName?: string;
+  literalContent?: true;
 }
 
 export type ResolvedSectionMap = Record<string, ResolvedFacetContent>;
@@ -805,7 +806,16 @@ export function resolveRefToContentWithSource(
     options?.selectorInstruction === true,
   );
   return resource
-    ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context, [], options?.selectorInstruction === true), context)
+    ? applyFacetIncludes(
+      expandFacetInheritance(
+        { ...resource, literalContent: true },
+        facetType,
+        context,
+        [],
+        options?.selectorInstruction === true,
+      ),
+      context,
+    )
     : undefined;
 }
 

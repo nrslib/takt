@@ -8,9 +8,8 @@
  * Mirrors what the codex provider receives at runtime:
  *   - persona (system prompt) is prepended to the instruction
  *     (see src/infra/codex/client.ts: `${systemPrompt}\n\n${prompt}`)
- *   - policy/knowledge are truncated inline by InstructionBuilder (via
- *     faceted-prompting's preparePolicyContent/prepareKnowledgeContent) with
- *     the full content written to snapshot files referenced as Source Paths
+ *   - policy/knowledge are truncated inline by InstructionBuilder, with
+ *     the full content written to snapshot files that the notice can reference
  *     (same contract as StepExecutor.writeFacetSnapshot)
  *   - a seeded report directory (fixture reports-seed/ -> .takt/runs/eval/reports/)
  *   - `{task}` / `{previous_response}` exported as promptfoo template
@@ -33,6 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const TASK_MARKER = '@@PROMPTFOO_TASK@@';
 const PREV_MARKER = '@@PROMPTFOO_PREVIOUS_RESPONSE@@';
 const SCENARIO_MARKER = '@@PROMPTFOO_SCENARIO@@';
+const EVAL_LANGUAGE = 'ja';
 
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
@@ -49,7 +49,7 @@ const TARGETS = [
   { id: 'frontend-review', workflow: 'review-frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-app' },
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },
   // rescan は arch-review と同じ facet 構成だが fixture が異なるため、
-  // スナップショット（Source Path）を inventory-es 側に生成する専用エントリが必要
+  // 省略時に全文を確認できるスナップショットを inventory-es 側に生成する専用エントリが必要
   { id: 'rescan', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'rescan-coding', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
@@ -60,7 +60,13 @@ const TARGETS = [
   { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
   { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
   { id: 'fix-plan-bounded-proof', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-bounded-proof' },
-  { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
+  {
+    id: 'review-impact-path-coverage',
+    workflow: 'development-review',
+    step: 'backend-review',
+    fixture: 'eval/fixtures/review-impact-path-coverage',
+    workflowCallVars: { review_mode: 'initial' },
+  },
   {
     id: 'initial-review-contract-discovery',
     workflow: 'peer-review',
@@ -201,12 +207,34 @@ const TARGETS = [
     fixture: 'eval/fixtures/follow-up-review-repair-regression',
   },
   {
+    id: 'follow-up-testing-review-repair-regression-phase2',
+    workflow: 'peer-review',
+    via: 'reviewers',
+    step: 'testing-review',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+    phase: 'phase2',
+    targetFile: 'testing-review.md',
+  },
+  {
+    id: 'follow-up-review-adjudication-repair-regression',
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+  },
+  {
+    id: 'follow-up-review-adjudication-repair-regression-phase2',
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+    phase: 'phase2',
+    targetFile: 'review-resolution.md',
+  },
+  {
     id: 'review-adjudication-binding',
     workflow: 'peer-review',
     via: 'reviewers',
     step: 'security-review',
     fixture: 'eval/fixtures/review-adjudication-binding',
-    includeOutputContract: true,
     dynamicFacetSelection: {
       sourceWorkflow: 'development-review',
       pool: 'security-review-facets',
@@ -219,18 +247,11 @@ const TARGETS = [
     via: 'initial-reviewers',
     step: 'security-review',
     fixture: 'eval/fixtures/security-review-method',
-    includeOutputContract: true,
     dynamicFacetSelection: {
       sourceWorkflow: 'development-review',
       pool: 'security-review-facets',
       candidateIds: ['cli'],
     },
-  },
-  {
-    id: 'review-mode-authority',
-    workflow: 'review',
-    step: 'backend-review',
-    fixture: 'eval/fixtures/review-mode-authority',
   },
   {
     id: 'fix-verifier-family-boundary',
@@ -251,22 +272,15 @@ const TARGETS = [
     fixture: 'eval/fixtures/fix-verifier-state-closure',
     phase: 'phase3',
   },
-  {
-    id: 'companion-early-scan',
-    companion: 'ai-antipattern-review-companion',
-    fixture: 'eval/fixtures/companion-family-boundary',
-  },
-  {
-    id: 'companion-testing-later-scan',
-    companion: 'testing-review-companion',
-    fixture: 'eval/fixtures/testing-review-observable-evidence',
-  },
-  {
-    id: 'companion-evidence-boundary',
-    companion: 'review-companion-moderator',
-    fixture: 'eval/fixtures/companion-family-boundary',
-  },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
+  {
+    id: 'review-adjudication-phase2',
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/review-adjudication',
+    phase: 'phase2',
+    targetFile: 'review-resolution.md',
+  },
   {
     id: 'final-readiness-supervision',
     workflow: 'final-gate',
@@ -287,15 +301,33 @@ const TARGETS = [
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-precision',
   },
+  {
+    id: 'fix-verification-scope',
+    workflow: 'review-remediation',
+    step: 'fix-verifier',
+    fixture: 'eval/fixtures/fix-verification-scope',
+  },
+  {
+    id: 'fix-verification-current-diff-regression',
+    workflow: 'review-remediation',
+    step: 'fix-verifier',
+    fixture: 'eval/fixtures/fix-verification-current-diff-regression',
+  },
+  {
+    id: 'fix-verification-preserved-condition',
+    workflow: 'review-remediation',
+    step: 'fix-verifier',
+    fixture: 'eval/fixtures/fix-verification-preserved-condition',
+  },
 ];
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
+process.env.TAKT_CONFIG_DIR = resolve(scriptDir, '../config');
 
 const {
   loadWorkflowByIdentifier,
   resolveWorkflowCallTarget,
-  resolveWorkflowConfigValue,
   loadPersonaPromptFromPath,
 } = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/index.js')).href
@@ -328,7 +360,13 @@ const { getBuiltinCompanionsDir } = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/paths.js')).href
 );
 
-function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
+function findStepTarget(
+  workflow,
+  stepName,
+  depth = 0,
+  inheritedWorkflowRules,
+  inheritedWorkflowCallVars = {},
+) {
   if (depth > MAX_WORKFLOW_CALL_DEPTH) {
     throw new Error(`Workflow-call nesting exceeded while resolving step "${stepName}"`);
   }
@@ -337,14 +375,28 @@ function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
 
   for (const [stepIndex, step] of workflow.steps.entries()) {
     if (step.name === stepName && step.kind !== 'workflow_call') {
-      return { workflow, target: step, stepIndex, workflowRules };
+      return {
+        workflow,
+        target: step,
+        stepIndex,
+        workflowRules,
+        workflowCallVars: inheritedWorkflowCallVars,
+      };
     }
   }
 
   for (const [stepIndex, step] of workflow.steps.entries()) {
     const substep = (step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
       .find((candidate) => candidate.name === stepName && candidate.kind !== 'workflow_call');
-    if (substep) return { workflow, target: substep, stepIndex, workflowRules };
+    if (substep) {
+      return {
+        workflow,
+        target: substep,
+        stepIndex,
+        workflowRules,
+        workflowCallVars: inheritedWorkflowCallVars,
+      };
+    }
   }
 
   for (const step of workflow.steps) {
@@ -356,7 +408,13 @@ function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
       if (candidate.kind !== 'workflow_call') continue;
       const child = resolveWorkflowCallTarget(workflow, candidate, repoRoot);
       if (!child) continue;
-      const found = findStepTarget(child, stepName, depth + 1, workflowRules);
+      const found = findStepTarget(
+        child,
+        stepName,
+        depth + 1,
+        workflowRules,
+        { ...inheritedWorkflowCallVars, ...candidate.vars },
+      );
       if (found) return found;
     }
   }
@@ -370,6 +428,7 @@ function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
       target: directWorkflowCall,
       stepIndex: workflow.steps.indexOf(directWorkflowCall),
       workflowRules,
+      workflowCallVars: inheritedWorkflowCallVars,
     };
   }
 
@@ -386,7 +445,7 @@ function findStepThroughCall(workflow, callStepName, stepName) {
     throw new Error(`Workflow call "${callStepName}" could not be resolved`);
   }
   const inheritedWorkflowRules = mergeWorkflowWideRules(undefined, workflow.allStepsRules);
-  return findStepTarget(child, stepName, 1, inheritedWorkflowRules);
+  return findStepTarget(child, stepName, 1, inheritedWorkflowRules, callStep.vars);
 }
 
 function composeConfiguredDynamicFacets(target, selection, targetId, stepName) {
@@ -454,7 +513,7 @@ async function main() {
   }
   const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(t.id)) : TARGETS;
 
-  const language = resolveWorkflowConfigValue(repoRoot, 'language');
+  const language = EVAL_LANGUAGE;
   const preparedDirs = new Set();
 
   for (const {
@@ -471,7 +530,6 @@ async function main() {
     artifacts,
     phase: requestedPhase,
     targetFile,
-    includeOutputContract,
     dynamicFacetSelection,
   } of targets) {
     if (requestedPhase !== undefined && monitorCycle !== undefined) {
@@ -516,6 +574,7 @@ async function main() {
 
     let target = null;
     let stepIndex = -1;
+    let effectiveWorkflowCallVars = workflowCallVars;
     if (companionSystemPrompt !== undefined) {
       target = {
         name: companionName,
@@ -550,6 +609,10 @@ async function main() {
         target = found.target;
         stepIndex = found.stepIndex;
         workflowRules = found.workflowRules;
+        effectiveWorkflowCallVars = {
+          ...found.workflowCallVars,
+          ...workflowCallVars,
+        };
       }
     }
     if (!target) {
@@ -559,30 +622,6 @@ async function main() {
           .map((substep) => substep.name),
       ]);
       throw new Error(`Step "${stepName}" not found in ${workflowName}. Available: ${names.join(', ')}`);
-    }
-
-    if (includeOutputContract === true) {
-      if (target.outputContracts?.length !== 1) {
-        throw new Error(`Target "${id}" requires exactly one output contract`);
-      }
-      const [outputContract] = target.outputContracts;
-      if (
-        outputContract === undefined
-        || outputContract === null
-        || typeof outputContract !== 'object'
-        || typeof outputContract.format !== 'string'
-      ) {
-        throw new Error(`Target "${id}" requires a formatted output contract`);
-      }
-      target = {
-        ...target,
-        instruction: [
-          target.instruction,
-          '',
-          '## Phase 1 evaluation output contract',
-          outputContract.format.trimEnd(),
-        ].join('\n'),
-      };
     }
 
     target = composeConfiguredDynamicFacets(target, dynamicFacetSelection, id, stepName);
@@ -648,7 +687,7 @@ async function main() {
       reportDir,
       policySourcePath,
       knowledgeSourcePath,
-      workflowCallVars,
+      workflowCallVars: effectiveWorkflowCallVars,
       workflowRules,
       language,
     };

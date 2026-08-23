@@ -1,8 +1,8 @@
-## Findings adjudicated out of scope
+## Previously decided findings not listed as separate problems
 
-| finding_id | Latest Disposition | Consolidated Into Family | Adjudication Evidence |
-|------------|--------------------|--------------------------|-----------------------|
-| {finding_id} | out_of_scope / overreach / false_positive / no_issue_after_verification / duplicate / environment_unverified | {required when Latest Disposition is duplicate; — otherwise} | `review-resolution.md` disposition and evidence |
+| finding_id | Latest Treatment | Consolidated Into | Decision Evidence |
+|------------|------------------|-------------------|-------------------|
+| {finding_id} | {Treatment recorded in the immediately preceding decision} | {required when that treatment merges this finding into another problem; — otherwise} | {Immediately preceding decision and evidence} |
 
-- For `duplicate`, identify the family into which the finding was consolidated; for every other disposition, use `—`
-- Do not use `family_tag` as evidence of the consolidation destination; cite explicit consolidation evidence from `review-resolution.md`
+- Copy the latest treatment without renaming or reclassifying it
+- When the latest treatment merges the finding into another problem, identify that problem from the recorded cause and evidence; otherwise use `—`

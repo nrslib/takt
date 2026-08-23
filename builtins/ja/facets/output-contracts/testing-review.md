@@ -18,12 +18,8 @@
 | テスト戦略（ユニット/統合/E2E） | ✅ | - |
 | 契約入力位置（body/query/path） | ✅ | - |
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 {{include:output-contracts/base-review-new-findings-category}}
-| 1 | TEST-NEW-src-test-L42 | test-structure | カバレッジ | `src/test.ts:42` | 問題の説明 | remediation_regression | 初回test review後の修正がこの挙動を変更した | 修正方法 |
-
-{{include:output-contracts/base-review-follow-up-authorization}}
+| 1 | TEST-NEW-src-test-L42 | test-structure | カバレッジ | `src/test.ts:42` | 問題の説明 | `src/test.ts:42` | 修正方法 |
 
 {{include:output-contracts/base-review-persists}}
 {{include:output-contracts/base-review-carry-over-findings}}
@@ -34,7 +30,7 @@
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | TEST-REOPENED-src-test-L55 | test-structure | `review-resolution.md`: 解消済み | d | `src/test.ts:55 で再発` | 問題の説明 | 修正方法 |
+| 1 | TEST-REOPENED-src-test-L55 | test-structure | 直前の裁定: 解消済み | 修正で再発 | `src/test.ts:55 で再発` | 問題の説明 | 修正方法 |
 
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-verification-evidence}}
@@ -50,7 +46,7 @@
 ```
 
 **認知負荷軽減ルール:**
-- APPROVE かつ解消済み指摘なし → サマリー、未確認範囲、継続レビューで必要な確認観点・検証証跡のみ（簡潔に集約）
-- APPROVE かつ解消済み指摘あり → サマリー、解消済み指摘、未確認範囲、継続レビューで必要な確認観点・検証証跡のみ（簡潔に集約）
+- APPROVE かつ解消済み指摘なし → サマリー、未確認範囲、判断を裏付ける確認観点・検証証跡のみ（簡潔に集約）
+- APPROVE かつ解消済み指摘あり → サマリー、解消済み指摘、未確認範囲、判断を裏付ける確認観点・検証証跡のみ（簡潔に集約）
 - REJECT → 確認済みの指摘をすべて表で記載し、同じ原因の場所は集約
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

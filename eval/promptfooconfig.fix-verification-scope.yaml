@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT ファセット評価: 修正完了検証で無関係なゲート失敗へ修正範囲を広げない。
+
+description: 'TAKT ファセット評価: 修正完了検証の範囲維持'
+
+prompts:
+  - file://prompts/fix-verification-scope.phase1.md
+
+providers:
+  - id: file://providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/fix-verification-scope
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/fix-verification-scope
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/fix-verification-scope
+      isolate_working_dir: true
+
+evaluateOptions:
+  maxConcurrency: 3
+
+tests:
+  - description: '修正完了検証: 計画した条件が成立している場合は無関係なゲート失敗を再修正対象にしない'
+    vars:
+      task: file://cases/fix-verification-scope-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: fix-verification/scope
+        value: file://asserts/fix-verification-scope.mjs

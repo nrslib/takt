@@ -1,7 +1,7 @@
-# Initial review: external step target routing
+# 初回レビュー: 外部ステップ対象の振り分け
 
-Review the cumulative implementation of external step target routing.
+外部ステップ対象の振り分けに関する累積実装をレビューしてください。
 
-The change adds a documented external step target key, a workflow fixture, runtime target configuration, execution and preview resolution, and an end-to-end test. A configured external target must be selected in both execution and preview; the default runner is only for steps without an explicit external target. Existing workflow-local cache behavior must remain intact.
+この変更では、文書化された外部ステップ対象キー、ワークフロー fixture、実行時の対象設定、実行時とプレビュー時の解決処理、E2E テストが追加されています。外部対象が設定された場合は実行とプレビューの両方でその対象を選び、明示的な外部対象がないステップだけ既定 runner を使わなければなりません。既存のワークフロー内キャッシュの振る舞いは維持してください。
 
-Treat this as the initial review. Read the documentation, references, calls, and data flow needed to check whether the change works as documented. Report every confirmed blocking problem and any missing behavior-level regression coverage. Also record the relevant paths that you checked and found correct or unrelated, without requiring changes to a neighboring feature.
+これは初回レビューです。文書どおりに動作するか確認するために必要な文書、参照、呼び出し、データフローを確認してください。確認できた阻害問題と、不足している振る舞い単位の回帰テストをすべて報告してください。確認して正しい、または無関係と判断した経路も記録し、隣接機能の変更は要求しないでください。

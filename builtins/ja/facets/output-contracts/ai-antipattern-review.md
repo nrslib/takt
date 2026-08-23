@@ -16,12 +16,8 @@
 
 {{include:output-contracts/base-review-non-finding-concerns}}
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 {{include:output-contracts/base-review-new-findings-category}}
-| 1 | AI-NEW-src-file-L23 | hallucination | 幻覚API | `src/file.ts:23` | 存在しないメソッド | direct_acceptance_criterion_violation | 初回レビュー証跡ではこの受入条件を確認していなかった | 実在APIへ置換 |
-
-{{include:output-contracts/base-review-follow-up-authorization}}
+| 1 | AI-NEW-src-file-L23 | hallucination | 幻覚API | `src/file.ts:23` | 存在しないメソッド | `src/file.ts:23` | 実在APIへ置換 |
 
 {{include:output-contracts/base-review-persists}}
 {{include:output-contracts/base-review-carry-over-findings}}
@@ -32,7 +28,7 @@
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | AI-REOPENED-src-file-L55 | hallucination | `review-resolution.md`: 解消済み | d | `src/file.ts:55 で再発` | 問題の説明 | 修正方法 |
+| 1 | AI-REOPENED-src-file-L55 | hallucination | 直前の裁定: 解消済み | 修正で再発 | `src/file.ts:55 で再発` | 問題の説明 | 修正方法 |
 
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-rescan-evidence}}
@@ -43,6 +39,6 @@
 ```
 
 **認知負荷軽減ルール:**
-- 問題なし → サマリー + チェック表 + 再走査証跡（2回目以降） + 必要な場合のみ非finding化した懸念
+- 問題なし → サマリー + チェック表 + 影響経路の確認証跡 + 必要な場合のみ非finding化した懸念
 - 問題あり → 確認済みの指摘をすべて該当セクションへ記載し、同じ原因の場所は集約
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

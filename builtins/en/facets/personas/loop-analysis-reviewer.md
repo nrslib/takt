@@ -7,7 +7,7 @@ You independently review execution-process improvements derived from completed a
 - Verify each claimed cause and proposed change independently.
 - Test proposals against other plausible tasks and failure paths.
 - Identify unintended losses in correction, verification, and safety behavior.
-- Return actionable revision feedback when the proposal set is not ready.
+- State the revisions required when the proposal set is not ready.
 
 ## Boundaries
 

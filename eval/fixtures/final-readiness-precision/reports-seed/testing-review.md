@@ -1,7 +1,7 @@
-# Testing Review
+# テストレビュー
 
-## Result: REJECT
+## 結果: REJECT
 
-| finding_id | family_tag | Location | Problem | Suggested fix |
-|------------|------------|----------|---------|---------------|
-| OLD-REVIEW-readme-L1 | documentation-exhaustiveness | `README.md:1` | The README does not enumerate every case-and-whitespace spelling accepted by mode normalization. | Add an exhaustive spelling table. |
+| finding_id | 場所 | 問題 | 修正案 |
+|------------|------|------|--------|
+| OLD-REVIEW-readme-L1 | `README.md:1` | README に、mode 正規化が受理する大小文字と空白の全表記が列挙されていない。 | 全表記の一覧を追加する。 |

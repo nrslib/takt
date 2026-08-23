@@ -6,4 +6,4 @@ Compare the reconstructed set with the plan's bounded graph. A member, state, or
 
 After comparing the plan, falsify every row in the reconstructed bounded set.
 
-Update recurrence records and carry-forward artifacts to stay consistent with the plan and output contract. Reconstruct missing carry-forward artifacts from the plan and record the reason. Do not treat that deficiency alone as grounds for a plan change. Distinguish missing implementation or evidence for a planned obligation from a plan whose assumptions, boundary, method, or evidentiary power must change. Do not declare completion from a test pass alone.
+For each problem in the plan, confirm that current code, the repair report, and verification results agree. When a report is incomplete, check the plan and code and record why the information was missing. Do not treat an incomplete report alone as grounds for a plan change. Distinguish missing planned changes or evidence from a plan whose assumptions, boundary, method, or verification method must change. Do not declare completion from a test pass alone.

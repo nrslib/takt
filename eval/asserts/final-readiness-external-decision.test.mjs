@@ -93,3 +93,77 @@ Product Council approval is external and cannot be obtained through code, but im
 
   assert.equal(assertFinalReadinessExternalDecision(output).pass, false);
 });
+
+test('accepts a natural Japanese stop decision in a CLI provider wrapper', () => {
+  const output = JSON.stringify({
+    output: '最終判定: **進行不可（外部要因による停止）**\n\n外部システムの承認はコードで作成・推測・代替できない。',
+  });
+  assert.equal(assertFinalReadinessExternalDecision(output).pass, true);
+});
+
+test('accepts an external hold described without the BLOCKED token', () => {
+  const output = `
+## 判定: 要件充足・finding 0 件 / ただし本番展開の可否は外部要因により保留
+
+承認は外部システムにのみ記録され、追加のコード修正なしに進行できます。
+`;
+
+  assert.equal(assertFinalReadinessExternalDecision(output).pass, true);
+});
+
+test('accepts an external decision that must not be copied into the repository', () => {
+  const output = `
+最終判定：本番展開は進行不可（外部要因による停止）です。
+
+外部承認は、リポジトリに写しを追加したり承認済みと推測したりはできません。
+`;
+
+  assert.equal(assertFinalReadinessExternalDecision(output).pass, true);
+});
+
+test('accepts a direct contrast between an external input and code remediation', () => {
+  const output = `
+# 最終判定: 外部要因による停止
+
+必要なのはコード修正ではなく、別システムにある承認判断の確認です。
+`;
+
+  assert.equal(assertFinalReadinessExternalDecision(output).pass, true);
+});
+
+test('accepts the observed statement that there is no code repair target', () => {
+  const output = `
+# 最終判定: 進行不可
+
+製品評議会の承認判断は外部システムにのみ記録されており、確認できるまで保留です。
+コード上の修正対象はありません。
+`;
+  assert.equal(assertFinalReadinessExternalDecision(output).pass, true);
+});
+
+test('accepts an external decision that code changes cannot obtain', () => {
+  const output = `
+# 最終判定: 外部要因による停止
+
+外部システムの承認情報をコード変更で得ることはできない。
+`;
+  assert.equal(assertFinalReadinessExternalDecision(output).pass, true);
+});
+
+test('accepts an external decision kept out of code findings', () => {
+  const output = `
+# 最終判定: 進行不可（外部要因による停止）
+
+外部システムの承認はコード上の finding にはせず、確認できるまで保留する。
+`;
+  assert.equal(assertFinalReadinessExternalDecision(output).pass, true);
+});
+
+test('accepts an external decision that is not a repository repair target', () => {
+  const output = `
+# 最終判定: 外部要因による停止
+
+外部承認はリポジトリへの修正対象ではありません。
+`;
+  assert.equal(assertFinalReadinessExternalDecision(output).pass, true);
+});

@@ -32,4 +32,4 @@ For evaluation telemetry, append exactly one `<scope-eval>` block after the revi
 }
 ```
 
-Include only classifications supported by files or executable evidence you inspected. Use an empty array when no boundary family or finding path is confirmed. `structureProxyFindings` is true only when the review promotes source wording, line count, imports, helper names, or file layout to a finding without an observable contract.
+Include only classifications supported by files or executable evidence you inspected. Use an empty array when no architectural boundary or finding path is confirmed. `structureProxyFindings` is true only when the review promotes source wording, line count, imports, helper names, or file layout to a finding without an observable contract.

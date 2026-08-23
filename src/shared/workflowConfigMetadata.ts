@@ -6,13 +6,22 @@ const WORKFLOW_TRUST_INFO = Symbol('workflowTrustInfo');
 const WORKFLOW_OPAQUE_REF = Symbol.for('takt.workflowOpaqueRef');
 const WORKFLOW_BUNDLE_NODE_ID = Symbol.for('takt.workflowBundleNodeId');
 const WORKFLOW_CONFIG_ERROR_TRANSLATOR = Symbol('workflowConfigErrorTranslator');
+const WORKFLOW_RESOLVED_SECTIONS = Symbol('workflowResolvedSections');
 type WorkflowConfigErrorTranslator = (workflow: object, error: unknown) => Error;
+export interface WorkflowResolvedSectionContent {
+  readonly content: string;
+  readonly sourcePath?: string;
+  readonly facetType?: string;
+  readonly refName?: string;
+}
+export type WorkflowResolvedSections = Partial<Record<string, Record<string, WorkflowResolvedSectionContent>>>;
 type WorkflowConfigWithSourcePath = object & {
   [WORKFLOW_SOURCE_PATH]?: string;
   [WORKFLOW_TRUST_INFO]?: object;
   [WORKFLOW_OPAQUE_REF]?: string;
   [WORKFLOW_BUNDLE_NODE_ID]?: string;
   [WORKFLOW_CONFIG_ERROR_TRANSLATOR]?: WorkflowConfigErrorTranslator;
+  [WORKFLOW_RESOLVED_SECTIONS]?: WorkflowResolvedSections;
 };
 
 export function attachWorkflowSourcePath<T extends object>(workflow: T, sourcePath: string): T {
@@ -54,6 +63,17 @@ export function getWorkflowSourcePath(workflow: object): string | undefined {
   return (workflow as WorkflowConfigWithSourcePath)[WORKFLOW_SOURCE_PATH];
 }
 
+export function attachWorkflowResolvedSections<T extends object>(workflow: T, sections: WorkflowResolvedSections): T {
+  Object.defineProperty(workflow, WORKFLOW_RESOLVED_SECTIONS, {
+    value: sections, writable: false, configurable: false, enumerable: false,
+  });
+  return workflow;
+}
+
+export function getWorkflowResolvedSections(workflow: object): WorkflowResolvedSections | undefined {
+  return (workflow as WorkflowConfigWithSourcePath)[WORKFLOW_RESOLVED_SECTIONS];
+}
+
 export function attachWorkflowTrustInfo<T extends object, TrustInfo extends object>(workflow: T, trustInfo: TrustInfo): T {
   Object.defineProperty(workflow, WORKFLOW_TRUST_INFO, {
     value: freezeTrustInfo(trustInfo), writable: false, configurable: false, enumerable: false,
@@ -88,6 +108,7 @@ export function inheritWorkflowConfigMetadata(source: object, target: object): v
     WORKFLOW_OPAQUE_REF,
     WORKFLOW_BUNDLE_NODE_ID,
     WORKFLOW_CONFIG_ERROR_TRANSLATOR,
+    WORKFLOW_RESOLVED_SECTIONS,
   ]) {
     const descriptor = Object.getOwnPropertyDescriptor(source, key);
     if (!descriptor) continue;

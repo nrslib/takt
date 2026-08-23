@@ -1,20 +1,20 @@
-# Coding Review
+# コーディングレビュー
 
-## Result: REJECT
+## 結果: REJECT
 
-## Findings
-| family | Finding ID | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria |
-|--------|------------|----------|-----------------------|-------------------------|---------------------|
-| artifact-identity | MERGE-NEW-artifact-identity-L8 | `src/artifact-store.js:8` | Two distinct supported logical IDs can resolve to one stored record | candidate selection, write, read, snapshot, reload | Each supported ID reads its own value after reload; distinct IDs never alias; invalid input fails before storage is mutated |
+## 指摘
+| 問題ID | 指摘ID | 根拠 | 問題と原因 | 影響する経路 | 受入条件 |
+|--------|--------|------|------------|--------------|----------|
+| artifact-identity | MERGE-NEW-artifact-identity-L8 | `src/artifact-store.js:8` | 対応している異なる2つの論理IDが、同じ保存レコードへ解決される場合がある | 候補選択、書き込み、読み取り、スナップショット、再読み込み | 各IDが再読み込み後も自身の値を読み取り、異なるIDが同じ保存先を共有せず、不正な入力は保存内容を変更する前に失敗する |
 
-## Reviewer Candidate
-- Prefer `encodeJsonBase64` because its output can be decoded back to the original pair in isolation.
-- For rollout safety, keep `encodeJsonBase64` as a fallback reader after switching current writes to `encodeFixedWidth`, so previously stored names remain readable.
+## レビュアーからの案
+- `encodeJsonBase64` は、その出力だけから元の組を復元できるため優先する。
+- 現在の書き込みを `encodeFixedWidth` へ切り替えた後も、以前に保存した名前を読めるよう、`encodeJsonBase64` を予備の読み取り方法として残す。
 
-## Non-actionable observations
-| Finding ID | State | Evidence |
-|------------|-------|----------|
-| OLD-REVIEW-doc-example-L1 | out_of_scope | Documentation formatting is unrelated to identity preservation |
+## 今回は修正しない指摘
+| 指摘ID | 扱い | 根拠 |
+|--------|------|------|
+| OLD-REVIEW-doc-example-L1 | 今回の対象外 | ドキュメントの書式はIDの一意性保持と関係しない |
 
-## Unresolved Premises and Environmental Constraints
-- None.
+## 未解決の前提と環境上の制約
+- なし。

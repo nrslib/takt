@@ -1,9 +1,9 @@
-# Security Review
+# セキュリティレビュー
 
-## Result: REJECT
+## 結果: REJECT
 
-| finding_id | family_tag | Severity | Location | Problem | Suggested fix |
-|------------|------------|----------|----------|---------|---------------|
-| SEC-NEW-rule-size-L14 | rule-resource-use | Medium | `src/rules.js:14` | Repository rule files have no size limit, so a large rule may increase provider cost. | Add a fixed size limit. |
-| SEC-NEW-terminal-output-L28 | terminal-control | High | `src/render.js:28` | One `ESC` byte from a repository label reaches terminal output. | Reject every control byte. |
-| SEC-NEW-symlink-target-L41 | path-boundary | High | `src/load.js:41` | A test-created symlink can point to a test-created external target. | Reject every symlink. |
+| finding_id | 重大度 | 場所 | 問題 | 修正案 |
+|------------|--------|------|------|--------|
+| SEC-NEW-rule-size-L14 | Medium | `src/rules.js:14` | リポジトリのルールファイルにサイズ上限がなく、大きなルールがプロバイダー費用を増やす可能性がある。 | 固定のサイズ上限を追加する。 |
+| SEC-NEW-terminal-output-L28 | High | `src/render.js:28` | リポジトリ由来のラベルにある単独の `ESC` バイトが端末出力へ到達する。 | すべての制御バイトを拒否する。 |
+| SEC-NEW-symlink-target-L41 | High | `src/load.js:41` | テストで作成したシンボリックリンクが、同じテストで作成した外部対象を参照できる。 | すべてのシンボリックリンクを拒否する。 |

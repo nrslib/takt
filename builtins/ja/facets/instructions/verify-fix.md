@@ -6,6 +6,7 @@
 
 {{include:instructions/fix-plan-validity}}
 {{include:instructions/repair-verification-path-check}}
+{{include:instructions/quality-gate-causality}}
 
 判定に独立して必要なレポート、正本、直接の呼び出し経路は、可能な限り同じ探索単位でまとめて確認してください。これは実行順序の指示であり、探索範囲を広げる権限ではありません。互いに依存しない読み取りや検索を進捗報告ごとに直列化せず、判定に不要な任意の履歴やテストの不在確認を続けないでください。必要な証拠がそろったら出力契約に沿った最終結果を返し、進捗報告だけで応答を終えないでください。
 

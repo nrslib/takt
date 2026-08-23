@@ -188,6 +188,7 @@ export async function executeTaskWorkflow(
       : {
           provider: agentOverrides.provider,
           model: agentOverrides.model,
+          autoStrategy: agentOverrides.autoStrategy,
           providerSource: agentOverrides.providerSource,
           modelSource: agentOverrides.modelSource,
         },

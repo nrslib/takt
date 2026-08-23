@@ -84,6 +84,7 @@ function normalizeCompletionRetry(
     minRetry: raw.min_retry ?? 0,
     maxRetry: raw.max_retry ?? MAX_COMPLETION_RETRY,
     retryInstruction,
+    retryInstructionRef,
   };
 }
 
@@ -184,10 +185,13 @@ function normalizeSelectorGuidance(
     }
     return resolved;
   });
+  const instructionRef = typeof raw.instruction === 'string' ? raw.instruction : undefined;
   return {
     ...(normalizedPersona?.personaSpec === undefined ? {} : { persona: normalizedPersona.personaSpec }),
     ...(normalizedPersona?.personaPath === undefined ? {} : { personaPath: normalizedPersona.personaPath }),
+    ...(typeof raw.persona === 'string' ? { personaRef: raw.persona } : {}),
     instruction,
+    instructionRef,
   };
 }
 

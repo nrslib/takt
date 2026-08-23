@@ -409,8 +409,8 @@ export class StepExecutor {
             ),
             (judgeResponse) => ({
               status: judgeResponse.status,
-              gapCount: Array.isArray(judgeResponse.structuredOutput?.missing_obligations)
-                ? judgeResponse.structuredOutput.missing_obligations.length
+              gapCount: Array.isArray(judgeResponse.structuredOutput?.missing_paths)
+                ? judgeResponse.structuredOutput.missing_paths.length
                 : 0,
             }),
           );
