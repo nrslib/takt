@@ -53,14 +53,16 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
     }
   });
 
-  it('should honor terminal Ctrl+C after shared stdin is paused during concurrent execution', async () => {
+  it('should honor terminal Ctrl+C while three concurrent providers await responses', async () => {
     const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/run-sigint-paused-stdin.json');
     const preloadPath = resolve(__dirname, '../fixtures/preload/pause-stdin-after-data-listener.mjs');
 
     const tasksFile = join(testRepo.path, '.takt', 'tasks.yaml');
+    const mockCallLog = join(testRepo.path, '.takt', 'mock-calls.jsonl');
     const pauseTriggerPath = join(testRepo.path, '.takt', 'pause-stdin.trigger');
     mkdirSync(join(testRepo.path, '.takt'), { recursive: true });
+    updateIsolatedConfig(isolatedEnv.taktDir, { concurrency: 3 });
 
     const now = new Date().toISOString();
     writeFileSync(
@@ -83,6 +85,14 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
         '    started_at: null',
         '    completed_at: null',
         '    owner_pid: null',
+        '  - name: paused-stdin-c',
+        '    status: pending',
+        '    content: "E2E paused stdin task C"',
+        `    workflow: "${workflowPath}"`,
+        `    created_at: "${now}"`,
+        '    started_at: null',
+        '    completed_at: null',
+        '    owner_pid: null',
       ].join('\n'),
       'utf-8',
     );
@@ -95,17 +105,25 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
         ...isolatedEnv.env,
         NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
         TAKT_E2E_PAUSE_STDIN_TRIGGER: pauseTriggerPath,
+        TAKT_MOCK_CALL_LOG: mockCallLog,
         TAKT_MOCK_SCENARIO: scenarioPath,
       },
     });
 
-    const workersFilled = await waitFor(
+    const providersAwaitingResponses = await waitFor(
       () => {
         try {
           const parsed = parseYaml(readFileSync(tasksFile, 'utf-8')) as {
             tasks?: Array<{ status?: string }>;
           };
-          return parsed.tasks?.filter((task) => task.status === 'running').length === 2;
+          if (parsed.tasks?.filter((task) => task.status === 'running').length !== 3) {
+            return false;
+          }
+          const records = readFileSync(mockCallLog, 'utf-8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line) as { event?: string });
+          return records.filter((record) => record.event === 'start').length === 3;
         } catch {
           return false;
         }
@@ -113,7 +131,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       30_000,
       20,
     );
-    expect(workersFilled, `output:\n${ptySession.output()}`).toBe(true);
+    expect(providersAwaitingResponses, `output:\n${ptySession.output()}`).toBe(true);
 
     writeFileSync(pauseTriggerPath, '', 'utf-8');
     await ptySession.waitForOutput('[e2e] stdin paused', 10_000);
@@ -124,6 +142,15 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
 
     expect([0, 130]).toContain(exitCode);
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+
+    const finalRecords = readFileSync(mockCallLog, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { event?: string; aborted?: boolean });
+    expect(finalRecords.filter((record) => record.event === 'start')).toHaveLength(3);
+    expect(
+      finalRecords.filter((record) => record.event === 'complete' && record.aborted === true),
+    ).toHaveLength(3);
   }, 60_000);
 
   it('should stop scheduling new clone work after SIGINT and exit cleanly', async () => {

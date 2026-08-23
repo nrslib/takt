@@ -205,7 +205,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt run --provider mock` を起動し、`=== Running Workflow:` が出たら `Ctrl+C` を送る。
     - 3件目タスク（`sigint-c`）が開始されないことを確認する。
     - `=== Tasks Summary ===` 以降に新規タスク開始やクローン作成ログが出ないことを確認する。
-    - 実 PTY 上で mock provider を待機させた2タスクを並列実行し、共有 stdin を pause した後に Ctrl+C バイトを送って、プロセスが速やかに終了することを確認する。
+    - `concurrency: 3` の実 PTY 上で3タスクすべてが mock provider の応答待ちに入ったことを call log で確認し、共有 stdin を pause した後に Ctrl+C バイトを送って、3呼び出しが abort されプロセスが速やかに終了することを確認する。
 - Runtime config injection with provider（`e2e/specs/runtime-config-provider.e2e.ts`）
   - 目的: `config.yaml` の `runtime.prepare` が provider 呼び出し前に反映される正例と未設定時のenv未注入をmockで確認し、任意の実provider E2Eでは子プロセスへの伝播も確認。
   - LLM: 通常CIでは呼び出さない（mockでprovider呼び出し時のruntime環境を検証）。`TAKT_E2E_PROVIDER` が `claude` / `claude-sdk` / `codex` / `opencode` の場合のみ、実コマンド伝播の追加テストを実行。
