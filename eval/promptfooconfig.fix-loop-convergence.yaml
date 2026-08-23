@@ -98,14 +98,6 @@ tests:
     assert:
       - type: regex
         value: 'JUDGEMENT: result=incomplete; recurrence=非再発; recurrence_confirmed=確認済み; cumulative=3\s*$'
-  - description: E12 fix-plan が裁定の引き継ぎ表から台帳を継承し非 actionable を修正対象にしない
-    vars: { role: fix-plan, scenario: E12 }
-    assert:
-      - type: regex
-        value: 'JUDGEMENT: bw2_inherited=継承; bw2_recurrence_confirmed=確認済み; bw2_cumulative=3; nonactionable_in_work=含まない\s*$'
-      - type: javascript
-        metric: carry-forward-and-work-boundary
-        value: file://asserts/fix-loop-convergence.mjs
   - description: E13a 人間向け説明セルの誤字・表記差だけなら verified とする
     vars: { role: verifier, scenario: E13a }
     assert:

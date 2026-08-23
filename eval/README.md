@@ -47,7 +47,9 @@ claude headless CLI (`eval/providers/claude-judge.sh`, model
 current remediation instructions and output contracts
 (`eval/fix-loop-convergence-prompt.mjs`). The scenario, instruction, and output
 contract preserve their runtime-relative order, but this focused eval does not
-reproduce every workflow-wide runtime rule. It needs both CLI
+reproduce every workflow-wide runtime rule. It is an independent evaluation
+with a reduced configuration rather than a complete mirror of the production
+step composition. It needs both CLI
 logins, is excluded from the default suite run, and asserts on a fixed
 machine-readable `JUDGEMENT:` line — invoke it explicitly
 (`npm run eval:prompts:fix-loop-convergence`).

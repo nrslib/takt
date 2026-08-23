@@ -265,7 +265,10 @@ const PREPARE_TARGET_OVERRIDES = {
   'frontend-coder': ['frontend-implement'],
   'cqrs-coder': ['cqrs-implement'],
   'fix-loop-convergence': [],
+  'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
+  'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
   'final-readiness-preservation': ['final-readiness-supervision-phase2'],
+  'review-adjudication-report': ['review-adjudication-phase2'],
   'task-instruction-gherkin': [],
 };
 

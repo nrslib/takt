@@ -33,6 +33,7 @@
     "eval:prompts:fix-plan-boundary-preflight": "node eval/scripts/prepare.mjs fix-plan-boundary-preflight && node eval/scripts/run-evals.mjs fix-plan-boundary-preflight",
     "eval:prompts:fix-plan-cause-check": "node --test eval/providers/cli-review.test.mjs && node eval/scripts/prepare.mjs fix-plan-cause-check && node eval/scripts/run-evals.mjs fix-plan-cause-check --no-cache",
     "eval:prompts:fix-plan-bounded-proof": "node --test eval/providers/cli-review.test.mjs && node eval/scripts/prepare.mjs fix-plan-bounded-proof && node eval/scripts/run-evals.mjs fix-plan-bounded-proof --no-cache",
+    "eval:prompts:fix-loop-convergence": "node eval/scripts/run-evals.mjs fix-loop-convergence",
     "eval:prompts:review-impact-path-coverage": "node --test eval/providers/cli-review.test.mjs eval/asserts/prepare-dynamic-facet-composition.test.mjs && node eval/scripts/prepare.mjs review-impact-path-coverage && node eval/scripts/run-evals.mjs review-impact-path-coverage --no-cache",
     "eval:prompts:initial-review-contract-discovery": "node eval/scripts/prepare.mjs initial-review-contract-discovery && node eval/scripts/run-evals.mjs initial-review-contract-discovery",
     "eval:prompts:testing-review-observable-evidence": "node eval/scripts/prepare.mjs testing-review-observable-evidence && node eval/scripts/run-evals.mjs testing-review-observable-evidence",

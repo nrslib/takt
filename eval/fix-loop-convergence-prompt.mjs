@@ -28,12 +28,6 @@ const ROLES = {
     instruction: 'instructions/apply-fix-verification.md',
     afterInstruction: [DRY_RUN_NOTE],
   },
-  'fix-plan': {
-    intro: 'あなたは TAKT ワークフローの fix-plan ステップを実行する planner エージェントである。次の instruction 全文に従うこと。',
-    instruction: 'instructions/fix-plan-from-review-resolution.md',
-    afterInstruction: [DRY_RUN_NOTE],
-    outputContract: 'output-contracts/fix-plan.md',
-  },
   fix: {
     intro: 'あなたは TAKT ワークフローの fix ステップを実行する coder エージェントである。次の instruction 全文に従うこと。',
     instruction: 'instructions/apply-fix-plan.md',

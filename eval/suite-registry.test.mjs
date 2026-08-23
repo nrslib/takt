@@ -7,6 +7,7 @@ import {
   promptEvalPrepareTargets,
   selectPromptEvalSuites,
 } from './suite-registry.mjs';
+import { PREPARE_TARGET_IDS } from './scripts/prepare.mjs';
 
 test('registry classifies every promptfoo config exactly once', () => {
   const configs = readdirSync(new URL('.', import.meta.url))
@@ -52,4 +53,12 @@ test('prepare targets are resolved from the same suite registry', () => {
     promptEvalPrepareTargets(selected),
     ['coding-review', 'final-readiness-supervision-phase2'],
   );
+});
+
+test('every registered prepare target resolves to an actual prepare target', () => {
+  const availableTargets = new Set(PREPARE_TARGET_IDS);
+  const unresolvedTargets = promptEvalPrepareTargets(PROMPT_EVAL_SUITES)
+    .filter((target) => !availableTargets.has(target));
+
+  assert.deepEqual(unresolvedTargets, []);
 });
