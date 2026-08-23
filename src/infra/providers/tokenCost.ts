@@ -30,7 +30,7 @@ interface SeparateCacheTokenPricing extends BaseTokenPricing {
   cacheReadInputUsdPerMillion: number;
 }
 
-const OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS = 270_000;
+const OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS = 272_000;
 
 const OPENAI_TOKEN_PRICING: Readonly<Record<string, TokenPricing>> = {
   'gpt-5.5': {
@@ -153,7 +153,7 @@ function resolveInputDiscountTier(
     return pricing;
   }
 
-  return inputTokens >= pricing.longContextThresholdTokens
+  return inputTokens > pricing.longContextThresholdTokens
     ? pricing.longContext
     : pricing.shortContext;
 }

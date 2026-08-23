@@ -37,34 +37,34 @@ describe('token cost estimator', () => {
   it('Given an OpenAI model call below the long-context boundary, When estimating cost, Then uses short-context token prices', () => {
     const cost = estimateProviderTokenCostUsd('openai', 'gpt-5.5', {
       usageMissing: false,
-      inputTokens: 269_999,
+      inputTokens: 271_999,
       outputTokens: 0,
-      totalTokens: 269_999,
+      totalTokens: 271_999,
     });
 
-    expect(cost).toBe(1.349995);
+    expect(cost).toBe(1.359995);
   });
 
-  it('Given an OpenAI model call at the long-context boundary, When estimating cost, Then uses long-context token prices', () => {
+  it('Given an OpenAI model call at the long-context boundary, When estimating cost, Then uses short-context token prices', () => {
     const cost = estimateProviderTokenCostUsd('openai', 'gpt-5.5', {
       usageMissing: false,
-      inputTokens: 270_000,
+      inputTokens: 272_000,
       outputTokens: 0,
-      totalTokens: 270_000,
+      totalTokens: 272_000,
     });
 
-    expect(cost).toBe(2.7);
+    expect(cost).toBe(1.36);
   });
 
   it('Given an OpenAI model call above the boundary with additional output, When estimating cost, Then uses long-context token prices', () => {
     const cost = estimateProviderTokenCostUsd('openai', 'gpt-5.5', {
       usageMissing: false,
-      inputTokens: 270_001,
+      inputTokens: 272_001,
       outputTokens: 1_000,
-      totalTokens: 271_001,
+      totalTokens: 273_001,
     });
 
-    expect(cost).toBe(2.74501);
+    expect(cost).toBe(2.76501);
   });
 
   it('Given a Codex model call, When estimating cost, Then uses the Codex model token prices', () => {
@@ -93,6 +93,47 @@ describe('token cost estimator', () => {
     });
 
     expect(cost).toBeUndefined();
+  });
+
+  it('Given non-finite or negative token usage, When estimating cost, Then returns undefined', () => {
+    for (const invalidTokenCount of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(estimateProviderTokenCostUsd('openai', 'gpt-5.4-mini', {
+        usageMissing: false,
+        inputTokens: invalidTokenCount,
+        outputTokens: 500,
+      })).toBeUndefined();
+
+      expect(estimateProviderTokenCostUsd('openai', 'gpt-5.4-mini', {
+        usageMissing: false,
+        inputTokens: 1_000,
+        outputTokens: invalidTokenCount,
+      })).toBeUndefined();
+
+      expect(estimateProviderTokenCostUsd('openai', 'gpt-5.4-mini', {
+        usageMissing: false,
+        inputTokens: 1_000,
+        outputTokens: 500,
+        cachedInputTokens: invalidTokenCount,
+      })).toBeUndefined();
+
+      expect(estimateProviderTokenCostUsd('claude', 'claude-opus-4-5-20251101', {
+        usageMissing: false,
+        inputTokens: 1_000,
+        outputTokens: 500,
+        cachedInputTokens: 12_000,
+        cacheCreationInputTokens: invalidTokenCount,
+        cacheReadInputTokens: 10_000,
+      })).toBeUndefined();
+
+      expect(estimateProviderTokenCostUsd('claude', 'claude-opus-4-5-20251101', {
+        usageMissing: false,
+        inputTokens: 1_000,
+        outputTokens: 500,
+        cachedInputTokens: 12_000,
+        cacheCreationInputTokens: 2_000,
+        cacheReadInputTokens: invalidTokenCount,
+      })).toBeUndefined();
+    }
   });
 
   it('Given OpenAI cached input tokens, When estimating cost, Then prices cached tokens at the cached input rate', () => {

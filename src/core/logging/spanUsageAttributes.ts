@@ -12,10 +12,12 @@ export function usageSnapshotFromSpanAttributes(attributes: Record<string, unkno
     };
   }
 
-  const inputTokens = getNumber(attributes, 'gen_ai.usage.input_tokens');
-  const outputTokens = getNumber(attributes, 'gen_ai.usage.output_tokens');
-  const totalTokens = getNumber(attributes, 'gen_ai.usage.total_tokens')
-    ?? (inputTokens !== undefined && outputTokens !== undefined ? inputTokens + outputTokens : undefined);
+  const inputTokens = getTokenCount(attributes, 'gen_ai.usage.input_tokens');
+  const outputTokens = getTokenCount(attributes, 'gen_ai.usage.output_tokens');
+  const totalTokenAttribute = attributes['gen_ai.usage.total_tokens'];
+  const totalTokens = totalTokenAttribute === undefined
+    ? deriveTotalTokenCount(inputTokens, outputTokens)
+    : getNonNegativeFiniteNumber(totalTokenAttribute);
 
   if (inputTokens === undefined || outputTokens === undefined || totalTokens === undefined) {
     return {
@@ -31,10 +33,25 @@ export function usageSnapshotFromSpanAttributes(attributes: Record<string, unkno
     inputTokens,
     outputTokens,
     totalTokens,
-    cachedInputTokens: getNumber(attributes, 'gen_ai.usage.cached_input_tokens'),
-    cacheCreationInputTokens: getNumber(attributes, 'gen_ai.usage.cache_creation_input_tokens'),
-    cacheReadInputTokens: getNumber(attributes, 'gen_ai.usage.cache_read_input_tokens'),
+    cachedInputTokens: getTokenCount(attributes, 'gen_ai.usage.cached_input_tokens'),
+    cacheCreationInputTokens: getTokenCount(attributes, 'gen_ai.usage.cache_creation_input_tokens'),
+    cacheReadInputTokens: getTokenCount(attributes, 'gen_ai.usage.cache_read_input_tokens'),
   };
+}
+
+function getTokenCount(attributes: Record<string, unknown>, key: string): number | undefined {
+  return getNonNegativeFiniteNumber(attributes[key]);
+}
+
+function deriveTotalTokenCount(inputTokens: number | undefined, outputTokens: number | undefined): number | undefined {
+  if (inputTokens === undefined || outputTokens === undefined) {
+    return undefined;
+  }
+  return getNonNegativeFiniteNumber(inputTokens + outputTokens);
+}
+
+function getNonNegativeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function hasAnyUsageAttribute(attributes: Record<string, unknown>): boolean {

@@ -79,6 +79,40 @@ describe('workflow span provider error metrics', () => {
     })?.value).toBe(2);
   });
 
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+  ])('Given a response with non-finite retryCount (%s), When the step span completes, Then records no retry provider error', async (_label, retryCount) => {
+    const points = await collectMetricPoints(async () => {
+      const { runWithStepSpan } = await import('../core/workflow/observability/workflowSpans.js');
+
+      await runWithStepSpan({
+        enabled: true,
+        runId: 'run-1',
+        workflowName: 'default',
+        step: makeStep('implement'),
+        iteration: 1,
+        providerInfo: {
+          provider: 'opencode',
+          model: 'opencode/big-pickle',
+        },
+      }, async () => ({
+        response: makeResponse({
+          status: 'done',
+          retryCount,
+        }),
+        instruction: 'Implement',
+        providerInfo: {
+          provider: 'opencode',
+          model: 'opencode/big-pickle',
+        },
+      }));
+    });
+
+    expect(points.filter((point) => point.name === 'takt.provider.errors')).toEqual([]);
+  });
+
   it('Given a provider timeout failure, When the step span completes, Then records the timeout classification', async () => {
     const points = await collectMetricPoints(async () => {
       const { runWithStepSpan } = await import('../core/workflow/observability/workflowSpans.js');

@@ -213,4 +213,26 @@ describe('phase usage event mapper', () => {
       usage: {},
     });
   });
+
+  it('turns overflowing derived token totals into usage_tokens_missing without throwing', () => {
+    const record = mapSpanEndToPhaseUsageEvent({
+      name: 'phase.implement.execute',
+      attributes: {
+        'takt.provider.name': 'mock',
+        'takt.step.name': 'implement',
+        'takt.step.type': 'agent',
+        'takt.phase.number': 1,
+        'takt.phase.name': 'execute',
+        'takt.phase.status': 'done',
+        'gen_ai.usage.input_tokens': Number.MAX_VALUE,
+        'gen_ai.usage.output_tokens': Number.MAX_VALUE,
+      },
+    }, context);
+
+    expect(record).toMatchObject({
+      usage_missing: true,
+      reason: 'usage_tokens_missing',
+      usage: {},
+    });
+  });
 });
