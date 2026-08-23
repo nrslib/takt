@@ -50,6 +50,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
     const preloadPath = resolve(__dirname, '../fixtures/preload/pause-stdin-after-data-listener.mjs');
 
     const tasksFile = join(testRepo.path, '.takt', 'tasks.yaml');
+    const pauseTriggerPath = join(testRepo.path, '.takt', 'pause-stdin.trigger');
     mkdirSync(join(testRepo.path, '.takt'), { recursive: true });
 
     const now = new Date().toISOString();
@@ -84,11 +85,11 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       env: {
         ...isolatedEnv.env,
         NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+        TAKT_E2E_PAUSE_STDIN_TRIGGER: pauseTriggerPath,
         TAKT_MOCK_SCENARIO: scenarioPath,
       },
     });
 
-    await ptySession.waitForOutput('[e2e] stdin paused', 10_000);
     const workersFilled = await waitFor(
       () => {
         try {
@@ -104,6 +105,9 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       20,
     );
     expect(workersFilled, `output:\n${ptySession.output()}`).toBe(true);
+
+    writeFileSync(pauseTriggerPath, '', 'utf-8');
+    await ptySession.waitForOutput('[e2e] stdin paused', 10_000);
 
     const startedAt = Date.now();
     ptySession.write('\u0003');
