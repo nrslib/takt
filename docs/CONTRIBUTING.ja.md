@@ -15,7 +15,7 @@ npm run lint
 npm test
 npm run test:it
 npm run test:opencode-probe
-npm run test:e2e:mock
+npm run test:e2e:smoke
 ```
 
 Nix flakes を使う場合は`nix develop` でこのプロジェクト用の Node.js ランタイムと Bun が入ったシェルを開けます:
@@ -43,7 +43,7 @@ npm run lint
 npm test
 npm run test:it
 npm run test:opencode-probe
-npm run test:e2e:mock
+npm run test:e2e:smoke
 ```
 
 `npm test` は開発中に反復する fast unit gate です。ローカルの unit は `availableParallelism()` を基にした適応型（最大8）シャードで実行し、10並列のマシンでは8シャードを維持します。メインの Pull Request CI は8つの独立 runner に固定分割します。CIでは wall-clock 短縮を優先するため、各 runner で `npm ci` と `npm run build` の固定コストが繰り返され、runner minutes は増加します。実装完了時は `npm run test:it` を実行し、実 filesystem・bounded storage・複数コンポーネント契約を扱う軽いITを確認してください。重いITはローカルでは1 workerで実行し、Pull Request の CI では独立 runner にシャード分割して、実 child process・Git・完全な engine・integration/regression/performance suite・計測済みの高負荷 serial group を確認します。ITを追加・変更した場合は `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単体実行してください。重いITの場合はPRへ渡す前に `npm test -- <test-file>` でそのファイルも自分で実行し、PR全件実行を初回確認にしてはいけません。決定的なOpenCode prompt smoke suiteは `npm run test:opencode-probe` で実行します。リリース担当者は `npm run check:release` で、adaptive local fast unit、軽いIT、重いIT、全providerのE2E suiteを含む完全なローカル release pathを検証できます。8シャードの unit matrix はメインの Pull Request CI の別経路であり、ローカルの `check:release` はその matrix を実行しません。
