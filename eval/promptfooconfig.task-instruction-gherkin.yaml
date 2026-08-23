@@ -120,7 +120,7 @@ tests:
           にすること。Markdown で目的を大まかに説明することや、確認方法から Gherkin
           全体を参照することは重複とみなさない。
 
-  - description: 'Formal specification mode uses applicable notation without duplicate requirements or ASCII diagrams'
+  - description: 'Formal specification mode expresses requirements in both Quint and Alloy without ASCII diagrams'
     vars:
       language: en
       formalSpec: true
@@ -129,18 +129,20 @@ tests:
         Activation is allowed only from Requested. An active lease eventually
         becomes Expired unless it is released first. Each resource has at most one
         active lease, and every lease belongs to exactly one resource and one owner.
-        Keep observable API behavior in Gherkin. Use formal notation only where it
-        is applicable, use actual syntax, and do not duplicate requirements.
+        Keep observable API behavior in Gherkin and use actual formal syntax.
     assert:
       - type: javascript
         metric: task-instruction-formal-spec/no-ascii-diagram
         value: |
           return !/[+|][-=]{2,}|->.*->|\[[^\]]+\]\s*--/m.test(output);
       - type: llm-rubric
-        metric: task-instruction-formal-spec/applicable-notation
+        metric: task-instruction-formal-spec/both-notations
         value: |
-          Pass only if the generated task instruction uses actual Quint syntax for
-          the lease state-transition or temporal requirements and actual Alloy
-          syntax for the ownership/cardinality relationships. The same requirement
-          must not be repeated across Gherkin, Quint, Alloy, and Markdown. It must
-          not contain an ASCII diagram or invent pseudo-notation.
+          Pass only if the generated task instruction expresses the requirements in
+          actual Quint syntax for the lease state-transition or temporal
+          requirements and in actual Alloy syntax for the ownership/cardinality
+          relationships, in addition to Gherkin and Markdown. Repeating the same
+          requirement across Gherkin, Quint, Alloy, and Markdown is expected and
+          must not be penalized. Omitting a notation fails unless the task
+          genuinely cannot be expressed in it; this task can be expressed in both.
+          It must not contain an ASCII diagram or invent pseudo-notation.
