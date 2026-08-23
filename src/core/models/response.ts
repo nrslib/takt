@@ -20,6 +20,13 @@ export function resolveAgentErrorMessage(
   return fallbackMessage;
 }
 
+export function sumRetryCounts(
+  responses: readonly Pick<AgentResponse, 'retryCount'>[],
+): number | undefined {
+  const retryCount = responses.reduce((sum, response) => sum + (response.retryCount ?? 0), 0);
+  return retryCount > 0 ? retryCount : undefined;
+}
+
 export interface ProviderUsageSnapshot {
   inputTokens?: number;
   outputTokens?: number;

@@ -378,6 +378,7 @@ export class CodexClient {
     let standardRetryCount = 0;
     let timeoutRetryCount = 0;
     let refusalRetryCount = 0;
+    const totalRetryCount = (): number => standardRetryCount + timeoutRetryCount + refusalRetryCount;
     let codexSkillConfig: CodexOptions['config'] | undefined;
     try {
       codexSkillConfig = options.skills
@@ -638,7 +639,7 @@ export class CodexClient {
               currentThreadId,
               failureMessage,
               options,
-              standardRetryCount + timeoutRetryCount,
+              totalRetryCount(),
             );
             emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
             return rateLimitedResponse;
@@ -665,7 +666,7 @@ export class CodexClient {
             currentThreadId,
             finalFailure,
             options,
-            standardRetryCount + timeoutRetryCount,
+            totalRetryCount(),
           );
           emitResult(
             options.onStream,
@@ -705,7 +706,7 @@ export class CodexClient {
             currentThreadId,
             failure,
             options,
-            standardRetryCount + timeoutRetryCount,
+            totalRetryCount(),
           );
           emitResult(
             options.onStream,
@@ -730,7 +731,7 @@ export class CodexClient {
             usageMissing: true,
             reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
           },
-          ...(standardRetryCount + timeoutRetryCount > 0 ? { retryCount: standardRetryCount + timeoutRetryCount } : {}),
+          ...(totalRetryCount() > 0 ? { retryCount: totalRetryCount() } : {}),
         };
         return response;
       } catch (error) {
@@ -751,7 +752,7 @@ export class CodexClient {
             currentThreadId,
             rawErrorMessage,
             options,
-            standardRetryCount + timeoutRetryCount,
+            totalRetryCount(),
           );
           emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
           return rateLimitedResponse;
@@ -791,7 +792,7 @@ export class CodexClient {
           currentThreadId,
           finalFailure,
           options,
-          standardRetryCount + timeoutRetryCount,
+          totalRetryCount(),
         );
         emitResult(
           options.onStream,

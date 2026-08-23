@@ -46,6 +46,8 @@ export interface BatchResult {
   readonly rateLimitedResponse?: AgentResponse;
   /** Provider usage captured for phase-level observability */
   readonly providerUsage?: ProviderUsageSnapshot;
+  /** Provider retry attempts captured from the child response */
+  readonly retryCount?: number;
 }
 
 /** Merge function signature: takes all batch results, returns merged string */

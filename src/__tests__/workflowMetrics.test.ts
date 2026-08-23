@@ -241,6 +241,24 @@ describe('workflow metrics helpers', () => {
     })?.value).toBe(2);
   });
 
+  it('Given a non-finite or negative provider error count, When recording provider error metrics, Then emits no counter', async () => {
+    const points = await collectMetricPoints(async () => {
+      const { recordProviderErrorMetric } = await import('../core/workflow/observability/workflowMetrics.js');
+
+      for (const count of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1]) {
+        recordProviderErrorMetric({
+          runId: 'run-1',
+          provider: 'codex',
+          model: 'gpt-5',
+          errorType: 'provider_error',
+          count,
+        });
+      }
+    });
+
+    expect(points.filter((point) => point.name === 'takt.provider.errors')).toEqual([]);
+  });
+
   it('Given a provider failure without a resolved model, When recording provider error metrics, Then emits the default model label', async () => {
     const points = await collectMetricPoints(async () => {
       const { recordProviderErrorMetric } = await import('../core/workflow/observability/workflowMetrics.js');

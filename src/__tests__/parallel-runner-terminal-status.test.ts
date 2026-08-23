@@ -301,6 +301,25 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(state.lastOutput).toBe(result.response);
   });
 
+  it('propagates the sum of child retry counts to the aggregated response', async () => {
+    const { runner } = makeRunner();
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      content: '[AI-ANTIPATTERN-REVIEW:1] approved',
+      retryCount: 2,
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+      retryCount: 1,
+    }));
+
+    const result = await runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn());
+
+    expect(result.response.status).toBe('done');
+    expect(result.response.retryCount).toBe(3);
+  });
+
   it('明示した any("error") で part timeout を集約し、親を done として再試行ルールへ渡す', async () => {
     const { runner } = makeRunner();
     const step = makeErrorAwareParallelStep();

@@ -8,6 +8,7 @@ import type {
   WorkflowResumePointEntry,
   AgentWorkflowStep,
 } from '../../models/types.js';
+import { sumRetryCounts } from '../../models/response.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -678,6 +679,7 @@ export class TeamLeaderRunner {
       executionAbortScope.dispose();
     }
     const { plannedParts, partResults } = executionResult;
+    const retryCount = sumRetryCounts(partResults.map((result) => result.response));
     this.recordPartRoutingResults(executableStep, partResults, routedProviderInfoByPart);
     this.emitPartRoutingDecisionEvents(executableStep, partResults, routedProviderInfoByPart, parentIteration);
 
@@ -686,6 +688,7 @@ export class TeamLeaderRunner {
       const rateLimitedResponse: AgentResponse = {
         ...rateLimitedResult.response,
         persona: step.name,
+        ...(retryCount === undefined ? {} : { retryCount }),
       };
       rollbackTeamLeaderAttempt(instructionTransaction, state, attemptState, updatePersonaSession);
       return {
@@ -720,6 +723,7 @@ export class TeamLeaderRunner {
         content: boundedContent,
         error: boundedError,
         timestamp: new Date(),
+        ...(retryCount === undefined ? {} : { retryCount }),
         ...(primaryFailure.response.failureCategory === undefined
           ? {}
           : { failureCategory: primaryFailure.response.failureCategory }),
@@ -753,6 +757,7 @@ export class TeamLeaderRunner {
       status: 'done',
       content: aggregatedContent,
       timestamp: new Date(),
+      ...(retryCount === undefined ? {} : { retryCount }),
     };
 
     let terminalOperation: StepRunResult['terminalOperation'];

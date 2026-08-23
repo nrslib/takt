@@ -35,6 +35,7 @@ import { renderWorkflowWideRules } from '../instruction/workflow-wide-rules.js';
 import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
+import { sumRetryCounts } from '../../models/response.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   createAgentResponseFailureError,
@@ -192,6 +193,7 @@ async function executeBatchWithRetry(
             success: false,
             error: lastError,
             providerUsage: response.providerUsage,
+            ...(response.retryCount === undefined ? {} : { retryCount: response.retryCount }),
           };
         }
         if (response.status === 'rate_limited') {
@@ -202,6 +204,7 @@ async function executeBatchWithRetry(
             error: response.error ?? response.content,
             rateLimitedResponse: response,
             providerUsage: response.providerUsage,
+            ...(response.retryCount === undefined ? {} : { retryCount: response.retryCount }),
           };
         }
         return {
@@ -209,6 +212,7 @@ async function executeBatchWithRetry(
           content: response.content,
           success: true,
           providerUsage: response.providerUsage,
+          ...(response.retryCount === undefined ? {} : { retryCount: response.retryCount }),
         };
       } catch (error) {
         if (isProviderStreamParseError(error)) {
@@ -379,11 +383,13 @@ export class ArpeggioRunner {
     );
 
     const instruction = `[Arpeggio] ${step.name}: ${batches.length} batches, source=${arpeggioConfig.source}`;
+    const retryCount = sumRetryCounts(results);
     const rateLimitedResult = results.find((result) => result.rateLimitedResponse);
     if (rateLimitedResult?.rateLimitedResponse) {
       const rateLimitedResponse: AgentResponse = {
         ...rateLimitedResult.rateLimitedResponse,
         persona: step.name,
+        ...(retryCount === undefined ? {} : { retryCount }),
       };
       state.stepOutputs.set(step.name, rateLimitedResponse);
       state.lastOutput = rateLimitedResponse;
@@ -434,6 +440,7 @@ export class ArpeggioRunner {
       content: mergedContent,
       timestamp: new Date(),
       ...(match && { matchedRuleIndex: match.index, matchedRuleMethod: match.method }),
+      ...(retryCount === undefined ? {} : { retryCount }),
     };
 
     state.stepOutputs.set(step.name, aggregatedResponse);

@@ -164,8 +164,8 @@ describe('ArpeggioRunner integration', () => {
     // Mock agent to return batch-specific responses
     const mockAgent = vi.mocked(runAgent);
     mockRunAgentWithPrompt(
-      makeResponse({ content: 'Processed Alice' }),
-      makeResponse({ content: 'Processed Bob' }),
+      makeResponse({ content: 'Processed Alice', retryCount: 1 }),
+      makeResponse({ content: 'Processed Bob', retryCount: 2 }),
       makeResponse({ content: 'Processed Charlie' }),
     );
 
@@ -185,6 +185,7 @@ describe('ArpeggioRunner integration', () => {
     const output = state.stepOutputs.get('process');
     expect(output).toBeDefined();
     expect(output!.content).toBe('Processed Alice\nProcessed Bob\nProcessed Charlie');
+    expect(output!.retryCount).toBe(3);
 
     const previousDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'previous_responses');
     const previousFiles = readdirSync(previousDir);

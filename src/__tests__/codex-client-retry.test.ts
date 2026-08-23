@@ -184,6 +184,37 @@ describe('CodexClient retry', () => {
     expect(result.retryCount).toBeUndefined();
   });
 
+  it('安全フィルタ拒否後の rate limit 応答に refusal retry 数を含める', async () => {
+    vi.useFakeTimers();
+
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-refusal', type: 'agent_message', text: 'This request was flagged for possible cybersecurity risk.' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-2' },
+          { type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.retryCount).toBe(1);
+  });
+
   it('imageAttachments がある場合は Codex SDK に local_image 入力として渡す', async () => {
     runPlans = [
       {
@@ -618,6 +649,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(0);
     expect(result.status).toBe('done');
     expect(result.content).toBe('review completed');
+    expect(result.retryCount).toBe(1);
   });
 
   it('渡された既存セッションは安全フィルタ拒否の retry でも破棄しない', async () => {
@@ -679,6 +711,7 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('error');
     expect(result.failureCategory).toBe('provider_error');
     expect(result.error).toContain('safety filter refused');
+    expect(result.retryCount).toBe(2);
   });
 
   it('拒否文を引用した短い structured output は拒否として扱わない', async () => {

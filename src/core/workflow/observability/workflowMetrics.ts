@@ -115,8 +115,8 @@ export function recordTokenUsageMetricsFromSpan(
 }
 
 export function recordProviderErrorMetric(input: ProviderErrorMetricInput): void {
-  const count = input.count ?? 1;
-  if (!input.runId || !input.provider || count <= 0) {
+  const count = finiteMetricNumber(input.count ?? 1);
+  if (!input.runId || !input.provider || count === undefined || count <= 0) {
     return;
   }
   workflowMeter().createCounter('takt.provider.errors', PROVIDER_ERRORS_COUNTER_OPTIONS).add(count, {
