@@ -10,7 +10,7 @@ import {
   type IsolatedEnv,
 } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
-import { startTaktPty, type TaktPtySession } from '../helpers/takt-pty-runner.js';
+import { startTaktPty, type TaktPtySession } from '../helpers/takt-pty-runner';
 import { cleanupChildProcess, cleanupTestResource, waitFor, waitForClose } from '../helpers/wait.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,12 +36,21 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
   });
 
   afterEach(async () => {
-    await cleanupChildProcess(child);
-    child = undefined;
-    await ptySession?.dispose();
-    ptySession = undefined;
-    cleanupTestResource('testRepo', () => testRepo.cleanup());
-    cleanupTestResource('isolatedEnv', () => isolatedEnv.cleanup());
+    try {
+      await cleanupChildProcess(child);
+    } finally {
+      child = undefined;
+      try {
+        await ptySession?.dispose();
+      } finally {
+        ptySession = undefined;
+        try {
+          cleanupTestResource('testRepo', () => testRepo.cleanup());
+        } finally {
+          cleanupTestResource('isolatedEnv', () => isolatedEnv.cleanup());
+        }
+      }
+    }
   });
 
   it('should honor terminal Ctrl+C after shared stdin is paused during concurrent execution', async () => {
