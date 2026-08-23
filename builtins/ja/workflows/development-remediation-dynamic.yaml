@@ -135,9 +135,6 @@ steps:
         $param: fix_pool
     companion:
       $param: fix_companions
-    completion_retry:
-      retry_instruction: fix-completion-retry
-      max_retry: 1
     rules:
       - condition: 修正完了
         next: fix-verifier
@@ -175,9 +172,6 @@ steps:
         $param: fix_pool
     companion:
       $param: fix_companions
-    completion_retry:
-      retry_instruction: fix-completion-retry
-      max_retry: 1
     rules:
       - condition: 修正完了
         next: fix-verifier
