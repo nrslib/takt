@@ -47,6 +47,40 @@ describe('installImmediateSigintExit', () => {
     expect(sigintListener).toHaveBeenCalledTimes(1);
   });
 
+  it('run では Kitty keyboard protocol の Ctrl+C を SIGINT に流す', () => {
+    const runtime = new FakeProcess();
+    const sigintListener = vi.fn();
+    runtime.on('SIGINT', sigintListener);
+
+    install('run', runtime);
+    runtime.stdin.emit('data', Buffer.from('\x1b[99;5u', 'utf-8'));
+
+    expect(sigintListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('分割された Kitty keyboard protocol の Ctrl+C も検出する', () => {
+    const runtime = new FakeProcess();
+    const sigintListener = vi.fn();
+    runtime.on('SIGINT', sigintListener);
+
+    install('run', runtime);
+    runtime.stdin.emit('data', Buffer.from('\x1b[99;', 'utf-8'));
+    runtime.stdin.emit('data', Buffer.from('5u', 'utf-8'));
+
+    expect(sigintListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('Kitty keyboard protocol の Ctrl+C release は SIGINT に流さない', () => {
+    const runtime = new FakeProcess();
+    const sigintListener = vi.fn();
+    runtime.on('SIGINT', sigintListener);
+
+    install('run', runtime);
+    runtime.stdin.emit('data', Buffer.from('\x1b[99;5:3u', 'utf-8'));
+
+    expect(sigintListener).not.toHaveBeenCalled();
+  });
+
   it('watch では複数回の Ctrl+C をそのまま SIGINT に流す', () => {
     const runtime = new FakeProcess();
     const sigintListener = vi.fn();

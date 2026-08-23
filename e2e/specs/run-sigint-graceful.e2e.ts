@@ -53,7 +53,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
     }
   });
 
-  it('should honor terminal Ctrl+C while three concurrent providers await responses', async () => {
+  it('should honor Kitty CSI-u Ctrl+C while three concurrent providers await responses', async () => {
     const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/run-sigint-paused-stdin.json');
     const preloadPath = resolve(__dirname, '../fixtures/preload/pause-stdin-after-data-listener.mjs');
@@ -137,7 +137,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
     await ptySession.waitForOutput('[e2e] stdin paused', 10_000);
 
     const startedAt = Date.now();
-    ptySession.write('\u0003');
+    ptySession.write('\x1b[99;5u');
     const exitCode = await ptySession.waitForExit(10_000);
 
     expect([0, 130]).toContain(exitCode);
