@@ -20,13 +20,22 @@ steps:
       fix_plan_report_format: scenario-based-fix-plan
       final_gate_instruction: scenario-based-supervise-review-resolution
       implementation_companions:
-        fixed: [ai-antipattern-review-companion, testing-review-companion]
+        fixed:
+          - ai-antipattern-review-companion
+          - testing-review-companion
         pool: []
         moderator: review-companion-moderator
       reviewer_suite: development-review
       review_policy_additions: []
-      review_policy: [coding, testing, review, architecture]
-      review_knowledge: [architecture, unit-testing, e2e-testing]
+      review_policy:
+        - coding
+        - testing
+        - review
+        - architecture
+      review_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
     rules:
       - condition: COMPLETE
         next: COMPLETE

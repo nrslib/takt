@@ -31,118 +31,118 @@ steps:
       - review
     parallel:
       fixed:
-      - name: arch-review
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: architecture-reviewer
-        policy:
-          - contract-change
-          - review
-          - architecture
-          - takt
-        knowledge:
-          - architecture
-          - takt
-        instruction: review-arch
-        output_contracts:
-          report:
-            - name: architecture-review.md
-              format: architecture-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+        - name: arch-review
+          capabilities: readonly
+          tags:
+            - review
+          edit: false
+          persona: architecture-reviewer
+          policy:
+            - contract-change
+            - review
+            - architecture
+            - takt
+          knowledge:
+            - architecture
+            - takt
+          instruction: review-arch
+          output_contracts:
+            report:
+              - name: architecture-review.md
+                format: architecture-review
+          rules:
+            - condition: approved
+            - condition: needs_fix
 
-      - name: testing-review
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: testing-reviewer
-        policy:
-          - contract-change
-          - review
-          - testing
-        knowledge:
-          - unit-testing
-          - e2e-testing
-        instruction: review-test
-        output_contracts:
-          report:
-            - name: testing-review.md
-              format: testing-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+        - name: testing-review
+          capabilities: readonly
+          tags:
+            - review
+          edit: false
+          persona: testing-reviewer
+          policy:
+            - contract-change
+            - review
+            - testing
+          knowledge:
+            - unit-testing
+            - e2e-testing
+          instruction: review-test
+          output_contracts:
+            report:
+              - name: testing-review.md
+                format: testing-review
+          rules:
+            - condition: approved
+            - condition: needs_fix
 
-      - name: ai-antipattern-review-2nd
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: ai-antipattern-reviewer
-        policy:
-          - contract-change
-          - review
-          - ai-antipattern
-        instruction: ai-antipattern-review
-        output_contracts:
-          report:
-            - name: ai-antipattern-review.md
-              format: ai-antipattern-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+        - name: ai-antipattern-review-2nd
+          capabilities: readonly
+          tags:
+            - review
+          edit: false
+          persona: ai-antipattern-reviewer
+          policy:
+            - contract-change
+            - review
+            - ai-antipattern
+          instruction: ai-antipattern-review
+          output_contracts:
+            report:
+              - name: ai-antipattern-review.md
+                format: ai-antipattern-review
+          rules:
+            - condition: approved
+            - condition: needs_fix
 
-      - name: coding-review
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: coding-reviewer
-        policy:
-          - contract-change
-          - review
-          - coding
-        instruction: review-coding
-        output_contracts:
-          report:
-            - name: coding-review.md
-              format: coding-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+        - name: coding-review
+          capabilities: readonly
+          tags:
+            - review
+          edit: false
+          persona: coding-reviewer
+          policy:
+            - contract-change
+            - review
+            - coding
+          instruction: review-coding
+          output_contracts:
+            report:
+              - name: coding-review.md
+                format: coding-review
+          rules:
+            - condition: approved
+            - condition: needs_fix
 
       pool:
-      - name: security-review
-        description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy:
-          - contract-change
-          - security-review
-          - takt
-        knowledge:
-          - security
-          - security-data
-          - security-dependencies
-          - takt
-        dynamic_facets:
-          pool: takt-security-review-facets
-          selector:
-            instruction: select-applicable-candidates
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+        - name: security-review
+          description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
+          capabilities: readonly
+          tags:
+            - review
+          edit: false
+          persona: security-reviewer
+          policy:
+            - contract-change
+            - security-review
+            - takt
+          knowledge:
+            - security
+            - security-data
+            - security-dependencies
+            - takt
+          dynamic_facets:
+            pool: takt-security-review-facets
+            selector:
+              instruction: select-applicable-candidates
+          instruction: review-security
+          output_contracts:
+            report:
+              - name: security-review.md
+                format: security-review
+          rules:
+            - condition: approved
+            - condition: needs_fix
       selection:
         selector:
           instruction: select-applicable-candidates
@@ -176,7 +176,6 @@ steps:
       ## Review Results
       {previous_response}
 
-      **This is a review-only workflow.** Do NOT run tests or builds.
       Your role is to synthesize the review results and produce a final summary.
 
       **Tasks:**

@@ -4,7 +4,9 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 
 ## Premise
 
-This review is a defensive quality and security audit performed, on request, against a codebase provided as the review target. All reproduction and verification of vulnerabilities or defects is performed as self-tests within the target repository; applying techniques against third-party systems or developing attack tooling is not part of the purpose.
+This review is a defensive quality and security audit performed, on request, against a codebase provided as the review target. Applying techniques against third-party systems or developing attack tooling is not part of the purpose.
+
+{{include:policies/reviewer-evidence}}
 
 ## Principles
 
@@ -139,23 +141,11 @@ Checks that only inspect configuration values, logs, snapshots, or the last obse
 | Only external-environment E2E exists, with no reproducible verification of the main boundary | Warning or REJECT |
 | Behavior is approved from configuration values, logs, or snapshots only | REJECT |
 
-### Division of Verification Responsibility
-
-Verifying that the full test suite passes or that quality-gate records are complete is not the reviewer's responsibility. Reviewers do not re-run the full suite and instead spend that time reproducing findings and running risk-based targeted checks.
-
-| Evidence | Judgment |
-|----------|----------|
-| Reproduced your own behavioral finding by operating on or executing the target code | OK (required for behavioral findings) |
-| Verified a statically determinable finding (types, contracts, specs, non-executable assets) by reading and cross-checking the relevant sources | OK |
-| Verified the main changed behaviors with targeted execution or tests | OK (recommended) |
-| Closing an individual finding based solely on full-suite passage | REJECT |
-| A behavioral claim not reproduced or verified by execution | REJECT |
-
-Do not file an issue when the fix report has no quality-gate record. Do not infer and require an unrecorded gate from the fix plan or another report.
+Do not close an individual finding from supplied verification evidence alone. Cross-check the current code, the original acceptance criteria, and the conditions directly observed by the evidence. Do not file an issue when the fix report has no quality-gate record. Do not infer and require an unrecorded gate from the fix plan or another report.
 
 ## Fact-Checking
 
-A finding must be directly supported by current code, types, schemas, primary specifications, or reproducible execution results. Memory, search mismatches, corrupted output, mocks that bypass the real path, and results where caching or skipping prevented target execution are not conclusive evidence. Claims that something is absent, unwired, or persists are not findings unless the governing contract and current implementation have been confirmed.
+A finding must be directly supported by current code, types, schemas, primary specifications, or supplied recorded execution results. Memory, search mismatches, corrupted output, mocks that bypass the real path, and results where caching or skipping prevented target execution are not conclusive evidence. Claims that something is absent, unwired, or persists are not findings unless the governing contract and current implementation have been confirmed.
 
 ## Finding ID Tracking (`finding_id`)
 
@@ -174,10 +164,10 @@ To prevent circular rejections, track findings by ID.
 
 ### Reopen Conditions (`resolved` -> open)
 
-Reopening a resolved finding requires reproducible evidence.
+Reopening a resolved finding requires evidence from the current code or supplied recorded results.
 
 - To reopen a previously `resolved` finding, all of the following are required
-  1. Reproduction steps (command/input)
+  1. Recorded reproduction conditions (command/input)
   2. Expected result vs. actual result
   3. Failing file/line evidence
 - If any of the three is missing, the reopen attempt is invalid (cannot be used as REJECT grounds)

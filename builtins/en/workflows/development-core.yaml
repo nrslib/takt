@@ -32,11 +32,14 @@ subworkflow:
     plan_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [design-planning]
+      default:
+        - design-planning
     plan_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, task-decomposition]
+      default:
+        - architecture
+        - task-decomposition
     plan_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -52,11 +55,16 @@ subworkflow:
     testing_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing]
+      default:
+        - coding
+        - testing
     testing_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, unit-testing, e2e-testing]
+      default:
+        - architecture
+        - unit-testing
+        - e2e-testing
     testing_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -68,11 +76,16 @@ subworkflow:
     development_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing, ai-antipattern]
+      default:
+        - coding
+        - testing
+        - ai-antipattern
     development_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, implementation-semantics]
+      default:
+        - architecture
+        - implementation-semantics
     implementation_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -88,11 +101,17 @@ subworkflow:
     review_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing, review]
+      default:
+        - coding
+        - testing
+        - review
     review_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, unit-testing, e2e-testing]
+      default:
+        - architecture
+        - unit-testing
+        - e2e-testing
     security_review_knowledge_additions:
       type: facet_ref[]
       facet_kind: knowledge
@@ -126,7 +145,9 @@ facet_pools:
 
 steps:
   - name: plan
-    capabilities: [readonly, enable-skills]
+    capabilities:
+      - readonly
+      - enable-skills
     uses: development-core-plan
     with:
       plan_policy:
@@ -146,7 +167,8 @@ steps:
         next: ABORT
 
   - name: replan
-    tags: [plan]
+    tags:
+      - plan
     edit: false
     capabilities: readonly
     persona: planner
@@ -171,7 +193,9 @@ steps:
         next: ABORT
 
   - name: write_tests
-    capabilities: [edit, enable-skills]
+    capabilities:
+      - edit
+      - enable-skills
     uses: development-core-write-tests
     with:
       testing_policy:

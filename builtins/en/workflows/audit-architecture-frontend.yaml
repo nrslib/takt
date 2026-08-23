@@ -4,7 +4,9 @@ max_steps: 12
 initial_step: plan
 
 loop_monitors:
-  - cycle: [supervise, review]
+  - cycle:
+      - supervise
+      - review
     threshold: 3
     judge:
       persona: supervisor

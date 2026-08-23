@@ -43,98 +43,98 @@ steps:
       - review
     parallel:
       fixed:
-      - name: arch-review
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: architecture-reviewer
-        policy:
-          - contract-change
-          - review
-          - architecture
-          - backend
-          - frontend
-        knowledge:
-          - architecture
-          - frontend
-          - backend
-        instruction: review-arch
-        output_contracts:
-          report:
-            - name: architect-review.md
-              format: architecture-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+        - name: arch-review
+          capabilities: readonly
+          tags:
+            - review
+          edit: false
+          persona: architecture-reviewer
+          policy:
+            - contract-change
+            - review
+            - architecture
+            - backend
+            - frontend
+          knowledge:
+            - architecture
+            - frontend
+            - backend
+          instruction: review-arch
+          output_contracts:
+            report:
+              - name: architect-review.md
+                format: architecture-review
+          rules:
+            - condition: approved
+            - condition: needs_fix
 
-      - name: frontend-review
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: frontend-reviewer
-        policy:
-          - contract-change
-          - review
-          - design-fidelity
-          - frontend
-        knowledge: frontend
-        instruction: review-frontend
-        output_contracts:
-          report:
-            - name: frontend-review.md
-              format: frontend-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+        - name: frontend-review
+          capabilities: readonly
+          tags:
+            - review
+          edit: false
+          persona: frontend-reviewer
+          policy:
+            - contract-change
+            - review
+            - design-fidelity
+            - frontend
+          knowledge: frontend
+          instruction: review-frontend
+          output_contracts:
+            report:
+              - name: frontend-review.md
+                format: frontend-review
+          rules:
+            - condition: approved
+            - condition: needs_fix
 
-      - name: coding-review
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: coding-reviewer
-        policy:
-          - contract-change
-          - review
-          - coding
-        instruction: review-coding
-        output_contracts:
-          report:
-            - name: coding-review.md
-              format: coding-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+        - name: coding-review
+          capabilities: readonly
+          tags:
+            - review
+          edit: false
+          persona: coding-reviewer
+          policy:
+            - contract-change
+            - review
+            - coding
+          instruction: review-coding
+          output_contracts:
+            report:
+              - name: coding-review.md
+                format: coding-review
+          rules:
+            - condition: approved
+            - condition: needs_fix
 
       pool:
-      - name: security-review
-        description: 既定では選ばない。(a) 変更が secret または credential の取扱い、外部入力の処理、process 実行、filesystem 操作、network または terminal の境界、sandbox、権限に影響し得る場合、または (b) 修正の規模が大きく、セキュリティへの影響がないと判断しきれない場合に限って選ぶ。ドキュメントのみ・コメントのみ・テストのみの変更や小さな局所修正では選ばない。
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy:
-          - contract-change
-          - security-review
-        knowledge:
-          - security
-          - security-data
-          - security-dependencies
-        dynamic_facets:
-          pool: security-review-facets
-          selector:
-            instruction: select-applicable-candidates
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+        - name: security-review
+          description: 既定では選ばない。(a) 変更が secret または credential の取扱い、外部入力の処理、process 実行、filesystem 操作、network または terminal の境界、sandbox、権限に影響し得る場合、または (b) 修正の規模が大きく、セキュリティへの影響がないと判断しきれない場合に限って選ぶ。ドキュメントのみ・コメントのみ・テストのみの変更や小さな局所修正では選ばない。
+          capabilities: readonly
+          tags:
+            - review
+          edit: false
+          persona: security-reviewer
+          policy:
+            - contract-change
+            - security-review
+          knowledge:
+            - security
+            - security-data
+            - security-dependencies
+          dynamic_facets:
+            pool: security-review-facets
+            selector:
+              instruction: select-applicable-candidates
+          instruction: review-security
+          output_contracts:
+            report:
+              - name: security-review.md
+                format: security-review
+          rules:
+            - condition: approved
+            - condition: needs_fix
       selection:
         selector:
           instruction: select-applicable-candidates

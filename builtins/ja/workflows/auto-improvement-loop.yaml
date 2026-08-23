@@ -1,7 +1,6 @@
 name: auto-improvement-loop
 description: >
-  PR・Issue・新規改善を巡回しながら次の task を積み続ける
-  orchestration loop workflow。
+  PR・Issue・新規改善を巡回しながら次の task を積み続ける orchestration loop workflow。
 max_steps: infinite
 initial_step: route_context
 schemas:

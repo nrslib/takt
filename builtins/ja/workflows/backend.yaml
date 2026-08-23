@@ -7,14 +7,44 @@ steps:
     kind: workflow_call
     call: development-core
     args:
-      plan_policy: [design-planning, architecture, backend]
-      plan_knowledge: [backend, architecture]
-      testing_policy: [coding, testing, architecture, backend]
-      testing_knowledge: [backend, architecture, unit-testing, e2e-testing]
-      development_policy: [coding, testing, architecture, backend]
-      development_knowledge: [backend, security, architecture]
-      review_policy: [coding, testing, review, architecture, backend]
-      review_knowledge: [backend, security, architecture, unit-testing, e2e-testing]
+      plan_policy:
+        - design-planning
+        - architecture
+        - backend
+      plan_knowledge:
+        - backend
+        - architecture
+      testing_policy:
+        - coding
+        - testing
+        - architecture
+        - backend
+      testing_knowledge:
+        - backend
+        - architecture
+        - unit-testing
+        - e2e-testing
+      development_policy:
+        - coding
+        - testing
+        - architecture
+        - backend
+      development_knowledge:
+        - backend
+        - security
+        - architecture
+      review_policy:
+        - coding
+        - testing
+        - review
+        - architecture
+        - backend
+      review_knowledge:
+        - backend
+        - security
+        - architecture
+        - unit-testing
+        - e2e-testing
     rules:
       - condition: COMPLETE
         next: COMPLETE

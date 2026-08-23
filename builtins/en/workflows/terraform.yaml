@@ -136,7 +136,9 @@ steps:
       - review
     edit: false
     persona: supervisor
-    policy: [contract-change, terraform]
+    policy:
+      - contract-change
+      - terraform
     knowledge: terraform-aws
     instruction: supervise
     rules:
@@ -161,7 +163,10 @@ steps:
       - supervise
     edit: &terraform_supervise_edit false
     persona: &terraform_supervise_persona supervisor
-    policy: &terraform_supervise_policy [contract-change, review, terraform]
+    policy: &terraform_supervise_policy
+      - contract-change
+      - review
+      - terraform
     knowledge: &terraform_supervise_knowledge terraform-aws
     instruction: &terraform_supervise_instruction supervise
     rules:
@@ -267,7 +272,9 @@ steps:
         next: implement
     instruction: fix-supervisor
 loop_monitors:
-  - cycle: [fix_both, reviewers]
+  - cycle:
+      - fix_both
+      - reviewers
     threshold: 3
     judge:
       persona: supervisor
@@ -285,7 +292,9 @@ loop_monitors:
           next: fix_both
         - condition: Unproductive (oscillation or requirement conflict)
           next: ABORT
-  - cycle: [ai-antipattern-fix, reviewers]
+  - cycle:
+      - ai-antipattern-fix
+      - reviewers
     threshold: 3
     judge:
       persona: supervisor
@@ -303,7 +312,9 @@ loop_monitors:
           next: ai-antipattern-fix
         - condition: Unproductive (oscillation or requirement conflict)
           next: ABORT
-  - cycle: [supervise_fix, reviewers]
+  - cycle:
+      - supervise_fix
+      - reviewers
     threshold: 3
     judge:
       persona: supervisor

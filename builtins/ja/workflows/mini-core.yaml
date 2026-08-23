@@ -106,6 +106,7 @@ steps:
         policy:
           - contract-change
           - ai-antipattern
+          - review
         instruction: ai-antipattern-review
         rules:
           - condition: AI特有の問題なし

@@ -1,7 +1,6 @@
 name: auto-improvement-loop
 description: >
-  Infinite orchestration loop that routes between open PR handling,
-  issue-driven planning, and fresh improvement planning.
+  Infinite orchestration loop that routes between open PR handling, issue-driven planning, and fresh improvement planning.
 max_steps: infinite
 initial_step: route_context
 schemas:

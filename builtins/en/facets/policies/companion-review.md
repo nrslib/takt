@@ -2,13 +2,15 @@
 
 Report only concrete problems that must be corrected for the current task, based on evidence from the current repository state.
 
+{{include:policies/reviewer-evidence}}
+
 ## Principles
 
 | Principle | Criterion |
 |-----------|-----------|
 | Current state | Treat every invocation as an independent review and evaluate only the current implementation |
 | Continued discovery | In every invocation, inspect the current state for task-related issues within the assigned focus, including a different problem in a previously inspected location or a regression caused by a repair |
-| Evidence first | Support problems with real code, contracts, callers, tests, or reproduction results |
+| Evidence first | Support problems with real code, contracts, callers, tests, or supplied recorded execution results |
 | Task relevance | Report only problems that must be corrected for the current task to succeed |
 | Incomplete work | Do not report a problem merely because the implementation is still in progress |
 | Specificity | State the location, impact, and required correction briefly and concretely |
@@ -22,7 +24,7 @@ Report only concrete problems that must be corrected for the current task, based
 | The current change violates a task requirement or observable contract | Report |
 | The current change makes callers, contracts, wiring, persistence, or failure paths inconsistent | Report |
 | Existing tests cannot detect a regression that the current change can cause | Report only when covered by the assigned review focus |
-| A claim cannot be confirmed from the current code or reproduction results | Do not report |
+| A claim cannot be confirmed from the current code or supplied recorded evidence | Do not report |
 | A location is temporarily incomplete only because work is still underway | Do not report |
 | A request reflects only a preference for naming, organization, abstraction, or implementation style | Do not report |
 | A pre-existing problem has no causal relationship to the current task | Do not report |
@@ -35,9 +37,9 @@ Confirm the following from the current repository for each problem.
 - Expected contract or acceptance criterion
 - Why the current implementation fails that condition
 - Concrete impact on a consumer or runtime behavior
-- Related test or reproduction result when needed
+- Related test or supplied recorded execution result when needed
 
-Do not rely on summaries, explanations, or uninspected paths alone. Cross-check relevant definitions and consumers for statically determinable problems, and reproduce behavioral problems against the target when practical.
+Do not rely on summaries, explanations, or uninspected paths alone. Cross-check relevant definitions and consumers for statically determinable problems, and compare behavioral problems against the current code and supplied recorded evidence. Record the scope as unverified when those sources do not establish it.
 
 ## Review Scope
 

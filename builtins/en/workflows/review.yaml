@@ -57,7 +57,6 @@ steps:
       ## Review Results
       {previous_response}
 
-      **This is a review-only workflow.** Do NOT run tests or builds.
       Your role is to synthesize the review results and produce a final summary.
 
       **Tasks:**

@@ -3,7 +3,8 @@ description: 共通開発コアで固定ファセットを使う実装実行。
 subworkflow:
   callable: true
   visibility: internal
-  returns: [need_replan]
+  returns:
+    - need_replan
   params:
     implementation_pool:
       type: facet_pool_ref
@@ -14,11 +15,16 @@ subworkflow:
     development_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing, ai-antipattern]
+      default:
+        - coding
+        - testing
+        - ai-antipattern
     development_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, implementation-semantics]
+      default:
+        - architecture
+        - implementation-semantics
     implementation_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -35,7 +41,9 @@ facet_pools:
 initial_step: implement
 steps:
   - name: implement
-    capabilities: [edit, enable-skills]
+    capabilities:
+      - edit
+      - enable-skills
     uses: development-core-implement
     with:
       development_policy:
