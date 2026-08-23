@@ -78,23 +78,49 @@ test('E06 rejects planned invariant names placed outside the invariant-name colu
   assert.equal(run(wrongNameColumn, 'E06').pass, false);
 });
 
-test('E13a accepts semantic-equivalent prose while preserving mechanical recurrence state', () => {
+test('E13a rejects an invalid previous verification count', () => {
   // Given
-  const mutations = [
-    ['| 2 | 1 | なし（引え継ぎ行なし） |', '| 2 | 9 | なし（引え継ぎ行なし） |'],
-    ['なし（引え継ぎ行なし）', 'P2: 親 window 置換'],
-    ['| 同一・再発 | 2 |', '| 維持 | 2 |'],
-  ];
-  const output = E13A_OUTPUT;
+  const output = E13A_OUTPUT.replace(
+    '| 2 | 1 | なし（引え継ぎ行なし） |',
+    '| 2 | 9 | なし（引え継ぎ行なし） |',
+  );
 
   // When
+  const baseline = run(E13A_OUTPUT, 'E13a');
   const result = run(output, 'E13a');
-  const mutationResults = mutations.map(([before, after]) =>
-    run(output.replace(before, after), 'E13a').pass);
 
   // Then
-  assert.equal(result.pass, true);
-  assert.deepEqual(mutationResults, [false, false, false]);
+  assert.equal(baseline.pass, true);
+  assert.equal(result.pass, false);
+});
+
+test('E13a rejects an invalid previous path', () => {
+  // Given
+  const output = E13A_OUTPUT.replace(
+    'なし（引え継ぎ行なし）',
+    'P2: 親 window 置換',
+  );
+
+  // When
+  const baseline = run(E13A_OUTPUT, 'E13a');
+  const result = run(output, 'E13a');
+
+  // Then
+  assert.equal(baseline.pass, true);
+  assert.equal(result.pass, false);
+});
+
+test('E13a rejects an invalid recurrence judgement', () => {
+  // Given
+  const output = E13A_OUTPUT.replace('| 同一・再発 | 2 |', '| 維持 | 2 |');
+
+  // When
+  const baseline = run(E13A_OUTPUT, 'E13a');
+  const result = run(output, 'E13a');
+
+  // Then
+  assert.equal(baseline.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('E13 accepts the normalized English recurrence-judgement header', () => {

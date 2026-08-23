@@ -2,6 +2,7 @@
 // builtins/ja の実ファセットと output contract を実行時に組み立ててロール別ヘッダを作り、
 // cases/fix-loop-convergence/<scenario>.md のシナリオ本文と合成する。
 // ファセットを変更すると、この評価は変更後の文面をそのまま対象にする。
+// 縮約構成の独立評価として、runtime の project → user → builtin resolver は使わず builtin 層だけを対象にする。
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -49,7 +49,9 @@ current remediation instructions and output contracts
 contract preserve their runtime-relative order, but this focused eval does not
 reproduce every workflow-wide runtime rule. It is an independent evaluation
 with a reduced configuration rather than a complete mirror of the production
-step composition. It needs both CLI
+step composition. The prompt intentionally reads only the repository's builtin
+facet layer instead of applying the runtime project → user → builtin resolver,
+because this suite is scoped as that reduced independent evaluation. It needs both CLI
 logins, is excluded from the default suite run, and asserts on a fixed
 machine-readable `JUDGEMENT:` line — invoke it explicitly
 (`npm run eval:prompts:fix-loop-convergence`).
