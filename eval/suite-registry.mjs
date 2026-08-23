@@ -1,5 +1,5 @@
 import { readdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const evalDir = dirname(fileURLToPath(import.meta.url));
@@ -272,13 +272,34 @@ const PREPARE_TARGET_OVERRIDES = {
   'task-instruction-gherkin': [],
 };
 
-function discoverSuiteNames() {
-  return readdirSync(evalDir)
-    .flatMap((fileName) => {
-      const match = /^promptfooconfig\.(.+)\.yaml$/.exec(fileName);
-      return match === null ? [] : [match[1]];
-    })
-    .sort();
+export function discoverPromptEvalConfigs(rootDir = evalDir) {
+  const configs = new Map();
+
+  function visit(directory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+        continue;
+      }
+      if (!entry.isFile() || !/\.ya?ml$/.test(entry.name)) continue;
+
+      const name = basename(entry.name).replace(/\.ya?ml$/, '');
+      const config = relative(rootDir, path).split(sep).join('/');
+      if (configs.has(name)) {
+        throw new Error(
+          `Prompt eval suite name duplicated: ${name} (${configs.get(name)}, ${config})`,
+        );
+      }
+      configs.set(name, config);
+    }
+  }
+
+  visit(join(rootDir, 'agents'));
+  visit(join(rootDir, 'scenarios'));
+  return [...configs.entries()]
+    .map(([name, config]) => ({ name, config }))
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function buildClassifications() {
@@ -292,7 +313,8 @@ function buildClassifications() {
   return classified;
 }
 
-const discoveredNames = discoverSuiteNames();
+const discoveredConfigs = discoverPromptEvalConfigs();
+const discoveredNames = discoveredConfigs.map(({ name }) => name);
 const classifications = buildClassifications();
 const missing = discoveredNames.filter((name) => !classifications.has(name));
 const stale = [...classifications.keys()].filter((name) => !discoveredNames.includes(name));
@@ -303,7 +325,7 @@ if (missing.length > 0 || stale.length > 0) {
   );
 }
 
-export const PROMPT_EVAL_SUITES = Object.freeze(discoveredNames.map((name) => {
+export const PROMPT_EVAL_SUITES = Object.freeze(discoveredConfigs.map(({ name, config }) => {
   const classification = classifications.get(name);
   const execution = EXECUTION_OVERRIDES[name] ?? {
     defaultEligible: true,
@@ -313,7 +335,7 @@ export const PROMPT_EVAL_SUITES = Object.freeze(discoveredNames.map((name) => {
   };
   return Object.freeze({
     name,
-    config: `promptfooconfig.${name}.yaml`,
+    config,
     ...classification,
     execution: Object.freeze(execution),
     prepareTargets: Object.freeze(PREPARE_TARGET_OVERRIDES[name] ?? [name]),

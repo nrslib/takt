@@ -43,7 +43,7 @@ OPENCODE_CONFIG_CONTENT
 # Local editor/agent settings
 .claude/
 
-# Prompt eval generated artifacts (re-create with npm run eval:prompts:export)
+# Prompt eval generated artifacts (re-create with npm run eval:prompts:prepare)
 eval/prompts/
 eval/fixtures/*/.takt/
 eval/.work/

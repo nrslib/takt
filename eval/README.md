@@ -129,6 +129,17 @@ remain available as incident knowledge assets and run only when requested by
 the retained tier command or by individual suite name. Explicit suite names
 always work regardless of tier or execution metadata.
 
+Suite configurations are grouped by what they execute:
+
+- `agents/<step>/<suite>.yaml` runs one TAKT agent step. Upstream reports and
+  other context are fixed inputs.
+- `scenarios/<flow>/<suite>.yaml` runs multiple steps or roles and verifies the
+  handoff between them.
+
+The suite ID is the YAML filename without its extension and must be unique
+across both trees. Provider and model matrices stay inside the suite and do not
+affect its directory.
+
 The `review-impact-path-coverage` suite measures first-round coverage of paths
 affected by the same cause on Claude Opus 5, Codex Luna Max, and Codex Sol High. It needs
 both CLI logins and is excluded from the default suite run; invoke it with
@@ -359,7 +370,8 @@ provider follows the same rule with `timeout_ms`.
 
 ```text
 eval/
-  promptfooconfig.<suite>.yaml   provider + tests + assertions per suite
+  agents/<step>/<suite>.yaml    single-agent provider + tests + assertions
+  scenarios/<flow>/<suite>.yaml multi-step or multi-role scenario evals
   suite-registry.mjs             tier, reason, execution metadata, prepare targets
   scripts/prepare.mjs            facet placement + prompt rendering
   scripts/run-evals.mjs          suite runner (failures don't stop the batch)
@@ -374,9 +386,10 @@ eval/
 
 ## Extending
 
-- New target: add an entry to `TARGETS` in `scripts/prepare.mjs`, add a
-  `promptfooconfig.<suite>.yaml`, and classify the suite once in
-  `suite-registry.mjs`. Registry validation rejects unclassified configs.
+- New target: add an entry to `TARGETS` in `scripts/prepare.mjs`, add a uniquely
+  named YAML under `agents/<step>/` or `scenarios/<flow>/`, and classify the
+  suite once in `suite-registry.mjs`. Registry validation rejects unclassified
+  configs and duplicate suite IDs.
 - More planted bugs: each fixture bug should map to a specific policy line,
   and get one `metric:`-labelled assertion (recall). Clean cases guard
   precision.

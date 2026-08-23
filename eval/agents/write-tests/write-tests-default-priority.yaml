@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: write-tests closes the primary Requeue-to-runner path'
+
+prompts:
+  - file://../../prompts/write-tests-default-priority.phase1.md
+
+providers:
+  - id: 'exec: bash ../../providers/claude-coder.sh opus ../../.work/write-tests-default-priority'
+    label: claude-opus
+
+tests:
+  - description: 'write-tests: trace manual Requeue from failed-leaf selection through pending storage to the normal runner'
+    vars:
+      task: file://../../cases/write-tests-default-priority-task.md
+      previous_response: file://../../cases/write-tests-default-priority-plan.md
+    assert:
+      - type: javascript
+        metric: primary-requeue/write-tests-path
+        value: file://../../asserts/write-tests-default-priority.mjs

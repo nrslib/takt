@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: failure aggregation architecture boundary'
+
+prompts:
+  - file://../../prompts/arch-failure-aggregation.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../fixtures/arch-failure-aggregation
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'recall: one policy-selected primary outcome must determine the parent projection'
+    vars:
+      task: file://../../cases/arch-failure-aggregation.md
+      previous_response: file://../../cases/prev-gather-arch-failure-aggregation.md
+    assert:
+      - type: llm-rubric
+        metric: recall/parent-failure-fields-have-different-sources
+        value: |
+          Judge the review by the exact data flow it attributes to
+          `aggregateFailures` in `src/failure-aggregation.ts`, not by keyword
+          presence. Pass only if it identifies that `category` is selected from
+          `fatal` while `abortReason` is selected from `retryable` when both are
+          present. The task's boundary policy explicitly selects the first
+          retryable outcome when one exists, so pass only if the review explains
+          that `category` violates that policy-selected primary while status and
+          reason use it. Fail if it instead demands a universal fatal-over-
+          retryable rule, or if the target, both sources, or observable mismatch
+          is missing.
+
+  - description: 'precision: an explicit boundary policy may select a retryable primary'
+    vars:
+      task: file://../../cases/arch-failure-aggregation-policy.md
+      previous_response: file://../../cases/prev-gather-arch-failure-aggregation-policy.md
+    assert:
+      - type: llm-rubric
+        metric: precision/boundary-specific-primary-policy
+        value: |
+          Judge the review by the concrete behavior it attributes to
+          `src/failure-aggregation-policy.ts`, not by keyword presence. The
+          boundary contract explicitly prioritizes retryable outcomes and the
+          implementation selects one such primary before deriving status,
+          category, and reason from it. Pass if the review approves this
+          behavior or does not report a defect in it. Fail if it demands that a
+          fatal sibling replace the policy-selected primary, invents a universal
+          fatal-over-retryable rule, or claims that the projected fields come
+          from different outcomes.

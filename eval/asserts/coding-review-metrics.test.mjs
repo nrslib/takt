@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { parse } from 'yaml';
 
-const configUrl = new URL('../promptfooconfig.coding.yaml', import.meta.url);
+const configUrl = new URL('../agents/coding-review/coding.yaml', import.meta.url);
 const config = parse(await readFile(configUrl, 'utf8'));
 
 function evaluateMetric(metric, output) {

@@ -1,25 +1,46 @@
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
   PROMPT_EVAL_SUITES,
+  discoverPromptEvalConfigs,
   promptEvalPrepareTargets,
   selectPromptEvalSuites,
 } from './suite-registry.mjs';
 import { PREPARE_TARGET_IDS } from './scripts/prepare.mjs';
 
 test('registry classifies every promptfoo config exactly once', () => {
-  const configs = readdirSync(new URL('.', import.meta.url))
-    .flatMap((fileName) => {
-      const match = /^promptfooconfig\.(.+)\.yaml$/.exec(fileName);
-      return match === null ? [] : [match[1]];
-    })
-    .sort();
+  const configs = discoverPromptEvalConfigs();
 
-  assert.deepEqual(PROMPT_EVAL_SUITES.map(({ name }) => name), configs);
+  assert.deepEqual(
+    PROMPT_EVAL_SUITES.map(({ name, config }) => ({ name, config })),
+    configs,
+  );
   assert.equal(new Set(PROMPT_EVAL_SUITES.map(({ name }) => name)).size, configs.length);
   assert.ok(PROMPT_EVAL_SUITES.every(({ reason }) => reason.length > 0));
+  assert.ok(PROMPT_EVAL_SUITES.every(({ config }) => /^(agents|scenarios)\//.test(config)));
+});
+
+test('recursive discovery rejects duplicate suite names across categories', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'takt-eval-registry-'));
+  try {
+    const agentDirectory = join(directory, 'agents', 'review-adjudication');
+    const scenarioDirectory = join(directory, 'scenarios', 'review-to-adjudication');
+    mkdirSync(agentDirectory, { recursive: true });
+    mkdirSync(scenarioDirectory, { recursive: true });
+    writeFileSync(join(agentDirectory, 'duplicate.yaml'), 'description: agent\n');
+    writeFileSync(join(scenarioDirectory, 'duplicate.yml'), 'description: scenario\n');
+
+    assert.throws(
+      () => discoverPromptEvalConfigs(directory),
+      /Prompt eval suite name duplicated: duplicate/,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 test('default selection is active and default-eligible only', () => {
   const selected = selectPromptEvalSuites();
