@@ -11,6 +11,7 @@ import { createUsageEventLogger } from '../core/logging/usageEventLogger.js';
 import {
   OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
   PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+  PROMPT_LOG_FILE_SUFFIX,
   PROVIDER_EVENTS_LOG_FILE_SUFFIX,
 } from '../core/logging/contracts.js';
 
@@ -325,7 +326,7 @@ describe('forceFailRunningTask', () => {
       .not.toContain('"type":"workflow_abort"');
   });
 
-  it('観測sidecarが併存してもsession logをforce-failする', async () => {
+  it('観測sidecarとdebug prompt logが併存してもsession logをforce-failする', async () => {
     const runSlug = '20260409-usage-sidecar';
     const runPaths = buildRunPaths(projectDir, runSlug);
     writeMeta(projectDir, runSlug, {
@@ -378,6 +379,22 @@ describe('forceFailRunningTask', () => {
         task: 'Stored from run context',
         workflowName: 'default',
         startTime: '2026-04-09T00:00:00.000Z',
+      })}\n`,
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(runPaths.logsAbs, `force-fail-session${PROMPT_LOG_FILE_SUFFIX}`),
+      `${JSON.stringify({
+        step: 'implement',
+        phase: 1,
+        iteration: 1,
+        scope: '{"step":"implement","stack":[]}',
+        phaseExecutionId: 'implement:1:1:1',
+        prompt: 'prompt',
+        systemPrompt: 'system prompt',
+        userInstruction: 'user instruction',
+        response: 'response',
+        timestamp: '2026-04-09T00:00:00.000Z',
       })}\n`,
       'utf-8',
     );

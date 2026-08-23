@@ -62,6 +62,7 @@ import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../in
 import {
   OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
   PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+  PROMPT_LOG_FILE_SUFFIX,
 } from '../../../core/logging/contracts.js';
 import {
   resolveEffectiveAutoRouting,
@@ -535,7 +536,7 @@ export async function createWorkflowExecutionBootstrap(
     },
   );
   const promptLogPath = isDebugEnabled()
-    ? join(runPaths.logsAbs, `${workflowSessionId}-prompts.jsonl`)
+    ? join(runPaths.logsAbs, `${workflowSessionId}${PROMPT_LOG_FILE_SUFFIX}`)
     : undefined;
   const sessionLogger = new SessionLogger(
     ndjsonLogPath,
