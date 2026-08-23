@@ -1,14 +1,18 @@
-// birpc's RPC deadline is a fixed 60s. Four unit shards plus fork workers on
-// one developer machine can starve a worker's event loop past it, and vitest
-// then exits non-zero while every test passed. `npm test` re-measures a shard
-// exactly once when its output carries that shape and nothing else, so the
-// gate reports what the machine measured instead of a scheduling artifact.
-// CI runs one shard per runner and has no such contention: a timeout there is
-// real, so it is never re-measured.
+// birpc's RPC deadline is a fixed 60s. The adaptive local unit-shard wave plus
+// fork workers on one developer machine can starve a worker's event loop past
+// it, and vitest then exits non-zero while every test passed. `npm test`
+// re-measures a shard exactly once when its output carries that shape and
+// nothing else, so the gate reports what the machine measured instead of a
+// scheduling artifact.
+// The blocking pull-request matrix runs one shard per runner, so a timeout
+// there remains fatal. The on-demand `/ci` job is a documented single-runner
+// exception: it sets TAKT_BIRPC_REMEASURE_ON_CI=1 and opts into the same strict
+// one-time re-measurement. Other CI paths remain fatal.
 // Anchored at both ends: vitest appends ` with "<args>"` for fetch, transform,
 // resolveId, and onUnhandledError timeouts, and those carry real information
 // about what stalled. Only the bare onTaskUpdate report is the known artifact.
 const BIRPC_NOISE_MESSAGE = /^\[vitest-worker\]: Timeout calling "onTaskUpdate"$/;
+export const BIRPC_REMEASURE_ON_CI_ENV = 'TAKT_BIRPC_REMEASURE_ON_CI';
 
 // vitest prints every error it reports as `<Name>: <message>` at column 0
 // (`printErrorMessage`). The name is matched as any bare token rather than
@@ -25,8 +29,8 @@ const SUMMARY_STATE_SEGMENT = /^(\d+) (failed|passed|skipped|todo)$/;
 // boundary can interleave the two and break a summary or headline line apart.
 // Every such case fails one of the checks below and the shard is reported as a
 // failure — interleaving can only cost a rescue, never grant one.
-export function isBirpcNoiseOnlyFailure({ output, isCI }) {
-  if (isCI) {
+export function isBirpcNoiseOnlyFailure({ output, isCI, remeasureOnCI }) {
+  if (isCI && !remeasureOnCI) {
     return false;
   }
 

@@ -4,10 +4,6 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
-      position: before_instruction
-    - ref: invariant-recurrence
-      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
@@ -81,6 +77,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: implement
+    scope_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: coder-scope
     review_policy_additions:
       type: facet_ref[]
       facet_kind: policy
@@ -163,7 +163,7 @@ steps:
           format:
             $param: plan_report_format
     rules:
-      - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
+      - condition: An untried project-scoped change or investigation and its verification steps were defined and can be performed
         next: implement
       - condition: The current implementation satisfies the requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation remains
         next: peer-review
@@ -209,6 +209,8 @@ steps:
         $param: development_knowledge
       implementation_instruction:
         $param: implementation_instruction
+      scope_report_format:
+        $param: scope_report_format
     rules:
       - condition: COMPLETE
         next: peer-review

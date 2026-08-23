@@ -9,7 +9,16 @@
  * seams — consumes the same mode decision instead of re-deriving it.
  */
 
-import type { TaktProvidersConfig } from '../../../core/models/config-types.js';
+import type {
+  TaktProvidersConfig,
+  WorkflowMcpServersConfig,
+} from '../../../core/models/config-types.js';
+import type { McpServerConfig } from '../../../core/models/index.js';
+import type { WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import { getAllParallelSubSteps } from '../../../core/models/index.js';
+import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
+import { getWorkflowReference } from '../../../core/workflow/workflow-reference.js';
+import type { WorkflowCallResolver } from '../../../core/workflow/types.js';
 import type { ProviderOptionsSource } from '../../../core/workflow/provider-options-trace.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
@@ -21,6 +30,7 @@ import {
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import type { LegacyProviderEnvironmentInput } from './environment.js';
 import type { LegacyProviderSignal } from './mode.js';
+import type { McpAssignmentSection } from './mcp-assignment.js';
 
 function isNonEmptyRecord(value: Record<string, unknown> | undefined): boolean {
   return value !== undefined && Object.keys(value).length > 0;
@@ -152,4 +162,160 @@ export function collectProjectLegacyProviderSignals(projectCwd: string): LegacyP
     ),
   };
   return collectLegacyProviderSignals(legacy, providerOptions.source);
+}
+
+/**
+ * Input for legacy MCP signal collection. `workflow_mcp_servers` is the workflow
+ * policy that enables MCP servers globally; `workflowStepMcpServers` is the
+ * per-step `mcp_servers` map (order.md:112-118).
+ */
+export interface LegacyMcpSignalInput {
+  /** The workflow-level `mcp_servers` policy (e.g. `{ stdio: true }`). */
+  workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined;
+  /** The per-step `mcp_servers` map (`{ name: McpServerConfig }`). */
+  workflowStepMcpServers: Record<string, McpServerConfig> | undefined;
+  /** Workflow name for error messages. */
+  workflowName: string;
+  /** Step name when the signal is step-scoped (undefined for workflow-scoped). */
+  workflowStepName: string | undefined;
+}
+
+/**
+ * Detect legacy workflow MCP settings that must not coexist with an active
+ * `runtime.yaml.mcp` section. Both the `workflow_mcp_servers` policy and the
+ * per-step `mcp_servers` map are reported so the mixed-config error names
+ * every legacy location and its migration target (order.md:112-118).
+ */
+export function collectLegacyMcpSignals(input: LegacyMcpSignalInput): LegacyProviderSignal[] {
+  const signals: LegacyProviderSignal[] = [];
+
+  if (input.workflowMcpServersPolicy !== undefined
+    && Object.keys(input.workflowMcpServersPolicy).length > 0) {
+    signals.push({
+      setting: 'workflow_mcp_servers',
+      location: `workflow "${input.workflowName}":workflow_mcp_servers policy`,
+      migrateTo: 'mcp.targets',
+    });
+  }
+
+  if (input.workflowStepMcpServers !== undefined
+    && Object.keys(input.workflowStepMcpServers).length > 0) {
+    const stepSuffix = input.workflowStepName !== undefined
+      ? `:${input.workflowStepName}`
+      : '';
+    signals.push({
+      setting: 'mcp_servers',
+      location: `workflow "${input.workflowName}"${stepSuffix}:mcp_servers`,
+      migrateTo: 'mcp.targets.steps',
+    });
+  }
+
+  return signals;
+}
+
+export interface WorkflowMcpSignalTraversalOptions {
+  /** Resolve child workflows reachable through workflow_call steps. */
+  workflowCallResolver?: WorkflowCallResolver;
+  /** Project root passed to the same resolver used by workflow execution. */
+  projectCwd?: string;
+  /** Lookup directory passed to the same resolver used by workflow execution. */
+  lookupCwd?: string;
+}
+
+/** Collect all legacy workflow MCP signals used by the bootstrap mixed-mode gate. */
+export function collectWorkflowLegacyMcpSignals(
+  workflowConfig: WorkflowConfig,
+  workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined,
+  options: WorkflowMcpSignalTraversalOptions = {},
+): LegacyProviderSignal[] {
+  const signals: LegacyProviderSignal[] = [];
+  const visited = new Set<string>();
+
+  function visitStep(step: WorkflowStep, parentWorkflow: WorkflowConfig): void {
+    signals.push(...collectLegacyMcpSignals({
+      workflowMcpServersPolicy: undefined,
+      workflowStepMcpServers: step.mcpServers,
+      workflowName: parentWorkflow.name,
+      workflowStepName: step.name,
+    }));
+
+    if (
+      isWorkflowCallStep(step)
+      && options.workflowCallResolver !== undefined
+      && options.projectCwd !== undefined
+      && options.lookupCwd !== undefined
+    ) {
+      const childWorkflow = options.workflowCallResolver({
+        parentWorkflow,
+        step,
+        projectCwd: options.projectCwd,
+        lookupCwd: options.lookupCwd,
+      });
+      if (childWorkflow !== null) {
+        visitWorkflow(childWorkflow, false);
+      }
+    }
+
+    const parallelSteps = step.parallel === undefined
+      ? []
+      : getAllParallelSubSteps(step.parallel);
+    for (const parallelStep of parallelSteps) {
+      visitStep(parallelStep, parentWorkflow);
+    }
+  }
+
+  function visitWorkflow(workflow: WorkflowConfig, includePolicy: boolean): void {
+    const reference = getWorkflowReference(workflow);
+    if (visited.has(reference)) {
+      return;
+    }
+    visited.add(reference);
+
+    if (includePolicy) {
+      signals.push(...collectLegacyMcpSignals({
+        workflowMcpServersPolicy,
+        workflowStepMcpServers: undefined,
+        workflowName: workflow.name,
+        workflowStepName: undefined,
+      }));
+    }
+    for (const step of workflow.steps) {
+      visitStep(step, workflow);
+    }
+  }
+
+  visitWorkflow(workflowConfig, true);
+  return signals;
+}
+
+/** Fail fast when runtime MCP assignment and legacy workflow MCP are mixed. */
+export function assertNoMixedMcpConfiguration(
+  mcpAssignment: McpAssignmentSection | undefined,
+  legacyMcpSignals: readonly LegacyProviderSignal[],
+): void {
+  if (mcpAssignment === undefined || legacyMcpSignals.length === 0) {
+    return;
+  }
+  const lines = legacyMcpSignals.map(
+    (signal) => `  - ${signal.setting} at ${signal.location} → migrate to ${signal.migrateTo}`,
+  );
+  throw new Error([
+    'Mixed MCP configuration detected: an active runtime.yaml mcp section cannot',
+    'coexist with legacy workflow MCP settings. Remove the runtime.yaml mcp section or migrate',
+    'the following legacy settings:',
+    ...lines,
+  ].join('\n'));
+}
+
+/** Apply the production mixed-MCP gate to a workflow and its legacy settings. */
+export function assertNoMixedWorkflowMcpConfiguration(
+  mcpAssignment: McpAssignmentSection | undefined,
+  workflowConfig: WorkflowConfig,
+  workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined,
+  options: WorkflowMcpSignalTraversalOptions = {},
+): void {
+  assertNoMixedMcpConfiguration(
+    mcpAssignment,
+    collectWorkflowLegacyMcpSignals(workflowConfig, workflowMcpServersPolicy, options),
+  );
 }

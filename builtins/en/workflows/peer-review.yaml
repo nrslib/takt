@@ -4,10 +4,6 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
-      position: before_instruction
-    - ref: invariant-recurrence
-      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
@@ -121,9 +117,9 @@ loop_monitors:
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: reviewers
-        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+        - condition: Implementation incomplete or report not converged, but the next review or fix can be performed
           next: reviewers
-        - condition: The remediation assumptions must change and replanning is actionable
+        - condition: The remediation assumptions must change and replanning can be performed
           next: remediation
         - condition: No feasible action can satisfy the requirements
           next: ABORT
@@ -139,15 +135,17 @@ loop_monitors:
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: reviewers
-        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+        - condition: Implementation incomplete or report not converged, but the next review or fix can be performed
           next: reviewers
-        - condition: The remediation assumptions must change and replanning is actionable
+        - condition: The remediation assumptions must change and replanning can be performed
           next: remediation
         - condition: No feasible action can satisfy the requirements
           next: ABORT
 steps:
   - name: initial-reviewers
     uses: peer-review-suite-call
+    vars:
+      review_mode: initial
     with:
       reviewer_suite:
         $param: reviewer_suite
@@ -173,6 +171,8 @@ steps:
         next: review-adjudication
   - name: reviewers
     uses: peer-review-suite-call
+    vars:
+      review_mode: follow_up
     with:
       reviewer_suite:
         $param: reviewer_suite
@@ -204,11 +204,11 @@ steps:
       review_knowledge_additions:
         $param: review_knowledge_additions
     rules:
-      - condition: ACTIONABLE FINDINGS
+      - condition: Problems require repair
         next: remediation
-      - condition: NO ACTIONABLE FINDINGS
+      - condition: No problems require repair
         next: final-gate
-      - condition: REPLAN REQUIRED
+      - condition: The entire task must be replanned
         return: need_replan
   - name: final-gate
     uses: peer-review-final-gate

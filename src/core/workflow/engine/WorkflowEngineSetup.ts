@@ -3,6 +3,10 @@ import { join } from 'node:path';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
+import {
+  DEFAULT_COMPANION_REVIEW_MODE,
+  type CompanionReviewMode,
+} from '../../models/companion-types.js';
 import type {
   AgentResponse,
   WorkflowConfig,
@@ -255,6 +259,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
   });
   const companionEnabled = params.options.companionEnabled ?? DEFAULT_COMPANION_ENABLED;
+  const companionReviewMode: CompanionReviewMode =
+    params.options.companionReviewMode ?? DEFAULT_COMPANION_REVIEW_MODE;
   const workflowRules: readonly WorkflowWideRule[] = mergeWorkflowWideRules(
     params.options.inheritedWorkflowRules,
     params.config.allStepsRules,
@@ -294,6 +300,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getRunId: () => params.runPaths.slug,
     getRunPathNamespace: () => params.options.runPathNamespace ?? [],
     companionEnabled,
+    companionReviewMode,
     companionDefinitions: params.config.companions,
     companionProviders: params.options.companionProviders,
     companionSelectorProvider: params.options.selectorProvider,

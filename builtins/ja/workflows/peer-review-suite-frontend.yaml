@@ -5,6 +5,16 @@ facet_pools:
     uses: security-review-facets
   takt-security-review-facets:
     uses: takt-security-review-facets
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: peer-review-scope
+      position: before_instruction
+    - ref: existing-finding-lookup
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
 subworkflow:
   callable: true
   visibility: internal

@@ -14,12 +14,8 @@
 | Projections | ✅ | - |
 | Eventual consistency | ✅ | - |
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 {{include:output-contracts/base-review-new-findings-scope}}
-| 1 | CQRS-NEW-src-file-L42 | cqrs-violation | In-scope | `src/file.ts:42` | Issue description | remediation_regression | The repair introduced this regression after the initial review | Fix approach |
-
-{{include:output-contracts/base-review-follow-up-authorization}}
+| 1 | CQRS-NEW-src-file-L42 | cqrs-violation | In-scope | `src/file.ts:42` | Issue description | `src/file.ts:42` | Fix approach |
 
 {{include:output-contracts/base-review-scope}}
 
@@ -32,7 +28,7 @@
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | CQRS-REOPENED-src-file-L55 | cqrs-violation | `review-resolution.md`: previously resolved | d | `Recurred at src/file.ts:55` | Issue description | Fix approach |
+| 1 | CQRS-REOPENED-src-file-L55 | cqrs-violation | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at src/file.ts:55` | Issue description | Fix approach |
 
 {{include:output-contracts/base-review-reopened}}
 ## Rejection Gate

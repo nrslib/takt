@@ -1,0 +1,48 @@
+name: loop-analysis
+description: Analyze a completed run and review evidence-backed workflow improvements that reduce avoidable loops.
+all_steps:
+  rules:
+    - ref: loop-analysis
+      position: before_instruction
+max_steps: 6
+initial_step: analyze
+
+steps:
+  - name: analyze
+    tags: [analysis]
+    capabilities: readonly
+    edit: false
+    persona: loop-analyzer
+    knowledge: loop-analysis
+    instruction: loop-analysis
+    rules:
+      - condition: when(true)
+        next: review
+
+  - name: review
+    tags: [review]
+    capabilities: readonly
+    edit: false
+    persona: loop-analysis-reviewer
+    instruction: review-loop-analysis
+    output_contracts:
+      report:
+        - name: loop-analysis.md
+          format: loop-analysis
+          use_judge: false
+    rules:
+      - condition: The proposal set is general and evidence-based, and any prior finding is resolved or its affected proposal is withdrawn with evidence because it cannot be addressed
+        next: COMPLETE
+      - condition: The proposal set is over-specialized, unsupported, incomplete, gives an unsupported cannot-address disposition, or otherwise needs revision
+        next: reanalyze
+
+  - name: reanalyze
+    tags: [analysis]
+    capabilities: readonly
+    edit: false
+    persona: loop-analyzer
+    knowledge: loop-analysis
+    instruction: reanalyze-loop-analysis
+    rules:
+      - condition: when(true)
+        next: review

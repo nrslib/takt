@@ -4,10 +4,6 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
-      position: before_instruction
-    - ref: invariant-recurrence
-      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
@@ -148,6 +144,8 @@ loop_monitors:
 steps:
   - name: initial-reviewers
     uses: peer-review-suite-call
+    vars:
+      review_mode: initial
     with:
       reviewer_suite:
         $param: reviewer_suite
@@ -173,6 +171,8 @@ steps:
         next: review-adjudication
   - name: reviewers
     uses: peer-review-suite-call
+    vars:
+      review_mode: follow_up
     with:
       reviewer_suite:
         $param: reviewer_suite

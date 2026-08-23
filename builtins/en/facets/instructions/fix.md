@@ -10,4 +10,4 @@ Use the latest reviewer reports in the Report Directory as authoritative and rem
 - Correct every issue that can be remediated
 - Do not claim that an unresolvable issue was fixed; identify it as a blocker in the work results
 
-Record the changes, verification evidence, and any blocker according to the supplied output contract.
+Record the changes, verification evidence, and any blocker in the requested format.

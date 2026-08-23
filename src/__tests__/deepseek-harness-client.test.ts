@@ -19,16 +19,25 @@ function findPython(): string | undefined {
   const candidates = process.platform === 'win32' ? ['python'] : ['python3', 'python'];
   for (const candidate of candidates) {
     try {
-      const version = execFileSync(candidate, ['-c', 'import sys; print(sys.version_info[:2])'], {
+      const details = execFileSync(candidate, [
+        '-c',
+        'import os, sys; print(sys.version_info[:2]); print(os.path.realpath(sys.executable))',
+      ], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       });
-      const match = /\((\d+), (\d+)\)/u.exec(version);
+      const [version, executable] = details.trim().split(/\r?\n/u);
+      const match = /\((\d+), (\d+)\)/u.exec(version ?? '');
       const parsedVersion: readonly [number, number] | undefined = match === null
         ? undefined
         : [Number(match[1]), Number(match[2])];
-      if (parsedVersion !== undefined && isSupportedPythonVersion(parsedVersion)) {
-        return candidate;
+      if (
+        parsedVersion !== undefined
+        && isSupportedPythonVersion(parsedVersion)
+        && executable !== undefined
+        && path.isAbsolute(executable)
+      ) {
+        return executable;
       }
     } catch {
       // Try the next supported interpreter name.

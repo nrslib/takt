@@ -9,7 +9,8 @@ workflow_overrides:
         - "Run `npm run lint` and verify lint passes"
         - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
         - "Run `npm test` after completing edits and verify the fast unit gate passes"
-        - "Besides the required `npm test` and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
+        - "Run `npm run test:it` after the unit gate and verify the light integration gate passes"
+        - "Besides the required `npm test`, `npm run test:it`, and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
         - "Run `npm run test:e2e:smoke` only when the changed behavior affects CLI startup, workflow execution, provider selection, config loading, sandboxing, or runtime preparation, and verify the smoke E2E passes"
     fix:
       quality_gates:
@@ -17,7 +18,8 @@ workflow_overrides:
         - "Run `npm run lint` and verify lint passes"
         - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
         - "Run `npm test` after completing edits and verify the fast unit gate passes"
-        - "Besides the required `npm test` and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
+        - "Run `npm run test:it` after the unit gate and verify the light integration gate passes"
+        - "Besides the required `npm test`, `npm run test:it`, and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
         - "Run `npm run test:e2e:smoke` only when the changed behavior affects CLI startup, workflow execution, provider selection, config loading, sandboxing, or runtime preparation, and verify the smoke E2E passes"
     ai_fix:
       quality_gates:
@@ -25,7 +27,8 @@ workflow_overrides:
         - "Run `npm run lint` and verify lint passes"
         - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
         - "Run `npm test` after completing edits and verify the fast unit gate passes"
-        - "Besides the required `npm test` and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
+        - "Run `npm run test:it` after the unit gate and verify the light integration gate passes"
+        - "Besides the required `npm test`, `npm run test:it`, and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
         - "Run `npm run test:e2e:smoke` only when the changed behavior affects CLI startup, workflow execution, provider selection, config loading, sandboxing, or runtime preparation, and verify the smoke E2E passes"
     ai-antipattern-fix:
       quality_gates:
@@ -33,7 +36,8 @@ workflow_overrides:
         - "Run `npm run lint` and verify lint passes"
         - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
         - "Run `npm test` after completing edits and verify the fast unit gate passes"
-        - "Besides the required `npm test` and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
+        - "Run `npm run test:it` after the unit gate and verify the light integration gate passes"
+        - "Besides the required `npm test`, `npm run test:it`, and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
         - "Run `npm run test:e2e:smoke` only when the changed behavior affects CLI startup, workflow execution, provider selection, config loading, sandboxing, or runtime preparation, and verify the smoke E2E passes"
     fix_supervisor:
       quality_gates:
@@ -41,7 +45,8 @@ workflow_overrides:
         - "Run `npm run lint` and verify lint passes"
         - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
         - "Run `npm test` after completing edits and verify the fast unit gate passes"
-        - "Besides the required `npm test` and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
+        - "Run `npm run test:it` after the unit gate and verify the light integration gate passes"
+        - "Besides the required `npm test`, `npm run test:it`, and the specific covering test files above, do not run unrelated full suites or whole test groups. Run an affected broader group only when you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), or re-run the exact failing command when fixing a failure reported from a quality gate or final-gate run. Run test commands sequentially and do not duplicate overlapping runs"
         - "Run `npm run test:e2e:smoke` only when the changed behavior affects CLI startup, workflow execution, provider selection, config loading, sandboxing, or runtime preparation, and verify the smoke E2E passes"
     merge-readiness-review:
       quality_gates:

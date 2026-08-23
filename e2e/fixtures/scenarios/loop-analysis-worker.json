@@ -1,0 +1,28 @@
+[
+  {
+    "persona": "test-coder",
+    "status": "done",
+    "content": "[EXECUTE:1]\n\nSource workflow completed."
+  },
+  {
+    "persona": "loop-analyzer",
+    "status": "done",
+    "delay_ms": 500,
+    "content": "The source run completed without an avoidable correction loop."
+  },
+  {
+    "persona": "loop-analysis-reviewer",
+    "status": "done",
+    "content": "No proposal is supported by the source run evidence."
+  },
+  {
+    "persona": "loop-analysis-reviewer",
+    "status": "done",
+    "content": "# Loop Analysis Report\n\n## Source Run\n- Run directory: supplied absolute source run directory\n- Artifacts examined: source run logs and reports\n\n## Accepted Proposals\n\n### None\n- Facet path: `None`\n- Evidence: No repeated avoidable behavior was observed.\n- Proposed change: None.\n- Expected loop reduction: None.\n- Generalization: No change is justified.\n\n## Rejected Proposals\n\n### None\n- Facet path: `None`\n- Rejection reason: No candidate proposal was identified."
+  },
+  {
+    "persona": "conductor",
+    "status": "done",
+    "content": "[REVIEW:1]"
+  }
+]

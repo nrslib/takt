@@ -15,12 +15,29 @@ prompts:
   - file://prompts/coding-review.phase1.md
 
 providers:
-  - id: 'exec: bash providers/claude-review.sh claude-opus-5 fixtures/sample-project'
+  - id: file://providers/cli-review.mjs
     label: claude-opus-5
-  - id: 'exec: bash providers/codex-review.sh gpt-5.6-luna max fixtures/sample-project'
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/sample-project
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
     label: codex-luna-max
-  - id: 'exec: bash providers/codex-review.sh gpt-5.6-sol high fixtures/sample-project'
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/sample-project
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
     label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/sample-project
+      isolate_working_dir: true
 
 # The Claude provider uses Claude CLI login. Codex providers and the grader use
 # Codex CLI login; no API billing is used.
@@ -63,7 +80,7 @@ tests:
         value: |
           const target = /(?:sortByName|\.sort\b|ソート|並べ替え|並び替え)/i;
           const mutation = /(?:破壊|変更|書き換え|mutat|in[ -]?place|元の(?:配列|入力|値|参照)(?:を|が|の)?(?:破壊|変更|書き換え|ソート))/i;
-          const inputEffect = /(?:入力|元の|呼び出し元|同一参照|配列)/i;
+          const inputEffect = /(?:入力|元の|呼び出し元|同一参照|配列|input|caller|array)/i;
           const text = String(output);
           const findingBlocks = text.split(/\n(?=###\s)/);
 

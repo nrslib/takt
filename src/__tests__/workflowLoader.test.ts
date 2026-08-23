@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import {
   isWorkflowPath,
@@ -17,6 +19,7 @@ import {
   loadAllStandaloneWorkflowsWithSources,
   loadWorkflow,
   loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
   listStandaloneWorkflowEntries,
   listWorkflows,
   listWorkflowEntries,
@@ -61,6 +64,23 @@ steps:
     allowed_tools: [Read]
     instruction: "{task}"
 `;
+
+function findWorkflowStep(workflow: WorkflowConfig, name: string): WorkflowStep {
+  const step = workflow.steps.find((candidate) => candidate.name === name);
+  if (!step) {
+    throw new Error(`Workflow step "${name}" was not found in "${workflow.name}"`);
+  }
+  return step;
+}
+
+function semanticTransitionMap(step: WorkflowStep): Record<string, string | undefined> {
+  return Object.fromEntries((step.rules ?? []).map((rule) => {
+    if (rule.condition.kind !== 'semantic') {
+      throw new Error(`Expected semantic transition rule on workflow step "${step.name}"`);
+    }
+    return [rule.condition.label, rule.next];
+  }));
+}
 
 function writeWorkflowCallContractChildFixture(workflowsDir: string): void {
   mkdirSync(workflowsDir, { recursive: true });
@@ -177,6 +197,58 @@ describe('loadWorkflowByIdentifier', () => {
     const workflow = loadWorkflowByIdentifier('default', process.cwd());
     expect(workflow).not.toBeNull();
     expect(workflow!.name).toBe('default');
+  });
+
+  it('should load the loop analysis builtin workflow', () => {
+    const workflow = loadWorkflowByIdentifier('loop-analysis', process.cwd());
+
+    expect(workflow?.name).toBe('loop-analysis');
+  });
+
+  it('TEST-NEW-review-fix-contract keeps review-fix aligned with default peer-review wiring', () => {
+    for (const language of ['en', 'ja'] as const) {
+      const projectDir = join(tempDir, language);
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
+
+      const defaultWorkflow = loadWorkflowByIdentifier('default', projectDir);
+      const reviewWorkflow = loadWorkflowByIdentifier('review', projectDir);
+      const reviewFixWorkflow = loadWorkflowByIdentifier('review-fix', projectDir);
+      if (!defaultWorkflow || !reviewWorkflow || !reviewFixWorkflow) {
+        throw new Error(`Expected builtin workflows to load for language "${language}"`);
+      }
+
+      const defaultDevelop = findWorkflowStep(defaultWorkflow, 'develop');
+      if (defaultDevelop.kind !== 'workflow_call') {
+        throw new Error('Expected default.develop to be a workflow_call step');
+      }
+      const developmentCore = resolveWorkflowCallTarget(defaultWorkflow, defaultDevelop, projectDir, projectDir);
+      if (!developmentCore) {
+        throw new Error('Expected default.develop to resolve development-core');
+      }
+
+      const defaultPeerReview = findWorkflowStep(developmentCore, 'peer-review');
+      const reviewFixReviewers = findWorkflowStep(reviewFixWorkflow, 'reviewers');
+      if (defaultPeerReview.kind !== 'workflow_call' || reviewFixReviewers.kind !== 'workflow_call') {
+        throw new Error('Expected peer-review and reviewers to be workflow_call steps');
+      }
+
+      expect(reviewFixReviewers.call).toBe('peer-review');
+      expect(reviewFixReviewers.args).toEqual(defaultPeerReview.args);
+      expect(reviewFixReviewers.args?.reviewer_suite).toBe('development-review');
+
+      const reviewGather = findWorkflowStep(reviewWorkflow, 'gather');
+      const reviewFixGather = findWorkflowStep(reviewFixWorkflow, 'gather');
+      expect(reviewFixGather.instructionRef).toBe(reviewGather.instructionRef);
+      expect(reviewFixGather.instruction).toBe(reviewGather.instruction);
+      expect(reviewFixGather.rules).toEqual(reviewGather.rules);
+
+      expect(semanticTransitionMap(reviewFixReviewers)).toEqual({
+        COMPLETE: 'COMPLETE',
+        need_replan: 'ABORT',
+        ABORT: 'ABORT',
+      });
+    }
   });
 
   it('should load workflow by absolute path', () => {

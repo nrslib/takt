@@ -127,11 +127,6 @@ describe('CT-COMP-01 workflow companion schema', () => {
       name: 'batch',
       arpeggio: { source: 'csv', source_path: 'input.csv', template: 'prompt.md' },
     }],
-    ['team leader root', {
-      name: 'team',
-      instruction: 'lead',
-      team_leader: { max_parts: 2 },
-    }],
     ['system step', { name: 'system', kind: 'system' }],
     ['workflow call', {
       name: 'delegate',
@@ -148,6 +143,17 @@ describe('CT-COMP-01 workflow companion schema', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it('should accept companion on a team leader root', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'team',
+      instruction: 'lead',
+      team_leader: { max_parts: 2 },
+      companion: ['security-reviewer'],
+    });
+
+    expect(result.success).toBe(true);
   });
 
   it('should reject companion on a parallel sub-step', () => {

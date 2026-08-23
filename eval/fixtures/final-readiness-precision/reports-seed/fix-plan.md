@@ -1,10 +1,10 @@
-# Fix Plan
+# 修正計画
 
-## Result: Fix plan finalized
+## 結果: 修正計画を確定した
 
-The implementation already covers both mode-entry paths and invalid-value rejection.
+実装はすでに両方の mode 入力経路と不正値拒否を満たしている。
 
-## Quality Gates
+## 品質確認
 
 - `npm run build`
 - `npm run lint`

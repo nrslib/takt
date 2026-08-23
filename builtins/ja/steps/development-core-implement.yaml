@@ -8,6 +8,9 @@ params:
   implementation_instruction:
     type: facet_ref
     facet_kind: instruction
+  scope_report_format:
+    type: facet_ref
+    facet_kind: report_format
 name: implement
 capabilities: edit
 tags:
@@ -25,7 +28,8 @@ instruction:
 output_contracts:
   report:
     - name: coder-scope.md
-      format: coder-scope
+      format:
+        $param: scope_report_format
       use_judge: false
     - name: coder-decisions.md
       format: coder-decisions

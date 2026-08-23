@@ -316,57 +316,6 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
     expect(await evaluateLive(detector)).toMatchObject({ reason: 'commit' });
   });
 
-  it('should report only hunk regions changed since the previous review', () => {
-    const detector = new CompanionChangeDetector({
-      intervalMs: 100,
-      minimumChangedLines: 10,
-      now: () => 1_000,
-      readDiff: vi.fn(),
-    });
-    detector.markReviewed({
-      ...diff('first', 10),
-      changedFiles: ['src/a.ts'],
-      fileFingerprints: { 'src/a.ts': 'a-1' },
-      hunkFingerprints: { 'src/a.ts:1-2': 'hunk-a-1' },
-    }, 0);
-
-    expect(detector.changedRegionsSinceLastReview({
-      ...diff('second', 11),
-      changedFiles: ['src/a.ts', 'src/b.ts'],
-      fileFingerprints: { 'src/a.ts': 'a-2', 'src/b.ts': 'b-1' },
-      hunkFingerprints: {
-        'src/a.ts:1-2': 'hunk-a-1',
-        'src/a.ts:8-9': 'hunk-a-2',
-        'src/b.ts:1-1': 'hunk-b-1',
-      },
-    })).toEqual(['src/a.ts:8-9', 'src/b.ts:1-1']);
-  });
-
-  it('should report a file removed from the cumulative diff after the previous review', () => {
-    const detector = new CompanionChangeDetector({
-      intervalMs: 100,
-      minimumChangedLines: 10,
-      now: () => 1_000,
-      readDiff: vi.fn(),
-    });
-    detector.markReviewed({
-      ...diff('first', 10),
-      changedFiles: ['src/a.ts', 'src/b.ts'],
-      fileFingerprints: { 'src/a.ts': 'a-1', 'src/b.ts': 'b-1' },
-      hunkFingerprints: {
-        'src/a.ts:1-1': 'a-1',
-        'src/b.ts:3-3': 'b-1',
-      },
-    }, 0);
-
-    expect(detector.changedRegionsSinceLastReview({
-      ...diff('second', 1),
-      changedFiles: ['src/a.ts'],
-      fileFingerprints: { 'src/a.ts': 'a-1' },
-      hunkFingerprints: { 'src/a.ts:1-1': 'a-1' },
-    })).toEqual(['src/b.ts:3-3']);
-  });
-
   it.each([
     'git commit -m change',
     'git -C . commit -m change',

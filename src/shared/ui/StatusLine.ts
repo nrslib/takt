@@ -21,8 +21,14 @@ class StatusLineImpl {
   private savedStdoutWrite?: typeof process.stdout.write;
   private savedStderrWrite?: typeof process.stderr.write;
   private rendering = false;
+  private suspendedMessage?: string;
+  private suspendDepth = 0;
 
   start(message: string): void {
+    if (this.suspendDepth > 0) {
+      this.suspendedMessage = message;
+      return;
+    }
     if (this.active) {
       this.message = message;
       return;
@@ -55,10 +61,43 @@ class StatusLineImpl {
   }
 
   update(message: string): void {
+    if (this.suspendDepth > 0) {
+      this.suspendedMessage = message;
+      return;
+    }
     this.message = message;
   }
 
+  suspend(): void {
+    if (this.suspendDepth > 0) {
+      this.suspendDepth++;
+      return;
+    }
+    if (!this.active) {
+      this.suspendDepth = 1;
+      return;
+    }
+
+    const message = this.message;
+    this.stop();
+    this.suspendedMessage = message;
+    this.suspendDepth = 1;
+  }
+
+  resume(): void {
+    if (this.suspendDepth === 0) return;
+    this.suspendDepth--;
+    if (this.suspendDepth > 0) return;
+
+    if (this.suspendedMessage === undefined) return;
+    const message = this.suspendedMessage;
+    this.suspendedMessage = undefined;
+    this.start(message);
+  }
+
   stop(): void {
+    this.suspendDepth = 0;
+    this.suspendedMessage = undefined;
     if (!this.active) return;
     this.active = false;
     if (this.intervalId) {

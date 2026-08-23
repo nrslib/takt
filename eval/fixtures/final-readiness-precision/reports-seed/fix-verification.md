@@ -1,5 +1,5 @@
-# Fix Completion Verification
+# 修正完了の確認
 
-## Result: verified
+## 結果: 確認済み
 
-The current code independently satisfies every acceptance criterion in the original task. The fix report contains evidence for every quality gate supplied at runtime. The mock E2E command appears only in the fix plan.
+現在のコードは、元タスクの受入条件をすべて満たしている。修正レポートには実行時に提示された各品質確認の結果がある。模擬 E2E のコマンドは修正計画にだけ記載されている。

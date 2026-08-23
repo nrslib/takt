@@ -24,6 +24,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     internalAgentIsolation: options.internalAgentIsolation,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
+    ...(options.preparedMcp !== undefined ? { preparedMcp: options.preparedMcp } : {}),
     model: options.model,
     effort,
     skillsEnabled,
@@ -51,6 +52,8 @@ export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'sse', 'http']);
+  readonly supportsStrictMcpConfig = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
@@ -84,6 +87,7 @@ export class ClaudeProvider implements Provider {
         internalAgentIsolation: 'strict-readonly',
         allowedTools: [],
         mcpServers: undefined,
+        preparedMcp: undefined,
         imageAttachments: undefined,
         outputSchema: assertOutputSchema(options.outputSchema, 'claude'),
       };

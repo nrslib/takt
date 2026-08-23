@@ -48,6 +48,8 @@ export interface StructuredAgentCallOptions {
   /** Omitted means explicit caller tools; synthetic defaults are marked explicitly. */
   readonly allowedToolsSource?: StructuredAgentControlSource;
   readonly mcpServers?: RunAgentOptions['mcpServers'];
+  readonly mcpAssignment?: RunAgentOptions['mcpAssignment'];
+  readonly mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
   readonly outputSchema?: RunAgentOptions['outputSchema'];
 }
 
@@ -124,6 +126,8 @@ async function executeFreshAgent(
     },
     ...(allowedTools === undefined ? {} : { allowedTools }),
     ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
+    ...(options.mcpAssignment === undefined ? {} : { mcpAssignment: options.mcpAssignment }),
+    ...(options.mcpServerIdentity === undefined ? {} : { mcpServerIdentity: options.mcpServerIdentity }),
     ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
     ...(options.language === undefined ? {} : { language: options.language }),
     ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),

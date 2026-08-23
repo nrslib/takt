@@ -1,0 +1,124 @@
+name: review
+description: 多角レビュー - 変更内容に応じて専門レビュアーを自動選択して並列レビューし、supervisor がレビュー結果を統合する
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+max_steps: 10
+initial_step: gather
+
+steps:
+  - name: gather
+    uses: review-gather-with-clarification-to-reviewers
+    rules:
+      - condition: レビュー対象の情報収集完了
+        next: reviewers
+      - condition: レビュー対象を特定できない、情報不足
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
+
+  - name: reviewers
+    kind: workflow_call
+    call: development-review
+    vars:
+      review_mode: initial
+    rules:
+      - condition: COMPLETE
+        next: review-synthesis
+      - condition: needs_fix
+        next: supervise
+      - condition: ABORT
+        next: ABORT
+
+  - name: review-synthesis
+    capabilities: readonly
+    tags:
+      - review
+      - final-gate
+      - supervise
+    edit: false
+    persona: supervisor
+    policy:
+      - contract-change
+      - review
+    pass_previous_response: false
+    rules:
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: COMPLETE
+    instruction: &review_synthesis_instruction |
+      ## レビュー結果
+      {previous_response}
+
+      **これはレビュー専用 workflow です。** テスト実行やビルドは行わないでください。
+      レビュー結果を統合し、最終サマリーを作成する役割です。
+
+      **やること:**
+      1. `review-target.md` と Report Directory に存在するすべてのレビュワーレポートを読む。任意のレビュワーが未選択の場合、そのレポートが存在すると仮定しない。
+      2. 利用可能なすべてのレビュー結果を統合
+      3. 統合レビューサマリーと総合判定を作成
+    output_contracts: &review_synthesis_output_contracts
+      report:
+        - name: review-summary.md
+          format: |
+            ```markdown
+            # レビューサマリー
+
+            ## 総合判定: APPROVE / REJECT
+
+            ## サマリー
+            {2-3文で全レビュー結果を統合}
+
+            ## レビュー結果
+            | レビュー | 結果 | 主要な発見 |
+            |---------|------|-----------|
+            | 存在する各レビュー | APPROVE/REJECT | {概要} |
+
+            ## 今回の指摘（new）
+            | # | finding_id | 重大度 | ソース | 場所 | 問題 | 修正案 |
+            |---|------------|--------|--------|------|------|--------|
+            | 1 | SUM-NEW-src-file-L42 | High | セキュリティ | `file:line` | 説明 | 提案 |
+
+            ## 継続指摘（persists）
+            | # | finding_id | ソース | 前回根拠 | 今回根拠 | 問題 |
+            |---|------------|--------|----------|----------|------|
+            | 1 | SUM-PERSIST-src-file-L77 | アーキテクチャ | `file:line` | `file:line` | 説明 |
+
+            ## 解消済み（resolved）
+            | finding_id | ソース | 解消根拠 |
+            |------------|--------|----------|
+            | SUM-RESOLVED-src-file-L10 | テスト | `file:line` |
+
+            ## 改善提案
+            - {全レビューからの統合提案}
+
+            ## REJECT判定条件
+            - `new` または `persists` が1件以上ある場合のみ REJECT 可
+            - `finding_id` なしの指摘は無効
+            ```
+
+  - name: supervise
+    capabilities: readonly
+    tags:
+      - review
+      - supervise
+    edit: false
+    persona: supervisor
+    policy:
+      - contract-change
+      - review
+    pass_previous_response: false
+    rules:
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        next: COMPLETE
+    instruction: *review_synthesis_instruction
+    output_contracts: *review_synthesis_output_contracts

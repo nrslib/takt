@@ -16,41 +16,52 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderFallbackNotice } from './fallback-notice.js';
 import {
   trimContextContent,
-  renderConflictNotice,
-  prepareKnowledgeContent as prepareKnowledgeContentGeneric,
-  preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
 import { renderPullRequestContext } from '../pr-context.js';
-import { isNormalAgentWorkflowStep } from '../../models/workflow-types.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../models/workflow-types.js';
 import { getCompanionInstructionCopy } from '../companion/evidence.js';
 import { renderWorkflowWideRules } from './workflow-wide-rules.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
-function prepareKnowledgeContent(content: string, sourcePath?: string): string {
-  return prepareKnowledgeContentGeneric(content, CONTEXT_MAX_CHARS, sourcePath);
-}
+export function prepareReferenceContent(
+  content: string,
+  sourcePath: string | undefined,
+  language: Language,
+): string {
+  if (content.length <= CONTEXT_MAX_CHARS) return content;
 
-function preparePolicyContent(content: string, sourcePath?: string): string {
-  return preparePolicyContentGeneric(content, CONTEXT_MAX_CHARS, sourcePath);
+  const omittedMarker = language === 'ja' ? '...（以下省略）...' : '...TRUNCATED...';
+  const lines = [`${content.slice(0, CONTEXT_MAX_CHARS)}\n${omittedMarker}`];
+  if (sourcePath) {
+    lines.push(
+      '',
+      language === 'ja'
+        ? `表示は途中までです。判断前に次のファイルを先頭から末尾まで確認してください: ${sourcePath}`
+        : `This display is truncated. Read the following file from beginning to end before deciding: ${sourcePath}`,
+    );
+  }
+  return lines.join('\n');
 }
 
 export function preparePreviousResponseContent(
   content: string,
   sourcePath: string | undefined,
   preserveFullContent: boolean,
+  language: Language = 'en',
 ): string {
   const prepared = preserveFullContent
     ? { content, truncated: false }
     : trimContextContent(content, CONTEXT_MAX_CHARS);
   const lines: string[] = [prepared.content];
   if (prepared.truncated && sourcePath) {
-    lines.push('', `Previous Response is truncated. Source: ${sourcePath}`);
+    lines.push(
+      '',
+      language === 'ja'
+        ? `以前の応答は途中までです。必要な内容は次のファイルで確認してください: ${sourcePath}`
+        : `The prior response is truncated. Read the missing content from this file: ${sourcePath}`,
+    );
   }
-  if (sourcePath) {
-    lines.push('', `Source: ${sourcePath}`);
-  }
-  lines.push('', renderConflictNotice());
   return lines.join('\n');
 }
 
@@ -97,12 +108,8 @@ export class InstructionBuilder {
     // Report info (from output contracts)
     const hasReport = !!(this.step.outputContracts && this.step.outputContracts.length > 0 && this.context.reportDir);
     let reportInfo = '';
-    let phaseNote = '';
     if (hasReport && this.step.outputContracts && this.context.reportDir) {
       reportInfo = renderReportContext(this.step.outputContracts, this.context.reportDir);
-      phaseNote = language === 'ja'
-        ? '**注意:** これはPhase 1（本来の作業）です。作業完了後、Phase 2で自動的にレポートを生成します。'
-        : '**Note:** This is Phase 1 (main work). After you complete your work, Phase 2 will automatically generate the report based on your findings.';
     }
 
     // Skip auto-injection for sections whose placeholders exist in the template
@@ -126,6 +133,7 @@ export class InstructionBuilder {
           this.context.previousOutput.content,
           this.context.previousResponseSourcePath,
           this.step.preserveFullPreviousResponse === true,
+          language,
         )
       : '';
     const workflowRules = renderWorkflowWideRules(
@@ -176,7 +184,7 @@ export class InstructionBuilder {
     const hasPolicy = !!(policyStrings && policyStrings.length > 0);
     const policyJoined = hasPolicy && policyStrings ? policyStrings.join('\n\n---\n\n') : '';
     const policyContent = hasPolicy
-      ? preparePolicyContent(policyJoined, this.context.policySourcePath)
+      ? prepareReferenceContent(policyJoined, this.context.policySourcePath, language)
       : '';
 
     // Knowledge injection (domain-specific knowledge, no reminder needed)
@@ -185,7 +193,7 @@ export class InstructionBuilder {
     const hasKnowledge = !!(knowledgeStrings && knowledgeStrings.length > 0);
     const knowledgeJoined = hasKnowledge && knowledgeStrings ? knowledgeStrings.join('\n\n---\n\n') : '';
     const knowledgeContent = hasKnowledge
-      ? prepareKnowledgeContent(knowledgeJoined, this.context.knowledgeSourcePath)
+      ? prepareReferenceContent(knowledgeJoined, this.context.knowledgeSourcePath, language)
       : '';
 
     // Quality gates injection (AI directives for step completion)
@@ -211,7 +219,6 @@ export class InstructionBuilder {
       stepName: this.step.name,
       hasReport,
       reportInfo,
-      phaseNote,
       hasTaskSection,
       userRequest,
       hasPreviousResponse,
@@ -262,27 +269,19 @@ export class InstructionBuilder {
 
   private appendCompanionInstruction(instructions: string): string {
     if (
-      !isNormalAgentWorkflowStep(this.step)
+      !isNormalOrTeamLeaderWorkflowStep(this.step)
       || this.step.companion === undefined
       || this.context.companion === undefined
     ) return instructions;
     const language = this.context.language ?? 'en';
     const companionCopy = getCompanionInstructionCopy(language);
-    const section = language === 'ja'
-      ? [
-          `## ${companionCopy.heading}`,
-          `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
-          '各ファイルの実装完了後、テスト実行前、作業完了宣言の直前に新規レコードを確認してください。',
-          companionCopy.evidenceGuard,
-          '指摘は参考情報です。現在のコードで検証し、対応するかどうかは自分で判断してください。対応しない場合は理由を応答に書いてください。',
-        ].join('\n')
-      : [
-          `## ${companionCopy.heading}`,
-          `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
-          'Read new records after finishing each file, before running tests, and before declaring completion.',
-          companionCopy.evidenceGuard,
-          'Findings are advisory. Verify them against the current code and decide whether to act. Explain in your response why you do not address a finding.',
-        ].join('\n');
+    const section = [
+      `## ${companionCopy.heading}`,
+      `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
+      companionCopy.reviewDelivery[this.context.companion.reviewMode],
+      companionCopy.evidenceGuard,
+      companionCopy.advisoryNotice,
+    ].join('\n');
     return [instructions, '', section].join('\n');
   }
 }

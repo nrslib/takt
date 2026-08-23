@@ -186,9 +186,12 @@ export interface NdjsonInteractiveEnd {
 
 export type NdjsonCompanionReviewTrigger = 'quiet' | 'forced' | 'completion' | 'commit';
 
+export type NdjsonCompanionReviewMode = 'completion' | 'live';
+
 export interface NdjsonCompanionReviewRound {
   type: 'companion_review_round';
   step: string;
+  reviewMode: NdjsonCompanionReviewMode;
   companion: string;
   trigger: NdjsonCompanionReviewTrigger;
   digest: string;
@@ -325,17 +328,3 @@ export type NdjsonRecord =
   | NdjsonCompanionQueueCoalesced
   | NdjsonCompanionCall
   | NdjsonCompanionReviewSkipped;
-
-/** Record for debug prompt/response log (debug-*-prompts.jsonl) */
-export interface PromptLogRecord {
-  step: string;
-  phase: 1 | 2 | 3;
-  iteration: number;
-  scope: string;
-  phaseExecutionId: string;
-  prompt: string;
-  systemPrompt: string;
-  userInstruction: string;
-  response: string;
-  timestamp: string;
-}

@@ -4,10 +4,6 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
-      position: before_instruction
-    - ref: invariant-recurrence
-      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
@@ -42,6 +38,7 @@ steps:
       development_policy: [coding, testing, architecture]
       development_knowledge: [architecture]
       implementation_instruction: simple-implement
+      scope_report_format: coder-scope
     rules:
       - condition: Implementation completed
         next: review

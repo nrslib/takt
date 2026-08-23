@@ -1,1 +1,1 @@
-`persists` は、未解消であり、最新の `review-resolution.md` で `actionable` と裁定された finding、または未裁定の finding に限定する。`out_of_scope`、`overreach`、`false_positive`、`no_issue_after_verification`、`environment_unverified`、または canonical finding へ統合済みの `duplicate` と裁定された finding を `persists` に置かない。
+`persists` は、同じ `finding_id` を持つ未解消の既出 finding に限定する。解消済み、修正不要と確認済み、または別の指摘へ統合済みの finding を `persists` に置かない。

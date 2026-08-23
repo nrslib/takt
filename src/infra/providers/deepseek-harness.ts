@@ -80,6 +80,7 @@ function toDeepSeekHarnessOptions(
 export class DeepSeekHarnessProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set();
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

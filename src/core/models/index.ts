@@ -41,6 +41,7 @@ export type {
   WorkflowPromotionEntry,
   AgentWorkflowStep,
   NormalAgentWorkflowStep,
+  NormalOrTeamLeaderWorkflowStep,
   ParallelWorkflowStep,
   DynamicParallelFixedSubStep,
   DynamicParallelPoolSubStep,
@@ -73,6 +74,7 @@ export type {
   WorkflowConfig,
   WorkflowState,
   CompanionSelection,
+  CompanionReviewMode,
   ResolvedCompanionDefinition,
   CompanionFindingSeverity,
   CompanionFinding,
@@ -106,6 +108,7 @@ export {
   getAllParallelSubSteps,
   isDynamicParallelSubSteps,
   isNormalAgentWorkflowStep,
+  isNormalOrTeamLeaderWorkflowStep,
 } from './types.js';
 
 // Re-export from agent.ts

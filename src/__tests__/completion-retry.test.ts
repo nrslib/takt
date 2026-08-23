@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import {
   buildCompletionRetryJudgePrompt,
+  buildCompletionRetryOutputSchema,
   runCompletionRetryEpisode,
 } from '../core/workflow/completion-retry.js';
 
@@ -16,8 +17,34 @@ function response(content: string, sessionId = 'review-session'): AgentResponse 
 }
 
 describe('completion retry episode', () => {
-  it('uses the actual reviewer instruction as the sole scope authority', () => {
-    const reviewerInstruction = 'Review only accepted-family regressions. Do not explore new families.';
+  it('asks only for missing paths that the retry implementation uses', () => {
+    const schema = JSON.stringify(buildCompletionRetryOutputSchema());
+    expect(schema).toContain('missing_paths');
+    expect(schema).not.toMatch(/family|actionable|authorization|policy|kind/);
+
+    for (const language of ['ja', 'en'] as const) {
+      const prompt = buildCompletionRetryJudgePrompt({
+        language,
+        task: 'review the change',
+        reviewerInstruction: 'check the affected consumers',
+        reviewScope: { changedPaths: ['src/changed.ts'] },
+        evidence: {
+          status: 'collected',
+          files: [],
+          references: [],
+          priorGapPaths: [],
+          omissions: [],
+        },
+        reviewResponse: 'reviewed src/changed.ts',
+      });
+      expect(`${prompt.systemPrompt}\n${prompt.instruction}`).not.toMatch(
+        /contract family|new famil|新規family|権限の正本|scope authority/i,
+      );
+    }
+  });
+
+  it('uses the actual review requirements to limit the coverage check', () => {
+    const reviewerInstruction = 'Review only regressions related to the accepted repair. Do not explore unrelated problems.';
     const prompt = buildCompletionRetryJudgePrompt({
       language: 'en',
       task: 'review the change',
@@ -45,8 +72,6 @@ describe('completion retry episode', () => {
         complete: false,
         reason: 'missing consumer',
         missingObligations: [{
-          kind: 'changed_target_gap',
-          contractFamily: 'config',
           path: 'consumer.ts',
           reason: 'not inspected',
         }],
@@ -181,8 +206,6 @@ describe('completion retry episode', () => {
         complete: false,
         reason: 'final retry introduced a gap',
         missingObligations: [{
-          kind: 'remediation_regression',
-          contractFamily: 'review-completion',
           path: 'consumer.ts',
           reason: 'regression remains',
         }],
@@ -202,8 +225,6 @@ describe('completion retry episode', () => {
     expect(result.diagnostic?.kind).toBe('max_retry_reached');
     expect(result.diagnostic?.retriesUsed).toBe(1);
     expect(result.diagnostic?.missingObligations).toEqual([{
-      kind: 'remediation_regression',
-      contractFamily: 'review-completion',
       path: 'consumer.ts',
       reason: 'regression remains',
     }]);
@@ -211,8 +232,6 @@ describe('completion retry episode', () => {
 
   it('reports the incomplete decision when the explicit retry ceiling is zero', async () => {
     const missingObligation = {
-      kind: 'family_lifecycle_gap' as const,
-      contractFamily: 'config',
       path: 'consumer.ts',
       reason: 'unvisited',
     };
@@ -250,8 +269,6 @@ describe('completion retry episode', () => {
 
   it('stops at the internal ceiling when every completeness decision remains incomplete', async () => {
     const missingObligation = {
-      kind: 'family_lifecycle_gap' as const,
-      contractFamily: 'config',
       path: 'consumer.ts',
       reason: 'unvisited',
     };
@@ -288,8 +305,6 @@ describe('completion retry episode', () => {
 
   it('honors an explicit retry ceiling above the internal ceiling', async () => {
     const missingObligation = {
-      kind: 'changed_target_gap' as const,
-      contractFamily: 'config',
       path: 'consumer.ts',
       reason: 'unvisited',
     };
@@ -339,8 +354,6 @@ describe('completion retry episode', () => {
         complete: false,
         reason: 'gap',
         missingObligations: [{
-          kind: 'family_lifecycle_gap',
-          contractFamily: 'config',
           path: 'consumer.ts',
           reason: 'unvisited',
         }],

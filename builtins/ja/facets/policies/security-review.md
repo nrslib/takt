@@ -2,7 +2,7 @@
 
 ## Security 固有の判定境界
 
-Security reviewer の脆弱性判定を、共通ポリシーの一般的な品質・レビュー判定から分離する。以下の Security 固有ルールは、共通ポリシーのスコープ判定・REJECT 基準・ボーイスカウト判定、Knowledge の例示的な判定、その他の一般的なレビュー指示と競合する場合に優先する。
+Security reviewer は、脆弱性による blocking finding を以下の条件だけで判定する。一般的な品質・保守性の懸念は脆弱性へ格上げせず、それぞれの技術的な基準で判断する。
 
 ### Blocking finding
 
@@ -37,4 +37,4 @@ symlink または canonical-path の問題は、攻撃者が制御するリポ�
 | 要求されていない defense-in-depth、追加保証、仮想的な脅威 | Warning |
 | セキュリティ境界に直接関係しない品質、保守性、一般的なテストカバレッジの提案 | Warning または対象外 |
 
-Warning または対象外の事項だけが残る場合は APPROVE とする。未確認の懸念は共通ポリシーに従って未確認範囲として記録し、finding に格上げしない。
+Warning または対象外の事項だけが残る場合は APPROVE とする。未確認の懸念は未確認範囲として記録し、finding に格上げしない。

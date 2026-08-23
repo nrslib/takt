@@ -20,15 +20,20 @@ const REPORT_SECTION_NAMES = {
   ],
   supervisorValidationFindings: [
     '前段 finding の再評価',
+    '前段の指摘の再評価',
     'Re-evaluation of Prior Findings',
   ],
   reviewDecisionRequirements: [
     '要件の判定根拠',
+    '要件との照合',
     'Requirement Decision Grounds',
+    'Requirement Check',
   ],
   reviewDecisionFindings: [
     '指摘ごとの裁定',
+    '指摘ごとの判断',
     'Finding Dispositions',
+    'Decision for Each Finding',
   ],
   supervisorSummaryRequirements: [
     '要件充足',
@@ -42,6 +47,7 @@ const REPORT_SECTION_NAMES = {
     'レビュー履歴',
     'Review History',
     '前段 finding の再評価',
+    '前段の指摘の再評価',
     'Re-evaluation of Prior Findings',
   ],
   unverified: [
@@ -84,7 +90,7 @@ const REPORT_SECTIONS: Record<ReportContract, ReportSections> = {
 };
 
 const FULFILLED_STATUS = /^(?:充足|fulfilled|satisfied)$/i;
-const UNRESOLVED_STATUS = /(?:未解決|未解消|未確認|未対応|unresolved|open|actionable|unverified)/i;
+const UNRESOLVED_STATUS = /(?:未解決|未解消|未確認|未対応|修正する|同じ問題へ統合|環境上確認不能|unresolved|open|actionable|unverified|repair|merge into same problem|cannot verify in this environment)/i;
 
 interface FenceMarker {
   readonly character: '`' | '~';
@@ -227,11 +233,11 @@ function fulfilledRequirements(lines: readonly string[]): string[] {
 
 function unresolvedFindingCount(lines: readonly string[]): number {
   const rows = parseTableRows(lines);
-  const headerIndex = findHeaderIndex(rows, /finding|解消状態|resolution|status|状態|disposition|裁定/i);
+  const headerIndex = findHeaderIndex(rows, /finding|解消状態|resolution|status|状態|disposition|裁定|今回の扱い|treatment/i);
   if (headerIndex >= 0) {
     const statusColumn = findColumn(
       rows[headerIndex]!,
-      /解消状態|resolution|status|状態|disposition|裁定/i,
+      /解消状態|resolution|status|状態|disposition|裁定|今回の扱い|treatment/i,
     );
     if (statusColumn >= 0) {
       return rows

@@ -59,7 +59,7 @@ npm test -- src/__tests__/releaseVerificationWiring.test.ts
 | timeout 延長だけで停止・競合・無限ループを解決した扱いにする | REJECT |
 | 重いテストを unit gate から除外しただけで分類先へ接続しない | REJECT |
 
-重い IT は1 runner 内で1 workerに固定する。ローカルの全件実行は直列とし、PR CI では worker を増やさず、独立 runner の4シャードと serial group ごとの runner に分離する。
+重い IT は1 runner 内で1 workerに固定する。ローカルの全件実行は直列とし、PR CI では worker を増やさず、独立 runner の6シャードと serial group ごとの runner に分離する。
 
 | 実行方式 | 判定 |
 |---------|------|

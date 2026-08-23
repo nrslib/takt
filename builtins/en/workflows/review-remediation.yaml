@@ -4,10 +4,6 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
-      position: before_instruction
-    - ref: invariant-recurrence
-      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
@@ -88,11 +84,11 @@ steps:
       review_knowledge_additions:
         $param: fix_knowledge
     rules:
-      - condition: ACTIONABLE FINDINGS
+      - condition: Problems require repair
         next: fix-plan
-      - condition: NO ACTIONABLE FINDINGS
+      - condition: No problems require repair
         next: COMPLETE
-      - condition: REPLAN REQUIRED
+      - condition: The entire task must be replanned
         return: need_replan
 
   - name: fix-plan

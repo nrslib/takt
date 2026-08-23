@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { WorkflowStep } from '../core/models/types.js';
-import type { StepRunResult } from '../core/workflow/types.js';
+import type { StepProviderInfo, StepRunResult } from '../core/workflow/types.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { TeamLeaderPartCancellation } from '../core/workflow/engine/team-leader-part-cancellation.js';
 
@@ -875,16 +875,27 @@ describe('workflow OpenTelemetry spans', () => {
         providerOptions: {
           codex: {
             baseUrl: 'http://user:token@127.0.0.1:8787/v1?api_key=secret',
+            fastMode: false,
             reasoningEffort: 'high',
           },
         },
-        providerOptionsSources: { 'codex.baseUrl': 'workflow', 'codex.reasoningEffort': 'project' },
+        providerOptionsSources: {
+          'codex.baseUrl': 'workflow',
+          'codex.fastMode': 'project',
+          'codex.reasoningEffort': 'project',
+        },
       },
     }, async () => makeDoneResult());
 
     expect(spans[0]?.attributes).toMatchObject({
-      'takt.provider.options': JSON.stringify({ codex: { baseUrl: '[configured]', reasoningEffort: 'high' } }),
-      'takt.provider.options_sources': JSON.stringify({ 'codex.baseUrl': 'workflow', 'codex.reasoningEffort': 'project' }),
+      'takt.provider.options': JSON.stringify({
+        codex: { baseUrl: '[configured]', fastMode: false, reasoningEffort: 'high' },
+      }),
+      'takt.provider.options_sources': JSON.stringify({
+        'codex.baseUrl': 'workflow',
+        'codex.fastMode': 'project',
+        'codex.reasoningEffort': 'project',
+      }),
     });
   });
 

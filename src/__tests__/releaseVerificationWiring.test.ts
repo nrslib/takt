@@ -35,6 +35,7 @@ import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 import { selectNpmTestRuns } from '../../scripts/run-npm-test.mjs';
+import { BIRPC_REMEASURE_ON_CI_ENV } from '../../scripts/vitest-birpc-noise.mjs';
 import {
   RELEASE_GATE_SCRIPTS,
   RELEASE_LOG_RELATIVE_PATH,
@@ -47,6 +48,7 @@ interface PackageManifest {
 
 interface CiWorkflowStep {
   run?: string;
+  env?: Record<string, string>;
 }
 
 interface CiWorkflowJob {
@@ -75,6 +77,9 @@ const manifest = JSON.parse(
 ) as PackageManifest;
 const ciWorkflow = parseYaml(
   readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+) as CiWorkflow;
+const prCommentWorkflow = parseYaml(
+  readFileSync(new URL('../../.github/workflows/pr-comment-commands.yml', import.meta.url), 'utf8'),
 ) as CiWorkflow;
 
 const integrationBoundaryNames = new Set([
@@ -230,7 +235,7 @@ if (command === process.env.TAKT_FAIL_COMMAND) {
 describe('release verification wiring', () => {
   it('should connect each public test entrypoint to its intended runner', () => {
     expect(manifest.scripts).toMatchObject({
-      test: 'npm run test:type-contracts && node scripts/run-npm-test.mjs',
+      test: 'npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs',
       'test:unit': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:unit:parallel': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:it': 'npm run test:it:light',
@@ -264,6 +269,29 @@ describe('release verification wiring', () => {
       'test:e2e:all',
     ]);
     expect(new Set(RELEASE_GATE_SCRIPTS).size).toBe(RELEASE_GATE_SCRIPTS.length);
+  });
+
+  it('should keep the eight-runner unit matrix on the main pull-request workflow', () => {
+    const unitShardJob = ciWorkflow.jobs?.['test-shard'];
+    const commentCiJob = prCommentWorkflow.jobs?.ci;
+
+    expect(unitShardJob?.name).toBe('test shard (${{ matrix.shard }}/8)');
+    expect(unitShardJob?.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(unitShardJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
+      'npm run test:unit:parallel -- --shard=${{ matrix.shard }}/8',
+    );
+    expect(commentCiJob?.strategy).toBeUndefined();
+    expect(commentCiJob?.steps?.map((step) => step.run).filter(Boolean)).toContain('npm run test');
+  });
+
+  it('should opt in to birpc re-measurement only on the auxiliary /ci job', () => {
+    const commentCiJob = prCommentWorkflow.jobs?.ci;
+    const testStep = commentCiJob?.steps?.find((step) => step.run === 'npm run test');
+    const e2eStep = commentCiJob?.steps?.find((step) => step.run === 'npm run test:e2e:mock');
+
+    expect(testStep?.env?.[BIRPC_REMEASURE_ON_CI_ENV]).toBe('1');
+    expect(e2eStep?.env?.[BIRPC_REMEASURE_ON_CI_ENV]).toBeUndefined();
+    expect(JSON.stringify(ciWorkflow)).not.toContain(BIRPC_REMEASURE_ON_CI_ENV);
   });
 
   it('should run light integration and isolated heavy integration shards as pull-request gates', () => {
@@ -440,6 +468,29 @@ describe('release verification wiring', () => {
       ...parallelIntegrationTestFiles,
       ...serialFiles,
     ]);
+  });
+
+  it('should type-check every test on the whitelist, and only tests that exist', () => {
+    const testsConfigPath = new URL('../../tsconfig.tests.json', import.meta.url);
+    // The file carries the rule as comments, which JSON.parse does not take.
+    const raw = readFileSync(testsConfigPath, 'utf-8')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//'))
+      .join('\n');
+    const listed = (JSON.parse(raw) as { include: string[] }).include;
+
+    expect(listed.length).toBeGreaterThan(0);
+    expect(listed, 'the list is read by people; keep it sorted').toEqual([...listed].sort());
+    for (const entry of listed) {
+      expect(existsSync(new URL(`../../${entry}`, import.meta.url)), entry).toBe(true);
+    }
+
+    // The gate has to run it, or the list is decoration.
+    const packageJson = JSON.parse(
+      readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'),
+    ) as { scripts: Record<string, string> };
+    expect(packageJson.scripts['test:types']).toContain('tsconfig.tests.json');
+    expect(packageJson.scripts.test).toContain('test:types');
   });
 
   it('should keep process, Git, storage, and workflow-engine boundaries out of unit tests', () => {

@@ -1,0 +1,56 @@
+name: review-fix
+description: Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+max_steps: 30
+initial_step: gather
+
+steps:
+  - name: gather
+    uses: review-gather-with-clarification-to-reviewers
+    rules:
+      - condition: Review target information gathered
+        next: reviewers
+      - condition: Cannot identify review target, insufficient info
+        next: ABORT
+        appendix: |
+          Clarifications needed:
+          - {Question 1}
+          - {Question 2}
+
+  - name: reviewers
+    kind: workflow_call
+    call: peer-review
+    args:
+      reviewer_suite: development-review
+      review_policy_additions: []
+      review_knowledge_additions: [architecture, unit-testing, e2e-testing]
+      security_review_knowledge_additions: []
+      security_review_pool: security-review-facets
+      fix_companions:
+        fixed: [ai-antipattern-review-companion, testing-review-companion]
+        pool: []
+        moderator: review-companion-moderator
+      remediation_workflow: development-remediation-dynamic
+      fix_pool: coding-facets
+      plan_policy: [coding, testing, review, architecture]
+      fix_policy: [coding, testing, ai-antipattern]
+      fix_knowledge: [architecture, implementation-semantics]
+      verification_knowledge: [architecture, unit-testing, e2e-testing]
+      verification_policy: [coding, testing, review, architecture]
+      final_gate_policy: [coding, testing, review, architecture]
+      fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
+      fix_plan_report_format: scenario-based-fix-plan
+      final_gate_instruction: scenario-based-supervise-review-resolution
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: need_replan
+        next: ABORT
+      - condition: ABORT
+        next: ABORT

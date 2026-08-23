@@ -1,94 +1,95 @@
 workflow_categories:
   🚀 クイックスタート:
     workflows:
-      - simple
-      - default
-      - experimental
-      - default-mini
-      - default-high
-      - cli
-      - frontend
-      - backend
-      - dual
-  ✨ Simple:
+      - default: "開発をする"
+      - maintenance: "既存コードに合わせて開発する"
+      - simple: "実装とレビューの2体でループする"
+      - review-fix: "並列レビューを行い修正する"
+  🛠️ 開発:
     workflows:
-      - simple
-      - simple-mini
-      - simple-frontend
-      - simple-backend
-      - simple-dual
-      - simple-cqrs
-      - simple-dual-cqrs
-  ⚡ Mini:
-    workflows:
-      - simple-mini
-      - default-mini
-      - frontend-mini
-      - backend-mini
-      - backend-cqrs-mini
-      - dual-mini
-      - dual-cqrs-mini
-  🎨 フロントエンド:
-    workflows:
-      - simple-frontend
-      - frontend
-      - frontend-mini
-      - frontend-maintenance
-  ⚙️ バックエンド:
-    workflows:
-      - simple-backend
-      - simple-cqrs
-      - backend
-      - backend-mini
-      - backend-maintenance
-      - backend-cqrs
-      - backend-cqrs-mini
-  🔧 デュアル:
-    workflows:
-      - simple-dual
-      - simple-dual-cqrs
-      - dual
-      - dual-mini
-      - dual-cqrs
-      - dual-cqrs-mini
-  🏗️ インフラストラクチャ:
-    workflows:
-      - terraform
+      - default: "開発をする"
+      - maintenance: "既存コードに合わせて開発する"
+      - simple: "実装とレビューの2体でループする"
+      - pure: "TAKT同梱のレビュー観点なしで2体ループで開発する"
   🔍 レビュー:
     workflows:
-      - review-default
-      - review-fix-default
-      - review-frontend
-      - review-fix-frontend
-      - review-backend
-      - review-fix-backend
-      - review-dual
-      - review-fix-dual
-      - review-dual-cqrs
-      - review-fix-dual-cqrs
-      - review-backend-cqrs
-      - review-fix-backend-cqrs
-      - review-takt-default
-      - review-fix-takt-default
-      - audit-unit
-      - audit-e2e
-      - audit-security
-      - audit-architecture
-      - audit-architecture-frontend
-      - audit-architecture-backend
-      - audit-architecture-dual
+      - review: "並列レビューをする"
+      - review-fix: "並列レビューを行い修正する"
+      - audit-unit: "ユニットテストを全件監査し、Issue向けレポートを作る"
+      - audit-e2e: "E2Eテストを全件監査し、Issue向けレポートを作る"
+      - audit-security: "全ファイルを1つずつ読んでセキュリティを調べる"
+      - audit-architecture: "アーキテクチャを全件監査し、Issue向けレポートを作る"
+  🏗️ インフラストラクチャ:
+    workflows:
+      - terraform: "Terraformを開発する"
   🎵 TAKT開発:
     workflows:
-      - takt-default
-      - takt-experimental
-      - takt-experimental-team
-      - auto-improvement-loop
-      - review-takt-default
-      - review-fix-takt-default
+      - takt-default: "TAKTを開発する"
+      - takt-default-team: "実装チームでTAKTを開発する"
+      - auto-improvement-loop: "PR・Issue・改善タスクを巡回して処理し続ける"
+      - review-takt-default: "TAKTを並列レビューする"
+      - review-fix-takt-default: "TAKTを並列レビューして修正する"
+  📦 レガシー:
+    workflows:
+      - cli: "CLIを開発する"
+    ✨ Simple:
+      workflows:
+        - simple-mini: "テスト作成を省いて軽く開発する"
+        - simple-frontend: "フロントエンドをシンプルに開発する"
+        - simple-backend: "バックエンドをシンプルに開発する"
+        - simple-dual: "フルスタックをシンプルに開発する"
+        - simple-cqrs: "CQRS+ESのバックエンドをシンプルに開発する"
+        - simple-dual-cqrs: "CQRS+ESのフルスタックをシンプルに開発する"
+    ⚡ Mini:
+      workflows:
+        - simple-mini: "テスト作成を省いて軽く開発する"
+        - frontend-mini: "フロントエンドを軽く開発する"
+        - backend-mini: "バックエンドを軽く開発する"
+        - backend-cqrs-mini: "CQRS+ESのバックエンドを軽く開発する"
+        - dual-mini: "フルスタックを軽く開発する"
+        - dual-cqrs-mini: "CQRS+ESのフルスタックを軽く開発する"
+    🎨 フロントエンド:
+      workflows:
+        - simple-frontend: "フロントエンドをシンプルに開発する"
+        - frontend: "フロントエンドを開発する"
+        - frontend-mini: "フロントエンドを軽く開発する"
+        - frontend-maintenance: "フロントエンドを保守開発する"
+    ⚙️ バックエンド:
+      workflows:
+        - simple-backend: "バックエンドをシンプルに開発する"
+        - simple-cqrs: "CQRS+ESのバックエンドをシンプルに開発する"
+        - backend: "バックエンドを開発する"
+        - backend-mini: "バックエンドを軽く開発する"
+        - backend-maintenance: "バックエンドを保守開発する"
+        - backend-cqrs: "CQRS+ESのバックエンドを開発する"
+        - backend-cqrs-mini: "CQRS+ESのバックエンドを軽く開発する"
+    🔧 デュアル:
+      workflows:
+        - simple-dual: "フルスタックをシンプルに開発する"
+        - simple-dual-cqrs: "CQRS+ESのフルスタックをシンプルに開発する"
+        - dual: "フルスタックを開発する"
+        - dual-mini: "フルスタックを軽く開発する"
+        - dual-cqrs: "CQRS+ESのフルスタックを開発する"
+        - dual-cqrs-mini: "CQRS+ESのフルスタックを軽く開発する"
+    🔍 レビュー:
+      workflows:
+        - review-frontend: "フロントエンドをレビューする"
+        - review-fix-frontend: "フロントエンドをレビューして修正する"
+        - review-backend: "バックエンドをレビューする"
+        - review-fix-backend: "バックエンドをレビューして修正する"
+        - review-dual: "フルスタックをレビューする"
+        - review-fix-dual: "フルスタックをレビューして修正する"
+        - review-dual-cqrs: "CQRS+ESのフルスタックをレビューする"
+        - review-fix-dual-cqrs: "CQRS+ESのフルスタックをレビューして修正する"
+        - review-backend-cqrs: "CQRS+ESのバックエンドをレビューする"
+        - review-fix-backend-cqrs: "CQRS+ESのバックエンドをレビューして修正する"
+        - audit-architecture-frontend: "フロントエンドの構成を監査し、Issue向けレポートを作る"
+        - audit-architecture-backend: "バックエンドの構成を監査し、Issue向けレポートを作る"
+        - audit-architecture-dual: "フルスタックの構成を監査し、Issue向けレポートを作る"
   その他:
     workflows:
-      - research
-      - deep-research
-      - magi
+      - research: "質問せずに自律的に調査する"
+      - deep-research: "見つかった問いを追って深く調査する"
+      - magi: "エヴァンゲリオンインスパイア"
 show_others_category: true
 others_category_name: その他

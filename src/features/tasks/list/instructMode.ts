@@ -25,12 +25,22 @@ import {
 } from '../../interactive/promptSections.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
+import { runTuiTaskConversation } from '../../tui/runTuiTask.js';
+import {
+  buildOrderRevisionPrompt,
+  createOrderRevisionSelector,
+  normalizeOrderRevisionSummary,
+} from '../../interactive/orderRevisionMode.js';
+import { resolveMaxImageIndex } from '../orderRevision.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 import { renderPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
+import { SlashCommand } from '../../../shared/constants.js';
+import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
+import { resolveFormalSpecModeWithoutPrompt } from '../../interactive/taskInstructionFormat.js';
 
 export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
@@ -60,6 +70,7 @@ function toInstructModeResult(result: InteractiveModeResult): InstructModeResult
     return attachImageAttachmentCleanup({
       action: 'cancel',
       task: '',
+      ...(result.source ? { source: result.source } : {}),
       ...(result.attachments ? { attachments: result.attachments } : {}),
     }, result.cleanupAttachments);
   }
@@ -67,6 +78,7 @@ function toInstructModeResult(result: InteractiveModeResult): InstructModeResult
   return attachImageAttachmentCleanup({
     action: result.action as InstructModeAction,
     task: result.task,
+    ...(result.source ? { source: result.source } : {}),
     ...(result.attachments ? { attachments: result.attachments } : {}),
   }, result.cleanupAttachments);
 }
@@ -134,8 +146,10 @@ export async function runInstructMode(
     workflowContext,
     previousOrderContent,
   } = options;
+  const canonicalOrderContent = (previousOrderContent ?? options.taskContent).trim();
   const globalConfig = resolveWorkflowConfigValues(cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
+  const formalSpec = resolveFormalSpecModeWithoutPrompt(cwd);
 
   const baseCtx = initializeSession(cwd, 'instruct');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };
@@ -154,15 +168,31 @@ export async function runInstructMode(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
+    formalSpec,
     allowedTools: INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),
     introMessage: `${ui.intro}${replayHint}`,
     selectAction: createSelectActionWithoutExecute(ui),
+    selectGoAction: createOrderRevisionSelector(),
+    summaryPromptBuilder: (summaryOptions) =>
+      buildOrderRevisionPrompt(summaryOptions, canonicalOrderContent),
+    normalizeSummaryTask: (task, attachments) => normalizeOrderRevisionSummary(task, attachments, ctx.lang),
+    initialImageAttachmentIndex: resolveMaxImageIndex(canonicalOrderContent),
+    enabledCommands: [
+      SlashCommand.Go,
+      SlashCommand.Replay,
+      SlashCommand.Cancel,
+      SlashCommand.Resume,
+      SlashCommand.PasteImage,
+    ],
     previousOrderContent: previousOrderContent ?? undefined,
+    trackResultSource: true,
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({ cwd, plan: { ctx, strategy }, workflowContext })
+    : await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
 
   return toInstructModeResult(result);
 }

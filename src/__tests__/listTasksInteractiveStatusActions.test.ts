@@ -130,12 +130,6 @@ const failedTask: TaskListItem = {
   failure: { step: 'review', error: 'Boom' },
 };
 
-const failedTaskWithoutBranch: TaskListItem = {
-  ...failedTask,
-  name: 'failed-without-branch',
-  branch: undefined,
-};
-
 describe('listTasks interactive status actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -261,7 +255,7 @@ describe('listTasks interactive status actions', () => {
   });
 
   describe('failed status action handling', () => {
-    it('failed タスクのアクションに Instruct と PR 作成を表示する', async () => {
+    it('failed タスクのアクションに Instruct を表示しない', async () => {
       mockListAllTaskItems.mockReturnValue([failedTask]);
       mockSelectOption
         .mockResolvedValueOnce('failed:0')
@@ -280,10 +274,6 @@ describe('listTasks interactive status actions', () => {
           label: 'Retry',
           value: 'retry',
           description: expect.stringContaining('conversation'),
-        }),
-        expect.objectContaining({
-          label: 'Instruct',
-          value: 'instruct',
         }),
         expect.objectContaining({
           label: 'Create PR',
@@ -324,7 +314,7 @@ describe('listTasks interactive status actions', () => {
       expect(mockRequeueFailedTask).not.toHaveBeenCalled();
     });
 
-    it('failed instruct 選択時は run の worktree を使う instructBranch を呼ぶ', async () => {
+    it('failed action に Instruct が返っても instructBranch を呼ばない', async () => {
       mockListAllTaskItems.mockReturnValue([failedTask]);
       mockSelectOption
         .mockResolvedValueOnce('failed:0')
@@ -333,20 +323,6 @@ describe('listTasks interactive status actions', () => {
 
       await listTasks('/project');
 
-      expect(mockInstructBranch).toHaveBeenCalledWith('/project', failedTask, undefined);
-      expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
-    });
-
-    it('failed instruct 選択時に branch が無ければ表示して一覧へ戻る', async () => {
-      mockListAllTaskItems.mockReturnValue([failedTaskWithoutBranch]);
-      mockSelectOption
-        .mockResolvedValueOnce('failed:0')
-        .mockResolvedValueOnce('instruct')
-        .mockResolvedValueOnce(null);
-
-      await listTasks('/project');
-
-      expect(mockInfo).toHaveBeenCalledWith('Branch is missing for failed task: failed-without-branch');
       expect(mockInstructBranch).not.toHaveBeenCalled();
       expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
     });

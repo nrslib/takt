@@ -362,6 +362,31 @@ describe('workflow selector resolution', () => {
     });
   });
 
+  it('should resolve selector configuration for Team Leader dynamic facets and companion pool', () => {
+    const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
+    const workflow = {
+      name: 'team-leader-selector',
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [{
+        name: 'implement',
+        personaDisplayName: 'implement',
+        instruction: 'Implement',
+        teamLeader: { maxConcurrency: 1, timeoutMs: 900000 },
+        dynamicFacets: { pool: 'review', maxSelected: 1 },
+        companion: { fixed: [], pool: ['security-reviewer'] },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    };
+
+    expect(resolveWorkflowSelectorForProject(workflow, projectDir, {
+      companionEnabled: true,
+    })).toMatchObject({
+      applies: true,
+      selectorProvider: { provider: 'codex', model: 'gpt-selector' },
+    });
+  });
+
   it('should ignore a companion pool when companion is disabled', () => {
     const projectDir = createProject('provider: opencode\nmodel: opencode/model\n');
     const workflow: WorkflowConfig = {

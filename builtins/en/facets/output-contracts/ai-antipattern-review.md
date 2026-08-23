@@ -16,12 +16,8 @@
 
 {{include:output-contracts/base-review-non-finding-concerns}}
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 {{include:output-contracts/base-review-new-findings-category}}
-| 1 | AI-NEW-src-file-L23 | hallucination | Hallucinated API | `src/file.ts:23` | Non-existent method | direct_acceptance_criterion_violation | The initial review evidence did not inspect this acceptance criterion | Replace with existing API |
-
-{{include:output-contracts/base-review-follow-up-authorization}}
+| 1 | AI-NEW-src-file-L23 | hallucination | Hallucinated API | `src/file.ts:23` | Non-existent method | `src/file.ts:23` | Replace with existing API |
 
 {{include:output-contracts/base-review-persists}}
 {{include:output-contracts/base-review-carry-over-findings}}
@@ -32,7 +28,7 @@
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | AI-REOPENED-src-file-L55 | hallucination | `review-resolution.md`: previously resolved | d | `Recurred at src/file.ts:55` | Issue description | Fix approach |
+| 1 | AI-REOPENED-src-file-L55 | hallucination | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at src/file.ts:55` | Issue description | Fix approach |
 
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-rescan-evidence}}
@@ -43,6 +39,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- No issues → Summary sentence + checklist + Re-scan Evidence (from the second iteration onward) + Non-Finding Concerns when needed
+- No issues → Summary sentence + checklist + Impact-Path Evidence + Non-Finding Concerns when needed
 - Issues found → include every verified finding in the impacted sections and aggregate locations with the same cause
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

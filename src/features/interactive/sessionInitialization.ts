@@ -8,6 +8,18 @@ import type { AssistantCliOverrides } from '../../core/config/provider-resolutio
 import { resolveAssistantProviderModel } from './assistantConfig.js';
 import type { SessionContext } from './aiCaller.js';
 
+/**
+ * Raised when no provider could be resolved. The message is unchanged, so
+ * existing callers that only surface `error.message` behave exactly as before;
+ * the type lets a front-end localize instead of matching on the text.
+ */
+export class ProviderNotConfiguredError extends Error {
+  constructor() {
+    super('Provider is not configured.');
+    this.name = 'ProviderNotConfiguredError';
+  }
+}
+
 export function initializeSession(
   cwd: string,
   personaName: string,
@@ -21,7 +33,7 @@ export function initializeSession(
     : resolveNonWorkflowProviderModel(cwd);
   const { provider: resolvedProvider, model } = resolved;
   if (!resolvedProvider) {
-    throw new Error('Provider is not configured.');
+    throw new ProviderNotConfiguredError();
   }
   // A runtime-v1 assistant or non-workflow `defaults` profile owns its options (the assistant path
   // drops them on a CLI provider override); every other case keeps the legacy `provider_options`

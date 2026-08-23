@@ -36,12 +36,12 @@ jobs:
       - run: python -m py_compile src/infra/deepseek-harness/bridge.py
 
   test-shard:
-    name: test shard (${{ matrix.shard }}/4)
+    name: test shard (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     permissions:
       contents: read
     steps:
@@ -54,7 +54,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm run test:unit:parallel -- --shard=${{ matrix.shard }}/4
+      # Wall-clock time is prioritized over runner minutes; the fixed npm ci
+      # and build cost is repeated for each isolated unit shard.
+      - run: npm run test:unit:parallel -- --shard=${{ matrix.shard }}/8
 
   test:
     runs-on: ubuntu-latest

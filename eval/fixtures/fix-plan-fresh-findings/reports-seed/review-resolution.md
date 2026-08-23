@@ -1,33 +1,18 @@
-# Final Validation Results
+# 最終検証結果
 
-## Result: REJECT
+## 結果: REJECT
 
-## Requirements Fulfillment Check
-| # | Decomposed Requirement | Original Requirement Source | Status | Basis |
-|---|------------------------|-----------------------------|--------|-------|
-| 1 | Case-insensitive cache keys | Task acceptance criteria | Unfulfilled | `src/cache.js:13` reads the raw key although `set` normalizes it |
+## 要件充足チェック
+| # | 要件 | 出典 | 状態 | 根拠 |
+|---|------|------|------|------|
+| 1 | cache key は大文字小文字と前後空白を区別しない | タスクの受入条件 | 未充足 | `set` は正規化するが `src/cache.js:13` の read と `src/cache.js:21` の delete は raw key を使う |
 
-## Invariant Register Carry-forward
-Carry-forward source: Carry-forward source missing: no preceding fix-verification.md exists
+## 前段の指摘の再評価
+| finding ID / 出典 | 受入条件 | 状態 | 根拠 |
+|-------------------|----------|------|------|
+| OLD-REVIEW-readme-L1 | ドキュメント例 | 必要以上の拡張 | 網羅的な README 例は要求された cache の振る舞いと無関係 |
 
-| Fix Unit | Family ID | Invariant Name | Responsible Source | Current Verification Number | Previous Verification Number | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Recurrence on a Different Path Confirmed? | Enforcement-Point Candidate | Record Integrity |
-|----------|-----------|----------------|--------------------|-----------------------------|------------------------------|---------------|--------------|--------------------------------------|-------------------------------|-------------------------------------------|-----------------------------|------------------|
-
-## Re-evaluation of Prior Findings
-| Finding ID / Source | Original Acceptance Criteria | Resolution Status | Basis |
-|---------------------|------------------------------|-------------------|-------|
-| OLD-REVIEW-readme-L1 | Documentation examples | overreach | Exhaustive README examples are unrelated to the requested cache behavior |
-
-## Actionable Families
-| family | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
-|--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
-| cache-key-normalization | MERGE-NEW-cache-key-L2 | Direct acceptance-criterion violation and required consumer migration | `src/cache.js:13` | Read-side operations bypass the normalization boundary used by writes | the normalization boundary and every production path reached from the application entry | Values written with a supported key are retrievable, detectable, and deletable through every case-and-whitespace-equivalent key across every reachable consumer, while invalid-value behavior is unchanged | Change only the cache-key normalization contract; do not revive documentation work or alter unrelated consumers |
-
-## Finding Dispositions
-| Finding ID / source | Technical validity | Disposition | Target family | Authorization basis | Reason absent from initial round | Evidence |
-|---------------------|--------------------|-------------|---------------|---------------------|----------------------------------|----------|
-| MERGE-NEW-cache-key-L2 | Confirmed | actionable | cache-key-normalization | Direct acceptance-criterion violation and required consumer migration | Initial review covered the write path but not the read path | `src/cache.js:13` bypasses normalization |
-| OLD-REVIEW-readme-L1 | Confirmed | overreach | none | none | not applicable | Exhaustive README examples are unrelated to the requested cache behavior |
-
-## Reason the Decision Cannot Be Made (when BLOCKED)
-- Not applicable.
+## 未解消の問題
+| 問題ID | 関係する要件・指摘 | 破られる条件 | 原因 | 関係する経路 | 根拠 | 完了条件 | 必要な対応 |
+|--------|--------------------|--------------|------|----------------|------|----------|------------|
+| cache-key-normalization | MERGE-NEW-cache-key-L2、REGRESSION-NEW-cache-delete-L21 | 到達可能な全 cache 操作で同じ key 正規化を使う | read と修正で追加した delete が write の正規化境界を迂回する | set、get、has、delete | `src/cache.js:13`、`src/cache.js:21` | 等価な key で取得・検出・削除でき、不正 key の挙動は変わらない | 同じ正規化境界を全 cache 操作から利用する |

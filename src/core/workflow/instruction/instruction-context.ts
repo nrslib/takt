@@ -16,6 +16,7 @@ import type {
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
 import type { TaskReviewScope } from '../review-scope.js';
+import type { CompanionReviewMode } from '../../models/companion-types.js';
 
 /**
  * Context for building instruction from template.
@@ -94,6 +95,7 @@ export interface InstructionContext {
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   companion?: {
     mailboxDirectory: string;
+    reviewMode: CompanionReviewMode;
   };
 }
 

@@ -6,9 +6,12 @@ import assertInitialReviewExternalIdentityWiring from './initial-review-external
 const completeReview = `
 Result: REJECT
 
-| family_tag | contract map |
-| --- | --- |
-| external-step-target | The authoritative owner is \`docs/configuration.md\`. The workflow fixture \`workflows/sample-flow.json\` supplies workflow name \`sample-flow\` and step name \`execute\`; composing those components yields the canonical \`sample-flow/execute\` identity. The producer \`config/runtime.json\` is read by \`src/target-lookup.js\` and consumed by \`src/execution-target.js\` and \`src/preview-target.js\`, reaches the terminal output, and is covered by \`e2e/external-step.test.js\`. |
+The authoritative owner is \`docs/configuration.md\`. The workflow fixture
+\`workflows/sample-flow.json\` supplies workflow name \`sample-flow\` and step name
+\`execute\`; composing those components yields the canonical \`sample-flow/execute\`
+identity. The producer \`config/runtime.json\` is read by \`src/target-lookup.js\` and
+consumed by \`src/execution-target.js\` and \`src/preview-target.js\`, reaches the
+terminal output, and is covered by \`e2e/external-step.test.js\`.
 
 The canonical key \`sample-flow/execute\` falls back to \`default-runner\`. The runtime config,
 implementation, and E2E test all use the same raw \`execute\` key, so the green test is a
@@ -17,9 +20,9 @@ self-consistent false positive. Update the E2E test to assert the canonical
 
 The adjacent \`src/local-step-cache.js\` contract is preserved and outside this finding.
 
-| finding_id | family_tag | files |
-| --- | --- | --- |
-| F-1 | external-step-target | \`docs/configuration.md\`, \`workflows/sample-flow.json\`, \`config/runtime.json\`, \`src/target-lookup.js\`, \`src/execution-target.js\`, \`src/preview-target.js\`, \`e2e/external-step.test.js\` |
+| finding_id | files |
+| --- | --- |
+| F-1 | \`docs/configuration.md\`, \`workflows/sample-flow.json\`, \`config/runtime.json\`, \`src/target-lookup.js\`, \`src/execution-target.js\`, \`src/preview-target.js\`, \`e2e/external-step.test.js\` |
 `;
 
 function replaceRequired(source, target, replacement) {
@@ -29,14 +32,14 @@ function replaceRequired(source, target, replacement) {
   return updated;
 }
 
-test('accepts a complete external identity family and excludes the adjacent contract', () => {
+test('accepts a complete external identity path and excludes the adjacent contract', () => {
   const result = assertInitialReviewExternalIdentityWiring(completeReview);
 
   assert.equal(result.pass, true);
   assert.equal(result.score, 1);
 });
 
-test('accepts substantive identity tracing without a family table or participates label', () => {
+test('accepts substantive identity tracing without a special grouping table or label', () => {
   const review = `
 Result: REJECT
 
@@ -53,6 +56,20 @@ canonical \`sample-flow/execute\` behavior.
 
 The separate \`src/local-step-cache.js\` contract is preserved and outside this finding.
 `;
+
+  const result = assertInitialReviewExternalIdentityWiring(review);
+
+  assert.equal(result.pass, true);
+  assert.equal(result.score, 1);
+});
+
+test('accepts a Japanese verdict and false-green explanation using ordinary wording', () => {
+  const review = completeReview
+    .replace('Result: REJECT', '判定は **REJECT**（要修正）')
+    .replace(
+      'so the green test is a\nself-consistent false positive.',
+      'そのため、fixture と実装が同じ誤った形式を共有しているだけでテストは合格する。',
+    );
 
   const result = assertInitialReviewExternalIdentityWiring(review);
 
@@ -121,6 +138,29 @@ and test share the same wrong key format. Update the E2E to require
 \`sample-flow/execute\`.
 
 \`local-step-cache.js\` keeps separate local behavior and is outside this finding.
+`;
+
+  const result = assertInitialReviewExternalIdentityWiring(review);
+
+  assert.equal(result.pass, true);
+  assert.equal(result.score, 1);
+});
+
+test('accepts an adjacent path described as contract-compliant and not to be conflated', () => {
+  const review = `
+結論: REJECT
+
+### external-identity-001
+
+文書の正本 \`docs/configuration.md\` は \`sample-flow/execute\` を要求するが、
+\`config/runtime.json\` の \`stepTargets\` と \`target-lookup.js\` の
+\`resolveExternalTarget\` は裸の step 名を共有している。正しい値では
+\`execution-target.js\` の実行結果と \`preview-target.js\` のプレビューが
+\`default-runner\` へ落ちる。E2E テストも同じ誤形式を使うため成功しており、
+文書値を使う回帰テストへ更新する必要がある。
+
+\`local-step-cache.js\` の裸キーは文書化された別契約どおりであり、
+外部対象キーと混同すべきではない。
 `;
 
   const result = assertInitialReviewExternalIdentityWiring(review);

@@ -1,5 +1,5 @@
 name: development-remediation-team
-description: 裁定済み experimental finding の fix-plan と検証を通常 agent step で行い、修正・再修正だけを Team Leader で実行する収束ループ。
+description: 裁定済みレビュー finding の fix-plan と検証を通常 agent step で行い、修正・再修正だけを Team Leader で実行する収束ループ。
 subworkflow:
   callable: true
   visibility: internal

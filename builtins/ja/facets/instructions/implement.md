@@ -9,7 +9,7 @@ Report Directory内のレポートを一次情報として参照してくださ�
 
 {{include:instructions/implement-common}}
 
-**Scope出力契約（実装開始時に作成）:**
+**変更範囲の記録（実装開始時に作成）:**
 ```markdown
 # 変更スコープ宣言
 
@@ -29,7 +29,7 @@ Small / Medium / Large
 - {影響するモジュールや機能}
 ```
 
-**Decisions出力契約（実装完了時、決定がある場合のみ）:**
+**決定内容の記録（実装完了時、決定がある場合のみ）:**
 ```markdown
 # 決定ログ
 

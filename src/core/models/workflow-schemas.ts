@@ -853,7 +853,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
 
     if (
       data.companion !== undefined
-      && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
+      && (data.parallel !== undefined || data.arpeggio !== undefined)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -872,7 +872,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
 
     if (
       data.dynamic_facets !== undefined
-      && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
+      && (data.parallel !== undefined || data.arpeggio !== undefined)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -433,9 +433,15 @@ jobs:
         run: npm run lint
         continue-on-error: true
 
+      # /ci is an on-demand auxiliary gate for PR comments, not the blocking
+      # pull-request gate. Keep it on this single runner: npm test intentionally
+      # uses adaptive local shard parallelism here instead of the fixed
+      # eight-runner matrix defined in .github/workflows/ci.yml.
       - name: Test
         id: test
         run: npm run test
+        env:
+          TAKT_BIRPC_REMEASURE_ON_CI: '1'
         continue-on-error: true
 
       - name: E2E Mock

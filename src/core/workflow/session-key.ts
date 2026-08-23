@@ -15,6 +15,24 @@ import type { ProviderType } from '../../shared/types/provider.js';
 export interface ResolvedSessionTarget {
   provider?: ProviderType;
   model?: string;
+  /** Deterministic MCP server set identity including non-secret server structure. */
+  mcpServerIdentity?: string;
+}
+
+function normalizeMcpServerIdentity(rawIdentity: string): string {
+  const identity = rawIdentity.trim();
+  // buildMcpServerSetIdentity returns sorted JSON values. Keep that canonical
+  // representation opaque because command arguments and URLs may contain commas.
+  if (identity.startsWith('[')) {
+    return identity;
+  }
+  // Preserve compatibility with older/manual name:transport identities.
+  return identity
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .sort()
+    .join(',');
 }
 
 /**
@@ -37,7 +55,22 @@ export function buildSessionKey(step: WorkflowStep, resolvedTarget?: ResolvedSes
   const base = step.sessionKey ?? step.persona ?? step.name;
   const provider = resolvedTarget === undefined ? step.provider : resolvedTarget.provider;
   const model = resolvedTarget === undefined ? step.model : resolvedTarget.model;
-  if (provider === undefined) return JSON.stringify([base]);
-  if (model === undefined) return JSON.stringify([base, provider]);
-  return JSON.stringify([base, provider, model]);
+  const rawMcpIdentity = resolvedTarget?.mcpServerIdentity;
+  // Normalize legacy identities while preserving the canonical JSON identity
+  // produced by the MCP resolver (order.md:269,333).
+  const mcpIdentity = rawMcpIdentity !== undefined && rawMcpIdentity.length > 0
+    ? normalizeMcpServerIdentity(rawMcpIdentity)
+    : undefined;
+  if (provider === undefined && mcpIdentity === undefined) return JSON.stringify([base]);
+  const components: unknown[] = [base];
+  if (provider !== undefined) {
+    components.push(provider);
+    if (model !== undefined) {
+      components.push(model);
+    }
+  }
+  if (mcpIdentity !== undefined && mcpIdentity.length > 0) {
+    components.push(mcpIdentity);
+  }
+  return JSON.stringify(components);
 }

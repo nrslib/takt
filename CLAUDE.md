@@ -15,21 +15,23 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm run build` | `tsc` (+ opencode-probe tsconfig) plus copies of `src/shared/prompts/{en,ja}/**/*.md`, `src/shared/i18n/*.yaml`, and `src/core/runtime/presets/*.sh` into `dist/`. Skipping any copy breaks runtime resolution. |
 | `npm run watch` | TypeScript incremental build (no asset copy). |
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
-| `npm test` | Fast unit gate: type-contracts tsc, then 4 shards launched **concurrently** (`Promise.all` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration tests; the output names the follow-up command. |
+| `npm test` | Fast unit gate: type-contracts tsc, the test type-check (`tsconfig.tests.json`), then an adaptive number of unit shards launched **concurrently** (capped at 8 from `availableParallelism()` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration tests; the output names the follow-up command. |
 | `npm run test:it` | Light integration gate for real filesystem, bounded storage, and multi-component contracts. Run after implementation. |
 | `npm run test:it:heavy` | Full heavy integration gate for real child processes, Git, complete engines, integration/regression/performance suites, and serial groups. Local execution uses one worker; PR CI shards across isolated runners. |
 | `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the correct unit, light-IT, heavy-parallel-IT, or heavy-serial-IT runner. For an added or changed IT, also run `releaseVerificationWiring.test.ts` by itself. Always target-run an added or changed heavy IT before handoff. |
 | `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |
 | `npm run test:opencode-probe` | Deterministic OpenCode probe smoke gate (11 cases, no API cost). Standalone; not part of routine gates or `check:release`. |
-| `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts`. |
+| `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `TAKT_E2E_PROVIDER=mock npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts` — **without that env var the specs run against the real provider** (`provider: claude` in `e2e/fixtures/config.e2e.yaml`) and cost API credits. |
 | `npm run test:e2e:provider:{claude,claude-sdk,codex,opencode,cursor}` | E2E against a real provider (slow, costs API credits). |
-| `npm run check:release` | Full pre-release gate: build + lint + fast 4-shard unit + light IT + heavy IT + e2e. |
+| `npm run check:release` | Full pre-release gate: build + lint + adaptive local unit + light IT + heavy IT + e2e. The main pull-request CI workflow runs the unit gate separately in 8 isolated shard jobs; local `check:release` does not run that CI matrix. |
+
+**Vitest strips types, so a test only gets type-checked if it is listed in `tsconfig.tests.json`.** Add the test you wrote or changed to that list; if an older test does not type-check yet, fix it first rather than leaving it off.
 
 ### Test pool behavior (worth knowing before "fixing" flakes)
 
 - Test-layer membership lives in `scripts/test-classification.mjs`. `lightIntegrationTestFiles` covers bounded filesystem/storage and component contracts; `heavyParallelIntegrationTestFiles`, integration filename globs, and the serial groups cover real processes, Git, full engines, and measured IO interference. `releaseVerificationWiring.test.ts` fails if a listed file does not exist, overlaps another group, or leaves an observed boundary in unit.
-- `dangerouslyIgnoreUnhandledErrors: !process.env.CI` (vitest.config.shared.ts): the spurious `[vitest-worker]: Timeout calling "onTaskUpdate"` error is tolerated locally (4 concurrent unit shards on one machine) but **fatal on CI**. Heavy parallel IT always uses one worker per runner; PR CI scales out through four isolated job-level shards, while local full-heavy execution stays serial.
-- Because that noise still makes a shard exit non-zero locally, `npm test` re-measures such a shard **once** (`scripts/vitest-birpc-noise.mjs`): only when the shard's own output shows zero failed tests, at least one passed test, and no reported error other than `[vitest-worker]: Timeout calling "onTaskUpdate"`. One real test failure, one unrecognized error headline, or `CI` set → no re-measurement, exit code stands. The re-measurement is announced on stderr; a silent shard exit is never rescued. The same one-time re-measurement now applies to `npm run test:e2e:mock` shards after the parallel wave completes.
+- `dangerouslyIgnoreUnhandledErrors: !process.env.CI` (vitest.config.shared.ts): the spurious `[vitest-worker]: Timeout calling "onTaskUpdate"` error is tolerated locally (the adaptive concurrent unit-shard wave on one machine) but **fatal on CI**. Heavy parallel IT always uses one worker per runner; PR CI scales out through six isolated job-level shards, while local full-heavy execution stays serial. The on-demand `/ci` workflow is the single-runner CI exception.
+- Because that noise still makes a shard exit non-zero locally, `npm test` re-measures such a shard **once** (`scripts/vitest-birpc-noise.mjs`): only when the shard's own output shows zero failed tests, at least one passed test, and no reported error other than `[vitest-worker]: Timeout calling "onTaskUpdate"`. One real test failure, one unrecognized error headline, or `CI` set without `TAKT_BIRPC_REMEASURE_ON_CI=1` → no re-measurement, exit code stands. The `/ci` workflow opts into the same strict one-time re-measurement for its single-runner adaptive unit wave; the blocking PR matrix and mock E2E workflow do not. The re-measurement is announced on stderr; a silent shard exit is never rescued.
 - Reading that output means unit and mock E2E shards run through a pipe (`scripts/teed-command.mjs`) instead of inheriting the terminal, so **`npm test` and `npm run test:e2e:mock` output is now non-TTY: no color and no live progress rewriting**. That module takes the exit code from `exit` and gives `close` only a short deadline — a shard's grandchild can hold the stdout pipe open forever, and waiting on `close` alone hangs the gate.
 - `src/__tests__/test-setup.ts` clears `TAKT_CONFIG_DIR` / `TAKT_NOTIFY_WEBHOOK` per test and provides an isolated config root — don't add per-suite env overrides that fight it.
 
@@ -96,7 +98,7 @@ Verified against `resolveStepProviderModel` / `PROVIDER_MODEL_SOURCE_PRIORITY` a
 
 ### Worktree-isolated execution
 
-`worktree: true` runs a task in a `git clone --shared` (not a real git worktree — Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation). Clones are ephemeral (auto-commit + push on success, deleted after), contain only tracked files, and cannot resume sessions (`cwd !== projectCwd`). `cwd` = clone path, `projectCwd` = repo root; reports go to `cwd/.takt/runs/{slug}/reports/`.
+`worktree: true` runs a task in a clone created with `git clone --reference <main-repo> --dissociate` (plain `git clone` when the project is itself a linked worktree, or as fallback when the reference repo is shallow) — not a real git worktree, because Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation. Clones are ephemeral (auto-commit + push on success, deleted after), contain only tracked files, and cannot resume sessions (`cwd !== projectCwd`). `cwd` = clone path, `projectCwd` = repo root; reports go to `cwd/.takt/runs/{slug}/reports/`.
 
 ## Faceted Prompting
 
@@ -127,7 +129,7 @@ builtins/{en,ja}/       Bundled facets + workflows (read from dist/ at runtime)
 
 ## TypeScript / testing
 
-- ESM (`"type": "module"`); import paths use `.js` extensions in `.ts` sources. Strict TS with `noUncheckedIndexedAccess`. Node ≥ 18.19.
+- ESM (`"type": "module"`); import paths use `.js` extensions in `.ts` sources. Strict TS with `noUncheckedIndexedAccess`. Node ≥ 22.22 (floor set by dependency engines — pi SDK needs 22.19, dev-only posthog-node/promptfoo need 22.22; see `engines` in package.json).
 - Unit and integration tests live under `src/__tests__/` (Vitest); E2E specs under `e2e/` with per-provider configs.
 
 ## Debugging
@@ -140,4 +142,4 @@ builtins/{en,ja}/       Bundled facets + workflows (read from dist/ at runtime)
 - Prefer simple code over defensive fallback-heavy logic. TAKT is a local tool: no audit trails, tamper-resistance, or security theater.
 - Filenames mostly `kebab-case`. Conventional Commit style with occasional `(#issue)` suffix.
 - Don't commit secrets; provider keys live in env vars or `~/.takt/config.yaml`.
-- A TAKT review pass is recommended before a PR: `takt -t "#<PR>" -w review-takt-default`. For CodeRabbit comments: judge each, act on the valid ones, resolve every thread; don't post replies.
+- For CodeRabbit comments: judge each, act on the valid ones, resolve every thread; don't post replies.

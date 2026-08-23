@@ -6,6 +6,38 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.60.0] - 2026-08-18
+
+### Added
+
+- assistant 会話向けの形式仕様モードを追加しました。`assistant.formal_spec` は `true`、`false`、`"Y/n"`、`"y/N"` を受け付け、project 値が global 値より優先されます。質問形式では TTY セッション開始時に1回だけ確認し、非 TTY と ACP は標準入力を消費せず設定の既定回答を採用します。有効なセッションには適用可能な Quint／Alloy のガイダンスを与え、Gherkin のガイダンスは常時利用できます。
+- 公式 DeepSeek Harness SDK プロバイダを追加しました (#1388)。新しい `deepseek-harness` プロバイダは、公式の DeepSeek Harness Python SDK を専用の JSON-RPC ブリッジ経由で駆動します。`provider_options.deepseek_harness` で `base_url`・`session_root`・`max_tokens`・`request_timeout_ms`・`shutdown_timeout_ms`・`runtime_mode` を設定できます（`python_path` と `cordis` は信頼済みグローバル設定と環境変数のみ）。認証情報は `DEEPSEEK_API_KEY` と任意の `DEEPSEEK_BASE_URL` から取得し、API キーはブリッジのプロセス環境にだけ渡され、コマンド引数や生成 workflow の設定には出力されません。実行には Python 3.10+ と、リリースの対応する `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` が必要で、対応プラットフォームは Linux x64/arm64 と macOS arm64 のみです。Windows と macOS x64 は他プロバイダへ黙ってフォールバックせず即座に失敗します。本プロバイダは developer preview の互換面であり、上流の API・イベント語彙はリリース間で変わり得るため、新しい SDK/runtime の組み合わせを使う前に Configuration Guide のオプトイン live smoke 手順を実行してください。
+- `takt-experimental-team` workflow を追加しました (#1401, #1404)。`takt-experimental` の計画・テスト・レビュー・final-gate の契約をそのまま保ち、実装・修正・再修正だけを静的な Team Leader の coder 実行に切り替えた実験的な TAKT 開発 workflow です。新設の callable workflow `development-implement-team` / `development-remediation-team` を呼び出し、リーダーと part のステップにはそれぞれのルーティングタグが付きます。現在のスキーマ制約により、この派生では実装側の dynamic facets と companion は使用しません。
+- `takt list` の failed タスクに instruct と PR 作成のアクションを追加しました (#1391, #1339)。failed の run に対して、completed に既にあった対話型の instruct と同じ流れを起動できます。failed の入口は run の未コミット作業ツリーを対象とし、最終裁定レポートの要約と作業ツリー差分の概要を初期コンテキストとして注入します。PR 作成アクションは completed / failed の両方から利用でき、既存の auto-commit と同じ命名でコミットし、shared clone に remote が無い場合はプロジェクトリポジトリ経由で push し、PR 本文を run の最終レポートから構成します。実行前にコミット対象のファイル一覧と本文プレビューを表示して確認を取ります。
+- Codex の権限制御オプション `provider_options.codex.permission_control` を追加しました (#1397)。既定の `takt` は従来どおり TAKT の permission mode を Codex SDK の `sandboxMode` / `networkAccessEnabled` に対応付けます。`permission_control: codex` を指定すると、厳密分離の structured 呼び出しを含むすべての Codex 呼び出しで両方を省略し、Codex 側の `config.toml`・`default_permissions`・permission profile が実効権限を決めます（非対話実行のための `approvalPolicy: never` は引き続き設定されます）。`network_access` との併用はできず、両方が残る設定は fail fast します。環境変数の上書きは `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL` です。
+- `instruction` が順序付き配列を受け付けるようになりました (#1395)。ステップと parallel サブステップで、複数の instruction facet やインラインテキストを合成できます。各要素はその位置で解決され、明示的な `---` の境界で連結されます。callable workflow では配列要素に `instruction` の `facet_ref` / `facet_ref[]` パラメータを置くこともでき、`facet_ref[]` の値は前後の順序を崩さずにその位置へ展開されます。スカラー指定の挙動は変わりません。
+- 簡体字中国語のドキュメントを追加しました (#1385, #1408)。導入経路（README・チュートリアル・設定・CLI リファレンス）、workflow 作成、プロバイダと外部連携、タスク管理を `.zh-CN.md` サフィックスで提供します。入口は `docs/README.zh-CN.md` です。残りのページは意図的に複製せず、英語または日本語のままです。
+
+### Changed
+
+- `assistant.gherkin` を廃止しました。この旧キーは警告後に無視し、変換・永続化・設定ファイル更新は行いません。対話プロンプトと最終タスク指示書プロンプトでは Gherkin のガイダンスを常時有効にしました。
+- **BREAKING:** workflow YAML からプロバイダ設定を削除しました (#1398)。`provider`・`model`・`provider_options`・`auto_routing`・`rate_limit_fallback`・`workflow_config.provider*`・`workflow_call.overrides` は workflow のフィールドではなくなり、これらを書いた workflow は移行先を示す診断つきでロード境界で失敗します。`promotion` のエントリは厳密に `{at: N}` の形だけになり（provider・model・provider options・`condition` は拒否）、マッチすると runtime ターゲットの `ladder` の次段へ進みます。provider・model・options・ルーティングは `runtime.yaml`（および従来どおり動作する legacy な `config.yaml` モード）が所有し、CLI と環境変数の上書きは引き続き利用できます。workflow YAML に残るプロバイダオプションの面は `capabilities` だけです。
+- Team Leader へのフィードバックを、セッションに蓄積せずレポート経由の有界要約で渡すようにしました (#1407)。part の結果はレポートとして書き出され、リーダーは上限付きの要約を受け取るため、分解が長く続いてもリーダーのコンテキストが肥大しません。リーダーにはレポート全文を開いて現物を確認することを求め、エンジンは分解フェーズと追加 part の判断フェーズに読み取り専用ツール（`read`・`glob`・`grep`）を既定で与えます（ツール allowlist をサポートするプロバイダの場合）。workflow 側で `inspect_tools` を書く必要はなくなりました。明示指定は既定を上書きし、明示的な空リストは空 allowlist として保持され、ツール制限を持たないプロバイダ（Codex など）では allowlist を設定しません。planning ステップの `{previous_response}` は従来どおり無損失で渡されます。
+- ビルトインのレビュー指示を集約しました (#1395, #1390)。レビュー範囲・finding の取り扱い・用語・family 探索・再発の指示を instruction ごとの facet partial から共有の `workflows/rules/` へ移し、`all_steps.rules` 経由で適用します。ドメインごとのレビュー基準は独立した policy facet（architecture・backend・frontend・react・cqrs-es・failure-boundary・implementation-semantics・resource-ownership・robustness・takt）に分割しました。実験的なレビュアーセットは再利用可能な step fragment になり、内部用の `experimental-review-adapter` / `takt-experimental-review-adapter` workflow は削除しました。`{review_scope}` は削除された `instructions/review-round-scope` partial ではなく共有ルール `findings-handling` からビルトインの汎用レビュアーへ届きます。親子の workflow ルールは `ref`・位置・解決後の内容が同一なら 1 回だけ適用されます。
+- ビルトインの判断系ステップから `review` タグを外しました (#1405)。裁定・修正計画・修正検証・final-gate・supervise / synthesis の完了ステップには役割どおりのタグ（`adjudication`・`plan`・`verification`・`final-gate`・`supervise`）だけを付け、レビュアー向けのルーティングがこれらを巻き込まないようにしました。これらのステップを `review` タグでルーティングしていた設定は、役割タグへ移してください。
+- ビルトインの final gate が充足判定の前に呼び出し先の実装を確認するようになりました (#1406)。呼び出し箇所の存在だけで要件充足とはみなさず、呼び出し先の実装まで追って判断します。本当に判定不能なケースは、無理に結論を出さず従来どおり判定不能として報告します。
+
+### Fixed
+
+- 子プロセスの stdio エラーで TAKT プロセスが墜落しなくなりました (#1410, #1411, #1412)。子プロセスの stdin/stdout/stderr で未処理の `error` イベント（多くは相手が既に終了したストリームへの EPIPE）が起きると run 全体が落ちていました。共通ガードが Claude headless・Claude terminal（tmux）・Cursor・Kiro・clone-exec・companion の git diff の各経路でこのイベントを局所処理し、OpenCode の共有サーバは専用のサーバプロセスラッパー経由で起動して起動後の出力を有界テールで保持し異常終了の原因を提示します。Codex は SDK 内部の spawn をガードし、SDK 内で発生する stdin EPIPE でもプロセスが落ちないようにしました。
+- OpenCode の exact repeat 検知が、呼び出しを即座に失敗させずツールガードの回復経路を通るようになりました (#1419)。同一入力に対して同一結果が規定回数連続した場合、まずそのツールの呼び出しを止めて実際の進捗を報告するよう矯正を送り、次に新規セッションで再試行し、両方の回復手段を使い切ってから失敗します。
+
+### Internal
+
+- ビルド前にビルド出力を掃除し、古い成果物がパッケージへ混入しないことをテストで検証するようにしました (#1387)。あわせてドキュメントと facet に残っていた Finding Contract の記述を削除しました。
+- テストの整理として、壊れやすいテキスト断定とビルトイン内容の断定を削除し、プロンプト評価スイートを復元しました (#1396, #1399, #1400)。
+- coding review メトリクスと final readiness 判定の eval を拡充し (#1395, #1406)、CI で DeepSeek ブリッジの Python 3.10 互換性を検証するようにしました (#1388)。
+
 ## [0.59.1] - 2026-08-16
 
 ### Fixed

@@ -8,7 +8,7 @@ Workflow Contextに示されたReport Directory内のレポートのみ参照し
 {{include:instructions/test-contract-discrimination}}
 
 **テストの境界:**
-- 観測可能な契約を基準に作成・更新・削除を判断し、現在のプロンプトにテスト関連の判断基準が提供されている場合はそれも適用する
+- 観測可能な契約を基準に作成・更新・削除を判断し、タスクにテスト関連の判断基準が示されている場合はそれにも従う
 - この段階では未実装による失敗を許容するが、実装後も残るテスト欠陥は修正する
 
 {{include:instructions/post-edit-self-scan}}

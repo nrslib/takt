@@ -1,5 +1,5 @@
 import type { AssistantProviderConfig } from '../../core/config/provider-resolution.js';
-import type { ProviderRoutingEntry } from '../../core/models/config-types.js';
+import type { AutoRoutingStrategy, ProviderRoutingEntry } from '../../core/models/config-types.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
 import type { ProviderType } from '../../shared/types/provider.js';
@@ -17,6 +17,7 @@ import type { CompiledProviderEnvironment } from './runtime-provider/environment
 export interface SelectorProviderOverrides {
   provider?: ProviderType;
   model?: string;
+  autoStrategy?: AutoRoutingStrategy;
   providerSource?: ProviderResolutionSource;
   modelSource?: ProviderResolutionSource;
 }

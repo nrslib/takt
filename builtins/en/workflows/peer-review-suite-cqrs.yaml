@@ -9,9 +9,9 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
+    - ref: peer-review-scope
       position: before_instruction
-    - ref: invariant-recurrence
+    - ref: existing-finding-lookup
       position: before_instruction
     - ref: plain-terminology
       position: before_instruction

@@ -59,6 +59,82 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it.each([true, false])('preserves Codex fastMode=%s when a later layer overrides it', (fastMode) => {
+    expect(mergeProviderOptions(
+      asProviderOptions({ codex: { fastMode: true } }),
+      asProviderOptions({ codex: { fastMode } }),
+    )).toEqual({ codex: { fastMode } });
+  });
+
+  it('does not create a Codex fastMode value when it is omitted', () => {
+    expect(mergeProviderOptions(asProviderOptions({ codex: { networkAccess: true } })))
+      .toEqual({ codex: { networkAccess: true } });
+  });
+
+  it.each([true, false])('resolves Codex fastMode=%s from the step before persona and config', (fastMode) => {
+    const configOptions = asProviderOptions({ codex: { fastMode: !fastMode } });
+    const personaOptions = asProviderOptions({ codex: { fastMode: !fastMode } });
+    const stepOptions = asProviderOptions({ codex: { fastMode } });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      configOptions,
+      stepOptions,
+      personaOptions,
+    )).toEqual({ codex: { fastMode } });
+    expect(resolveProviderOptionSource(
+      'codex.fastMode',
+      stepOptions,
+      [],
+      configOptions,
+      undefined,
+      'project',
+    )).toBe('step');
+  });
+
+  it('resolves Codex fastMode from persona when the step does not set it', () => {
+    const personaOptions = asProviderOptions({ codex: { fastMode: false } });
+    const configOptions = asProviderOptions({ codex: { fastMode: true } });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      configOptions,
+      undefined,
+      personaOptions,
+    )).toEqual({ codex: { fastMode: false } });
+    expect(resolveProviderOptionSource(
+      'codex.fastMode',
+      undefined,
+      [{ source: 'persona_providers', options: personaOptions }],
+      configOptions,
+      undefined,
+      'project',
+    )).toBe('persona_providers');
+  });
+
+  it('keeps an env-origin Codex fastMode value ahead of lower-priority layers', () => {
+    const configOptions = asProviderOptions({ codex: { fastMode: true } });
+    const stepOptions = asProviderOptions({ codex: { fastMode: false } });
+    const originResolver = (path: string) => (path === 'codex.fastMode' ? 'env' : 'local');
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      originResolver,
+      configOptions,
+      stepOptions,
+    )).toEqual({ codex: { fastMode: true } });
+    expect(resolveProviderOptionSource(
+      'codex.fastMode',
+      stepOptions,
+      [],
+      configOptions,
+      originResolver,
+      'project',
+    )).toBe('env');
+  });
+
   it('Codex Skill inheritance is resolved independently per scope', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -630,7 +706,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
     const result = resolveProviderOptionsSources(
       { claude: { effort: 'xhigh' } },
       [{ source: 'persona_providers', options: {
-        codex: { permissionControl: 'codex', reasoningEffort: 'high' },
+        codex: { fastMode: false, permissionControl: 'codex', reasoningEffort: 'high' },
       } }],
       { copilot: { effort: 'medium' } },
       undefined,
@@ -638,6 +714,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
     );
     expect(result).toEqual({
       'claude.effort': 'step',
+      'codex.fastMode': 'persona_providers',
       'codex.permissionControl': 'persona_providers',
       'codex.reasoningEffort': 'persona_providers',
       'copilot.effort': 'global',
@@ -764,6 +841,7 @@ describe('providerOptionsContract', () => {
     expect(envPaths).toEqual(new Set([
       'provider_options',
       'provider_options.codex.base_url',
+      'provider_options.codex.fast_mode',
       'provider_options.codex.network_access',
       'provider_options.codex.permission_control',
       'provider_options.codex.reasoning_effort',
@@ -812,6 +890,7 @@ describe('providerOptionsContract', () => {
       'provider_options.pi.no_context_files',
     ]));
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.base_url');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.fast_mode');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.base_url');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.skills.enabled');
@@ -858,6 +937,8 @@ describe('providerOptionsContract', () => {
   it('maps internal provider option paths to traced-config paths', () => {
     expect(toProviderOptionsTracePath('codex.baseUrl'))
       .toBe('provider_options.codex.base_url');
+    expect(toProviderOptionsTracePath('codex.fastMode'))
+      .toBe('provider_options.codex.fast_mode');
     expect(toProviderOptionsTracePath('claude.baseUrl'))
       .toBe('provider_options.claude.base_url');
     expect(toProviderOptionsTracePath('claude.sandbox.allowUnsandboxedCommands'))
@@ -908,6 +989,7 @@ describe('providerOptionsContract', () => {
     expect(getPresentProviderOptionPaths({
       codex: {
         baseUrl: 'http://127.0.0.1:8787/v1',
+        fastMode: false,
         networkAccess: true,
         permissionControl: 'takt',
         reasoningEffort: 'high',
@@ -931,6 +1013,7 @@ describe('providerOptionsContract', () => {
       cursor: { guards: { callTimeoutMs: 360_000 } },
     } as Parameters<typeof getPresentProviderOptionPaths>[0])).toEqual([
       'codex.baseUrl',
+      'codex.fastMode',
       'codex.networkAccess',
       'codex.permissionControl',
       'codex.reasoningEffort',
@@ -1141,6 +1224,7 @@ describe('claude_terminal provider_options normalization', () => {
       'opencode.guards.eventLimit',
       'claude.guards.callTimeoutMs',
       'codex.guards.callTimeoutMs',
+      'codex.fastMode',
       'copilot.guards.callTimeoutMs',
       'kiro.guards.callTimeoutMs',
       'cursor.guards.callTimeoutMs',

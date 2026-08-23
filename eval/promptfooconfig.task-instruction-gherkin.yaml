@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT interactive summary eval: Markdown preserves design intent while Gherkin captures behavior'
+description: 'TAKT interactive summary eval: Gherkin is always available and formal specification guidance is conditional'
 
 prompts:
   - file://task-instruction-gherkin-prompt.mjs
@@ -28,6 +28,7 @@ tests:
   - description: 'English source: design details stay in Markdown and observable behavior becomes focused Gherkin'
     vars:
       language: en
+      formalSpec: false
       conversation: |
         Add configurable retry handling to the payment flow. Extract the current
         retry decisions behind a RetryPolicy interface so payment providers do not
@@ -76,6 +77,7 @@ tests:
   - description: 'Japanese: abstraction intent stays in Markdown and boundary behavior becomes focused Gherkin'
     vars:
       language: ja
+      formalSpec: false
       conversation: |
         商品検索のキャッシュ処理を追加してほしい。キャッシュ方式は
         SearchCache インターフェースで抽象化し、検索ユースケースが Redis の
@@ -117,3 +119,56 @@ tests:
           Markdown 側に再掲せず、これらの境界を区別するために必要な最小限の Scenario
           にすること。Markdown で目的を大まかに説明することや、確認方法から Gherkin
           全体を参照することは重複とみなさない。
+
+  - description: 'Formal specification mode expresses requirements in both Quint and Alloy without ASCII diagrams'
+    vars:
+      language: en
+      formalSpec: true
+      conversation: |
+        Add a lease service with Requested, Active, Expired, and Released states.
+        Activation is allowed only from Requested. An active lease eventually
+        becomes Expired unless it is released first. Each resource has at most one
+        active lease, and every lease belongs to exactly one resource and one owner.
+        Keep observable API behavior in Gherkin and use actual formal syntax.
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-formal-spec/both-notations
+        value: |
+          Pass only if the generated task instruction expresses the requirements in
+          both actual Quint syntax and actual Alloy syntax, in addition to Gherkin
+          and Markdown. Each requirement — the lease state transitions and temporal
+          behavior, and the ownership/cardinality relationships — must appear in
+          both formal notations; do not pass an output that covers a requirement in
+          only one notation. Omitting a notation is acceptable only when a
+          requirement genuinely cannot be expressed in it, and the instruction must
+          state that reason per requirement; every requirement in this task can be
+          expressed in both notations. Repeating the same requirement across
+          Gherkin, Quint, Alloy, and Markdown is expected and must not be
+          penalized. The output must not contain an ASCII diagram or invent
+          pseudo-notation.
+
+  - description: 'Japanese: formal specification mode expresses requirements in both Quint and Alloy'
+    vars:
+      language: ja
+      formalSpec: true
+      conversation: |
+        予約サービスを追加してほしい。予約は Requested, Confirmed, Cancelled,
+        Fulfilled の状態を持つ。Confirmed にできるのは Requested からだけ。
+        確定した予約はキャンセルされない限りいずれ Fulfilled になる。
+        各資源は同時に1つの確定済み予約だけを持ち、すべての予約はちょうど1つの
+        資源と1人の利用者に紐づく。観測可能な API の振る舞いは Gherkin で記述し、
+        形式記法は実際の構文を使うこと。
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-formal-spec/both-notations-ja
+        value: |
+          実際に生成されたタスク指示書を評価すること。Gherkin と Markdown に
+          加えて、要件が実際の Quint 構文と実際の Alloy 構文の両方で表現されて
+          いる場合のみ合格とする。予約の状態遷移・時相の振る舞いと、
+          所有関係・カーディナリティの各要件が両方の形式記法に現れることを
+          確認し、一方の記法だけで表現された要件がある場合は不合格とする。
+          記法の省略は、その要件がその記法では表現できない理由が要件ごとに
+          示されている場合だけ許容するが、このタスクの要件はどちらの記法でも
+          表現可能である。同じ要件が Gherkin・Quint・Alloy・Markdown に重複して
+          記載されていても減点しない。ASCII 図や独自の疑似記法を含む場合は
+          不合格とする。

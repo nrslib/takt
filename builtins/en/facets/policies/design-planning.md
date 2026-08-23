@@ -14,7 +14,7 @@ When a task includes design references, planning must make element inventory and
 
 ## Applicability
 
-This policy applies to planning tasks whose task instructions or reference materials include design references. It does not apply when no design reference exists.
+Apply the criteria below only to planning tasks whose task instructions or reference materials include design references. Otherwise treat them as out of scope.
 
 ## Decision Criteria
 

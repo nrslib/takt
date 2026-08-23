@@ -1,34 +1,79 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT facet eval: follow-up testing review keeps regression coverage inside authorized families'
+description: 'TAKT ファセット評価: testing-review の結果を review-adjudication で検証・裁定する'
 
 prompts:
   - file://prompts/follow-up-testing-review-repair-regression.phase1.md
 
 providers:
-  - id: openai:codex-sdk
-    label: codex
+  - id: file://providers/cli-review-adjudication.mjs
+    label: claude-opus-5
     config:
+      cli: claude
+      model: claude-opus-5
       working_dir: fixtures/follow-up-review-repair-regression
-      sandbox_mode: read-only
-      approval_policy: never
-      skip_git_repo_check: true
-      model_reasoning_effort: low
+      isolate_working_dir: true
+      reviewer_report_prompt: prompts/follow-up-testing-review-repair-regression-phase2.phase2.md
+      reviewer_report: testing-review.md
+      adjudication_prompt: prompts/follow-up-review-adjudication-repair-regression.phase1.md
+      adjudication_report_prompt: prompts/follow-up-review-adjudication-repair-regression-phase2.phase2.md
+      adjudication_report: review-resolution.md
+  - id: file://providers/cli-review-adjudication.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/follow-up-review-repair-regression
+      isolate_working_dir: true
+      reviewer_report_prompt: prompts/follow-up-testing-review-repair-regression-phase2.phase2.md
+      reviewer_report: testing-review.md
+      adjudication_prompt: prompts/follow-up-review-adjudication-repair-regression.phase1.md
+      adjudication_report_prompt: prompts/follow-up-review-adjudication-repair-regression-phase2.phase2.md
+      adjudication_report: review-resolution.md
+  - id: file://providers/cli-review-adjudication.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/follow-up-review-repair-regression
+      isolate_working_dir: true
+      reviewer_report_prompt: prompts/follow-up-testing-review-repair-regression-phase2.phase2.md
+      reviewer_report: testing-review.md
+      adjudication_prompt: prompts/follow-up-review-adjudication-repair-regression.phase1.md
+      adjudication_report_prompt: prompts/follow-up-review-adjudication-repair-regression-phase2.phase2.md
+      adjudication_report: review-resolution.md
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+evaluateOptions:
+  maxConcurrency: 3
 
 tests:
-  - description: 'follow-up testing review: request only missing regression detection inside the accepted identity family'
+  - description: '修正後の testing-review と review-adjudication: 必要な回帰検出だけを修正対象へ残す'
     vars:
       task: file://cases/follow-up-review-repair-regression-task.md
       previous_response: ''
     assert:
       - type: llm-rubric
-        metric: review/testing-scope-authority
+        metric: review/testing-scope
         value: |
-          Judge behavioral scope, not headings, table shape, labels, or exact wording. Pass only if the testing review does all of the following:
+          testing-review.md と review-resolution.md を順に確認し、次をすべて満たす場合だけ合格とする。testing-review.md が見落とした項目を review-adjudication がテスト観点内で検証・裁定した場合は合格とする。testing-review.md 単体に完全性を要求しない。
 
-          - It may request missing regression detection for src/resource-record.js because that persisted consumer belongs to the active compound-resource-identity family and the current tests do not exercise it. Any such finding states an accepted-family unvisited-consumer or required-consumer-migration authorization basis and why the initial round missed it.
-          - It may request detection of the repair-induced collision in src/public-key.js with a remediation-regression authorization basis.
-          - It does not turn the separate presentation contract in src/resource-text.js into a finding or test-addition request merely because bounded comparison exposed it.
-          - It does not request duplicate tests, assertions that freeze workflow names or prose, raw YAML structure, helpers or internal implementation details, permanent migration inventories, or assertions already covered by a loader, gate, or higher-level behavior test.
-          - It does not ask to reduce or consolidate existing tests unless that is causally required to detect a regression introduced by this change.
+          - review-resolution.md に記録された受入条件と修正境界を根拠にする。src/resource-record.js は保存時に job ID だけを記録する一方、復元時は両方の ID を保持する既存の識別情報と照合するため、記録済みの識別情報修正の範囲に属する永続化経路である。現在のテストがこの往復を実行していないため、コード上の保存・復元の接続と受入条件を根拠に回帰検出を要求してよい。保存側と復元側の不一致を別原因として別の問題に分けても、同じ修正範囲から除外せず修正と回帰テストを要求していれば不合格にしない。
+          - 修正が導入した src/public-key.js の collision を検出するテストを要求してよい。
+          - 修正によって公開された src/identity-card.js の resolver 結果に対する回帰検出を要求してよい。その場合、結果がない状態と例外状態を一般的な error handling として曖昧にせず、それぞれの期待結果と検証方法を区別し、公開された publishResource() の結果を通じた検証を要求する。同じ指摘に記載していても、この区別が明確なら不合格にしない。
+          - 既存の公開 identity-card テストを要求動作の網羅と数えてはならない。解決済みの場合のテストは他の状態を対象にせず、結果がない場合のテストはタスクが禁止する card 形式の note 付き結果を固定している。そのテストの修正要求は範囲内であり、禁止されたテスト削減には当たらない。
+          - 限定した比較で発見したというだけで、src/resource-text.js の別の表示契約を指摘やテスト追加要求にしない。
+          - 重複テスト、ワークフロー名や文章を固定する検証、YAML の生構造、補助関数や内部実装の詳細、恒久的な移行一覧、読み込み処理・ゲート・上位の振る舞いテストがすでに対象にする検証を要求しない。
+          - この変更が導入した退行の検出に因果的に必要な場合を除き、既存テストの削減や統合を要求しない。
 
-          A response fails if it opens a separate test family without one of the four follow-up authorization bases, or treats general test cleanliness as repair scope.
+          review-adjudication が、隣接する別契約のテスト追加や一般的なテスト整理を今回の修正範囲として残した場合は不合格とする。既存指摘の根拠不足を確認した場合は、その扱いを証拠に基づいて決めていること。

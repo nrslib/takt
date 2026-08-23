@@ -8,7 +8,10 @@ import {
   serialWorkflowTestFiles,
 } from './scripts/test-classification.mjs';
 
-export const srcTestInclude = ['src/__tests__/**/*.test.ts'];
+export const srcTestInclude = [
+  'src/__tests__/**/*.test.ts',
+  'src/__tests__/**/*.test.tsx',
+];
 
 export const itTestGlobs = [
   ...parallelIntegrationTestGlobs,
@@ -54,12 +57,14 @@ export const commonSrcTestConfig = {
     TAKT_CONFIG_DIR: '',
     TAKT_NOTIFY_WEBHOOK: '',
   },
-  // Local runs execute 4 unit shards plus fork workers and spawnSync-heavy
-  // tests on one machine. A worker whose event loop is starved past 60s trips
-  // birpc's fixed RPC timeout and vitest surfaces it as an unhandled error
-  // ("Timeout calling onTaskUpdate") even though every test passed. Keep
-  // unhandled errors fatal on CI (one shard per runner, no such contention)
-  // and ignore them locally where they are reproducibly spurious.
+  // Local runs execute an adaptive unit-shard wave plus fork workers and
+  // spawnSync-heavy tests on one machine. A worker whose event loop is starved
+  // past 60s trips birpc's fixed RPC timeout and vitest surfaces it as an
+  // unhandled error ("Timeout calling onTaskUpdate") even though every test
+  // passed. Keep unhandled errors fatal when CI is set. The blocking
+  // pull-request matrix keeps one shard per runner; the on-demand /ci comment
+  // workflow is a documented single-runner exception and opts into one strict
+  // wrapper re-measurement without changing Vitest's CI-fatal handling.
   dangerouslyIgnoreUnhandledErrors: !process.env.CI,
   environment: 'node',
   globals: false,

@@ -14,22 +14,18 @@ import {
   debugLog,
   infoLog,
   errorLog,
-  writePromptLog,
 } from '../shared/utils/index.js';
-import { existsSync, readFileSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const TEST_TMPDIR = realpathSync(tmpdir());
-
-function resolvePromptsLogFilePath(): string {
-  const debugLogFile = getDebugLogFile();
-  expect(debugLogFile).not.toBeNull();
-  if (!debugLogFile!.endsWith('.log')) {
-    throw new Error(`unexpected debug log file path: ${debugLogFile!}`);
-  }
-  return debugLogFile!.replace(/\.log$/, '-prompts.jsonl');
-}
 
 function readPersistedDebugData(logFile: string, message: string): string {
   const persisted = readFileSync(logFile, 'utf-8');
@@ -102,21 +98,6 @@ describe('debug logging', () => {
       }
     });
 
-    it('should create prompts log file with -prompts suffix', () => {
-      const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-prompts-'));
-
-      try {
-        initDebugLogger({ enabled: true }, projectDir);
-        const promptsLogFile = resolvePromptsLogFilePath();
-        expect(promptsLogFile).toContain(join(projectDir, '.takt', 'runs'));
-        expect(promptsLogFile).toContain('/logs/');
-        expect(promptsLogFile).toMatch(/debug-.*-prompts\.jsonl$/);
-        expect(existsSync(promptsLogFile)).toBe(true);
-      } finally {
-        rmSync(projectDir, { recursive: true, force: true });
-      }
-    });
-
     it('should not create log file when projectDir is not provided', () => {
       initDebugLogger({ enabled: true });
       expect(isDebugEnabled()).toBe(true);
@@ -130,9 +111,7 @@ describe('debug logging', () => {
       try {
         initDebugLogger({ enabled: true, logFile }, '/tmp');
         expect(getDebugLogFile()).toBe(logFile);
-        expect(resolvePromptsLogFilePath()).toBe(join(logDir, 'test-prompts.jsonl'));
         expect(existsSync(logFile)).toBe(true);
-        expect(existsSync(join(logDir, 'test-prompts.jsonl'))).toBe(true);
 
         const content = readFileSync(logFile, 'utf-8');
         expect(content).toContain('TAKT Debug Log');
@@ -167,68 +146,6 @@ describe('debug logging', () => {
       expect(isDebugEnabled()).toBe(false);
       expect(getDebugLogFile()).toBeNull();
       expect(isVerboseConsole()).toBe(false);
-    });
-  });
-
-  describe('writePromptLog', () => {
-    it('should append prompt log record when debug is enabled', () => {
-      const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-write-prompts-'));
-
-      try {
-        initDebugLogger({ enabled: true }, projectDir);
-        const promptsLogFile = resolvePromptsLogFilePath();
-
-        writePromptLog({
-          step: 'plan',
-          phase: 1,
-          iteration: 2,
-          scope: '{"step":"plan","stack":[]}',
-          systemPrompt: 'system prompt',
-          userInstruction: 'prompt text',
-          prompt: 'prompt text',
-          response: 'response text',
-          timestamp: '2026-02-07T00:00:00.000Z',
-        });
-
-        const content = readFileSync(promptsLogFile, 'utf-8').trim();
-        expect(content).not.toBe('');
-        const parsed = JSON.parse(content) as {
-          step: string;
-          phase: number;
-          iteration: number;
-          systemPrompt: string;
-          userInstruction: string;
-          prompt: string;
-          response: string;
-          timestamp: string;
-        };
-        expect(parsed.step).toBe('plan');
-        expect(parsed.phase).toBe(1);
-        expect(parsed.iteration).toBe(2);
-        expect(parsed.systemPrompt).toBe('system prompt');
-        expect(parsed.userInstruction).toBe('prompt text');
-        expect(parsed.prompt).toBe('prompt text');
-        expect(parsed.response).toBe('response text');
-        expect(parsed.timestamp).toBe('2026-02-07T00:00:00.000Z');
-      } finally {
-        rmSync(projectDir, { recursive: true, force: true });
-      }
-    });
-
-    it('should do nothing when debug is disabled', () => {
-      writePromptLog({
-        step: 'plan',
-          phase: 1,
-          iteration: 1,
-          scope: '{"step":"plan","stack":[]}',
-        systemPrompt: 'system prompt',
-        userInstruction: 'ignored prompt',
-        prompt: 'ignored prompt',
-        response: 'ignored response',
-        timestamp: '2026-02-07T00:00:00.000Z',
-      });
-
-      expect(getDebugLogFile()).toBeNull();
     });
   });
 
