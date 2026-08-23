@@ -17,6 +17,7 @@ class FakeStdin extends EventEmitter {
 
   pause(): void {
     this.paused = true;
+    this.emit('pause');
   }
 }
 
@@ -126,6 +127,19 @@ describe('installImmediateSigintExit', () => {
     expect(sigintListener).not.toHaveBeenCalled();
     expect(runtime.stdin.isRaw).toBe(false);
     expect(runtime.stdin.paused).toBe(true);
+  });
+
+  it('run 中に共有 stdin が pause されても Ctrl+C 監視を維持する', () => {
+    const runtime = new FakeProcess();
+    const sigintListener = vi.fn();
+    runtime.on('SIGINT', sigintListener);
+
+    install('run', runtime);
+    runtime.stdin.pause();
+    runtime.stdin.emit('data', Buffer.from('\u0003', 'utf-8'));
+
+    expect(runtime.stdin.paused).toBe(false);
+    expect(sigintListener).toHaveBeenCalledTimes(1);
   });
 
   it('cleanup は複数回呼んでも安全', () => {
