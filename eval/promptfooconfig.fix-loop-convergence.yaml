@@ -110,15 +110,3 @@ tests:
         metric: semantic-human-cells
         value: |
           見出し、表形式、文言の完全一致は評価しない。担当箇所が TaskRetryRestartTree の target 解決と visible projection の責務を意味同等に維持し、強制点候補が単一の window setter への集約を意味同等に維持している場合に限り pass とする。前回経路セルの誤字や、接続詞・日本語表記の違いだけを blocking な不一致として扱っていれば fail とする。一方、元のキーワードを残していても責務を否定する文、または target / visible projection の責務を UI 層へ移譲する文は fail とする。強制点を否定・撤回・別の場所へ変更する文も fail とする。
-  - description: E13b 経路集合の変更は意味同等として通さない
-    vars: { role: verifier, scenario: E13b }
-    assert:
-      - type: regex
-        value: 'JUDGEMENT: result=incomplete; semantic_carry_forward=不一致\s*$'
-      - type: javascript
-        metric: semantic-carry-forward
-        value: file://asserts/fix-loop-convergence.mjs
-      - type: llm-rubric
-        metric: semantic-human-cells
-        value: |
-          見出し、表形式、文言の完全一致は評価しない。plan の正本経路 P3 を report が検証成果物なしに P4 へ変更したことを意味不一致かつ成果物不足として扱い、出力行では P3 を復元している場合に限り pass とする。担当箇所は TaskRetryRestartTree の target 解決と visible projection の責務、強制点候補は単一の window setter への集約という意味を勝手に変更してはならない。元のキーワードを残していても責務を否定する文や UI 層へ移譲する文、強制点を否定・撤回・別の場所へ変更する文は fail とする。

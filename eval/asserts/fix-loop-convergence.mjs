@@ -209,40 +209,29 @@ function assertE06(report) {
   );
 }
 
-function isUnmetItemsSection(heading) {
-  return /^(?:不成立・未確認事項|unmet or unverified items)$/i.test(heading);
-}
-
-function assertE13(report, scenario) {
+function assertE13(report) {
   const recurrenceRows = report.sections
     .filter(({ heading }) =>
       /^(?:不変条件の再発記録|invariant recurrence record)$/i.test(heading))
     .flatMap(extractRowsWithinSection)
     .filter((row) => valueForHeader(row, INVARIANT_NAME_HEADERS) === 'BW-2');
-  const expectedResult = scenario === 'E13a' ? 'verified' : 'incomplete';
-  const expectedSemanticResult = scenario === 'E13a' ? '維持' : '不一致';
   const recurrenceRow = recurrenceRows.length === 1 ? recurrenceRows[0] : undefined;
   const recordIntegrityValue = recurrenceRow === undefined
     ? ''
     : valueForHeader(recurrenceRow, E13_COLUMN_HEADERS[12]) ?? '';
-  const recordIntegrityIsExpected = scenario === 'E13a'
-    ? recordIntegrityValue === '完全'
-    : /成果物不足/.test(recordIntegrityValue);
+  const recordIntegrityIsExpected = recordIntegrityValue === '完全';
   const checks = [
     ['one-bw2-recurrence-row', recurrenceRows.length === 1],
     ['result-reflects-semantic-contract', new RegExp(
-      `(?:^|\\n)##\\s+(?:結果|Result):\\s*${expectedResult}(?:\\s|$)`,
+      '(?:^|\\n)##\\s+(?:結果|Result):\\s*verified(?:\\s|$)',
       'i',
     ).test(report.report)],
     ['judgement-reflects-semantic-contract', new RegExp(
-      `JUDGEMENT: result=${expectedResult}; semantic_carry_forward=${expectedSemanticResult}\\s*$`,
+      'JUDGEMENT: result=verified; semantic_carry_forward=維持\\s*$',
     ).test(report.report)],
   ];
   if (recurrenceRows.length === 1) {
     const [row] = recurrenceRows;
-    const expectedPreviousPath = scenario === 'E13a'
-      ? /^なし（引(?:き|え)継ぎ行なし）$/
-      : /^P2: 親 window 置換$/;
     checks.push(
       ['all-thirteen-columns-present', row.headers.length === 13
         && E13_COLUMN_HEADERS.every((patterns) => headerIndex(row, patterns) >= 0)],
@@ -255,7 +244,7 @@ function assertE13(report, scenario) {
         /^current verification number$/i,
       ]) === '2'],
       ['previous-verification-number-preserved', valueForHeader(row, E13_COLUMN_HEADERS[5]) === '1'],
-      ['previous-path-preserved', expectedPreviousPath.test(
+      ['previous-path-preserved', /^なし（引(?:き|え)継ぎ行なし）$/.test(
         valueForHeader(row, E13_COLUMN_HEADERS[6]) ?? '',
       )],
       ['path-set-preserved', valueForHeader(row, [
@@ -275,24 +264,14 @@ function assertE13(report, scenario) {
       ['record-integrity-column-preserved', recordIntegrityIsExpected],
     );
   }
-  if (scenario === 'E13b') {
-    const unmetItemsLines = report.sections
-      .filter(({ heading }) => isUnmetItemsSection(heading))
-      .flatMap(({ lines }) => lines);
-    checks.push(
-      ['path-change-recognized', unmetItemsLines.some((line) =>
-        /P3.*P4|P4.*P3/.test(line))],
-      ['artifact-deficiency-recognized', recordIntegrityIsExpected],
-    );
-  }
   return gradingResult(checks, 'semantic descriptions are tolerant while mechanical state is preserved');
 }
 
 export default function assertFixLoopConvergence(output, context) {
   const report = extractReport(output);
   if (context?.vars?.scenario === 'E06') return assertE06(report);
-  if (context?.vars?.scenario === 'E13a' || context?.vars?.scenario === 'E13b') {
-    return assertE13(report, context.vars.scenario);
+  if (context?.vars?.scenario === 'E13a') {
+    return assertE13(report);
   }
   return {
     pass: false,

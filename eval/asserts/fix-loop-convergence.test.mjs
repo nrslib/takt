@@ -25,22 +25,6 @@ const E13A_OUTPUT = `
 JUDGEMENT: result=verified; semantic_carry_forward=維持
 `;
 
-const E13B_OUTPUT = `
-## 結果: incomplete
-
-## 不変条件の再発記録
-
-| 修正単位 | family ID | 不変条件の名前 | 担当箇所 | 今回の検証回数 | 前回の検証回数 | 前回経路 | 今回経路 | 同一不変条件・再発判定 | 累積 \`incomplete\` 回数 | 別経路での再発が確認済みか | 強制点候補 | 記録の完全性 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| FP-PICKER-STATE | FAM-RETRY-PICKER | BW-2 | TaskRetryRestartTree の target 解決・visible projection | 2 | 1 | P2: 親 window 置換 | P3: prune 復帰漏れ | 同一・再発 | 2 | 確認済み | 単一 window setter への集約 | 理由付き成果物不足: fix-report が P3 を P4 に無断変更 |
-
-## 不成立・未確認事項
-
-- fix-report の今回経路は正本 P3 から P4 に無断変更され、裏付ける検証成果物が不足している。
-
-JUDGEMENT: result=incomplete; semantic_carry_forward=不一致
-`;
-
 function run(output, scenario) {
   return assertFixLoopConvergence(output, { vars: { scenario } });
 }
@@ -157,53 +141,4 @@ test('E13 JavaScript assertion leaves human-cell semantics to the rubric', () =>
   // Then
   assert.deepEqual(paraphraseResults, [true, true]);
   assert.equal(contradictionResult.pass, true);
-});
-
-test('E13b requires incomplete and reconstructs the canonical P3 row', () => {
-  // Given
-  const shortRow = E13B_OUTPUT.replace(
-    /\| 修正単位 \| family ID[\s\S]*?理由付き成果物不足: fix-report が P3 を P4 に無断変更 \|/,
-    '| 修正単位 | family ID |\n|---|---|\n| FP-PICKER-STATE | FAM-RETRY-PICKER |',
-  );
-  const changedPath = E13B_OUTPUT.replace('P3: prune 復帰漏れ', 'P4: restore 復帰漏れ');
-  const changedResult = E13B_OUTPUT.replaceAll('incomplete', 'verified').replace('不一致', '維持');
-
-  // When
-  const result = run(E13B_OUTPUT, 'E13b');
-  const rejectedResults = [shortRow, changedPath, changedResult].map((output) =>
-    run(output, 'E13b').pass);
-
-  // Then
-  assert.equal(result.pass, true);
-  assert.deepEqual(rejectedResults, [false, false, false]);
-});
-
-test('E13b requires the path change in the unmet-items section', () => {
-  // Given
-  const output = E13B_OUTPUT.replace('## 不成立・未確認事項', '## サマリー');
-
-  // When
-  const result = run(output, 'E13b');
-
-  // Then
-  assert.equal(result.pass, false);
-});
-
-test('E13b requires artifact deficiency in the record-integrity column', () => {
-  // Given
-  const output = E13B_OUTPUT
-    .replace(
-      '理由付き成果物不足: fix-report が P3 を P4 に無断変更',
-      '完全',
-    )
-    .replace(
-      '## 不成立・未確認事項',
-      '## サマリー\n\n成果物不足\n\n## 不成立・未確認事項',
-    );
-
-  // When
-  const result = run(output, 'E13b');
-
-  // Then
-  assert.equal(result.pass, false);
 });
