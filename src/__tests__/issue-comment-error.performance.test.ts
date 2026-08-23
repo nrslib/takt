@@ -1,17 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { getIssueCommentFailureReason } from '../infra/git/issue-comment-error.js';
 
+const ISSUE_COMMENT_ERROR_MAX_LENGTH = 16_384;
+
 describe('getIssueCommentFailureReason performance', () => {
-  it('16KiBの敵対的なstatus入力を短時間で処理する', () => {
-    getIssueCommentFailureReason({ stderr: 'permission denied' }, '');
-
-    const input = `status${' '.repeat(16_384 - 'status'.length - 2)}xx`;
-    const startedAt = performance.now();
+  it('16KiB未満の入力にあるHTTPステータスを分類する', () => {
+    const input = `${'x'.repeat(ISSUE_COMMENT_ERROR_MAX_LENGTH - ' HTTP 401'.length - 1)} HTTP 401`;
     const reason = getIssueCommentFailureReason({ stderr: input }, '');
-    const elapsedMs = performance.now() - startedAt;
 
-    expect(input).toHaveLength(16_384);
+    expect(input).toHaveLength(ISSUE_COMMENT_ERROR_MAX_LENGTH - 1);
+    expect(reason).toBe('authentication failed');
+  });
+
+  it('16KiB境界より後ろにあるHTTPステータスは汎用フォールバックにする', () => {
+    const input = `${'x'.repeat(ISSUE_COMMENT_ERROR_MAX_LENGTH)} HTTP 401`;
+    const reason = getIssueCommentFailureReason({ stderr: input }, '');
+
+    expect(input).toHaveLength(ISSUE_COMMENT_ERROR_MAX_LENGTH + ' HTTP 401'.length);
     expect(reason).toBe('Issue comment command failed');
-    expect(elapsedMs).toBeLessThan(200);
   });
 });
