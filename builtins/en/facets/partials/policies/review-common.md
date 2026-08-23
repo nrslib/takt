@@ -141,7 +141,7 @@ Checks that only inspect configuration values, logs, snapshots, or the last obse
 | Only external-environment E2E exists, with no reproducible verification of the main boundary | Warning or REJECT |
 | Behavior is approved from configuration values, logs, or snapshots only | REJECT |
 
-Do not close an individual finding from supplied verification evidence alone. Cross-check the current code, the original acceptance criteria, and the conditions directly observed by the evidence. Do not report the absence of a quality-gate record in a fix report as an issue. Do not infer and require an unrecorded gate from the fix plan or another report.
+Do not close an individual finding from supplied verification evidence alone. Cross-check the current code, the original acceptance criteria, and the conditions directly observed by the evidence. Do not report the absence of a quality-gate record as an issue. Do not infer and require an unrecorded gate from other information.
 
 ## Fact-Checking
 
