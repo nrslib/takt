@@ -70,6 +70,10 @@ interface SingleWorkflowIterationResult {
   abort?: WorkflowAbortResult;
 }
 
+type CommandGateTransitionResult =
+  | { kind: 'transition'; transition: WorkflowRuleTransition }
+  | { kind: 'quality_gate_failure'; response: AgentResponse };
+
 interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
@@ -777,6 +781,40 @@ function resolveQualityGateSnapshotIteration(
   throw new Error(`Step "${step.name}" completed without a step iteration for quality gate feedback`);
 }
 
+async function resolveCommandGateTransition(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  response: AgentResponse,
+  stepIteration: number | undefined,
+  observabilityEnabled: boolean,
+): Promise<CommandGateTransitionResult> {
+  const transition = deps.resolveDoneTransition(step, response);
+  if (transition.commandGates === 'skip') {
+    return { kind: 'transition', transition };
+  }
+
+  const qualityGateResult = await deps.runQualityGates({
+    qualityGates: step.qualityGates,
+    projectRoot: deps.getCwd(),
+    step,
+    childProcessEnv: deps.options.childProcessEnv,
+    observabilityEnabled,
+    runId: deps.options.observabilityRunId,
+    workflowName: deps.getWorkflowName(),
+  });
+  if (qualityGateResult.ok) {
+    return { kind: 'transition', transition };
+  }
+
+  applyQualityGateFailure(
+    deps,
+    step,
+    resolveQualityGateSnapshotIteration(deps.state, step, stepIteration),
+    qualityGateResult.response,
+  );
+  return { kind: 'quality_gate_failure', response: qualityGateResult.response };
+}
+
 export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promise<WorkflowRunResult> {
   try {
     return await runWorkflowToCompletionCore(deps);
@@ -1074,26 +1112,18 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         break;
       }
 
-      const qualityGateResult = await deps.runQualityGates({
-        qualityGates: step.qualityGates,
-        projectRoot: deps.getCwd(),
+      const commandGateTransition = await resolveCommandGateTransition(
+        deps,
         step,
-        childProcessEnv: deps.options.childProcessEnv,
+        response,
+        stepIteration,
         observabilityEnabled,
-        runId: deps.options.observabilityRunId,
-        workflowName: deps.getWorkflowName(),
-      });
-      if (!qualityGateResult.ok) {
-        applyQualityGateFailure(
-          deps,
-          step,
-          resolveQualityGateSnapshotIteration(deps.state, step, stepIteration),
-          qualityGateResult.response,
-        );
+      );
+      if (commandGateTransition.kind === 'quality_gate_failure') {
         continue;
       }
+      const { transition } = commandGateTransition;
 
-      const transition = deps.resolveDoneTransition(step, response);
       if (transition.requiresUserInput) {
         if (!deps.options.onUserInput) {
           abort = abortWorkflow(deps, 'user_input_required', 'User input required but no handler is configured');
@@ -1433,31 +1463,23 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     };
   }
 
-  const qualityGateResult = await deps.runQualityGates({
-    qualityGates: step.qualityGates,
-    projectRoot: deps.getCwd(),
+  const commandGateTransition = await resolveCommandGateTransition(
+    deps,
     step,
-    childProcessEnv: deps.options.childProcessEnv,
+    response,
+    stepIteration,
     observabilityEnabled,
-    runId: deps.options.observabilityRunId,
-    workflowName: deps.getWorkflowName(),
-  });
-  if (!qualityGateResult.ok) {
-    applyQualityGateFailure(
-      deps,
-      step,
-      resolveQualityGateSnapshotIteration(deps.state, step, stepIteration),
-      qualityGateResult.response,
-    );
+  );
+  if (commandGateTransition.kind === 'quality_gate_failure') {
     return {
-      response: qualityGateResult.response,
+      response: commandGateTransition.response,
       nextStep: step.name,
       isComplete: false,
       loopDetected: loopCheck.isLoop,
     };
   }
+  const { transition } = commandGateTransition;
 
-  const transition = deps.resolveDoneTransition(step, response);
   if (transition.requiresUserInput) {
     if (!deps.options.onUserInput) {
       const abort = abortWorkflow(deps, 'user_input_required', 'User input required but no handler is configured');

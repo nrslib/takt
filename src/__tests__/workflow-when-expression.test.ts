@@ -408,6 +408,19 @@ describe('generateStatusRulesComponents interactive default', () => {
 });
 
 describe('workflow rule normalization', () => {
+  it.each([
+    ['required', 'required'],
+    ['skip', 'skip'],
+  ] as const)('normalizes command_gates %s to %s', (commandGates, expected) => {
+    const normalized = normalizeRule({
+      condition: 'approved',
+      next: 'COMPLETE',
+      command_gates: commandGates,
+    });
+
+    expect(normalized.commandGates).toBe(expected);
+  });
+
   it('rejects the removed when alias instead of translating it into a condition', () => {
     expect(() => normalizeRule({
       when: 'context.review.count == 0',

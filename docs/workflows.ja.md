@@ -223,8 +223,10 @@ base コミットは `refs/takt/pr-base/<branch>` → `refs/takt/base/<branch>` 
 rules:
   - condition: "Implementation complete"
     next: review
+    command_gates: required
   - condition: "Cannot proceed"
     next: ABORT
+    command_gates: skip
     appendix: |
       何が進行を妨げているかを説明してください。
 ```
@@ -253,6 +255,10 @@ rule は YAML 記述順で評価され、最初に成立した rule を採用し
 ### ルールフィールド: `interactive_only`
 
 `interactive_only: true` を指定した rule は interactive 実行時にのみ評価対象になります。非 interactive 実行（`--pipeline` や `takt run` など）ではその rule は宣言されていないものとしてスキップされ、残りの rule で評価が続行されます。ユーザー入力を待つ遷移など、人間の介在が必要な遷移に使用します。
+
+### ルールフィールド: `command_gates`
+
+`command_gates` は、選択された rule で command quality gate を実行するか制御します。`required` は rule と transition の解決後、transition の適用前に step の command gate を実行し、成功した場合だけ transition を適用します。`skip` は command gate を実行せず、選択済みの transition を適用します。省略時は `required` です。
 
 ## Step タイプ
 

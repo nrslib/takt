@@ -201,8 +201,10 @@ Rules 决定每个 step 如何路由到下一个 step。instruction builder 会�
 rules:
   - condition: "Implementation complete"
     next: review
+    command_gates: required
   - condition: "Cannot proceed"
     next: ABORT
+    command_gates: skip
     appendix: |
       Explain what is blocking progress.
 ```
@@ -231,6 +233,10 @@ rules:
 ### `interactive_only`
 
 `interactive_only: true` 的规则只在交互执行中考虑。`--pipeline` 或 `takt run` 等非交互运行会跳过它，就像该规则未声明一样。可用于需要人工输入的转移。
+
+### `command_gates`
+
+`command_gates` 控制选中规则的 command quality gate。`required` 会在规则和 transition 解析后、应用 transition 前执行该 step 的 command gate，并且只在 gate 成功后应用 transition。`skip` 不执行 command gate，直接应用选中的 transition。省略时等同于 `required`。
 
 ## Step 类型
 

@@ -34,7 +34,7 @@ function makeDeps(nextStep: string) {
     applyRuntimeEnvironment: vi.fn(),
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
     cycleDetectorRecordAndCheck: vi.fn(() => ({ triggered: true, cycleCount: 1, monitor })),
-    resolveDoneTransition: vi.fn(() => ({ nextStep })),
+    resolveDoneTransition: vi.fn(() => ({ nextStep, commandGates: 'required' as const })),
     runLoopMonitorJudge: vi.fn(async () => 'ABORT'),
     runStep: vi.fn(async (_step: WorkflowStep, instruction: string) => ({
       response,

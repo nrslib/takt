@@ -224,8 +224,10 @@ Rules define how each step routes to the next step. The instruction builder auto
 rules:
   - condition: "Implementation complete"
     next: review
+    command_gates: required
   - condition: "Cannot proceed"
     next: ABORT
+    command_gates: skip
     appendix: |
       Explain what is blocking progress.
 ```
@@ -254,6 +256,10 @@ The optional `appendix` field provides a template for additional AI output when 
 ### Rule Field: `interactive_only`
 
 A rule with `interactive_only: true` is only considered during interactive execution. In non-interactive runs (e.g. `--pipeline` or `takt run`), the rule is skipped as if it were not declared, and evaluation continues with the remaining rules. Use it for transitions that require a human, such as a rule that waits for user input.
+
+### Rule Field: `command_gates`
+
+`command_gates` controls command quality gates for the selected rule. `required` runs the step's command gates after rule resolution and before applying the transition; the transition is applied only after the gates succeed. `skip` applies the selected transition without running command gates. Omitting the field is equivalent to `required`.
 
 ## Step Types
 
