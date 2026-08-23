@@ -155,6 +155,26 @@ test('E12 accepts unchanged BW-2 fields, a separate actionable row, and bounded 
   assert.equal(run(E12_OUTPUT, 'E12').pass, true);
 });
 
+test('E12 recognizes identifier/source key cells only for the matching identifier', () => {
+  const sourceQualifiedFinding = E12_OUTPUT.replace(
+    '| ARCH-NEW-picker-L520 | FP-PICKER-ORDER |',
+    '| ARCH-NEW-picker-L520 / review-resolution.md | FP-PICKER-ORDER |',
+  );
+  const sourceQualifiedDifferentFinding = sourceQualifiedFinding.replace(
+    'ARCH-NEW-picker-L520 / review-resolution.md',
+    'OTHER-FINDING / review-resolution.md',
+  );
+  const sourceQualifiedNonActionableFinding = sourceQualifiedFinding.replace(
+    '| ARCH-NEW-picker-L520 / review-resolution.md | FP-PICKER-ORDER |',
+    '| ARCH-NEW-picker-L520 / review-resolution.md | FP-PICKER-ORDER |\n'
+      + '| INV-EMPTY-TERM / invariant-recurrence.md | FP-EMPTY |',
+  );
+
+  assert.equal(run(sourceQualifiedFinding, 'E12').pass, true);
+  assert.equal(run(sourceQualifiedDifferentFinding, 'E12').pass, false);
+  assert.equal(run(sourceQualifiedNonActionableFinding, 'E12').pass, false);
+});
+
 test('E12 accepts explanatory mentions of the non-actionable invariant', () => {
   assert.equal(run(E12_CLAUDE_OPUS_OUTPUT, 'E12').pass, true);
 });

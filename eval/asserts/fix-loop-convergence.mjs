@@ -264,10 +264,12 @@ function isCodeChangeTargetSection(heading) {
 }
 
 function rowUsesIdentifierAsKey(row, identifier) {
-  return row.cells[0] === identifier
+  const matchesIdentifier = (cell) => cell === identifier
+    || cell.startsWith(`${identifier} /`);
+  return matchesIdentifier(row.cells[0])
     || row.headers.some((header, index) =>
       WORK_ITEM_KEY_HEADERS.some((pattern) => pattern.test(header))
-        && row.cells[index] === identifier);
+        && matchesIdentifier(row.cells[index]));
 }
 
 function lineUsesIdentifierAsWorkItem(line, identifier) {
