@@ -5,7 +5,7 @@ if (!triggerPath) {
   throw new Error('TAKT_E2E_PAUSE_STDIN_TRIGGER is required');
 }
 
-const deadline = Date.now() + 40_000;
+const deadline = Date.now() + 20_000;
 
 const timer = setInterval(() => {
   if (
