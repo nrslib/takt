@@ -1,5 +1,5 @@
 // promptfoo prompt function: fix ループ収束規則の挙動評価。
-// builtins/ja の実ファセットと output contract を実行時に組み立ててロール別ヘッダを作り、
+// builtins/ja の実ファセットを実行時に組み立ててロール別ヘッダを作り、
 // cases/fix-loop-convergence/<scenario>.md のシナリオ本文と合成する。
 // ファセットを変更すると、この評価は変更後の文面をそのまま対象にする。
 // 縮約構成の独立評価として、runtime の project → user → builtin resolver は使わず builtin 層だけを対象にする。
@@ -24,23 +24,10 @@ function expandFacet(relativePath) {
 const DRY_RUN_NOTE = 'これは机上評価環境であり、実際のコード編集・コマンド実行はできない。編集内容は方針レベルの記述でよい。環境制約（編集・実行ができないこと）を「作業結果」や判定の選択理由にしてはならない。方針が修正境界内で実行可能なら、編集と対象テストが完了したものとみなして判定すること。instruction の判定手順と必須出力は厳密に守ること。レポート参照 {report:...} は本文中に実体を与える。';
 
 const ROLES = {
-  'fix-retry': {
-    intro: 'あなたは TAKT ワークフローの fix-retry ステップを実行する coder エージェントである。次の instruction 全文に従うこと。',
-    instruction: 'instructions/apply-fix-verification.md',
-    afterInstruction: [DRY_RUN_NOTE],
-  },
   fix: {
     intro: 'あなたは TAKT ワークフローの fix ステップを実行する coder エージェントである。次の instruction 全文に従うこと。',
     instruction: 'instructions/apply-fix-plan.md',
     afterInstruction: [DRY_RUN_NOTE],
-  },
-  verifier: {
-    intro: 'あなたは TAKT ワークフローの fix-verifier ステップを実行する coding-reviewer エージェントである。次の instruction 全文に従うこと。',
-    instruction: 'instructions/verify-fix.md',
-    afterInstruction: [
-      'これは机上評価環境であり、コード実行はできない。シナリオ中の「観測事実」を独立検証の結果として扱ってよい。',
-    ],
-    outputContract: 'output-contracts/fix-verification.md',
   },
   monitor: {
     intro: 'あなたは TAKT ワークフローの loop_monitor 判定を行う supervisor エージェントである。fix-retry と fix-verifier のサイクルが閾値 4 回に達した（{cycle_count}=4）。次の instruction 全文に従うこと。',
@@ -70,13 +57,5 @@ export default async function ({ vars }) {
     '--- INSTRUCTION ここまで ---',
     ...role.afterInstruction,
   ];
-  if (role.outputContract !== undefined) {
-    sections.push(
-      '出力は次の output contract に従うこと。',
-      '--- OUTPUT CONTRACT（全文） ---',
-      expandFacet(role.outputContract),
-      '--- OUTPUT CONTRACT ここまで ---',
-    );
-  }
   return sections.join('\n\n');
 }

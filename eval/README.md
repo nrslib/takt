@@ -38,8 +38,8 @@ preservation is checked only as an explicit independent behavior. The suite
 uses a disposable work copy, so rerun the complete command for each trial.
 Run `npm run eval:prompts:default-priority:codex` to cross-check it with Codex.
 
-The `fix-loop-convergence` suite probes the remediation-loop convergence
-rules with decision scenarios, each run on **three providers** — the
+The `fix-loop-convergence` suite probes remediation-loop monitor and
+established-invariant-scan behavior with decision scenarios, each run on **three providers** — the
 claude headless CLI (`eval/providers/claude-judge.sh`, model
 `claude-opus-5`) and the codex CLI (`eval/providers/codex-judge.sh`, model
 `gpt-5.6-luna`, reasoning effort `max`, and `gpt-5.6-sol`, reasoning effort
@@ -161,7 +161,7 @@ remain excluded.
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
-| `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether repeated failures switch from local patches to a structural fix, history is preserved across retries, new regressions are found, and the monitor chooses the correct next step, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
+| `fix-loop-convergence` | development-remediation / fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether the monitor distinguishes structural replanning from executable repair progress, and whether the established-invariant scan detects a newly introduced violation, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
 | `fix-verifier-family-boundary` | review-remediation / fix-verifier | fix-verifier-family-boundary | whether verification keeps implementation/evidence gaps separate from an omitted family path and excludes an adjacent contract |
 | `fix-verifier-state-closure` | review-remediation / fix-verifier | fix-verifier-state-closure | whether verification derives every applicable terminal state from the source of truth, separates a plan omission from an implementation gap, retains both findings, and excludes an adjacent contract |
 | `fix-verifier-state-routing` | review-remediation / fix-verifier status judgement | fix-verifier-state-closure | whether workflow-owned rules route a report containing both a plan defect and an implementation gap to fix-plan |
