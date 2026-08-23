@@ -67,8 +67,8 @@ describe('commentOnIssue GitHub boundary', () => {
     execFileSync.mockReset();
   });
 
-  it('gh issue comment にIssue番号・全文・cwdを渡して新規コメントを投稿する', () => {
-    const body = 'Confirmed task instructions\nwith the complete content';
+  it('gh issue comment にIssue番号・短い本文・cwdを渡して新規コメントを投稿する', () => {
+    const body = 'Created an execution issue: #999 (https://example.com/issues/999)';
     execFileSync.mockReturnValue('');
 
     const firstResult = commentOnIssue(999, body, '/project');

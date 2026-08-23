@@ -4,9 +4,9 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 
-const { mockCreateIssue, mockCloseIssue } = vi.hoisted(() => ({
+const { mockCreateIssue, mockCommentOnIssue } = vi.hoisted(() => ({
   mockCreateIssue: vi.fn(),
-  mockCloseIssue: vi.fn(),
+  mockCommentOnIssue: vi.fn(),
 }));
 
 vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
@@ -25,6 +25,7 @@ vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
 vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   info: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
 }));
@@ -52,11 +53,11 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
 vi.mock('../infra/git/index.js', () => ({
   getGitProvider: () => ({
     createIssue: (...args: unknown[]) => mockCreateIssue(...args),
-    closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
+    commentOnIssue: (...args: unknown[]) => mockCommentOnIssue(...args),
   }),
 }));
 
-import { success, info, error } from '../shared/ui/index.js';
+import { success, info, warn, error } from '../shared/ui/index.js';
 import { confirm, promptInput } from '../shared/prompt/index.js';
 import { createIssueAndSaveTask, saveTaskFile, saveTaskFromInteractive } from '../features/tasks/add/index.js';
 import { getCurrentBranch, branchExists } from '../infra/task/index.js';
@@ -64,6 +65,7 @@ import { summarizeTaskName } from '../infra/task/summarize.js';
 
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
+const mockWarn = vi.mocked(warn);
 const mockError = vi.mocked(error);
 const mockConfirm = vi.mocked(confirm);
 const mockPromptInput = vi.mocked(promptInput);
@@ -113,7 +115,7 @@ beforeEach(() => {
     issueNumber: 42,
     url: 'https://github.com/owner/repo/issues/42',
   });
-  mockCloseIssue.mockReturnValue({ success: true });
+  mockCommentOnIssue.mockReturnValue({ success: true });
 });
 
 afterEach(() => {
@@ -468,29 +470,7 @@ describe('saveTaskFromInteractive', () => {
 
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.issue).toBe(42);
-  });
-
-  it('should return the saved task content and source issue after persistence', async () => {
-    const taskContent = 'Confirmed task instructions\nwith full details';
-
-    const result = await saveTaskFromInteractive(testDir, taskContent, 'default', {
-      issue: 42,
-      presetSettings: {
-        worktree: true,
-        autoPr: false,
-        draftPr: false,
-      },
-    });
-
-    const savedTask = loadTasks(testDir).tasks[0]!;
-    expect(result).toEqual({
-      taskName: savedTask.name,
-      tasksFile: path.join(testDir, '.takt', 'tasks.yaml'),
-      taskContent,
-      sourceIssueNumber: 42,
-    });
-    expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(true);
-    expect(savedTask.issue).toBe(42);
+    expect(mockCommentOnIssue).not.toHaveBeenCalled();
   });
 
   it('should record PR review metadata and the resolved PR head branch in tasks.yaml', async () => {
@@ -525,7 +505,7 @@ describe('saveTaskFromInteractive', () => {
   it('should persist image attachments when saving an interactive task with preset settings', async () => {
     const attachment = createTempAttachment(testDir, 'image-1.png', 'interactive-image');
 
-    const result = await saveTaskFromInteractive(testDir, 'Review [Image #1].', 'default', {
+    await saveTaskFromInteractive(testDir, 'Review [Image #1].', 'default', {
       presetSettings: { worktree: true, autoPr: false, draftPr: false },
       attachments: [attachment],
     });
@@ -535,7 +515,6 @@ describe('saveTaskFromInteractive', () => {
     const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
     expect(task.workflow).toBe('default');
     expect(task.worktree).toBe(true);
-    expect(result?.taskContent).toBe(orderContent);
     expect(orderContent).toContain('Review [Image #1].');
     expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
     expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('interactive-image');
@@ -544,7 +523,7 @@ describe('saveTaskFromInteractive', () => {
   it('should keep task content unchanged when attachments are empty', async () => {
     const taskContent = 'Review the login flow.';
 
-    const result = await saveTaskFromInteractive(testDir, taskContent, 'default', {
+    await saveTaskFromInteractive(testDir, taskContent, 'default', {
       presetSettings: { worktree: true, autoPr: false, draftPr: false },
       attachments: [],
     });
@@ -553,38 +532,6 @@ describe('saveTaskFromInteractive', () => {
     const taskDir = path.join(testDir, String(task.task_dir));
     const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
     expect(orderContent).toBe(taskContent);
-    expect(result?.taskContent).toBe(orderContent);
-  });
-
-  describe('with confirmAtEndMessage', () => {
-    it('should not save task when user declines confirmAtEndMessage', async () => {
-      mockConfirm.mockResolvedValueOnce(false);
-
-      await saveTaskFromInteractive(testDir, 'Task content', 'default', {
-        issue: 42,
-        confirmAtEndMessage: 'Add this issue to tasks?',
-      });
-
-      expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
-    });
-
-    it('should prompt worktree settings after confirming confirmAtEndMessage', async () => {
-      mockConfirm.mockResolvedValueOnce(true);
-      mockPromptInput.mockResolvedValueOnce('');
-      mockPromptInput.mockResolvedValueOnce('');
-      mockConfirm.mockResolvedValueOnce(false);
-
-      await saveTaskFromInteractive(testDir, 'Task content', 'default', {
-        issue: 42,
-        confirmAtEndMessage: 'Add this issue to tasks?',
-      });
-
-      expect(mockConfirm).toHaveBeenNthCalledWith(1, 'Add this issue to tasks?', true);
-      expect(mockConfirm).toHaveBeenNthCalledWith(2, 'Auto-create PR?', true);
-      const task = loadTasks(testDir).tasks[0]!;
-      expect(task.issue).toBe(42);
-      expect(task.worktree).toBe(true);
-    });
   });
 
   it('should save base_branch when current branch is not main/master and user confirms', async () => {
@@ -624,24 +571,43 @@ describe('createIssueAndSaveTask', () => {
     expect(orderContent).toContain('Review [Image #1].');
     expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
     expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('issue-image');
+    expect(mockCommentOnIssue).not.toHaveBeenCalled();
   });
 
-  it('should leave the created issue open when the user declines saving the issue task', async () => {
+  it('should comment the created issue link on a single source issue', async () => {
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(false);
 
-    await createIssueAndSaveTask(testDir, 'Create issue only', 'default', {
-      confirmAtEndMessage: 'Add this issue to tasks?',
+    await createIssueAndSaveTask(testDir, 'Create execution issue', 'default', {
+      sourceIssue: { number: 7, language: 'ja' },
     });
 
-    expect(mockCreateIssue).toHaveBeenCalledWith(
-      { title: 'Create issue only', body: 'Create issue only', labels: undefined },
+    expect(mockCommentOnIssue).toHaveBeenCalledWith(
+      7,
+      '実行用 Issue を作成しました: #42 (https://github.com/owner/repo/issues/42)',
       testDir,
     );
-    expect(mockCloseIssue).not.toHaveBeenCalled();
-    expectNoTaskArtifacts(testDir);
+    expect(loadTasks(testDir).tasks[0]?.issue).toBe(42);
   });
 
-  it('should leave the created issue open when interactive task saving fails', async () => {
+  it('should warn and preserve the issue and task when source issue commenting fails', async () => {
+    mockCommentOnIssue.mockReturnValue({ success: false, error: 'permission denied' });
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await createIssueAndSaveTask(testDir, 'Create execution issue', 'default', {
+      sourceIssue: { number: 7, language: 'en' },
+    });
+
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('source Issue #7'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('permission denied'));
+    expect(loadTasks(testDir).tasks[0]?.issue).toBe(42);
+    expect(mockCreateIssue).toHaveBeenCalled();
+  });
+
+  it('should not comment when interactive task saving fails', async () => {
     const directoryAttachment = path.join(testDir, 'attachment-dir');
     fs.mkdirSync(directoryAttachment);
     mockPromptInput.mockResolvedValueOnce('');
@@ -656,34 +622,7 @@ describe('createIssueAndSaveTask', () => {
       }],
     });
 
-    expect(mockCloseIssue).not.toHaveBeenCalled();
-    expect(mockError).toHaveBeenCalledWith(expect.stringContaining(
-      'Issue #42 was created, but task saving failed:',
-    ));
-    expectNoTaskArtifacts(testDir);
-  });
-
-  it('should not attempt issue close after task saving fails', async () => {
-    const directoryAttachment = path.join(testDir, 'attachment-dir');
-    fs.mkdirSync(directoryAttachment);
-    mockCloseIssue.mockReturnValue({
-      success: false,
-      commentCreated: true,
-      error: 'glab issue close failed',
-    });
-    mockPromptInput.mockResolvedValueOnce('');
-    mockPromptInput.mockResolvedValueOnce('');
-    mockConfirm.mockResolvedValueOnce(false);
-
-    await createIssueAndSaveTask(testDir, 'Review [Image #1].', 'default', {
-      attachments: [{
-        placeholder: '[Image #1]',
-        tempPath: directoryAttachment,
-        fileName: 'image-1.png',
-      }],
-    });
-
-    expect(mockCloseIssue).not.toHaveBeenCalled();
+    expect(mockCommentOnIssue).not.toHaveBeenCalled();
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining(
       'Issue #42 was created, but task saving failed:',
     ));

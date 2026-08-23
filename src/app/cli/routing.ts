@@ -382,8 +382,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       create_issue: async ({ task: confirmedTask }) => {
         const labels = await promptLabelSelection(lang);
         await createIssueAndSaveTask(resolvedCwd, confirmedTask, chosenWorkflowId, {
-          confirmAtEndMessage: 'Add this issue to tasks?',
           labels,
+          ...(sourceIssueNumber !== undefined
+            ? { sourceIssue: { number: sourceIssueNumber, language: lang } }
+            : {}),
           ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
         });
       },

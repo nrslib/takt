@@ -449,9 +449,9 @@ describe('GitHubProvider', () => {
       mockCommentOnIssue.mockReturnValue(commentResult);
       const provider = new GitHubProvider();
 
-      const result = provider.commentOnIssue(999, 'Confirmed task instructions', '/project');
+      const result = provider.commentOnIssue(999, 'Created an execution issue: #999', '/project');
 
-      expect(mockCommentOnIssue).toHaveBeenCalledWith(999, 'Confirmed task instructions', '/project');
+      expect(mockCommentOnIssue).toHaveBeenCalledWith(999, 'Created an execution issue: #999', '/project');
       expect(result).toEqual(commentResult);
     });
 

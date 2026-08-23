@@ -636,8 +636,8 @@ describe('commentOnIssue', () => {
     mockExecFileSync.mockReset();
   });
 
-  it('glab api にIssue IID・全文・cwdを渡して新規コメントを投稿する', () => {
-    const body = 'Confirmed task instructions\nwith the complete content';
+  it('glab api にIssue IID・短い本文・cwdを渡して新規コメントを投稿する', () => {
+    const body = 'Created an execution issue: #999 (https://example.com/issues/999)';
     mockExecFileSync
       .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
       .mockReturnValueOnce('')

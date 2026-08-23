@@ -88,9 +88,17 @@ export interface IssueEnqueueTaskRequest extends EnqueueTaskRequest {
   issueOutputMode?: 'terminal' | 'silent';
 }
 
+export interface IssueTaskEnqueuedContext {
+  issueNumber: number;
+  issueUrl?: string;
+}
+
+export type IssueTaskEnqueuedHandler = (context: IssueTaskEnqueuedContext) => void;
+
 export interface IssueEnqueueDependencies {
   saveTaskFile: SaveEnqueuedTaskFile;
   createIssueFromTaskResult: CreateEnqueueIssueFromTaskResult;
+  onIssueTaskEnqueued?: IssueTaskEnqueuedHandler;
 }
 
 export type EnqueueTaskResult = Awaited<ReturnType<SaveEnqueuedTaskFile>> & {
@@ -282,22 +290,22 @@ export async function createIssueAndEnqueueTask(
     };
   }
 
+  const issueUrl = normalizePublicIssueUrl(issueResult.issueUrl);
+  let created: EnqueueTaskResult;
   try {
     if (input.abortSignal !== undefined) {
       await waitForAbortSignalPropagation();
     }
     throwIfIssueEnqueueAborted(input.abortSignal);
-    const created = await enqueueTask(
+    created = await enqueueTask(
       {
         ...input,
         issueNumber: issueResult.issueNumber,
       },
       deps.saveTaskFile,
     );
-    return { success: true, created };
   } catch (error) {
     const stage = resolveIssueEnqueueFailureStage(error);
-    const issueUrl = normalizePublicIssueUrl(issueResult.issueUrl);
     return {
       success: false,
       failure: {
@@ -310,6 +318,11 @@ export async function createIssueAndEnqueueTask(
       },
     };
   }
+  deps.onIssueTaskEnqueued?.({
+    issueNumber: issueResult.issueNumber,
+    ...(issueUrl !== undefined ? { issueUrl } : {}),
+  });
+  return { success: true, created };
 }
 
 /**
