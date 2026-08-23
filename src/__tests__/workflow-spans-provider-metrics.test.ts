@@ -115,6 +115,40 @@ describe('workflow span provider error metrics', () => {
     })?.value).toBe(1);
   });
 
+  it.each([
+    ['external abort', AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT],
+    ['part timeout', AGENT_FAILURE_CATEGORIES.PART_TIMEOUT],
+  ])('Given a %s response, When the step span completes, Then records no provider error counter', async (_label, failureCategory) => {
+    const points = await collectMetricPoints(async () => {
+      const { runWithStepSpan } = await import('../core/workflow/observability/workflowSpans.js');
+
+      await runWithStepSpan({
+        enabled: true,
+        runId: 'run-1',
+        workflowName: 'default',
+        step: makeStep('implement'),
+        iteration: 1,
+        providerInfo: {
+          provider: 'codex',
+          model: 'gpt-5',
+        },
+      }, async () => ({
+        response: makeResponse({
+          status: 'error',
+          failureCategory,
+          error: failureCategory,
+        }),
+        instruction: 'Implement',
+        providerInfo: {
+          provider: 'codex',
+          model: 'gpt-5',
+        },
+      }));
+    });
+
+    expect(points.filter((point) => point.name === 'takt.provider.errors')).toEqual([]);
+  });
+
   it('Given a rate limited step response without a resolved model, When the step span completes, Then records provider error and retry counters', async () => {
     const points = await collectMetricPoints(async () => {
       const { runWithStepSpan } = await import('../core/workflow/observability/workflowSpans.js');
@@ -156,7 +190,7 @@ describe('workflow span provider error metrics', () => {
     })?.value).toBe(2);
   });
 
-  it('Given an error step response without a failure category, When the step span completes, Then records a provider error counter', async () => {
+  it('Given an error step response without a failure category, When the step span completes, Then records no provider error counter', async () => {
     const points = await collectMetricPoints(async () => {
       const { runWithStepSpan } = await import('../core/workflow/observability/workflowSpans.js');
 
@@ -183,12 +217,7 @@ describe('workflow span provider error metrics', () => {
       }));
     });
 
-    expect(metricPoint(points, 'takt.provider.errors', {
-      'takt.run.id': 'run-1',
-      'takt.provider.name': 'codex',
-      'takt.model.name': 'gpt-5',
-      'takt.provider.error_type': AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
-    })?.value).toBe(1);
+    expect(points.filter((point) => point.name === 'takt.provider.errors')).toEqual([]);
   });
 
   it('Given a provider callback throws a non-provider error, When the step span closes, Then records no provider error counter', async () => {

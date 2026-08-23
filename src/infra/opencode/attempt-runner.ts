@@ -69,7 +69,10 @@ import {
 } from './unavailable-tool-recovery.js';
 import { createOpenCodeSessionLifecycle } from './session-lifecycle.js';
 import type { OpenCodeSessionLifecycle } from './session-lifecycle.js';
-import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  type AgentFailureCategory,
+} from '../../shared/types/agent-failure.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import {
   createSensitiveTextStreamRedactor,
@@ -185,6 +188,19 @@ const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
 ];
 type OpenCodeSessionSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient['session']['get']>>['data']>;
 type OpenCodeAbortCause = 'timeout' | OpenCodeGuardAbortKind | 'external' | 'prompt' | 'server';
+
+function resolveOpenCodeAbortFailureCategory(
+  abortCause: OpenCodeAbortCause | undefined,
+): AgentFailureCategory | undefined {
+  switch (abortCause) {
+    case 'deadline':
+      return AGENT_FAILURE_CATEGORIES.PART_TIMEOUT;
+    case 'external':
+      return AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT;
+    default:
+      return undefined;
+  }
+}
 
 function getToolGuardFailureFingerprint(failure: ToolGuardRecoverableFailure): string {
   return failure.kind === 'edit_conflict_loop' ? failure.signature : failure.fingerprint;
@@ -928,6 +944,7 @@ export class OpenCodeAttemptRunner {
 
   const buildAttemptErrorResponse = (error: unknown): AgentResponse => {
     const errorMessage = sanitizeAttemptError(getErrorMessage(error));
+    const failureCategory = resolveOpenCodeAbortFailureCategory(abortCause);
     return {
       persona: agentType,
       status: 'error',
@@ -935,9 +952,7 @@ export class OpenCodeAttemptRunner {
       error: errorMessage,
       timestamp: new Date(),
       sessionId,
-      ...(abortCause === 'deadline'
-        ? { failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT }
-        : {}),
+      ...(failureCategory === undefined ? {} : { failureCategory }),
       ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
     };
   };
@@ -2102,6 +2117,7 @@ export class OpenCodeAttemptRunner {
     }
 
     const sanitizedErrorMessage = sanitizeAttemptError(errorMessage);
+    const failureCategory = resolveOpenCodeAbortFailureCategory(abortCause);
     return {
       persona: agentType,
       status: 'error',
@@ -2109,9 +2125,7 @@ export class OpenCodeAttemptRunner {
       error: sanitizedErrorMessage,
       timestamp: new Date(),
       sessionId,
-      ...(abortCause === 'deadline'
-        ? { failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT }
-        : {}),
+      ...(failureCategory === undefined ? {} : { failureCategory }),
       ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
     };
   } finally {

@@ -209,13 +209,14 @@ function providerErrorType(response: AgentResponse | undefined): string | undefi
   if (response.errorKind === 'rate_limit' || response.status === 'rate_limited') {
     return 'rate_limit';
   }
-  if (response.failureCategory) {
-    return response.failureCategory;
+  switch (response.failureCategory) {
+    case AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR:
+    case AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR:
+    case AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT:
+      return response.failureCategory;
+    default:
+      return undefined;
   }
-  if (response.status === 'error') {
-    return AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR;
-  }
-  return undefined;
 }
 
 function stringAttribute(span: SpanMetricSnapshot, key: string): string | undefined {

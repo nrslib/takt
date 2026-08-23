@@ -1333,5 +1333,6 @@ describe('OpenCodeClient retry', () => {
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('error');
     expect(result.content).toBe('OpenCode execution aborted');
+    expect(result.failureCategory).toBe('external_abort');
   });
 });

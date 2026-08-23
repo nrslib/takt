@@ -48,6 +48,8 @@ export interface BatchResult {
   readonly providerUsage?: ProviderUsageSnapshot;
   /** Provider retry attempts captured from the child response */
   readonly retryCount?: number;
+  /** Provider failure classification captured from the child response */
+  readonly failureCategory?: AgentResponse['failureCategory'];
 }
 
 /** Merge function signature: takes all batch results, returns merged string */

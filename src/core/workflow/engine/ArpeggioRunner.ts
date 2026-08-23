@@ -39,6 +39,7 @@ import { sumRetryCounts } from '../../models/response.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   createAgentResponseFailureError,
+  isAgentFailureError,
   isProviderStreamParseError,
 } from '../../../shared/types/agent-failure.js';
 
@@ -150,8 +151,9 @@ async function executeBatchWithRetry(
     runtime,
   );
   let lastError: string | undefined;
+  let lastFailureCategory: AgentResponse['failureCategory'];
 
-  return runWithPhaseSpan({
+  return runWithPhaseSpan<BatchResult>({
     enabled: observability.enabled,
     runId: observability.runId,
     workflowName: observability.workflowName,
@@ -194,6 +196,7 @@ async function executeBatchWithRetry(
             error: lastError,
             providerUsage: response.providerUsage,
             ...(response.retryCount === undefined ? {} : { retryCount: response.retryCount }),
+            ...(response.failureCategory === undefined ? {} : { failureCategory: response.failureCategory }),
           };
         }
         if (response.status === 'rate_limited') {
@@ -219,6 +222,7 @@ async function executeBatchWithRetry(
           throw error;
         }
         lastError = error instanceof Error ? error.message : String(error);
+        lastFailureCategory = isAgentFailureError(error) ? error.failureCategory : undefined;
         log.info('Batch execution threw, retrying', {
           batchIndex: batch.batchIndex,
           attempt: attempt + 1,
@@ -241,6 +245,7 @@ async function executeBatchWithRetry(
         usageMissing: true,
         reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
       },
+      ...(lastFailureCategory === undefined ? {} : { failureCategory: lastFailureCategory }),
     };
   }, (result) => ({
     status: getBatchResultStatus(result),
@@ -401,9 +406,26 @@ export class ArpeggioRunner {
       const errorDetails = failedBatches
         .map((r) => `batch ${r.batchIndex}: ${r.error}`)
         .join('; ');
-      throw new Error(
-        `Arpeggio step "${step.name}" failed: ${failedBatches.length}/${results.length} batches failed (${errorDetails})`
-      );
+      const primaryFailure = failedBatches.find((result) => result.failureCategory !== undefined)
+        ?? failedBatches[0];
+      if (primaryFailure === undefined) {
+        throw new Error(`Arpeggio step "${step.name}" has no primary failed batch`);
+      }
+      const failureMessage = `Arpeggio step "${step.name}" failed: ${failedBatches.length}/${results.length} batches failed (${errorDetails})`;
+      const failureResponse: AgentResponse = {
+        persona: step.name,
+        status: 'error',
+        content: failureMessage,
+        error: primaryFailure.error ?? failureMessage,
+        timestamp: new Date(),
+        ...(primaryFailure.failureCategory === undefined
+          ? {}
+          : { failureCategory: primaryFailure.failureCategory }),
+        ...(retryCount === undefined ? {} : { retryCount }),
+      };
+      state.stepOutputs.set(step.name, failureResponse);
+      state.lastOutput = failureResponse;
+      return { response: failureResponse, instruction, providerInfo: stepProviderModel };
     }
 
     const mergeFn = buildMergeFn(arpeggioConfig.merge);
