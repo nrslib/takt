@@ -155,9 +155,6 @@ export async function runStatusJudgmentPhase(
         abortSignal: ctx.abortSignal,
         failureDir: ctx.failureDir,
         childProcessEnv: ctx.childProcessEnv,
-        mcpServers: ctx.mcpServers,
-        mcpAssignment: ctx.mcpAssignment,
-        mcpServerIdentity: ctx.mcpServerIdentity,
         onStream: ctx.onStream,
         onActivity: ctx.onActivity,
         onStructuredPromptResolved: (promptParts) => {

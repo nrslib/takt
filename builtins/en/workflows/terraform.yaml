@@ -60,10 +60,8 @@ steps:
       report:
         - name: coder-scope.md
           format: coder-scope
-          use_judge: false
         - name: coder-decisions.md
           format: coder-decisions
-          use_judge: false
   - name: reviewers
     tags:
       - review
@@ -154,7 +152,6 @@ steps:
           format: supervisor-validation
         - name: summary.md
           format: supervisor-summary
-          use_judge: false
 
   - name: supervise
     capabilities: readonly
@@ -182,7 +179,6 @@ steps:
           format: supervisor-validation
         - name: summary.md
           format: supervisor-summary
-          use_judge: false
   - name: fix_both
     tags:
       - coding
@@ -207,7 +203,6 @@ steps:
           report:
             - name: ai-antipattern-fix-report.md
               format: fix-report
-              use_judge: false
       - name: supervise_fix_parallel
         capabilities: edit
         tags:
@@ -252,7 +247,6 @@ steps:
       report:
         - name: ai-antipattern-fix-report.md
           format: fix-report
-          use_judge: false
   - name: supervise_fix
     capabilities: edit
     tags:
