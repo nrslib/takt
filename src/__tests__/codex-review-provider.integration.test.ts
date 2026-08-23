@@ -242,7 +242,9 @@ afterEach(async () => {
 
 describe('Codex review eval provider process boundary', () => {
   it('returns the final response on normal completion', async () => {
-    const { result } = startProvider('success');
+    const outputRootDir = join(testDir, 'provider-tmp');
+    mkdirSync(outputRootDir);
+    const { result } = startProvider('success', { TMPDIR: outputRootDir });
 
     await expect(result).resolves.toEqual({
       code: 0,
@@ -250,10 +252,13 @@ describe('Codex review eval provider process boundary', () => {
       stdout: 'review complete\n',
       stderr: '',
     });
+    expect(readdirSync(outputRootDir)).toEqual([]);
   });
 
   it('allows total runtime beyond the idle threshold while events continue', async () => {
-    const { result } = startProvider('activity');
+    const outputRootDir = join(testDir, 'provider-tmp');
+    mkdirSync(outputRootDir);
+    const { result } = startProvider('activity', { TMPDIR: outputRootDir });
 
     await expect(result).resolves.toEqual({
       code: 0,
@@ -261,10 +266,13 @@ describe('Codex review eval provider process boundary', () => {
       stdout: 'review complete\n',
       stderr: '',
     });
+    expect(readdirSync(outputRootDir)).toEqual([]);
   });
 
   it('returns 124 after observable inactivity and terminates the process group', async () => {
-    const { result } = startProvider('idle');
+    const outputRootDir = join(testDir, 'provider-tmp');
+    mkdirSync(outputRootDir);
+    const { result } = startProvider('idle', { TMPDIR: outputRootDir });
     await waitForFile(pidFile);
     const workerPids = readWorkerPids();
     const completed = await result;
@@ -273,6 +281,7 @@ describe('Codex review eval provider process boundary', () => {
     expect(completed.signal).toBeNull();
     expect(completed.stderr).toContain('made no observable progress for 1s');
     await expectProcessesGone(workerPids);
+    expect(readdirSync(outputRootDir)).toEqual([]);
   });
 
   it('returns 143 and cleans up the worker process group and output directory on external SIGTERM', async () => {
@@ -294,7 +303,9 @@ describe('Codex review eval provider process boundary', () => {
   });
 
   it('preserves a nonzero Codex exit and diagnostic output', async () => {
-    const { result } = startProvider('failure');
+    const outputRootDir = join(testDir, 'provider-tmp');
+    mkdirSync(outputRootDir);
+    const { result } = startProvider('failure', { TMPDIR: outputRootDir });
     const completed = await result;
 
     expect(completed.code).toBe(7);
@@ -302,6 +313,7 @@ describe('Codex review eval provider process boundary', () => {
     expect(completed.stdout).toBe('');
     expect(completed.stderr).toContain('codex review failed (exit 7)');
     expect(completed.stderr).toContain('fake codex failure');
+    expect(readdirSync(outputRootDir)).toEqual([]);
   });
 
   it(

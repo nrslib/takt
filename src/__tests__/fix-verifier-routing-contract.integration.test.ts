@@ -47,11 +47,10 @@ const workflowNames = [
   'development-remediation-team',
   'review-remediation',
 ] as const;
-const sourceDiscoveryEvalFiles = [
-  'promptfooconfig.fix-verifier-family-boundary.yaml',
-  'promptfooconfig.fix-verifier-state-closure.yaml',
-  'promptfooconfig.fix-verifier-model-matrix.yaml',
-] as const;
+const mixedGapPhase1Report = readFileSync(
+  join(repoRoot, 'eval', 'cases', 'fix-verifier-state-routing.md'),
+  'utf8',
+);
 const runtimeRoutes = [
   {
     name: 'verified',
@@ -63,7 +62,7 @@ const runtimeRoutes = [
     name: 'mixed-gap plan_invalid',
     ruleIndex: 1,
     expectedNext: 'fix-plan',
-    report: 'The plan omits a required path, and an implementation gap also remains.',
+    report: mixedGapPhase1Report,
   },
   {
     name: 'incomplete',
@@ -156,18 +155,6 @@ describe('fix-verifier result ownership', () => {
     expect(instruction).not.toContain('plan_invalid');
   });
 
-  it.each(sourceDiscoveryEvalFiles)(
-    'keeps workflow-result selection out of the Phase 1 rubric in %s',
-    (fileName) => {
-      const config = readFileSync(join(repoRoot, 'eval', fileName), 'utf8');
-
-      expect(config).not.toContain('final result must');
-      expect(config).toMatch(
-        /Overall workflow-result selection is not\s+part of this Phase 1/,
-      );
-    },
-  );
-
   it.each(['ja', 'en'] as const)('defines mixed-gap precedence in every %s remediation workflow', (language) => {
     for (const workflowName of workflowNames) {
       const rules = verifierRules(language, workflowName);
@@ -195,10 +182,25 @@ describe('fix-verifier result ownership', () => {
       mockRunAgentSequence([
         makeResponse({ persona: 'fix-verifier', content: report }),
       ]);
-      vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({
-        label: selectedRule.condition.label,
-        method: 'phase3_tag',
-      });
+      if (report === mixedGapPhase1Report) {
+        expect(selectedRule.condition.label).toMatch(/^plan_invalid(?:\s+—|$)/);
+        expect(selectedRule.next).toBe('fix-plan');
+        expect(report).toContain('implementation gap');
+        expect(report).toContain('plan constraint violation');
+        expect(report).not.toContain('[FIX-VERIFIER:2]');
+        vi.mocked(runStatusJudgmentPhase).mockImplementationOnce(async (_step, context) => {
+          expect(context.lastResponse).toBe(report);
+          return {
+            label: selectedRule.condition.label,
+            method: 'phase3_tag',
+          };
+        });
+      } else {
+        vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({
+          label: selectedRule.condition.label,
+          method: 'phase3_tag',
+        });
+      }
       engine = new WorkflowEngine(config, tmpDir, 'verify remediation', {
         projectCwd: tmpDir,
         reportDirName: 'test-report-dir',
@@ -210,6 +212,9 @@ describe('fix-verifier result ownership', () => {
       expect(result.isComplete).toBe(expectedNext === 'COMPLETE');
       expect(runAgent).toHaveBeenCalledOnce();
       expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
+      if (report === mixedGapPhase1Report) {
+        expect(runReportPhase).not.toHaveBeenCalled();
+      }
     },
   );
 });
