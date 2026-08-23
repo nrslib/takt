@@ -67,8 +67,6 @@ When all material decision branches are resolved, concisely summarize the agreed
 - Omit a notation only when the task genuinely cannot be expressed in that notation.
 - Use actual valid Quint and Alloy syntax instead of inventing pseudo-notation.
 - During conversation, use a small ASCII diagram only when it helps explain a state machine, violation trace, or relation instance.
-{{else}}
-- Do not duplicate the same requirement across notation formats.
 {{/if}}
 
 ## Source Context Handling
