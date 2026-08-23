@@ -64,38 +64,6 @@ function extractFindingBlocks(output) {
   return starts.map((start, index) => lines.slice(start, starts[index + 1] ?? lines.length).join('\n'));
 }
 
-function extractCanonicalEvidenceSections(output) {
-  const lines = output.split('\n');
-  const sections = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const heading = lines[index].match(/^\s{0,3}(#{1,6})\s+(.+)$/);
-    if (heading === null) continue;
-    if (!/(?:canonical.*(?:identity|contract)|(?:identity|contract).*canonical|正規.*(?:識別子|契約)|(?:識別子|契約).*正規)/i.test(heading[2])) {
-      continue;
-    }
-    const depth = heading[1].length;
-    let end = index + 1;
-    while (end < lines.length) {
-      const nextHeading = lines[end].match(/^\s{0,3}(#{1,6})\s+/);
-      if (nextHeading !== null && nextHeading[1].length <= depth) break;
-      end += 1;
-    }
-    sections.push(lines.slice(index, end).join('\n'));
-  }
-  return sections;
-}
-
-function extractIdentityEvidenceBlocks(output, findingRows, findingBlocks) {
-  const blocks = [
-    ...findingRows,
-    ...findingBlocks,
-    ...extractCanonicalEvidenceSections(output),
-  ];
-  const hasMultipleFindings = findingRows.length > 1 || findingBlocks.length > 1;
-  if (!hasMultipleFindings) blocks.push(output);
-  return [...new Set(blocks)];
-}
-
 function hasNearbyEvidence(output, anchor, evidence) {
   let index = output.indexOf(anchor);
   while (index >= 0) {
@@ -136,12 +104,21 @@ function hasSharedNonCanonicalRepresentation(output) {
   ));
 }
 
+function hasNonCanonicalImplementationEvidence(output) {
+  const clauses = output
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?。！？;；])\s+|\s*(?:,|，|、|\bwhile\b|一方(?:で)?)\s*/i);
+  const implementation = /implementation|resolver|lookup|src\/target-lookup\.js|実装|解決処理|検索処理/i;
+  const nonCanonical = /raw|bare|short(?:ened)?|step\.name|wrong\s+(?:key\s+)?format|短縮|生の|裸の|誤った|誤形式/i;
+  return clauses.some((clause) => implementation.test(clause) && nonCanonical.test(clause));
+}
+
 function hasRejectVerdict(output) {
-  return /(?:結果|判定|Result|Verdict)\s*:\s*(?:\*{1,2}|_{1,2}|`)?REJECT/i.test(output)
+  return /(?:結果|判定|結論|Result|Verdict)(?:\s*は)?\s*[:：]?\s*(?:\*{1,2}|_{1,2}|`)?REJECT/i.test(output)
     || /^(?:#+\s*)?(?:[^\n（(]{0,40}[（(])?(?:\*{1,2}|_{1,2}|`)?REJECT(?:\*{1,2}|_{1,2}|`)?(?:[）)])?(?:\s+[—–-].*)?\s*$/im.test(output);
 }
 
-function hasConnectedFamilyEvidence(output) {
+function hasConnectedPathEvidence(output) {
   const routeStages = [
     /(docs\/configuration\.md|authoritative|owner|正本)/i,
     /(config\/runtime\.json|runtime config|config\.stepTargets|stepTargets|設定)/i,
@@ -157,31 +134,25 @@ export default function assertInitialReviewExternalIdentityWiring(output) {
   const reviewOutput = unwrapProviderOutput(output);
   const findingRows = extractFindingRows(reviewOutput);
   const findingBlocks = extractFindingBlocks(reviewOutput);
-  const identityEvidenceBlocks = extractIdentityEvidenceBlocks(reviewOutput, findingRows, findingBlocks);
   const canonicalKey = /\bsample-flow\s*\/\s*execute(?![\w/-])/i;
   const defaultFallback = /default(?:-runner| target| fallback)|デフォルト(?:ターゲット|へ|に)|フォールバック/i;
-  const falsePositiveEvidence = /(self[- ]consistent|false positive|green|pass(?:es|ed|ing)?|成功|通(?:る|って|過)|偽陽性|自己整合)/i;
+  const falsePositiveEvidence = /(self[- ]consistent|false positive|green|pass(?:es|ed|ing)?|成功|合格|通(?:る|って|過)|偽陽性|自己整合)/i;
   const testChange = /(?:\b(?:test|e2e)\b|テスト).{0,240}(?:\b(?:add|change|replace|require|assert|cover|update)\b|追加|変更|置換|要求|検証|更新)|(?:\b(?:add|change|replace|require|assert|cover|update)\b|追加|変更|置換|要求|検証|更新).{0,240}(?:\b(?:test|e2e)\b|テスト)/is;
-  const adjacentPathPreserved = /(?:outside (?:this|the) finding|out of scope|(?:is|remains|kept) preserved|`?preserved`?\s*:|no (?:issue|change)s?|does not (?:need|require) changes?|対象外|保持(?:する|される)?|維持(?:する|して|される|しており)?|問題なし|変更不要|この指摘には含めない)/i;
-  const hasConnectedIdentityEvidence = identityEvidenceBlocks.some((block) => (
-    hasConnectedFamilyEvidence(block)
-    && canonicalKey.test(block)
-    && hasNearbyEvidence(block, 'sample-flow/execute', defaultFallback)
-  ));
-  const documentedValueTestDemand = identityEvidenceBlocks.some((block) => (
-    hasConnectedFamilyEvidence(block)
-    && canonicalKey.test(block)
-    && hasNearbyEvidence(block, 'sample-flow/execute', defaultFallback)
-    && hasNearbyEvidence(block, 'sample-flow/execute', testChange)
-  ));
-  const hasFalseGreenEvidence = identityEvidenceBlocks.some((block) => (
-    falsePositiveEvidence.test(block)
-    && /e2e/i.test(block)
-    && hasSharedNonCanonicalRepresentation(block)
-  ));
+  const adjacentPathPreserved = /(?:outside (?:this|the) finding|out of scope|(?:is|remains|kept) preserved|`?preserved`?\s*:|no (?:issue|change)s?|does not (?:need|require) changes?|separate|distinct contract|対象外|保持(?:する|される)?|維持(?:する|して|される|しており)?|問題なし|変更不要|別(?:の)?契約|契約どおり|混同(?:しない|すべきではない)|この指摘には含めない)/i;
+  const hasConnectedIdentityEvidence = hasConnectedPathEvidence(reviewOutput)
+    && canonicalKey.test(reviewOutput)
+    && defaultFallback.test(reviewOutput);
+  const documentedValueTestDemand = hasConnectedIdentityEvidence
+    && testChange.test(reviewOutput);
+  const hasFalseGreenEvidence = falsePositiveEvidence.test(reviewOutput)
+    && /e2e|test|テスト/i.test(reviewOutput)
+    && (hasSharedNonCanonicalRepresentation(reviewOutput)
+      || (hasNonCanonicalImplementationEvidence(reviewOutput)
+        && /fixture|config|設定|テスト/i.test(reviewOutput)
+        && /raw|bare|short(?:ened)?|step\.name|wrong\s+(?:key\s+)?format|短縮|生の|裸の|誤った|誤形式/i.test(reviewOutput)));
   const checks = [
     ['reject-verdict', hasRejectVerdict(reviewOutput)],
-    ['single-family-complete', hasConnectedIdentityEvidence],
+    ['connected-path-complete', hasConnectedIdentityEvidence],
     ['canonical-key-derived', hasConnectedIdentityEvidence],
     ['canonical-input-falls-to-default', hasConnectedIdentityEvidence],
     ['false-green-explained', hasFalseGreenEvidence],

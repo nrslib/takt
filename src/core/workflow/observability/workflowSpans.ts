@@ -20,6 +20,7 @@ import {
   sanitizeTraceTaskMetadataText,
   sanitizeTraceTaskSummary,
 } from './traceDiscovery.js';
+import { recordStepProviderErrorMetrics } from './workflowMetrics.js';
 import { redactProviderOptions } from '../providerOptionsRedaction.js';
 
 const tracer = trace.getTracer('takt.workflow');
@@ -493,6 +494,7 @@ function recordStepMetrics(
   const meter = metrics.getMeter('takt.workflow');
   meter.createCounter('takt.workflow.step.runs', STEP_RUN_COUNTER_OPTIONS).add(1, attributes);
   meter.createHistogram('takt.workflow.step.duration', STEP_DURATION_HISTOGRAM_OPTIONS).record(durationMs, attributes);
+  recordStepProviderErrorMetrics(params.runId, result, providerInfo);
 }
 
 function recordPhaseOutcome(span: Span, params: PhaseSpanParams, outcome: PhaseSpanOutcome): void {

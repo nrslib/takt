@@ -4,10 +4,6 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
-      position: before_instruction
-    - ref: invariant-recurrence
-      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
@@ -30,6 +26,8 @@ steps:
   - name: reviewers
     kind: workflow_call
     call: development-review
+    vars:
+      review_mode: initial
     rules:
       - condition: COMPLETE
         next: review-synthesis
@@ -59,7 +57,6 @@ steps:
       ## レビュー結果
       {previous_response}
 
-      **これはレビュー専用 workflow です。** テスト実行やビルドは行わないでください。
       レビュー結果を統合し、最終サマリーを作成する役割です。
 
       **やること:**

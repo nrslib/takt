@@ -22,7 +22,8 @@ knowledge:
   $param: review_knowledge
 pass_previous_response: false
 instruction:
-  $param: final_gate_instruction
+  - $param: final_gate_instruction
+  - review-remediation-problem-tracking
 output_contracts:
   report:
     - name: review-resolution.md

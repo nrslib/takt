@@ -4,10 +4,6 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
-      position: before_instruction
-    - ref: invariant-recurrence
-      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
@@ -136,10 +132,10 @@ steps:
     rules:
       - condition: verified
         next: COMPLETE
-      - condition: incomplete
-        next: fix-retry
-      - condition: plan_invalid
+      - condition: plan_invalid — 修正計画に必要な要素・状態・経路の漏れ、対象外の混入、または前提・境界・方法・証拠能力の不備がある。実装不足または証拠不足も同時にある場合を含む
         next: fix-plan
+      - condition: incomplete — 修正計画に不備はないが、計画済みの義務に実装不足または証拠不足がある
+        next: fix-retry
 
   - name: fix-retry
     uses: peer-review-fix

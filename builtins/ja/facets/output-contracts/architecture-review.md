@@ -13,12 +13,8 @@
 - [x] デッドコード
 - [x] 呼び出しチェーン検証
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 {{include:output-contracts/base-review-new-findings-scope}}
-| 1 | ARCH-NEW-src-file-L42 | design-violation | スコープ内 | `src/file.ts:42` | 問題の説明 | accepted_family_unvisited_consumer | 初回レビュー証跡ではこのconsumerを確認していなかった | 修正方法 |
-
-{{include:output-contracts/base-review-follow-up-authorization}}
+| 1 | ARCH-NEW-src-file-L42 | design-violation | スコープ内 | `src/file.ts:42` | 問題の説明 | `src/file.ts:42` | 修正方法 |
 
 {{include:output-contracts/base-review-scope}}
 
@@ -31,7 +27,7 @@
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | ARCH-REOPENED-src-file-L55 | design-violation | `review-resolution.md`: 解消済み | d | `src/file.ts:55 で再発` | 問題の説明 | 修正方法 |
+| 1 | ARCH-REOPENED-src-file-L55 | design-violation | 直前の裁定: 解消済み | 修正で再発 | `src/file.ts:55 で再発` | 問題の説明 | 修正方法 |
 
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-verification-evidence}}
@@ -45,6 +41,6 @@
 ```
 
 **認知負荷軽減ルール:**
-- APPROVE → サマリー + 検証証跡 + 再走査証跡（2回目以降）。それ以外は省略
+- APPROVE → サマリー + 検証証跡 + 影響経路の確認証跡。それ以外は省略
 - REJECT → 確認済みの指摘をすべて表で記載し、同じ原因の場所は集約
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

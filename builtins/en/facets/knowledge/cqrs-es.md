@@ -803,7 +803,7 @@ class PendingState : OrderState() {
 
 ## Anti-pattern observations
 
-In CQRS+ES, implementations that only mimic CRUD, emit meaningless events repeatedly, depend implicitly on event order, omit important facts, or concentrate all responsibilities in one Aggregate are design concerns to inspect. The final judgment is governed by the CQRS+ES policy.
+In CQRS+ES, inspect implementations that only mimic CRUD, emit meaningless events repeatedly, depend implicitly on event order, omit important facts, or concentrate all responsibilities in one Aggregate.
 
 ## Test Strategy
 

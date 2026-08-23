@@ -2,7 +2,7 @@
 
 ## Security-Specific Decision Boundary
 
-Separate Security reviewer vulnerability decisions from the shared policy's general quality and review decisions. These Security-specific rules take precedence when they conflict with the shared policy's scope, REJECT, or Boy Scout criteria, example judgments in Knowledge, or other general review instructions.
+The Security reviewer decides blocking vulnerability findings only from the conditions below. Do not promote general quality or maintainability concerns into vulnerabilities; judge them under their own technical criteria.
 
 ### Blocking finding
 
@@ -37,4 +37,4 @@ The following may be recorded as security recommendations but must not become bl
 | Unrequested defense-in-depth, additional guarantees, or hypothetical threats | Warning |
 | Quality, maintainability, or general test-coverage suggestions that do not directly concern a security boundary | Warning or out of scope |
 
-When only warnings or out-of-scope items remain, return APPROVE. Record unverified concerns as unverified scope under the shared policy; do not promote them to findings.
+When only warnings or out-of-scope items remain, return APPROVE. Record unverified concerns as unverified scope; do not promote them to findings.

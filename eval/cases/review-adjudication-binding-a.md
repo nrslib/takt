@@ -1,5 +1,5 @@
-# Follow-up security review: adjudicated findings only
+# 修正後セキュリティレビュー: 裁定済みの指摘だけがある場合
 
-Review the cumulative change after the latest adjudication. The current diff changes explanatory comments only and introduces no new behavior or defect. The repository state and the latest reports contain no evidence beyond the three findings already recorded in `security-review.md` and disposed in `review-resolution.md`.
+最新の裁定後にある累積変更をレビューしてください。現在の差分は説明コメントだけを変更しており、新しい振る舞いや欠陥を導入していません。リポジトリの状態と最新レポートには、`security-review.md` に記録され、`review-resolution.md` で判断済みの3件を超える証拠はありません。
 
-Treat the report directory as authoritative for the latest dispositions. Do not infer a new defect from the old evidence. Produce the follow-up security-review result using its required output contract.
+最新の判断はレポートディレクトリの記録を正として扱ってください。古い証拠から新しい欠陥を推測せず、修正後セキュリティレビューの結果を記録してください。

@@ -181,6 +181,38 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('rate_limited');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.content).toBe('');
+    expect(result.retryCount).toBeUndefined();
+  });
+
+  it('安全フィルタ拒否後の rate limit 応答に refusal retry 数を含める', async () => {
+    vi.useFakeTimers();
+
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-refusal', type: 'agent_message', text: 'This request was flagged for possible cybersecurity risk.' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-2' },
+          { type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.retryCount).toBe(1);
   });
 
   it('imageAttachments がある場合は Codex SDK に local_image 入力として渡す', async () => {
@@ -279,6 +311,7 @@ describe('CodexClient retry', () => {
     ]);
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
+    expect(result.retryCount).toBe(1);
     expect(onActivity).toHaveBeenCalledTimes(2);
     expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
     expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
@@ -402,6 +435,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(2);
     expect(result.status).toBe('done');
     expect(result.content).toBe('third attempt succeeded');
+    expect(result.retryCount).toBe(2);
   });
 
   it('at capacity が続く場合は 初回実行後に 8 回 retry して最後の失敗を返す', async () => {
@@ -423,6 +457,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(8);
     expect(result.status).toBe('error');
     expect(result.content).toBe('Selected model is at capacity. Please try a different model.');
+    expect(result.retryCount).toBe(8);
   });
 
   it('at capacity が続く場合は 30 秒 cap で最後の retry を行う', async () => {
@@ -458,6 +493,7 @@ describe('CodexClient retry', () => {
     expect(elapsedMs).toBe(121000);
     expect(result.status).toBe('error');
     expect(result.content).toBe('Selected model is at capacity. Please try a different model.');
+    expect(result.retryCount).toBe(8);
   });
 
   it.each(CODEX_RECONNECT_RETRYABLE_MESSAGES)(
@@ -613,6 +649,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(0);
     expect(result.status).toBe('done');
     expect(result.content).toBe('review completed');
+    expect(result.retryCount).toBe(1);
   });
 
   it('渡された既存セッションは安全フィルタ拒否の retry でも破棄しない', async () => {
@@ -674,6 +711,7 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('error');
     expect(result.failureCategory).toBe('provider_error');
     expect(result.error).toContain('safety filter refused');
+    expect(result.retryCount).toBe(2);
   });
 
   it('拒否文を引用した短い structured output は拒否として扱わない', async () => {
@@ -1074,6 +1112,7 @@ describe('CodexClient retry', () => {
     ]);
     expect(result.status).toBe('done');
     expect(result.content).toBe('timeout retry succeeded');
+    expect(result.retryCount).toBe(1);
   });
 
   it('ストリームの idle timeout は最大 2 回まで retry して停止する', async () => {
@@ -1099,6 +1138,7 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('error');
     expect(result.failureCategory).toBe('stream_idle_timeout');
     expect(result.content).toBe('Codex stream timed out after 10 minutes of inactivity');
+    expect(result.retryCount).toBe(2);
     expect(onStream).toHaveBeenCalledWith({
       type: 'result',
       data: expect.objectContaining({
@@ -1184,6 +1224,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(9);
     expect(result.status).toBe('done');
     expect(result.content).toBe('mixed retry succeeded');
+    expect(result.retryCount).toBe(9);
   });
 
   it('external abort は retry せずに停止する', async () => {

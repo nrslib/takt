@@ -337,6 +337,27 @@ describe('Issue resolution in routing', () => {
       );
     });
 
+    it('should pass a single source issue to the interactive create_issue action', async () => {
+      mockOpts.issue = 131;
+      const issue131 = createMockIssue(131);
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(issue131);
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'Create execution issue' });
+
+      await executeDefaultAction();
+
+      expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'Create execution issue',
+        'default',
+        {
+          labels: [],
+          sourceIssue: { number: 131, language: 'en' },
+        },
+      );
+    });
+
     it('should exit with error when gh CLI is unavailable for --issue', async () => {
       // Given
       mockOpts.issue = 131;
@@ -433,6 +454,26 @@ describe('Issue resolution in routing', () => {
         expect.objectContaining({
           issue: 131,
         }),
+      );
+    });
+
+    it('should not pass a source issue to create_issue when multiple issues are referenced', async () => {
+      const issue131 = createMockIssue(131);
+      const issue132 = createMockIssue(132);
+      mockIsDirectTask.mockReturnValue(true);
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockImplementation((issueNumber: number) => issueNumber === 131 ? issue131 : issue132);
+      mockFormatIssueAsTask.mockImplementation((issue: Issue) => `## Issue #${issue.number}`);
+      mockParseIssueNumbers.mockReturnValue([131, 132]);
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'Create execution issue' });
+
+      await executeDefaultAction('#131 #132');
+
+      expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'Create execution issue',
+        'default',
+        { labels: [] },
       );
     });
   });
@@ -766,7 +807,7 @@ describe('Issue resolution in routing', () => {
   });
 
   describe('create_issue action', () => {
-    it('should delegate to createIssueAndSaveTask with confirmAtEndMessage', async () => {
+    it('should delegate to createIssueAndSaveTask without a confirmation option', async () => {
       // Given
       mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature request' });
 
@@ -778,7 +819,7 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         'New feature request',
         'default',
-        { confirmAtEndMessage: 'Add this issue to tasks?', labels: [] },
+        { labels: [] },
       );
     });
 

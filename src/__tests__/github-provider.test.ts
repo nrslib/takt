@@ -14,6 +14,7 @@ const {
   mockListOpenIssues,
   mockCreateIssue,
   mockCloseIssue,
+  mockCommentOnIssue,
   mockFindExistingPr,
   mockCommentOnPr,
   mockClosePr,
@@ -26,6 +27,7 @@ const {
   mockListOpenIssues: vi.fn(),
   mockCreateIssue: vi.fn(),
   mockCloseIssue: vi.fn(),
+  mockCommentOnIssue: vi.fn(),
   mockFindExistingPr: vi.fn(),
   mockCommentOnPr: vi.fn(),
   mockClosePr: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock('../infra/github/issue.js', () => ({
   listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
   createIssue: (...args: unknown[]) => mockCreateIssue(...args),
   closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
+  commentOnIssue: (...args: unknown[]) => mockCommentOnIssue(...args),
 }));
 
 vi.mock('../infra/github/pr.js', () => ({
@@ -53,7 +56,7 @@ vi.mock('../infra/github/pr.js', () => ({
 
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { getGitProvider } from '../infra/git/index.js';
-import type { CommentResult, PrReviewData } from '../infra/git/index.js';
+import type { CommentResult, IssueCommentResult, PrReviewData } from '../infra/git/index.js';
 import { createIssueSuccess } from './helpers/createIssueResult.js';
 
 beforeEach(() => {
@@ -440,6 +443,38 @@ describe('GitHubProvider', () => {
     });
   });
 
+  describe('commentOnIssue', () => {
+    it('commentOnIssue(issueNumber, body, cwd) に委譲し結果を返す', () => {
+      const commentResult: IssueCommentResult = { success: true };
+      mockCommentOnIssue.mockReturnValue(commentResult);
+      const provider = new GitHubProvider();
+
+      const result = provider.commentOnIssue(999, 'Created an execution issue: #999', '/project');
+
+      expect(mockCommentOnIssue).toHaveBeenCalledWith(999, 'Created an execution issue: #999', '/project');
+      expect(result).toEqual(commentResult);
+    });
+
+    it('コメント投稿失敗時は理由付き失敗結果を委譲して返す', () => {
+      const commentResult: IssueCommentResult = { success: false, error: 'Permission denied' };
+      mockCommentOnIssue.mockReturnValue(commentResult);
+      const provider = new GitHubProvider();
+
+      const result = provider.commentOnIssue(999, 'comment', '/project');
+
+      expect(result).toEqual(commentResult);
+    });
+
+    it('cwd 省略時は commentOnIssue に process.cwd() を渡す', () => {
+      mockCommentOnIssue.mockReturnValue({ success: true });
+      const provider = new GitHubProvider();
+
+      provider.commentOnIssue(999, 'body');
+
+      expect(mockCommentOnIssue).toHaveBeenCalledWith(999, 'body', process.cwd());
+    });
+  });
+
   describe('fetchPrReviewComments', () => {
     it('fetchPrReviewComments(n) に委譲し結果を返す', () => {
       // Given
@@ -592,6 +627,7 @@ describe('getGitProvider', () => {
     expect(typeof provider.findExistingPr).toBe('function');
     expect(typeof provider.createPullRequest).toBe('function');
     expect(typeof provider.commentOnPr).toBe('function');
+    expect(typeof provider.commentOnIssue).toBe('function');
     expect(typeof (provider as Record<string, unknown>).closePr).toBe('function');
     expect(typeof provider.mergePr).toBe('function');
   });

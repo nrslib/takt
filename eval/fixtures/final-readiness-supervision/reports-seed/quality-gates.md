@@ -1,7 +1,7 @@
-# Quality Gate Evidence
+# quality gate の証跡
 
-- Build: PASS
-- Unit tests: PASS
-- Integration tests: PASS
+- ビルド: PASS
+- unit test: PASS
+- integration test: PASS
 
-The tests executed successfully but cover only the CLI entry.
+テストは成功しましたが、対象は CLI entry だけです。

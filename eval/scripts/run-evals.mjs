@@ -9,6 +9,7 @@
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -21,6 +22,8 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const evalDir = resolve(scriptDir, '..');
 const repoRoot = resolve(evalDir, '..');
+const promptfooConfigDir = join(repoRoot, '.tmp', 'promptfoo');
+mkdirSync(promptfooConfigDir, { recursive: true });
 
 function parseArgs(args) {
   const names = [];
@@ -90,6 +93,10 @@ for (const suite of selected) {
   const result = spawnSync('npx', ['promptfoo', 'eval', '-c', config, '--no-progress-bar', ...options.flags], {
     stdio: 'inherit',
     cwd: repoRoot,
+    env: {
+      ...process.env,
+      PROMPTFOO_CONFIG_DIR: promptfooConfigDir,
+    },
   });
   summary.push({ name: suite.name, code: result.status ?? 1 });
 }

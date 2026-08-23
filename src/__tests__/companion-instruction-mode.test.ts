@@ -13,6 +13,11 @@ const COMPANION_SECTION_HEADINGS: Record<Language, string> = {
   ja: '## Companion 受信箱',
 };
 
+const WORK_SECTION_HEADINGS: Record<Language, string> = {
+  en: '## Work',
+  ja: '## 作業内容',
+};
+
 const POLLING_OPERATION_PATTERNS: Record<Language, RegExp> = {
   en: /\b(?:check|inspect|look\s+at|monitor|poll|read)\b/u,
   ja: /(?:確認|チェック|参照|監視|ポーリング|読む)/u,
@@ -65,12 +70,12 @@ function companionSectionHeading(language: Language): string {
 }
 
 function extractCompanionSection(prompt: string, language: Language): string {
-  const instructionsHeading = '\n## Instructions\n';
-  const instructionsStart = prompt.lastIndexOf(instructionsHeading);
+  const workHeading = `\n${WORK_SECTION_HEADINGS[language]}\n`;
+  const workStart = prompt.lastIndexOf(workHeading);
   const headingLine = `\n${companionSectionHeading(language)}\n`;
   const headingStart = prompt.lastIndexOf(headingLine);
 
-  if (instructionsStart < 0 || headingStart <= instructionsStart) {
+  if (workStart < 0 || headingStart <= workStart) {
     throw new Error(`Missing ${companionSectionHeading(language)} section in the instruction prompt`);
   }
 

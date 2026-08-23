@@ -1,8 +1,0 @@
-{
-  "name": "review-family-closure-fixture",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node tests/reporting.test.js"
-  }
-}

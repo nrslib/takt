@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # promptfoo exec プロバイダ: codex CLI での判定専用実行（read-only）。
 # 使い方: exec: bash providers/codex-judge.sh <model> [reasoning-effort]
-# fix-loop-convergence スイートで使用。モデルを明示指定するため
+# モデルを明示する編集なしの判定で使用する。
 # openai:codex-sdk ではなく CLI を直接使う。
 set -euo pipefail
 model="$1"
@@ -12,14 +12,17 @@ else
   reasoning_effort="max"
   prompt="$2"
 fi
-raw_timeout_seconds="${CODEX_JUDGE_TIMEOUT_SECONDS:-600}"
-if [[ ! "$raw_timeout_seconds" =~ ^0*([1-9][0-9]{0,6})$ ]]; then
-  echo "CODEX_JUDGE_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
+raw_timeout_seconds="${CODEX_JUDGE_TIMEOUT_SECONDS:-0}"
+if [[ "$raw_timeout_seconds" =~ ^0+$ ]]; then
+  timeout_seconds=0
+elif [[ "$raw_timeout_seconds" =~ ^0*([1-9][0-9]{0,6})$ ]]; then
+  timeout_seconds="${BASH_REMATCH[1]}"
+else
+  echo "CODEX_JUDGE_TIMEOUT_SECONDS must be 0 (disabled) or an integer from 1 through 2147483" >&2
   exit 2
 fi
-timeout_seconds="${BASH_REMATCH[1]}"
 if [ "$timeout_seconds" -gt 2147483 ]; then
-  echo "CODEX_JUDGE_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
+  echo "CODEX_JUDGE_TIMEOUT_SECONDS must be 0 (disabled) or an integer from 1 through 2147483" >&2
   exit 2
 fi
 cd "$(dirname "$0")/.."
@@ -57,7 +60,8 @@ codex exec -m "$model" -s read-only --skip-git-repo-check \
 codex_pid=$!
 set +m
 
-node -e '
+if [ "$timeout_seconds" -gt 0 ]; then
+  node -e '
   const { writeFileSync } = require("node:fs");
   const pid = Number(process.argv[1]);
   const timeoutMs = Number(process.argv[2]) * 1000;
@@ -95,17 +99,20 @@ node -e '
     }, 15_000);
   }, timeoutMs);
 ' "$codex_pid" "$timeout_seconds" "$timeout_marker" >/dev/null &
-watchdog_pid=$!
+  watchdog_pid=$!
+fi
 
 status=0
 wait "$codex_pid" || status=$?
-kill -TERM "$watchdog_pid" 2>/dev/null || true
 watchdog_status=0
-wait "$watchdog_pid" 2>/dev/null || watchdog_status=$?
-watchdog_pid=''
-if [ "$watchdog_status" -ne 0 ] && { [ -f "$timeout_marker" ] || [ "$watchdog_status" -ne 143 ]; }; then
-  echo "codex judge watchdog failed (exit ${watchdog_status})" >&2
-  exit 125
+if [ -n "$watchdog_pid" ]; then
+  kill -TERM "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || watchdog_status=$?
+  watchdog_pid=''
+  if [ "$watchdog_status" -ne 0 ] && { [ -f "$timeout_marker" ] || [ "$watchdog_status" -ne 143 ]; }; then
+    echo "codex judge watchdog failed (exit ${watchdog_status})" >&2
+    exit 125
+  fi
 fi
 if [ -f "$timeout_marker" ]; then
   echo "codex judge timed out after ${timeout_seconds}s" >&2

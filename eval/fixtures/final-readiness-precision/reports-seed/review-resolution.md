@@ -1,29 +1,19 @@
-# Review Finding Adjudication
+# レビュー指摘の裁定
 
-## Result: NO ACTIONABLE FINDINGS
+## 結果: 修正対象なし
 
-## Decision Summary
-No submitted finding is authorized for remediation.
+## 判定の要約
+提出された指摘に、今回の変更で修正する必要がある問題はありません。
 
-## Requirement Decision Grounds
-| Subject | Status | Grounds |
-|---------|--------|---------|
-| Mode normalization | Fulfilled | `src/mode.js` contains the required behavior |
+## 要件との照合
+| 対象 | 状態 | 根拠 |
+|------|------|------|
+| mode の正規化 | 充足 | `src/mode.js` に要求された振る舞いがある |
 
-## Invariant Register Carry-forward
-Carry-forward source: No prior remediation
+## 指摘ごとの判断
+| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |
+|-------------------|--------------------|------------|------------------|------------|
+| OLD-REVIEW-readme-L1 / testing-review.md | 確認済み | 必要以上の拡張 | なし | mode 正規化の実装を検証するために、大小文字と空白の全表記を README へ列挙する必要はない |
 
-| Fix Unit | Family ID | Invariant Name | Responsible Source | Current Verification Number | Previous Verification Number | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Recurrence on a Different Path Confirmed? | Enforcement-Point Candidate | Record Integrity |
-|----------|-----------|----------------|--------------------|-----------------------------|------------------------------|---------------|--------------|--------------------------------------|-------------------------------|-------------------------------------------|-----------------------------|------------------|
-
-## Actionable Families
-| family | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
-|--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
-
-## Finding Dispositions
-| Finding ID / source | Technical validity | Disposition | Target family | Authorization basis | Reason absent from initial round | Evidence |
-|---------------------|--------------------|-------------|---------------|---------------------|----------------------------------|----------|
-| OLD-REVIEW-readme-L1 / testing-review.md | Confirmed | overreach | none | none | not applicable | Enumerating every case-and-whitespace spelling in README is not required to verify the implemented behavior. |
-
-## Unresolved Premises
-- None.
+## 未解決の前提
+- なし。

@@ -43,7 +43,7 @@ A test may be required only when all of the following can be shown: an acceptanc
 | Medium | Edge cases, error handling |
 | Low | Simple CRUD |
 
-**Note:** When a design reference is provided, UI appearance verification is elevated to medium priority. Refer to the Design Fidelity Policy.
+**Note:** When a design reference is provided, UI appearance verification is elevated to medium priority.
 
 ## Non-Executable Asset Tests
 
@@ -316,7 +316,7 @@ writeConfig({ backend, connectionPool: backend === 'embedded' ? 1 : 10 })
 | Treating rejection, non-inheritance, or isolation as verified only because one exact sentence is absent | REJECT |
 | Checking only the displayed allowed value without proving forbidden values do not reach final processing | REJECT |
 | Extracting observable units and checking forbidden, rejected, or non-inherited values per value | OK |
-| Comparing allowed vs rejected and inherited vs non-inherited cases in the same scenario family | OK |
+| Comparing related allowed vs rejected and inherited vs non-inherited scenarios | OK |
 
 ## unit-testing Criteria
 

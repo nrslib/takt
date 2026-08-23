@@ -107,6 +107,22 @@
 3. **ツール固有のパス**: `.takt/runs/` 等の具体的なディレクトリパス
 4. **実行手順**: どのファイルを読め、何を実行しろ等
 5. **無条件の探索拡大**: 全ファイル、全入口、全セクションを列挙・確認させる手順
+6. **メタ参照**: 「このpolicy」「適用policy」「include元」など、規則そのものではなくプロンプト組成を参照させる記述
+
+### workflow固有規則の分離
+
+初回・後続、特定ラウンド、提出元、完了・差し戻し、step間の状態遷移はworkflow YAMLの責務とし、汎用policyへ入れない。
+
+複数stepへ文章として渡すworkflow固有規則は`workflows/rules/`の別ファイルにし、`all_steps.rules`の配列で合成する。
+
+```yaml
+all_steps:
+  rules:
+    - ref: findings-handling
+    - ref: peer-review-scope
+```
+
+workflowの状態や役割に依存せず複数stepで共有できる判断規則だけは、汎用policyと別ファイルにして`policy`配列で合成できる。実行順序はinstruction、routingとworkflow固有の適用条件は`rules`に残す。
 
 ---
 
@@ -174,6 +190,9 @@ const good = ...
 - [ ] 複数のエージェントに適用可能な内容か
 - [ ] 特定エージェント固有の知識が混入していないか
 - [ ] ワークフロー固有の概念が含まれていないか
+- [ ] workflow固有規則をpolicyへ混ぜず、`workflows/rules/`から`all_steps.rules`の配列で合成しているか
+- [ ] 親workflowから子へ継承される`all_steps.rules`に、通常のreviewerが不要な裁定・修正台帳・最終確認の規則を置いていないか
+- [ ] policyやfacetの組成を本文から参照させるメタ表現がないか
 - [ ] ツール固有のパスが含まれていないか
 - [ ] `####` 以下のネストがないか
 - [ ] 各判定規則の正本が1つに定まり、他facetへ同義の判定を重複させていないか

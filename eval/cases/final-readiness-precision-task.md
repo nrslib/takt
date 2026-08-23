@@ -1,1 +1,1 @@
-Add case-insensitive `local` and `cloud` mode handling to both the CLI options entry and the project configuration entry. Both entries must store the normalized value, and existing invalid-value rejection must remain unchanged.
+CLI オプションとプロジェクト設定の両方で、前後の空白と大文字小文字を正規化して `local` と `cloud` を受理してください。どちらの入口でも正規化した値を保存し、それ以外の不正値拒否は維持してください。

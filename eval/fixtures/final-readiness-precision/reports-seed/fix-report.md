@@ -1,15 +1,15 @@
-# Fix Report
+# 修正レポート
 
-## Result: Complete
+## 結果: 完了
 
-Both mode-entry paths normalize supported values and preserve invalid-value rejection.
+両方の mode 入力経路で対応値を正規化し、不正値拒否を維持している。
 
-## Quality Gates
+## 品質確認
 
 - `npm run build`: PASS
 - `npm run lint`: PASS
-- covering tests: PASS
+- 対象を網羅するテスト: PASS
 - `npm test`: PASS
 - `npm run smoke`: PASS
 
-No mock E2E run is recorded.
+模擬 E2E の実行記録はない。

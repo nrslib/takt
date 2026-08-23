@@ -367,7 +367,7 @@ describe('otel foundation', () => {
       'service.version': packageJson.version,
     });
     expect(usageEventsProcessor.registrations?.size).toBe(0);
-    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(3);
     expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
     expect(foundation.constructedOptions[0]).not.toHaveProperty('traceExporter');
     expect(foundation.traceExporterImportCount()).toBe(0);
@@ -383,7 +383,7 @@ describe('otel foundation', () => {
     const handle = await foundation.initializeOtelFoundation(enabledObservability);
     await handle.shutdown();
 
-    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(3);
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(4);
     expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(2);
     expect(foundation.traceExporterImportCount()).toBe(1);
     expect(foundation.metricExporterImportCount()).toBe(1);
@@ -401,7 +401,7 @@ describe('otel foundation', () => {
     const handle = await foundation.initializeOtelFoundation(enabledObservability);
     await handle.shutdown();
 
-    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(3);
     expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
     expect(foundation.traceExporterImportCount()).toBe(0);
     expect(foundation.metricExporterImportCount()).toBe(0);
@@ -416,7 +416,7 @@ describe('otel foundation', () => {
     const handle = await foundation.initializeOtelFoundation(enabledObservability);
     await handle.shutdown();
 
-    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(3);
     expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
     expect(foundation.traceExporterImportCount()).toBe(0);
     expect(foundation.metricExporterImportCount()).toBe(0);
@@ -479,7 +479,7 @@ describe('otel foundation', () => {
       );
       await handle.shutdown();
 
-      expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
+      expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(3);
       const records = readFileSync(shadowLogPath, 'utf-8')
         .trim()
         .split('\n')

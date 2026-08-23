@@ -2,10 +2,14 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   executeNpmTestRuns,
+  resolveLocalUnitShardCount,
   runNpmTest,
   selectNpmTestRuns,
 } from '../../scripts/run-npm-test.mjs';
-import { isBirpcNoiseOnlyFailure } from '../../scripts/vitest-birpc-noise.mjs';
+import {
+  BIRPC_REMEASURE_ON_CI_ENV,
+  isBirpcNoiseOnlyFailure,
+} from '../../scripts/vitest-birpc-noise.mjs';
 import { resolveNpmInvocation } from '../../scripts/npm-invocation.mjs';
 import heavyParallelIntegrationConfig from '../../vitest.config.it.heavy.parallel.js';
 import lightIntegrationConfig from '../../vitest.config.it.parallel.js';
@@ -24,6 +28,8 @@ import {
   srcTestInclude,
 } from '../../vitest.config.shared.js';
 
+const FIXED_UNIT_SHARD_COUNT = 8;
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -34,6 +40,13 @@ describe('parallel test runner configuration', () => {
     expect(parallelSrcRunnerConfig.fileParallelism).toBe(true);
     expect(parallelSrcRunnerConfig.maxWorkers).toMatch(/^\d+%$/);
     expect(parallelSrcRunnerConfig.maxWorkers).not.toBe('1%');
+  });
+
+  it('should cap local unit shards while retaining eight on a ten-way machine', () => {
+    expect(resolveLocalUnitShardCount(1)).toBe(1);
+    expect(resolveLocalUnitShardCount(4)).toBe(2);
+    expect(resolveLocalUnitShardCount(10)).toBe(8);
+    expect(resolveLocalUnitShardCount(32)).toBe(8);
   });
 
   it('should keep unit, light integration, heavy integration, and serial gates exclusive', () => {
@@ -77,10 +90,21 @@ describe('npm test execution', () => {
     expect(() => resolveNpmInvocation('/opt/node/bin/node', 'npm-cli.js')).toThrow(/absolute path/);
   });
 
+  it('should resolve unit shards when runNpmTest is called without a shard count', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const run = vi.fn(async () => ({ code: 0, signal: null, output: '' }));
+
+    const code = await runNpmTest([], run);
+
+    expect(run).toHaveBeenCalledTimes(selectNpmTestRuns([]).length);
+    expect(log).toHaveBeenCalled();
+    expect(code).toBe(0);
+  });
+
   it('should run unit shards concurrently when no target is provided', async () => {
     const events: string[] = [];
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const run = vi.fn(async (npmArgs: string[]) => {
+    const run = vi.fn(async (npmArgs: readonly string[]) => {
       const shard = npmArgs[3]!;
       events.push(`start:${shard}`);
       await Promise.resolve();
@@ -88,23 +112,31 @@ describe('npm test execution', () => {
       return { code: 0, signal: null, output: '' };
     });
 
-    const code = await runNpmTest([], run);
+    const code = await runNpmTest([], run, FIXED_UNIT_SHARD_COUNT);
 
-    expect(events.slice(0, 4)).toEqual([
-      'start:--shard=1/4',
-      'start:--shard=2/4',
-      'start:--shard=3/4',
-      'start:--shard=4/4',
+    expect(events.slice(0, 8)).toEqual([
+      'start:--shard=1/8',
+      'start:--shard=2/8',
+      'start:--shard=3/8',
+      'start:--shard=4/8',
+      'start:--shard=5/8',
+      'start:--shard=6/8',
+      'start:--shard=7/8',
+      'start:--shard=8/8',
     ]);
-    expect(events.slice(4)).toEqual([
-      'finish:--shard=1/4',
-      'finish:--shard=2/4',
-      'finish:--shard=3/4',
-      'finish:--shard=4/4',
+    expect(events.slice(8)).toEqual([
+      'finish:--shard=1/8',
+      'finish:--shard=2/8',
+      'finish:--shard=3/8',
+      'finish:--shard=4/8',
+      'finish:--shard=5/8',
+      'finish:--shard=6/8',
+      'finish:--shard=7/8',
+      'finish:--shard=8/8',
     ]);
-    expect(run).toHaveBeenCalledTimes(4);
+    expect(run).toHaveBeenCalledTimes(8);
     expect(log).toHaveBeenCalledWith(
-      '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.',
+      '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". The main pull-request CI workflow and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.',
     );
     expect(code).toBe(0);
   });
@@ -112,36 +144,40 @@ describe('npm test execution', () => {
   it('should continue all unit shards and return the first failure code', async () => {
     const executedShards: string[] = [];
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const run = vi.fn(async (npmArgs: string[]) => {
+    const run = vi.fn(async (npmArgs: readonly string[]) => {
       const shard = npmArgs[3]!;
       executedShards.push(shard);
       const codeByShard = new Map([
-        ['--shard=1/4', 7],
-        ['--shard=3/4', 9],
+        ['--shard=1/8', 7],
+        ['--shard=3/8', 9],
       ]);
       return { code: codeByShard.get(shard) ?? 0, signal: null, output: '' };
     });
 
-    const code = await runNpmTest([], run);
+    const code = await runNpmTest([], run, FIXED_UNIT_SHARD_COUNT);
 
     expect(executedShards).toEqual([
-      '--shard=1/4',
-      '--shard=2/4',
-      '--shard=3/4',
-      '--shard=4/4',
+      '--shard=1/8',
+      '--shard=2/8',
+      '--shard=3/8',
+      '--shard=4/8',
+      '--shard=5/8',
+      '--shard=6/8',
+      '--shard=7/8',
+      '--shard=8/8',
     ]);
     expect(error.mock.calls).toEqual([
-      ['[takt] npm run test:unit:parallel -- --shard=1/4 --maxWorkers=1 failed with exit=7'],
-      ['[takt] npm run test:unit:parallel -- --shard=3/4 --maxWorkers=1 failed with exit=9'],
+      ['[takt] npm run test:unit:parallel -- --shard=1/8 --maxWorkers=1 failed with exit=7'],
+      ['[takt] npm run test:unit:parallel -- --shard=3/8 --maxWorkers=1 failed with exit=9'],
     ]);
     expect(code).toBe(7);
   });
 
   it('should continue into serial runs after parallel failure and return the first failure code', async () => {
-    const commands: string[][] = [];
+    const commands: (readonly string[])[] = [];
     const events: string[] = [];
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const run = vi.fn(async (npmArgs: string[]) => {
+    const run = vi.fn(async (npmArgs: readonly string[]) => {
       const script = npmArgs[1]!;
       commands.push(npmArgs);
       events.push(`start:${script}`);
@@ -217,7 +253,7 @@ describe('npm test execution', () => {
     const runs = scripts.map((script) => ({ npmArgs: ['run', script] }));
     const releases = new Map<string, () => void>();
     const events: string[] = [];
-    const run = vi.fn(async (npmArgs: string[]) => {
+    const run = vi.fn(async (npmArgs: readonly string[]) => {
       const script = npmArgs[1]!;
       events.push(`start:${script}`);
       await new Promise<void>((resolvePromise) => releases.set(script, resolvePromise));
@@ -266,6 +302,27 @@ describe('npm test execution', () => {
     expect(results.map(({ result }) => result.code)).toEqual([7, 0, 0, 0, 9]);
   });
 
+  it('should return indexed runs with the nested run and result shape', async () => {
+    const runs = [
+      { npmArgs: ['run', 'test:unit:parallel'] },
+      { npmArgs: ['run', 'test:it:heavy:serial:git'] },
+    ];
+    const run = vi.fn(async (_npmArgs: readonly string[]) => ({
+      code: 0,
+      signal: null,
+      output: '',
+    }));
+
+    const results = await executeNpmTestRuns(runs, run);
+
+    expect(results).toEqual([
+      { run: runs[0], index: 0, result: { code: 0, signal: null, output: '' } },
+      { run: runs[1], index: 1, result: { code: 0, signal: null, output: '' } },
+    ]);
+    expect(results[0]?.run.npmArgs).toEqual(runs[0]?.npmArgs);
+    expect(results[0]?.index).toBe(0);
+  });
+
   it('should reject an unknown runner classification before executing commands', async () => {
     const run = vi.fn();
 
@@ -297,7 +354,11 @@ const birpcNoiseOutput = [
 
 describe('birpc noise classification', () => {
   it('should treat an all-passed shard whose only error is the birpc timeout as noise', () => {
-    expect(isBirpcNoiseOnlyFailure({ output: birpcNoiseOutput, isCI: false })).toBe(true);
+    expect(isBirpcNoiseOnlyFailure({
+      output: birpcNoiseOutput,
+      isCI: false,
+      remeasureOnCI: false,
+    })).toBe(true);
   });
 
   it('should treat a shard with a failed test as a real failure even alongside birpc noise', () => {
@@ -308,7 +369,7 @@ describe('birpc noise classification', () => {
         'AssertionError: expected 1 to be 2',
       );
 
-    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false, remeasureOnCI: false })).toBe(false);
   });
 
   it('should treat an all-passed shard carrying any other error as a real failure', () => {
@@ -317,7 +378,7 @@ describe('birpc noise classification', () => {
       'Error: connect ECONNREFUSED 127.0.0.1:5432',
     );
 
-    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false, remeasureOnCI: false })).toBe(false);
   });
 
   it('should treat an error whose name does not end in Error as a real failure', () => {
@@ -326,7 +387,7 @@ describe('birpc noise classification', () => {
       'DatabaseFailure: connection lost',
     );
 
-    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false, remeasureOnCI: false })).toBe(false);
   });
 
   it('should treat a timeout carrying call arguments as a real failure', () => {
@@ -335,7 +396,7 @@ describe('birpc noise classification', () => {
       'Error: [vitest-worker]: Timeout calling "onTaskUpdate" with "[{}]"',
     );
 
-    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false, remeasureOnCI: false })).toBe(false);
   });
 
   it('should treat a shard that passed no test as a real failure', () => {
@@ -343,7 +404,7 @@ describe('birpc noise classification', () => {
       .replace(' Test Files  120 passed (120)', ' Test Files  0 passed (0)')
       .replace('      Tests  3330 passed (3330)', '      Tests  0 passed (0)');
 
-    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false, remeasureOnCI: false })).toBe(false);
   });
 
   it('should treat an all-passed shard with no reported error as a real failure', () => {
@@ -353,11 +414,23 @@ describe('birpc noise classification', () => {
       '   Duration  62.00s',
     ].join('\n');
 
-    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false, remeasureOnCI: false })).toBe(false);
   });
 
   it('should never rescue on CI where the shard has the machine to itself', () => {
-    expect(isBirpcNoiseOnlyFailure({ output: birpcNoiseOutput, isCI: true })).toBe(false);
+    expect(isBirpcNoiseOnlyFailure({
+      output: birpcNoiseOutput,
+      isCI: true,
+      remeasureOnCI: false,
+    })).toBe(false);
+  });
+
+  it('should classify birpc-only noise on CI when re-measurement is opted in', () => {
+    expect(isBirpcNoiseOnlyFailure({
+      output: birpcNoiseOutput,
+      isCI: true,
+      remeasureOnCI: true,
+    })).toBe(true);
   });
 });
 
@@ -421,25 +494,34 @@ describe('birpc noise re-measurement', () => {
         : { code: 0, signal: null, output: '' };
     });
 
-    const code = await runNpmTest([], run);
+    const code = await runNpmTest([], run, FIXED_UNIT_SHARD_COUNT);
 
-    expect(run).toHaveBeenCalledTimes(5);
-    expect(events.slice(0, 8)).toEqual([
+    expect(run).toHaveBeenCalledTimes(9);
+    expect(events.slice(0, 16)).toEqual([
       'start:0',
       'start:1',
       'start:2',
       'start:3',
+      'start:4',
+      'start:5',
+      'start:6',
+      'start:7',
       'finish:0',
       'finish:1',
       'finish:2',
       'finish:3',
+      'finish:4',
+      'finish:5',
+      'finish:6',
+      'finish:7',
     ]);
-    expect(events.slice(8)).toEqual(['start:4', 'finish:4']);
+    expect(events.slice(16)).toEqual(['start:8', 'finish:8']);
     expect(code).toBe(0);
   });
 
-  it('should not re-measure on CI', async () => {
+  it('should not re-measure on CI without the opt-in flag', async () => {
     vi.stubEnv('CI', 'true');
+    vi.stubEnv(BIRPC_REMEASURE_ON_CI_ENV, '');
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const run = vi.fn(async () => ({ code: 1, signal: null, output: birpcNoiseOutput }));
 
@@ -448,15 +530,46 @@ describe('birpc noise re-measurement', () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(code).toBe(1);
   });
+
+  it('should re-measure on CI when the opt-in flag is set', async () => {
+    vi.stubEnv('CI', 'true');
+    vi.stubEnv(BIRPC_REMEASURE_ON_CI_ENV, '1');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const attempts = [
+      { code: 1, signal: null, output: birpcNoiseOutput },
+      { code: 0, signal: null, output: '' },
+    ];
+    let attempt = 0;
+    const run = vi.fn(async () => attempts[attempt++]!);
+
+    const code = await runNpmTest(['src/__tests__/option-resolution-order.test.ts'], run);
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(code).toBe(0);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('re-measuring this shard once'));
+  });
 });
 
 describe('npm test entrypoint routing', () => {
+  it('should resolve local unit shards when no shard count is supplied', () => {
+    const runs = selectNpmTestRuns([]);
+
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs.map(({ npmArgs }) => npmArgs[3])).toEqual(
+      runs.map((_, index) => `--shard=${index + 1}/${runs.length}`),
+    );
+  });
+
   it('should run the unit suite as single-worker shards when no test target is provided', () => {
-    expect(selectNpmTestRuns([])).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=1/4', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=2/4', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=3/4', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=4/4', '--maxWorkers=1'] },
+    expect(selectNpmTestRuns([], FIXED_UNIT_SHARD_COUNT)).toEqual([
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=1/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=2/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=3/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=4/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=5/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=6/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=7/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=8/8', '--maxWorkers=1'] },
     ]);
   });
 

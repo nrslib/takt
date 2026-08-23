@@ -69,7 +69,10 @@ import {
 } from './unavailable-tool-recovery.js';
 import { createOpenCodeSessionLifecycle } from './session-lifecycle.js';
 import type { OpenCodeSessionLifecycle } from './session-lifecycle.js';
-import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  type AgentFailureCategory,
+} from '../../shared/types/agent-failure.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import {
   createSensitiveTextStreamRedactor,
@@ -185,6 +188,19 @@ const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
 ];
 type OpenCodeSessionSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient['session']['get']>>['data']>;
 type OpenCodeAbortCause = 'timeout' | OpenCodeGuardAbortKind | 'external' | 'prompt' | 'server';
+
+function resolveOpenCodeAbortFailureCategory(
+  abortCause: OpenCodeAbortCause | undefined,
+): AgentFailureCategory | undefined {
+  switch (abortCause) {
+    case 'deadline':
+      return AGENT_FAILURE_CATEGORIES.PART_TIMEOUT;
+    case 'external':
+      return AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT;
+    default:
+      return undefined;
+  }
+}
 
 function getToolGuardFailureFingerprint(failure: ToolGuardRecoverableFailure): string {
   return failure.kind === 'edit_conflict_loop' ? failure.signature : failure.fingerprint;
@@ -748,12 +764,14 @@ export class OpenCodeAttemptRunner {
     agentType: string,
     sessionId: string | undefined,
     message: string,
+    retryCount: number,
   ): AgentResponse {
     return {
       persona: agentType,
       timestamp: new Date(),
       sessionId,
       ...buildRateLimitedResponseFields('opencode', 'sdk_error', message),
+      ...(retryCount > 0 ? { retryCount } : {}),
     };
   }
 
@@ -926,6 +944,7 @@ export class OpenCodeAttemptRunner {
 
   const buildAttemptErrorResponse = (error: unknown): AgentResponse => {
     const errorMessage = sanitizeAttemptError(getErrorMessage(error));
+    const failureCategory = resolveOpenCodeAbortFailureCategory(abortCause);
     return {
       persona: agentType,
       status: 'error',
@@ -933,9 +952,8 @@ export class OpenCodeAttemptRunner {
       error: errorMessage,
       timestamp: new Date(),
       sessionId,
-      ...(abortCause === 'deadline'
-        ? { failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT }
-        : {}),
+      ...(failureCategory === undefined ? {} : { failureCategory }),
+      ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
     };
   };
 
@@ -1757,6 +1775,7 @@ export class OpenCodeAttemptRunner {
           error: sanitizedMessage,
           timestamp: new Date(),
           sessionId: activeSessionId,
+          ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
         };
       }
       // 認証済み transport の無音タイムアウトで止めた場合、死因はサーバが握った
@@ -1789,6 +1808,7 @@ export class OpenCodeAttemptRunner {
             agentType,
             activeSessionId,
             sanitizeAttemptError(rateLimitMessage),
+            attempt - 1,
           );
           scheduleResultEmission(
             false,
@@ -1804,6 +1824,7 @@ export class OpenCodeAttemptRunner {
           agentType,
           activeSessionId,
           sanitizeAttemptError(message),
+          attempt - 1,
         );
         scheduleResultEmission(false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
         throwIfServerInvalidated();
@@ -1958,6 +1979,7 @@ export class OpenCodeAttemptRunner {
         timestamp: new Date(),
         sessionId: activeSessionId,
         debugInfo: { toolHealth: failureToolHealth },
+        ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
       };
     }
 
@@ -2008,6 +2030,7 @@ export class OpenCodeAttemptRunner {
       sessionId: activeSessionId,
       ...(capturedStructuredOutput !== undefined ? { structuredOutput: capturedStructuredOutput } : {}),
       debugInfo: { toolHealth: successToolHealth },
+      ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
     };
   } catch (error) {
     const invalidationError = currentServerInvalidationError()
@@ -2046,6 +2069,7 @@ export class OpenCodeAttemptRunner {
         agentType,
         sessionId,
         sanitizeAttemptError(errorMessage),
+        attempt - 1,
       );
       if (sessionId) {
         scheduleResultEmission(false, rateLimitedResponse.error ?? rateLimitedResponse.content, sessionId);
@@ -2093,6 +2117,7 @@ export class OpenCodeAttemptRunner {
     }
 
     const sanitizedErrorMessage = sanitizeAttemptError(errorMessage);
+    const failureCategory = resolveOpenCodeAbortFailureCategory(abortCause);
     return {
       persona: agentType,
       status: 'error',
@@ -2100,9 +2125,8 @@ export class OpenCodeAttemptRunner {
       error: sanitizedErrorMessage,
       timestamp: new Date(),
       sessionId,
-      ...(abortCause === 'deadline'
-        ? { failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT }
-        : {}),
+      ...(failureCategory === undefined ? {} : { failureCategory }),
+      ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
     };
   } finally {
     guardSuite.stopAttempt();

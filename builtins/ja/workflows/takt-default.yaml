@@ -20,21 +20,61 @@ steps:
       fix_plan_report_format: scenario-based-fix-plan
       final_gate_instruction: scenario-based-supervise-review-resolution
       implementation_companions:
-        fixed: [ai-antipattern-review-companion, testing-review-companion]
+        fixed:
+          - ai-antipattern-review-companion
+          - testing-review-companion
         pool: []
         moderator: review-companion-moderator
       reviewer_suite: takt-development-review
-      review_policy_additions: [takt-testing]
-      review_policy: [coding, testing, takt-testing, review, architecture, takt]
-      review_knowledge: [takt, architecture, unit-testing, e2e-testing]
+      review_policy_additions:
+        - takt-testing-review
+      review_policy:
+        - coding
+        - testing
+        - takt-testing-review
+        - review
+        - architecture
+        - takt
+      review_knowledge:
+        - takt
+        - architecture
+        - unit-testing
+        - e2e-testing
       security_review_pool: takt-security-review-facets
-      security_review_knowledge_additions: [takt]
-      plan_policy: [design-planning, architecture, takt, task-decomposition]
-      plan_knowledge: [takt, architecture, task-decomposition]
-      testing_policy: [coding, testing, takt-testing, architecture, takt]
-      testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
-      development_policy: [coding, testing, takt-testing, ai-antipattern, architecture, implementation-semantics, takt]
-      development_knowledge: [takt, architecture, implementation-semantics]
+      security_review_knowledge_additions:
+        - takt
+      plan_policy:
+        - design-planning
+        - architecture
+        - takt
+        - task-decomposition
+      plan_knowledge:
+        - takt
+        - architecture
+        - task-decomposition
+      testing_policy:
+        - coding
+        - testing
+        - takt-testing
+        - architecture
+        - takt
+      testing_knowledge:
+        - takt
+        - architecture
+        - unit-testing
+        - e2e-testing
+      development_policy:
+        - coding
+        - testing
+        - takt-testing
+        - ai-antipattern
+        - architecture
+        - implementation-semantics
+        - takt
+      development_knowledge:
+        - takt
+        - architecture
+        - implementation-semantics
     rules:
       - condition: COMPLETE
         next: COMPLETE

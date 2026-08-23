@@ -14,12 +14,8 @@
 - [x] lifecycle rules
 - [x] Cost trade-off documentation
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 {{include:output-contracts/base-review-new-findings-scope}}
-| 1 | TF-NEW-file-L42 | tf-convention | In-scope | `modules/example/main.tf:42` | Issue description | accepted_family_unvisited_consumer | The initial review evidence did not visit this module consumer | Fix approach |
-
-{{include:output-contracts/base-review-follow-up-authorization}}
+| 1 | TF-NEW-file-L42 | tf-convention | In-scope | `modules/example/main.tf:42` | Issue description | `modules/example/main.tf:42` | Fix approach |
 
 {{include:output-contracts/base-review-scope}}
 
@@ -32,7 +28,7 @@
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | TF-REOPENED-file-L55 | tf-convention | `review-resolution.md`: previously resolved | d | `Recurred at file.tf:55` | Issue description | Fix approach |
+| 1 | TF-REOPENED-file-L55 | tf-convention | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at file.tf:55` | Issue description | Fix approach |
 
 {{include:output-contracts/base-review-reopened}}
 ## Rejection Gate

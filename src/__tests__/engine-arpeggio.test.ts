@@ -49,6 +49,7 @@ import {
   cleanupWorkflowEngine,
 } from './engine-test-helpers.js';
 import type { RuleMatch } from '../core/workflow/index.js';
+import { collectMetricPoints, metricPoint } from './observability-metrics-test-helpers.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   createProviderStreamParseError,
@@ -164,8 +165,8 @@ describe('ArpeggioRunner integration', () => {
     // Mock agent to return batch-specific responses
     const mockAgent = vi.mocked(runAgent);
     mockRunAgentWithPrompt(
-      makeResponse({ content: 'Processed Alice' }),
-      makeResponse({ content: 'Processed Bob' }),
+      makeResponse({ content: 'Processed Alice', retryCount: 1 }),
+      makeResponse({ content: 'Processed Bob', retryCount: 2 }),
       makeResponse({ content: 'Processed Charlie' }),
     );
 
@@ -185,6 +186,7 @@ describe('ArpeggioRunner integration', () => {
     const output = state.stepOutputs.get('process');
     expect(output).toBeDefined();
     expect(output!.content).toBe('Processed Alice\nProcessed Bob\nProcessed Charlie');
+    expect(output!.retryCount).toBe(3);
 
     const previousDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'previous_responses');
     const previousFiles = readdirSync(previousDir);
@@ -282,17 +284,53 @@ describe('ArpeggioRunner integration', () => {
     const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
 
     const mockAgent = vi.mocked(runAgent);
+    const workflowAborted = vi.fn();
     mockRunAgentWithPrompt(
       makeResponse({ content: 'OK' }),
-      makeResponse({ status: 'error', error: 'fail1' }),
-      makeResponse({ status: 'error', error: 'fail2' }),
+      makeResponse({
+        status: 'error',
+        error: 'fail1',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+        retryCount: 1,
+      }),
+      makeResponse({
+        status: 'error',
+        error: 'fail2',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+        retryCount: 2,
+      }),
       makeResponse({ content: 'OK' }),
     );
 
-    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
-    const state = await engine.run();
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      ...createEngineOptions(tmpDir),
+      provider: 'codex',
+      model: 'gpt-5',
+      observability: { enabled: true },
+      observabilityRunId: 'run-1',
+    });
+    engine.on('workflow:abort', workflowAborted);
+    const points = await collectMetricPoints(async () => {
+      const state = await engine!.run();
+      expect(state.status).toBe('aborted');
+    });
 
-    expect(state.status).toBe('aborted');
+    expect(workflowAborted.mock.calls[0]?.[3]).toMatchObject({
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      reason: expect.stringContaining('fail2'),
+    });
+    expect(metricPoint(points, 'takt.provider.errors', {
+      'takt.run.id': 'run-1',
+      'takt.provider.name': 'codex',
+      'takt.model.name': 'gpt-5',
+      'takt.provider.error_type': AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+    })?.value).toBe(1);
+    expect(metricPoint(points, 'takt.provider.errors', {
+      'takt.run.id': 'run-1',
+      'takt.provider.name': 'codex',
+      'takt.model.name': 'gpt-5',
+      'takt.provider.error_type': 'retry',
+    })?.value).toBe(2);
   });
 
   it('fails fast with the typed parse category when attempt 1 returns a parse response', async () => {
@@ -609,7 +647,7 @@ describe('ArpeggioRunner integration', () => {
     expect(state.status).toBe('completed');
     expect(phaseStarts).toHaveLength(3);
     expect(phaseStarts.every((instruction) => instruction.includes('previous=Prior batch result'))).toBe(true);
-    expect(phaseStarts.every((instruction) => instruction.includes('Source:'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('Source:'))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('{previous_response}'))).toBe(true);
   });
 

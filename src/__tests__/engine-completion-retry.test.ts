@@ -86,9 +86,7 @@ function judgeResponse(complete: boolean): AgentResponse {
     structuredOutput: {
       complete,
       reason: complete ? 'closed' : 'missing consumer',
-      missing_obligations: complete ? [] : [{
-        kind: 'family_lifecycle_gap',
-        contract_family: 'config',
+      missing_paths: complete ? [] : [{
         path: 'consumer.ts',
         reason: 'not inspected',
       }],
@@ -293,11 +291,11 @@ describe('WorkflowEngine completion retry wiring', () => {
 
     expect(state.status).toBe('completed');
     const judgePayload = JSON.parse(judgeInstruction!.slice(judgeInstruction!.indexOf('{')));
-    expect(judgePayload.repository_evidence.files).toEqual([expect.objectContaining({
+    expect(judgePayload.code_evidence.files).toEqual([expect.objectContaining({
       path: 'review-target.ts',
       content: 'export const version = 2;\n',
     })]);
-    expect(judgePayload.repository_evidence.diff).toMatch(/-export const version = 1;[\s\S]*\+export const version = 2;/);
+    expect(judgePayload.code_evidence.diff).toMatch(/-export const version = 1;[\s\S]*\+export const version = 2;/);
   });
 
   it('validates and adds a prior judge gap path to the next attempt evidence', async () => {
@@ -321,9 +319,7 @@ describe('WorkflowEngine completion retry wiring', () => {
           structuredOutput: {
             complete: false,
             reason: 'consumer not checked',
-            missing_obligations: [{
-              kind: 'family_lifecycle_gap',
-              contract_family: 'consumer',
+            missing_paths: [{
               path: 'consumer.ts',
               reason: 'consumer path is unverified',
             }],
@@ -337,10 +333,10 @@ describe('WorkflowEngine completion retry wiring', () => {
     await engine.run();
 
     const secondPayload = JSON.parse(judgeInstructions[1]!.slice(judgeInstructions[1]!.indexOf('{')));
-    expect(secondPayload.repository_evidence.files).toEqual([
+    expect(secondPayload.code_evidence.files).toEqual([
       expect.objectContaining({ path: 'review-target.ts' }),
     ]);
-    expect(secondPayload.repository_evidence.priorGapPaths).toEqual(['consumer.ts']);
+    expect(secondPayload.code_evidence.priorGapPaths).toEqual(['consumer.ts']);
     expect(judgeInstructions[1]).not.toContain('export const consumer = true');
   });
 
@@ -364,10 +360,10 @@ describe('WorkflowEngine completion retry wiring', () => {
       if (options.internalAgentName === 'review-completion-judge') {
         judgeInstructions.push(instruction);
         const payload = JSON.parse(instruction.slice(instruction.indexOf('{')));
-        const consumerWasDiscovered = payload.repository_evidence.references.some(
+        const consumerWasDiscovered = payload.code_evidence.references.some(
           (reference: { path: string }) => reference.path === 'consumer.ts',
         );
-        const reviewerCoveredConsumer = payload.reviewer_report.includes('consumer.ts');
+        const reviewerCoveredConsumer = payload.review_result.includes('consumer.ts');
         return consumerWasDiscovered && !reviewerCoveredConsumer
           ? makeResponse({
             persona: 'review-completion-judge',
@@ -375,9 +371,7 @@ describe('WorkflowEngine completion retry wiring', () => {
             structuredOutput: {
               complete: false,
               reason: 'tracked consumer was not reviewed',
-              missing_obligations: [{
-                kind: 'family_lifecycle_gap',
-                contract_family: 'stableContract',
+              missing_paths: [{
                 path: 'consumer.ts',
                 reason: 'metadata identifies an unvisited consumer',
               }],
@@ -400,7 +394,7 @@ describe('WorkflowEngine completion retry wiring', () => {
     expect(state.status).toBe('completed');
     expect(reviewerCalls).toBe(2);
     const firstPayload = JSON.parse(judgeInstructions[0]!.slice(judgeInstructions[0]!.indexOf('{')));
-    expect(firstPayload.repository_evidence.references).toEqual(expect.arrayContaining([
+    expect(firstPayload.code_evidence.references).toEqual(expect.arrayContaining([
       expect.objectContaining({
         path: 'consumer.ts',
         line: 1,

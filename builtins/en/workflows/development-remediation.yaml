@@ -4,17 +4,14 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
-      position: before_instruction
-    - ref: invariant-recurrence
-      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
 subworkflow:
   callable: true
   visibility: internal
-  returns: [need_replan]
+  returns:
+    - need_replan
   params:
     fix_pool:
       type: facet_pool_ref
@@ -25,23 +22,36 @@ subworkflow:
     plan_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing, review]
+      default:
+        - coding
+        - testing
+        - review
     fix_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing]
+      default:
+        - coding
+        - testing
     verification_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing, review]
+      default:
+        - coding
+        - testing
+        - review
     fix_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, implementation-semantics]
+      default:
+        - architecture
+        - implementation-semantics
     verification_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, unit-testing, e2e-testing]
+      default:
+        - architecture
+        - unit-testing
+        - e2e-testing
     fix_plan_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -57,8 +67,12 @@ facet_pools:
     uses: takt-coding-facets
 initial_step: fix-plan
 loop_monitors:
-  - cycle: [fix-plan, fix]
-    ignore_steps: [fix-verifier, fix-retry]
+  - cycle:
+      - fix-plan
+      - fix
+    ignore_steps:
+      - fix-verifier
+      - fix-retry
     threshold: 4
     judge:
       persona: supervisor
@@ -72,7 +86,9 @@ loop_monitors:
           next: fix-plan
         - condition: No feasible path can satisfy the requirements
           next: ABORT
-  - cycle: [fix-retry, fix-verifier]
+  - cycle:
+      - fix-retry
+      - fix-verifier
     threshold: 4
     judge:
       persona: supervisor
@@ -104,7 +120,9 @@ steps:
       - condition: Whole-task replanning required
         return: need_replan
   - name: fix
-    capabilities: [edit, enable-skills]
+    capabilities:
+      - edit
+      - enable-skills
     uses: peer-review-fix
     with:
       fix_policy:
@@ -131,12 +149,14 @@ steps:
     rules:
       - condition: verified
         next: COMPLETE
-      - condition: incomplete
-        next: fix-retry
-      - condition: plan_invalid
+      - condition: plan_invalid — The fix plan omits a required member, state, or path; includes an out-of-scope path; or has a defective assumption, boundary, method, or evidentiary power. This includes cases that also have implementation or evidence gaps
         next: fix-plan
+      - condition: incomplete — The fix plan has no defect, but a planned obligation has an implementation or evidence gap
+        next: fix-retry
   - name: fix-retry
-    capabilities: [edit, enable-skills]
+    capabilities:
+      - edit
+      - enable-skills
     uses: peer-review-fix
     with:
       fix_policy:

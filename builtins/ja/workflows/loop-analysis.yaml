@@ -9,7 +9,8 @@ initial_step: analyze
 
 steps:
   - name: analyze
-    tags: [analysis]
+    tags:
+      - analysis
     capabilities: readonly
     edit: false
     persona: loop-analyzer
@@ -20,7 +21,8 @@ steps:
         next: review
 
   - name: review
-    tags: [review]
+    tags:
+      - review
     capabilities: readonly
     edit: false
     persona: loop-analysis-reviewer
@@ -37,7 +39,8 @@ steps:
         next: reanalyze
 
   - name: reanalyze
-    tags: [analysis]
+    tags:
+      - analysis
     capabilities: readonly
     edit: false
     persona: loop-analyzer

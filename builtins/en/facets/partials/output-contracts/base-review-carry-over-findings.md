@@ -1,3 +1,3 @@
 ## Carry-over Findings (persists)
-| # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |
-|---|------------|------------|-------------------|------------------|-------|----------------|
+| # | finding_id | Previous Evidence | Current Evidence | Issue | Fix Suggestion |
+|---|------------|-------------------|------------------|-------|----------------|

@@ -1,5 +1,5 @@
 // promptfoo prompt function: fix ループ収束規則の挙動評価。
-// builtins/ja の実ファセットと workflow-wide rule を実行時に組み立ててロール別ヘッダを作り、
+// builtins/ja の実ファセットと output contract を実行時に組み立ててロール別ヘッダを作り、
 // cases/fix-loop-convergence/<scenario>.md のシナリオ本文と合成する。
 // ファセットを変更すると、この評価は変更後の文面をそのまま対象にする。
 import { readFileSync } from 'node:fs';
@@ -9,10 +9,6 @@ import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
 
 const EVAL_DIR = dirname(fileURLToPath(import.meta.url));
 const FACETS_ROOT = join(EVAL_DIR, '../builtins/ja/facets');
-const INVARIANT_RECURRENCE_RULE = join(
-  EVAL_DIR,
-  '../builtins/ja/workflows/rules/invariant-recurrence.md',
-);
 
 function expandFacet(relativePath) {
   const body = readFileSync(join(FACETS_ROOT, relativePath), 'utf-8');
@@ -71,12 +67,8 @@ export default async function ({ vars }) {
     join(EVAL_DIR, 'cases', 'fix-loop-convergence', `${vars.scenario}.md`),
     'utf-8',
   );
-  const workflowRule = readFileSync(INVARIANT_RECURRENCE_RULE, 'utf-8');
   const sections = [
     scenario,
-    '--- EVALUATION WORKFLOW RULE（invariant-recurrence のみ） ---',
-    workflowRule,
-    '--- EVALUATION WORKFLOW RULE ここまで ---',
     role.intro,
     '--- INSTRUCTION（全文） ---',
     expandFacet(role.instruction),

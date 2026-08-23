@@ -35,6 +35,7 @@ function createTestGitProvider(overrides: Partial<GitProvider> = {}): GitProvide
     findExistingPr: vi.fn(() => undefined),
     createPullRequest: vi.fn(() => ({ success: true, url: 'https://example.com/pull/1' })),
     commentOnPr: vi.fn(() => ({ success: true })),
+    commentOnIssue: vi.fn(() => ({ success: true })),
     closePr: vi.fn(() => ({ success: true })),
     mergePr: vi.fn(() => ({ success: true })),
     ...overrides,
@@ -72,6 +73,36 @@ describe('createIssueAndEnqueueTask', () => {
     }, '/repo');
   });
 
+  it('calls the post-save handler with the created issue number and URL', async () => {
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: 'task-1',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const onIssueTaskEnqueued = vi.fn();
+    const createIssueFromTaskResult = vi.fn(() => ({
+      success: true as const,
+      issueNumber: 913,
+      issueUrl: 'https://example.com/issues/913',
+    }));
+
+    const result = await createIssueAndEnqueueTask({
+      cwd: '/repo',
+      task: 'Implement enqueue service',
+      workflow: 'review',
+      gitProvider: createTestGitProvider(),
+    }, {
+      createIssueFromTaskResult,
+      saveTaskFile,
+      onIssueTaskEnqueued,
+    });
+
+    expect(result.success).toBe(true);
+    expect(onIssueTaskEnqueued).toHaveBeenCalledWith({
+      issueNumber: 913,
+      issueUrl: 'https://example.com/issues/913',
+    });
+  });
+
   it('does not create an issue when the abort signal is already aborted', async () => {
     const closeIssue = vi.fn(() => ({ success: true as const }));
     const gitProvider = createTestGitProvider({ closeIssue });
@@ -103,6 +134,7 @@ describe('createIssueAndEnqueueTask', () => {
     const gitProvider = createTestGitProvider({ closeIssue });
     const createIssueFromTaskResult = vi.fn(() => ({ success: true as const, issueNumber: 913 }));
     const saveTaskFile = vi.fn().mockRejectedValue(new Error('disk full'));
+    const onIssueTaskEnqueued = vi.fn();
 
     const result = await createIssueAndEnqueueTask({
       cwd: '/repo',
@@ -114,6 +146,7 @@ describe('createIssueAndEnqueueTask', () => {
     }, {
       createIssueFromTaskResult,
       saveTaskFile,
+      onIssueTaskEnqueued,
     });
 
     expect(result.success).toBe(false);
@@ -126,6 +159,7 @@ describe('createIssueAndEnqueueTask', () => {
       }));
     }
     expect(closeIssue).not.toHaveBeenCalled();
+    expect(onIssueTaskEnqueued).not.toHaveBeenCalled();
   });
 
   it('returns an issue_creation failure result without saving or compensation when issue creation fails', async () => {

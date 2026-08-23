@@ -257,6 +257,8 @@ issue:
     none: "なし"
     custom: "入力（カスタム）"
     customPrompt: "ラベル名を入力"
+  createdFromIssueComment: "実行用 Issue を作成しました: #{issueNumber}{issueUrl}"
+  sourceIssueCommentFailed: "起点 Issue #{sourceIssueNumber} へのリンクコメント投稿に失敗しました: {error}"
 
 # ===== Ink TUI =====
 tui:

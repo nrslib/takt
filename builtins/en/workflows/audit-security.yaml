@@ -4,7 +4,9 @@ max_steps: 15
 initial_step: plan
 
 loop_monitors:
-  - cycle: [supervise, review]
+  - cycle:
+      - supervise
+      - review
     threshold: 3
     judge:
       persona: supervisor
@@ -41,8 +43,16 @@ steps:
     tags:
       - review
     persona: security-reviewer
-    policy: contract-change
-    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+    policy:
+      - contract-change
+      - review
+    knowledge:
+      - security
+      - security-web
+      - security-api
+      - security-local
+      - security-data
+      - security-dependencies
     instruction: audit-security-team-leader
     edit: false
     team_leader:
@@ -63,7 +73,13 @@ steps:
       - supervise
     persona: supervisor
     policy: contract-change
-    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+    knowledge:
+      - security
+      - security-web
+      - security-api
+      - security-local
+      - security-data
+      - security-dependencies
     instruction: audit-security-supervise
     edit: false
     rules:
@@ -76,8 +92,16 @@ steps:
     tags:
       - review
     persona: security-reviewer
-    policy: contract-change
-    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+    policy:
+      - contract-change
+      - review
+    knowledge:
+      - security
+      - security-web
+      - security-api
+      - security-local
+      - security-data
+      - security-dependencies
     instruction: audit-security-review
     edit: false
     output_contracts:

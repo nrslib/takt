@@ -59,13 +59,27 @@ The pull request owns full heavy integration execution, but work must not be han
 | Timeout increase alone is treated as resolving a hang, contention, or infinite loop | REJECT |
 | A heavy test is removed from unit without being connected to another gate | REJECT |
 
-Keep heavy integration at one worker per runner. Full local execution is serial; pull-request CI scales out across four isolated shard runners and separate runners for each serial group instead of adding workers within one runner.
+Keep heavy integration at one worker per runner. Full local execution is serial; pull-request CI scales out across six isolated shard runners and separate runners for each serial group instead of adding workers within one runner.
 
 | Execution Mode | Judgment |
 |----------------|----------|
 | Full local execution with one worker | OK |
 | Pull-request CI shards across isolated runners | OK |
 | More workers within one runner for acceleration | REJECT; reintroduces process, Git, and synchronous I/O contention |
+
+## Process and Asynchronous Verification
+
+When child-process launch or completion, or a lifetime independent of the parent process, changes, do not treat mocked launch confirmation as completion. Verify the lifetime and observable result on which the user depends with a real process. Do not require a real process for every wait that has no process-lifetime contract.
+
+| Change | Required Verification |
+|--------|-----------------------|
+| Worker target or launch method | The target module loads from every supported execution mode, including source/development execution when it is supported |
+| Work independent of the parent CLI | An artifact or persisted failure remains observable when the parent exits before the worker |
+| Polling or marker wait | Success, transient read contention during publication, and the wait bound all finish in finite time |
+| Child-process failure | Distinguish launch failure from nonzero exit or module-load failure after launch |
+| All applicable terminal paths | Inventory failure, interruption, cancellation, and forced termination; verify the documented terminal result, child and descendant termination, and temporary-resource cleanup. Record every unexecuted path and every path where cleanup cannot run |
+
+Classify verification that crosses a real child-process boundary as heavy integration. Avoid a Cartesian product: select the smallest cases that distinguish supported execution modes, normal completion, wait-bound completion, post-launch failure, and every applicable interruption, cancellation, or forced-termination behavior. Record rather than omit a path that cannot run locally.
 
 ## Completion Evidence
 

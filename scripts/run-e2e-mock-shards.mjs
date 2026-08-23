@@ -130,7 +130,11 @@ function selectFilesForFilters(files, positionalFilters) {
 export async function settleShardResults(results, { isCI, remeasureShard }) {
   const settledResults = [];
   for (const result of results) {
-    if (result.code === 0 || !isBirpcNoiseOnlyFailure({ output: result.output, isCI })) {
+    if (result.code === 0 || !isBirpcNoiseOnlyFailure({
+      output: result.output,
+      isCI,
+      remeasureOnCI: false,
+    })) {
       settledResults.push(result);
       continue;
     }

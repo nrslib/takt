@@ -7,7 +7,7 @@
 {1-2文でレビュー結果を要約}
 
 ## 契約入口チェック
-ID、名前、メタデータ、設定、環境変数、出力契約の追加・変更がある場合は記載する。
+ID、名前、メタデータ、設定、環境変数、外部出力形式の追加・変更がある場合は記載する。
 
 | 入口・経路 | 元要件 | 実装根拠 | テスト根拠 | 判定 | 例外・未確認の根拠 |
 |-----------|--------|----------|------------|------|-------------------|
@@ -15,18 +15,14 @@ ID、名前、メタデータ、設定、環境変数、出力契約の追加・
 
 {{include:output-contracts/base-review-non-finding-concerns}}
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 ## 今回の指摘（new）
-| # | finding_id | family_tag | 重大度 | 場所 | 問題 | 影響 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
-|---|------------|------------|--------|------|------|------|---------------------|------------------------------|--------|
-| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {問題} | {影響} | {follow-upでは accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration のいずれか。初回は該当なし。その他の値は無効} | {follow-up findingが初回レビューに含まれなかった独立した証拠。初回は該当なし} | {修正案} |
-
-follow-up finding の `Authorization basis` は列挙した4つの正確な値だけを許可し、その他の値を拒否する。「初回に含まれなかった理由」はauthorization値ではなく、独立した事実説明にする。
+| # | finding_id | 重大度 | 場所 | 問題 | 影響 | 根拠 | 修正案 |
+|---|------------|--------|------|------|------|------|--------|
+| 1 | CODE-NEW-src-file-L42 | High / Medium / Low | `src/file.ts:42` | {問題} | {影響} | {file:line または再現可能な証拠} | {修正案} |
 
 {{include:output-contracts/base-review-persists}}
 {{include:output-contracts/base-review-carry-over-findings}}
-| 1 | CODE-PERSIST-src-file-L77 | regression | `src/file.ts:77` | `src/file.ts:77` | {未解消の問題} | {修正案} |
+| 1 | CODE-PERSIST-src-file-L77 | `src/file.ts:77` | `src/file.ts:77` | {未解消の問題} | {修正案} |
 
 ## 解消済み（resolved）
 | finding_id | 元の期待結果 | 解消根拠 |
@@ -35,7 +31,7 @@ follow-up finding の `Authorization basis` は列挙した4つの正確な値�
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | CODE-REOPENED-src-file-L55 | bug | `review-resolution.md`: 解消済み | d | `src/file.ts:55` | {再発した問題} | {修正案} |
+| 1 | CODE-REOPENED-src-file-L55 | 直前の裁定: 解消済み | 修正で再発 | `src/file.ts:55` | {再発した問題} | {修正案} |
 
 {{include:output-contracts/base-review-reopened}}
 ## 検証証跡
@@ -51,6 +47,6 @@ follow-up finding の `Authorization basis` は列挙した4つの正確な値�
 ```
 
 **認知負荷軽減ルール:**
-- APPROVE → サマリー + 検証証跡 + 再走査証跡（2回目以降）と、必要な場合のみ契約入口チェック・非finding化した懸念
+- APPROVE → サマリー + 検証証跡 + 影響経路の確認証跡と、必要な場合のみ契約入口チェック・非finding化した懸念
 - REJECT → 確認済みの指摘をすべて表で記載し、同じ原因の場所は集約
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

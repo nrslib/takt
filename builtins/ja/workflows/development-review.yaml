@@ -4,9 +4,9 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
+    - ref: peer-review-scope
       position: before_instruction
-    - ref: invariant-recurrence
+    - ref: existing-finding-lookup
       position: before_instruction
     - ref: plain-terminology
       position: before_instruction
@@ -14,7 +14,8 @@ all_steps:
 subworkflow:
   callable: true
   visibility: internal
-  returns: [needs_fix]
+  returns:
+    - needs_fix
   params:
     review_policy_additions:
       type: facet_ref[]
@@ -31,13 +32,34 @@ subworkflow:
     security_review_pool:
       type: facet_pool_ref
       default: security-review-facets
-    architecture_review_instruction: { type: facet_ref, facet_kind: instruction, default: architecture-review }
-    security_review_instruction: { type: facet_ref, facet_kind: instruction, default: security-review }
-    testing_review_instruction: { type: facet_ref, facet_kind: instruction, default: testing-review }
-    coding_review_instruction: { type: facet_ref, facet_kind: instruction, default: coding-review }
-    ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction, default: ai-antipattern-review }
-    frontend_review_instruction: { type: facet_ref, facet_kind: instruction, default: frontend-review }
-    cqrs_es_review_instruction: { type: facet_ref, facet_kind: instruction, default: cqrs-es-review }
+    architecture_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: architecture-review
+    security_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: security-review
+    testing_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: testing-review
+    coding_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: coding-review
+    ai_antipattern_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: ai-antipattern-review
+    frontend_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: frontend-review
+    cqrs_es_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: cqrs-es-review
 facet_pools:
   security-review-facets:
     uses: security-review-facets
@@ -49,51 +71,75 @@ steps:
       fixed:
         - uses: development-ai-antipattern-reviewer
           with:
-            review_policy_additions: { $param: review_policy_additions }
-            review_knowledge_additions: { $param: review_knowledge_additions }
-            ai_antipattern_review_instruction: { $param: ai_antipattern_review_instruction }
-          rules: &reviewer_rules [{ condition: approved }, { condition: needs_fix }]
+            review_policy_additions:
+              $param: review_policy_additions
+            review_knowledge_additions:
+              $param: review_knowledge_additions
+            ai_antipattern_review_instruction:
+              $param: ai_antipattern_review_instruction
+          rules: &reviewer_rules
+            - condition: approved
+            - condition: needs_fix
       pool:
         - uses: development-architecture-reviewer
           with:
-            review_policy_additions: { $param: review_policy_additions }
-            review_knowledge_additions: { $param: review_knowledge_additions }
-            architecture_review_instruction: { $param: architecture_review_instruction }
+            review_policy_additions:
+              $param: review_policy_additions
+            review_knowledge_additions:
+              $param: review_knowledge_additions
+            architecture_review_instruction:
+              $param: architecture_review_instruction
           rules: *reviewer_rules
         - uses: peer-review-frontend-reviewer
           description: UI、コンポーネント、状態管理、アクセシビリティをレビューする
           pass_previous_response: false
           with:
-            review_policy_additions: { $param: review_policy_additions }
-            review_knowledge_additions: { $param: review_knowledge_additions }
-            frontend_review_instruction: { $param: frontend_review_instruction }
+            review_policy_additions:
+              $param: review_policy_additions
+            review_knowledge_additions:
+              $param: review_knowledge_additions
+            frontend_review_instruction:
+              $param: frontend_review_instruction
           rules: *reviewer_rules
         - uses: development-backend-reviewer
           with:
-            review_policy_additions: { $param: review_policy_additions }
-            review_knowledge_additions: { $param: review_knowledge_additions }
-            coding_review_instruction: { $param: coding_review_instruction }
+            review_policy_additions:
+              $param: review_policy_additions
+            review_knowledge_additions:
+              $param: review_knowledge_additions
+            coding_review_instruction:
+              $param: coding_review_instruction
           rules: *reviewer_rules
         - uses: peer-review-cqrs-reviewer
           description: CQRS、イベントソーシング、集約境界、投影の整合性をレビューする
           pass_previous_response: false
           with:
-            review_policy_additions: { $param: review_policy_additions }
-            review_knowledge_additions: { $param: review_knowledge_additions }
-            cqrs_es_review_instruction: { $param: cqrs_es_review_instruction }
+            review_policy_additions:
+              $param: review_policy_additions
+            review_knowledge_additions:
+              $param: review_knowledge_additions
+            cqrs_es_review_instruction:
+              $param: cqrs_es_review_instruction
           rules: *reviewer_rules
         - uses: development-security-reviewer
           with:
-            review_policy_additions: { $param: review_policy_additions }
-            security_review_knowledge_additions: { $param: security_review_knowledge_additions }
-            security_review_pool: { $param: security_review_pool }
-            security_review_instruction: { $param: security_review_instruction }
+            review_policy_additions:
+              $param: review_policy_additions
+            security_review_knowledge_additions:
+              $param: security_review_knowledge_additions
+            security_review_pool:
+              $param: security_review_pool
+            security_review_instruction:
+              $param: security_review_instruction
           rules: *reviewer_rules
         - uses: development-testing-reviewer
           with:
-            review_policy_additions: { $param: review_policy_additions }
-            review_knowledge_additions: { $param: review_knowledge_additions }
-            testing_review_instruction: { $param: testing_review_instruction }
+            review_policy_additions:
+              $param: review_policy_additions
+            review_knowledge_additions:
+              $param: review_knowledge_additions
+            testing_review_instruction:
+              $param: testing_review_instruction
           rules: *reviewer_rules
     rules:
       self:
@@ -104,10 +150,24 @@ steps:
         - condition: any("needs_fix")
           return: needs_fix
       parallel:
-        ai-antipattern-review: [{ condition: approved }, { condition: needs_fix }]
-        architecture-review: [{ condition: approved }, { condition: needs_fix }]
-        frontend-review: [{ condition: approved }, { condition: needs_fix }]
-        backend-review: [{ condition: approved }, { condition: needs_fix }]
-        cqrs-es-review: [{ condition: approved }, { condition: needs_fix }]
-        security-review: [{ condition: approved }, { condition: needs_fix }]
-        testing-review: [{ condition: approved }, { condition: needs_fix }]
+        ai-antipattern-review:
+          - condition: approved
+          - condition: needs_fix
+        architecture-review:
+          - condition: approved
+          - condition: needs_fix
+        frontend-review:
+          - condition: approved
+          - condition: needs_fix
+        backend-review:
+          - condition: approved
+          - condition: needs_fix
+        cqrs-es-review:
+          - condition: approved
+          - condition: needs_fix
+        security-review:
+          - condition: approved
+          - condition: needs_fix
+        testing-review:
+          - condition: approved
+          - condition: needs_fix

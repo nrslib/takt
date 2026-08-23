@@ -118,7 +118,7 @@ TAKT classifies unit, light integration, heavy integration, and E2E tests by the
 | Added or changed a heavy integration test | Run the changed file yourself as a target instead of waiting for the full heavy suite |
 | Pull request or release | Run the complete light and heavy integration suites |
 
-Heavy integration runners use one worker to avoid process, Git, and synchronous I/O contention. Full local execution is serial, while pull-request CI splits heavy parallel integration across four isolated runners and isolates each serial group on its own runner. `npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy integration test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light integration, heavy integration, prompt evaluation, and E2E in order.
+Heavy integration runners use one worker to avoid process, Git, and synchronous I/O contention. Full local execution is serial, while pull-request CI splits heavy parallel integration across six isolated runners and isolates each serial group on its own runner. `npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy integration test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light integration, heavy integration, and E2E in order.
 
 ### Mock Provider
 
@@ -136,6 +136,8 @@ setMockScenario([
 ```
 
 ### Test Isolation
+
+Shared test setup assigns an isolated configuration root to `TAKT_CONFIG_DIR` for each test environment. Except for tests of configuration-directory selection itself, tests create required configuration inside the assigned root rather than replacing the process-wide `TAKT_CONFIG_DIR`. Replacing a process-wide environment variable can leak state into parallel or subsequent tests.
 
 
 ## Platform Priority
@@ -156,6 +158,21 @@ When a normal Phase 1 response merely omits `sessionId`, that alone is not a rea
 However, when a retry or fallback explicitly runs as a new session and succeeds, a missing `sessionId` must not continue using the old resumed session. The storage layer must be told that the new run produced no sessionId, so the old session is cleared or isolated.
 
 The Report Phase is Phase 2 and reads Phase 1 outputs. Its execution contract is readonly and tool-free. Report retry/fallback must preserve `permissionMode: readonly`, empty tool permission, and provider capability overrides such as turn limits.
+
+
+## Asynchronous Work and Process Boundaries
+
+Work that must complete after the calling CLI exits cannot be owned only by an unresolved Promise in the CLI process. Before the CLI returns, ownership must transfer to a worker or external service that can survive independently of the CLI process.
+
+| Boundary | Fact to Verify |
+|----------|----------------|
+| Worker launch target | Resolves from both the distributed build and every supported source or development execution mode |
+| Child-process start | Spawn success is observed separately from module loading, work completion, and exit status |
+| Parent CLI exit | Required artifacts appear after parent exit, or failure remains observable |
+| Polling | A time or attempt bound and the result at that bound are defined |
+| Marker or artifact publication | Transient absence or read races during replacement follow the publication contract through bounded retry or explicit failure |
+
+A launch API returning without an error does not prove that the worker loaded its target module or completed its work. Use an artifact or persisted failure whose lifetime does not depend on the parent process. An exit status is independent evidence only when an independent worker or supervisor that survives the parent records it durably.
 
 
 ## Termination-Path Completeness

@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: fix verifier reconstructs omitted finite states without starting a full review'
+
+prompts:
+  - file://prompts/fix-verifier-state-closure.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/fix-verifier-state-closure
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'fix verifier: derive a missing terminal state from the source of truth'
+    vars:
+      task: file://cases/fix-verifier-state-closure.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-verifier/source-derived-state-closure
+        value: |
+          Judge the verification against the seeded accepted review target,
+          fix plan, fix report, and source. Pass only if it independently reads
+          the RunResult source of truth and distinguishes both facts: `failed`
+          is already in the plan but remains unimplemented (an `incomplete`
+          implementation gap), while `cancelled` is an applicable terminal
+          state omitted from the plan (a `plan_invalid` plan gap). It must retain
+          both gaps independently so the next plan/fix cycle does not lose the
+          planned implementation gap. Overall workflow-result selection is not
+          part of this Phase 1 source-discovery evaluation. Fail if it trusts
+          the plan's state list, reports only one of the two gaps,
+          or turns the adjacent progress-telemetry contract into a remediation
+          target, plan defect, or implementation/evidence gap. Merely checking
+          it as the fix plan's explicit unchanged preservation boundary is
+          allowed.

@@ -13,6 +13,7 @@ const {
   mockListOpenIssues,
   mockCreateIssue,
   mockCloseIssue,
+  mockCommentOnIssue,
   mockFindExistingMr,
   mockCommentOnMr,
   mockCloseMr,
@@ -25,6 +26,7 @@ const {
   mockListOpenIssues: vi.fn(),
   mockCreateIssue: vi.fn(),
   mockCloseIssue: vi.fn(),
+  mockCommentOnIssue: vi.fn(),
   mockFindExistingMr: vi.fn(),
   mockCommentOnMr: vi.fn(),
   mockCloseMr: vi.fn(),
@@ -46,6 +48,7 @@ vi.mock('../infra/gitlab/issue.js', () => ({
   listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
   createIssue: (...args: unknown[]) => mockCreateIssue(...args),
   closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
+  commentOnIssue: (...args: unknown[]) => mockCommentOnIssue(...args),
 }));
 
 vi.mock('../infra/gitlab/pr.js', () => ({
@@ -58,7 +61,7 @@ vi.mock('../infra/gitlab/pr.js', () => ({
 }));
 
 import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
-import type { CommentResult, PrReviewData } from '../infra/git/types.js';
+import type { CommentResult, IssueCommentResult, PrReviewData } from '../infra/git/types.js';
 import { createIssueSuccess } from './helpers/createIssueResult.js';
 
 beforeEach(() => {
@@ -530,6 +533,38 @@ describe('GitLabProvider', () => {
 
       // Then
       expect(mockCommentOnMr).toHaveBeenCalledWith(10, 'body', process.cwd());
+    });
+  });
+
+  describe('commentOnIssue', () => {
+    it('commentOnIssue(issueNumber, body, cwd) に委譲し結果を返す', () => {
+      const commentResult: IssueCommentResult = { success: true };
+      mockCommentOnIssue.mockReturnValue(commentResult);
+      const provider = new GitLabProvider();
+
+      const result = provider.commentOnIssue(999, 'Created an execution issue: #999', '/project');
+
+      expect(mockCommentOnIssue).toHaveBeenCalledWith(999, 'Created an execution issue: #999', '/project');
+      expect(result).toEqual(commentResult);
+    });
+
+    it('コメント投稿失敗時は理由付き失敗結果を委譲して返す', () => {
+      const commentResult: IssueCommentResult = { success: false, error: 'Permission denied' };
+      mockCommentOnIssue.mockReturnValue(commentResult);
+      const provider = new GitLabProvider();
+
+      const result = provider.commentOnIssue(999, 'comment', '/project');
+
+      expect(result).toEqual(commentResult);
+    });
+
+    it('cwd 省略時は commentOnIssue に process.cwd() を渡す', () => {
+      mockCommentOnIssue.mockReturnValue({ success: true });
+      const provider = new GitLabProvider();
+
+      provider.commentOnIssue(999, 'body');
+
+      expect(mockCommentOnIssue).toHaveBeenCalledWith(999, 'body', process.cwd());
     });
   });
 

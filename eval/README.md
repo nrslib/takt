@@ -44,15 +44,34 @@ claude headless CLI (`eval/providers/claude-judge.sh`, model
 `claude-opus-5`) and the codex CLI (`eval/providers/codex-judge.sh`, model
 `gpt-5.6-luna`, reasoning effort `max`, and `gpt-5.6-sol`, reasoning effort
 `high`). Prompts are assembled at run time from the live facets and isolate the
-actual `builtins/ja/workflows/rules/invariant-recurrence.md` workflow-wide rule
-(`eval/fix-loop-convergence-prompt.mjs`). The scenario, isolated rule,
-instruction, and output contract preserve their runtime-relative order, but
-this focused eval does not reproduce every workflow-wide runtime rule. It needs both CLI
+current remediation instructions and output contracts
+(`eval/fix-loop-convergence-prompt.mjs`). The scenario, instruction, and output
+contract preserve their runtime-relative order, but this focused eval does not
+reproduce every workflow-wide runtime rule. It needs both CLI
 logins, is excluded from the default suite run, and asserts on a fixed
 machine-readable `JUDGEMENT:` line — invoke it explicitly
 (`npm run eval:prompts:fix-loop-convergence`).
 
-The `fix-plan-cause-check` suite uses the same two providers and one-at-a-time
+The `fix-verifier-model-matrix` command checks two separate responsibilities on
+Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3: Phase 1 derives and
+records source-backed state and path gaps, while Phase 3 applies workflow-owned
+routing when plan defects coexist with implementation or evidence gaps. It
+requires Claude, Codex, and opencode logins and is excluded from the default
+suite run. Invoke it explicitly with
+`npm run eval:prompts:fix-verifier-model-matrix`. The corresponding
+`fix-verifier-state-closure` and `fix-verifier-state-routing` suites keep
+single-provider regressions in the default prompt gate. The Codex and opencode
+eval providers have no total wall-clock limit. They terminate only after 15
+minutes with no JSON or diagnostic event; override those inactivity windows
+with `CODEX_REVIEW_IDLE_TIMEOUT_SECONDS` and
+`OPENCODE_REVIEW_IDLE_TIMEOUT_SECONDS` when needed.
+
+The `fix-verifier-family-boundary` suite checks that source discovery keeps
+implementation/evidence gaps separate from omitted family paths and excludes a
+neighboring contract. Invoke it with
+`npm run eval:prompts:fix-verifier-family-boundary`.
+
+The `fix-plan-cause-check` suite uses the same three providers and one-at-a-time
 execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with
 `npm run eval:prompts:fix-plan-cause-check`.
@@ -106,6 +125,23 @@ remain available as incident knowledge assets and run only when requested by
 the retained tier command or by individual suite name. Explicit suite names
 always work regardless of tier or execution metadata.
 
+The `review-impact-path-coverage` suite measures first-round coverage of paths
+affected by the same cause on Claude Opus 5, Codex Luna Max, and Codex Sol High. It needs
+both CLI logins and is excluded from the default suite run; invoke it with
+`npm run eval:prompts:review-impact-path-coverage`.
+
+The `follow-up-review-repair-regression` suite measures the follow-up round on
+the same three models: falsifying a completion claim, separating a
+repair-induced regression from an initially missed consumer, and enumerating
+the distinct reachable terminal results of one newly exposed projection. It
+needs both CLI logins and is excluded from the default suite run; invoke it with
+`npm run eval:prompts:follow-up-review-repair-regression`. It shares its fixture
+with `follow-up-testing-review-repair-regression`. That suite executes the
+production review sequence for each model: testing review followed by
+`review-adjudication`. It measures whether adjudication verifies omissions
+within the testing perspective while findings outside the current repair scope
+remain excluded.
+
 ## Suites
 
 | Suite | Workflow / step | Fixture | Measures |
@@ -121,13 +157,16 @@ always work regardless of tier or execution metadata.
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
-| `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether repeated failures switch from local patches to a structural fix, history is preserved across retries, new regressions are found, and the monitor chooses the correct next step, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
-| `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes a duplicate review update from possible causes and declines to serialize parallel execution until the cause is confirmed, measured on both Claude Opus and Codex Luna Max |
+| `fix-verifier-family-boundary` | review-remediation / fix-verifier | fix-verifier-family-boundary | whether verification keeps implementation/evidence gaps separate from an omitted family path and excludes an adjacent contract |
+| `fix-verifier-state-closure` | review-remediation / fix-verifier | fix-verifier-state-closure | whether verification derives every applicable terminal state from the source of truth, separates a plan omission from an implementation gap, retains both findings, and excludes an adjacent contract |
+| `fix-verifier-state-routing` | review-remediation / fix-verifier status judgement | fix-verifier-state-closure | whether workflow-owned rules route a report containing both a plan defect and an implementation gap to fix-plan |
+| `fix-verifier-model-matrix` | review-remediation / fix-verifier | fix-verifier-state-closure | source-derived state closure and workflow-owned mixed-gap routing measured separately on Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3 |
+| `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes a duplicate review update from possible causes and declines to serialize parallel execution until the cause is confirmed, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
 | `fix-plan-bounded-proof` | peer-review / fix-plan | fix-plan-bounded-proof | whether Opus 5, Luna Max, and Sol High turn broad format, consumer, and boundary claims into source-backed concrete rows for report variants, helper limits, absence states, branch identity, and locale consumers |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the accepted group of findings, covers every affected use of the same rule, and does not revive findings that were excluded |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
-| `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
-| `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
+| `review-impact-path-coverage` | development-review / backend-review | review-impact-path-coverage | whether one review reports every path affected by the same cause instead of stopping at a representative example; measured on Opus, Luna Max, and Sol High |
+| `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking problems and checks the complete affected scope of each |
 | `initial-review-external-identity-wiring` | takt-development-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
 | `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
 | `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan discovers same-responsibility paths even under different names, closes real multi-boundary impact paths, and keeps local changes local |
@@ -142,17 +181,18 @@ always work regardless of tier or execution metadata.
 | `scope-architecture-boundary` | peer-review / arch-review | scope-architecture-boundary | whether review recognizes an existing domain/I/O boundary on its first implementation without speculative extension points |
 | `implement-contract-traceability` | default / implement | implement-contract-traceability | whether implementation preserves named contract identities from plan and tests |
 | `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
-| `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
-| `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family and reject adjacent or structure-freezing test expansion |
-| `companion-early-scan` | ai-antipattern-review-companion | companion-family-boundary | whether each composed Companion call can report a different task-related issue in a previously inspected location and a repair-induced regression without importing adjacent contracts or outer-workflow issue-tracking state |
-| `companion-testing-later-scan` | testing-review-companion | testing-review-observable-evidence | whether a later composed testing Companion call finds a different observable regression-detection gap in a previously inspected test boundary without duplicating coverage, freezing internal structure, or importing outer-workflow issue-tracking state |
-| `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from remediation authority, keeps accepted-family closure and diff-induced regressions actionable, and excludes even severe horizontal improvements from the fix plan |
+| `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims, distinguishes repair-induced defects from adjacent omissions, and enumerates distinct reachable terminal outcomes; measured on Opus, Luna Max, and Sol High |
+| `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review -> review-adjudication | follow-up-review-repair-regression | whether review-adjudication recovers in-perspective omissions, verifies reviewer evidence, keeps regression detection within the selected repair scope, and excludes adjacent or structure-freezing test expansion; measured on Opus 5, Luna Max, and Sol High |
+| `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from the current remediation scope, keeps required same-cause paths and diff-induced regressions in scope, and excludes even severe horizontal improvements from the fix plan |
 | `review-adjudication-binding` | peer-review / follow-up security-review | review-adjudication-binding | whether Opus 5, Luna Max, and Sol High keep three out-of-scope findings non-blocking, reopen only with an allowed basis, and distinguish bare ESC or unconstrained repository-owned rules from a reproduced OSC terminal effect |
 | `security-review-method` | peer-review / initial security-review | security-review-method | whether Opus 5, Luna Max, and Sol High approve unchanged boundaries and bound SQL, reject verified SQL injection, authorization bypass, credential exposure, and helper-mediated command injection, and keep repository-author-controlled size alone non-blocking |
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
-| `final-readiness-supervision` | final-gate / supervise Phase 1 | final-readiness-supervision | whether the supervisor authorizes a newly discovered required consumer, explains its initial-round omission, and avoids horizontal exploration |
-| `final-readiness-preservation` | final-gate / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the new finding and keeps adjudicated noise non-actionable |
+| `final-readiness-supervision` | final-gate / supervise Phase 1 | final-readiness-supervision | whether the supervisor identifies a newly discovered required consumer from the unmet acceptance criteria and avoids unrelated exploration |
+| `final-readiness-preservation` | final-gate / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the unresolved finding and does not reopen a previously excluded documentation request |
 | `final-readiness-precision` | final-gate / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
+| `fix-verification-scope` | review-remediation / fix-verifier | fix-verification-scope | whether completion verification accepts satisfied planned conditions while recording, but not selecting for repair, a broad-gate failure with no causal connection to the current change |
+| `fix-verification-current-diff-regression` | review-remediation / fix-verifier | fix-verification-current-diff-regression | whether completion verification marks a broad-gate failure incomplete when the current diff caused the regression |
+| `fix-verification-preserved-condition` | review-remediation / fix-verifier | fix-verification-preserved-condition | whether completion verification marks a repair incomplete when it breaks an existing condition that the plan requires preserving |
 
 The `coding` suite requires both Claude and Codex CLI logins and is excluded
 from the default suite run. Invoke it explicitly with
@@ -247,7 +287,7 @@ npm run eval:prompts:fix-closure
 npm run eval:prompts:fix-plan-fresh-findings
 npm run eval:prompts:fix-plan-boundary-preflight
 npm run eval:prompts:fix-plan-bounded-proof
-npm run eval:prompts:review-family-closure
+npm run eval:prompts:review-impact-path-coverage
 npm run eval:prompts:initial-review-contract-discovery
 npm run eval:prompts:initial-review-external-identity-wiring
 npm run eval:prompts:testing-review-observable-evidence
@@ -260,7 +300,10 @@ npm run eval:prompts:scope-discipline
 npm run eval:prompts:implement-contract-traceability
 npm run eval:prompts:follow-up-review-repair-regression
 npm run eval:prompts:follow-up-testing-review-repair-regression
-npm run eval:prompts:contract-family-boundaries
+npm run eval:prompts:fix-verifier-family-boundary
+npm run eval:prompts:fix-verifier-state-closure
+npm run eval:prompts:fix-verifier-state-routing
+npm run eval:prompts:fix-verifier-model-matrix
 npm run eval:prompts:review-adjudication
 npm run eval:prompts:security-review-method
 npm run eval:prompts:task-instruction-gherkin
@@ -277,6 +320,15 @@ Run from the repo root. Note: `working_dir` in the configs is resolved
 relative to the config file's directory (`eval/`), not the process cwd.
 `run-evals.mjs` keeps going when a suite fails and prints a summary
 (promptfoo exits non-zero on test failures, which would break `&&` chains).
+
+Coder, review, and judge CLI providers do not use an elapsed-time timeout by default.
+The Codex and OpenCode review wrappers use an inactivity watchdog: they terminate
+only after 15 minutes without a JSON or diagnostic event. Override those windows
+with `CODEX_REVIEW_IDLE_TIMEOUT_SECONDS` and `OPENCODE_REVIEW_IDLE_TIMEOUT_SECONDS`.
+Other CLI wrappers accept their corresponding `*_TIMEOUT_SECONDS` variable for an
+explicit watchdog; `0` keeps it disabled. Promptfoo's JavaScript CLI review
+provider follows the same rule with `timeout_ms`.
+
 ### Token budget rules
 
 - `model_reasoning_effort: low` is set on the regular Codex SDK providers and
@@ -285,8 +337,8 @@ relative to the config file's directory (`eval/`), not the process cwd.
   compare scores between runs with the same effort setting. Known effect:
   minor planted findings can become flaky at low
   effort; quantify with `--repeat` before judging a facet change. The
-  `fix-loop-convergence` and `initial-review-external-identity-wiring` suites
-  are explicit production-condition exceptions: their Codex CLI rows use
+  `initial-review-external-identity-wiring` suite is an explicit
+  production-condition exception: its Codex CLI rows use
   Luna with reasoning effort `max` and Sol with reasoning effort `high`.
   `fix-plan-bounded-proof` uses the same production-condition model settings,
   serial execution, and uncached generation for its red/green comparison.
@@ -323,8 +375,7 @@ eval/
 - More planted bugs: each fixture bug should map to a specific policy line,
   and get one `metric:`-labelled assertion (recall). Clean cases guard
   precision.
-- Phase 3 (status judgment) is a good next target: cheap, single-shot, and
+- Phase 3 (status judgement) is a good next target: cheap, single-shot, and
   promptfoo-friendly (assert the emitted `[STEP:N]` tag).
-- Language note: prompts are exported in the language resolved from your TAKT
-  config (currently whatever `~/.takt/config.yaml` says). Assertions must
-  match the output language; the current regexes cover en + ja keywords.
+- Language note: eval prompts are always exported in Japanese. English prompt
+  variants are not generated for the same eval case.

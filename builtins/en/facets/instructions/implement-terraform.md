@@ -12,7 +12,7 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 - Do not remove existing `lifecycle { prevent_destroy = true }` without approval
 - All new variables must have `type` and `description`
 
-**Scope output contract (create at the start of implementation):**
+**Change-scope record (create at the start of implementation):**
 ```markdown
 # Change Scope Declaration
 
@@ -32,7 +32,7 @@ Small / Medium / Large
 - {Affected modules or resources}
 ```
 
-**Decisions output contract (at implementation completion, only if decisions were made):**
+**Decision record (at implementation completion, only if decisions were made):**
 ```markdown
 # Decision Log
 

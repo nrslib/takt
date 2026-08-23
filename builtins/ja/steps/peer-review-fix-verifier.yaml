@@ -17,7 +17,9 @@ policy:
 knowledge:
   $param: fix_knowledge
 pass_previous_response: false
-instruction: verify-fix
+instruction:
+  - verify-fix
+  - review-remediation-problem-tracking
 output_contracts:
   report:
     - name: fix-verification.md

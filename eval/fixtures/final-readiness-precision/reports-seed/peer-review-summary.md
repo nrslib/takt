@@ -1,5 +1,5 @@
-# Peer Review Summary
+# ピアレビューの要約
 
-## Result: needs_fix
+## 結果: 修正が必要
 
-A testing reviewer returned REJECT before adjudication. The later `review-resolution.md` classified its only finding as non-actionable.
+テストレビュアーは裁定前に REJECT と判定した。その後の `review-resolution.md` では、その指摘は今回の修正対象ではないと判断された。

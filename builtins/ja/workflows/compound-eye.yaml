@@ -14,7 +14,9 @@ steps:
         edit: false
         persona: coder
         session: refresh
-        policy: architecture
+        policy:
+          - architecture
+          - review
         knowledge: architecture
         rules:
           - condition: done
@@ -48,7 +50,9 @@ steps:
         edit: false
         persona: coder
         session: refresh
-        policy: architecture
+        policy:
+          - architecture
+          - review
         knowledge: architecture
         rules:
           - condition: done

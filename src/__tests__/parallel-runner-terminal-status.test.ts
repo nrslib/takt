@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   MAX_EXPLICIT_PARALLEL_ERROR_RETRIES,
@@ -5,7 +8,9 @@ import {
   type ParallelRunnerDeps,
 } from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import { runQualityGates as runRealQualityGates } from '../core/workflow/quality-gates/qualityGateRunner.js';
 import { makeRule, makeStep } from './test-helpers.js';
+import { collectMetricPoints, metricPoint } from './observability-metrics-test-helpers.js';
 import {
   createProviderStreamParseError,
   MAX_AGENT_FAILURE_MESSAGE_BYTES,
@@ -137,7 +142,13 @@ function mockResponsesByPersona(responses: Readonly<Record<string, AgentResponse
   });
 }
 
-function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
+function makeRunner(options: {
+  projectDir?: string;
+  observabilityEnabled?: boolean;
+  observabilityRunId?: string;
+  runQualityGates?: ParallelRunnerDeps['runQualityGates'];
+} = {}): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
+  const projectDir = options.projectDir ?? '/tmp/project';
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
       buildAgentOptions: vi.fn().mockReturnValue({}),
@@ -156,20 +167,21 @@ function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
       })),
     } as unknown as ParallelRunnerDeps['stepExecutor'],
     engineOptions: {
-      projectCwd: '/tmp/project',
+      projectCwd: projectDir,
     },
-    getCwd: () => '/tmp/project',
+    getCwd: () => projectDir,
     getReportDir: () => '.takt/runs/test/reports',
     getWorkflowName: () => 'test-workflow',
     getInteractive: () => false,
-    observabilityEnabled: false,
+    observabilityEnabled: options.observabilityEnabled ?? false,
+    observabilityRunId: options.observabilityRunId,
     structuredCaller: {
       evaluateCondition: vi.fn(),
       judgeStatus: vi.fn(),
       decomposeTask: vi.fn(),
       requestMoreParts: vi.fn(),
     },
-    runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
+    runQualityGates: options.runQualityGates ?? vi.fn().mockResolvedValue({ ok: true }),
     updateMaxSteps: vi.fn(),
     setActiveResumePoint: vi.fn(),
   };
@@ -287,6 +299,25 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(result.response.content).toBeTruthy();
     expect(state.stepOutputs.get('reviewers')).toBe(result.response);
     expect(state.lastOutput).toBe(result.response);
+  });
+
+  it('propagates the sum of child retry counts to the aggregated response', async () => {
+    const { runner } = makeRunner();
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      content: '[AI-ANTIPATTERN-REVIEW:1] approved',
+      retryCount: 2,
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+      retryCount: 1,
+    }));
+
+    const result = await runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn());
+
+    expect(result.response.status).toBe('done');
+    expect(result.response.retryCount).toBe(3);
   });
 
   it('明示した any("error") で part timeout を集約し、親を done として再試行ルールへ渡す', async () => {
@@ -456,6 +487,118 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       step: expect.objectContaining({ name: 'security-review' }),
     }));
     expect(deps.stepExecutor.completeReviewerResponse).not.toHaveBeenCalled();
+  });
+
+  it('records command quality gate metrics from parallel sub-steps when observability is enabled', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-parallel-quality-gate-metrics-'));
+    try {
+      const { runner } = makeRunner({
+        projectDir,
+        observabilityEnabled: true,
+        observabilityRunId: 'run-1',
+        runQualityGates: runRealQualityGates,
+      });
+      const step = makeParallelStep();
+      if (!step.parallel) {
+        throw new Error('parallel sub-steps are required for this test');
+      }
+      for (const subStep of step.parallel) {
+        subStep.qualityGates = [
+          {
+            type: 'command',
+            name: `${subStep.name}-gate`,
+            command: 'node -e "process.exit(0)"',
+          },
+        ];
+      }
+      const state = makeState();
+      queueAgentResponse(makeAgentResponse({
+        persona: 'ai-antipattern-review-2nd',
+        content: '[STEP:1] approved',
+      }));
+      queueAgentResponse(makeAgentResponse({
+        persona: 'security-review',
+        content: '[STEP:1] approved',
+      }));
+
+      const points = await collectMetricPoints(async () => {
+        await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+      });
+
+      expect(metricPoint(points, 'takt.quality_gate.results', {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'test-workflow',
+        'takt.step.name': 'ai-antipattern-review-2nd',
+        'takt.quality_gate.name': 'ai-antipattern-review-2nd-gate',
+        'takt.quality_gate.result': 'pass',
+      })?.value).toBe(1);
+      expect(metricPoint(points, 'takt.quality_gate.results', {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'test-workflow',
+        'takt.step.name': 'security-review',
+        'takt.quality_gate.name': 'security-review-gate',
+        'takt.quality_gate.result': 'pass',
+      })?.value).toBe(1);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('records command quality gate pass and fail results from parallel sub-steps when observability is enabled', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-parallel-quality-gate-fail-metrics-'));
+    try {
+      const { runner } = makeRunner({
+        projectDir,
+        observabilityEnabled: true,
+        observabilityRunId: 'run-1',
+        runQualityGates: runRealQualityGates,
+      });
+      const step = makeParallelStep();
+      if (!step.parallel) {
+        throw new Error('parallel sub-steps are required for this test');
+      }
+      for (const subStep of step.parallel) {
+        subStep.qualityGates = [
+          {
+            type: 'command',
+            name: `${subStep.name}-gate`,
+            command: subStep.name === 'ai-antipattern-review-2nd'
+              ? 'node -e "process.exit(1)"'
+              : 'node -e "process.exit(0)"',
+          },
+        ];
+      }
+      const state = makeState();
+      queueAgentResponse(makeAgentResponse({
+        persona: 'ai-antipattern-review-2nd',
+        content: '[STEP:1] approved',
+      }));
+      queueAgentResponse(makeAgentResponse({
+        persona: 'security-review',
+        content: '[STEP:1] approved',
+      }));
+
+      const points = await collectMetricPoints(async () => {
+        await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+      });
+
+      expect(metricPoint(points, 'takt.quality_gate.results', {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'test-workflow',
+        'takt.step.name': 'ai-antipattern-review-2nd',
+        'takt.quality_gate.name': 'ai-antipattern-review-2nd-gate',
+        'takt.quality_gate.result': 'fail',
+      })?.value).toBe(1);
+      expect(metricPoint(points, 'takt.quality_gate.results', {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'test-workflow',
+        'takt.step.name': 'security-review',
+        'takt.quality_gate.name': 'security-review-gate',
+        'takt.quality_gate.result': 'pass',
+      })?.value).toBe(1);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('returns parent error with rejected promise detail', async () => {

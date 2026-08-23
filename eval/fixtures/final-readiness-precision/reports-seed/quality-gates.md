@@ -1,8 +1,8 @@
-# Quality Gate Evidence
+# 品質確認の結果
 
-- Build: PASS
+- ビルド: PASS
 - Lint: PASS
-- Unit tests: PASS, including valid and invalid modes through CLI options and project configuration
-- Smoke check: PASS
+- 単体テスト: PASS。CLI オプションとプロジェクト設定の両方で、正常な mode と不正な mode を確認済み
+- スモーク確認: PASS
 
-No mock E2E run is recorded.
+模擬 E2E の実行記録はない。

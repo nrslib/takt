@@ -257,6 +257,8 @@ issue:
     none: "None"
     custom: "Custom input"
     customPrompt: "Enter label name"
+  createdFromIssueComment: "Created an execution Issue: #{issueNumber}{issueUrl}"
+  sourceIssueCommentFailed: "Failed to post the execution Issue link on source Issue #{sourceIssueNumber}: {error}"
 
 # ===== Ink TUI =====
 tui:

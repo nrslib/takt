@@ -64,7 +64,7 @@ describe('autoCommitAndPush', () => {
     }) as typeof execFile);
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (includesCommand(argsArr, 'status')) {
+      if (includesCommand(argsArr, 'diff')) {
         return 'M src/index.ts\n';
       }
       if (includesCommand(argsArr, 'rev-parse')) {
@@ -123,7 +123,7 @@ describe('autoCommitAndPush', () => {
   it('should return success with no commit when there are no changes', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (includesCommand(argsArr, 'status')) {
+      if (includesCommand(argsArr, 'diff')) {
         return ''; // No changes
       }
       if (includesCommand(argsArr, 'config')) {
@@ -180,7 +180,7 @@ describe('autoCommitAndPush', () => {
     // Given: commit creation succeeds, but the local push back to projectDir fails.
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (includesCommand(argsArr, 'status')) {
+      if (includesCommand(argsArr, 'diff')) {
         return 'M src/index.ts\n';
       }
       if (includesCommand(argsArr, 'rev-parse')) {
@@ -222,7 +222,7 @@ describe('autoCommitAndPush', () => {
   it('should not include co-author in commit message', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (includesCommand(argsArr, 'status')) {
+      if (includesCommand(argsArr, 'diff')) {
         return 'M file.ts\n';
       }
       if (includesCommand(argsArr, 'rev-parse')) {
@@ -251,7 +251,7 @@ describe('autoCommitAndPush', () => {
   it('should use the correct commit message format', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (includesCommand(argsArr, 'status')) {
+      if (includesCommand(argsArr, 'diff')) {
         return 'A new-file.ts\n';
       }
       if (includesCommand(argsArr, 'rev-parse')) {
@@ -284,7 +284,7 @@ describe('autoCommitAndPush', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (includesCommand(argsArr, 'status')) {
+      if (includesCommand(argsArr, 'diff')) {
         return 'M src/index.ts\n';
       }
       if (includesCommand(argsArr, 'rev-parse')) {

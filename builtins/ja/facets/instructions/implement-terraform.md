@@ -12,7 +12,7 @@ Workflow Contextに示されたReport Directory内のファイルのみ参照し
 - 既存リソースの `lifecycle { prevent_destroy = true }` を無断で削除しない
 - 新しい variable を追加する場合は `type` と `description` を必ず付ける
 
-**Scope出力契約（実装開始時に作成）:**
+**変更範囲の記録（実装開始時に作成）:**
 ```markdown
 # 変更スコープ宣言
 
@@ -32,7 +32,7 @@ Small / Medium / Large
 - {影響するモジュールやリソース}
 ```
 
-**Decisions出力契約（実装完了時、決定がある場合のみ）:**
+**決定内容の記録（実装完了時、決定がある場合のみ）:**
 ```markdown
 # 決定ログ
 

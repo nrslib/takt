@@ -20,6 +20,13 @@ export function resolveAgentErrorMessage(
   return fallbackMessage;
 }
 
+export function sumRetryCounts(
+  responses: readonly Pick<AgentResponse, 'retryCount'>[],
+): number | undefined {
+  const retryCount = responses.reduce((sum, response) => sum + (response.retryCount ?? 0), 0);
+  return retryCount > 0 ? retryCount : undefined;
+}
+
 export interface ProviderUsageSnapshot {
   inputTokens?: number;
   outputTokens?: number;
@@ -61,6 +68,8 @@ export interface AgentResponse {
   structuredOutput?: Record<string, unknown>;
   /** Provider-native usage payload normalized for TAKT observability */
   providerUsage?: ProviderUsageSnapshot;
+  /** Number of provider-level retry attempts performed before this response */
+  retryCount?: number;
   /**
    * Provider 内部のデバッグスナップショット（例: OpenCode の tool health
    * メトリクス）。閾値校正・調査用の観測データであり、制御フローには使わない。

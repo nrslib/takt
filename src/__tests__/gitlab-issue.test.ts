@@ -28,7 +28,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
-import { closeIssue, fetchIssue, listOpenIssues, createIssue } from '../infra/gitlab/issue.js';
+import { closeIssue, commentOnIssue, fetchIssue, listOpenIssues, createIssue } from '../infra/gitlab/issue.js';
 
 function withGlabApiResponse(body: unknown, nextPath?: string): string {
   const headers = [
@@ -42,6 +42,14 @@ function withGlabApiResponse(body: unknown, nextPath?: string): string {
 function getApiPath(call: unknown[]): string {
   const args = call[1] as string[];
   return args[2] as string;
+}
+
+function getMockCall(index: number): unknown[] {
+  const call = mockExecFileSync.mock.calls[index];
+  if (call === undefined) {
+    throw new Error(`Expected mock call at index ${index}`);
+  }
+  return call;
 }
 
 beforeEach(() => {
@@ -98,7 +106,7 @@ describe('fetchIssue', () => {
     fetchIssue(10, '/project');
 
     // Then
-    const call = mockExecFileSync.mock.calls[0];
+    const call = getMockCall(0);
     expect(call[0]).toBe('glab');
     expect(call[1]).toContain('issue');
     expect(call[1]).toContain('view');
@@ -121,9 +129,13 @@ describe('fetchIssue', () => {
     fetchIssue(10, '/project');
 
     // Then: second call should be glab api for notes
-    const notesCall = mockExecFileSync.mock.calls[1];
+    const notesCall = getMockCall(1);
     expect(notesCall[0]).toBe('glab');
-    expect(notesCall[1][0]).toBe('api');
+    const notesArgs = notesCall[1];
+    if (!Array.isArray(notesArgs)) {
+      throw new Error('Expected glab notes call arguments');
+    }
+    expect(notesArgs[0]).toBe('api');
     const apiPath = getApiPath(notesCall);
     expect(apiPath).toContain('issues/10/notes');
     expect(apiPath).toContain('per_page=100');
@@ -286,11 +298,11 @@ describe('fetchIssue', () => {
     fetchIssue(50, '/project');
 
     // Then: verify page=1 and page=2
-    const notesCall1 = mockExecFileSync.mock.calls[1];
+    const notesCall1 = getMockCall(1);
     const apiPath1 = getApiPath(notesCall1);
     expect(apiPath1).toContain('page=1');
 
-    const notesCall2 = mockExecFileSync.mock.calls[2];
+    const notesCall2 = getMockCall(2);
     const apiPath2 = getApiPath(notesCall2);
     expect(apiPath2).toContain('page=2');
   });
@@ -335,7 +347,7 @@ describe('fetchIssue', () => {
     fetchIssue(10, '/worktree/clone');
 
     // Then: glab issue view に cwd が渡される
-    const issueViewCall = mockExecFileSync.mock.calls[0];
+    const issueViewCall = getMockCall(0);
     expect(issueViewCall[2]).toHaveProperty('cwd', '/worktree/clone');
   });
 
@@ -355,7 +367,7 @@ describe('fetchIssue', () => {
     fetchIssue(10, '/worktree/clone');
 
     // Then: glab api（notes）にも cwd が渡される
-    const notesCall = mockExecFileSync.mock.calls[1];
+    const notesCall = getMockCall(1);
     expect(notesCall[2]).toHaveProperty('cwd', '/worktree/clone');
   });
 });
@@ -439,7 +451,7 @@ describe('createIssue', () => {
     createIssue({ title: 'Title', body: 'Body text' }, '/my/project');
 
     // Then
-    const createCall = mockExecFileSync.mock.calls[2];
+    const createCall = getMockCall(2);
     expect(createCall[1]).toContain('--description');
     expect(createCall[1]).not.toContain('--body');
   });
@@ -455,7 +467,7 @@ describe('createIssue', () => {
     createIssue({ title: 'Bug', body: 'Details', labels: ['bug', 'urgent'] }, '/my/project');
 
     // Then
-    const createCall = mockExecFileSync.mock.calls[2];
+    const createCall = getMockCall(2);
     expect(createCall[1]).toContain('--label');
   });
 
@@ -471,6 +483,9 @@ describe('createIssue', () => {
 
     // Then
     expect(result.success).toBe(false);
+    if (result.success !== false) {
+      throw new Error('Expected createIssue to return a failure result');
+    }
     expect(result.error).toBeDefined();
   });
 
@@ -486,6 +501,9 @@ describe('createIssue', () => {
 
     // Then
     expect(result.success).toBe(false);
+    if (result.success !== false) {
+      throw new Error('Expected createIssue to return a failure result');
+    }
     expect(result.error).toBeDefined();
   });
 
@@ -539,11 +557,11 @@ describe('createIssue', () => {
     createIssue({ title: 'Test', body: 'Body' }, '/specific/dir');
 
     // Then: first call is getRemoteHostname which receives cwd via execFileSync options
-    const remoteCall = mockExecFileSync.mock.calls[0];
+    const remoteCall = getMockCall(0);
     expect(remoteCall[2]).toHaveProperty('cwd', '/specific/dir');
 
     // Then: third call is glab issue create which also receives cwd
-    const createCall = mockExecFileSync.mock.calls[2];
+    const createCall = getMockCall(2);
     expect(createCall[2]).toHaveProperty('cwd', '/specific/dir');
   });
 });
@@ -582,6 +600,9 @@ describe('closeIssue', () => {
     const result = closeIssue(938, 'Compensation comment', '/my/project');
 
     expect(result.success).toBe(false);
+    if (result.success !== false) {
+      throw new Error('Expected closeIssue to return a failure result');
+    }
     expect(result.error).toBeDefined();
     expect(mockExecFileSync).toHaveBeenCalledTimes(3);
   });
@@ -595,6 +616,9 @@ describe('closeIssue', () => {
     const result = closeIssue(938, 'Compensation comment', '/my/project');
 
     expect(result.success).toBe(false);
+    if (result.success !== false) {
+      throw new Error('Expected closeIssue to return a failure result');
+    }
     expect(result.commentCreated).toBe(false);
     expect(result.error).toBeDefined();
     expect(mockExecFileSync).toHaveBeenCalledTimes(3);
@@ -610,6 +634,9 @@ describe('closeIssue', () => {
     const result = closeIssue(938, 'Compensation comment', '/my/project');
 
     expect(result.success).toBe(false);
+    if (result.success !== false) {
+      throw new Error('Expected closeIssue to return a failure result');
+    }
     expect(result.commentCreated).toBe(true);
     expect(result.error).toBeDefined();
     expect(mockExecFileSync).toHaveBeenCalledTimes(4);
@@ -627,5 +654,178 @@ describe('closeIssue', () => {
     for (const call of mockExecFileSync.mock.calls) {
       expect(call[2]).toHaveProperty('cwd', '/specific/dir');
     }
+  });
+});
+
+describe('commentOnIssue', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecFileSync.mockReset();
+  });
+
+  it('glab api にIssue IID・短い本文・cwdを渡して新規コメントを投稿する', () => {
+    const body = 'Created an execution issue: #999 (https://example.com/issues/999)';
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('');
+
+    const firstResult = commentOnIssue(999, body, '/project');
+    const secondResult = commentOnIssue(999, body, '/project');
+
+    expect(firstResult).toEqual({ success: true });
+    expect(secondResult).toEqual({ success: true });
+    const commentCalls = mockExecFileSync.mock.calls.filter(([command, args]) =>
+      command === 'glab' && Array.isArray(args) && args[0] === 'api' && args[1] === 'projects/:id/issues/999/notes');
+    expect(commentCalls).toHaveLength(2);
+    for (const call of commentCalls) {
+      expect(call[1]).toEqual([
+        'api',
+        'projects/:id/issues/999/notes',
+        '--method',
+        'POST',
+        '--field',
+        'body=@-',
+      ]);
+      expect(call[2]).toEqual(expect.objectContaining({ cwd: '/project', input: body }));
+      expect(JSON.stringify(call[1])).not.toContain(body);
+    }
+  });
+
+  it('コメント投稿コマンドの失敗理由を返し、再試行しない', () => {
+    const body = 'secret task instructions';
+    const error = Object.assign(new Error(`Command failed: ${body}`), {
+      stderr: 'permission denied',
+    });
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockImplementationOnce(() => { throw error; });
+
+    const result = commentOnIssue(999, body, '/project');
+
+    expect(result).toMatchObject({
+      success: false,
+      error: 'permission denied',
+    });
+    if (result.success !== false) {
+      throw new Error('Expected commentOnIssue to return a failure result');
+    }
+    expect(result.error).not.toContain(body);
+    expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(body);
+    const commentCalls = mockExecFileSync.mock.calls.filter(([command, args]) =>
+      command === 'glab' && Array.isArray(args) && args[0] === 'api' && args[1] === 'projects/:id/issues/999/notes');
+    expect(commentCalls).toHaveLength(1);
+    expect(JSON.stringify(commentCalls[0]?.[1])).not.toContain(body);
+  });
+
+  it.each([
+    { label: '完全一致', stderr: (body: string) => `permission denied: ${body}` },
+    { label: 'JSONエスケープ', stderr: (body: string) => `permission denied: ${JSON.stringify(body)}` },
+    { label: '部分引用', stderr: (body: string) => `permission denied: "${body.slice(0, 18)}..."` },
+    { label: '切り詰めた本文', stderr: (body: string) => `permission denied: ${body.slice(0, -8)}` },
+  ])('stderrに$labelの本文が含まれる場合は本文を返さない', ({ stderr }) => {
+    const body = 'secret task "instructions"\nwith private details';
+    const error = Object.assign(new Error('command failed'), { stderr: stderr(body) });
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockImplementationOnce(() => { throw error; });
+
+    const result = commentOnIssue(999, body, '/project');
+
+    expect(result).toEqual({ success: false, error: 'permission denied' });
+    expect(mockLogError).toHaveBeenCalledWith('Issue comment failed', {
+      issueNumber: 999,
+      error: 'permission denied',
+    });
+  });
+
+  it.each([
+    { label: '本文を含む認証ステータス', body: 'ordinary task text', stderr: 'HTTP 401: ordinary task text', expected: 'authentication failed' },
+    { label: '404', body: 'private note', stderr: 'HTTP 404: issue not found', expected: 'issue not found' },
+    { label: '改行を含むネットワーク', body: 'private note', stderr: 'connection\nrefused: gitlab.com', expected: 'network error' },
+    { label: 'rate limit', body: 'private note', stderr: 'HTTP 403: API rate limit exceeded', expected: 'rate limit exceeded' },
+    { label: '単独のrate limit言及', body: 'private note', stderr: 'permission denied: Documented rate limit fallback behavior for issue 429.', expected: 'permission denied' },
+    { label: 'helper対象外の429形式', body: 'private note', stderr: 'permission denied: status: 429', expected: 'permission denied' },
+    { label: 'リモートサービス', body: 'private note', stderr: 'HTTP 503: Service Unavailable', expected: 'remote service error' },
+    { label: '裸の401を含むIssue解決エラー', body: 'private note', stderr: 'Could not resolve to an Issue with the number of 401.', expected: 'issue not found' },
+    { label: '8文字未満の部分引用', body: 'XissueY', stderr: 'not found: issue', expected: 'issue not found' },
+    { label: 'フォールバック文字列との衝突', body: 'XIssue comment command failedY', stderr: 'unexpected: Issue comment command failed', expected: 'Issue comment command failed' },
+    { label: '非英語メッセージ', body: 'private note', stderr: '認証が必要です', expected: 'Issue comment command failed' },
+    { label: '未知のエラー', body: 'private note', stderr: 'unexpected: private note details', expected: 'Issue comment command failed' },
+    { label: 'stderr上限超過', body: 'private note', stderr: `${'x'.repeat(20_000)} HTTP 401`, expected: 'Issue comment command failed' },
+  ])('stderrの$labelを固定理由へ分類し、stderrや本文を返さない', ({ body, stderr, expected }) => {
+    const error = Object.assign(new Error('command failed'), { stderr });
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockImplementationOnce(() => { throw error; });
+
+    const result = commentOnIssue(999, body, '/project');
+
+    expect(result).toEqual({ success: false, error: expected });
+    expect(mockLogError).toHaveBeenCalledWith('Issue comment failed', {
+      issueNumber: 999,
+      error: expected,
+    });
+    expect(JSON.stringify(result)).not.toContain(body);
+    expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(body);
+  });
+
+  it.each([
+    new Error('missing stderr'),
+    Object.assign(new Error('non-string stderr'), { stderr: 123 }),
+    Object.assign(new Error('blank stderr'), { stderr: '  \n  ' }),
+  ])('stderrが利用できない場合は固定の失敗理由を返す', (error) => {
+    mockExecFileSync.mockImplementation((command: unknown, args: unknown[]) => {
+      if (command === 'git') {
+        return 'https://gitlab.com/org/repo.git\n';
+      }
+      if (command === 'glab' && args[0] === 'api') {
+        throw error;
+      }
+      return '';
+    });
+
+    expect(commentOnIssue(999, 'comment', '/project')).toEqual({
+      success: false,
+      error: 'Issue comment command failed',
+    });
+  });
+
+  it('本文が空の場合も許可済みの失敗理由を返す', () => {
+    const error = Object.assign(new Error('command failed'), { stderr: ' permission denied \n' });
+    mockExecFileSync.mockImplementation((command: unknown, args: unknown[]) => {
+      if (command === 'git') {
+        return 'https://gitlab.com/org/repo.git\n';
+      }
+      if (command === 'glab' && args[0] === 'api') {
+        throw error;
+      }
+      return '';
+    });
+
+    expect(commentOnIssue(999, '', '/project')).toEqual({
+      success: false,
+      error: 'permission denied',
+    });
+  });
+
+  it('glab CLIが利用できない場合はコメントを投稿しない', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockImplementationOnce(() => { throw new Error('not authenticated'); })
+      .mockReturnValueOnce('glab version 1');
+
+    const result = commentOnIssue(999, 'comment', '/project');
+
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('not authenticated') });
+    const commentCalls = mockExecFileSync.mock.calls.filter(([command, args]) =>
+      command === 'glab' && Array.isArray(args) && args[0] === 'api' && args[1] === 'projects/:id/issues/999/notes');
+    expect(commentCalls).toHaveLength(0);
   });
 });

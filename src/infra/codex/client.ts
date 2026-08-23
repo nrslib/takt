@@ -300,6 +300,7 @@ export class CodexClient {
     sessionId: string | undefined,
     failure: AgentFailureDetail,
     options: CodexCallOptions,
+    retryCount: number,
   ): AgentResponse {
     const message = boundCodexFailureMessage(formatAgentFailure(failure), options, true);
     return {
@@ -310,6 +311,7 @@ export class CodexClient {
       timestamp: new Date(),
       sessionId,
       failureCategory: failure.category,
+      ...(retryCount > 0 ? { retryCount } : {}),
     };
   }
 
@@ -318,6 +320,7 @@ export class CodexClient {
     sessionId: string | undefined,
     message: string,
     options: CodexFailureMessageOptions,
+    retryCount: number,
   ): AgentResponse {
     const response = buildRateLimitedResponseFields('codex', 'sdk_error', message);
     return {
@@ -326,6 +329,7 @@ export class CodexClient {
       sessionId,
       ...response,
       error: boundCodexFailureMessage(response.error, options, true),
+      ...(retryCount > 0 ? { retryCount } : {}),
     };
   }
 
@@ -367,13 +371,14 @@ export class CodexClient {
       input = buildCodexInput(fullPrompt, options.imageAttachments);
     } catch (error) {
       const failure = createProviderErrorFailure(getErrorMessage(error));
-      const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options);
+      const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
       emitResult(options.onStream, false, errorResponse.error ?? errorResponse.content, threadId, failure.category);
       return errorResponse;
     }
     let standardRetryCount = 0;
     let timeoutRetryCount = 0;
     let refusalRetryCount = 0;
+    const totalRetryCount = (): number => standardRetryCount + timeoutRetryCount + refusalRetryCount;
     let codexSkillConfig: CodexOptions['config'] | undefined;
     try {
       codexSkillConfig = options.skills
@@ -387,7 +392,7 @@ export class CodexClient {
       const failure = createProviderErrorFailure(
         `Failed to discover Codex Skills: ${getErrorMessage(error)}`,
       );
-      const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options);
+      const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
       emitResult(
         options.onStream,
         false,
@@ -634,6 +639,7 @@ export class CodexClient {
               currentThreadId,
               failureMessage,
               options,
+              totalRetryCount(),
             );
             emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
             return rateLimitedResponse;
@@ -655,7 +661,13 @@ export class CodexClient {
           }
 
           const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);
-          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure, options);
+          const errorResponse = this.buildErrorResponse(
+            agentType,
+            currentThreadId,
+            finalFailure,
+            options,
+            totalRetryCount(),
+          );
           emitResult(
             options.onStream,
             false,
@@ -689,7 +701,13 @@ export class CodexClient {
           const failure = createProviderErrorFailure(
             `Codex safety filter refused the request after ${CODEX_REFUSAL_MAX_RETRIES + 1} attempts: ${trimmed.slice(0, 200)}`,
           );
-          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, failure, options);
+          const errorResponse = this.buildErrorResponse(
+            agentType,
+            currentThreadId,
+            failure,
+            options,
+            totalRetryCount(),
+          );
           emitResult(
             options.onStream,
             false,
@@ -713,6 +731,7 @@ export class CodexClient {
             usageMissing: true,
             reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
           },
+          ...(totalRetryCount() > 0 ? { retryCount: totalRetryCount() } : {}),
         };
         return response;
       } catch (error) {
@@ -733,6 +752,7 @@ export class CodexClient {
             currentThreadId,
             rawErrorMessage,
             options,
+            totalRetryCount(),
           );
           emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
           return rateLimitedResponse;
@@ -767,7 +787,13 @@ export class CodexClient {
         }
 
         const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);
-        const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure, options);
+        const errorResponse = this.buildErrorResponse(
+          agentType,
+          currentThreadId,
+          finalFailure,
+          options,
+          totalRetryCount(),
+        );
         emitResult(
           options.onStream,
           false,

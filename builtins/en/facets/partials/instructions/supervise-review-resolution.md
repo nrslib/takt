@@ -16,4 +16,4 @@ Judge a requirement fulfilled only after confirming the path by which the requir
 
 Do not request or inspect machine-gate execution status, results, or logs, including tests and builds, whether presented as quality-gate or requirement-fulfillment evidence. Their absence is not evidence that the work requires repair or external input.
 
-Record the result according to the supplied output contract.
+Record the decision, evidence, and any required repair targets completely.

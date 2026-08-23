@@ -11,6 +11,7 @@ import { createLogger } from '../../shared/utils/debug.js';
 import { SessionLogSpanProcessor, type SessionLogSpanProcessorOptions } from './sessionLogSpanProcessor.js';
 import { MonitorJsonMetricExporter, type MonitorJsonMetricExporterOptions } from './monitorJsonMetricExporter.js';
 import { UsageEventsSpanProcessor, type UsageEventsSpanProcessorOptions } from './usageEventsSpanProcessor.js';
+import { WorkflowMetricsSpanProcessor } from './workflowMetricsSpanProcessor.js';
 
 const require = createRequire(import.meta.url);
 const { version: TAKT_VERSION } = require('../../../package.json') as { version: string };
@@ -178,7 +179,12 @@ async function createSpanProcessorState(otlpConfig: OtlpExporterConfig): Promise
 }> {
   const sessionLogSpanProcessor = new SessionLogSpanProcessor();
   const usageEventsSpanProcessor = new UsageEventsSpanProcessor();
-  const spanProcessors: SpanProcessor[] = [sessionLogSpanProcessor, usageEventsSpanProcessor];
+  const workflowMetricsSpanProcessor = new WorkflowMetricsSpanProcessor();
+  const spanProcessors: SpanProcessor[] = [
+    sessionLogSpanProcessor,
+    usageEventsSpanProcessor,
+    workflowMetricsSpanProcessor,
+  ];
   if (otlpConfig.enabled) {
     spanProcessors.push(await createOtlpSpanProcessor(otlpConfig));
   }

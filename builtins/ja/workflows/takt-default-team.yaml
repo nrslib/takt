@@ -19,16 +19,43 @@ steps:
       fix_plan_report_format: scenario-based-fix-plan
       final_gate_instruction: scenario-based-supervise-review-resolution
       reviewer_suite: takt-development-review
-      review_policy_additions: [takt-testing]
-      review_policy: [coding, testing, takt-testing, review]
-      review_knowledge: [takt, architecture, unit-testing, e2e-testing]
+      review_policy_additions:
+        - takt-testing-review
+      review_policy:
+        - coding
+        - testing
+        - takt-testing-review
+        - review
+      review_knowledge:
+        - takt
+        - architecture
+        - unit-testing
+        - e2e-testing
       security_review_pool: takt-security-review-facets
-      security_review_knowledge_additions: [takt]
-      plan_knowledge: [takt, architecture, task-decomposition]
-      testing_policy: [coding, testing, takt-testing]
-      testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
-      development_policy: [coding, testing, takt-testing, ai-antipattern]
-      development_knowledge: [takt, architecture, implementation-semantics]
+      security_review_knowledge_additions:
+        - takt
+      plan_knowledge:
+        - takt
+        - architecture
+        - task-decomposition
+      testing_policy:
+        - coding
+        - testing
+        - takt-testing
+      testing_knowledge:
+        - takt
+        - architecture
+        - unit-testing
+        - e2e-testing
+      development_policy:
+        - coding
+        - testing
+        - takt-testing
+        - ai-antipattern
+      development_knowledge:
+        - takt
+        - architecture
+        - implementation-semantics
     rules:
       - condition: COMPLETE
         next: COMPLETE

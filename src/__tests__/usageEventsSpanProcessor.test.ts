@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { UsageEventsSpanProcessor } from '../infra/observability/usageEventsSpanProcessor.js';
+import { collectMetricPoints } from './observability-metrics-test-helpers.js';
 
 const tempDirs = new Set<string>();
 
@@ -32,6 +33,20 @@ afterEach(() => {
 });
 
 describe('UsageEventsSpanProcessor', () => {
+  it('does not record token metrics when no usage event writer is registered', async () => {
+    const points = await collectMetricPoints(() => {
+      const processor = new UsageEventsSpanProcessor();
+
+      processor.onEnd(makePhaseSpan('run-1') as unknown as ReadableSpan);
+    });
+
+    // Label-independent: the processor must emit no token metric points at all,
+    // regardless of attributes. Asserting on a single labelled point would pass
+    // even if the metric were emitted under a different label set.
+    expect(points.filter((point) => point.name === 'takt.token.input_tokens')).toEqual([]);
+    expect(points.filter((point) => point.name.startsWith('takt.token.'))).toEqual([]);
+  });
+
   it('routes phase usage records to the matching registered run', () => {
     const firstLogPath = createTempLogPath('first-usage-events.phase.jsonl');
     const secondLogPath = createTempLogPath('second-usage-events.phase.jsonl');

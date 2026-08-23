@@ -125,6 +125,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       status: 'done',
       content: 'API done',
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      retryCount: 2,
     });
     const resolveStepProviderModel = vi.fn().mockReturnValue({
       provider: 'opencode',
@@ -318,6 +319,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
     expect(result.response.status).toBe('done');
     expect(result.response.content).toContain('part-1');
+    expect(result.response.retryCount).toBe(2);
     expect(structuredCaller.decomposeTask).toHaveBeenCalledWith(
       'leader instruction',
       undefined,

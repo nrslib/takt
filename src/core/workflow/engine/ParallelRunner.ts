@@ -69,6 +69,7 @@ import {
 import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { formatCompletionRetryDiagnostic } from '../completion-retry.js';
+import { sumRetryCounts } from '../../models/response.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   MAX_AGENT_FAILURE_MESSAGE_BYTES,
@@ -174,6 +175,9 @@ export interface ParallelRunnerDeps {
     projectRoot: string;
     step: WorkflowStep;
     childProcessEnv?: Readonly<Record<string, string>>;
+    observabilityEnabled: boolean;
+    runId?: string;
+    workflowName?: string;
   }) => Promise<QualityGateRunResult>;
   readonly onPhaseStart?: (
     step: WorkflowStep,
@@ -902,6 +906,9 @@ export class ParallelRunner {
           projectRoot: this.deps.getCwd(),
           step: subStep,
           childProcessEnv: this.deps.engineOptions.childProcessEnv,
+          observabilityEnabled: this.deps.observabilityEnabled,
+          runId: this.deps.observabilityRunId,
+          workflowName: this.deps.getWorkflowName(),
         });
         if (!qualityGateResult.ok) {
           state.stepOutputs.set(subStep.name, qualityGateResult.response);
@@ -1107,6 +1114,7 @@ export class ParallelRunner {
     const qualityGateFailure = subResults.find((r) => (
       'qualityGateFailure' in r && r.qualityGateFailure === true
     ));
+    const retryCount = sumRetryCounts(subResults.map((result) => result.response));
     if (qualityGateFailure) {
       const failureResponse: AgentResponse = {
         persona: step.name,
@@ -1117,6 +1125,7 @@ export class ParallelRunner {
           qualityGateFailure.response.content,
         ].join('\n'),
         timestamp: new Date(),
+        ...(retryCount === undefined ? {} : { retryCount }),
       };
       return {
         response: failureResponse,
@@ -1177,6 +1186,7 @@ export class ParallelRunner {
       content: aggregatedContent,
       timestamp: new Date(),
       ...(match && { matchedRuleIndex: match.index, matchedRuleMethod: match.method }),
+      ...(retryCount === undefined ? {} : { retryCount }),
     };
 
     state.stepOutputs.set(step.name, aggregatedResponse);
@@ -1480,6 +1490,7 @@ export class ParallelRunner {
       ),
       MAX_AGENT_FAILURE_MESSAGE_BYTES,
     );
+    const retryCount = sumRetryCounts(options.subResults.map((result) => result.response));
     const response: AgentResponse = {
       persona: options.step.name,
       status: options.status,
@@ -1489,6 +1500,7 @@ export class ParallelRunner {
         ? { error: failureError || boundedContent }
         : {}),
       ...(failureCategory && { failureCategory }),
+      ...(retryCount === undefined ? {} : { retryCount }),
       ...(options.status === 'rate_limited'
         ? {
             ...(primaryFailure.response.errorKind === undefined

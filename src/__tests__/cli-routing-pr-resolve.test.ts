@@ -10,9 +10,6 @@ vi.mock('../shared/ui/index.js', () => ({
   withProgress: vi.fn(async (_start, _done, operation) => operation()),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
-}));
-
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({

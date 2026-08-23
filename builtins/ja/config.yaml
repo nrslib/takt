@@ -65,7 +65,7 @@ language: ja         # 表示言語: ja | en
 # インタラクティブモード
 # interactive_preview_steps: 3 # インタラクティブモードでの step プレビュー数 (0-10)
 # assistant:
-#   formal_spec: 'y/N'         # true/false は質問なし。Y/n または y/N は TTY で既定回答付き質問（未設定: y/N）。非 TTY は既定回答を採用。適用可能な要件に限り該当する記法を追加し、同じ要件を重複させず、両方の記法を強制しません。
+#   formal_spec: 'y/N'         # true/false は質問なし。Y/n または y/N は TTY で既定回答付き質問（未設定: y/N）。非 TTY は既定回答を採用。要件を両方の記法でも表現し、重複は避けず、表現できない場合にだけ省略します。
 # Gherkin のガイダンスは常時有効です。廃止済み assistant.gherkin は警告後に無視され、移行されません。
 
 # workflow step の provider routing（推奨）

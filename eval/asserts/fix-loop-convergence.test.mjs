@@ -48,10 +48,6 @@ const FIX_PLAN_OUTPUT_CONTRACT = readFileSync(
   new URL('../../builtins/ja/facets/partials/output-contracts/base-fix-plan.md', import.meta.url),
   'utf8',
 );
-const INVARIANT_RECURRENCE_RULE = readFileSync(
-  new URL('../../builtins/ja/workflows/rules/invariant-recurrence.md', import.meta.url),
-  'utf8',
-);
 const FIX_LOOP_CONFIG = readFileSync(
   new URL('../promptfooconfig.fix-loop-convergence.yaml', import.meta.url),
   'utf8',
@@ -99,21 +95,18 @@ test('fix-plan prompt includes the expanded output contract', async () => {
   assert.doesNotMatch(prompt, /\{\{include:output-contracts\/base-fix-plan\}\}/);
 });
 
-test('fix-loop prompt orders scenario, isolated workflow rule, instruction, and output contract', async () => {
+test('fix-loop prompt orders scenario, instruction, and output contract', async () => {
   const prompt = await buildFixLoopConvergencePrompt({
     vars: { role: 'verifier', scenario: 'E13a' },
   });
 
   const scenarioIndex = prompt.indexOf('### fix-plan.md（抜粋）');
-  const ruleIndex = prompt.indexOf('--- EVALUATION WORKFLOW RULE（invariant-recurrence のみ） ---');
   const instructionIndex = prompt.indexOf('--- INSTRUCTION（全文） ---');
   const outputContractIndex = prompt.indexOf('--- OUTPUT CONTRACT（全文） ---');
 
   assert.ok(scenarioIndex >= 0);
-  assert.ok(scenarioIndex < ruleIndex);
-  assert.ok(ruleIndex < instructionIndex);
+  assert.ok(scenarioIndex < instructionIndex);
   assert.ok(instructionIndex < outputContractIndex);
-  assert.ok(prompt.includes(INVARIANT_RECURRENCE_RULE));
 });
 
 test('E06 accepts each planned invariant exactly once in recurrence-record rows', () => {
@@ -167,7 +160,7 @@ test('E12 recognizes identifier/source key cells only for the matching identifie
   const sourceQualifiedNonActionableFinding = sourceQualifiedFinding.replace(
     '| ARCH-NEW-picker-L520 / review-resolution.md | FP-PICKER-ORDER |',
     '| ARCH-NEW-picker-L520 / review-resolution.md | FP-PICKER-ORDER |\n'
-      + '| INV-EMPTY-TERM / invariant-recurrence.md | FP-EMPTY |',
+      + '| INV-EMPTY-TERM / review-resolution.md | FP-EMPTY |',
   );
 
   assert.equal(run(sourceQualifiedFinding, 'E12').pass, true);

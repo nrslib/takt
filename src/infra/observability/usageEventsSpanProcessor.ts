@@ -5,7 +5,7 @@ import {
   mapSpanEndToPhaseUsageEvent,
   type PhaseUsageEventLogRecord,
 } from '../../core/logging/phaseUsageEvent.js';
-import type { SpanSnapshot } from '../../core/logging/span-to-ndjson-mapper.js';
+import { readableSpanSnapshot } from './readableSpanSnapshot.js';
 
 const log = createLogger('usage-events-span-processor');
 
@@ -47,7 +47,7 @@ export class UsageEventsSpanProcessor implements SpanProcessor {
     if (!options) {
       return;
     }
-    const record = mapSpanEndToPhaseUsageEvent(toSpanSnapshot(span), {
+    const record = mapSpanEndToPhaseUsageEvent(readableSpanSnapshot(span), {
       runId: options.runId,
       sessionId: options.sessionId,
     });
@@ -85,13 +85,4 @@ export class UsageEventsSpanProcessor implements SpanProcessor {
     this.registrations.clear();
     this.reportedWriteFailureRunIds.clear();
   }
-}
-
-function toSpanSnapshot(span: ReadableSpan): SpanSnapshot {
-  return {
-    name: span.name,
-    attributes: span.attributes,
-    startTime: span.startTime,
-    endTime: span.endTime,
-  };
 }

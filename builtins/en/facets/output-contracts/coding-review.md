@@ -7,7 +7,7 @@
 {Summarize the review result in 1-2 sentences}
 
 ## Contract Entry Check
-Fill this when the diff adds or changes IDs, names, metadata, config, environment variables, or output contracts.
+Fill this when the diff adds or changes IDs, names, metadata, config, environment variables, or externally visible output formats.
 
 | Entry / Path | Original Requirement | Implementation Evidence | Test Evidence | Judgment | Exception / Unverified Evidence |
 |--------------|----------------------|--------------------------|---------------|----------|---------------------------------|
@@ -15,18 +15,14 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 
 {{include:output-contracts/base-review-non-finding-concerns}}
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 ## Current Iteration Findings (new)
-| # | finding_id | family_tag | Severity | Location | Issue | Impact | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
-|---|------------|------------|----------|----------|-------|--------|---------------------|----------------------------------|----------------|
-| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {Issue} | {Impact} | {accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration for follow-up; not applicable for initial review; reject every other value} | {Independent evidence explaining why the initial review omitted this follow-up finding; not applicable for initial review} | {Fix suggestion} |
-
-For a follow-up finding, `Authorization Basis` must be exactly one of the four listed values; reject every other value. `Reason Absent from Initial Round` is an independent factual explanation, never another authorization value.
+| # | finding_id | Severity | Location | Issue | Impact | Evidence | Fix Suggestion |
+|---|------------|----------|----------|-------|--------|----------|----------------|
+| 1 | CODE-NEW-src-file-L42 | High / Medium / Low | `src/file.ts:42` | {Issue} | {Impact} | {file:line or reproducible evidence} | {Fix suggestion} |
 
 {{include:output-contracts/base-review-persists}}
 {{include:output-contracts/base-review-carry-over-findings}}
-| 1 | CODE-PERSIST-src-file-L77 | regression | `src/file.ts:77` | `src/file.ts:77` | {Unresolved issue} | {Fix suggestion} |
+| 1 | CODE-PERSIST-src-file-L77 | `src/file.ts:77` | `src/file.ts:77` | {Unresolved issue} | {Fix suggestion} |
 
 ## Resolved Findings (resolved)
 | finding_id | Original Expected Result | Resolution Evidence |
@@ -35,7 +31,7 @@ For a follow-up finding, `Authorization Basis` must be exactly one of the four l
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | CODE-REOPENED-src-file-L55 | bug | `review-resolution.md`: previously resolved | d | `src/file.ts:55` | {Reopened issue} | {Fix suggestion} |
+| 1 | CODE-REOPENED-src-file-L55 | Immediately preceding disposition: resolved | Reintroduced by the repair | `src/file.ts:55` | {Reopened issue} | {Fix suggestion} |
 
 {{include:output-contracts/base-review-reopened}}
 ## Verification Evidence
@@ -51,6 +47,6 @@ For a follow-up finding, `Authorization Basis` must be exactly one of the four l
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary plus Verification Evidence, Contract Entry Check, Re-scan Evidence (from the second iteration onward), and Non-Finding Concerns when needed
+- APPROVE: Summary plus Verification Evidence, Contract Entry Check, Impact-Path Evidence, and Non-Finding Concerns when needed
 - REJECT: Include every verified finding row and aggregate locations with the same cause
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

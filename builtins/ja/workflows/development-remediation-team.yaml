@@ -3,7 +3,8 @@ description: 裁定済みレビュー finding の fix-plan と検証を通常 ag
 subworkflow:
   callable: true
   visibility: internal
-  returns: [need_replan]
+  returns:
+    - need_replan
   params:
     fix_pool:
       type: facet_pool_ref
@@ -14,23 +15,36 @@ subworkflow:
     plan_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing, review]
+      default:
+        - coding
+        - testing
+        - review
     fix_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing]
+      default:
+        - coding
+        - testing
     verification_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing, review]
+      default:
+        - coding
+        - testing
+        - review
     fix_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, implementation-semantics]
+      default:
+        - architecture
+        - implementation-semantics
     verification_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, unit-testing, e2e-testing]
+      default:
+        - architecture
+        - unit-testing
+        - e2e-testing
     fix_plan_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -46,8 +60,12 @@ facet_pools:
     uses: takt-coding-facets
 initial_step: fix-plan
 loop_monitors:
-  - cycle: [fix-plan, fix]
-    ignore_steps: [fix-verifier, fix-retry]
+  - cycle:
+      - fix-plan
+      - fix
+    ignore_steps:
+      - fix-verifier
+      - fix-retry
     threshold: 4
     judge:
       persona: supervisor
@@ -61,7 +79,9 @@ loop_monitors:
           next: fix-plan
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
-  - cycle: [fix-retry, fix-verifier]
+  - cycle:
+      - fix-retry
+      - fix-verifier
     threshold: 4
     judge:
       persona: supervisor
@@ -93,8 +113,12 @@ steps:
       - condition: タスク全体の再計画が必要
         return: need_replan
   - name: fix
-    capabilities: [edit, enable-skills]
-    tags: [coding, coding-leader]
+    capabilities:
+      - edit
+      - enable-skills
+    tags:
+      - coding
+      - coding-leader
     uses: peer-review-fix
     with:
       fix_policy:
@@ -106,7 +130,9 @@ steps:
       max_concurrency: 2
       initial_max_parts: 2
       fail_on_part_error: false
-      part_tags: [coding, coding-part]
+      part_tags:
+        - coding
+        - coding-part
       part_persona: coder
       part_edit: true
       part_permission_mode: edit
@@ -127,13 +153,17 @@ steps:
     rules:
       - condition: verified
         next: COMPLETE
-      - condition: incomplete
-        next: fix-retry
-      - condition: plan_invalid
+      - condition: plan_invalid — 修正計画に必要な要素・状態・経路の漏れ、対象外の混入、または前提・境界・方法・証拠能力の不備がある。実装不足または証拠不足も同時にある場合を含む
         next: fix-plan
+      - condition: incomplete — 修正計画に不備はないが、計画済みの義務に実装不足または証拠不足がある
+        next: fix-retry
   - name: fix-retry
-    capabilities: [edit, enable-skills]
-    tags: [coding, coding-leader]
+    capabilities:
+      - edit
+      - enable-skills
+    tags:
+      - coding
+      - coding-leader
     uses: peer-review-fix
     with:
       fix_policy:
@@ -145,7 +175,9 @@ steps:
       max_concurrency: 2
       initial_max_parts: 2
       fail_on_part_error: false
-      part_tags: [coding, coding-part]
+      part_tags:
+        - coding
+        - coding-part
       part_persona: coder
       part_edit: true
       part_permission_mode: edit

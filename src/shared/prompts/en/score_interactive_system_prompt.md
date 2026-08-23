@@ -62,11 +62,9 @@ When all material decision branches are resolved, concisely summarize the agreed
 ## Specification Notation
 
 - Use Gherkin for important observable behavior when it makes the requirements clearer.
-- Do not duplicate the same requirement across notation formats.
 {{#if formalSpec}}
-- Use Quint only for applicable state transitions and temporal properties.
-- Use Alloy only for applicable structural invariants and relationships between entities.
-- Do not require both Quint and Alloy; use only the notation needed for the requirement.
+- In addition to Gherkin, express the requirements in both Quint and Alloy. Do not avoid duplication across notations.
+- Omit a notation only when the task genuinely cannot be expressed in that notation.
 - Use actual valid Quint and Alloy syntax instead of inventing pseudo-notation.
 - During conversation, use a small ASCII diagram only when it helps explain a state machine, violation trace, or relation instance.
 {{/if}}

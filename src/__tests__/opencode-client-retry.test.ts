@@ -240,6 +240,7 @@ describe('OpenCodeClient retry', () => {
     expect(result.status).toBe('rate_limited');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.content).toBe('');
+    expect(result.retryCount).toBeUndefined();
   });
 
   it('session.error が RateLimitError 名だけを示す場合は retry せず rate_limited を返す', async () => {
@@ -597,7 +598,7 @@ describe('OpenCodeClient retry', () => {
         event.type === 'thinking' && event.data.thinking === 'transient reasoning tail'
       ))).toHaveLength(1);
       expect(JSON.stringify(onStream.mock.calls)).not.toContain('transient-secret');
-
+      expect(result.retryCount).toBe(1);
       const records = readFileSync(providerLogger.filepath, 'utf8')
         .trim()
         .split('\n')
@@ -663,6 +664,7 @@ describe('OpenCodeClient retry', () => {
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('recovered');
+    expect(result.retryCount).toBe(1);
     expect(promptAsync).toHaveBeenCalledTimes(2);
   });
 
@@ -1331,5 +1333,6 @@ describe('OpenCodeClient retry', () => {
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('error');
     expect(result.content).toBe('OpenCode execution aborted');
+    expect(result.failureCategory).toBe('external_abort');
   });
 });

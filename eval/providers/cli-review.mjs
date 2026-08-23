@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -39,6 +40,20 @@ export function rewriteWorkingDirectoryPaths(prompt, workingDirectory) {
   return prompt.replaceAll(workingDirectory.sourceDirectory, workingDirectory.cwd);
 }
 
+export function resolveTimeoutMs(config) {
+  const timeoutMs = config.timeout_ms;
+  if (timeoutMs === undefined || timeoutMs === 0) return 0;
+  if (
+    typeof timeoutMs !== 'number'
+    || !Number.isInteger(timeoutMs)
+    || timeoutMs < 1
+    || timeoutMs > 2_147_483_647
+  ) {
+    throw new Error('timeout_ms must be 0 (disabled) or an integer from 1 through 2147483647');
+  }
+  return timeoutMs;
+}
+
 export async function runProcess(command, args, { cwd, input, timeoutMs, abortSignal }) {
   if (abortSignal?.aborted) {
     throw new Error(`${command} was aborted before it started`);
@@ -65,10 +80,12 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     aborted = true;
     stop(new Error(`${command} was aborted`));
   };
-  const timer = setTimeout(() => {
-    timedOut = true;
-    stop(new Error(`${command} timed out after ${timeoutMs}ms`));
-  }, timeoutMs);
+  const timer = timeoutMs > 0
+    ? setTimeout(() => {
+      timedOut = true;
+      stop(new Error(`${command} timed out after ${timeoutMs}ms`));
+    }, timeoutMs)
+    : undefined;
   abortSignal?.addEventListener('abort', abort, { once: true });
 
   child.stdout.on('data', (chunk) => stdout.push(chunk));
@@ -87,8 +104,9 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     if (aborted) throw new Error(`${command} was aborted`);
     if (timedOut) throw new Error(`${command} timed out after ${timeoutMs}ms: ${errorOutput}`);
     if (code !== 0) {
+      const diagnosticOutput = errorOutput.length > 0 ? errorOutput : output;
       throw new Error(
-        `${command} exited with code ${code}${signal ? ` after signal ${signal}` : ''}: ${errorOutput}`,
+        `${command} exited with code ${code}${signal ? ` after signal ${signal}` : ''}: ${diagnosticOutput}`,
       );
     }
     return output;
@@ -101,9 +119,99 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     }
     throw error;
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
     abortSignal?.removeEventListener('abort', abort);
   }
+}
+
+export async function runCliReview(config, prompt, { cwd, abortSignal }) {
+  const session = createCliReviewSession(config, { cwd, abortSignal });
+  return session.run(prompt);
+}
+
+function readCodexSessionId(output) {
+  for (const line of output.split(/\r?\n/)) {
+    if (line.length === 0) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event.type === 'thread.started' && typeof event.thread_id === 'string') {
+        return event.thread_id;
+      }
+    } catch {
+      // Codex JSONL may be accompanied by non-JSON diagnostics.
+    }
+  }
+  throw new Error('Codex did not report a session ID');
+}
+
+export function createCliReviewSession(config, { cwd, abortSignal }) {
+  const timeoutMs = resolveTimeoutMs(config);
+  if (config.cli === 'claude') {
+    const sessionId = randomUUID();
+    let started = false;
+    return {
+      run: async (prompt) => {
+        const args = [
+          '-p',
+          '--model', config.model,
+          '--allowed-tools', 'Read,Glob,Grep',
+          '--permission-mode', 'dontAsk',
+          '--setting-sources=project',
+          ...(started ? ['--resume', sessionId] : ['--session-id', sessionId]),
+        ];
+        const output = await runProcess(
+          'claude',
+          args,
+          { cwd, input: prompt, timeoutMs, abortSignal },
+        );
+        started = true;
+        return output;
+      },
+    };
+  }
+
+  if (config.cli === 'codex') {
+    let sessionId;
+    return {
+      run: async (prompt) => {
+        const tempDirectory = mkdtempSync(join(tmpdir(), 'takt-prompt-eval-'));
+        const outputPath = join(tempDirectory, 'output');
+        try {
+          const firstRun = sessionId === undefined;
+          const args = firstRun
+            ? [
+              'exec',
+              '-m', config.model,
+              '-s', 'read-only',
+              '--skip-git-repo-check',
+              '-c', `model_reasoning_effort=${config.reasoning_effort}`,
+              '--json',
+              '-o', outputPath,
+              '-',
+            ]
+            : [
+              'exec', 'resume', sessionId,
+              '-m', config.model,
+              '--skip-git-repo-check',
+              '-c', `model_reasoning_effort=${config.reasoning_effort}`,
+              '-o', outputPath,
+              '-',
+            ];
+          const processOutput = await runProcess(
+            'codex',
+            args,
+            { cwd, input: prompt, timeoutMs, abortSignal },
+          );
+          if (firstRun) sessionId = readCodexSessionId(processOutput);
+          return readFileSync(outputPath, 'utf8');
+        } finally {
+          rmSync(tempDirectory, { recursive: true, force: true });
+        }
+      },
+    };
+  }
+
+  throw new Error(`Unsupported CLI provider: ${config.cli}`);
 }
 
 export default class CliReviewProvider {
@@ -116,48 +224,21 @@ export default class CliReviewProvider {
   }
 
   async callApi(prompt, _context, options = {}) {
-    const workingDirectory = prepareWorkingDirectory(this.config);
-    const { cwd } = workingDirectory;
-    const isolatedPrompt = rewriteWorkingDirectoryPaths(prompt, workingDirectory);
-    const timeoutMs = this.config.timeout_ms ?? 900_000;
+    let workingDirectory;
 
     try {
-      if (this.config.cli === 'claude') {
-        const output = await runProcess('claude', [
-          '-p',
-          '--model', this.config.model,
-          '--allowed-tools', 'Read,Glob,Grep',
-          '--permission-mode', 'dontAsk',
-          '--setting-sources=project',
-          '--no-session-persistence',
-        ], { cwd, input: isolatedPrompt, timeoutMs, abortSignal: options.abortSignal });
-        return { output };
-      }
-
-      if (this.config.cli === 'codex') {
-        const tempDirectory = mkdtempSync(join(tmpdir(), 'takt-prompt-eval-'));
-        const outputPath = join(tempDirectory, 'output');
-        try {
-          await runProcess('codex', [
-            'exec',
-            '-m', this.config.model,
-            '-s', 'read-only',
-            '--skip-git-repo-check',
-            '-c', `model_reasoning_effort=${this.config.reasoning_effort}`,
-            '-o', outputPath,
-            '-',
-          ], { cwd, input: isolatedPrompt, timeoutMs, abortSignal: options.abortSignal });
-          return { output: readFileSync(outputPath, 'utf8') };
-        } finally {
-          rmSync(tempDirectory, { recursive: true, force: true });
-        }
-      }
-
-      return { error: `Unsupported CLI provider: ${this.config.cli}` };
+      workingDirectory = prepareWorkingDirectory(this.config);
+      const { cwd } = workingDirectory;
+      const isolatedPrompt = rewriteWorkingDirectoryPaths(prompt, workingDirectory);
+      const output = await runCliReview(this.config, isolatedPrompt, {
+        cwd,
+        abortSignal: options.abortSignal,
+      });
+      return { output };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     } finally {
-      workingDirectory.cleanup();
+      workingDirectory?.cleanup();
     }
   }
 }

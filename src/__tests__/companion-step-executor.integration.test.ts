@@ -716,9 +716,7 @@ describe('companion StepExecutor lifecycle', () => {
         structuredOutput: {
           complete: false,
           reason: 'consumer not checked',
-          missing_obligations: [{
-            kind: 'family_lifecycle_gap',
-            contract_family: 'companion',
+          missing_paths: [{
             path: 'src/a.ts',
             reason: 'retry the review',
           }],
@@ -732,7 +730,7 @@ describe('companion StepExecutor lifecycle', () => {
         structuredOutput: {
           complete: true,
           reason: 'closed',
-          missing_obligations: [],
+          missing_paths: [],
         },
       },
     ]);

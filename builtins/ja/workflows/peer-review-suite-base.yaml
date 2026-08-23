@@ -9,9 +9,9 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
-    - ref: existing-family-lookup
+    - ref: peer-review-scope
       position: before_instruction
-    - ref: invariant-recurrence
+    - ref: existing-finding-lookup
       position: before_instruction
     - ref: plain-terminology
       position: before_instruction
@@ -97,8 +97,18 @@ steps:
         - condition: any("needs_fix")
           return: needs_fix
       parallel:
-        arch-review: [{ condition: approved }, { condition: needs_fix }]
-        security-review: [{ condition: approved }, { condition: needs_fix }]
-        testing-review: [{ condition: approved }, { condition: needs_fix }]
-        coding-review: [{ condition: approved }, { condition: needs_fix }]
-        ai-antipattern-review-2nd: [{ condition: approved }, { condition: needs_fix }]
+        arch-review:
+          - condition: approved
+          - condition: needs_fix
+        security-review:
+          - condition: approved
+          - condition: needs_fix
+        testing-review:
+          - condition: approved
+          - condition: needs_fix
+        coding-review:
+          - condition: approved
+          - condition: needs_fix
+        ai-antipattern-review-2nd:
+          - condition: approved
+          - condition: needs_fix
