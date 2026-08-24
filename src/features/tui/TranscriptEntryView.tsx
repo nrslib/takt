@@ -12,6 +12,10 @@ export interface TranscriptEntryViewProps {
   readonly entry: TranscriptEntry;
 }
 
+export interface TranscriptViewProps {
+  readonly entries: readonly TranscriptEntry[];
+}
+
 /**
  * Every entry is one marker plus its text, with no speaker heading: the marker
  * column is what tells the two apart, and the text box that follows it starts at
@@ -32,13 +36,34 @@ export function TranscriptEntryView({ entry }: TranscriptEntryViewProps): ReactE
     );
   }
 
-  const isUser = entry.role === 'user';
+  if (entry.role === 'user') {
+    return (
+      <Box
+        width="100%"
+        paddingY={1}
+        marginBottom={1}
+        backgroundColor="gray"
+      >
+        <Text color="white">{USER_MARKER}</Text>
+        <Text color="white">{entry.content}</Text>
+      </Box>
+    );
+  }
+
   return (
     <Box marginBottom={1}>
-      <Text dimColor={isUser} color={isUser ? undefined : 'white'}>
-        {isUser ? USER_MARKER : ASSISTANT_MARKER}
-      </Text>
+      <Text color="white">{ASSISTANT_MARKER}</Text>
       <Text>{entry.content}</Text>
+    </Box>
+  );
+}
+
+export function TranscriptView({ entries }: TranscriptViewProps): ReactElement {
+  return (
+    <Box flexDirection="column">
+      {entries.map((entry, index) => (
+        <TranscriptEntryView key={index} entry={entry} />
+      ))}
     </Box>
   );
 }

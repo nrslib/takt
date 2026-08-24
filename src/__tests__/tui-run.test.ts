@@ -17,6 +17,7 @@ import type { ImageAttachmentStore } from '../features/interactive/imageAttachme
 
 const {
   mockRender,
+  mockRenderToString,
   mockCreateTuiConversation,
   mockDetermineWorkflow,
   mockSelectInteractiveMode,
@@ -31,6 +32,7 @@ const {
   storeOverride,
 } = vi.hoisted(() => ({
   mockRender: vi.fn(),
+  mockRenderToString: vi.fn(),
   mockCreateTuiConversation: vi.fn(),
   mockDetermineWorkflow: vi.fn(),
   mockSelectInteractiveMode: vi.fn(),
@@ -50,11 +52,12 @@ const mockCreateStore = (cwd: string): unknown => storeOverride.current?.(cwd);
 
 vi.mock('ink', () => ({
   render: (...args: unknown[]) => mockRender(...args),
+  renderToString: (...args: unknown[]) => mockRenderToString(...args),
   Box: () => null,
-  Static: () => null,
   Text: () => null,
   useInput: () => undefined,
   useStdout: () => ({ stdout: undefined }),
+  useWindowSize: () => ({ columns: 100, rows: 24 }),
 }));
 
 vi.mock('../features/tui/tuiConversation.js', () => ({
@@ -211,6 +214,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockRenderToString.mockReturnValue('final transcript');
   // clearAllMocks keeps implementations, and some cases install a throwing one.
   mockCreateTuiConversation.mockReset();
   // The run talks to the conversation between mounts — a resumed session, a
@@ -323,6 +327,35 @@ describe('runTui', () => {
   });
 
   describe('selectors between mounts', () => {
+    it('should hold the finalized transcript until Ink clears the live frame', async () => {
+      const written = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+      const entries = [
+        { role: 'user', content: 'question' },
+        { role: 'assistant', content: 'answer' },
+      ] as const;
+
+      const conversation = tree.conversationProps();
+      conversation.finalizeTranscript(entries, 14);
+
+      expect(mockRenderToString).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ props: { entries } }),
+        { columns: 14 },
+      );
+      expect(written.mock.calls.flat().map(String)).not.toContain('final transcript\n');
+
+      conversation.onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+
+      expect(written.mock.calls.flat().map(String)
+        .filter((chunk) => chunk === 'final transcript\n')).toHaveLength(1);
+    });
+
     it('should run the action selector with Ink unmounted and finish on its choice', async () => {
       const tree = scriptRender();
       mockSelectAction.mockImplementation(() => {

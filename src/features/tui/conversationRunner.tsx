@@ -9,6 +9,7 @@
  * a finished summary, and what to do with the decision.
  */
 
+import { renderToString } from 'ink';
 import { getLabel } from '../../shared/i18n/index.js';
 import { info } from '../../shared/ui/index.js';
 import type { PostSummaryAction } from '../interactive/interactive-summary.js';
@@ -21,7 +22,7 @@ import {
 } from './ConversationView.js';
 import type { EditorDraft } from './editorState.js';
 import { mountInk } from './inkMount.js';
-import type { TranscriptEntry } from './TranscriptEntryView.js';
+import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
 import type { InteractiveResultSource, TuiConversation } from './tuiConversation.js';
 
 export interface TuiConversationRunOptions {
@@ -70,6 +71,13 @@ export type TuiHandoffOutcome =
   | { readonly kind: 'continue'; readonly notice?: string }
   /** The run is over and this is what the caller asked for. */
   | { readonly kind: 'finished'; readonly result: InteractiveModeResult };
+
+function finalizeTranscript(entries: readonly TranscriptEntry[], columns: number): void {
+  if (entries.length === 0) {
+    return;
+  }
+  process.stdout.write(`${renderToString(<TranscriptView entries={entries} />, { columns })}\n`);
+}
 
 export async function runTuiConversation(
   options: TuiConversationRunOptions,
@@ -133,6 +141,7 @@ export async function runTuiConversation(
         // A caller that carries decisions out mounts this view again, so the
         // images it pasted have to stay available.
         residentSession={options.dispatch !== undefined}
+        finalizeTranscript={finalizeTranscript}
         onExit={(exit, carried) => {
           // A failure ends the run rather than the mount, so it is reported as
           // the mount's own failure and outranks anything the teardown hits.
@@ -148,7 +157,7 @@ export async function runTuiConversation(
     history = settled.carried.history;
     queue = settled.carried.queue;
     draft = settled.carried.draft;
-    // The transcript is already in the scrollback; printing it again doubles it.
+    // The previous mount finalized its transcript into the scrollback.
     initialEntries = [];
     autoSubmit = false;
 

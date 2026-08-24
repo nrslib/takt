@@ -1,9 +1,9 @@
-import { Box, Static, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useWindowSize } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import { PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
-import { TranscriptEntryView, type TranscriptEntry } from './TranscriptEntryView.js';
+import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
 import { toDisplayText, toSingleLineText } from './displayText.js';
 import {
   applyEditorKey,
@@ -99,6 +99,11 @@ export interface ConversationViewProps {
   readonly residentSession: boolean;
   /** Lines still waiting from the mount before this one. */
   readonly initialQueue: readonly string[];
+  /** Queues the confirmed history for output after Ink erases the live frame. */
+  readonly finalizeTranscript: (
+    entries: readonly TranscriptEntry[],
+    columns: number,
+  ) => void;
   /** Called once, with what the next mount has to carry on from. */
   readonly onExit: (exit: ConversationExit, carried: ConversationCarryOver) => void;
 }
@@ -130,11 +135,13 @@ export function ConversationView({
   modelLabel,
   residentSession,
   initialQueue,
+  finalizeTranscript,
   onExit,
 }: ConversationViewProps): ReactElement {
-  const [transcript, setTranscript] = useState<TranscriptEntry[]>(
+  const [transcript, setTranscriptView] = useState<readonly TranscriptEntry[]>(
     () => initialEntries.map((entry) => transcriptEntry(entry.role, entry.content)),
   );
+  const transcriptRef = useRef(transcript);
   // Ink can deliver several keypresses before React re-renders, so the ref is the
   // authoritative buffer that handlers read and edit; the state is its render mirror.
   const editorRef = useRef<EditorState>({
@@ -182,9 +189,11 @@ export function ConversationView({
   const finalExitRef = useRef(false);
   const cancellingRef = useRef(false);
 
-  const { stdout } = useStdout();
+  const { columns } = useWindowSize();
+  const columnsRef = useRef(columns);
+  columnsRef.current = columns;
   // Resolved once per render: the keys and the box must agree on the row width.
-  const contentWidth = resolvePromptContentWidth(stdout?.columns);
+  const contentWidth = resolvePromptContentWidth(columns);
   const allCompletions = useMemo(
     () => resolveSlashCompletions(editor.text, lang, conversation.commandAvailability),
     [conversation.commandAvailability, editor.text, lang],
@@ -205,12 +214,18 @@ export function ConversationView({
   const isFinalExit = (next: ConversationExit): boolean =>
     next.kind === 'failed' || (next.kind === 'result' && !residentSession);
 
-  const exit = useCallback((next: ConversationExit) => {
+  const exit = useCallback((requested: ConversationExit) => {
     if (exitedRef.current) {
       return;
     }
     exitedRef.current = true;
     exitReportedRef.current = true;
+    let next = requested;
+    try {
+      finalizeTranscript(transcriptRef.current, columnsRef.current);
+    } catch (error) {
+      next = { kind: 'failed', error };
+    }
     if (isFinalExit(next)) {
       // Sealed synchronously with the settle: a capture that finishes afterwards
       // must not write a file the caller has already cleaned up. A hand-off does
@@ -226,7 +241,7 @@ export function ConversationView({
       // has nothing to hand over.
       ...(text === '' ? {} : { draft: { text, cursor } }),
     });
-  }, [conversation, onExit]);
+  }, [conversation, finalizeTranscript, onExit]);
 
   // A teardown started outside this view must stop an in-flight submission from
   // touching state or leaving the provider call running.
@@ -259,6 +274,12 @@ export function ConversationView({
   const writeQueue = useCallback((next: readonly string[]) => {
     queueRef.current = next;
     setQueueView(next);
+  }, []);
+
+  const appendTranscript = useCallback((...entries: readonly TranscriptEntry[]) => {
+    const next = [...transcriptRef.current, ...entries];
+    transcriptRef.current = next;
+    setTranscriptView(next);
   }, []);
 
   const trackPendingWork = useCallback((work: PendingWork) => {
@@ -305,20 +326,17 @@ export function ConversationView({
       // taking images as paths, for one — belongs above the answer it came with.
       const notices = outcome.notices ?? [];
       if (notices.length > 0) {
-        setTranscript((entries) => [
-          ...entries,
-          ...notices.map((note) => transcriptEntry('system', note)),
-        ]);
+        appendTranscript(...notices.map((note) => transcriptEntry('system', note)));
       }
       switch (outcome.kind) {
         case 'assistant_response':
-          setTranscript((entries) => [...entries, transcriptEntry('assistant', outcome.content)]);
+          appendTranscript(transcriptEntry('assistant', outcome.content));
           drainQueueRef.current();
           return;
         case 'error':
           // Into the transcript, not the one-line notice: the next send clears
           // that row, and the queue may start the next send immediately.
-          setTranscript((entries) => [...entries, transcriptEntry('system', outcome.message)]);
+          appendTranscript(transcriptEntry('system', outcome.message));
           drainQueueRef.current();
           return;
         case 'task_instruction':
@@ -336,7 +354,7 @@ export function ConversationView({
       inFlightRef.current = null;
       exit({ kind: 'failed', error });
     }
-  }, [conversation, exit, submitMode]);
+  }, [appendTranscript, conversation, exit, submitMode]);
 
   /**
    * Opens a turn for `text`, leaving the prompt alone.
@@ -349,7 +367,7 @@ export function ConversationView({
     // The seeded auto-submit carries no note of its own; its user line is already
     // in the initial transcript, so an empty row would just be noise.
     if (text !== '') {
-      setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
+      appendTranscript(transcriptEntry('user', text));
     }
     setNotice(null);
     setStreamingRaw('');
@@ -363,7 +381,7 @@ export function ConversationView({
       isInstruction: submitMode === 'summarize' || isInstructionRequest(text),
     };
     trackPendingWork({ controller, completion: runSubmission(text, controller, submissionId) });
-  }, [runSubmission, submitMode, trackPendingWork]);
+  }, [appendTranscript, runSubmission, submitMode, trackPendingWork]);
 
   /**
    * Esc while a call is running. The call is aborted, and whatever was typed
@@ -386,17 +404,14 @@ export function ConversationView({
     setStreamingRaw('');
     setIsBusy(false);
     setNotice(null);
-    setTranscript((entries) => [
-      ...entries,
-      transcriptEntry('system', inFlight.isInstruction
-        ? ui.instructionInterrupted
-        : ui.responseInterrupted),
-    ]);
+    appendTranscript(transcriptEntry('system', inFlight.isInstruction
+      ? ui.instructionInterrupted
+      : ui.responseInterrupted));
     // Read after the note is recorded, so the transcript reads: interrupted,
     // then the queued line, then the answer to it.
     drainQueueRef.current();
     return true;
-  }, [ui.instructionInterrupted, ui.responseInterrupted]);
+  }, [appendTranscript, ui.instructionInterrupted, ui.responseInterrupted]);
 
   /**
    * Every exit drains the in-flight work first. A clipboard capture writes a
@@ -455,12 +470,12 @@ export function ConversationView({
       case 'resume_session':
         // Consumed here, so the command is on record and the picker opens over a
         // prompt that no longer shows it.
-        setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
+        appendTranscript(transcriptEntry('user', text));
         setNotice(null);
         void finishRun({ kind: 'resume_session' });
         return;
       case 'handoff':
-        setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
+        appendTranscript(transcriptEntry('user', text));
         setNotice(null);
         void finishRun({
           kind: 'handoff',
@@ -478,12 +493,12 @@ export function ConversationView({
         drainQueueRef.current();
         return;
       case 'notice':
-        setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
+        appendTranscript(transcriptEntry('user', text));
         setNotice(toSingleLineText(command.message));
         drainQueueRef.current();
         return;
     }
-  }, [captureClipboardImage, finishRun]);
+  }, [appendTranscript, captureClipboardImage, finishRun]);
 
   /** One queued or typed line, sent exactly as if it had just been typed. */
   const submitLine = useCallback((text: string) => {
@@ -709,11 +724,7 @@ export function ConversationView({
 
   return (
     <>
-      <Static items={transcript}>
-        {(entry, index) => (
-          <TranscriptEntryView key={index} entry={entry} />
-        )}
-      </Static>
+      <TranscriptView entries={transcript} />
       <Box flexDirection="column">
         {queue.length > 0 && (
           <Box flexDirection="column">
