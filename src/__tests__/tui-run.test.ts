@@ -361,6 +361,29 @@ describe('runTui', () => {
         .filter((chunk) => chunk === 'final transcript\n')).toHaveLength(1);
     });
 
+    it('should fail after unmount when writing the finalized transcript fails', async () => {
+      const failure = new Error('transcript write failed');
+      vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+        if (String(chunk) === 'final transcript\n') {
+          throw failure;
+        }
+        return true;
+      }) as typeof process.stdout.write);
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      const conversation = tree.conversationProps();
+      conversation.finalizeTranscript([{ role: 'user', content: 'question' }], 14);
+      conversation.onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+
+      await expect(run).rejects.toBe(failure);
+      expect(tree.unmount).toHaveBeenCalledOnce();
+    });
+
     it('should run the action selector with Ink unmounted and finish on its choice', async () => {
       const tree = scriptRender();
       mockSelectAction.mockImplementation(() => {

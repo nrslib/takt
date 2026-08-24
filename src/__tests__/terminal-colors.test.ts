@@ -238,6 +238,28 @@ describe('user message terminal colors', () => {
     });
   });
 
+  it('should replay a malformed OSC 11 response as unrelated input', async () => {
+    vi.useFakeTimers();
+    try {
+      const input = new FakeInput();
+      const output = new FakeOutput();
+      output.onWrite = () => {
+        input.emit('data', Buffer.from('\x1b]11;rgb:zz/zz/zz\x1b\\typed'));
+      };
+
+      const result = queryTerminalBackground(input, output);
+      await vi.advanceTimersByTimeAsync(TERMINAL_BACKGROUND_QUERY_TIMEOUT_MS);
+
+      await expect(result).resolves.toMatchObject({
+        colors: FALLBACK_USER_MESSAGE_COLORS,
+      });
+      expect(Buffer.concat(input.unshifted).toString())
+        .toBe('\x1b]11;rgb:zz/zz/zz\x1b\\typed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('should isolate a delayed response from the next Ink readable input', async () => {
     vi.useFakeTimers();
     try {

@@ -93,13 +93,16 @@ export async function runTuiConversation(
   // remount and for the final scrollback frame.
   const colorResolution = await resolveUserMessageColors();
   const userMessageColors = colorResolution.colors;
+  let pendingTranscriptOutput: string | undefined;
   const finalizeTranscript = (entries: readonly TranscriptEntry[], columns: number): void => {
     if (entries.length === 0) {
+      pendingTranscriptOutput = undefined;
       return;
     }
-    process.stdout.write(
-      `${renderToString(<TranscriptView entries={entries} userMessageColors={userMessageColors} />, { columns })}\n`,
-    );
+    pendingTranscriptOutput = `${renderToString(
+      <TranscriptView entries={entries} userMessageColors={userMessageColors} />,
+      { columns },
+    )}\n`;
   };
 
   /**
@@ -160,6 +163,12 @@ export async function runTuiConversation(
         }}
       />
     ), exitedEarly, colorResolution.delayedResponseGuard);
+
+    const transcriptOutput = pendingTranscriptOutput;
+    pendingTranscriptOutput = undefined;
+    if (transcriptOutput !== undefined) {
+      process.stdout.write(transcriptOutput);
+    }
 
     history = settled.carried.history;
     queue = settled.carried.queue;

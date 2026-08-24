@@ -1,5 +1,5 @@
 import { Box, Text } from 'ink';
-import type { ReactElement } from 'react';
+import { memo, type ReactElement } from 'react';
 import type { UserMessageColors } from './terminalColors.js';
 
 type TranscriptRole = 'system' | 'user' | 'assistant';
@@ -61,7 +61,7 @@ export function TranscriptEntryView({ entry, userMessageColors }: TranscriptEntr
   );
 }
 
-export function TranscriptView({ entries, userMessageColors }: TranscriptViewProps): ReactElement {
+function TranscriptViewComponent({ entries, userMessageColors }: TranscriptViewProps): ReactElement {
   return (
     <Box flexDirection="column">
       {entries.map((entry, index) => (
@@ -74,3 +74,6 @@ export function TranscriptView({ entries, userMessageColors }: TranscriptViewPro
     </Box>
   );
 }
+
+export const TranscriptView = memo(TranscriptViewComponent);
+TranscriptView.displayName = 'TranscriptView';
