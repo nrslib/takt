@@ -1,6 +1,6 @@
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
-import type { AgentWorkflowStep, PartDefinition, PartResult, WorkflowStep, AgentResponse, WorkflowResumePointEntry } from '../../models/types.js';
+import type { AgentWorkflowStep, NormalAgentWorkflowStep, PartDefinition, PartResult, WorkflowStep, AgentResponse, WorkflowResumePointEntry } from '../../models/types.js';
 import type { RuntimeStepResolution } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { buildAbortSignal } from './abort-signal.js';
@@ -21,6 +21,7 @@ import {
   ExplicitPartFailureError,
   OperationRecoveryError,
 } from '../operations/operation-recovery-error.js';
+import type { CompanionStepRuntime } from '../companion/step-runtime.js';
 
 export interface TeamLeaderPartObservability {
   readonly enabled: boolean;
@@ -34,9 +35,19 @@ export interface TeamLeaderPartObservability {
 export interface TeamLeaderPartExecutionOptions {
   readonly forceNewSession: boolean;
   readonly onDispatch?: RunAgentOptions['onDispatch'];
-  readonly composeOptions?: (options: RunAgentOptions) => RunAgentOptions;
   readonly deadlineSignal?: AbortSignal;
   readonly providerInfo: StepProviderInfo;
+  readonly createCompanionRuntime?: (
+    partStep: NormalAgentWorkflowStep,
+    abortSignal: AbortSignal,
+  ) => Promise<CompanionStepRuntime | undefined>;
+  readonly completeCompanionReview?: (input: {
+    readonly partStep: NormalAgentWorkflowStep;
+    readonly initialResponse: AgentResponse;
+    readonly agentOptions: RunAgentOptions;
+    readonly companionRuntime: CompanionStepRuntime;
+    readonly abortSignal: AbortSignal;
+  }) => Promise<AgentResponse>;
 }
 
 export function buildPartScopedSessionKey(
@@ -124,11 +135,13 @@ export async function runTeamLeaderPart(
       abortSignal: signal,
       onDispatch: executionOptions?.onDispatch,
     };
-  const options = executionOptions?.composeOptions?.(baseRunOptions) ?? baseRunOptions;
-
   try {
+    const companionRuntime = await executionOptions?.createCompanionRuntime?.(partStep, signal);
+    using activeCompanionRuntime = companionRuntime;
+    activeCompanionRuntime?.beginReviewAttempt();
+    const options = activeCompanionRuntime?.composeOptions(baseRunOptions) ?? baseRunOptions;
     const partInstruction = buildInstruction(partStep);
-    const response = await runWithPhaseSpan({
+    const initialResponse = await runWithPhaseSpan({
       enabled: observability.enabled,
       runId: observability.runId,
       workflowName: observability.workflowName,
@@ -163,6 +176,17 @@ export async function runTeamLeaderPart(
         ? { status: 'cancelled' }
         : undefined
     ));
+    const response = initialResponse.status === 'done'
+      && activeCompanionRuntime !== undefined
+      && executionOptions?.completeCompanionReview !== undefined
+      ? await executionOptions.completeCompanionReview({
+          partStep,
+          initialResponse,
+          agentOptions: options,
+          companionRuntime: activeCompanionRuntime,
+          abortSignal: signal,
+        })
+      : initialResponse;
     if (response.sessionId !== undefined) {
       updatePersonaSession(
         buildPartScopedSessionKey(partStep, {
@@ -186,6 +210,9 @@ export async function runTeamLeaderPart(
     }
     if (isTeamLeaderPartCancellation(error)) {
       throw error;
+    }
+    if (isTeamLeaderPartCancellation(signal.reason)) {
+      throw signal.reason;
     }
     return {
       ...buildTeamLeaderErrorPartResult(step, part, error, signal),

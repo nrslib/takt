@@ -195,7 +195,7 @@ describe('createPartStep', () => {
 
   });
 
-  it('does not copy dynamic facet or companion configuration to worker parts', () => {
+  it('copies companion configuration but not dynamic facets to worker parts', () => {
     const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
@@ -217,12 +217,12 @@ describe('createPartStep', () => {
     });
 
     expect(partStep).not.toHaveProperty('dynamicFacets');
-    expect(partStep).not.toHaveProperty('companion');
+    expect(partStep.companion).toEqual(step.companion);
   });
 });
 
 describe('createTeamLeaderPlanningStep', () => {
-  it('adds mailbox pull guidance to the planning prompt without adding it to worker parts', () => {
+  it('adds mailbox evidence guidance to both Team Leader and Companion-enabled worker prompts', () => {
     const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
@@ -254,7 +254,7 @@ describe('createTeamLeaderPlanningStep', () => {
     ).build();
 
     expect(planningPrompt).toContain('/tmp/takt-mailbox');
-    expect(partPrompt).not.toContain('/tmp/takt-mailbox');
+    expect(partPrompt).toContain('/tmp/takt-mailbox');
   });
 
   it('uses team leader persona identity for provider resolution', () => {

@@ -108,6 +108,56 @@ describe('runTeamLeaderExecution', () => {
     expect(result.partResults.some((r) => r.part.id === part3.id)).toBe(true);
   });
 
+  it('一つのpartの完了レビュー待ちでも別の並行partを実行して公開する', async () => {
+    const part1 = makePart('p1');
+    const part2 = makePart('p2');
+    let releasePart1Review: (() => void) | undefined;
+    const part1ReviewGate = new Promise<void>((resolve) => {
+      releasePart1Review = resolve;
+    });
+    let markPart2Completed: (() => void) | undefined;
+    const part2Completed = new Promise<void>((resolve) => {
+      markPart2Completed = resolve;
+    });
+    const publishedPartIds: string[] = [];
+    const runPart = vi.fn(async (part: PartDefinition) => {
+      if (part.id === part1.id) {
+        await part1ReviewGate;
+      } else {
+        markPart2Completed?.();
+      }
+      return makeResult(part);
+    });
+    const execution = runTeamLeaderExecution({
+      initialParts: [part1, part2],
+      maxConcurrency: 2,
+      runPart,
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'both parts are complete',
+        cancelPartIds: [],
+        parts: [],
+      }),
+      onPartCompleted: (result) => {
+        publishedPartIds.push(result.part.id);
+      },
+    });
+
+    await part2Completed;
+    expect(runPart).toHaveBeenCalledTimes(2);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(publishedPartIds).toEqual(['p2']);
+    releasePart1Review?.();
+
+    await expect(execution).resolves.toMatchObject({
+      partResults: expect.arrayContaining([
+        expect.objectContaining({ part: part1 }),
+        expect.objectContaining({ part: part2 }),
+      ]),
+    });
+    expect(publishedPartIds).toEqual(['p2', 'p1']);
+  });
+
   it('未完了パートがある間の空の追加計画ではリーダー評価を終了しない', async () => {
     const part1 = makePart('p1');
     const part2 = makePart('p2');
@@ -201,11 +251,67 @@ describe('runTeamLeaderExecution', () => {
     expect(requestMoreParts).toHaveBeenCalledTimes(2);
   });
 
+  it('全ての並行partを公開するまでTeam完了レビューを開始しない', async () => {
+    const part1 = makePart('p1');
+    const part2 = makePart('p2');
+    let releaseSecondPart: (() => void) | undefined;
+    const secondPartGate = new Promise<void>((resolve) => {
+      releaseSecondPart = resolve;
+    });
+    const publishedPartIds: string[] = [];
+    const requestMoreParts = vi.fn().mockResolvedValue({
+      done: true,
+      reasoning: 'all work completed',
+      cancelPartIds: [],
+      parts: [],
+    });
+    const reviewCompletion = vi.fn(async () => {
+      expect(publishedPartIds).toEqual(['p1', 'p2']);
+      return [];
+    });
+
+    const execution = runTeamLeaderExecution({
+      initialParts: [part1, part2],
+      maxConcurrency: 2,
+      runPart: async (part) => {
+        if (part.id === part2.id) {
+          await secondPartGate;
+        }
+        return makeResult(part);
+      },
+      requestMoreParts,
+      reviewCompletion,
+      onPartCompleted: (result) => {
+        publishedPartIds.push(result.part.id);
+      },
+    });
+
+    await vi.waitFor(() => expect(requestMoreParts).toHaveBeenCalledOnce());
+    expect(publishedPartIds).toEqual(['p1']);
+    expect(reviewCompletion).not.toHaveBeenCalled();
+
+    releaseSecondPart?.();
+    const result = await execution;
+
+    expect(result.partResults.map((partResult) => partResult.part.id)).toEqual(['p1', 'p2']);
+    expect(publishedPartIds).toEqual(['p1', 'p2']);
+    expect(reviewCompletion).toHaveBeenCalledOnce();
+    expect(reviewCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      partResults: [
+        expect.objectContaining({ part: part1 }),
+        expect.objectContaining({ part: part2 }),
+      ],
+    }));
+    expect(requestMoreParts).toHaveBeenCalledOnce();
+  });
+
   it('追加計画が失敗した場合は既存パートの結果で終了する', async () => {
     const parts = ['p1', 'p2'].map(makePart);
     const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
     const requestMoreParts = vi.fn().mockRejectedValue(new Error('feedback failed'));
     const onPlanningError = vi.fn();
+    const onCompletionPlanningFailure = vi.fn();
+    const reviewCompletion = vi.fn().mockResolvedValue([]);
 
     const result = await runTeamLeaderExecution({
       initialParts: parts,
@@ -213,10 +319,145 @@ describe('runTeamLeaderExecution', () => {
       runPart,
       requestMoreParts,
       onPlanningError,
+      onCompletionPlanningFailure,
+      reviewCompletion,
     });
 
     expect(result.partResults).toHaveLength(2);
     expect(onPlanningError).toHaveBeenCalledWith(expect.objectContaining({ message: 'feedback failed' }));
+    expect(reviewCompletion).toHaveBeenCalledOnce();
+    expect(onCompletionPlanningFailure).not.toHaveBeenCalled();
+  });
+
+  it('追加計画の失敗後に Team 指摘を検出した場合は completion failure を確定する', async () => {
+    const part = makePart('p1');
+    const planningError = new Error('feedback failed');
+    const requestMoreParts = vi.fn().mockRejectedValue(planningError);
+    const reviewCompletion = vi.fn().mockResolvedValue([{
+      companion: 'reviewer',
+      reviewedAt: '2026-08-23T00:00:00.000Z',
+      reviewedDigest: 'digest-1',
+      severity: 'must_fix',
+      file: 'src/a.ts',
+      line: 1,
+      finding: 'Fix the value.',
+    }]);
+    const onCompletionPlanningFailure = vi.fn();
+
+    const result = await runTeamLeaderExecution({
+      initialParts: [part],
+      maxConcurrency: 1,
+      runPart: vi.fn(async () => makeResult(part)),
+      requestMoreParts,
+      reviewCompletion,
+      onCompletionPlanningFailure,
+    });
+
+    expect(result.partResults).toHaveLength(1);
+    expect(reviewCompletion).toHaveBeenCalledOnce();
+    expect(onCompletionPlanningFailure).toHaveBeenCalledWith(planningError);
+  });
+
+  it('Team 指摘の correction planning が失敗した場合は再レビューせず completion failure を確定する', async () => {
+    const part = makePart('p1');
+    const planningError = new Error('correction planning failed');
+    const requestMoreParts = vi.fn()
+      .mockResolvedValueOnce({
+        done: true,
+        reasoning: 'initially complete',
+        cancelPartIds: [],
+        parts: [],
+      })
+      .mockRejectedValueOnce(planningError);
+    const reviewCompletion = vi.fn().mockResolvedValue([{
+      companion: 'reviewer',
+      reviewedAt: '2026-08-23T00:00:00.000Z',
+      reviewedDigest: 'digest-1',
+      severity: 'must_fix',
+      file: 'src/a.ts',
+      line: 1,
+      finding: 'Fix the value.',
+    }]);
+    const onCompletionPlanningFailure = vi.fn();
+
+    const result = await runTeamLeaderExecution({
+      initialParts: [part],
+      maxConcurrency: 1,
+      runPart: vi.fn(async () => makeResult(part)),
+      requestMoreParts,
+      reviewCompletion,
+      onCompletionPlanningFailure,
+    });
+
+    expect(result.partResults).toHaveLength(1);
+    expect(requestMoreParts).toHaveBeenCalledTimes(2);
+    expect(reviewCompletion).toHaveBeenCalledOnce();
+    expect(onCompletionPlanningFailure).toHaveBeenCalledWith(planningError);
+  });
+
+  it.each([
+    {
+      name: 'done を返す',
+      correctionFeedback: {
+        done: true,
+        reasoning: 'no correction required',
+        cancelPartIds: [],
+        parts: [],
+      },
+    },
+    {
+      name: '既存 part ID だけを返す',
+      correctionFeedback: {
+        done: false,
+        reasoning: 'repeat the completed part',
+        cancelPartIds: [],
+        parts: [{ id: 'p1', title: 'part p1', instruction: 'run p1' }],
+      },
+    },
+  ])('Team 指摘後の correction planning が $name 場合は completion failure を確定する', async ({
+    correctionFeedback,
+  }) => {
+    const part = makePart('p1');
+    const requestMoreParts = vi.fn()
+      .mockResolvedValueOnce({
+        done: true,
+        reasoning: 'initially complete',
+        cancelPartIds: [],
+        parts: [],
+      })
+      .mockResolvedValueOnce(correctionFeedback);
+    const reviewCompletion = vi.fn().mockResolvedValue([{
+      companion: 'reviewer',
+      reviewedAt: '2026-08-23T00:00:00.000Z',
+      reviewedDigest: 'digest-1',
+      severity: 'must_fix',
+      file: 'src/a.ts',
+      line: 1,
+      finding: 'Fix the value.',
+    }]);
+    const onCompletionPlanningFailure = vi.fn();
+    const onPlanningDone = vi.fn();
+    const onPlanningNoNewParts = vi.fn();
+
+    const result = await runTeamLeaderExecution({
+      initialParts: [part],
+      maxConcurrency: 1,
+      runPart: vi.fn(async () => makeResult(part)),
+      requestMoreParts,
+      reviewCompletion,
+      onCompletionPlanningFailure,
+      onPlanningDone,
+      onPlanningNoNewParts,
+    });
+
+    expect(result.partResults).toHaveLength(1);
+    expect(requestMoreParts).toHaveBeenCalledTimes(2);
+    expect(reviewCompletion).toHaveBeenCalledOnce();
+    expect(onCompletionPlanningFailure).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Team Companion correction planning did not schedule a correction part',
+    }));
+    expect(onPlanningDone).not.toHaveBeenCalled();
+    expect(onPlanningNoNewParts).not.toHaveBeenCalled();
   });
 
   it('追加計画の provider stream parse failure は fallback と成功集約へ進まない', async () => {
@@ -244,6 +485,7 @@ describe('runTeamLeaderExecution', () => {
   it('重複IDだけ返された場合は追加せず終了する', async () => {
     const part1 = makePart('p1');
 
+    const completionEvents: string[] = [];
     const onPlanningNoNewParts = vi.fn();
     const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
     const requestMoreParts = vi.fn().mockResolvedValue({
@@ -258,12 +500,20 @@ describe('runTeamLeaderExecution', () => {
       maxConcurrency: 1,
       runPart,
       requestMoreParts,
-      onPlanningNoNewParts,
+      reviewCompletion: vi.fn(async () => {
+        completionEvents.push('review');
+        return [];
+      }),
+      onPlanningNoNewParts: () => {
+        completionEvents.push('planning-complete');
+        onPlanningNoNewParts();
+      },
     });
 
     expect(result.plannedParts.map((p) => p.id)).toEqual(['p1']);
     expect(result.partResults).toHaveLength(1);
     expect(onPlanningNoNewParts).toHaveBeenCalledTimes(1);
+    expect(completionEvents).toEqual(['review', 'planning-complete']);
   });
 
   it('latches a terminal part failure, aborts siblings, and waits for their settlement', async () => {

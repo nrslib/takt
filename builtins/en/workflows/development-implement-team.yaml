@@ -48,6 +48,8 @@ steps:
       - coding
       - coding-leader
     uses: development-core-implement
+    companion:
+      $param: implementation_companions
     with:
       development_policy:
         $param: development_policy

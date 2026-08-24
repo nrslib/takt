@@ -13,7 +13,7 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 | `simple` | A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included. |
 | `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
 | `takt-default` | Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and final check that requirements are met. |
-| `takt-default-team` | TAKT development workflow that preserves takt-default's planning, testing, review, and final-gate contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets or companions, as required by the current schema constraints. |
+| `takt-default-team` | TAKT development workflow that preserves takt-default's planning, testing, review, final-gate, and implementation Companion contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets. |
 | `review` | Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results. |
 | `review-fix` | Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check. |
 
@@ -41,7 +41,7 @@ Organized by category.
 |  | `audit-architecture` | Comprehensive architecture audit. Enumerate modules and boundaries, then produce an issue-ready report without modifying code |
 | 🏗️ Infrastructure | `terraform` | Terraform IaC development workflow (plan → implement → parallel review → final gate → fix → complete) |
 | 🎵 TAKT Development | `takt-default` | Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and final check that requirements are met. |
-|  | `takt-default-team` | TAKT development workflow that preserves takt-default's planning, testing, review, and final-gate contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets or companions, as required by the current schema constraints. |
+|  | `takt-default-team` | TAKT development workflow that preserves takt-default's planning, testing, review, final-gate, and implementation Companion contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets. |
 |  | `auto-improvement-loop` | Infinite orchestration loop that routes between open PR handling, issue-driven planning, and fresh improvement planning. |
 |  | `review-takt-default` | TAKT-focused multi-perspective review with AI antipattern and coding review |
 |  | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |

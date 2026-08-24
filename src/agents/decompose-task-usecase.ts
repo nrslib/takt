@@ -1,5 +1,6 @@
 import type {
   AgentResponse,
+  CompanionFinding,
   Language,
   PermissionMode,
   PartDefinition,
@@ -75,6 +76,7 @@ export type MorePartsOptions = Omit<
   'onPromptResolved'
 > & {
   cancellablePartIds: readonly string[];
+  companionFindings?: readonly CompanionFinding[];
 };
 
 export interface MorePartsResponse {
@@ -207,6 +209,7 @@ export async function requestMorePartsRawResponse(
     options.cancellablePartIds,
     options.inspectTools,
     options.inspectGuidance === true,
+    options.companionFindings,
   );
 
   let response: AgentResponse;

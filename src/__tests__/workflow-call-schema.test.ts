@@ -105,6 +105,28 @@ function createCallableCompanionWorkflow(): Record<string, unknown> {
   };
 }
 
+function createCallableTeamLeaderCompanionWorkflow(): Record<string, unknown> {
+  return {
+    name: 'callable-team-leader-companion',
+    subworkflow: {
+      callable: true,
+      params: {
+        implementation_companions: {
+          type: 'companion_ref[]',
+          default: [],
+        },
+      },
+    },
+    steps: [{
+      name: 'implement',
+      instruction: 'Implement',
+      team_leader: { max_concurrency: 2 },
+      companion: { $param: 'implementation_companions' },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
+  };
+}
+
 function createCallableScalarFacetWorkflow(): Record<string, unknown> {
   return {
     name: 'callable-scalar-facets',
@@ -449,6 +471,31 @@ describe('workflow_call schema', () => {
     });
     expect(implement?.rules).toHaveLength(1);
     expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
+  });
+
+  it('should expand companion_ref[] on a callable team leader step', () => {
+    const workflow = normalizeWorkflowConfig(
+      createCallableTeamLeaderCompanionWorkflow(),
+      '/tmp',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        callableArgs: {
+          implementation_companions: ['first-reviewer', 'second-reviewer'],
+        },
+      },
+    );
+    const implement = workflow.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.teamLeader).toEqual(expect.objectContaining({ maxConcurrency: 2 }));
+    expect(implement?.companion).toEqual({
+      fixed: ['first-reviewer', 'second-reviewer'],
+      pool: [],
+    });
   });
 
   it('should preserve a companion selection object through callable arg expansion', () => {

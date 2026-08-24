@@ -18,6 +18,7 @@ import {
   loadAllStandaloneWorkflows,
   loadAllStandaloneWorkflowsWithSources,
   loadWorkflow,
+  loadWorkflowFromFile,
   loadWorkflowByIdentifier,
   resolveWorkflowCallTarget,
   listStandaloneWorkflowEntries,
@@ -248,6 +249,49 @@ describe('loadWorkflowByIdentifier', () => {
         need_replan: 'ABORT',
         ABORT: 'ABORT',
       });
+    }
+  });
+
+  it('loads Team Leader Companion selections through the English and Japanese builtin wiring', () => {
+    const expectedSelection = {
+      fixed: ['ai-antipattern-review-companion', 'testing-review-companion'],
+      pool: [],
+      moderator: 'review-companion-moderator',
+    };
+
+    for (const language of ['en', 'ja'] as const) {
+      const projectDir = join(tempDir, language);
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
+
+      const implementation = loadWorkflowFromFile(
+        join(process.cwd(), 'builtins', language, 'workflows', 'development-implement-team.yaml'),
+        projectDir,
+        { callableArgs: { implementation_companions: ['ai-antipattern-review-companion'] } },
+      );
+      const remediation = loadWorkflowFromFile(
+        join(process.cwd(), 'builtins', language, 'workflows', 'development-remediation-team.yaml'),
+        projectDir,
+        { callableArgs: { fix_companions: ['testing-review-companion'] } },
+      );
+      const defaultTeam = loadWorkflowByIdentifier('takt-default-team', projectDir);
+
+      const implementationStep = findWorkflowStep(implementation, 'implement');
+      const fixStep = findWorkflowStep(remediation, 'fix');
+      const retryStep = findWorkflowStep(remediation, 'fix-retry');
+      const developStep = findWorkflowStep(defaultTeam!, 'develop');
+
+      expect(implementationStep.companion).toEqual({
+        fixed: ['ai-antipattern-review-companion'],
+        pool: [],
+      });
+      expect(fixStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
+      expect(retryStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
+      expect(developStep.kind).toBe('workflow_call');
+      expect(developStep.args).toEqual(expect.objectContaining({
+        implementation_companions: expectedSelection,
+      }));
+      expect(developStep.args).not.toHaveProperty('fix_companions');
     }
   });
 

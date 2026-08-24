@@ -101,7 +101,10 @@ import {
 } from './phase1-empty-recovery.js';
 import { buildCompanionInstructionContext } from '../companion/instruction-context.js';
 import { runCompanionFixLoop } from '../companion/fix-loop.js';
-import { CompanionStepRuntime } from '../companion/step-runtime.js';
+import {
+  CompanionStepRuntime,
+  type CompanionDiffBaseline,
+} from '../companion/step-runtime.js';
 import type { CompanionAgentPurpose } from '../companion/review-runner.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import { isAbortError } from '../companion/abort.js';
@@ -514,7 +517,7 @@ export class StepExecutor {
     return normalized;
   }
 
-  private async completeReviewerCompanion(input: {
+  async completeCompanionReview(input: {
     readonly eventStep: WorkflowStep;
     readonly executableStep: AgentWorkflowStep;
     readonly state: WorkflowState;
@@ -524,9 +527,22 @@ export class StepExecutor {
     readonly companionRuntime: CompanionStepRuntime | undefined;
     readonly providerInfo: StepProviderInfo;
     readonly nextSequence: () => number;
+    readonly abortSignal: AbortSignal | undefined;
+    readonly recordUsage?: (
+      success: boolean,
+      usage: AgentResponse['providerUsage'],
+    ) => void;
   }): Promise<AgentResponse> {
     if (input.companionRuntime === undefined) return input.initialResponse;
-    input.companionRuntime.beginReviewAttempt();
+    const recordUsage = input.recordUsage
+      ?? ((success: boolean, usage: AgentResponse['providerUsage']) => {
+        this.deps.recordSynthesizedAgentUsage(
+          input.eventStep.name,
+          input.providerInfo,
+          success,
+          usage,
+        );
+      });
     const fixLoop = await runCompanionFixLoop({
       initialResponse: input.initialResponse,
       phase1Options: input.agentOptions,
@@ -595,12 +611,7 @@ export class StepExecutor {
                   onPhaseComplete: this.deps.onPhaseComplete,
                 });
               }
-              this.deps.recordSynthesizedAgentUsage(
-                input.eventStep.name,
-                input.providerInfo,
-                false,
-                undefined,
-              );
+              recordUsage(false, undefined);
               throw error;
             }
           },
@@ -616,12 +627,7 @@ export class StepExecutor {
                 onPhaseComplete: this.deps.onPhaseComplete,
               });
             }
-            this.deps.recordSynthesizedAgentUsage(
-              input.eventStep.name,
-              input.providerInfo,
-              response.status === 'done',
-              response.providerUsage,
-            );
+            recordUsage(response.status === 'done', response.providerUsage);
           },
         });
         const finalAttempt = resolvePhaseAttempt(recovery.finalAttempt);
@@ -638,12 +644,7 @@ export class StepExecutor {
             attempt: finalAttempt,
             response: recovery.response,
             runtime: input.runtime,
-            recordUsage: (success, usage) => this.deps.recordSynthesizedAgentUsage(
-              input.eventStep.name,
-              input.providerInfo,
-              success,
-              usage,
-            ),
+            recordUsage,
           });
         }
         const normalized = this.normalizeStructuredOutputWithDiagnostics(
@@ -662,12 +663,7 @@ export class StepExecutor {
             response: { ...recovery.response, status: 'error', error: error.message },
             onPhaseComplete: this.deps.onPhaseComplete,
           });
-          this.deps.recordSynthesizedAgentUsage(
-            input.eventStep.name,
-            input.providerInfo,
-            false,
-            recovery.response.providerUsage,
-          );
+          recordUsage(false, recovery.response.providerUsage);
           throw error;
         }
         completeObservedPhase1Attempt({
@@ -677,15 +673,10 @@ export class StepExecutor {
           response: normalized.response,
           onPhaseComplete: this.deps.onPhaseComplete,
         });
-        this.deps.recordSynthesizedAgentUsage(
-          input.eventStep.name,
-          input.providerInfo,
-          normalized.response.status === 'done',
-          normalized.response.providerUsage,
-        );
+        recordUsage(normalized.response.status === 'done', normalized.response.providerUsage);
         return normalized.response;
       },
-      abortSignal: this.resolveAbortSignal(),
+      abortSignal: input.abortSignal,
     });
     if (fixLoop.followUpFailureReason === undefined) {
       const companionState = requireActiveCompanionState(input.state, input.eventStep.name);
@@ -746,9 +737,12 @@ export class StepExecutor {
     task: string,
     state: WorkflowState,
     abortSignal?: AbortSignal,
+    options?: {
+      readonly diffBaseline?: CompanionDiffBaseline;
+    },
   ): Promise<CompanionStepRuntime | undefined> {
     if (!this.deps.companionEnabled) {
-      if (step.companion !== undefined) {
+      if (step.companion !== undefined && step.engineSynthesized !== true) {
         emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
           step: step.name,
           phase: 'initial',
@@ -797,6 +791,7 @@ export class StepExecutor {
         providers: companionProviders,
         selectorProvider: this.deps.companionSelectorProvider,
         diffReader: companionDiffReader,
+        diffBaseline: options?.diffBaseline,
         reviewMode: this.deps.companionReviewMode,
         abortSignal: runtimeAbortSignal,
         buildProviderCallCallbacks: ({
@@ -848,6 +843,19 @@ export class StepExecutor {
       );
       return undefined;
     }
+  }
+
+  createCompanionDiffBaseline(abortSignal?: AbortSignal): CompanionDiffBaseline | undefined {
+    const diffReader = this.deps.companionDiffReader;
+    if (!this.deps.companionEnabled || diffReader === undefined) return undefined;
+    const cwd = this.deps.getCwd();
+    let baselinePromise: Promise<string> | undefined;
+    return {
+      resolve: () => {
+        baselinePromise ??= diffReader.readBaselineSha(cwd, abortSignal);
+        return baselinePromise;
+      },
+    };
   }
 
   private writeSnapshot(
@@ -1488,6 +1496,7 @@ export class StepExecutor {
       ...baseAgentOptions,
       ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
     };
+    activeCompanionRuntime?.beginReviewAttempt();
     const promptResolvedAttempts = new Set<number>();
     const phase1Result = await runPhase1WithEmptyRecovery({
       instruction: phase1Instruction,
@@ -1674,7 +1683,7 @@ export class StepExecutor {
     }
 
     let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
-    response = await this.completeReviewerCompanion({
+    response = await this.completeCompanionReview({
       eventStep: step,
       executableStep,
       state,
@@ -1684,6 +1693,7 @@ export class StepExecutor {
       companionRuntime: activeCompanionRuntime,
       providerInfo,
       nextSequence: () => reviewerPhaseExecutionSequence++,
+      abortSignal: this.resolveAbortSignal(),
     });
     if (response.sessionId !== undefined) {
       updatePersonaSession(sessionKey, response.sessionId);
@@ -1706,6 +1716,7 @@ export class StepExecutor {
         originalInstruction: phase1Instruction,
         initialResponse: response,
         executeRetry: async (retryInstruction, retrySessionId) => {
+          activeCompanionRuntime?.beginReviewAttempt();
           const observedAttempts = new Map<number, Phase1Attempt>();
           const resolveObservedAttempt = (attempt: Phase1Attempt): Phase1Attempt => {
             const existing = observedAttempts.get(attempt.sequence);
@@ -1779,7 +1790,7 @@ export class StepExecutor {
               usage,
             ),
           });
-          return this.completeReviewerCompanion({
+          return this.completeCompanionReview({
             eventStep: step,
             executableStep,
             state,
@@ -1789,6 +1800,7 @@ export class StepExecutor {
             companionRuntime: activeCompanionRuntime,
             providerInfo,
             nextSequence: () => reviewerPhaseExecutionSequence++,
+            abortSignal: this.resolveAbortSignal(),
           });
         },
       });
