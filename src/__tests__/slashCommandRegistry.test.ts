@@ -92,12 +92,18 @@ describe('filterSlashCommands', () => {
 
   it.each([
     ['/workflow', 'interactive.commands.workflow'],
-    ['/mode', 'interactive.commands.mode'],
+    ['/interaction', 'interactive.commands.mode'],
     ['/provider', 'interactive.commands.provider'],
     ['/model', 'interactive.commands.model'],
     ['/effort', 'interactive.commands.effort'],
   ])('should expose %s with its label', (command, labelKey) => {
     expect(filterSlashCommands(command, { enableSettingsCommands: true })).toEqual([{ command, labelKey }]);
+  });
+
+  it('should reserve the /mo prefix for /model after renaming the interaction command', () => {
+    expect(filterSlashCommands('/mo', { enableSettingsCommands: true })).toEqual([
+      { command: '/model', labelKey: 'interactive.commands.model' },
+    ]);
   });
 
   it('should expose /setup only when exec command availability enables it', () => {

@@ -467,7 +467,7 @@ describe('TUI local commands', () => {
 
   it.each([
     ['/workflow', { kind: 'handoff', id: 'workflow' }],
-    ['/mode', { kind: 'handoff', id: 'mode' }],
+    ['/interaction', { kind: 'handoff', id: 'mode' }],
     ['/provider', { kind: 'handoff', id: 'provider' }],
     ['/model custom-model', { kind: 'handoff', id: 'model', text: 'custom-model' }],
     ['/effort custom-effort', { kind: 'handoff', id: 'effort', text: 'custom-effort' }],
@@ -480,7 +480,7 @@ describe('TUI local commands', () => {
 
   it.each([
     '/workflow default',
-    '/mode persona',
+    '/interaction persona',
     '/model',
     '/effort',
   ])('should reject invalid setting command syntax locally: %s', (input) => {
@@ -495,9 +495,9 @@ describe('TUI local commands', () => {
 
   it.each([
     'please use /workflow later',
-    '`/mode`',
+    '`/interaction`',
     '> /workflow',
-    '```text\n/mode\n```',
+    '```text\n/interaction\n```',
     '```text\n/workflow',
   ])('should send non-command text containing a setting command to the provider: %s', async (input) => {
     const conversation = createConversation();

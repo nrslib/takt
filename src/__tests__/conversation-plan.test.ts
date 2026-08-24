@@ -133,7 +133,7 @@ describe('assistant conversation plan', () => {
     expect(strategy.allowedTools).toContain('Bash');
     expect(strategy.permissionMode).toBeUndefined();
     expect(strategy.introMessage).toContain('Interactive mode');
-    for (const command of ['/workflow', '/mode', '/provider', '/model <value>', '/effort <value>']) {
+    for (const command of ['/workflow', '/interaction', '/provider', '/model <value>', '/effort <value>']) {
       expect(strategy.introMessage).not.toContain(command);
     }
   });
@@ -148,7 +148,7 @@ describe('assistant conversation plan', () => {
     expect(strategy.allowedTools).not.toContain('Bash');
     expect(strategy.permissionMode).toBe('readonly');
     expect(strategy.introMessage).toContain('Grill Me');
-    for (const command of ['/workflow', '/mode', '/provider', '/model <value>', '/effort <value>']) {
+    for (const command of ['/workflow', '/interaction', '/provider', '/model <value>', '/effort <value>']) {
       expect(strategy.introMessage).not.toContain(command);
     }
   });

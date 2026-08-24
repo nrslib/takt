@@ -25,7 +25,7 @@ export const SlashCommand = {
   PasteImage: '/paste-image',
   Setup: '/setup',
   Workflow: '/workflow',
-  Mode: '/mode',
+  Mode: '/interaction',
   Provider: '/provider',
   Model: '/model',
   Effort: '/effort',

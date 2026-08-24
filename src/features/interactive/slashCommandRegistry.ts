@@ -18,7 +18,7 @@ const SLASH_COMMAND_LABEL_KEYS: Readonly<Record<SlashCommand, string>> = {
   '/paste-image': 'interactive.commands.pasteImage',
   '/setup': 'interactive.commands.setup',
   '/workflow': 'interactive.commands.workflow',
-  '/mode': 'interactive.commands.mode',
+  '/interaction': 'interactive.commands.mode',
   '/provider': 'interactive.commands.provider',
   '/model': 'interactive.commands.model',
   '/effort': 'interactive.commands.effort',

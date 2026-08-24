@@ -299,7 +299,7 @@ describe('runTui', () => {
     expect(mockDisplayAndClearSessionState).toHaveBeenCalledWith('/repo', 'en');
     expect(tree.mounts.count).toBe(1);
     const intro = tree.conversationProps().initialEntries.map((entry) => entry.content).join('\n');
-    for (const command of ['/workflow', '/mode', '/provider', '/model <value>', '/effort <value>']) {
+    for (const command of ['/workflow', '/interaction', '/provider', '/model <value>', '/effort <value>']) {
       expect(intro).toContain(command);
     }
 
@@ -418,7 +418,7 @@ describe('runTui', () => {
       mockSelectInteractiveMode.mockResolvedValue('grill-me');
       tree.conversationProps().onExit(
         { kind: 'handoff', id: 'mode' },
-        { history: ['/mode'], queue: [] },
+        { history: ['/interaction'], queue: [] },
       );
       await waitForMount(tree, 2);
 
@@ -517,7 +517,7 @@ describe('runTui', () => {
       mockSelectInteractiveMode.mockResolvedValue('persona');
       tree.conversationProps().onExit(
         { kind: 'handoff', id: 'mode' },
-        { history: ['/mode'], queue: [] },
+        { history: ['/interaction'], queue: [] },
       );
       await waitForMount(tree, 2);
 
@@ -961,7 +961,7 @@ describe('runTui', () => {
       mockSelectInteractiveMode.mockResolvedValue('grill-me');
       tree.conversationProps().onExit(
         { kind: 'handoff', id: 'mode' },
-        { history: ['/mode'], queue: [] },
+        { history: ['/interaction'], queue: [] },
       );
       await waitForMount(tree, 2);
       await tree.conversationProps().conversation.submit(submitInput());
@@ -1158,7 +1158,7 @@ describe('runTui', () => {
       mockSelectInteractiveMode.mockResolvedValue('grill-me');
       tree.conversationProps().onExit(
         { kind: 'handoff', id: 'mode' },
-        { history: ['/mode'], queue: [] },
+        { history: ['/interaction'], queue: [] },
       );
       await waitForMount(tree, 3);
 

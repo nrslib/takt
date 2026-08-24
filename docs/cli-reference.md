@@ -64,7 +64,7 @@ takt hello
 | Command | Effect |
 |---------|--------|
 | `/workflow` | Select another workflow. |
-| `/mode` | Select another interactive mode. |
+| `/interaction` | Select another interactive mode. |
 | `/provider` | Select another provider. |
 | `/model <value>` | Use a free-form model override for this conversation. |
 | `/effort <value>` | Use a free-form reasoning effort override for this conversation. |
@@ -82,7 +82,7 @@ Select workflow:
     Research/
     Cancel
 
-Interactive mode - describe your task. Commands: /go (create instruction & run), /accept (use latest assistant response), /workflow (change workflow), /mode (change mode), /provider (change provider), /model <value> (change model), /effort <value> (change reasoning effort), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)
+Interactive mode - describe your task. Commands: /go (create instruction & run), /accept (use latest assistant response), /workflow (change workflow), /interaction (change interactive mode), /provider (change provider), /model <value> (change model), /effort <value> (change reasoning effort), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)
 
 > I want to add user authentication feature
 

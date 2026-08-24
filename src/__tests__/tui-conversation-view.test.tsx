@@ -221,7 +221,7 @@ function renderConversation(
 describe('ConversationView', () => {
   it.each([
     ['/workflow', { kind: 'handoff', id: 'workflow' }],
-    ['/mode', { kind: 'handoff', id: 'mode' }],
+    ['/interaction', { kind: 'handoff', id: 'mode' }],
     ['/provider', { kind: 'handoff', id: 'provider' }],
     ['/model custom-model', { kind: 'handoff', id: 'model', text: 'custom-model' }],
     ['/effort custom-effort', { kind: 'handoff', id: 'effort', text: 'custom-effort' }],
@@ -2642,7 +2642,7 @@ describe('ConversationView', () => {
     expect(completionFrame).toContain('/go');
     expect(completionFrame).toContain('/cancel');
     expect(completionFrame).toContain('/workflow');
-    expect(completionFrame).toContain('/mode');
+    expect(completionFrame).toContain('/interaction');
     expect(completionFrame).toContain('/provider');
     expect(completionFrame).toContain('/model');
     expect(completionFrame).toContain('/effort');

@@ -15,7 +15,7 @@ interactive:
   ui:
     intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
     introGrillMe: "Grill Me mode - resolve requirement decisions one question at a time. The assistant will suggest /go when the requirements are ready. Commands: /go (create instruction & run), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
-    settingsCommands: "Session settings: /workflow (change workflow), /mode (change mode), /provider (change provider), /model <value> (change model), /effort <value> (change reasoning effort)"
+    settingsCommands: "Session settings: /workflow (change workflow), /interaction (change interactive mode), /provider (change provider), /model <value> (change model), /effort <value> (change reasoning effort)"
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your task first."
     thinking: "Assistant is thinking..."

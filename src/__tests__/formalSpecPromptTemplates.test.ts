@@ -33,18 +33,20 @@ function renderJapaneseSummaryPrompt(formalSpec: boolean): string {
 }
 
 describe('interactive formal specification prompt templates', () => {
-  it('selects English Gherkin guidance without formal notation guidance when disabled', () => {
+  it('selects English conditional Gherkin guidance without formal notation guidance when disabled', () => {
     const prompt = renderInteractivePrompt('en', false);
 
     expect(prompt).toContain('Gherkin');
+    expect(prompt).toContain('whose deliverable is not an implementation, do not use Gherkin');
     expect(prompt).not.toContain('Quint');
     expect(prompt).not.toContain('Alloy');
   });
 
-  it('selects Japanese Gherkin guidance without formal notation guidance when disabled', () => {
+  it('selects Japanese conditional Gherkin guidance without formal notation guidance when disabled', () => {
     const prompt = renderInteractivePrompt('ja', false);
 
     expect(prompt).toContain('Gherkin');
+    expect(prompt).toContain('実装を成果物としないタスクでは Gherkin を使用しない');
     expect(prompt).not.toContain('Quint');
     expect(prompt).not.toContain('Alloy');
   });
@@ -85,5 +87,6 @@ describe('Japanese task instruction formal specification prompt', () => {
     expect(prompt).toContain('Quint');
     expect(prompt).toContain('Alloy');
     expect(prompt).toContain('ASCII');
+    expect(prompt).toContain('非開発タスクには Gherkin を追加しない');
   });
 });

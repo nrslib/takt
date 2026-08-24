@@ -64,7 +64,7 @@ takt hello
 | 命令 | 效果 |
 |------|------|
 | `/workflow` | 选择另一个 workflow。 |
-| `/mode` | 选择另一个交互模式。 |
+| `/interaction` | 选择另一个交互模式。 |
 | `/provider` | 选择另一个 provider。 |
 | `/model <value>` | 为当前会话指定任意 model 名称。 |
 | `/effort <value>` | 为当前会话指定任意推理强度。 |
@@ -82,7 +82,7 @@ Select workflow:
     Research/
     Cancel
 
-交互模式 - 请描述任务。命令: /go（创建指令并运行）、/accept（采用最新助手回复）、/workflow（更改 workflow）、/mode（更改模式）、/provider（更改 provider）、/model <value>（更改 model）、/effort <value>（更改推理强度）、/paste-image（附加剪贴板图片）、/resume（加载 session）、/cancel（退出）
+交互模式 - 请描述任务。命令: /go（创建指令并运行）、/accept（采用最新助手回复）、/workflow（更改 workflow）、/interaction（更改交互模式）、/provider（更改 provider）、/model <value>（更改 model）、/effort <value>（更改推理强度）、/paste-image（附加剪贴板图片）、/resume（加载 session）、/cancel（退出）
 
 > I want to add user authentication feature
 

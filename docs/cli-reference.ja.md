@@ -64,7 +64,7 @@ takt hello
 | コマンド | 効果 |
 |----------|------|
 | `/workflow` | 別の workflow を選択する。 |
-| `/mode` | 別の interactive mode を選択する。 |
+| `/interaction` | 別の interactive mode を選択する。 |
 | `/provider` | 別の provider を選択する。 |
 | `/model <value>` | この会話で使う任意の model 名を指定する。 |
 | `/effort <value>` | この会話で使う任意の推論強度を指定する。 |
@@ -82,7 +82,7 @@ Select workflow:
     Research/
     Cancel
 
-対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /workflow（workflow変更）, /mode（モード変更）, /provider（provider変更）, /model <value>（model変更）, /effort <value>（推論強度変更）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）
+対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /workflow（workflow変更）, /interaction（対話モード変更）, /provider（provider変更）, /model <value>（model変更）, /effort <value>（推論強度変更）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）
 
 > I want to add user authentication feature
 

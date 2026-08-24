@@ -61,9 +61,11 @@ When all material decision branches are resolved, concisely summarize the agreed
 
 ## Specification Notation
 
-- Use Gherkin for important observable behavior when it makes the requirements clearer.
+- First determine whether the task is a development or implementation task whose deliverables create or change code, configuration, infrastructure, or tests.
+- For development or implementation tasks, use Gherkin for important observable behavior when it makes the requirements clearer.
+- For research, analysis, review, planning, documentation, operations, decision support, or any other task whose deliverable is not an implementation, do not use Gherkin.
 {{#if formalSpec}}
-- In addition to Gherkin, express the requirements in both Quint and Alloy. Do not avoid duplication across notations.
+- Express the requirements in both Quint and Alloy. For development or implementation tasks, write these in addition to Gherkin and do not avoid duplication across notations. Do not add Gherkin to non-development tasks.
 - Omit a notation only when the task genuinely cannot be expressed in that notation.
 - Use actual valid Quint and Alloy syntax instead of inventing pseudo-notation.
 - During conversation, use a small ASCII diagram only when it helps explain a state machine, violation trace, or relation instance.

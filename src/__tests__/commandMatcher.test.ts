@@ -15,7 +15,7 @@ import { SlashCommand } from '../shared/constants.js';
 describe('start-of-line detection', () => {
   it.each([
     ['/workflow', '/workflow', ''],
-    ['/mode', '/mode', ''],
+    ['/interaction', '/interaction', ''],
     ['/provider', '/provider', ''],
     ['/model custom-model', '/model', 'custom-model'],
     ['/effort custom-effort', '/effort', 'custom-effort'],
@@ -110,9 +110,9 @@ describe('end-of-line detection', () => {
 describe('middle-of-text (not recognized)', () => {
   it.each([
     'please use /workflow later',
-    '`/mode`',
+    '`/interaction`',
     '> /workflow',
-    '```text\n/mode\n```',
+    '```text\n/interaction\n```',
     '```text\n/workflow',
   ])('should not treat structured or quoted text as a setting command: %s', (input) => {
     expect(matchSlashCommand(input, { enableSettingsCommands: true })).toBeNull();
@@ -157,7 +157,7 @@ describe('middle-of-text (not recognized)', () => {
 describe('edge cases', () => {
   it.each([
     '/workflow default',
-    '/mode persona',
+    '/interaction persona',
     '/model',
     '/effort',
   ])('should parse invalid setting syntax so the TUI can show a local notice: %s', (input) => {
@@ -166,10 +166,14 @@ describe('edge cases', () => {
 
   it('should leave setting commands as ordinary text outside the resident TUI', () => {
     expect(matchSlashCommand('/workflow')).toBeNull();
-    expect(matchSlashCommand('/mode')).toBeNull();
+    expect(matchSlashCommand('/interaction')).toBeNull();
     expect(matchSlashCommand('/provider')).toBeNull();
     expect(matchSlashCommand('/model custom-model')).toBeNull();
     expect(matchSlashCommand('/effort custom-effort')).toBeNull();
+  });
+
+  it('should not recognize the removed /mode command in the resident TUI', () => {
+    expect(matchSlashCommand('/mode', { enableSettingsCommands: true })).toBeNull();
   });
 
   it('should return null for empty input', () => {
