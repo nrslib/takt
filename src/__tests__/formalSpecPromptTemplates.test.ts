@@ -38,6 +38,8 @@ describe('interactive formal specification prompt templates', () => {
 
     expect(prompt).toContain('Gherkin');
     expect(prompt).toContain('whose deliverable is not an implementation, do not use Gherkin');
+    expect(prompt).toContain('where a misunderstanding would materially change the implementation result');
+    expect(prompt).toContain('do not duplicate the same acceptance clause in Markdown and Gherkin');
     expect(prompt).not.toContain('Quint');
     expect(prompt).not.toContain('Alloy');
   });
@@ -47,6 +49,8 @@ describe('interactive formal specification prompt templates', () => {
 
     expect(prompt).toContain('Gherkin');
     expect(prompt).toContain('実装を成果物としないタスクでは Gherkin を使用しない');
+    expect(prompt).toContain('解釈の誤りが実装結果を実質的に変える');
+    expect(prompt).toContain('同じ受け入れ条件を Markdown と Gherkin に重複して記述しない');
     expect(prompt).not.toContain('Quint');
     expect(prompt).not.toContain('Alloy');
   });
@@ -58,6 +62,7 @@ describe('interactive formal specification prompt templates', () => {
     expect(prompt).toContain('Quint');
     expect(prompt).toContain('Alloy');
     expect(prompt).toContain('ASCII');
+    expect(prompt).toContain('keep the prohibition on duplicating acceptance clauses between Markdown and Gherkin');
   });
 
   it('selects Japanese formal notation guidance when enabled', () => {
@@ -67,6 +72,7 @@ describe('interactive formal specification prompt templates', () => {
     expect(prompt).toContain('Quint');
     expect(prompt).toContain('Alloy');
     expect(prompt).toContain('ASCII');
+    expect(prompt).toContain('Markdown と Gherkin の重複禁止は維持する');
   });
 });
 
@@ -88,5 +94,6 @@ describe('Japanese task instruction formal specification prompt', () => {
     expect(prompt).toContain('Alloy');
     expect(prompt).toContain('ASCII');
     expect(prompt).toContain('非開発タスクには Gherkin を追加しない');
+    expect(prompt).toContain('Markdown と Gherkin の重複禁止は維持する');
   });
 });
