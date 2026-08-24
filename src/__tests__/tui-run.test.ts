@@ -731,6 +731,7 @@ describe('runTui', () => {
         role: 'system',
         content: 'Failed to switch conversation settings: rebuild failed',
       }]);
+      expect(tree.conversationProps().modelLabel()).toContain('mock/mock-model');
       expect(mockInfo).not.toHaveBeenCalled();
       expect(initial.resumeSession).not.toHaveBeenCalled();
 
@@ -844,7 +845,7 @@ describe('runTui', () => {
       );
       await waitForMount(tree, 3);
       const modelLabel = tree.conversationProps().modelLabel;
-      expect(modelLabel()).toContain('mock-model');
+      expect(modelLabel()).toContain('mock/custom-model');
       expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
       expect(mockResolveAssistantProviderModel).toHaveBeenCalledTimes(resolverCallsBeforeCommands);
       expect(first.submit).not.toHaveBeenCalled();
@@ -1100,6 +1101,8 @@ describe('runTui', () => {
       await waitForMount(tree, 2);
 
       expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+      expect(tree.conversationProps().modelLabel()).toContain('claude');
+      expect(tree.conversationProps().modelLabel()).not.toContain('mock-model');
       expect(recovered.submit).not.toHaveBeenCalled();
       expect(await tree.conversationProps().conversation.submit(submitInput())).toMatchObject({
         kind: 'assistant_response',
@@ -1120,6 +1123,55 @@ describe('runTui', () => {
         { history: [], queue: [] },
       );
       await run;
+    });
+
+    it('should keep the resolved provider model visible during a later mode handoff', async () => {
+      mockResolveAssistantProviderModel.mockImplementation((
+        _cwd: string,
+        overrides?: { provider?: string; model?: string },
+      ) => ({
+        runtimeManaged: false,
+        provider: overrides?.provider ?? 'mock',
+        model: overrides?.provider === 'claude'
+          ? 'claude-resolved-model'
+          : overrides?.model ?? 'mock-model',
+      }));
+      const initial = createConversationDouble();
+      const providerConversation = createConversationDouble();
+      mockCreateTuiConversation
+        .mockReturnValueOnce(initial)
+        .mockReturnValueOnce(providerConversation);
+      mockSelectInteractiveProvider.mockResolvedValue('claude');
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'provider' },
+        { history: ['/provider'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+      await tree.conversationProps().conversation.submit(submitInput());
+
+      expect(tree.conversationProps().modelLabel()).toContain('claude/claude-resolved-model');
+
+      mockSelectInteractiveMode.mockResolvedValue('grill-me');
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'mode' },
+        { history: ['/mode'], queue: [] },
+      );
+      await waitForMount(tree, 3);
+
+      expect(mockCreateTuiConversation).toHaveBeenCalledTimes(2);
+      const modelLabelDuringModeHandoff = tree.conversationProps().modelLabel();
+
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+
+      expect(modelLabelDuringModeHandoff).toContain('claude/claude-resolved-model');
     });
 
     it('should keep the current session when only effort changes', async () => {

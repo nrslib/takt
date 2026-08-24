@@ -87,6 +87,39 @@ describe('interactive system prompt', () => {
       workflowStructure: '1. plan',
     });
   });
+
+  it('should describe workflow agents without exposing their model identity', () => {
+    buildInteractiveSystemPrompt('en', {
+      grillMe: false,
+      workflowContext: {
+        ...WORKFLOW_CONTEXT,
+        stepPreviews: [{
+          name: 'plan',
+          personaDisplayName: 'Architect',
+          personaContent: 'You are an architect.',
+          instructionContent: 'Plan the feature.',
+          allowedTools: ['Read', 'Grep'],
+          canEdit: false,
+          provider: 'codex',
+          model: 'gpt-5.6-luna',
+          providerSource: 'step',
+          modelSource: 'step',
+          permissionMode: 'readonly',
+        }],
+      },
+    });
+
+    const stepDetails = templateVarsFor('score_interactive_system_prompt').stepDetails;
+    expect(stepDetails).toContain('**Provider:** codex');
+    expect(stepDetails).toContain('**Provider source:** step');
+    expect(stepDetails).toContain('**Permission:** readonly');
+    expect(stepDetails).toContain('**Persona:**');
+    expect(stepDetails).toContain('**Instruction:**');
+    expect(stepDetails).toContain('**Tools:** Read, Grep');
+    expect(stepDetails).not.toContain('**Model:**');
+    expect(stepDetails).not.toContain('**Model source:**');
+    expect(stepDetails).not.toContain('gpt-5.6-luna');
+  });
 });
 
 describe('assistant conversation plan', () => {

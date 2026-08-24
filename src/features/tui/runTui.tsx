@@ -284,6 +284,27 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       }
     }
 
+    function describeDisplayedSessionModel(): string {
+      if (!pendingRebuild) {
+        return describeSessionModel(currentPlan.ctx);
+      }
+      // Rebuild is lazy: show explicit setting overrides while the current plan remains active.
+      const pendingContext = {
+        ...currentPlan.ctx,
+        ...(temporaryProviderActive
+          && selectedProvider !== undefined
+          && selectedProvider !== currentPlan.ctx.providerType
+          ? {
+            providerType: selectedProvider,
+            // A provider-only handoff has not resolved a model yet; avoid showing the old one.
+            model: undefined,
+          }
+          : {}),
+        ...(temporaryModelActive ? { model: selectedModel } : {}),
+      };
+      return describeSessionModel(pendingContext);
+    }
+
     const conversationFacade: TuiConversation = {
       get lang() {
         return currentConversation.lang;
@@ -405,7 +426,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       submitMode: 'chat',
       autoSubmit: false,
       modelLabel: () => getLabel('tui.ui.model', options.lang, {
-        value: describeSessionModel(currentPlan.ctx),
+        value: describeDisplayedSessionModel(),
       }),
       chooseAction,
       continuePrompt: summaryUi.continuePrompt,
