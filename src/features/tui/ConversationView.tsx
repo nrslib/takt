@@ -195,7 +195,9 @@ export function ConversationView({
 
   const { columns } = useWindowSize();
   const columnsRef = useRef(columns);
-  columnsRef.current = columns;
+  useEffect(() => {
+    columnsRef.current = columns;
+  }, [columns]);
   // Resolved once per render: the keys and the box must agree on the row width.
   const contentWidth = resolvePromptContentWidth(columns);
   const allCompletions = useMemo(
