@@ -1,4 +1,4 @@
-import { SlashCommand } from '../../shared/constants.js';
+import { INTERACTIVE_SETTING_COMMANDS, SlashCommand } from '../../shared/constants.js';
 import type { CommandAvailability } from './slashCommandRegistry.js';
 
 const SLASH_COMMAND_VALUES = Object.values(SlashCommand);
@@ -9,6 +9,9 @@ function isCommandMatchEnabled(command: SlashCommand, availability?: CommandAvai
   }
   if (command === SlashCommand.Setup) {
     return availability?.enableSetupCommand === true;
+  }
+  if (INTERACTIVE_SETTING_COMMANDS.has(command)) {
+    return availability?.enableSettingsCommands === true;
   }
   return true;
 }
@@ -40,7 +43,9 @@ export const matchSlashCommand = (
   }
 
   const suffixMatch = SLASH_COMMAND_VALUES.find((cmd) => (
-    isCommandMatchEnabled(cmd, availability) && input.endsWith(` ${cmd}`)
+    !INTERACTIVE_SETTING_COMMANDS.has(cmd)
+    && isCommandMatchEnabled(cmd, availability)
+    && input.endsWith(` ${cmd}`)
   ));
   if (suffixMatch) {
     const precedingText = input.slice(0, -(suffixMatch.length + 1)).trim();

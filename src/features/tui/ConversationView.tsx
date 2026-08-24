@@ -89,8 +89,8 @@ export interface ConversationViewProps {
    * draft is never dropped by omission.
    */
   readonly initialDraft: EditorDraft | undefined;
-  /** Provider and model this session calls, shown under the prompt. */
-  readonly modelLabel: string;
+  /** Provider and model the current session calls, read again after a session rebuild. */
+  readonly modelLabel: () => string;
   /**
    * True when the caller carries a decision out and mounts this view again. The
    * image store then outlives the decision, and sealing it here would refuse
@@ -193,7 +193,9 @@ export function ConversationView({
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
   // The model name comes from config or `--model`, so it crosses the display
   // boundary like any other outside text before it reaches a fixed-height row.
-  const modelRow = useMemo(() => toSingleLineText(modelLabel), [modelLabel]);
+  // A submission can lazily replace the session before this component renders
+  // its response, so read the current value on every render.
+  const modelRow = toSingleLineText(modelLabel());
 
   /**
    * Every exit ends this mount, but not always the run: a hand-off gives the

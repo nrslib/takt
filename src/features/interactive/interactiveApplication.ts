@@ -12,6 +12,8 @@ export const DEFAULT_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSe
 export interface ConversationSummaryContext {
   workflowContext?: WorkflowContext;
   sourceContext?: string;
+  /** Whether a separate handoff transcript will be quoted in the user prompt. */
+  hasReferenceHistory?: boolean;
   /**
    * Set when a provider session is being continued but no local transcript
    * exists yet — resuming and summarizing straight away must still describe the
@@ -44,5 +46,6 @@ export function buildConversationSummaryPrompt(
     context?.sourceContext,
     promptContext,
     formalSpec,
+    context?.hasReferenceHistory === true,
   );
 }

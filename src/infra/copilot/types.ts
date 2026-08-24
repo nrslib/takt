@@ -2,7 +2,6 @@
  * Type definitions for GitHub Copilot CLI integration
  */
 
-import type { CopilotEffort } from '../../core/models/workflow-types.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
@@ -12,7 +11,7 @@ export interface CopilotCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
-  effort?: CopilotEffort;
+  effort?: string;
   systemPrompt?: string;
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;

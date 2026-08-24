@@ -102,7 +102,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 備考: 生の出力は消去済みフレームも含むため、画面に実際に残る内容は `@xterm/headless` に食わせた `visibleTranscript()` / `visibleScreen()` で検証する。
   - 手順（ユーザー行動/コマンド）:
     - PTY 上でフラグなしに `takt --workflow e2e/fixtures/workflows/mock-single-step.yaml` を起動し、モード選択が従来の readline セレクタ（`(default)` 表記）で出たあと、会話だけが Ink（枠付き入力ボックス）になることを確認する。
-    - モード選択に Assistant / Grill Me / Persona / Quiet / Passthrough が表示され、Cancel 行を選ぶと Ink を起動せず exit 0 になることを確認する。
+    - モード選択に Assistant / Grill Me / Persona が表示され、Cancel 行を選ぶと Ink を起動せず exit 0 になることを確認する。
     - `--workflow` を省略して起動し、従来のカテゴリ付きワークフローセレクタでカテゴリ → ワークフローと選べること、セレクタ上の Ctrl+C は従来どおり exit 130 になることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-conversation.json` でメッセージ送信 → 応答表示、ストリーミング中はマーカー `●` が出ず確定後に1回だけ出ること、`/cancel` で exit 0 を確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-go-handoff.json` で `/go` → アクション選択（Execute now）→ ワークフロー実行のあと、TUI が同じセッションで再開し実行結果（前回タスクの完了通知）が transcript に出ること、過去の会話が二重表示されないこと、`/cancel` で初めて exit 0 になることを確認する。

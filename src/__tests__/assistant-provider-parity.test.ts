@@ -95,4 +95,29 @@ describe('assistant provider resolution', () => {
     expect(mockResolveNonWorkflow).toHaveBeenCalledWith('/repo');
     expect(mockResolveAssistant).not.toHaveBeenCalled();
   });
+
+  it('should apply interactive provider and model overrides to a persona conversation', () => {
+    mockResolveAssistant.mockReturnValue({
+      runtimeManaged: false,
+      provider: 'claude',
+      model: 'custom-model',
+    });
+
+    const plan = createPersonaConversationPlan('/repo', {
+      personaContent: 'persona',
+      personaDisplayName: 'reviewer',
+      allowedTools: [],
+    }, {
+      provider: 'claude',
+      model: 'custom-model',
+    });
+
+    expect(plan.ctx.providerType).toBe('claude');
+    expect(plan.ctx.model).toBe('custom-model');
+    expect(mockResolveAssistant).toHaveBeenCalledWith('/repo', {
+      provider: 'claude',
+      model: 'custom-model',
+    });
+    expect(mockResolveNonWorkflow).not.toHaveBeenCalled();
+  });
 });

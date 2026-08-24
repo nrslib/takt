@@ -24,5 +24,18 @@ export const SlashCommand = {
   Resume: '/resume',
   PasteImage: '/paste-image',
   Setup: '/setup',
+  Workflow: '/workflow',
+  Mode: '/mode',
+  Provider: '/provider',
+  Model: '/model',
+  Effort: '/effort',
 } as const;
 export type SlashCommand = typeof SlashCommand[keyof typeof SlashCommand];
+
+export const INTERACTIVE_SETTING_COMMANDS: ReadonlySet<SlashCommand> = new Set([
+  SlashCommand.Workflow,
+  SlashCommand.Mode,
+  SlashCommand.Provider,
+  SlashCommand.Model,
+  SlashCommand.Effort,
+]);

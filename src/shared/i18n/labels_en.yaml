@@ -15,8 +15,7 @@ interactive:
   ui:
     intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
     introGrillMe: "Grill Me mode - resolve requirement decisions one question at a time. The assistant will suggest /go when the requirements are ready. Commands: /go (create instruction & run), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
-    introQuiet: "Quiet mode - describe your task. Instructions will be generated without further questions."
-    introPassthrough: "Passthrough mode - describe your task. Your input will be passed directly as the task."
+    settingsCommands: "Session settings: /workflow (change workflow), /mode (change mode), /provider (change provider), /model <value> (change model), /effort <value> (change reasoning effort)"
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your task first."
     thinking: "Assistant is thinking..."
@@ -44,10 +43,8 @@ interactive:
     grill-meDescription: "Resolve requirements one recommended question at a time"
     persona: "Persona"
     personaDescription: "Converse as the first agent's persona"
-    quiet: "Quiet"
-    quietDescription: "Generate instructions without asking questions"
-    passthrough: "Passthrough"
-    passthroughDescription: "Pass your input directly as task text"
+  providerSelection:
+    prompt: "Select provider:"
   runSelector:
     confirm: "Reference a previous run's results?"
     prompt: "Select a run to reference:"
@@ -76,6 +73,11 @@ interactive:
     resume: "Load a previous session"
     pasteImage: "Attach clipboard image"
     setup: "Configure exec agents"
+    workflow: "Switch workflow"
+    mode: "Switch interactive mode"
+    provider: "Switch provider"
+    model: "Use a model for this conversation"
+    effort: "Use reasoning effort for this conversation"
 
 # ===== Exec Mode UI =====
 exec:
@@ -278,7 +280,6 @@ tui:
     promptKeepHint: "Enter: confirm  empty Enter: keep the current value  Esc: cancel"
     promptPlaceholder: "Type your answer"
     model: "Model: {value}"
-    passthroughHint: "Enter: run as-is  Shift+Enter: newline  Ctrl+C: cancel"
   errors:
     requiresTty: "--tui requires an interactive terminal. Run takt from a TTY or drop --tui."
     exitedEarly: "The TUI exited before the task conversation finished."
@@ -290,4 +291,6 @@ tui:
     noConversation: "No conversation yet. Describe your task first."
     instructionFailed: "Failed to create the task instruction."
     unsupportedCommand: "That command is not available in the TUI."
+    settingNoArguments: "{command} does not accept an argument."
+    settingValueRequired: "{command} requires a value."
     imagePasteFailed: "The image could not be pasted."

@@ -217,4 +217,14 @@ describe('retry and replay availability', () => {
     const withoutOrder = await resolveCommand({}, SlashCommand.Replay);
     expect(withoutOrder).toMatchObject({ command: { kind: 'notice' } });
   });
+
+  it('should leave resident TUI setting commands disabled in task conversations', async () => {
+    const resolved = await resolveCommand({}, '/model custom-model') as {
+      command: unknown;
+      conversation: { isCommandLine: (text: string) => boolean };
+    };
+
+    expect(resolved.command).toBeNull();
+    expect(resolved.conversation.isCommandLine('/model custom-model')).toBe(false);
+  });
 });

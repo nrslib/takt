@@ -56,8 +56,6 @@ vi.mock('../features/pipeline/index.js', () => ({
 vi.mock('../features/interactive/index.js', () => ({
   interactiveMode: vi.fn(),
   selectInteractiveMode: vi.fn(),
-  passthroughMode: vi.fn(),
-  quietMode: vi.fn(),
   personaMode: vi.fn(),
   resolveLanguage: vi.fn(() => 'en'),
   dispatchConversationAction: vi.fn(async (
@@ -345,6 +343,30 @@ describe('TUI routing', () => {
     );
     // The store belongs to the open session, so the dispatch leaves it alone.
     expect(mockCleanupAttachments).not.toHaveBeenCalledWith(result);
+  });
+
+  it('should keep resident TUI workflow dispatch on the startup CLI overrides', async () => {
+    const startupOverrides = { provider: 'mock', model: 'workflow-model' };
+    mockResolveAgentOverrides.mockReturnValue(startupOverrides);
+    mockRunTui.mockImplementation(async (options: {
+      dispatch: (id: string, result: { action: 'execute'; task: string }) => Promise<void>;
+    }) => {
+      await options.dispatch('review', { action: 'execute', task: 'generated instruction' });
+      return {
+        kind: 'selected',
+        workflowId: 'review',
+        result: { action: 'cancel', task: '' },
+      };
+    });
+
+    await executeDefaultAction();
+
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+      '/test/cwd',
+      'generated instruction',
+      expect.objectContaining({ workflow: 'review' }),
+      startupOverrides,
+    );
   });
 
   it('should still read the task history only after the mode selector on the classic path', async () => {

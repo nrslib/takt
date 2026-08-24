@@ -129,7 +129,7 @@ export async function runTuiConversation(
         initialHistory={history}
         initialDraft={draft}
         initialQueue={queue}
-        modelLabel={options.modelLabel()}
+        modelLabel={options.modelLabel}
         // A caller that carries decisions out mounts this view again, so the
         // images it pasted have to stay available.
         residentSession={options.dispatch !== undefined}

@@ -13,7 +13,7 @@ import {
 
 function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   const claudeSandbox = options.providerOptions?.claude?.sandbox;
-  const effort = options.providerOptions?.claude?.effort;
+  const effort = options.effort ?? options.providerOptions?.claude?.effort;
   const skillsEnabled = options.internalAgentIsolation === 'strict-readonly'
     ? false
     : options.providerOptions?.claude?.skills?.enabled;

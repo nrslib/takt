@@ -46,7 +46,7 @@ takt hello
 ### Flow
 
 1. Select workflow
-2. Select interactive mode (assistant / grill-me / persona / quiet / passthrough)
+2. Select interactive mode (assistant / grill-me / persona)
 3. Refine task content through conversation with AI
 4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`)
 5. Execute (run workflow, create PR)
@@ -58,10 +58,18 @@ takt hello
 | `assistant` | Default. AI asks clarifying questions before generating task instructions. |
 | `grill-me` | Resolves material decision branches one recommended question at a time, then suggests `/go` when the requirements are ready. |
 | `persona` | Conversation with the first step's persona (uses its system prompt and tools). |
-| `quiet` | Generates task instructions without asking questions (best-effort). |
-| `passthrough` | Passes user input directly as task text without AI processing. |
 
-Workflows can set a default mode via the `interactive_mode` field in YAML.
+### Conversation Settings Commands
+
+| Command | Effect |
+|---------|--------|
+| `/workflow` | Select another workflow. |
+| `/mode` | Select another interactive mode. |
+| `/provider` | Select another provider. |
+| `/model <value>` | Use a free-form model override for this conversation. |
+| `/effort <value>` | Use a free-form reasoning effort override for this conversation. |
+
+Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. These conversation overrides do not affect workflow execution.
 
 ### Execution Example
 
@@ -74,7 +82,7 @@ Select workflow:
     Research/
     Cancel
 
-Interactive mode - Enter task content. Commands: /go (execute), /cancel (exit)
+Interactive mode - describe your task. Commands: /go (create instruction & run), /accept (use latest assistant response), /workflow (change workflow), /mode (change mode), /provider (change provider), /model <value> (change model), /effort <value> (change reasoning effort), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)
 
 > I want to add user authentication feature
 

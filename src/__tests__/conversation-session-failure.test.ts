@@ -22,14 +22,24 @@ import { makeProvider, makeSessionContext } from './test-helpers.js';
 
 const mockUpdatePersonaSession = vi.mocked(updatePersonaSession);
 
-function createSession(sessionId?: string) {
+function createSession(
+  sessionId?: string,
+  effort?: string,
+  disableSessionRetry?: boolean,
+  model?: string,
+  persistSession?: boolean,
+) {
   return createConversationSession({
     cwd: '/repo',
     outputMode: 'silent',
     formalSpec: false,
+    ...(persistSession === false ? { persistSession: false } : {}),
     ctx: makeSessionContext({
       provider: makeProvider({ setup: () => ({ call: mockCall }) }),
       sessionId,
+      effort,
+      ...(model === undefined ? {} : { model }),
+      ...(disableSessionRetry === true ? { disableSessionRetry: true } : {}),
     }),
     strategy: {
       systemPrompt: 'system',
@@ -355,6 +365,107 @@ describe('a turn the caller has already moved past', () => {
 });
 
 describe('a turn that produces no answer', () => {
+  it('should not automatically resend a failed message when interactive effort is set', async () => {
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive',
+      status: 'error',
+      content: '',
+      error: 'unsupported effort',
+      timestamp: new Date(),
+    });
+    const session = createSession('session-existing', 'custom-effort');
+
+    const failed = await session.handleUserMessage({ text: 'send once' });
+
+    expect(failed).toEqual({
+      kind: 'error',
+      code: 'provider_error',
+      message: 'unsupported effort',
+    });
+    expect(mockCall).toHaveBeenCalledTimes(1);
+    expect(mockCall.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      sessionId: 'session-existing',
+      effort: 'custom-effort',
+    }));
+
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive',
+      status: 'done',
+      content: 'manual retry succeeded',
+      sessionId: 'session-existing',
+      timestamp: new Date(),
+    });
+    const retried = await session.handleUserMessage({ text: 'send once' });
+
+    expect(retried).toMatchObject({
+      kind: 'assistant_response',
+      content: 'manual retry succeeded',
+    });
+    expect(mockCall).toHaveBeenCalledTimes(2);
+  });
+
+  it('should not automatically resend a failed message when an interactive model override is active', async () => {
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive',
+      status: 'error',
+      content: '',
+      error: 'unsupported model',
+      timestamp: new Date(),
+    });
+    const session = createSession('session-existing', undefined, true, 'custom-model');
+
+    const failed = await session.handleUserMessage({ text: 'send once' });
+
+    expect(failed).toEqual({
+      kind: 'error',
+      code: 'provider_error',
+      message: 'unsupported model',
+    });
+    expect(mockCall).toHaveBeenCalledTimes(1);
+    expect(mockCall.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      model: 'custom-model',
+      sessionId: 'session-existing',
+    }));
+
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive',
+      status: 'done',
+      content: 'manual retry succeeded',
+      sessionId: 'session-existing',
+      timestamp: new Date(),
+    });
+    const retried = await session.handleUserMessage({ text: 'send once' });
+
+    expect(retried).toMatchObject({
+      kind: 'assistant_response',
+      content: 'manual retry succeeded',
+    });
+    expect(mockCall).toHaveBeenCalledTimes(2);
+    expect(mockCall.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      model: 'custom-model',
+      sessionId: 'session-existing',
+    }));
+  });
+
+  it('should not persist a session created with a temporary provider or model', async () => {
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive',
+      status: 'done',
+      content: 'temporary answer',
+      sessionId: 'temporary-session',
+      timestamp: new Date(),
+    });
+    const session = createSession(undefined, undefined, true, 'custom-model', false);
+
+    const result = await session.handleUserMessage({ text: 'send once' });
+
+    expect(result).toMatchObject({
+      kind: 'assistant_response',
+      content: 'temporary answer',
+    });
+    expect(mockUpdatePersonaSession).not.toHaveBeenCalled();
+  });
+
   it('should report the provider error text when the provider fails', async () => {
     mockCall.mockResolvedValue({
       persona: 'interactive',

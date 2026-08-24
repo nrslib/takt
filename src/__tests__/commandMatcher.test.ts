@@ -13,6 +13,16 @@ import { SlashCommand } from '../shared/constants.js';
 // Start-of-line detection (existing behavior)
 // =================================================================
 describe('start-of-line detection', () => {
+  it.each([
+    ['/workflow', '/workflow', ''],
+    ['/mode', '/mode', ''],
+    ['/provider', '/provider', ''],
+    ['/model custom-model', '/model', 'custom-model'],
+    ['/effort custom-effort', '/effort', 'custom-effort'],
+  ])('should detect the interactive setting command %s', (input, command, text) => {
+    expect(matchSlashCommand(input, { enableSettingsCommands: true })).toEqual({ command, text });
+  });
+
   it('should detect /go without note', () => {
     const result = matchSlashCommand('/go');
     expect(result).toEqual({ command: '/go', text: '' });
@@ -98,6 +108,16 @@ describe('end-of-line detection', () => {
 // Middle-of-text: NOT recognized
 // =================================================================
 describe('middle-of-text (not recognized)', () => {
+  it.each([
+    'please use /workflow later',
+    '`/mode`',
+    '> /workflow',
+    '```text\n/mode\n```',
+    '```text\n/workflow',
+  ])('should not treat structured or quoted text as a setting command: %s', (input) => {
+    expect(matchSlashCommand(input)).toBeNull();
+  });
+
   it('should not detect /go in the middle of text', () => {
     const result = matchSlashCommand('テキスト中に /go を含むがコマンドではない文');
     expect(result).toBeNull();
@@ -135,6 +155,23 @@ describe('middle-of-text (not recognized)', () => {
 // Edge cases
 // =================================================================
 describe('edge cases', () => {
+  it.each([
+    '/workflow default',
+    '/mode persona',
+    '/model',
+    '/effort',
+  ])('should parse invalid setting syntax so the TUI can show a local notice: %s', (input) => {
+    expect(matchSlashCommand(input, { enableSettingsCommands: true })).not.toBeNull();
+  });
+
+  it('should leave setting commands as ordinary text outside the resident TUI', () => {
+    expect(matchSlashCommand('/workflow')).toBeNull();
+    expect(matchSlashCommand('/mode')).toBeNull();
+    expect(matchSlashCommand('/provider')).toBeNull();
+    expect(matchSlashCommand('/model custom-model')).toBeNull();
+    expect(matchSlashCommand('/effort custom-effort')).toBeNull();
+  });
+
   it('should return null for empty input', () => {
     expect(matchSlashCommand('')).toBeNull();
   });

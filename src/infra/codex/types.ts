@@ -3,10 +3,7 @@
  */
 
 import type { PermissionMode } from '../../core/models/index.js';
-import type {
-  CodexPermissionControl,
-  CodexReasoningEffort,
-} from '../../core/models/workflow-types.js';
+import type { CodexPermissionControl } from '../../core/models/workflow-types.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
@@ -29,7 +26,7 @@ export interface CodexCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
-  reasoningEffort?: CodexReasoningEffort;
+  reasoningEffort?: string;
   fastMode?: boolean;
   systemPrompt?: string;
   /** Permission mode for the TAKT-controlled sandbox */

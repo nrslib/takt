@@ -743,14 +743,6 @@ schemas:
 
 `auto_routing`、provider/model 默认值、provider options 和 routing 都不是 workflow YAML 字段。它们由 `runtime.yaml`（或保留的旧版 `config.yaml`）管理。workflow YAML 中唯一的 provider option surface 是 `capabilities`；`rate_limit_fallback` 也不能写进 workflow YAML。
 
-### `interactive_mode`
-
-`takt` 不带参数时使用的默认交互模式，可选 `assistant`（默认）、`grill-me`、`passthrough`、`quiet`、`persona`：
-
-```yaml
-interactive_mode: assistant
-```
-
 ### 已移除的 Workflow 执行设置
 
 `workflow_config.provider`、`workflow_config.model`、`workflow_config.provider_options`、step `provider`/`model`/`provider_options`、`loop_monitors.judge` 的 provider 设置以及 `workflow_call.overrides` 都会被拒绝。请迁移到 `runtime.yaml`；`workflow_config.runtime.prepare` 仍然支持。

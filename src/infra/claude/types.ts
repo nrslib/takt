@@ -7,7 +7,6 @@
 
 import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
-import type { ClaudeEffort } from '../../core/models/workflow-types.js';
 import type { AgentErrorKind, ProviderUsageSnapshot, RateLimitInfo } from '../../core/models/response.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import type {
@@ -112,7 +111,7 @@ export interface ClaudeCallOptions {
   /** Provider-prepared MCP material (issue #1137). */
   preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   model?: string;
-  effort?: ClaudeEffort;
+  effort?: string;
   skillsEnabled?: boolean;
   maxTurns?: number;
   systemPrompt?: string;
@@ -160,7 +159,7 @@ export interface ClaudeSpawnOptions {
    */
   preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   model?: string;
-  effort?: ClaudeEffort;
+  effort?: string;
   skillsEnabled?: boolean;
   maxTurns?: number;
   systemPrompt?: string;

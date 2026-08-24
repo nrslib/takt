@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
-import { SlashCommand } from '../shared/constants.js';
+import { INTERACTIVE_SETTING_COMMANDS, SlashCommand } from '../shared/constants.js';
 
 describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
@@ -14,6 +14,7 @@ describe('filterSlashCommands', () => {
     expect(pasteCommands.length).toBeGreaterThan(0);
     expect(commands).toEqual(expect.arrayContaining(pasteCommands));
     expect(commands).not.toContain('/setup');
+    expect(commands.filter((command) => INTERACTIVE_SETTING_COMMANDS.has(command))).toEqual([]);
   });
 
   it('should filter by prefix "/a"', () => {
@@ -87,6 +88,16 @@ describe('filterSlashCommands', () => {
         labelKey: 'interactive.commands.pasteImage',
       },
     ]);
+  });
+
+  it.each([
+    ['/workflow', 'interactive.commands.workflow'],
+    ['/mode', 'interactive.commands.mode'],
+    ['/provider', 'interactive.commands.provider'],
+    ['/model', 'interactive.commands.model'],
+    ['/effort', 'interactive.commands.effort'],
+  ])('should expose %s with its label', (command, labelKey) => {
+    expect(filterSlashCommands(command, { enableSettingsCommands: true })).toEqual([{ command, labelKey }]);
   });
 
   it('should expose /setup only when exec command availability enables it', () => {

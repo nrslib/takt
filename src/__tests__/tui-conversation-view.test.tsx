@@ -9,11 +9,12 @@ import type { InteractiveModeResult } from '../features/interactive/interactive.
 import type { PastedImage } from '../features/interactive/inlineImagePaste.js';
 import type { EditorDraft } from '../features/tui/editorState.js';
 import type { TranscriptEntry } from '../features/tui/TranscriptEntryView.js';
-import type {
-  TuiConversation,
-  TuiLocalCommand,
-  TuiSubmission,
-  TuiSubmitInput,
+import {
+  createTuiConversation,
+  type TuiConversation,
+  type TuiLocalCommand,
+  type TuiSubmission,
+  type TuiSubmitInput,
 } from '../features/tui/tuiConversation.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
@@ -23,7 +24,9 @@ import { join } from 'node:path';
 import {
   cleanupImageAttachmentStore,
   createImageAttachmentStore,
+  createSessionImageAttachmentStore,
 } from '../features/interactive/imageAttachments.js';
+import { makeProvider } from './test-helpers.js';
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -187,7 +190,7 @@ interface RenderOverrides {
   readonly initialHistory?: readonly string[];
   readonly initialDraft?: EditorDraft;
   readonly initialQueue?: readonly string[];
-  readonly modelLabel?: string;
+  readonly modelLabel?: () => string;
   readonly residentSession?: boolean;
 }
 
@@ -209,13 +212,66 @@ function renderConversation(
       initialDraft={overrides.initialDraft}
       initialQueue={overrides.initialQueue ?? []}
       residentSession={overrides.residentSession ?? false}
-      modelLabel={overrides.modelLabel ?? MODEL_LABEL}
+      modelLabel={overrides.modelLabel ?? (() => MODEL_LABEL)}
       onExit={onExit}
     />,
   );
 }
 
 describe('ConversationView', () => {
+  it.each([
+    ['/workflow', { kind: 'handoff', id: 'workflow' }],
+    ['/mode', { kind: 'handoff', id: 'mode' }],
+    ['/provider', { kind: 'handoff', id: 'provider' }],
+    ['/model custom-model', { kind: 'handoff', id: 'model', text: 'custom-model' }],
+    ['/effort custom-effort', { kind: 'handoff', id: 'effort', text: 'custom-effort' }],
+  ] as const)('should hand off the real resident setting command input without calling AI: %s', async (
+    input,
+    expected,
+  ) => {
+    const setupProvider = vi.fn(() => ({
+      call: vi.fn(() => Promise.reject(new Error('setting commands must not call AI'))),
+    }));
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: {
+        ctx: {
+          provider: makeProvider({ setup: setupProvider }),
+          providerType: 'mock',
+          model: 'mock-model',
+          lang: 'en',
+          personaName: 'interactive',
+          sessionId: undefined,
+        },
+        strategy: {
+          systemPrompt: 'system prompt',
+          formalSpec: false,
+          allowedTools: [],
+          transformPrompt: (message: string) => message,
+          introMessage: 'Interactive mode',
+        },
+      },
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+      enableSettingsCommands: true,
+    });
+    const onExit = vi.fn();
+    const app = renderConversation(conversation, 'chat', onExit, { residentSession: true });
+    await flushFrames();
+
+    app.stdin.write(input);
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith(
+      expected,
+      expect.objectContaining({ history: [input], queue: [] }),
+    );
+    expect(setupProvider).not.toHaveBeenCalled();
+
+    app.unmount();
+  });
+
   it('should commit the resume command and exit so the picker can run', async () => {
     const onExit = vi.fn();
     const conversation = createScriptedConversation(
@@ -471,7 +527,7 @@ describe('ConversationView', () => {
       createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS),
       'chat',
       vi.fn(),
-      { modelLabel: 'Model: mock/\u001b[31mred\nsecond line' },
+      { modelLabel: () => 'Model: mock/\u001b[31mred\nsecond line' },
     );
     await flushFrames();
 
@@ -1373,6 +1429,29 @@ describe('ConversationView', () => {
     const hintRow = rows.findIndex((row) => row.includes('Enter: send'));
     const modelRow = rows.findIndex((row) => row.includes(MODEL_LABEL));
     expect(modelRow).toBe(hintRow + 1);
+
+    app.unmount();
+  });
+
+  it('should show the rebuilt session model after a submission settles', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    let currentModel = 'Model: mock/old-model';
+    const app = renderConversation(conversation, 'chat', vi.fn(), {
+      modelLabel: () => currentModel,
+    });
+    await flushFrames();
+
+    expect(app.lastFrame()).toContain('Model: mock/old-model');
+    app.stdin.write('use the new model');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+    currentModel = 'Model: mock/new-model';
+    conversation.resolveWith({ kind: 'assistant_response', content: 'done' });
+    await flushFrames();
+
+    expect(app.lastFrame()).toContain('Model: mock/new-model');
+    expect(app.lastFrame()).not.toContain('Model: mock/old-model');
 
     app.unmount();
   });
@@ -2548,7 +2627,10 @@ describe('ConversationView', () => {
   });
 
   it('should offer slash completions, move the highlight and accept one with Tab', async () => {
-    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, {
+      ...NO_ORDER_COMMANDS,
+      enableSettingsCommands: true,
+    });
     const app = renderConversation(conversation, 'chat', vi.fn());
     await flushFrames();
 
@@ -2559,6 +2641,11 @@ describe('ConversationView', () => {
     expect(completionFrame).toContain('❯ /accept');
     expect(completionFrame).toContain('/go');
     expect(completionFrame).toContain('/cancel');
+    expect(completionFrame).toContain('/workflow');
+    expect(completionFrame).toContain('/mode');
+    expect(completionFrame).toContain('/provider');
+    expect(completionFrame).toContain('/model');
+    expect(completionFrame).toContain('/effort');
     expect(completionFrame).toContain('Accept latest assistant response');
     // Both order commands are unavailable in this run, so they stay out of the menu.
     expect(completionFrame).not.toContain('/retry');

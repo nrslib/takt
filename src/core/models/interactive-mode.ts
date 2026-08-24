@@ -5,12 +5,10 @@
  * - assistant: Asks clarifying questions before generating instructions (default)
  * - grill-me: Resolves requirement decisions one question at a time
  * - persona: Uses the first step's persona for conversation
- * - quiet: Generates instructions without asking questions (best-effort)
- * - passthrough: Passes user input directly as task text
  */
 
 /** Available interactive mode variants */
-export const INTERACTIVE_MODES = ['assistant', 'grill-me', 'persona', 'quiet', 'passthrough'] as const;
+export const INTERACTIVE_MODES = ['assistant', 'grill-me', 'persona'] as const;
 
 /** Interactive mode type */
 export type InteractiveMode = typeof INTERACTIVE_MODES[number];

@@ -207,6 +207,7 @@ export function buildSummaryPrompt(
   sourceContext?: string,
   promptContext?: string,
   formalSpec = false,
+  hasReferenceHistory = false,
 ): string {
   let conversation = '';
   if (history.length > 0) {
@@ -217,7 +218,7 @@ export function buildSummaryPrompt(
   }
 
   const formattedSourceContext = formatSourceContextSection(lang, sourceContext);
-  if (!conversation && !formattedSourceContext) {
+  if (!conversation && !formattedSourceContext && !hasReferenceHistory) {
     return '';
   }
 

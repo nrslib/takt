@@ -107,6 +107,7 @@ function createConversation(overrides?: Partial<TuiConversationOptions>): TuiCon
     plan: createPlan(),
     workflowContext: WORKFLOW_CONTEXT,
     attachmentStore: createSessionImageAttachmentStore('/repo'),
+    enableSettingsCommands: true,
     ...overrides,
   });
 }
@@ -156,6 +157,57 @@ describe('TUI conversation layer', () => {
     expect(outcome).toMatchObject({ kind: 'assistant_response', content: 'Assistant answer' });
     expect(chunks).toEqual(['chunk-1', 'chunk-2']);
     expect(lastCallOptions().outputMode).toBe('silent');
+  });
+
+  it('should forward disabled session persistence to the real session factory', async () => {
+    const conversation = createConversation({ persistSession: false });
+
+    await send(conversation, 'use the temporary provider', []);
+
+    expect(lastCallOptions().persistSession).toBe(false);
+  });
+
+  it('should forward handoff history through the real session factory only once', async () => {
+    const conversation = createConversation({
+      handoffHistory: [
+        { role: 'user', content: 'distinct prior request' },
+        { role: 'assistant', content: 'distinct prior answer' },
+      ],
+    });
+
+    await send(conversation, 'first new message', []);
+    await send(conversation, 'second new message', []);
+
+    const firstPrompt = String(mockCallAIWithRetry.mock.calls[0]?.[0]);
+    const secondPrompt = String(mockCallAIWithRetry.mock.calls[1]?.[0]);
+    expect(firstPrompt).toContain('User: distinct prior request');
+    expect(firstPrompt).toContain('Assistant: distinct prior answer');
+    expect(secondPrompt).not.toContain('User: distinct prior request');
+    expect(secondPrompt).not.toContain('Assistant: distinct prior answer');
+    expect(conversation.snapshotHistory?.()).toEqual([
+      { role: 'user', content: 'distinct prior request' },
+      { role: 'assistant', content: 'distinct prior answer' },
+      { role: 'user', content: 'first new message' },
+      { role: 'assistant', content: 'Assistant answer' },
+      { role: 'user', content: 'second new message' },
+      { role: 'assistant', content: 'Assistant answer' },
+    ]);
+  });
+
+  it('should preserve pending handoff history through the real factory after a provider failure', async () => {
+    const handoffHistory = [
+      { role: 'user' as const, content: 'distinct prior request' },
+      { role: 'assistant' as const, content: 'distinct prior answer' },
+    ];
+    const conversation = createConversation({ handoffHistory });
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'unsupported model', sessionId: undefined, success: false },
+      sessionId: undefined,
+    });
+
+    await send(conversation, 'retry this', []);
+
+    expect(conversation.snapshotHistory?.()).toEqual(handoffHistory);
   });
 
   it('should stop forwarding chunks once the submission settled', async () => {
@@ -399,6 +451,76 @@ describe('TUI local commands', () => {
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['/workflow', { kind: 'handoff', id: 'workflow' }],
+    ['/mode', { kind: 'handoff', id: 'mode' }],
+    ['/provider', { kind: 'handoff', id: 'provider' }],
+    ['/model custom-model', { kind: 'handoff', id: 'model', text: 'custom-model' }],
+    ['/effort custom-effort', { kind: 'handoff', id: 'effort', text: 'custom-effort' }],
+  ])('should hand the setting command %s to the TUI runner without calling AI', (input, expected) => {
+    const conversation = createConversation();
+
+    expect(conversation.resolveLocalCommand(input)).toEqual(expected);
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '/workflow default',
+    '/mode persona',
+    '/model',
+    '/effort',
+  ])('should reject invalid setting command syntax locally: %s', (input) => {
+    const conversation = createConversation();
+
+    expect(conversation.resolveLocalCommand(input)).toEqual({
+      kind: 'notice',
+      message: expect.any(String),
+    });
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'please use /workflow later',
+    '`/mode`',
+    '> /workflow',
+    '```text\n/mode\n```',
+    '```text\n/workflow',
+  ])('should send non-command text containing a setting command to the provider: %s', async (input) => {
+    const conversation = createConversation();
+
+    expect(conversation.resolveLocalCommand(input)).toBeNull();
+    await send(conversation, input, []);
+
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('should remain usable for a manual resend after a provider error', async () => {
+    const conversation = createConversation();
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'unsupported model', success: false },
+      sessionId: 'session-existing',
+    });
+
+    const failed = await send(conversation, 'send once', []);
+
+    expect(failed).toEqual({
+      kind: 'error',
+      message: 'unsupported model',
+      notices: [],
+    });
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'manual retry succeeded', success: true },
+      sessionId: 'session-existing',
+    });
+    const retried = await send(conversation, 'send once', []);
+
+    expect(retried).toMatchObject({
+      kind: 'assistant_response',
+      content: 'manual retry succeeded',
+    });
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
+  });
+
   it('should summarize a resumed session that has no local transcript yet', async () => {
     mockInitializeSession.mockReturnValue({
       provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
@@ -465,6 +587,7 @@ describe('TUI local commands', () => {
     expect(conversation.commandAvailability).toEqual({
       enableRetryCommand: false,
       hasPreviousOrder: false,
+      enableSettingsCommands: true,
     });
   });
 

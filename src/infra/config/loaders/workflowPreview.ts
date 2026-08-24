@@ -1,4 +1,4 @@
-import type { InteractiveMode, PermissionMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import type { PermissionMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import { DEFAULT_COMPANION_REVIEW_MODE } from '../../../core/models/companion-types.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
@@ -34,6 +34,7 @@ import {
 } from '../selectorProviderResolution.js';
 import { resolveWorkflowSelector } from '../workflowSelectorResolution.js';
 import { withWorkflowTargetContext } from '../../../core/workflow/provider-target-resolution.js';
+import { composeRuntimeProviderOverride } from '../runtime-provider/override.js';
 
 const log = createLogger('workflow-preview');
 
@@ -284,26 +285,56 @@ function resolvePreviewProviderResolution(
   workflow: WorkflowConfig,
   selectorOverrides?: SelectorProviderOverrides,
   workflowCallResolver?: WorkflowCallResolver,
+  selectorResolution: 'resolve' | 'omit' = 'resolve',
 ): PreviewProviderResolution {
   // Resolve provider/model/personaProviders/providerRouting/autoRouting/providerOptions through the
   // same compiled bundle as execution, so a runtime-v1 environment previews the runtime.yaml
   // `profiles.default` resolution (and a mixed configuration fails fast here too). providerOptions
   // source/originResolver stay on the trace resolver, matching how the executor traces them.
   const runtimeEnvironment = resolveAuxiliaryRuntimeEnvironment(projectCwd, workflow);
-  const env = runtimeEnvironment.providerEnvironment;
+  const baseEnvironment = runtimeEnvironment.providerEnvironment;
+  const providerOverridden = selectorOverrides?.provider !== undefined;
+  const modelOverridden = selectorOverrides?.model !== undefined;
+  const composedEnvironment = composeRuntimeProviderOverride(baseEnvironment, {
+    provider: selectorOverrides?.provider,
+    model: selectorOverrides?.model,
+  });
+  const env = providerOverridden || modelOverridden
+    ? {
+        ...baseEnvironment,
+        provider: composedEnvironment.provider,
+        providerSource: providerOverridden
+          ? selectorOverrides?.providerSource ?? 'cli'
+          : baseEnvironment.providerSource,
+        model: composedEnvironment.model,
+        modelSource: modelOverridden
+          ? selectorOverrides?.modelSource ?? 'cli'
+          : providerOverridden
+            ? selectorOverrides?.providerSource ?? 'cli'
+            : baseEnvironment.modelSource,
+        providerOptions: runtimeEnvironment.providerConfigMode === 'runtime-v1'
+          ? composedEnvironment.providerOptions
+          : baseEnvironment.providerOptions,
+        permissionMode: runtimeEnvironment.providerConfigMode === 'runtime-v1'
+          ? composedEnvironment.permissionMode
+          : baseEnvironment.permissionMode,
+      }
+    : baseEnvironment;
   const {
     source: providerOptionsSource,
     originResolver: providerOptionsOriginResolver,
   } = resolveProviderOptionsWithTrace(projectCwd);
-  const selectorResolution = resolveWorkflowSelector(workflow, {
-    projectCwd,
-    lookupCwd,
-    overrides: selectorOverrides,
-    companionEnabled: runtimeEnvironment.companionEnabled,
-    providerEnvironment: env,
-    providerConfigMode: runtimeEnvironment.providerConfigMode,
-    workflowCallResolver,
-  });
+  const resolvedSelector = selectorResolution === 'resolve'
+    ? resolveWorkflowSelector(workflow, {
+        projectCwd,
+        lookupCwd,
+        overrides: selectorOverrides,
+        companionEnabled: runtimeEnvironment.companionEnabled,
+        providerEnvironment: env,
+        providerConfigMode: runtimeEnvironment.providerConfigMode,
+        workflowCallResolver,
+      })
+    : { applies: false as const };
 
   return {
     provider: env.provider,
@@ -322,8 +353,8 @@ function resolvePreviewProviderResolution(
     internalAgentSeats: env.internalAgents,
     companionEnabled: runtimeEnvironment.companionEnabled,
     companionReviewMode: runtimeEnvironment.companionReviewMode,
-    ...(selectorResolution.applies
-      ? { selectorProvider: selectorResolution.selectorProvider }
+    ...(resolvedSelector.applies
+      ? { selectorProvider: resolvedSelector.selectorProvider }
       : {}),
   };
 }
@@ -427,12 +458,12 @@ export function getWorkflowDescription(
   previewCount?: number,
   lookupCwd = projectCwd,
   selectorOverrides?: SelectorProviderOverrides,
+  firstStepOverrides?: SelectorProviderOverrides,
 ): {
   name: string;
   description: string;
   workflowStructure: string;
   stepPreviews: StepPreview[];
-  interactiveMode?: InteractiveMode;
   firstStep?: FirstStepInfo;
   companionReviewMode: PreviewProviderResolution['companionReviewMode'];
 } {
@@ -452,6 +483,9 @@ export function getWorkflowDescription(
     previewCount,
     lookupCwd,
     selectorOverrides,
+    undefined,
+    undefined,
+    firstStepOverrides,
   );
 }
 
@@ -463,12 +497,12 @@ export function getWorkflowDescriptionFromConfig(
   selectorOverrides?: SelectorProviderOverrides,
   workflowCallResolver?: WorkflowCallResolver,
   workflowBundleResourceRoot?: string,
+  firstStepOverrides?: SelectorProviderOverrides,
 ): {
   name: string;
   description: string;
   workflowStructure: string;
   stepPreviews: StepPreview[];
-  interactiveMode?: InteractiveMode;
   firstStep?: FirstStepInfo;
   companionReviewMode: PreviewProviderResolution['companionReviewMode'];
 } {
@@ -479,6 +513,16 @@ export function getWorkflowDescriptionFromConfig(
     selectorOverrides,
     workflowCallResolver,
   );
+  const firstStepResolution = firstStepOverrides === undefined
+    ? resolution
+    : resolvePreviewProviderResolution(
+        projectCwd,
+        lookupCwd,
+        workflow,
+        firstStepOverrides,
+        workflowCallResolver,
+        'omit',
+      );
   return {
     name: workflow.name,
     description: workflow.description ?? '',
@@ -486,8 +530,7 @@ export function getWorkflowDescriptionFromConfig(
     stepPreviews: previewCount && previewCount > 0
       ? buildStepPreviews(workflow, previewCount, projectCwd, resolution, workflowBundleResourceRoot)
       : [],
-    interactiveMode: workflow.interactiveMode,
     companionReviewMode: resolution.companionReviewMode,
-    firstStep: buildFirstStepInfo(workflow, projectCwd, resolution, workflowBundleResourceRoot),
+    firstStep: buildFirstStepInfo(workflow, projectCwd, firstStepResolution, workflowBundleResourceRoot),
   };
 }

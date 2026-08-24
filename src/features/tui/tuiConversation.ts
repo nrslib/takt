@@ -19,6 +19,7 @@ import {
   type ConversationSessionResult,
 } from '../interactive/conversationSession.js';
 import type { WorkflowContext } from '../interactive/interactive-summary-types.js';
+import type { ConversationMessage } from '../interactive/interactiveApplication.js';
 import {
   createClipboardImagePasteHandler,
   createImagePasteHandler,
@@ -44,7 +45,13 @@ export interface TuiConversationOptions {
   attachmentStore: ImageAttachmentStore;
   /** Task text supplied on the command line; seeds the conversation history. */
   userMessage?: string;
+  /** Previous session transcript included once as reference on the first provider call. */
+  handoffHistory?: readonly ConversationMessage[];
+  /** Keep temporary provider/model sessions out of persisted `/continue` metadata. */
+  persistSession?: boolean;
   sourceContext?: string;
+  /** Enable settings handoffs owned by the resident interactive TUI. */
+  enableSettingsCommands?: boolean;
 }
 
 /** i18n label for every failure the session reports with a fixed cause. */
@@ -143,6 +150,10 @@ export interface TuiConversation {
    * session keeps no transcript of its own (exec).
    */
   recordRejectedDraft?(task: string): void;
+  /** Snapshot all user/assistant context needed by a recreated provider session. */
+  snapshotHistory?(): readonly ConversationMessage[];
+  /** Apply an effort override to future calls on the active session. */
+  setEffort?(effort: string): void;
   /** Capture the clipboard image and return the placeholder to insert. */
   pasteClipboardImage(abortSignal: AbortSignal): Promise<string>;
   /** Refuse further images once the run ended, so a late save leaves no temp file. */
@@ -166,6 +177,10 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     // transcript; summarizing it straight away has to work.
     summarizeResumedSession: true,
     ...(options.userMessage ? { initialUserMessage: options.userMessage } : {}),
+    ...(options.handoffHistory && options.handoffHistory.length > 0
+      ? { handoffHistory: options.handoffHistory }
+      : {}),
+    ...(options.persistSession === false ? { persistSession: false } : {}),
     ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
     resolveImageAttachments: (prompt) =>
       resolvePromptImageAttachments(prompt, options.attachmentStore.listAttachments()),
@@ -178,6 +193,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
   const commandAvailability: CommandAvailability = {
     enableRetryCommand: strategy.enableRetryCommand === true,
     hasPreviousOrder: previousOrder !== undefined,
+    ...(options.enableSettingsCommands === true ? { enableSettingsCommands: true } : {}),
     ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
   };
 
@@ -197,6 +213,14 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
 
     recordRejectedDraft(task: string): void {
       session.recordRejectedDraft(task);
+    },
+
+    snapshotHistory(): readonly ConversationMessage[] {
+      return session.snapshotHistory();
+    },
+
+    setEffort(effort: string): void {
+      session.setEffort(effort);
     },
 
     resolveLocalCommand(text: string): TuiLocalCommand | null {
@@ -232,6 +256,23 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           return { kind: 'resume_session' };
         case SlashCommand.PasteImage:
           return { kind: 'paste_image' };
+        case SlashCommand.Workflow:
+        case SlashCommand.Mode:
+        case SlashCommand.Provider:
+          return match.text === ''
+            ? { kind: 'handoff', id: match.command.slice(1) }
+            : {
+              kind: 'notice',
+              message: getLabel('tui.errors.settingNoArguments', ctx.lang, { command: match.command }),
+            };
+        case SlashCommand.Model:
+        case SlashCommand.Effort:
+          return match.text !== ''
+            ? { kind: 'handoff', id: match.command.slice(1), text: match.text }
+            : {
+              kind: 'notice',
+              message: getLabel('tui.errors.settingValueRequired', ctx.lang, { command: match.command }),
+            };
         case SlashCommand.Go:
         case SlashCommand.Setup:
           return null;

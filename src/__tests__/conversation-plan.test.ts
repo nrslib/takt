@@ -100,6 +100,9 @@ describe('assistant conversation plan', () => {
     expect(strategy.allowedTools).toContain('Bash');
     expect(strategy.permissionMode).toBeUndefined();
     expect(strategy.introMessage).toContain('Interactive mode');
+    for (const command of ['/workflow', '/mode', '/provider', '/model <value>', '/effort <value>']) {
+      expect(strategy.introMessage).not.toContain(command);
+    }
   });
 
   it('should make Grill Me read-only and withhold Bash', () => {
@@ -112,6 +115,9 @@ describe('assistant conversation plan', () => {
     expect(strategy.allowedTools).not.toContain('Bash');
     expect(strategy.permissionMode).toBe('readonly');
     expect(strategy.introMessage).toContain('Grill Me');
+    for (const command of ['/workflow', '/mode', '/provider', '/model <value>', '/effort <value>']) {
+      expect(strategy.introMessage).not.toContain(command);
+    }
   });
 
   it('should forward the CLI provider and model overrides and the resumed session', () => {
@@ -138,6 +144,52 @@ describe('assistant conversation plan', () => {
     expect(ctx.sessionId).toBe('session-9');
   });
 
+  it('should attach interactive effort without translating it into provider options', () => {
+    const { ctx } = createAssistantConversationPlan('/repo', {
+      assistantMode: 'assistant',
+      effort: 'custom-effort',
+    });
+
+    expect(ctx.effort).toBe('custom-effort');
+    expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'interactive');
+  });
+
+  it('should rebuild from an already resolved session without re-resolving runtime settings', () => {
+    const provider = {
+      supportsStructuredOutput: false,
+      supportsNativeImageInput: false,
+      keepsAllowedToolWithoutEdit: vi.fn(() => false),
+      setup: vi.fn(),
+      getRuntimeInstructions: vi.fn(() => null),
+    };
+    const { ctx } = createAssistantConversationPlan('/repo', {
+      assistantMode: 'grill-me',
+      model: 'temporary-model',
+      resolvedSessionContext: {
+        provider,
+        providerType: 'codex',
+        model: 'runtime-model',
+        lang: 'ja',
+        personaName: 'interactive',
+        sessionId: 'old-session',
+        providerOptions: { codex: { reasoningEffort: 'high' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    expect(mockInitializeSession).not.toHaveBeenCalled();
+    expect(ctx).toEqual(expect.objectContaining({
+      provider,
+      providerType: 'codex',
+      model: 'temporary-model',
+      lang: 'ja',
+      personaName: 'grill-me-interactive',
+      sessionId: undefined,
+      providerOptions: { codex: { reasoningEffort: 'high' } },
+      permissionMode: 'readonly',
+    }));
+  });
+
   it('should use the assistant init context for both the first prompt and the summary', () => {
     mockLoadAssistantInitContext.mockReturnValue('init context');
 
@@ -160,6 +212,7 @@ describe('persona conversation plan', () => {
     expect(strategy.allowedTools).toEqual(['Read']);
     expect(strategy.systemPrompt).toContain('You are the reviewer.');
     expect(strategy.introMessage).toContain('[Reviewer]');
+    expect(strategy.introMessage).not.toContain('/workflow');
     expect(strategy.resolveResumedSessionConfiguration).toBeUndefined();
   });
 
@@ -171,5 +224,23 @@ describe('persona conversation plan', () => {
     });
 
     expect(strategy.allowedTools).toContain('Bash');
+  });
+
+  it('should apply explicit interactive provider, model, and effort overrides', () => {
+    const { ctx } = createPersonaConversationPlan('/repo', {
+      personaContent: 'You are the reviewer.',
+      personaDisplayName: 'Reviewer',
+      allowedTools: ['Read'],
+    }, {
+      provider: 'claude',
+      model: 'custom-model',
+      effort: 'custom-effort',
+    });
+
+    expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'persona-interactive', {
+      provider: 'claude',
+      model: 'custom-model',
+    });
+    expect(ctx.effort).toBe('custom-effort');
   });
 });
