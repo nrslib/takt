@@ -265,6 +265,8 @@ describe('user message terminal colors', () => {
 
       input.push(Buffer.from('typed-before'));
       await flushReadableEvents();
+      input.push(Buffer.from('\x1b'));
+      await flushReadableEvents();
       input.push(Buffer.from('\x1b]11;rgb:2929'));
       await flushReadableEvents();
       input.push(Buffer.concat([
@@ -274,7 +276,7 @@ describe('user message terminal colors', () => {
       input.push(Buffer.from('typed-after'));
       await flushReadableEvents();
 
-      expect(inkInput.join('')).toBe('typed-beforetyped-after');
+      expect(inkInput.join('')).toBe('typed-before\x1btyped-after');
 
       input.removeListener('readable', onReadable);
       guard?.detach();

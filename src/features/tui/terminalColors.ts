@@ -224,6 +224,16 @@ class OscBackgroundResponseParser {
     this.pending = Buffer.alloc(0);
     return [pending];
   }
+
+  /** A bare Esc is a user key, not enough evidence to retain an OSC response. */
+  releaseStandaloneEscape(): Buffer | null {
+    if (this.pending.length !== 1 || this.pending[0] !== 0x1b) {
+      return null;
+    }
+    const escape = this.pending;
+    this.pending = Buffer.alloc(0);
+    return escape;
+  }
 }
 
 function restoreFlowingState(stdin: TerminalInput, wasFlowing: boolean | null): boolean {
@@ -291,6 +301,10 @@ function createDelayedResponseGuard(stdin: TerminalInput): TerminalInputGuard {
       while ((chunk = stdin.read()) !== null) {
         const result = parser.push(chunk);
         unrelatedInput.push(...result.unrelatedInput);
+      }
+      const standaloneEscape = parser.releaseStandaloneEscape();
+      if (standaloneEscape !== null) {
+        unrelatedInput.push(standaloneEscape);
       }
       replay(unrelatedInput);
     } catch {
