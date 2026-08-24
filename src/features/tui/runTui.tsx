@@ -42,6 +42,7 @@ import type { TranscriptEntry } from './TranscriptEntryView.js';
 import {
   createTuiConversation,
   type TuiConversation,
+  type TuiHandoffId,
   type TuiSubmitInput,
   type TuiSubmission,
 } from './tuiConversation.js';
@@ -223,11 +224,11 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         ...(!initial && selectedProvider === undefined
           ? { resolvedSessionContext: currentPlan.ctx }
           : {}),
-        ...((temporaryModelActive || selectedEffort !== undefined)
+        ...((temporaryProviderActive || temporaryModelActive || selectedEffort !== undefined)
           ? { disableSessionRetry: true }
           : {}),
       };
-      currentPlan = usePersonaPlan
+      const nextPlan = usePersonaPlan
         ? createPersonaConversationPlan(options.cwd, description.firstStep!, overrides)
         : createAssistantConversationPlan(options.cwd, {
           assistantMode: selectedMode === 'grill-me' ? 'grill-me' : 'assistant',
@@ -236,9 +237,9 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           ...overrides,
           ...(continued.sessionId ? { sessionId: continued.sessionId } : {}),
         });
-      currentConversation = createTuiConversation({
+      const nextConversation = createTuiConversation({
         cwd: options.cwd,
-        plan: currentPlan,
+        plan: nextPlan,
         workflowContext: context,
         attachmentStore,
         enableSettingsCommands: true,
@@ -249,10 +250,12 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           : {}),
         ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
       });
+      currentPlan = nextPlan;
+      currentConversation = nextConversation;
       activeWorkflowId = selectedWorkflowId;
       return {
         initialEntries: initial
-          ? buildInitialEntries(currentPlan, personaFallback, continued.notice)
+          ? buildInitialEntries(nextPlan, personaFallback, continued.notice)
           : [],
       };
     }
@@ -264,14 +267,21 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       pendingRebuild = true;
     }
 
-    async function ensureCurrentConversation(): Promise<void> {
+    async function ensureCurrentConversation(): Promise<string | undefined> {
       if (!pendingRebuild) {
-        return;
+        return undefined;
       }
       const history = pendingHandoffHistory;
-      await createCurrentConversation(false, history);
-      pendingRebuild = false;
-      pendingHandoffHistory = undefined;
+      try {
+        await createCurrentConversation(false, history);
+        return undefined;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return getLabel('tui.errors.conversationRebuildFailed', options.lang, { error: message });
+      } finally {
+        pendingRebuild = false;
+        pendingHandoffHistory = undefined;
+      }
     }
 
     const conversationFacade: TuiConversation = {
@@ -291,16 +301,26 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         return currentConversation.resolveLocalCommand(text);
       },
       async submit(input: TuiSubmitInput): Promise<TuiSubmission> {
-        await ensureCurrentConversation();
+        const rebuildError = await ensureCurrentConversation();
+        if (rebuildError !== undefined) {
+          return { kind: 'error', message: rebuildError };
+        }
         return currentConversation.submit(input);
       },
       async createInstruction(input: TuiSubmitInput): Promise<TuiSubmission> {
-        await ensureCurrentConversation();
+        const rebuildError = await ensureCurrentConversation();
+        if (rebuildError !== undefined) {
+          return { kind: 'error', message: rebuildError };
+        }
         return currentConversation.createInstruction(input);
       },
-      async resumeSession(sessionId: string): Promise<void> {
-        await ensureCurrentConversation();
+      async resumeSession(sessionId: string): Promise<string | undefined> {
+        const rebuildError = await ensureCurrentConversation();
+        if (rebuildError !== undefined) {
+          return rebuildError;
+        }
         await currentConversation.resumeSession(sessionId);
+        return undefined;
       },
       recordRejectedDraft(task: string): void {
         currentConversation.recordRejectedDraft?.(task);
@@ -322,7 +342,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       },
     };
 
-    async function handleHandoff(id: string, text: string) {
+    async function handleHandoff(id: TuiHandoffId, text: string) {
       switch (id) {
         case 'workflow': {
           const workflowId = await determineWorkflow(options.cwd, undefined);
@@ -394,6 +414,10 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         ? {}
         : {
           dispatch: async (result) => {
+            const rebuildError = await ensureCurrentConversation();
+            if (rebuildError !== undefined) {
+              return rebuildError;
+            }
             const attachments = attachmentStore.listAttachments();
             await dispatch(activeWorkflowId, {
               ...result,

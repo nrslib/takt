@@ -290,6 +290,7 @@ tui:
     emptyAiResponse: "The assistant returned no response."
     noConversation: "No conversation yet. Describe your task first."
     instructionFailed: "Failed to create the task instruction."
+    conversationRebuildFailed: "Failed to switch conversation settings: {error}"
     unsupportedCommand: "That command is not available in the TUI."
     settingNoArguments: "{command} does not accept an argument."
     settingValueRequired: "{command} requires a value."

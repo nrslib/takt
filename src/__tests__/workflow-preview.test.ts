@@ -33,8 +33,10 @@ describe('getWorkflowDescription', () => {
         name: 'implement',
         instruction: 'Implement the task',
         rules: [{ condition: 'done', next: 'COMPLETE' }],
+        engineSynthesized: true,
+        providerOptions: { claude: { allowedTools: ['Bash'] } },
       }],
-    } as WorkflowConfig;
+    } as unknown as WorkflowConfig;
   }
 
   function writePreviewRuntime(
@@ -172,6 +174,7 @@ describe('getWorkflowDescription', () => {
       provider: 'codex',
       model: 'gpt-selector',
     });
+    expect(interactiveProviderOverride.firstStep?.provider).toBe('opencode');
     expect(description.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
     expect(overridden.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
     const facetDir = join(workflowDir, 'facets', 'policies');
@@ -240,7 +243,7 @@ describe('getWorkflowDescription', () => {
     expect(description.companionReviewMode).toBe('completion');
   });
 
-  it('明示provider overrideで通常stepのprovider別allowedToolsを再解決する', () => {
+  it('legacy provider-only override does not inherit provider-tied options', () => {
     const projectDir = createProject();
     const globalConfigDir = createProject();
     const configDir = join(projectDir, '.takt');
@@ -261,11 +264,9 @@ describe('getWorkflowDescription', () => {
       { provider: 'claude' },
     ));
 
-    expect(description.stepPreviews[0]).toMatchObject({
-      provider: 'claude',
-      allowedTools: ['Read'],
-    });
-    expect(description.firstStep?.allowedTools).toEqual(['Read']);
+    expect(description.stepPreviews[0]).toMatchObject({ provider: 'claude' });
+    expect(description.stepPreviews[0]?.allowedTools).not.toContain('Read');
+    expect(description.firstStep?.allowedTools).not.toContain('Read');
   });
 
   it('firstStep overrideだけをpersona previewへ適用し通常stepの解決を維持する', () => {

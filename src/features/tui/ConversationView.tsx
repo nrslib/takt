@@ -18,6 +18,7 @@ import { resolveSlashCompletions } from './slashCompletion.js';
 import type {
   InteractiveResultSource,
   TuiConversation,
+  TuiHandoffId,
   TuiLocalCommand,
 } from './tuiConversation.js';
 import { drainPendingWork, useImagePaste, type PendingWork } from './useImagePaste.js';
@@ -49,7 +50,7 @@ export type ConversationExit =
   | { kind: 'choose_action'; task: string; origin?: InteractiveResultSource }
   | { kind: 'resume_session' }
   /** The caller runs `id` with Ink unmounted, then this view is mounted again. */
-  | { kind: 'handoff'; id: string; text?: string }
+  | { kind: 'handoff'; id: TuiHandoffId; text?: string }
   | { kind: 'failed'; error: unknown };
 
 /**

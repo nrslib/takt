@@ -115,7 +115,7 @@ describe('middle-of-text (not recognized)', () => {
     '```text\n/mode\n```',
     '```text\n/workflow',
   ])('should not treat structured or quoted text as a setting command: %s', (input) => {
-    expect(matchSlashCommand(input)).toBeNull();
+    expect(matchSlashCommand(input, { enableSettingsCommands: true })).toBeNull();
   });
 
   it('should not detect /go in the middle of text', () => {

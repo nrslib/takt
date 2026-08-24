@@ -73,6 +73,7 @@ export interface FirstStepInfo {
   personaContent: string;
   personaDisplayName: string;
   allowedTools: string[];
+  provider?: StepProviderInfo['provider'];
 }
 
 interface PreviewProviderResolution extends ProviderModelResolutionContext {
@@ -312,12 +313,8 @@ function resolvePreviewProviderResolution(
           : providerOverridden
             ? selectorOverrides?.providerSource ?? 'cli'
             : baseEnvironment.modelSource,
-        providerOptions: runtimeEnvironment.providerConfigMode === 'runtime-v1'
-          ? composedEnvironment.providerOptions
-          : baseEnvironment.providerOptions,
-        permissionMode: runtimeEnvironment.providerConfigMode === 'runtime-v1'
-          ? composedEnvironment.permissionMode
-          : baseEnvironment.permissionMode,
+        providerOptions: composedEnvironment.providerOptions,
+        permissionMode: composedEnvironment.permissionMode,
       }
     : baseEnvironment;
   const {
@@ -445,10 +442,12 @@ function buildFirstStepInfo(
   const step = workflow.steps.find((candidate) => candidate.name === workflow.initialStep);
   if (!step) return undefined;
   const previewStep = resolvePreviewStep(step);
+  const providerInfo = resolvePreviewProviderInfo(previewStep, resolution);
   return {
     personaContent: readStepPersona(previewStep, projectCwd, workflowBundleResourceRoot),
     personaDisplayName: previewStep.personaDisplayName,
     allowedTools: resolvePreviewAllowedTools(previewStep, resolution),
+    ...(providerInfo.provider === undefined ? {} : { provider: providerInfo.provider }),
   };
 }
 

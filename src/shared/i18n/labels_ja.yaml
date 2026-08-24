@@ -290,6 +290,7 @@ tui:
     emptyAiResponse: "アシスタントからの応答がありませんでした。"
     noConversation: "まだ会話がありません。先にタスクを説明してください。"
     instructionFailed: "タスク指示書の作成に失敗しました。"
+    conversationRebuildFailed: "会話設定の切り替えに失敗しました: {error}"
     unsupportedCommand: "このコマンドは TUI では利用できません。"
     settingNoArguments: "{command} に引数は指定できません。"
     settingValueRequired: "{command} には値が必要です。"

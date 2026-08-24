@@ -120,4 +120,40 @@ describe('assistant provider resolution', () => {
     });
     expect(mockResolveNonWorkflow).not.toHaveBeenCalled();
   });
+
+  it('should apply a provider-only override without carrying a model override', () => {
+    mockResolveAssistant.mockReturnValue({
+      runtimeManaged: false,
+      provider: 'claude',
+      model: 'claude-default',
+    });
+
+    const plan = createPersonaConversationPlan('/repo', {
+      personaContent: 'persona',
+      personaDisplayName: 'reviewer',
+      allowedTools: [],
+    }, { provider: 'claude' });
+
+    expect(plan.ctx.providerType).toBe('claude');
+    expect(plan.ctx.model).toBe('claude-default');
+    expect(mockResolveAssistant).toHaveBeenCalledWith('/repo', { provider: 'claude' });
+  });
+
+  it('should apply a model-only override without carrying a provider override', () => {
+    mockResolveAssistant.mockReturnValue({
+      runtimeManaged: false,
+      provider: 'codex',
+      model: 'custom-model',
+    });
+
+    const plan = createPersonaConversationPlan('/repo', {
+      personaContent: 'persona',
+      personaDisplayName: 'reviewer',
+      allowedTools: [],
+    }, { model: 'custom-model' });
+
+    expect(plan.ctx.providerType).toBe('codex');
+    expect(plan.ctx.model).toBe('custom-model');
+    expect(mockResolveAssistant).toHaveBeenCalledWith('/repo', { model: 'custom-model' });
+  });
 });

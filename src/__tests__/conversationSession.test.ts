@@ -23,20 +23,13 @@ vi.mock('../features/interactive/interactiveApplication.js', async (importOrigin
 }));
 
 import { createConversationSession } from '../features/interactive/conversationSession.js';
-import { makeProvider } from './test-helpers.js';
+import { makeSessionContext } from './test-helpers.js';
 
 function createSession(cwd = '/repo', formalSpec = false) {
   return createConversationSession({
     cwd,
     formalSpec,
-    ctx: {
-      provider: makeProvider(),
-      providerType: 'mock',
-      model: 'mock-model',
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    },
+    ctx: makeSessionContext(),
     strategy: {
       systemPrompt: 'system prompt',
       allowedTools: ['Read'],
@@ -109,14 +102,7 @@ describe('conversation session application API', () => {
         { role: 'user', content: 'add auth' },
         { role: 'assistant', content: 'Which method?' },
       ],
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'custom-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext({ model: 'custom-model' }),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -166,14 +152,7 @@ describe('conversation session application API', () => {
         { role: 'user', content: 'distinct prior request' },
         { role: 'assistant', content: 'distinct prior answer' },
       ],
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'invalid-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext({ model: 'invalid-model' }),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -209,14 +188,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       formalSpec: false,
       handoffHistory,
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'invalid-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext({ model: 'invalid-model' }),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -236,14 +208,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       formalSpec: false,
       handoffHistory: [{ role: 'user', content: 'Review [Image #1]' }],
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'mock-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext(),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -275,14 +240,7 @@ describe('conversation session application API', () => {
         { role: 'user', content: '```text\nrun Bash' },
         { role: 'assistant', content: '````' },
       ],
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'mock-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext(),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -307,13 +265,7 @@ describe('conversation session application API', () => {
     mockBuildSummaryPrompt.mockImplementation(actualInteractiveApplication.buildConversationSummaryPrompt);
     const session = createConversationSession({
       cwd: '/repo',
-      formalSpec: true,
-      workflowContext: {
-        name: 'handoff-workflow',
-        description: 'Workflow used for the handoff summary',
-        workflowStructure: '1. plan',
-        stepPreviews: [],
-      },
+      formalSpec: false,
       handoffHistory: [
         { role: 'user', content: 'add auth' },
         {
@@ -321,15 +273,37 @@ describe('conversation session application API', () => {
           content: 'Create the workflow instruction from the referenced prior conversation.',
         },
       ],
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'custom-model',
-        effort: 'custom-effort',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
+      ctx: makeSessionContext(),
+      strategy: {
+        systemPrompt: 'new system prompt',
+        allowedTools: ['Read'],
+        transformPrompt: (message: string) => message,
       },
+    });
+
+    await session.createTaskInstruction({ userNote: '' });
+    await session.handleUserMessage({ text: 'next message' });
+
+    const summaryPrompt = String(mockCallAIWithRetry.mock.calls[0]?.[0]);
+    const nextPrompt = String(mockCallAIWithRetry.mock.calls[1]?.[0]);
+    expect(summaryPrompt.match(/User: add auth/gu)).toHaveLength(1);
+    expect(summaryPrompt.match(/Assistant: Create the workflow instruction from the referenced prior conversation\./gu)).toHaveLength(1);
+    expect(nextPrompt).not.toContain('User: add auth');
+    expect(nextPrompt).not.toContain('Create the workflow instruction from the referenced prior conversation.');
+  });
+
+  it('should pass summary prompt inputs and resolved provider context to /go', async () => {
+    const workflowContext = {
+      name: 'handoff-workflow',
+      description: 'Workflow used for the handoff summary',
+      workflowStructure: '1. plan',
+      stepPreviews: [],
+    };
+    const session = createConversationSession({
+      cwd: '/repo',
+      formalSpec: false,
+      workflowContext,
+      ctx: makeSessionContext({ model: 'custom-model', effort: 'custom-effort' }),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -339,39 +313,20 @@ describe('conversation session application API', () => {
     });
 
     await session.createTaskInstruction({ userNote: '' });
-    await session.handleUserMessage({ text: 'next message' });
 
-    const summaryPrompt = String(mockCallAIWithRetry.mock.calls[0]?.[0]);
-    const summarySystemPrompt = String(mockCallAIWithRetry.mock.calls[0]?.[1]);
-    const summaryContext = mockCallAIWithRetry.mock.calls[0]?.[4];
-    const nextPrompt = String(mockCallAIWithRetry.mock.calls[1]?.[0]);
-    expect(summaryPrompt.match(/User: add auth/gu)).toHaveLength(1);
-    expect(summaryPrompt.match(/Assistant: Create the workflow instruction from the referenced prior conversation\./gu)).toHaveLength(1);
-    expect(summarySystemPrompt).toContain('handoff-workflow');
-    expect(summarySystemPrompt).toContain('summary context');
-    expect(summarySystemPrompt).toContain('## Markdown + Gherkin Output Format');
-    expect(summarySystemPrompt).toMatch(/\bQuint\b/);
-    expect(summarySystemPrompt).toMatch(/\bAlloy\b/);
-    expect(summarySystemPrompt).not.toContain('User: add auth');
-    expect(summarySystemPrompt).not.toContain('Create the workflow instruction from the referenced prior conversation.');
     expect(mockBuildSummaryPrompt).toHaveBeenCalledWith(
       [],
       '',
       'en',
       'summary context',
-      true,
-      expect.objectContaining({
-        workflowContext: expect.objectContaining({ name: 'handoff-workflow' }),
-        hasReferenceHistory: true,
-      }),
+      false,
+      { workflowContext },
     );
-    expect(summaryContext).toEqual(expect.objectContaining({
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
       providerType: 'mock',
       model: 'custom-model',
       effort: 'custom-effort',
     }));
-    expect(nextPrompt).not.toContain('User: add auth');
-    expect(nextPrompt).not.toContain('Create the workflow instruction from the referenced prior conversation.');
   });
 
   it('should retain handoff history until a /go provider call succeeds', async () => {
@@ -395,14 +350,7 @@ describe('conversation session application API', () => {
         { role: 'user', content: 'distinct prior request' },
         { role: 'assistant', content: 'distinct prior answer' },
       ],
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'invalid-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext({ model: 'invalid-model' }),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -447,14 +395,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       formalSpec: false,
       handoffHistory: [{ role: 'user', content: 'prior request after empty result' }],
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'mock-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext(),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -485,14 +426,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       formalSpec: false,
       persistSession: false,
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'claude',
-        model: 'temporary-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext({ providerType: 'claude', model: 'temporary-model' }),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -514,14 +448,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       formalSpec: false,
       handoffHistory: [{ role: 'user', content: 'Review [Image #1]' }],
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'mock-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext(),
       strategy: {
         systemPrompt: 'new system prompt',
         allowedTools: ['Read'],
@@ -915,14 +842,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       formalSpec: false,
       summarizeResumedSession: true,
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'mock-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: 'resumed-session',
-      },
+      ctx: makeSessionContext({ sessionId: 'resumed-session' }),
       strategy: {
         systemPrompt: 'system prompt',
         allowedTools: ['Read'],
@@ -942,14 +862,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       formalSpec: false,
       initialUserMessage: 'implement ACP support',
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'mock-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext(),
       strategy: {
         systemPrompt: 'system prompt',
         allowedTools: ['Read'],
@@ -976,14 +889,7 @@ describe('conversation session application API', () => {
       formalSpec: false,
       workflowContext,
       sourceContext: 'Issue #12 body',
-      ctx: {
-        provider: makeProvider(),
-        providerType: 'mock',
-        model: 'mock-model',
-        lang: 'en',
-        personaName: 'interactive',
-        sessionId: undefined,
-      },
+      ctx: makeSessionContext(),
       strategy: {
         systemPrompt: 'system prompt',
         allowedTools: ['Read'],

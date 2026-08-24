@@ -158,9 +158,9 @@ function createScriptedConversation(
     createInstruction(input: TuiSubmitInput): Promise<TuiSubmission> {
       return recordAndHold(instructionCalls, input);
     },
-    resumeSession(sessionId: string): Promise<void> {
+    resumeSession(sessionId: string): Promise<string | undefined> {
       resumedSessions.push(sessionId);
-      return Promise.resolve();
+      return Promise.resolve(undefined);
     },
     pasteClipboardImage(): Promise<string> {
       return Promise.resolve(PASTED_IMAGE_PLACEHOLDER);

@@ -174,6 +174,19 @@ describe('selectInteractiveMode', () => {
     );
   });
 
+  it('should use the first available mode when the default is unavailable', async () => {
+    await selectInteractiveMode('en', ['grill-me', 'persona']);
+
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      expect.any(String),
+      [
+        expect.objectContaining({ value: 'grill-me' }),
+        expect.objectContaining({ value: 'persona' }),
+      ],
+      'grill-me',
+    );
+  });
+
   it('should return null when user cancels', async () => {
     // Given
     mockSelectOptionWithDefault.mockResolvedValue(null);

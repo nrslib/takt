@@ -76,6 +76,7 @@
     "src/__tests__/tui-task-conversation.test.ts",
     "src/__tests__/tui-terminal-ownership.test.ts",
     "src/__tests__/workflow-inspect.test.ts",
+    "src/__tests__/workflow-preview.test.ts",
     "src/__tests__/workflowCallResolver.test.ts"
   ],
   "exclude": []

@@ -22,13 +22,21 @@ import { makeProvider, makeSessionContext } from './test-helpers.js';
 
 const mockUpdatePersonaSession = vi.mocked(updatePersonaSession);
 
-function createSession(
-  sessionId?: string,
-  effort?: string,
-  disableSessionRetry?: boolean,
-  model?: string,
-  persistSession?: boolean,
-) {
+interface SessionOptions {
+  sessionId?: string;
+  effort?: string;
+  disableSessionRetry?: boolean;
+  model?: string;
+  persistSession?: boolean;
+}
+
+function createSession({
+  sessionId,
+  effort,
+  disableSessionRetry,
+  model,
+  persistSession,
+}: SessionOptions = {}) {
   return createConversationSession({
     cwd: '/repo',
     outputMode: 'silent',
@@ -292,7 +300,7 @@ describe('a turn the caller has already moved past', () => {
   it('should not persist the session a superseded turn retried into', async () => {
     const interrupted = createPendingCall();
     mockCall.mockImplementationOnce(() => interrupted.promise);
-    const session = createSession('session-existing');
+    const session = createSession({ sessionId: 'session-existing' });
 
     const abandoned = session.handleUserMessage({ text: 'first question' });
     mockCall.mockResolvedValueOnce({
@@ -373,7 +381,7 @@ describe('a turn that produces no answer', () => {
       error: 'unsupported effort',
       timestamp: new Date(),
     });
-    const session = createSession('session-existing', 'custom-effort');
+    const session = createSession({ sessionId: 'session-existing', effort: 'custom-effort' });
 
     const failed = await session.handleUserMessage({ text: 'send once' });
 
@@ -412,7 +420,11 @@ describe('a turn that produces no answer', () => {
       error: 'unsupported model',
       timestamp: new Date(),
     });
-    const session = createSession('session-existing', undefined, true, 'custom-model');
+    const session = createSession({
+      sessionId: 'session-existing',
+      disableSessionRetry: true,
+      model: 'custom-model',
+    });
 
     const failed = await session.handleUserMessage({ text: 'send once' });
 
@@ -455,7 +467,11 @@ describe('a turn that produces no answer', () => {
       sessionId: 'temporary-session',
       timestamp: new Date(),
     });
-    const session = createSession(undefined, undefined, true, 'custom-model', false);
+    const session = createSession({
+      disableSessionRetry: true,
+      model: 'custom-model',
+      persistSession: false,
+    });
 
     const result = await session.handleUserMessage({ text: 'send once' });
 

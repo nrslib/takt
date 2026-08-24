@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskHistorySummaryItem } from '../features/interactive/interactive-summary-types.js';
 import type { ConversationViewProps } from '../features/tui/ConversationView.js';
 import type { RunTuiOptions } from '../features/tui/runTui.js';
+import type { TuiConversation } from '../features/tui/tuiConversation.js';
 import type { SessionState } from '../infra/config/project/sessionState.js';
 import type { ImageAttachmentStore } from '../features/interactive/imageAttachments.js';
 
@@ -27,6 +28,7 @@ const {
   mockLoadPersonaSessions,
   mockTakeSessionState,
   mockResolveAssistantProviderModel,
+  mockInfo,
   mockWatchProcessExit,
   mockReleaseProcessExit,
   storeOverride,
@@ -44,6 +46,7 @@ const {
   mockLoadPersonaSessions: vi.fn(),
   mockTakeSessionState: vi.fn(),
   mockResolveAssistantProviderModel: vi.fn(),
+  mockInfo: vi.fn(),
   mockWatchProcessExit: vi.fn(),
   mockReleaseProcessExit: vi.fn(),
   /** Lets one test hand runTui a real store in a temp directory. */
@@ -73,6 +76,11 @@ vi.mock('../features/tui/tuiConversation.js', async (importOriginal) => {
         : mockCreateTuiConversation(...args),
   };
 });
+
+vi.mock('../shared/ui/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/ui/index.js')>()),
+  info: (message: string) => mockInfo(message),
+}));
 
 vi.mock('../features/tasks/index.js', () => ({
   determineWorkflow: (...args: unknown[]) => mockDetermineWorkflow(...args),
@@ -143,8 +151,6 @@ function expectTerminalReleased(): void {
 
 const TASK_HISTORY: TaskHistorySummaryItem[] = [];
 
-type MountedProps = ConversationViewProps;
-
 interface MountedTree {
   conversationProps(): ConversationViewProps;
   exitInk(): void;
@@ -158,11 +164,11 @@ interface MountedTree {
  */
 function scriptRender(): MountedTree {
   const mounts = { count: 0 };
-  let rendered: MountedProps | undefined;
+  let rendered: ConversationViewProps | undefined;
   let exitInk: (() => void) | undefined;
   const unmount = vi.fn(() => exitInk?.());
 
-  mockRender.mockImplementation((element: { props: MountedProps }) => {
+  mockRender.mockImplementation((element: { props: ConversationViewProps }) => {
     mounts.count += 1;
     rendered = element.props;
     let resolveExit!: () => void;
@@ -173,7 +179,7 @@ function scriptRender(): MountedTree {
     return { unmount, clear: () => undefined, waitUntilExit: () => exited };
   });
 
-  const requireProps = (): MountedProps => {
+  const requireProps = (): ConversationViewProps => {
     if (!rendered) {
       throw new Error('no Ink tree is mounted');
     }
@@ -183,13 +189,7 @@ function scriptRender(): MountedTree {
   return {
     mounts,
     unmount,
-    conversationProps: () => {
-      const props = requireProps();
-      if (!('onExit' in props)) {
-        throw new Error('the mounted tree is not the conversation');
-      }
-      return props;
-    },
+    conversationProps: requireProps,
     exitInk: () => exitInk?.(),
   };
 }
@@ -210,7 +210,7 @@ function startRun(overrides?: Partial<RunTuiOptions>) {
   return run;
 }
 
-function createConversationDouble(overrides: Record<string, unknown> = {}) {
+function createConversationDouble(overrides: Partial<TuiConversation> = {}): TuiConversation {
   return {
     lang: 'en' as const,
     commandAvailability: {},
@@ -399,8 +399,8 @@ describe('runTui', () => {
 
     it('should defer a mode switch until the next message and preserve the workflow', async () => {
       const history = [
-        { role: 'user', content: 'add auth' },
-        { role: 'assistant', content: 'Which method?' },
+        { role: 'user' as const, content: 'add auth' },
+        { role: 'assistant' as const, content: 'Which method?' },
       ];
       const first = createConversationDouble({ snapshotHistory: vi.fn(() => history) });
       const second = createConversationDouble();
@@ -446,8 +446,8 @@ describe('runTui', () => {
 
     it('should apply only the final mode after multiple switches', async () => {
       const history = [
-        { role: 'user', content: 'distinct prior request' },
-        { role: 'assistant', content: 'distinct prior answer' },
+        { role: 'user' as const, content: 'distinct prior request' },
+        { role: 'assistant' as const, content: 'distinct prior answer' },
       ];
       const snapshotHistory = vi.fn(() => history);
       const first = createConversationDouble({ snapshotHistory });
@@ -491,8 +491,8 @@ describe('runTui', () => {
 
     it('should rebuild the selected persona lazily with its prompt and tools', async () => {
       const history = [
-        { role: 'user', content: 'review this change' },
-        { role: 'assistant', content: 'I will inspect it.' },
+        { role: 'user' as const, content: 'review this change' },
+        { role: 'assistant' as const, content: 'I will inspect it.' },
       ];
       const first = createConversationDouble({ snapshotHistory: vi.fn(() => history) });
       const personaConversation = createConversationDouble();
@@ -603,6 +603,148 @@ describe('runTui', () => {
         { history: [], queue: [] },
       );
       await expect(run).resolves.toMatchObject({ workflowId: 'review' });
+    });
+
+    it('should rebuild before dispatch and use the rebuilt workflow id', async () => {
+      const first = createConversationDouble();
+      const rebuilt = createConversationDouble();
+      mockCreateTuiConversation
+        .mockReturnValueOnce(first)
+        .mockReturnValueOnce(rebuilt);
+      mockGetWorkflowDescription.mockImplementation((workflowId: string) => ({
+        name: workflowId,
+        description: `${workflowId} workflow`,
+        workflowStructure: '1. plan',
+        stepPreviews: [],
+      }));
+      const dispatch = vi.fn().mockResolvedValue(undefined);
+      const tree = scriptRender();
+      const run = startRun({ dispatch });
+      await waitForMount(tree, 1);
+
+      mockDetermineWorkflow.mockResolvedValue('review');
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'workflow' },
+        { history: ['/workflow'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'execute', task: 'ship it' } },
+        { history: [], queue: [] },
+      );
+      await waitForMount(tree, 3);
+
+      expect(dispatch).toHaveBeenCalledWith('review', expect.objectContaining({
+        action: 'execute',
+        task: 'ship it',
+      }));
+      expect(mockCreateTuiConversation).toHaveBeenCalledTimes(2);
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+    });
+
+    it('should keep the old conversation after a rebuild failure and allow a retry', async () => {
+      const submit = vi.fn().mockResolvedValue({
+        kind: 'assistant_response',
+        content: 'old conversation recovered',
+      });
+      const initial = createConversationDouble({ submit });
+      mockCreateTuiConversation.mockReturnValue(initial);
+      mockGetWorkflowDescription
+        .mockImplementationOnce(() => ({
+          name: 'default',
+          description: 'default workflow',
+          workflowStructure: '1. plan',
+          stepPreviews: [],
+        }))
+        .mockImplementationOnce(() => {
+          throw new Error('rebuild failed');
+        });
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'model', text: 'broken-model' },
+        { history: ['/model broken-model'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toEqual({
+        kind: 'error',
+        message: 'Failed to switch conversation settings: rebuild failed',
+      });
+      expect(submit).not.toHaveBeenCalled();
+
+      await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toEqual({
+        kind: 'assistant_response',
+        content: 'old conversation recovered',
+      });
+      expect(submit).toHaveBeenCalledTimes(1);
+
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+    });
+
+    it('should show a rebuild failure instead of a successful /resume notice', async () => {
+      const submit = vi.fn().mockResolvedValue({
+        kind: 'assistant_response',
+        content: 'old conversation recovered',
+      });
+      const initial = createConversationDouble({ submit });
+      mockCreateTuiConversation.mockReturnValue(initial);
+      mockGetWorkflowDescription
+        .mockImplementationOnce(() => ({
+          name: 'default',
+          description: 'default workflow',
+          workflowStructure: '1. plan',
+          stepPreviews: [],
+        }))
+        .mockImplementationOnce(() => {
+          throw new Error('rebuild failed');
+        });
+      mockSelectRecentSession.mockResolvedValueOnce('session-abc');
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'model', text: 'broken-model' },
+        { history: ['/model broken-model'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      tree.conversationProps().onExit(
+        { kind: 'resume_session' },
+        { history: ['/resume'], queue: [] },
+      );
+      await waitForMount(tree, 3);
+
+      expect(tree.conversationProps().initialEntries).toEqual([{
+        role: 'system',
+        content: 'Failed to switch conversation settings: rebuild failed',
+      }]);
+      expect(mockInfo).not.toHaveBeenCalled();
+      expect(initial.resumeSession).not.toHaveBeenCalled();
+
+      await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toEqual({
+        kind: 'assistant_response',
+        content: 'old conversation recovered',
+      });
+      expect(submit).toHaveBeenCalledTimes(1);
+
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
     });
 
     it('should rebuild persona mode from the switched workflow first step', async () => {
@@ -969,6 +1111,7 @@ describe('runTui', () => {
       expect(snapshotHistory).toHaveBeenCalledTimes(1);
       expect(mockCreateTuiConversation).toHaveBeenCalledTimes(2);
       expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.plan.ctx.providerType).toBe('claude');
+      expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.plan.ctx.disableSessionRetry).toBe(true);
       expect(failed.submit).toHaveBeenCalledTimes(1);
       expect(recovered.submit).toHaveBeenCalledTimes(1);
 

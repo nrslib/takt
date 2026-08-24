@@ -194,7 +194,7 @@ describe('TUI conversation layer', () => {
     ]);
   });
 
-  it('should preserve pending handoff history through the real factory after a provider failure', async () => {
+  it('should pass pending handoff history on a manual retry after a provider failure', async () => {
     const handoffHistory = [
       { role: 'user' as const, content: 'distinct prior request' },
       { role: 'assistant' as const, content: 'distinct prior answer' },
@@ -204,10 +204,24 @@ describe('TUI conversation layer', () => {
       result: { content: 'unsupported model', sessionId: undefined, success: false },
       sessionId: undefined,
     });
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'recovered answer', sessionId: 'session-2', success: true },
+      sessionId: 'session-2',
+    });
 
-    await send(conversation, 'retry this', []);
+    const failed = await send(conversation, 'retry this', []);
+    const recovered = await send(conversation, 'retry this manually', []);
 
-    expect(conversation.snapshotHistory?.()).toEqual(handoffHistory);
+    expect(failed).toMatchObject({ kind: 'error', message: 'unsupported model' });
+    expect(recovered).toMatchObject({ kind: 'assistant_response', content: 'recovered answer' });
+    const retryPrompt = String(mockCallAIWithRetry.mock.calls[1]?.[0]);
+    expect(retryPrompt).toContain('User: distinct prior request');
+    expect(retryPrompt).toContain('Assistant: distinct prior answer');
+    expect(conversation.snapshotHistory?.()).toEqual([
+      ...handoffHistory,
+      { role: 'user', content: 'retry this manually' },
+      { role: 'assistant', content: 'recovered answer' },
+    ]);
   });
 
   it('should stop forwarding chunks once the submission settled', async () => {

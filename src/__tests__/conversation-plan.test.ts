@@ -184,10 +184,10 @@ describe('assistant conversation plan', () => {
       model: 'temporary-model',
       lang: 'ja',
       personaName: 'grill-me-interactive',
-      sessionId: undefined,
       providerOptions: { codex: { reasoningEffort: 'high' } },
       permissionMode: 'readonly',
     }));
+    expect(ctx.sessionId).toBeUndefined();
   });
 
   it('should use the assistant init context for both the first prompt and the summary', () => {

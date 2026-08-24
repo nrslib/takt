@@ -22,7 +22,7 @@ import {
 import type { EditorDraft } from './editorState.js';
 import { mountInk } from './inkMount.js';
 import type { TranscriptEntry } from './TranscriptEntryView.js';
-import type { InteractiveResultSource, TuiConversation } from './tuiConversation.js';
+import type { InteractiveResultSource, TuiConversation, TuiHandoffId } from './tuiConversation.js';
 
 export interface TuiConversationRunOptions {
   readonly cwd: string;
@@ -62,7 +62,7 @@ export interface TuiConversationRunOptions {
    * whatever was typed alongside the command. It answers with the line to greet
    * the session with, or with the result that ends the run.
    */
-  readonly onHandoff?: (id: string, text: string) => Promise<TuiHandoffOutcome>;
+  readonly onHandoff?: (id: TuiHandoffId, text: string) => Promise<TuiHandoffOutcome>;
 }
 
 export type TuiHandoffOutcome =
@@ -188,8 +188,13 @@ export async function runTuiConversation(
       case 'resume_session': {
         const selected = await selectRecentSession(options.cwd, options.lang);
         if (selected !== null) {
-          await options.conversation.resumeSession(selected);
-          info(getLabel('interactive.resumeSessionLoaded', options.lang));
+          const notice = await options.conversation.resumeSession(selected);
+          initialEntries = notice === undefined
+            ? []
+            : [{ role: 'system', content: notice }];
+          if (notice === undefined) {
+            info(getLabel('interactive.resumeSessionLoaded', options.lang));
+          }
         }
         break;
       }

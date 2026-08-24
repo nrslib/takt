@@ -54,6 +54,30 @@ export interface TuiConversationOptions {
   enableSettingsCommands?: boolean;
 }
 
+type SettingsSlashCommand =
+  | typeof SlashCommand.Workflow
+  | typeof SlashCommand.Mode
+  | typeof SlashCommand.Provider
+  | typeof SlashCommand.Model
+  | typeof SlashCommand.Effort;
+
+export type TuiHandoffId =
+  | 'workflow'
+  | 'mode'
+  | 'provider'
+  | 'model'
+  | 'effort'
+  | 'exec-setup'
+  | 'exec-go';
+
+export const TUI_HANDOFF_IDS: Readonly<Record<SettingsSlashCommand, TuiHandoffId>> = {
+  [SlashCommand.Workflow]: 'workflow',
+  [SlashCommand.Mode]: 'mode',
+  [SlashCommand.Provider]: 'provider',
+  [SlashCommand.Model]: 'model',
+  [SlashCommand.Effort]: 'effort',
+};
+
 /** i18n label for every failure the session reports with a fixed cause. */
 const SESSION_ERROR_LABEL_KEYS: Readonly<
   Record<Exclude<ConversationSessionErrorCode, 'provider_error'>, string>
@@ -114,7 +138,7 @@ export type TuiLocalCommand =
    */
   | {
     kind: 'handoff';
-    id: string;
+    id: TuiHandoffId;
     /** What was typed alongside the command, for the run that carries it out. */
     text?: string;
   }
@@ -142,8 +166,8 @@ export interface TuiConversation {
   submit(input: TuiSubmitInput): Promise<TuiSubmission>;
   /** Summarize straight into a task instruction, skipping the chat turn. */
   createInstruction(input: TuiSubmitInput): Promise<TuiSubmission>;
-  /** Continue from a session picked with /resume. */
-  resumeSession(sessionId: string): Promise<void>;
+  /** Continue from a session picked with /resume, or return a notice to show. */
+  resumeSession(sessionId: string): Promise<string | undefined>;
   /**
    * Put a `/go` draft the user rejected back into the conversation, so the next
    * revision starts from what was proposed. Left out by a front-end whose
@@ -260,7 +284,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         case SlashCommand.Mode:
         case SlashCommand.Provider:
           return match.text === ''
-            ? { kind: 'handoff', id: match.command.slice(1) }
+            ? { kind: 'handoff', id: TUI_HANDOFF_IDS[match.command] }
             : {
               kind: 'notice',
               message: getLabel('tui.errors.settingNoArguments', ctx.lang, { command: match.command }),
@@ -268,7 +292,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         case SlashCommand.Model:
         case SlashCommand.Effort:
           return match.text !== ''
-            ? { kind: 'handoff', id: match.command.slice(1), text: match.text }
+            ? { kind: 'handoff', id: TUI_HANDOFF_IDS[match.command], text: match.text }
             : {
               kind: 'notice',
               message: getLabel('tui.errors.settingValueRequired', ctx.lang, { command: match.command }),
@@ -353,11 +377,12 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         };
     },
 
-    async resumeSession(sessionId: string): Promise<void> {
+    async resumeSession(sessionId: string): Promise<string | undefined> {
       session.setSessionId(sessionId);
       if (strategy.resolveResumedSessionConfiguration) {
         session.setPromptConfiguration(await strategy.resolveResumedSessionConfiguration());
       }
+      return undefined;
     },
 
     pasteClipboardImage(abortSignal: AbortSignal): Promise<string> {
