@@ -341,7 +341,12 @@ describe('runTui', () => {
       conversation.finalizeTranscript(entries, 14);
 
       expect(mockRenderToString).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ props: { entries } }),
+        expect.objectContaining({
+          props: expect.objectContaining({
+            entries,
+            userMessageColors: conversation.userMessageColors,
+          }),
+        }),
         { columns: 14 },
       );
       expect(written.mock.calls.flat().map(String)).not.toContain('final transcript\n');
@@ -412,6 +417,7 @@ describe('runTui', () => {
       expect(second.autoSubmit).toBe(false);
       // The same session object carries the conversation across the remount.
       expect(second.conversation).toBe(first.conversation);
+      expect(second.userMessageColors).toBe(first.userMessageColors);
 
       second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;

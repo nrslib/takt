@@ -199,6 +199,7 @@ interface RenderOverrides {
   readonly initialQueue?: readonly string[];
   readonly modelLabel?: string;
   readonly residentSession?: boolean;
+  readonly userMessageColors?: ConversationViewProps['userMessageColors'];
   readonly finalizeTranscript?: ConversationViewProps['finalizeTranscript'];
 }
 
@@ -214,6 +215,10 @@ function renderConversation(
       lang="en"
       conversation={conversation}
       initialEntries={INITIAL_ENTRIES}
+      userMessageColors={overrides.userMessageColors ?? {
+        background: '#42454b',
+        foreground: '#ffffff',
+      }}
       submitMode={submitMode}
       autoSubmit={overrides.autoSubmit ?? false}
       initialHistory={overrides.initialHistory ?? []}
@@ -227,10 +232,12 @@ function renderConversation(
   );
 }
 
-const DARK_GRAY_BACKGROUND = '\x1b[100m';
+const USER_MESSAGE_BACKGROUND = '\x1b[48;2;66;69;75m';
 const DEFAULT_FOREGROUND = '\x1b[39m';
-const WHITE_FOREGROUND = '\x1b[37m';
+const USER_MESSAGE_FOREGROUND = '\x1b[38;2;255;255;255m';
 const DIM_TEXT = '\x1b[2m';
+const FALLBACK_USER_MESSAGE_COLORS = { background: '#42454b', foreground: '#ffffff' } as const;
+const THEMED_USER_MESSAGE_COLORS = { background: '#d7d7d7' } as const;
 
 function renderWithColors(node: ReactNode, columns: number): string {
   const originalChalkLevel = chalk.level;
@@ -277,21 +284,26 @@ describe('TranscriptEntryView', () => {
   it('should render a submitted user message as a full-width dark band with white text and one padded row on each side', () => {
     const columns = 24;
     const output = renderWithColors(
-      <TranscriptEntryView entry={{ role: 'user', content: 'submitted message' }} />,
+      <TranscriptEntryView
+        entry={{ role: 'user', content: 'submitted message' }}
+        userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+      />,
       columns,
     );
     const [topPadding, content, bottomPadding, outsideBand] = output.split('\n');
 
     expect(stripAnsi(topPadding ?? '')).toBe(' '.repeat(columns));
-    expect(topPadding).toMatch(/^\x1b\[100m/);
+    expect(topPadding?.startsWith(USER_MESSAGE_BACKGROUND)).toBe(true);
     expect(stripAnsi(content ?? '').trimEnd()).toBe('❯ submitted message');
     expect(stripAnsi(content ?? '')).toHaveLength(columns);
-    expect(content).toMatch(/^\x1b\[100m/);
-    expect(content).toContain(`${WHITE_FOREGROUND}❯ submitted message${DEFAULT_FOREGROUND}`);
+    expect(content?.startsWith(USER_MESSAGE_BACKGROUND)).toBe(true);
+    expect(content).toContain(
+      `${USER_MESSAGE_FOREGROUND}❯ submitted message${DEFAULT_FOREGROUND}`,
+    );
     expect(content).not.toContain(DIM_TEXT);
     expect(stripAnsi(bottomPadding ?? '')).toBe(' '.repeat(columns));
-    expect(bottomPadding).toMatch(/^\x1b\[100m/);
-    expect(outsideBand ?? '').not.toContain(DARK_GRAY_BACKGROUND);
+    expect(bottomPadding?.startsWith(USER_MESSAGE_BACKGROUND)).toBe(true);
+    expect(outsideBand ?? '').not.toContain(USER_MESSAGE_BACKGROUND);
   });
 
   it('should reflow the existing user-message band when the mounted terminal is resized', async () => {
@@ -311,6 +323,7 @@ describe('TranscriptEntryView', () => {
           ui={UI}
           lang="en"
           conversation={conversation}
+          userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
           initialEntries={[
             { role: 'user', content: message },
             { role: 'assistant', content: 'answer' },
@@ -349,7 +362,7 @@ describe('TranscriptEntryView', () => {
 
       const selectBandLines = (frame: string): string[] => frame
         .split('\n')
-        .filter((line) => line.startsWith(DARK_GRAY_BACKGROUND));
+        .filter((line) => line.startsWith(USER_MESSAGE_BACKGROUND));
       const selectContentLines = (frame: string): string[] => selectBandLines(frame)
         .filter((line) => stripAnsi(line).trim() !== '');
 
@@ -372,17 +385,43 @@ describe('TranscriptEntryView', () => {
     }
   });
 
+  it('should use the resolved background and terminal-default foreground in the user band', () => {
+    const output = renderWithColors(
+      <TranscriptEntryView
+        entry={{ role: 'user', content: 'submitted message' }}
+        userMessageColors={THEMED_USER_MESSAGE_COLORS}
+      />,
+      24,
+    );
+    const [, content] = output.split('\n');
+
+    expect(output).toContain('\x1b[48;2;215;215;215m');
+    expect(content?.startsWith('\x1b[48;2;215;215;215m')).toBe(true);
+    expect(stripAnsi(output)).toContain('❯ submitted message');
+    expect(output).not.toContain(USER_MESSAGE_FOREGROUND);
+    expect(output).not.toContain(USER_MESSAGE_BACKGROUND);
+  });
+
   it('should apply the submitted-message band only to user transcript entries', () => {
     const user = renderWithColors(
-      <TranscriptEntryView entry={{ role: 'user', content: 'submitted' }} />,
+      <TranscriptEntryView
+        entry={{ role: 'user', content: 'submitted' }}
+        userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+      />,
       30,
     );
     const assistant = renderWithColors(
-      <TranscriptEntryView entry={{ role: 'assistant', content: 'answer' }} />,
+      <TranscriptEntryView
+        entry={{ role: 'assistant', content: 'answer' }}
+        userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+      />,
       30,
     );
     const system = renderWithColors(
-      <TranscriptEntryView entry={{ role: 'system', content: 'notice' }} />,
+      <TranscriptEntryView
+        entry={{ role: 'system', content: 'notice' }}
+        userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+      />,
       30,
     );
     const draft = renderWithColors(
@@ -399,10 +438,10 @@ describe('TranscriptEntryView', () => {
       30,
     );
 
-    expect(user).toContain(DARK_GRAY_BACKGROUND);
-    expect(assistant).not.toContain(DARK_GRAY_BACKGROUND);
-    expect(system).not.toContain(DARK_GRAY_BACKGROUND);
-    expect(draft).not.toContain(DARK_GRAY_BACKGROUND);
+    expect(user).toContain(USER_MESSAGE_BACKGROUND);
+    expect(assistant).not.toContain(USER_MESSAGE_BACKGROUND);
+    expect(system).not.toContain(USER_MESSAGE_BACKGROUND);
+    expect(draft).not.toContain(USER_MESSAGE_BACKGROUND);
     expect(stripAnsi(assistant).trimEnd()).toBe('● answer');
     expect(stripAnsi(system).trimEnd()).toBe('  notice');
   });

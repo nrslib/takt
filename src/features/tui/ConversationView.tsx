@@ -4,6 +4,7 @@ import type { InteractiveModeResult } from '../interactive/interactive.js';
 import { PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
 import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
+import type { UserMessageColors } from './terminalColors.js';
 import { toDisplayText, toSingleLineText } from './displayText.js';
 import {
   applyEditorKey,
@@ -73,6 +74,8 @@ export interface ConversationViewProps {
   readonly lang: 'en' | 'ja';
   readonly conversation: TuiConversation;
   readonly initialEntries: readonly TranscriptEntry[];
+  /** Colors resolved once for this run and reused when the transcript is finalized. */
+  readonly userMessageColors: UserMessageColors;
   /** `summarize` turns the first input straight into an instruction. */
   readonly submitMode: 'chat' | 'summarize';
   /** Summarize the seeded input on mount, without waiting for a keystroke. */
@@ -128,6 +131,7 @@ export function ConversationView({
   lang,
   conversation,
   initialEntries,
+  userMessageColors,
   submitMode,
   autoSubmit,
   initialHistory,
@@ -724,7 +728,7 @@ export function ConversationView({
 
   return (
     <>
-      <TranscriptView entries={transcript} />
+      <TranscriptView entries={transcript} userMessageColors={userMessageColors} />
       <Box flexDirection="column">
         {queue.length > 0 && (
           <Box flexDirection="column">

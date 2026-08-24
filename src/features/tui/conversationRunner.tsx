@@ -23,6 +23,7 @@ import {
 import type { EditorDraft } from './editorState.js';
 import { mountInk } from './inkMount.js';
 import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
+import { resolveUserMessageColors } from './terminalColors.js';
 import type { InteractiveResultSource, TuiConversation } from './tuiConversation.js';
 
 export interface TuiConversationRunOptions {
@@ -72,13 +73,6 @@ export type TuiHandoffOutcome =
   /** The run is over and this is what the caller asked for. */
   | { readonly kind: 'finished'; readonly result: InteractiveModeResult };
 
-function finalizeTranscript(entries: readonly TranscriptEntry[], columns: number): void {
-  if (entries.length === 0) {
-    return;
-  }
-  process.stdout.write(`${renderToString(<TranscriptView entries={entries} />, { columns })}\n`);
-}
-
 export async function runTuiConversation(
   options: TuiConversationRunOptions,
 ): Promise<InteractiveModeResult> {
@@ -95,6 +89,18 @@ export async function runTuiConversation(
    * had reached by then are theirs to keep.
    */
   let draft: EditorDraft | undefined;
+  // Resolve before Ink owns stdin/stdout; the same result is used for every
+  // remount and for the final scrollback frame.
+  const colorResolution = await resolveUserMessageColors();
+  const userMessageColors = colorResolution.colors;
+  const finalizeTranscript = (entries: readonly TranscriptEntry[], columns: number): void => {
+    if (entries.length === 0) {
+      return;
+    }
+    process.stdout.write(
+      `${renderToString(<TranscriptView entries={entries} userMessageColors={userMessageColors} />, { columns })}\n`,
+    );
+  };
 
   /**
    * What happens once the conversation has decided on something. Leaving ends
@@ -132,6 +138,7 @@ export async function runTuiConversation(
         lang={options.lang}
         conversation={options.conversation}
         initialEntries={initialEntries}
+        userMessageColors={userMessageColors}
         submitMode={options.submitMode}
         autoSubmit={autoSubmit}
         initialHistory={history}
@@ -152,7 +159,7 @@ export async function runTuiConversation(
           settle({ exit, carried });
         }}
       />
-    ), exitedEarly);
+    ), exitedEarly, colorResolution.delayedResponseGuard);
 
     history = settled.carried.history;
     queue = settled.carried.queue;
