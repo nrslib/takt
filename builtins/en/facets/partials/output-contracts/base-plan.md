@@ -48,6 +48,8 @@
 |-------------|-------------------------|----------------------------------------|-----------------------------------------------|-------------------|----------------------------|------------------|
 | `{same stable ID}` | {definition and producers} | {existing intermediate path} | {all consumers and entry points} | {state and ownership} | {for a replacement, consumers moving to the new contract} | {only when required: target and scope} |
 
+The `State / Ownership` column applies when the requirement asks behavior to follow the state at that time after an event and the same entity persists before and after the event.
+
 ### Reachability and Launch Conditions (when adding/changing user-facing features)
 | Item | Content |
 |------|---------|

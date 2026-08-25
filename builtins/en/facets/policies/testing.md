@@ -121,6 +121,16 @@ Changes involving side effects or state transitions are not sufficiently verifie
 | Mock-verified behavior is not distinguished from unverified real-integration scope | Warning. REJECT when it is a primary requirement |
 | Successful path, representative failure paths, and boundary state transitions are each verified | OK |
 
+Apply the following criteria when the requirement asks behavior to follow the state at that time after an event and the same entity persists before and after the event.
+
+| Criteria | Verdict |
+|----------|---------|
+| The evidence uses independent entities whose conditions were changed (separate renders, startups, or processes) instead of observing the same owner before and after the event in one sequence | REJECT |
+| Treating the contract as satisfied by leaving pre-event output in the old state and creating only new post-event output in the new state | REJECT |
+| The state owner can be observed in a test, but the check is sent only to a manual real-environment check, such as a real TTY | REJECT |
+| The checks for state and ownership or continuous execution, ownership, and concurrency are treated as not applicable even though the contract applies | REJECT |
+| The same owner is observed through the state before the event → the event → the state after the event in one continuous sequence | OK |
+
 ## Testing Contract Changes and Existing Branches
 
 When a change standardizes a contract through a shared helper, normalizer, builder, or adapter, confirm that existing equivalent branches remain protected. Do not duplicate tests per consumer; use the contract owner's unit test, a representative parameterized test, or an existing higher-level behavior test, whichever detects the same fault at the smallest scope.

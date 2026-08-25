@@ -22,6 +22,8 @@
 | `{ID}` | {path from entry point to endpoint} | {where the value or state is produced} | {where the value or state is consumed} | {propagation, conversion, persistence, event emission, etc.} | `{test name or test file}` | {reason only when not created} |
 
 ## Continuous Execution, Ownership, and Concurrency (when applicable)
+This section applies when the requirement asks behavior to follow the state at that time after an event and the same entity persists before and after the event.
+
 | Contract ID | Execution Sequence or Interleaving | Real Upper-Level Entry Point | Invariant Observed | Test | Uncovered Reason |
 |-------------|------------------------------------|------------------------------|--------------------|------|------------------|
 | `{ID}` | {create->persist->restore->continue->re-enter, failure terminal, parallel interleaving, etc.} | {production-equivalent entry point} | {ownership, identity, terminal pairing, etc.} | `{test name or test file}` | {reason only when not created} |
