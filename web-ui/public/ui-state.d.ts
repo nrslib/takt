@@ -15,6 +15,52 @@ export declare function resolveChatPaneWidth(
   manuallyAdjusted: boolean,
 ): number;
 
+export declare function isWorkflowCatalogReady(
+  selectedProjectId: string,
+  catalogProjectId: string,
+  categories: readonly { workflows?: readonly unknown[] }[],
+): boolean;
+
+export declare function isCurrentWorkflowRequest(
+  request: { requestId: number; projectId: string },
+  currentRequestId: number,
+  selectedProjectId: string,
+): boolean;
+
+export declare function sameRunSelection(
+  left: { projectId: string; slug: string } | null,
+  right: { projectId: string; slug: string } | null,
+): boolean;
+
+export declare function projectSelectionForRefresh(
+  preferredProjectId: string,
+  currentProjectId: string,
+): string;
+
+export interface RunDetailViewState {
+  scrollTop: number;
+  openReportFilenames: readonly string[];
+}
+
+export declare function captureRunDetailViewState(runDetail: {
+  scrollTop: number;
+  querySelectorAll: (selector: string) => Iterable<{
+    open: boolean;
+    dataset: { reportFilename?: string };
+  }>;
+}): RunDetailViewState;
+
+export declare function restoreRunDetailViewState(
+  runDetail: {
+    scrollTop: number;
+    querySelectorAll: (selector: string) => Iterable<{
+      open: boolean;
+      dataset: { reportFilename?: string };
+    }>;
+  },
+  state: RunDetailViewState,
+): void;
+
 export declare function shouldCloseExecutionContext(
   event: { composedPath?: () => unknown[]; target?: unknown },
   contextElement: { contains: (target: unknown) => boolean },

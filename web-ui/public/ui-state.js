@@ -24,6 +24,47 @@ export function resolveChatPaneWidth(workspaceWidth, currentWidth, manuallyAdjus
   );
 }
 
+export function isWorkflowCatalogReady(selectedProjectId, catalogProjectId, categories) {
+  return selectedProjectId !== ''
+    && selectedProjectId === catalogProjectId
+    && Array.isArray(categories)
+    && categories.some((category) =>
+      Array.isArray(category.workflows) && category.workflows.length > 0);
+}
+
+export function isCurrentWorkflowRequest(request, currentRequestId, selectedProjectId) {
+  return request.requestId === currentRequestId && request.projectId === selectedProjectId;
+}
+
+export function sameRunSelection(left, right) {
+  return left !== null
+    && right !== null
+    && left.projectId === right.projectId
+    && left.slug === right.slug;
+}
+
+export function projectSelectionForRefresh(preferredProjectId, currentProjectId) {
+  return preferredProjectId === currentProjectId ? preferredProjectId : currentProjectId;
+}
+
+export function captureRunDetailViewState(runDetail) {
+  return {
+    scrollTop: runDetail.scrollTop,
+    openReportFilenames: [...runDetail.querySelectorAll('details.report[data-report-filename]')]
+      .filter((detail) => detail.open)
+      .map((detail) => detail.dataset.reportFilename)
+      .filter((filename) => filename !== undefined),
+  };
+}
+
+export function restoreRunDetailViewState(runDetail, state) {
+  const openReportFilenames = new Set(state.openReportFilenames);
+  for (const detail of runDetail.querySelectorAll('details.report[data-report-filename]')) {
+    detail.open = openReportFilenames.has(detail.dataset.reportFilename);
+  }
+  runDetail.scrollTop = state.scrollTop;
+}
+
 export function shouldCloseExecutionContext(event, contextElement, dialogElement) {
   const eventPath = typeof event.composedPath === 'function'
     ? event.composedPath()

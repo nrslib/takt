@@ -17,8 +17,9 @@
   --complete: #69bd93;
   --radius: 7px;
   --header-height: 58px;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-sans: -apple-system, blinkmacsystemfont, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", consolas, "Liberation Mono", monospace;
+
   color: var(--text);
   background: var(--bg);
   font-family: var(--font-sans);
@@ -630,7 +631,7 @@ button {
   height: 1px;
   padding: 0;
   overflow: hidden;
-  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
 }

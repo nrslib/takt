@@ -15,9 +15,15 @@ import {
 } from './api.js';
 import {
   clampChatPaneWidth,
+  captureRunDetailViewState,
   createDirectoryRequestTracker,
   getChatPaneWidthBounds,
+  isCurrentWorkflowRequest as isCurrentWorkflowRequestState,
+  isWorkflowCatalogReady,
+  projectSelectionForRefresh,
   resolveChatPaneWidth,
+  restoreRunDetailViewState,
+  sameRunSelection as sameRunSelectionState,
   shouldCloseExecutionContext,
 } from './ui-state.js';
 
@@ -55,6 +61,7 @@ const elements = {
   projectHelp: document.querySelector('#project-help'),
   refresh: document.querySelector('#refresh-button'),
   runDetail: document.querySelector('#run-detail'),
+  runStatusLive: document.querySelector('#run-status-live'),
   runList: document.querySelector('#run-list'),
   runListEmpty: document.querySelector('#run-list-empty'),
   runWarning: document.querySelector('#run-warning'),
@@ -68,6 +75,9 @@ let sessionToken = '';
 let selectedRun = null;
 let refreshing = false;
 let workflowCatalog = [];
+let workflowCatalogProjectId = '';
+let workflowRequestId = 0;
+let projectRefreshGeneration = 0;
 let chatSession = null;
 let registryWarnings = [];
 let workflowWarnings = [];
@@ -76,6 +86,7 @@ let chatPaneWidth = null;
 let chatPaneWidthManuallyAdjusted = false;
 let executionEnabled = false;
 let chatOperationInProgress = false;
+let chatMessageRevision = 0;
 
 function createElement(tag, className, text) {
   const element = document.createElement(tag);
@@ -106,6 +117,10 @@ function selectedCategory() {
 
 function selectedProjectId() {
   return elements.project.value;
+}
+
+function workflowCatalogReady(projectId = selectedProjectId()) {
+  return isWorkflowCatalogReady(projectId, workflowCatalogProjectId, workflowCatalog);
 }
 
 function updateExecutionContextSummary() {
@@ -152,6 +167,7 @@ function setChatOperationInProgress(inProgress) {
 }
 
 function populateProjects(snapshot, preferredProjectId = '') {
+  const previousProjectId = selectedProjectId();
   registryWarnings = [...snapshot.warnings];
   elements.project.replaceChildren();
   const availableProjects = snapshot.projects.filter((candidate) => candidate.available);
@@ -169,7 +185,8 @@ function populateProjects(snapshot, preferredProjectId = '') {
   const preferredAvailable = availableProjects.some((project) => project.id === preferredProjectId);
   if (preferredAvailable) elements.project.value = preferredProjectId;
   elements.project.disabled = !available;
-  setExecutionEnabled(preferredAvailable);
+  if (selectedProjectId() !== previousProjectId) clearWorkflowCatalog();
+  setExecutionEnabled(preferredAvailable && workflowCatalogReady(preferredProjectId));
   elements.projectHelp.textContent = available
     ? 'Chatを始める前に、実行ディレクトリを選択してください。'
     : '登録済みディレクトリがありません。対象ディレクトリでtaktコマンドを一度実行してください。';
@@ -180,15 +197,30 @@ function populateProjects(snapshot, preferredProjectId = '') {
 function applyProjectsSnapshot(snapshot, preferredProjectId) {
   populateProjects(snapshot, preferredProjectId);
   if (preferredProjectId !== '' && selectedProjectId() === '') {
-    workflowCatalog = [];
-    elements.category.replaceChildren();
-    elements.workflow.replaceChildren();
+    clearWorkflowCatalog();
     resetChatSession();
   }
 }
 
 async function refreshProjects(preferredProjectId) {
-  applyProjectsSnapshot(await getProjects(), preferredProjectId);
+  const generation = ++projectRefreshGeneration;
+  const selectedProjectAtStart = selectedProjectId();
+  const preferredProjectAtStart = preferredProjectId === selectedProjectAtStart
+    ? preferredProjectId
+    : selectedProjectAtStart;
+  try {
+    const snapshot = await getProjects();
+    if (generation !== projectRefreshGeneration) return false;
+    const preferredProjectIdForSnapshot = projectSelectionForRefresh(
+      preferredProjectAtStart,
+      selectedProjectId(),
+    );
+    applyProjectsSnapshot(snapshot, preferredProjectIdForSnapshot);
+    return true;
+  } catch (error) {
+    if (generation !== projectRefreshGeneration) return false;
+    throw error;
+  }
 }
 
 function syncDirectoryControls() {
@@ -294,9 +326,21 @@ function openDirectoryPicker() {
 }
 
 function clearWorkflowCatalog() {
+  workflowRequestId += 1;
   workflowCatalog = [];
+  workflowCatalogProjectId = '';
+  workflowWarnings = [];
   elements.category.replaceChildren();
   elements.workflow.replaceChildren();
+}
+
+function beginWorkflowRequest(projectId) {
+  workflowRequestId += 1;
+  return { projectId, requestId: workflowRequestId };
+}
+
+function isCurrentWorkflowRequest(request) {
+  return isCurrentWorkflowRequestState(request, workflowRequestId, selectedProjectId());
 }
 
 async function selectBrowsedDirectory() {
@@ -306,6 +350,7 @@ async function selectBrowsedDirectory() {
   if (directoryRequest === null) return;
   syncDirectoryControls();
   elements.directoryMessage.textContent = 'ディレクトリを登録しています…';
+  let workflowRequest = null;
   try {
     const directory = await browseDirectories(sessionToken, requestedPath);
     if (!directoryRequests.isCurrent(directoryRequest)) return;
@@ -318,15 +363,21 @@ async function selectBrowsedDirectory() {
     if (!directoryRequests.isCurrent(directoryRequest)) return;
     setExecutionEnabled(false);
     clearWorkflowCatalog();
+    workflowRequest = beginWorkflowRequest(project.id);
     const catalog = await getWorkflows(project.id);
-    if (!directoryRequests.isCurrent(directoryRequest)) return;
-    if (selectedProjectId() === project.id) populateWorkflowCatalog(catalog);
-    if (!directoryRequests.isCurrent(directoryRequest)) return;
-    setExecutionEnabled(true);
+    if (!directoryRequests.isCurrent(directoryRequest) || !isCurrentWorkflowRequest(workflowRequest)) return;
+    if (selectedProjectId() !== project.id) {
+      elements.directoryMessage.textContent = '登録したディレクトリを選択できませんでした。';
+      return;
+    }
+    populateWorkflowCatalog(catalog, project.id);
+    if (!directoryRequests.isCurrent(directoryRequest) || !isCurrentWorkflowRequest(workflowRequest)) return;
+    setExecutionEnabled(workflowCatalogReady(project.id));
     resetChatSession();
     closeDirectoryPicker();
   } catch (error) {
     if (!directoryRequests.isCurrent(directoryRequest)) return;
+    if (workflowRequest !== null && !isCurrentWorkflowRequest(workflowRequest)) return;
     elements.directoryMessage.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     if (directoryRequests.finishPendingOperation(directoryRequest)) syncDirectoryControls();
@@ -348,8 +399,9 @@ function populateWorkflowSelect(preferredWorkflow = '') {
   updateExecutionContextSummary();
 }
 
-function populateWorkflowCatalog(catalog) {
+function populateWorkflowCatalog(catalog, projectId = selectedProjectId()) {
   workflowCatalog = catalog.categories;
+  workflowCatalogProjectId = projectId;
   elements.category.replaceChildren();
   for (const category of workflowCatalog) {
     const option = createElement('option', '', category.label);
@@ -367,9 +419,15 @@ function populateWorkflowCatalog(catalog) {
 async function loadWorkflowsForProject() {
   const projectId = selectedProjectId();
   clearWorkflowCatalog();
-  if (projectId === '') return;
-  const catalog = await getWorkflows(projectId);
-  if (selectedProjectId() === projectId) populateWorkflowCatalog(catalog);
+  const request = beginWorkflowRequest(projectId);
+  if (projectId === '') return { request, ok: true };
+  try {
+    const catalog = await getWorkflows(projectId);
+    if (isCurrentWorkflowRequest(request)) populateWorkflowCatalog(catalog, projectId);
+    return { request, ok: true };
+  } catch (error) {
+    return { request, ok: false, error };
+  }
 }
 
 function renderChatPlaceholder() {
@@ -465,6 +523,7 @@ function submitChatWithShortcut(event) {
 }
 
 function handleChatMessageInput() {
+  chatMessageRevision += 1;
   resizeChatMessage();
   if (elements.chatStatus.textContent === EMPTY_CHAT_MESSAGE) {
     elements.chatStatus.textContent = '';
@@ -650,13 +709,18 @@ async function submitChat(event) {
     elements.chatStatus.textContent = EMPTY_CHAT_MESSAGE;
     return;
   }
+  const messageRevision = chatMessageRevision;
+  let messageWasCleared = false;
   setChatOperationInProgress(true);
   elements.chatStatus.textContent = 'AIが応答を作成しています…';
   try {
     const session = await ensureChatSession();
     appendChatEntry('user', text);
-    elements.chatMessage.value = '';
-    resizeChatMessage();
+    if (chatMessageRevision === messageRevision && elements.chatMessage.value.trim() === text) {
+      elements.chatMessage.value = '';
+      resizeChatMessage();
+      messageWasCleared = true;
+    }
     const reply = await sendChatMessage(sessionToken, session.id, text);
     if (reply.kind === 'assistant_response') {
       appendChatEntry('assistant', reply.content);
@@ -667,6 +731,14 @@ async function submitChat(event) {
     }
     elements.chatStatus.textContent = '';
   } catch (error) {
+    if (
+      messageWasCleared
+      && chatMessageRevision === messageRevision
+      && elements.chatMessage.value === ''
+    ) {
+      elements.chatMessage.value = text;
+      resizeChatMessage();
+    }
     elements.chatStatus.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     setChatOperationInProgress(false);
@@ -720,6 +792,7 @@ function renderReports(reports) {
   }
   for (const report of reports) {
     const details = createElement('details', 'report');
+    details.dataset.reportFilename = report.filename;
     details.append(createElement('summary', '', report.filename));
     details.append(createElement(
       'pre',
@@ -764,8 +837,16 @@ function renderLogEvents(events) {
   return section;
 }
 
-function renderRunDetail(detail) {
+function renderRunDetail(detail, expectedRun) {
   const { meta, reports, events, project } = detail;
+  if (!sameRunSelectionState(
+    { projectId: project.id, slug: meta.runSlug },
+    expectedRun,
+  )) return false;
+  const viewState = elements.runDetail.dataset.projectId === expectedRun.projectId
+    && elements.runDetail.dataset.runSlug === expectedRun.slug
+    ? captureRunDetailViewState(elements.runDetail)
+    : null;
   const header = createElement('header', 'detail-header');
   header.append(
     createElement('span', `status-badge status-${meta.status}`, statusLabel(meta.status)),
@@ -783,6 +864,8 @@ function renderRunDetail(detail) {
 
   const task = createElement('section', 'task-detail');
   task.append(createElement('h3', '', 'Task'), createElement('pre', '', meta.task));
+  elements.runDetail.dataset.projectId = expectedRun.projectId;
+  elements.runDetail.dataset.runSlug = expectedRun.slug;
   elements.runDetail.replaceChildren(
     header,
     progress,
@@ -790,6 +873,10 @@ function renderRunDetail(detail) {
     renderLogEvents(events),
     renderReports(reports),
   );
+  if (viewState !== null) restoreRunDetailViewState(elements.runDetail, viewState);
+  const status = statusLabel(meta.status);
+  if (elements.runStatusLive.textContent !== status) elements.runStatusLive.textContent = status;
+  return true;
 }
 
 async function refreshRuns() {
@@ -807,7 +894,15 @@ async function refreshRuns() {
     renderRunList(collection.runs);
     updateWarnings(collection.warnings);
     if (selectedRun !== null) {
-      renderRunDetail(await getRun(selectedRun.projectId, selectedRun.slug));
+      const requestedRun = { ...selectedRun };
+      try {
+        const detail = await getRun(requestedRun.projectId, requestedRun.slug);
+        if (sameRunSelectionState(selectedRun, requestedRun)) {
+          renderRunDetail(detail, requestedRun);
+        }
+      } catch (error) {
+        if (sameRunSelectionState(selectedRun, requestedRun)) throw error;
+      }
     }
     elements.connection.textContent = '接続済み';
   } catch (error) {
@@ -922,15 +1017,15 @@ elements.project.addEventListener('change', () => {
   resetChatSession();
   setExecutionEnabled(false);
   void loadWorkflowsForProject()
-    .then(() => {
-      if (selectedProjectId() === requestedProjectId) {
-        setExecutionEnabled(true);
-        updateExecutionContextSummary();
+    .then(({ request, ok, error }) => {
+      if (!isCurrentWorkflowRequest(request) || selectedProjectId() !== requestedProjectId) return;
+      if (!ok) {
+        setExecutionEnabled(false);
+        elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
+        return;
       }
-    })
-    .catch((error) => {
-      setExecutionEnabled(false);
-      elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
+      setExecutionEnabled(workflowCatalogReady(requestedProjectId));
+      updateExecutionContextSummary();
     });
 });
 elements.workflow.addEventListener('change', () => {
@@ -938,7 +1033,10 @@ elements.workflow.addEventListener('change', () => {
 });
 elements.chatMode.addEventListener('change', () => void reconfigureActiveChatSession());
 elements.refresh.addEventListener('click', () => {
-  void refreshProjects(selectedProjectId()).then(refreshRuns).catch((error) => {
+  void refreshProjects(selectedProjectId()).then((applied) => {
+    if (applied) return refreshRuns();
+    return undefined;
+  }).catch((error) => {
     elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
   });
 });

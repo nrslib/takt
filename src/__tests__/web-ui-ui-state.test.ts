@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  captureRunDetailViewState,
   clampChatPaneWidth,
   createDirectoryRequestTracker,
   getChatPaneWidthBounds,
+  isCurrentWorkflowRequest,
+  isWorkflowCatalogReady,
+  projectSelectionForRefresh,
   resolveChatPaneWidth,
+  restoreRunDetailViewState,
+  sameRunSelection,
   shouldCloseExecutionContext,
 } from '../../web-ui/public/ui-state.js';
 import type { DirectoryRequestToken } from '../../web-ui/public/ui-state.js';
@@ -119,5 +125,59 @@ describe('Web UI execution context boundary', () => {
   it('keeps the context open for a dialog close click after the dialog state flips closed', () => {
     const closedDialog = { open: false };
     expect(shouldCloseExecutionContext({ composedPath: () => [closedDialog, {}] }, context, closedDialog)).toBe(false);
+  });
+});
+
+describe('Web UI execution readiness and run detail view state', () => {
+  it('requires the selected project and a populated catalog', () => {
+    const categories = [{ workflows: [{ id: 'default' }] }];
+    expect(isWorkflowCatalogReady('project-a', 'project-a', categories)).toBe(true);
+    expect(isWorkflowCatalogReady('project-a', 'project-b', categories)).toBe(false);
+    expect(isWorkflowCatalogReady('project-a', 'project-a', [{ workflows: [] }])).toBe(false);
+    expect(isWorkflowCatalogReady('', 'project-a', categories)).toBe(false);
+  });
+
+  it('preserves open reports and scroll position across detail replacement', () => {
+    const firstReport = { dataset: { reportFilename: 'first.md' }, open: true };
+    const secondReport = { dataset: { reportFilename: 'second.md' }, open: false };
+    const runDetail = {
+      scrollTop: 42,
+      querySelectorAll: () => [firstReport, secondReport],
+    };
+
+    const state = captureRunDetailViewState(runDetail);
+    firstReport.open = false;
+    secondReport.open = true;
+    runDetail.scrollTop = 0;
+
+    restoreRunDetailViewState(runDetail, state);
+
+    expect(firstReport.open).toBe(true);
+    expect(secondReport.open).toBe(false);
+    expect(runDetail.scrollTop).toBe(42);
+  });
+
+  it('accepts only the current workflow request for the selected project', () => {
+    const requestA1 = { requestId: 1, projectId: 'project-a' };
+    const requestB = { requestId: 2, projectId: 'project-b' };
+    const requestA2 = { requestId: 3, projectId: 'project-a' };
+
+    expect(isCurrentWorkflowRequest(requestA1, requestA2.requestId, 'project-a')).toBe(false);
+    expect(isCurrentWorkflowRequest(requestB, requestA2.requestId, 'project-a')).toBe(false);
+    expect(isCurrentWorkflowRequest(requestA2, requestA2.requestId, 'project-a')).toBe(true);
+  });
+
+  it('requires both project and slug for an in-flight run detail', () => {
+    const projectA = { projectId: 'project-a', slug: 'same-slug' };
+    const projectB = { projectId: 'project-b', slug: 'same-slug' };
+    expect(sameRunSelection(projectA, projectA)).toBe(true);
+    expect(sameRunSelection(projectA, projectB)).toBe(false);
+    expect(sameRunSelection(projectA, null)).toBe(false);
+  });
+
+  it('keeps a user selection made during refresh instead of restoring the old one', () => {
+    expect(projectSelectionForRefresh('project-a', 'project-a')).toBe('project-a');
+    expect(projectSelectionForRefresh('project-a', 'project-b')).toBe('project-b');
+    expect(projectSelectionForRefresh('', 'project-b')).toBe('project-b');
   });
 });
