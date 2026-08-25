@@ -35,12 +35,15 @@ function runWithImplementation(source, { captureTrace = false } = {}) {
     cpSync(join(workDir, 'tests'), join(tempDir, 'tests'), { recursive: true });
     cpSync(join(workDir, 'package.json'), join(tempDir, 'package.json'));
     writeFileSync(join(tempDir, 'src', 'connection.js'), source);
-    const env = captureTrace
-      ? { ...process.env, STATE_AFTER_EVENT_TRACE_PATH: tracePath }
-      : process.env;
+    const env = {
+      PATH: process.env.PATH,
+      HOME: tempDir,
+      ...(captureTrace ? { STATE_AFTER_EVENT_TRACE_PATH: tracePath } : {}),
+    };
     execFileSync(process.execPath, ['--test'], { cwd: tempDir, env, stdio: 'pipe' });
     passed = true;
   } catch {
+    passed = false;
   } finally {
     trace = captureTrace && existsSync(tracePath) ? readFileSync(tracePath, 'utf8') : '';
     rmSync(tempDir, { recursive: true, force: true });
@@ -204,6 +207,19 @@ export default function assertStateAfterEventWriteTests() {
       + `  };\n}\n`,
   );
 
+  const preEventMutationFails = !passesWithImplementation(
+    `export function createConnection(initialStatus) {\n`
+      + `  let currentStatus = initialStatus;\n`
+      + `  let reads = 0;\n`
+      + `  return {\n`
+      + `    reconnect(nextStatus) { currentStatus = nextStatus; },\n`
+      + `    readStatus() {\n`
+      + `      reads += 1;\n`
+      + `      return reads === 1 ? 'unknown' : currentStatus;\n`
+      + `    },\n`
+      + `  };\n}\n`,
+  );
+
   const checks = [
     changes.some((path) => path.startsWith('tests/')),
     changes.every((path) => path.startsWith('tests/')),
@@ -212,6 +228,7 @@ export default function assertStateAfterEventWriteTests() {
     runtimeIdentityEvidence,
     correctImplementationPasses,
     writeOnceImplementationFails,
+    preEventMutationFails,
   ];
   const names = [
     'tests-changed',
@@ -221,6 +238,7 @@ export default function assertStateAfterEventWriteTests() {
     'runtime-identity-and-call-sequence',
     'correct-implementation-passes',
     'write-once-implementation-fails',
+    'pre-event-assertion-fails',
   ];
   const failed = names.filter((_, index) => !checks[index]);
   return {

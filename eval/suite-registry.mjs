@@ -43,9 +43,10 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
-    reason: 'イベント後も同じ実体の状態に合わせて振る舞う契約の発火・誤発火・証拠境界を測る',
+    reason: '変化を名指しし、その後も状態に合わせて振る舞うことを求め、同じ実体が存続する契約の発火・誤発火・証拠境界を測る',
     suites: [
       'state-after-event-plan',
+      'state-after-event-plan-config',
       'state-after-event-write-tests',
       'state-after-event-testing-review',
     ],
@@ -244,6 +245,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: 'Claude Opus と Codex Luna を含む production-condition の計画比較を行う',
+  },
+  'state-after-event-plan-config': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: 'Claude Opus と Codex Luna を含む production-condition の設定変更計画比較を行う',
   },
   'state-after-event-testing-review': {
     defaultEligible: false,

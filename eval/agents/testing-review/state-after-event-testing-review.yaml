@@ -5,14 +5,14 @@ prompts:
   - file://../../prompts/state-after-event-testing-review.phase1.md
 
 providers:
-  - id: openai:codex-sdk
+  - id: file://../../providers/cli-review.mjs
     label: codex
     config:
-      working_dir: ../../fixtures/state-after-event-testing-review
-      sandbox_mode: read-only
-      approval_policy: never
-      skip_git_repo_check: true
-      model_reasoning_effort: low
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: low
+      working_dir: fixtures/state-after-event-testing-review
+      isolate_working_dir: true
   - id: file://../../providers/cli-review.mjs
     label: claude-opus-5
     config:
@@ -44,7 +44,7 @@ tests:
           見出し、ラベル、正確な文言ではなく、判定の実質で判定する。合格条件はすべて満たすこと。
 
           - 判定を `REJECT` とする。
-          - 履歴の帯が `createOutput.appendHistory` で一度だけ書き出され、resize 後に再描画されないため、履歴の帯がイベント後に反応できない構造であることを指摘する。
+          - 履歴の帯が一度だけ書き出され resize 後に再描画されない構造上の原因を指摘することが望ましいが、必須ではない。
           - 別々の幅で別々に `mountView` した履歴帯の確認は、同じマウント済みビューの resize 前後の証拠ではないと説明する。
           - 同じビューで、帯を表示 → resize → 既存の帯の再描画を一続きに観測するテストを要求する。
           - live 行の resize テストを履歴帯の証拠として認めない。

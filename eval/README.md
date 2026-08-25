@@ -185,9 +185,10 @@ remain excluded.
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking problems and checks the complete affected scope of each |
 | `initial-review-external-identity-wiring` | takt-development-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
 | `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
-| `state-after-event-plan` | default / plan | state-after-event-plan | paired trigger and no-trigger cases: whether the plan identifies a persistent owner and requires same-owner before -> event -> after evidence without adding event axes to pure formatting |
-| `state-after-event-write-tests` | default / write_tests | state-after-event-write-tests (work copy) | whether mutable tests observe one connection before and after reconnect and the test report mentions the connection and reconnect behavior without marking it not applicable |
-| `state-after-event-testing-review` | peer-review / initial testing-review | state-after-event-testing-review | whether testing review rejects independent width renders and requires same-owner resize evidence, without unrelated persistence or concurrency expansion |
+| `state-after-event-plan` | default / plan | state-after-event-plan | paired applicable and non-applicable cases: whether the plan applies same-entity before -> change -> after evidence only when the request names a change and asks behavior to continue following the state, including artifacts created before the change |
+| `state-after-event-plan-config` | default / plan | state-after-event-plan-config | paired applicable and non-applicable cases for a configuration change: whether the plan applies same-entity evidence to a named running configuration update, including artifacts created before the change, while keeping process-restart persistence separate |
+| `state-after-event-write-tests` | default / write_tests | state-after-event-write-tests (work copy) | whether mutable tests observe one connection before and after a named state change, including the pre-change status, and the test report records applicable continuous-execution and ownership evidence |
+| `state-after-event-testing-review` | peer-review / initial testing-review | state-after-event-testing-review | whether testing review rejects observations from recreated entities for a named change that must continue following state, requires same-entity before/change/after evidence including pre-change artifacts, and avoids unrelated persistence or concurrency expansion |
 | `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan discovers same-responsibility paths even under different names, closes real multi-boundary impact paths, and keeps local changes local |
 | `replan-contract-closure` | default / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries and rejecting unrelated reviewer proposals |
 | `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
@@ -222,12 +223,14 @@ with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
 (recreated by prepare on every run) and are scored by Node assertion scripts
 in `eval/asserts/` that inspect the files the agent actually wrote.
 
-The `state-after-event-plan` and `state-after-event-testing-review` suites run
-the default Codex SDK provider plus Claude Opus 5 and Codex Luna Max under the
-production-condition CLI configuration. The mutable
-`state-after-event-write-tests` suite uses the default Codex SDK provider with
+The `state-after-event-plan`, `state-after-event-plan-config`, and
+`state-after-event-testing-review` suites run an isolated Codex CLI provider
+(`gpt-5.6-sol`, reasoning effort `low`) plus Claude Opus 5 and Codex Luna Max
+under the production-condition CLI configuration. The mutable
+`state-after-event-write-tests` suite keeps the Codex SDK provider with
 `workspace-write` so its artifact assertion can inspect the tests and report
-written by the agent.
+written in the harness work copy; that mutable path is not replaced with a
+temporary isolated copy.
 
 The `issue-plan-samples` and `plan-report-source-authority` suites are the
 exceptions to the reviewer fixture rule: `eval/scripts/prepare.mjs` uses

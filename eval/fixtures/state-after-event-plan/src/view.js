@@ -1,7 +1,7 @@
 import { createOutput } from './output.js';
 
-export function mountView({ terminal, write }) {
-  const output = createOutput({ terminal, write });
+export function mountView({ terminal, screen }) {
+  const output = createOutput({ terminal, screen });
 
   return {
     showUserMessage(text) {

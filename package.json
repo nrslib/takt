@@ -38,6 +38,7 @@
     "eval:prompts:initial-review-contract-discovery": "node eval/scripts/prepare.mjs initial-review-contract-discovery && node eval/scripts/run-evals.mjs initial-review-contract-discovery",
     "eval:prompts:testing-review-observable-evidence": "node eval/scripts/prepare.mjs testing-review-observable-evidence && node eval/scripts/run-evals.mjs testing-review-observable-evidence",
     "eval:prompts:state-after-event-plan": "node eval/scripts/prepare.mjs state-after-event-plan && node eval/scripts/run-evals.mjs state-after-event-plan",
+    "eval:prompts:state-after-event-plan-config": "node eval/scripts/prepare.mjs state-after-event-plan-config && node eval/scripts/run-evals.mjs state-after-event-plan-config",
     "eval:prompts:state-after-event-write-tests": "node eval/scripts/prepare.mjs state-after-event-write-tests && node eval/scripts/run-evals.mjs state-after-event-write-tests",
     "eval:prompts:state-after-event-testing-review": "node eval/scripts/prepare.mjs state-after-event-testing-review && node eval/scripts/run-evals.mjs state-after-event-testing-review",
     "eval:prompts:initial-plan-contract-closure": "node eval/scripts/prepare.mjs initial-plan-contract-closure && node eval/scripts/run-evals.mjs initial-plan-contract-closure",

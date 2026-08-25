@@ -5,14 +5,14 @@ prompts:
   - file://../../prompts/state-after-event-plan.phase1.md
 
 providers:
-  - id: openai:codex-sdk
+  - id: file://../../providers/cli-review.mjs
     label: codex
     config:
-      working_dir: ../../fixtures/state-after-event-plan
-      sandbox_mode: read-only
-      approval_policy: never
-      skip_git_repo_check: true
-      model_reasoning_effort: low
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: low
+      working_dir: fixtures/state-after-event-plan
+      isolate_working_dir: true
   - id: file://../../providers/cli-review.mjs
     label: claude-opus-5
     config:
@@ -72,7 +72,8 @@ tests:
           - resize、イベント前後、同じ実体の前後観測、永続化、再接続、並行性の軸を計画へ追加しない。
           - 送信済みユーザー発言の先頭マーカーの変換と、その直接のテストを主対象にする。
           - 既存動作を維持する契約や、変更不要の根拠を記載しても減点しない。
+          - 既存テスト（resize や live 行のテストを含む）を維持し、実行して通ることを確認する記載は、軸の追加ではないため減点しない。
 
           既存の resize 処理や live 行の振る舞いを「維持する」「変更しない」と記載しても減点しない。
 
-          これらを満たさず、上記のイベント軸を追加した計画は不合格とする。
+          不合格は、新しい変化前後の観測、同じ実体の前後契約、または resize 追従の新しい実装作業を追加した場合に限る。

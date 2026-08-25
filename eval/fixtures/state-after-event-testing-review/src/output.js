@@ -12,11 +12,16 @@ function formatBand(text, width) {
   return `\n${lines.join('\n')}\n`;
 }
 
-export function createOutput({ terminal, write }) {
+export function createOutput({ terminal, screen }) {
   let liveText = null;
+  let liveRendered = false;
 
   const appendHistory = (text) => {
-    write(formatBand(text, terminal.columns));
+    const historyLines = liveRendered ? screen.lines.slice(0, -1) : screen.lines;
+    const lines = [...historyLines, ...formatBand(text, terminal.columns).split('\n')];
+    if (liveText !== null) lines.push(fitLine(liveText, terminal.columns));
+    screen.render(lines);
+    liveRendered = liveText !== null;
   };
 
   const setLive = (text) => {
@@ -24,7 +29,10 @@ export function createOutput({ terminal, write }) {
   };
 
   const refresh = () => {
-    if (liveText !== null) write(fitLine(liveText, terminal.columns));
+    if (liveText === null) return;
+    const historyLines = liveRendered ? screen.lines.slice(0, -1) : screen.lines;
+    screen.render([...historyLines, fitLine(liveText, terminal.columns)]);
+    liveRendered = true;
   };
 
   terminal.on('resize', () => refresh());

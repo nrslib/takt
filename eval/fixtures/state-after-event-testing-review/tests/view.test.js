@@ -15,16 +15,28 @@ function createTerminal(columns) {
   };
 }
 
-function renderHistoryAtWidth(width) {
-  const output = [];
-  const terminal = createTerminal(width);
-  const view = mountView({ terminal, write: (value) => output.push(value) });
-  view.showUserMessage('hello');
-  return output[0];
+function createScreen() {
+  let lines = [];
+  return {
+    get lines() {
+      return lines;
+    },
+    render(nextLines) {
+      lines = [...nextLines];
+    },
+  };
 }
 
-function historyLine(value) {
-  return value.split('\n')[1];
+function renderHistoryAtWidth(width) {
+  const screen = createScreen();
+  const terminal = createTerminal(width);
+  const view = mountView({ terminal, screen });
+  view.showUserMessage('hello');
+  return screen.lines;
+}
+
+function historyLine(lines) {
+  return lines[1];
 }
 
 test('renders the history band at each separate view mount', () => {
@@ -33,13 +45,13 @@ test('renders the history band at each separate view mount', () => {
 });
 
 test('refreshes the live row when the terminal width changes', () => {
-  const output = [];
+  const screen = createScreen();
   const terminal = createTerminal(14);
-  const view = mountView({ terminal, write: (value) => output.push(value) });
+  const view = mountView({ terminal, screen });
 
   view.showStatus('ready');
   terminal.columns = 26;
   terminal.emit('resize');
 
-  assert.equal(output.at(-1).length, 26);
+  assert.equal(screen.lines.at(-1).length, 26);
 });

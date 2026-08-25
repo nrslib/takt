@@ -22,7 +22,7 @@
 
 | 契約ID | 影響経路 | テスト | 状態 |
 |--------|----------|--------|------|
-| `SUBMITTED-USER-BAND-RESPONSIVE` | `mountView` → `createOutput.appendHistory` → `write` | 別々の幅で `mountView` して履歴帯を確認する | 作成 |
+| `SUBMITTED-USER-BAND-RESPONSIVE` | `mountView` → `createOutput.appendHistory` → `screen.render` | 別々の幅で `mountView` して履歴帯を確認する | 作成 |
 
 ## 連続実行・所有権・並行性（該当する場合）
 

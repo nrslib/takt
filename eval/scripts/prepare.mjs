@@ -94,6 +94,12 @@ const TARGETS = [
     fixture: 'eval/fixtures/state-after-event-plan',
   },
   {
+    id: 'state-after-event-plan-config',
+    workflow: 'default',
+    step: 'plan',
+    fixture: 'eval/fixtures/state-after-event-plan-config',
+  },
+  {
     id: 'state-after-event-write-tests',
     workflow: 'default',
     step: 'write_tests',
