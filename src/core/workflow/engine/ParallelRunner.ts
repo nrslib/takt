@@ -903,7 +903,7 @@ export class ParallelRunner {
           : subResponse;
 
         let commandGates: 'required' | 'skip' = 'required';
-        if (match !== undefined) {
+        if (match !== undefined && subStep.rules !== undefined && subStep.rules.length > 0) {
           const transition = determineRuleTransition(subStep, match.index);
           if (transition === null) {
             throw new RuleDetectionExhaustedError(subStep.name);
