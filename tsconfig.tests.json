@@ -22,6 +22,7 @@
     "src/__tests__/cli-command-registration.test.ts",
     "src/__tests__/cli-routing-issue-resolve.test.ts",
     "src/__tests__/cli-routing-tui.test.ts",
+    "src/__tests__/clone-metadata-central.test.ts",
     "src/__tests__/commands-workflow.test.ts",
     "src/__tests__/completion-retry-workflow-schema.test.ts",
     "src/__tests__/conversation-plan.test.ts",

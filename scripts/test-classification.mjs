@@ -191,6 +191,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/claude-mcp-runtime.test.ts',
   'src/__tests__/cli-update-check.test.ts',
   'src/__tests__/clipboardImage.test.ts',
+  'src/__tests__/clone-metadata-central.test.ts',
   'src/__tests__/codex-client-retry.test.ts',
   'src/__tests__/codex-skill-config.test.ts',
   'src/__tests__/codex-spawn-guard.test.ts',

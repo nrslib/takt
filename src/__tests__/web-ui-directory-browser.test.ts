@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +9,7 @@ import {
 
 describe('Web UI directory browser', () => {
   it('lists child directories without exposing files', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'takt-directory-browser-'));
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'takt-directory-browser-')));
     await mkdir(join(root, 'project'));
     await writeFile(join(root, 'notes.txt'), 'not a directory');
 
@@ -25,7 +25,7 @@ describe('Web UI directory browser', () => {
   });
 
   it('caps the returned directory list before resolving entries', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'takt-directory-browser-limit-'));
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'takt-directory-browser-limit-')));
     await Promise.all(Array.from({ length: 2_005 }, (_, index) =>
       mkdir(join(root, `directory-${String(index).padStart(4, '0')}`))));
 

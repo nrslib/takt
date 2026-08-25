@@ -37,6 +37,31 @@ import { isTaskAbortError } from './clone-errors.js';
 import { createTaskClonePath, createTempClonePath } from './clone-path.js';
 
 export type { WorktreeOptions, WorktreeResult };
+
+/** Optional roots used when cleaning a clone owned by a central execution state. */
+export interface CloneCleanupOptions {
+  readonly worktreeBaseDirectory?: string;
+  readonly metadataDirectory?: string;
+}
+
+export type CloneCleanupArgument = string | CloneCleanupOptions;
+
+function normalizeCloneCleanupOptions(
+  worktreeBaseDirectoryOrOptions?: CloneCleanupArgument,
+  metadataDirectory?: string,
+): CloneCleanupOptions {
+  if (typeof worktreeBaseDirectoryOrOptions === 'string') {
+    return {
+      worktreeBaseDirectory: worktreeBaseDirectoryOrOptions,
+      ...(metadataDirectory === undefined ? {} : { metadataDirectory }),
+    };
+  }
+  return {
+    ...(worktreeBaseDirectoryOrOptions ?? {}),
+    ...(metadataDirectory === undefined ? {} : { metadataDirectory }),
+  };
+}
+
 export {
   branchExists,
   createBaseBranchIfMissing,
@@ -341,19 +366,27 @@ export class CloneManager {
     saveCloneMetaFile(projectDir, branch, clonePath, metadataDirectory);
   }
 
-  removeCloneMeta(projectDir: string, branch: string): void {
-    removeCloneMetaFile(projectDir, branch);
+  removeCloneMeta(projectDir: string, branch: string, metadataDirectory?: string): void {
+    removeCloneMetaFile(projectDir, branch, metadataDirectory);
   }
 
-  cleanupOrphanedClone(projectDir: string, branch: string): void {
-    const meta = loadCloneMeta(projectDir, branch);
+  cleanupOrphanedClone(
+    projectDir: string,
+    branch: string,
+    worktreeBaseDirectoryOrOptions?: CloneCleanupArgument,
+    metadataDirectory?: string,
+  ): void {
+    const options = normalizeCloneCleanupOptions(worktreeBaseDirectoryOrOptions, metadataDirectory);
+    const meta = loadCloneMeta(projectDir, branch, options.metadataDirectory);
     if (!meta) {
-      this.removeCloneMeta(projectDir, branch);
+      this.removeCloneMeta(projectDir, branch, options.metadataDirectory);
       return;
     }
-    const cloneBaseDir = path.resolve(CloneManager.resolveCloneBaseDir(projectDir));
+    const cloneBaseDir = path.resolve(
+      options.worktreeBaseDirectory ?? CloneManager.resolveCloneBaseDir(projectDir),
+    );
     const resolvedClonePath = path.resolve(meta.clonePath);
-    if (!isRealPathInside(cloneBaseDir, resolvedClonePath)) {
+    if (resolvedClonePath === cloneBaseDir || !isRealPathInside(cloneBaseDir, resolvedClonePath)) {
       log.error('Refusing to remove clone outside of clone base directory', {
         branch,
         clonePath: meta.clonePath,
@@ -365,7 +398,7 @@ export class CloneManager {
       this.removeClone(resolvedClonePath);
       log.info('Orphaned clone cleaned up', { branch, clonePath: resolvedClonePath });
     }
-    this.removeCloneMeta(projectDir, branch);
+    this.removeCloneMeta(projectDir, branch, options.metadataDirectory);
   }
 }
 
@@ -395,12 +428,17 @@ export function saveCloneMeta(projectDir: string, branch: string, clonePath: str
   defaultManager.saveCloneMeta(projectDir, branch, clonePath, metadataDirectory);
 }
 
-export function removeCloneMeta(projectDir: string, branch: string): void {
-  defaultManager.removeCloneMeta(projectDir, branch);
+export function removeCloneMeta(projectDir: string, branch: string, metadataDirectory?: string): void {
+  defaultManager.removeCloneMeta(projectDir, branch, metadataDirectory);
 }
 
-export function cleanupOrphanedClone(projectDir: string, branch: string): void {
-  defaultManager.cleanupOrphanedClone(projectDir, branch);
+export function cleanupOrphanedClone(
+  projectDir: string,
+  branch: string,
+  worktreeBaseDirectoryOrOptions?: CloneCleanupArgument,
+  metadataDirectory?: string,
+): void {
+  defaultManager.cleanupOrphanedClone(projectDir, branch, worktreeBaseDirectoryOrOptions, metadataDirectory);
 }
 
 export function resolveBaseBranch(

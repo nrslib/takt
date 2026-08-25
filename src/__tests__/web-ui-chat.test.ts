@@ -145,9 +145,12 @@ describe('Web UI chat session settings', () => {
     mockCreateAssistantConversationPlan.mockReset();
     mockCreateAssistantConversationPlan.mockReturnValue(createPlan('review', null));
     const restarted = service.restart(created.id);
+    expect(mockCreateConversationSession).toHaveBeenCalledTimes(3);
     expect(restarted.id).toBe(created.id);
     expect(restarted).not.toHaveProperty('model');
-    expect(mockCreateConversationSession.mock.calls[2]?.[0]).not.toHaveProperty('handoffHistory');
+    const restartedSessionOptions = mockCreateConversationSession.mock.calls[2];
+    if (restartedSessionOptions === undefined) throw new Error('restart session was not created');
+    expect(restartedSessionOptions[0]).not.toHaveProperty('handoffHistory');
     expect(switchedSession.snapshotHistory).not.toHaveBeenCalled();
   });
 

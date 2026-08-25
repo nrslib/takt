@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   launchTaktRun,
   parseLaunchRequest,
@@ -168,11 +168,10 @@ describe('Web UI central launcher', () => {
       displayName: project.displayName,
       fingerprint: project.fingerprint,
     });
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    await vi.waitFor(async () => {
       const current = await repository.readTasks();
-      if (current[0]?.status === 'failed') break;
-      await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
-    }
+      expect(current[0]?.status).toBe('failed');
+    }, { timeout: 1_000, interval: 10 });
     const tasks = await repository.readTasks();
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ status: 'failed', failure: { code: 'spawn_failed' } });

@@ -1,7 +1,7 @@
-import { mkdtemp, mkdir, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertContained,
   resolveRunPaths,
@@ -14,9 +14,23 @@ import {
 } from '../infra/config/global/projectRegistry.js';
 import { resolveCentralWorktree } from '../infra/task/centralWorktree.js';
 
+const temporaryDirectories = new Set<string>();
+
+async function createTemporaryDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  temporaryDirectories.add(directory);
+  return directory;
+}
+
+afterEach(async () => {
+  const directories = [...temporaryDirectories];
+  temporaryDirectories.clear();
+  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
 describe('execution locations', () => {
   it('uses a channel-neutral central state layout and absolute contained run paths', async () => {
-    const global = await mkdtemp(join(tmpdir(), 'takt-locations-global-'));
+    const global = await createTemporaryDirectory('takt-locations-global-');
     const state = resolveStatePaths(global, '11111111-1111-4111-8111-111111111111');
     expect(state.stateDirectory).toBe(join(global, 'state', 'projects', '11111111-1111-4111-8111-111111111111'));
     expect(state.tasksFile).toBe(join(state.stateDirectory, 'tasks.yaml'));
@@ -31,7 +45,7 @@ describe('execution locations', () => {
   });
 
   it('keeps CLI state project-local while the central locator stays explicit', async () => {
-    const project = await mkdtemp(join(tmpdir(), 'takt-locations-project-'));
+    const project = await createTemporaryDirectory('takt-locations-project-');
     const locations = new ProjectLocalStateLocator().resolve(project);
     expect(locations.projectDirectory).toBe(project);
     expect(locations.executionDirectory).toBe(project);
@@ -40,8 +54,8 @@ describe('execution locations', () => {
   });
 
   it('uses canonical path lookup with persistent state ids', async () => {
-    const global = await mkdtemp(join(tmpdir(), 'takt-locations-registry-'));
-    const parent = await mkdtemp(join(tmpdir(), 'takt-locations-parent-'));
+    const global = await createTemporaryDirectory('takt-locations-registry-');
+    const parent = await createTemporaryDirectory('takt-locations-parent-');
     const project = join(parent, 'project');
     await mkdir(project);
     const alias = join(parent, 'alias');

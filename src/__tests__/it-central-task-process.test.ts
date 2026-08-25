@@ -1,15 +1,29 @@
 import { spawn } from 'node:child_process';
-import { lstat, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { getProcessIdentity } from '../infra/task/process.js';
 
+const temporaryDirectories = new Set<string>();
+
+async function createTemporaryDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  temporaryDirectories.add(directory);
+  return directory;
+}
+
+afterEach(async () => {
+  const directories = [...temporaryDirectories];
+  temporaryDirectories.clear();
+  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
 async function setup() {
-  const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-process-global-'));
-  const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-process-project-'));
+  const globalConfigDirectory = await createTemporaryDirectory('takt-central-process-global-');
+  const projectDirectory = await createTemporaryDirectory('takt-central-process-project-');
   const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
   const repository = await CentralTaskRepository.open({
     globalConfigDirectory,
@@ -23,6 +37,7 @@ async function setup() {
 }
 
 function waitForExit(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('close', () => resolve());
@@ -42,15 +57,22 @@ describe('central task process ownership', () => {
       child.once('spawn', () => resolve());
     });
     expect(child.pid).toBeGreaterThan(0);
-    await repository.setStartingPid({
-      taskId: started.task.taskId,
-      generation: started.task.generation,
-      executionId: started.executionId,
-      ownerToken: started.ownerToken,
-      pid: child.pid!,
-    });
-    child.kill('SIGTERM');
-    await waitForExit(child);
+    try {
+      await repository.setStartingPid({
+        taskId: started.task.taskId,
+        generation: started.task.generation,
+        executionId: started.executionId,
+        ownerToken: started.ownerToken,
+        pid: child.pid!,
+      });
+      child.kill('SIGTERM');
+      await waitForExit(child);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+        await waitForExit(child).catch(() => undefined);
+      }
+    }
 
     await expect(repository.reconcile()).resolves.toEqual([
       expect.objectContaining({

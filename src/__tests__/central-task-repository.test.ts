@@ -2,14 +2,28 @@ import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskCasError, CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { launchTaktRun } from '../features/web-ui/launcher.js';
 
+const temporaryDirectories = new Set<string>();
+
+async function createTemporaryDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  temporaryDirectories.add(directory);
+  return directory;
+}
+
+afterEach(async () => {
+  const directories = [...temporaryDirectories];
+  temporaryDirectories.clear();
+  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
 async function setup() {
-  const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-global-'));
-  const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-project-'));
+  const globalConfigDirectory = await createTemporaryDirectory('takt-central-global-');
+  const projectDirectory = await createTemporaryDirectory('takt-central-project-');
   const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
   const repository = await CentralTaskRepository.open({
     globalConfigDirectory,
@@ -37,7 +51,7 @@ describe('central task CAS repository', () => {
 
   it('fails closed when the central runs root is replaced by a symlink', async () => {
     const { repository } = await setup();
-    const outside = await mkdtemp(join(tmpdir(), 'takt-central-runs-outside-'));
+    const outside = await createTemporaryDirectory('takt-central-runs-outside-');
     await rm(repository.paths.runsDirectory, { recursive: true, force: true });
     await symlink(outside, repository.paths.runsDirectory);
 
@@ -84,11 +98,14 @@ describe('central task CAS repository', () => {
         await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
       }
     })();
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      await repository.claimNextPending();
+    try {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await repository.claimNextPending();
+      }
+    } finally {
+      stop = true;
+      await poll;
     }
-    stop = true;
-    await poll;
     expect(malformed).toBe(false);
   });
 
@@ -121,7 +138,7 @@ describe('central task CAS repository', () => {
 
   it('keeps separate TAKT_CONFIG_DIR namespaces independent', async () => {
     const { projectDirectory, globalConfigDirectory, project, repository } = await setup();
-    const otherGlobal = await mkdtemp(join(tmpdir(), 'takt-central-other-global-'));
+    const otherGlobal = await createTemporaryDirectory('takt-central-other-global-');
     const otherProject = await registerProject({ globalConfigDirectory: otherGlobal, projectDirectory, command: 'ui' });
     const otherRepository = await CentralTaskRepository.open({
       globalConfigDirectory: otherGlobal,

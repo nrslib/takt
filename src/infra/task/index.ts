@@ -58,6 +58,8 @@ export {
   saveCloneMeta,
   removeCloneMeta,
   cleanupOrphanedClone,
+  type CloneCleanupArgument,
+  type CloneCleanupOptions,
   createBaseBranchIfMissing,
   resolveBaseBranch,
   resolveBaseBranchName,

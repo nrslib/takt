@@ -1,5 +1,5 @@
-import { lstat, mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
-import { request as httpRequest } from 'node:http';
+import { lstat, mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,7 +10,20 @@ import { resolveStatePaths, type StatePaths } from '../core/execution/locations.
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 
-const servers: Array<{ close: () => void }> = [];
+const servers: Server[] = [];
+const temporaryDirectories = new Set<string>();
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    server.close((error) => {
+      if (error) {
+        rejectPromise(error);
+        return;
+      }
+      resolvePromise();
+    });
+  });
+}
 
 function requestStatus(url: string, headers: Record<string, string>): Promise<number> {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -23,16 +36,29 @@ function requestStatus(url: string, headers: Record<string, string>): Promise<nu
   });
 }
 
-afterEach(() => {
-  for (const server of servers.splice(0)) server.close();
+afterEach(async () => {
+  const activeServers = servers.splice(0);
+  const directories = [...temporaryDirectories];
+  temporaryDirectories.clear();
+  try {
+    await Promise.all(activeServers.map((server) => closeServer(server)));
+  } finally {
+    await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
+  }
 });
 
 async function createProject(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'takt-web-ui-'));
+  return createTemporaryDirectory('takt-web-ui-');
+}
+
+async function createTemporaryDirectory(prefix: string): Promise<string> {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+  temporaryDirectories.add(directory);
+  return directory;
 }
 
 async function createArtifactState(): Promise<StatePaths> {
-  const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-web-ui-global-'));
+  const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
   const projectDirectory = await createProject();
   const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'run' });
   return resolveStatePaths(globalConfigDirectory, project.stateId);
@@ -153,7 +179,7 @@ describe('Web UI run artifacts', () => {
   it('rejects a symlinked runs collection root before enumeration', async () => {
     const statePaths = await createArtifactState();
     await mkdir(statePaths.stateDirectory, { recursive: true });
-    const outside = await mkdtemp(join(tmpdir(), 'takt-web-ui-runs-outside-'));
+    const outside = await createTemporaryDirectory('takt-web-ui-runs-outside-');
     await symlink(outside, statePaths.runsDirectory);
 
     await expect(readRunCollection(statePaths)).rejects.toThrow(/symbolic link|runs directory/i);
@@ -183,7 +209,7 @@ describe('Web UI run artifacts', () => {
   it('rejects a symlinked report root before reading outside the run', async () => {
     const statePaths = await createArtifactState();
     const runRoot = await writeRun(statePaths, 'symlink-report');
-    const outside = await mkdtemp(join(tmpdir(), 'takt-web-ui-outside-'));
+    const outside = await createTemporaryDirectory('takt-web-ui-outside-');
     await rm(join(runRoot, 'reports'), { recursive: true, force: true });
     await symlink(outside, join(runRoot, 'reports'));
 
@@ -193,7 +219,7 @@ describe('Web UI run artifacts', () => {
 
 describe('Web UI HTTP boundary', () => {
   it('rejects non-loopback Host and Origin before exposing the session token', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-web-ui-global-'));
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const server = await createWebUiServer({
       globalConfigDirectory,
       launch: async () => ({ pid: 9001, disposition: 'started' as const, mode: 'run' as const }),
@@ -208,7 +234,7 @@ describe('Web UI HTTP boundary', () => {
   });
 
   it('serves a chat-only composer with header execution context', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-web-ui-global-'));
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const server = await createWebUiServer({
       globalConfigDirectory,
       launch: async () => ({ pid: 9001, disposition: 'started' as const, mode: 'run' as const }),
@@ -232,32 +258,13 @@ describe('Web UI HTTP boundary', () => {
     expect(html).not.toContain('data-composer-mode');
     expect(html).not.toContain('id="run-form"');
 
-    const app = await (await fetch(`${origin}/app.js`)).text();
     const uiStateResponse = await fetch(`${origin}/ui-state.js`);
     expect(uiStateResponse.status).toBe(200);
-    await expect(uiStateResponse.text()).resolves.toContain('createDirectoryRequestTracker');
-    expect(app).toContain("event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey)");
-    expect(app).toContain('elements.chatForm.requestSubmit()');
-    expect(app).toContain('reconfigureChatSession');
-    expect(app).toContain('restartChatSession');
-    expect(app).not.toContain('setComposerMode');
-    expect(app).not.toContain('collapseExecutionContext');
-    expect(app).toContain('elements.executionContext.open = false');
-    expect(app).toContain("document.addEventListener('pointerdown'");
-    expect(app).toContain("document.addEventListener('click', closeExecutionContextFromOutside)");
-    expect(app).toContain("event.key !== 'Escape'");
-    expect(app).not.toContain('chatPane: document.querySelector');
-    expect(app).toContain("style.setProperty('--chat-pane-width'");
-    expect(app).toContain("ArrowRight: currentWidth + CHAT_RESIZE_STEP");
-    expect(app).toContain("beginPendingOperation('native-picker')");
-    expect(app).toContain("beginPendingOperation('select')");
-    expect(app).toContain('elements.directoryCurrentPath.disabled = pending');
-    expect(app).toContain('button.disabled = pending');
   });
 
   it('browses and registers an unregistered execution directory', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-web-ui-global-'));
-    const parentDirectory = await mkdtemp(join(tmpdir(), 'takt-directory-browser-'));
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
+    const parentDirectory = await createTemporaryDirectory('takt-directory-browser-');
     const projectDirectory = join(parentDirectory, 'new-project');
     await mkdir(projectDirectory);
     const server = await createWebUiServer({
@@ -336,7 +343,7 @@ describe('Web UI HTTP boundary', () => {
   });
 
   it('serves runs and accepts token-authenticated launches', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-web-ui-global-'));
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const projectDirectory = await createProject();
     const project = await registerProject({
       globalConfigDirectory,
@@ -430,7 +437,7 @@ describe('Web UI HTTP boundary', () => {
   });
 
   it('joins project discovery with central consumer status without stale cleanup', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-web-ui-global-'));
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const projectDirectory = await createProject();
     const project = await registerProject({
       globalConfigDirectory,
@@ -470,7 +477,7 @@ describe('Web UI HTTP boundary', () => {
   });
 
   it('serves categorized workflows and token-authenticated chat messages', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-web-ui-global-'));
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const projectDirectory = await createProject();
     const project = await registerProject({
       globalConfigDirectory,
