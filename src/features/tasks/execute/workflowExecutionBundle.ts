@@ -32,6 +32,7 @@ import {
   getAttachedWorkflowBundleNodeId,
 } from '../../../shared/workflowConfigMetadata.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
+import { isSensitiveKeyName } from '../../../shared/utils/sensitiveText.js';
 import { extractPersonaName } from '../../../agents/persona-spec.js';
 import { loadAgentPrompt, loadCustomAgents } from '../../../infra/config/loaders/agentLoader.js';
 
@@ -82,7 +83,7 @@ interface PreparedNode {
 }
 
 const MCP_ENV_REFERENCE_PATTERN = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/u;
-const MCP_ENV_REFERENCE_MARKER = '${';
+const MCP_ENV_REFERENCE_GLOBAL_PATTERN = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/gu;
 const MCP_FLAG_NAME_PATTERN = /^--?[A-Za-z0-9][A-Za-z0-9_-]*$/u;
 const MCP_CREDENTIAL_FLAG_NAMES = new Set([
   'access-key',
@@ -129,6 +130,45 @@ const MCP_CREDENTIAL_FLAG_SUFFIXES = [
   '-session-id',
   '-token',
 ] as const;
+const MCP_CREDENTIAL_KEY_NAMES = new Set([
+  'auth',
+  'authorization',
+  'bearer',
+  'credential',
+  'credentials',
+  'cookie',
+  'cookies',
+  'header',
+  'headers',
+  'key',
+  'password',
+  'passphrase',
+  'pass-phrase',
+  'secret',
+  'session-id',
+  'set-cookie',
+  'token',
+]);
+const MCP_CREDENTIAL_KEY_SUFFIXES = [
+  '-apikey',
+  '-api-key',
+  '-auth',
+  '-auth-header',
+  '-authorization',
+  '-authorization-header',
+  '-bearer',
+  '-cookie',
+  '-cookies',
+  '-credential',
+  '-credentials',
+  '-key',
+  '-pass-phrase',
+  '-passphrase',
+  '-password',
+  '-secret',
+  '-session-id',
+  '-token',
+] as const;
 
 function normalizeMcpFlagName(flag: string): string {
   return flag.replace(/^-+/u, '').replaceAll('_', '-').toLowerCase();
@@ -139,6 +179,17 @@ function isMcpCredentialFlag(flag: string): boolean {
   const normalized = normalizeMcpFlagName(flag);
   return MCP_CREDENTIAL_FLAG_NAMES.has(normalized)
     || MCP_CREDENTIAL_FLAG_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+}
+
+function normalizeMcpKeyName(key: string): string {
+  return key.trim().replaceAll('_', '-').toLowerCase();
+}
+
+function isMcpCredentialKey(key: string): boolean {
+  const normalized = normalizeMcpKeyName(key);
+  return isSensitiveKeyName(normalized)
+    || MCP_CREDENTIAL_KEY_NAMES.has(normalized)
+    || MCP_CREDENTIAL_KEY_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
 }
 
 function parseMcpFlag(argument: string): { readonly name: string; readonly inlineValue?: string } | undefined {
@@ -185,19 +236,30 @@ function assertCentralMcpArgumentSafety(
 
 function assertCentralMcpUrlSafety(value: string, label: string): void {
   if (MCP_ENV_REFERENCE_PATTERN.test(value)) return;
-  if (value.includes(MCP_ENV_REFERENCE_MARKER) || value.includes('?') || value.includes('#')) {
-    throw new Error(
-      `Central workflow bundle rejects unsafe MCP URL at ${label}; credentials, queries, and mixed references are unsupported`,
-    );
-  }
   let parsed: URL;
   try {
-    parsed = new URL(value);
+    parsed = new URL(value.replace(MCP_ENV_REFERENCE_GLOBAL_PATTERN, 'env-reference'));
   } catch {
     throw new Error(`Central workflow bundle rejects invalid MCP URL at ${label}`);
   }
   if (parsed.username.length > 0 || parsed.password.length > 0) {
     throw new Error(`Central workflow bundle rejects MCP URL credentials at ${label}`);
+  }
+  for (const [key] of parsed.searchParams) {
+    if (isMcpCredentialKey(key)) {
+      throw new Error(`Central workflow bundle rejects unsafe MCP URL at ${label}; credential-bearing query is unsupported`);
+    }
+  }
+  const fragment = parsed.hash.slice(1);
+  if (fragment !== '') {
+    const fragmentParams = new URLSearchParams(fragment);
+    const fragmentKey = fragment.split(/[=&?#:]/u, 1)[0] ?? '';
+    if (
+      [...fragmentParams.keys()].some((key) => isMcpCredentialKey(key))
+      || isMcpCredentialKey(fragmentKey)
+    ) {
+      throw new Error(`Central workflow bundle rejects unsafe MCP URL at ${label}; credential-bearing fragment is unsupported`);
+    }
   }
 }
 
@@ -207,7 +269,9 @@ function assertCentralMcpServerValueSafety(
 ): void {
   if ('command' in server) {
     for (const [key, value] of Object.entries(server.env ?? {})) {
-      requireMcpEnvironmentReference(value, `${label}.env.${key}`);
+      if (isMcpCredentialKey(key)) {
+        requireMcpEnvironmentReference(value, `${label}.env.${key}`);
+      }
     }
     assertCentralMcpArgumentSafety(server.args, label);
     return;
@@ -216,14 +280,17 @@ function assertCentralMcpServerValueSafety(
   const remote = server as Extract<McpServerConfig, { readonly url: string }>;
   assertCentralMcpUrlSafety(remote.url, `${label}.url`);
   for (const [key, value] of Object.entries(remote.headers ?? {})) {
-    requireMcpEnvironmentReference(value, `${label}.headers.${key}`);
+    if (isMcpCredentialKey(key)) {
+      requireMcpEnvironmentReference(value, `${label}.headers.${key}`);
+    }
   }
 }
 
 /**
  * Central runs persist a portable workflow bundle below the state root. Legacy
- * MCP definitions may carry only complete environment references across that
- * durable boundary; arbitrary literals and mixed references are ambiguous.
+ * Credential-bearing MCP values may carry only complete environment references
+ * across that durable boundary. Ordinary environment/header values and URL
+ * metadata remain portable; credential-bearing URL parts are rejected.
  */
 function assertCentralWorkflowBundleCredentialSafety(
   workflow: WorkflowConfig,

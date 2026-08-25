@@ -33,6 +33,8 @@ The global config directory (default: `~/.takt/`) can be changed with the `TAKT_
 
 The Web UI stores its queued tasks, runs, and sessions in channel-neutral central state below `TAKT_CONFIG_DIR`. The CLI keeps its existing project-local state behavior. Concurrent execution or mutation of the same canonical project through the CLI and Web UI is not supported; use one channel for a given execution target at a time.
 
+Central workflow bundles keep ordinary MCP configuration portable. Non-credential environment variables and headers (for example `LOG_LEVEL`, `NODE_ENV`, `ENDPOINT`, and `Content-Type`) may remain literal. Credential-bearing environment/header keys and credential flags in stdio arguments must use one complete `${ENV_VAR}` reference; mixed or literal credential values are rejected. MCP URLs reject userinfo and credential-bearing query or fragment keys, while ordinary metadata such as `version=2` is allowed. Local CLI bundles keep their existing behavior.
+
 ## Interactive Mode
 
 A mode where you refine task content through conversation with AI before execution. Useful when task requirements are ambiguous or when you want to clarify content while consulting with AI.
