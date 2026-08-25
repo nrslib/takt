@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { loadTemplate } from '../shared/prompts/index.js';
 import { buildSummaryPrompt } from '../features/interactive/interactive-summary.js';
 
-function renderInteractivePrompt(lang: 'en' | 'ja', formalSpec: boolean): string {
+function renderInteractivePrompt(
+  lang: 'en' | 'ja',
+  formalSpec: boolean,
+  grillMe = false,
+): string {
   return loadTemplate('score_interactive_system_prompt', lang, {
-    grillMe: false,
+    grillMe,
     formalSpec,
     hasWorkflowPreview: false,
     workflowStructure: '',
@@ -31,6 +35,58 @@ function renderJapaneseSummaryPrompt(formalSpec: boolean): string {
     formalSpec,
   );
 }
+
+describe('interactive codebase investigation boundaries', () => {
+  it('allows sufficient current-state investigation in the English assistant mode', () => {
+    const prompt = renderInteractivePrompt('en', false);
+
+    expect(prompt).toContain('Perform sufficient read-only codebase investigation');
+    expect(prompt).toContain('Inspect related code as needed');
+    expect(prompt).toContain('Do not investigate how to implement the task');
+    expect(prompt).toContain('identifying files to change');
+    expect(prompt).toContain('analyzing dependencies or call paths for the change');
+    expect(prompt).toContain('comparing fixes or designs');
+    expect(prompt).toContain('preparing implementation steps');
+    expect(prompt).not.toContain('Use the read-only inspection needed to challenge the requirements');
+  });
+
+  it('keeps English Grill Me focused on requirement decisions', () => {
+    const prompt = renderInteractivePrompt('en', false, true);
+
+    expect(prompt).toContain('Use the read-only inspection needed to challenge the requirements');
+    expect(prompt).toContain('Do not investigate implementation');
+    expect(prompt).toContain('identifying files to change');
+    expect(prompt).toContain('analyzing dependencies or call paths for the change');
+    expect(prompt).toContain('comparing fixes or designs');
+    expect(prompt).toContain('preparing implementation steps');
+    expect(prompt).not.toContain('Perform sufficient read-only codebase investigation');
+  });
+
+  it('allows sufficient current-state investigation in the Japanese assistant mode', () => {
+    const prompt = renderInteractivePrompt('ja', false);
+
+    expect(prompt).toContain('現状理解と要件明確化に必要なコードベース調査を');
+    expect(prompt).toContain('関連箇所を必要な範囲で確認してよい');
+    expect(prompt).toContain('実装方法を決めるための調査は行わない');
+    expect(prompt).toContain('変更対象ファイルの特定');
+    expect(prompt).toContain('変更のための依存関係や呼び出し経路の解析');
+    expect(prompt).toContain('修正案や設計案の比較');
+    expect(prompt).toContain('実装手順の作成');
+    expect(prompt).not.toContain('要件を問い詰めるために必要な現行仕様');
+  });
+
+  it('keeps Japanese Grill Me focused on requirement decisions', () => {
+    const prompt = renderInteractivePrompt('ja', false, true);
+
+    expect(prompt).toContain('要件を問い詰めるために必要な現行仕様');
+    expect(prompt).toContain('実装のための調査は行わない');
+    expect(prompt).toContain('変更対象ファイルの特定');
+    expect(prompt).toContain('依存関係や呼び出し経路の解析');
+    expect(prompt).toContain('修正案や設計案の比較');
+    expect(prompt).toContain('実装手順の作成');
+    expect(prompt).not.toContain('現状理解と要件明確化に必要なコードベース調査を');
+  });
+});
 
 describe('interactive formal specification prompt templates', () => {
   it('selects English conditional Gherkin guidance without formal notation guidance when disabled', () => {
