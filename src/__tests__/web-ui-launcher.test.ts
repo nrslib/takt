@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   launchTaktRun,
   parseLaunchRequest,
@@ -14,6 +14,20 @@ import {
 } from '../features/web-ui/central-worker-spawn.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
+
+const temporaryDirectories = new Set<string>();
+
+async function createTemporaryDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  temporaryDirectories.add(directory);
+  return directory;
+}
+
+afterEach(async () => {
+  const directories = [...temporaryDirectories];
+  temporaryDirectories.clear();
+  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
+});
 
 describe('Web UI central launcher', () => {
   it('normalizes a request with the default worktree policy', () => {
@@ -41,7 +55,7 @@ describe('Web UI central launcher', () => {
   });
 
   it('rejects a symlinked detached-worker stderr path before spawning', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'takt-launcher-stderr-'));
+    const directory = await createTemporaryDirectory('takt-launcher-stderr-');
     const target = join(directory, 'outside.log');
     const stderrPath = join(directory, 'worker.log');
     await writeFile(target, 'outside');
@@ -63,7 +77,7 @@ describe('Web UI central launcher', () => {
   });
 
   it('uses an execution-specific stderr path and rejects an existing collision', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'takt-launcher-stderr-'));
+    const directory = await createTemporaryDirectory('takt-launcher-stderr-');
     const firstPath = buildCentralWorkerStderrPath(directory, 'task-id', 'execution-one');
     const secondPath = buildCentralWorkerStderrPath(directory, 'task-id', 'execution-two');
     expect(firstPath).not.toBe(secondPath);
@@ -90,8 +104,8 @@ describe('Web UI central launcher', () => {
   });
 
   it('does not serialize a Web task into project .takt', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-launcher-global-'));
-    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-launcher-project-'));
+    const globalConfigDirectory = await createTemporaryDirectory('takt-launcher-global-');
+    const projectDirectory = await createTemporaryDirectory('takt-launcher-project-');
     const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
     const child = Object.assign(new EventEmitter(), { pid: process.pid, unref: () => undefined });
     let command = '';
@@ -124,8 +138,8 @@ describe('Web UI central launcher', () => {
   });
 
   it('returns reused when another UI request already owns the state', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-launcher-global-'));
-    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-launcher-project-'));
+    const globalConfigDirectory = await createTemporaryDirectory('takt-launcher-global-');
+    const projectDirectory = await createTemporaryDirectory('takt-launcher-project-');
     const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
     const child = Object.assign(new EventEmitter(), { pid: process.pid, unref: () => undefined });
     const spawnProcess = ((_command: string, _args: readonly string[]) => {
@@ -138,8 +152,8 @@ describe('Web UI central launcher', () => {
   });
 
   it('terminalizes a child that exits before startup adoption without a later request', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-launcher-global-'));
-    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-launcher-project-'));
+    const globalConfigDirectory = await createTemporaryDirectory('takt-launcher-global-');
+    const projectDirectory = await createTemporaryDirectory('takt-launcher-project-');
     const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
     const child = Object.assign(new EventEmitter(), {
       pid: process.pid,

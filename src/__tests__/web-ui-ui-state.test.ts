@@ -140,9 +140,13 @@ describe('Web UI execution readiness and run detail view state', () => {
   it('preserves open reports and scroll position across detail replacement', () => {
     const firstReport = { dataset: { reportFilename: 'first.md' }, open: true };
     const secondReport = { dataset: { reportFilename: 'second.md' }, open: false };
+    const selectors: string[] = [];
     const runDetail = {
       scrollTop: 42,
-      querySelectorAll: () => [firstReport, secondReport],
+      querySelectorAll: (selector: string) => {
+        selectors.push(selector);
+        return [firstReport, secondReport];
+      },
     };
 
     const state = captureRunDetailViewState(runDetail);
@@ -155,6 +159,10 @@ describe('Web UI execution readiness and run detail view state', () => {
     expect(firstReport.open).toBe(true);
     expect(secondReport.open).toBe(false);
     expect(runDetail.scrollTop).toBe(42);
+    expect(selectors).toEqual([
+      'details.report[data-report-filename]',
+      'details.report[data-report-filename]',
+    ]);
   });
 
   it('accepts only the current workflow request for the selected project', () => {

@@ -4,6 +4,16 @@ import {
   pickNativeDirectory,
 } from '../features/web-ui/native-directory-picker.js';
 
+function deferred<T>() {
+  let resolvePromise!: (value: T | PromiseLike<T>) => void;
+  let rejectPromise!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
+}
+
 describe('Web UI native directory picker', () => {
   it('opens the macOS Finder picker with a fixed AppleScript', async () => {
     const execute = vi.fn().mockResolvedValue('/Users/example/project/\n');
@@ -32,23 +42,38 @@ describe('Web UI native directory picker', () => {
   });
 
   it('serializes concurrent pickers in FIFO order and continues after failure', async () => {
+    const firstOutput = deferred<string>();
+    const secondOutput = deferred<string>();
     const execute = vi.fn()
-      .mockResolvedValueOnce('/Users/example/first/\n')
-      .mockResolvedValueOnce('/Users/example/next/\n');
+      .mockReturnValueOnce(firstOutput.promise)
+      .mockReturnValueOnce(secondOutput.promise);
 
     const first = pickNativeDirectory({ platform: 'darwin', execute });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
     const concurrent = pickNativeDirectory({ platform: 'darwin', execute });
+    expect(execute).toHaveBeenCalledTimes(1);
 
+    firstOutput.resolve('/Users/example/first/\n');
     await expect(first).resolves.toEqual({ cancelled: false, path: '/Users/example/first/' });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    secondOutput.resolve('/Users/example/next/\n');
     await expect(concurrent).resolves.toEqual({ cancelled: false, path: '/Users/example/next/' });
     expect(execute).toHaveBeenCalledTimes(2);
 
+    const failedOutput = deferred<string>();
+    const recoveredOutput = deferred<string>();
     const failingExecute = vi.fn()
-      .mockRejectedValueOnce(new Error('Finder failed'))
-      .mockResolvedValueOnce('/Users/example/recovered/\n');
+      .mockReturnValueOnce(failedOutput.promise)
+      .mockReturnValueOnce(recoveredOutput.promise);
     const failed = pickNativeDirectory({ platform: 'darwin', execute: failingExecute });
+    await vi.waitFor(() => expect(failingExecute).toHaveBeenCalledTimes(1));
     const recovered = pickNativeDirectory({ platform: 'darwin', execute: failingExecute });
-    await expect(failed).rejects.toThrow('Finder failed');
+    expect(failingExecute).toHaveBeenCalledTimes(1);
+    const failedExpectation = expect(failed).rejects.toThrow('Finder failed');
+    failedOutput.reject(new Error('Finder failed'));
+    await failedExpectation;
+    await vi.waitFor(() => expect(failingExecute).toHaveBeenCalledTimes(2));
+    recoveredOutput.resolve('/Users/example/recovered/\n');
     await expect(recovered).resolves.toEqual({ cancelled: false, path: '/Users/example/recovered/' });
     expect(failingExecute).toHaveBeenCalledTimes(2);
   });
