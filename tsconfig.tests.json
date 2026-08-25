@@ -96,6 +96,7 @@
     "src/__tests__/workflow-call-schema.test.ts",
     "src/__tests__/workflow-inspect.test.ts",
     "src/__tests__/workflow-preview.test.ts",
+    "src/__tests__/workflow-run-lifecycle-boundary.test.ts",
     "src/__tests__/workflowCallResolver.test.ts",
     "src/__tests__/workflowExecutionApi.test.ts",
     "src/__tests__/workflowLoader.test.ts"

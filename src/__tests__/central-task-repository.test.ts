@@ -53,8 +53,12 @@ describe('central task CAS repository', () => {
     const original = await stat(repository.paths.runsDirectory);
     expect(persisted.runsRootFingerprint).toEqual({ dev: original.dev, ino: original.ino });
 
+    // Keep the original directory alive while creating its replacement so the
+    // filesystem cannot reuse its inode on ext4/CI fixtures.
+    const replacementPath = join(repository.paths.stateDirectory, 'runs-replacement');
+    await mkdir(replacementPath);
     await rm(repository.paths.runsDirectory, { recursive: true, force: true });
-    await mkdir(repository.paths.runsDirectory);
+    await rename(replacementPath, repository.paths.runsDirectory);
     const replacement = await stat(repository.paths.runsDirectory);
     expect(replacement.ino).not.toBe(original.ino);
     await expect(repository.writeRunMeta('replaced-root', { status: 'running' }))
@@ -154,8 +158,10 @@ describe('central task CAS repository', () => {
 
   it('revalidates the project fingerprint before a worker attaches to state', async () => {
     const { globalConfigDirectory, projectDirectory, project } = await setup();
+    const replacementPath = join(projectDirectory, '..', 'project-replacement');
+    await mkdir(replacementPath);
     await rm(projectDirectory, { recursive: true, force: true });
-    await mkdir(projectDirectory);
+    await rename(replacementPath, projectDirectory);
 
     await expect(CentralTaskRepository.openByState({
       globalConfigDirectory,
@@ -170,6 +176,8 @@ describe('central task CAS repository', () => {
       workflow: 'default',
       worktree: false,
     });
+    const replacementPath = join(projectDirectory, '..', 'project-replacement');
+    await mkdir(replacementPath);
 
     await expect(repository.adoptVerified({
       taskId: reserved.task.taskId,
@@ -178,7 +186,7 @@ describe('central task CAS repository', () => {
       ownerToken: reserved.ownerToken,
     }, async () => {
       await rm(projectDirectory, { recursive: true, force: true });
-      await mkdir(projectDirectory);
+      await rename(replacementPath, projectDirectory);
     })).rejects.toThrow(/identity|fingerprint|registered/i);
     await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'starting' });
   });

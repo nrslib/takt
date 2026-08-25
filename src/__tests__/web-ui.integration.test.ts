@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -155,8 +155,13 @@ describe('Web UI run artifacts', () => {
       ...statePaths,
       runsRootFingerprint: { dev: original.dev, ino: original.ino },
     };
+    // Create the replacement while the original is still present. This makes
+    // the differing inode deterministic on filesystems that eagerly reuse
+    // deleted directory inodes.
+    const replacementPath = join(statePaths.stateDirectory, 'runs-replacement');
+    await mkdir(replacementPath);
     await rm(statePaths.runsDirectory, { recursive: true, force: true });
-    await mkdir(statePaths.runsDirectory);
+    await rename(replacementPath, statePaths.runsDirectory);
     const replacement = await lstat(statePaths.runsDirectory);
     expect(replacement.ino).not.toBe(original.ino);
 
