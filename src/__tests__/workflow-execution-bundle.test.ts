@@ -331,6 +331,10 @@ steps:
     expect(() => prepareCentralBundle(root, withArgs([
       '-y',
       '-h',
+      '-k',
+      '-p',
+      '-t',
+      '-A',
       '@modelcontextprotocol/server-filesystem',
       'serve',
       '--transport=stdio',
@@ -347,6 +351,14 @@ steps:
       ['-H=literal-secret'],
       ['-H:literal-secret'],
       ['-H', 'literal-secret'],
+      ['-uliteral-secret'],
+      ['-u=literal-secret'],
+      ['-u:literal-secret'],
+      ['-u', 'literal-secret'],
+      ['--user=literal-secret'],
+      ['--proxy-user:literal-secret'],
+      ['--user', 'literal-secret'],
+      ['--proxy-user', 'literal-secret'],
       ['--auth-header=literal-secret'],
       ['--custom-header:literal-secret'],
       ['--authorization-header', 'literal-secret'],
@@ -359,9 +371,17 @@ steps:
       ['-H=${MCP_HEADER}'],
       ['-H:${MCP_HEADER}'],
       ['-H', '${MCP_HEADER}'],
+      ['-u${MCP_USER}'],
+      ['-u=${MCP_USER}'],
+      ['-u:${MCP_USER}'],
+      ['-u', '${MCP_USER}'],
       ['--auth-header=${MCP_AUTH_HEADER}'],
       ['--custom-header:${MCP_CUSTOM_HEADER}'],
       ['--authorization-header', '${MCP_AUTHORIZATION_HEADER}'],
+      ['--user=${MCP_USER}'],
+      ['--proxy-user:${MCP_PROXY_USER}'],
+      ['--user', '${MCP_USER}'],
+      ['--proxy-user', '${MCP_PROXY_USER}'],
     ]) {
       expect(() => prepareCentralBundle(root, withArgs(args))).not.toThrow();
     }
@@ -378,6 +398,7 @@ steps:
 
     for (const url of [
       'https://example.test/mcp?version=2&format=json#section',
+      'https://example.test/mcp#section',
       'https://${MCP_HOST}/mcp?version=${MCP_VERSION}',
     ]) {
       expect(() => prepareCentralBundle(root, withUrl(url))).not.toThrow();
@@ -387,6 +408,7 @@ steps:
       'https://user:password@example.test/mcp',
       'https://example.test/mcp?token=literal-secret',
       'https://example.test/mcp?version=2#session_id=literal-secret',
+      'https://example.test/mcp#section?token=literal-secret',
     ]) {
       expect(() => prepareCentralBundle(root, withUrl(url))).toThrow(/unsafe MCP URL|MCP URL credentials/i);
     }

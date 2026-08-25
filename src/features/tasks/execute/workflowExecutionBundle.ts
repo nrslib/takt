@@ -110,6 +110,8 @@ const MCP_CREDENTIAL_FLAG_NAMES = new Set([
   'session-id',
   'set-cookie',
   'token',
+  'user',
+  'proxy-user',
 ]);
 const MCP_CREDENTIAL_FLAG_SUFFIXES = [
   '-apikey',
@@ -175,7 +177,9 @@ function normalizeMcpFlagName(flag: string): string {
 }
 
 function isMcpCredentialFlag(flag: string): boolean {
-  if (/^-[^-]/u.test(flag)) return flag === '-H';
+  // Only the standard compact credential aliases are protected. Generic
+  // short options such as -k, -p, -t, and -A are command-specific.
+  if (/^-[^-]/u.test(flag)) return flag === '-H' || flag === '-u';
   const normalized = normalizeMcpFlagName(flag);
   return MCP_CREDENTIAL_FLAG_NAMES.has(normalized)
     || MCP_CREDENTIAL_FLAG_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
@@ -196,6 +200,9 @@ function parseMcpFlag(argument: string): { readonly name: string; readonly inlin
   if (!argument.startsWith('-') || argument === '-' || argument === '--') return undefined;
   if (argument.startsWith('-H') && argument.length > 2 && argument[2] !== '=' && argument[2] !== ':') {
     return { name: '-H', inlineValue: argument.slice(2) };
+  }
+  if (argument.startsWith('-u') && argument.length > 2 && argument[2] !== '=' && argument[2] !== ':') {
+    return { name: '-u', inlineValue: argument.slice(2) };
   }
   const separatorIndex = argument.search(/[=:]/u);
   const name = separatorIndex === -1 ? argument : argument.slice(0, separatorIndex);
@@ -252,12 +259,17 @@ function assertCentralMcpUrlSafety(value: string, label: string): void {
   }
   const fragment = parsed.hash.slice(1);
   if (fragment !== '') {
-    const fragmentParams = new URLSearchParams(fragment);
-    const fragmentKey = fragment.split(/[=&?#:]/u, 1)[0] ?? '';
-    if (
-      [...fragmentParams.keys()].some((key) => isMcpCredentialKey(key))
-      || isMcpCredentialKey(fragmentKey)
-    ) {
+    const fragmentParts = [fragment];
+    for (const match of fragment.matchAll(/[?#]([^?#]*)/gu)) {
+      if (match[1] !== undefined) fragmentParts.push(match[1]);
+    }
+    const hasCredentialBearingFragment = fragmentParts.some((part) => {
+      const fragmentParams = new URLSearchParams(part);
+      const fragmentKey = part.split(/[=&?#:]/u, 1)[0] ?? '';
+      return [...fragmentParams.keys()].some((key) => isMcpCredentialKey(key))
+        || isMcpCredentialKey(fragmentKey);
+    });
+    if (hasCredentialBearingFragment) {
       throw new Error(`Central workflow bundle rejects unsafe MCP URL at ${label}; credential-bearing fragment is unsupported`);
     }
   }
