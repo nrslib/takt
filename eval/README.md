@@ -221,11 +221,10 @@ in `eval/asserts/` that inspect the files the agent actually wrote.
 
 The `issue-plan-samples` and `plan-report-source-authority` suites are the
 exceptions to the reviewer fixture rule: `eval/scripts/prepare.mjs` uses
-`fixture: '.'` and their promptfoo configurations use `working_dir: ..`
-(resolved from `eval/`), so their repository context and provider working
-directory both point at the checked-out repository root. The former reads it in
-read-only mode; the latter renders the report-phase prompt. Reproduce either
-suite from the repository root after preparing it.
+`fixture: '.'` and their promptfoo configurations use `working_dir: ../../..`,
+which is resolved from `eval/agents/plan/` to the checked-out repository root.
+The former reads it in read-only mode; the latter renders the report-phase
+prompt. Reproduce either suite from the repository root after preparing it.
 
 `plan-report-source-authority` measures the rendered Phase 2 instruction and
 report content, not TAKT's runtime tool suppression. The promptfoo Codex SDK
@@ -332,8 +331,15 @@ npx promptfoo view               # browse results in the web UI
 Do not use `--repeat` with mutable coder suites such as `fix-closure`,
 `frontend-coder`, or `cqrs-coder`; independent trials require a fresh work copy.
 
-Run from the repo root. Note: `working_dir` in the configs is resolved
-relative to the config file's directory (`eval/`), not the process cwd.
+Run from the repo root. The custom providers resolve `working_dir` and prompt
+paths in their provider config relative to `eval/`, regardless of the config
+file's location. Promptfoo built-in providers such as `openai:codex-sdk` instead
+resolve `working_dir` relative to the config file's directory, so configs under
+`eval/agents/plan/` use `../../..` to reach the repository root. Promptfoo
+resolves `file://` references in `prompts:`,
+`providers[].id`, and `vars` relative to the config file, so configs under
+`eval/agents/<step>/` and `eval/scenarios/<flow>/` use `file://../../...` to
+reach `eval/prompts`, `eval/providers`, `eval/cases`, and `eval/asserts`.
 `run-evals.mjs` keeps going when a suite fails and prints a summary
 (promptfoo exits non-zero on test failures, which would break `&&` chains).
 

@@ -42,6 +42,28 @@ test('recursive discovery rejects duplicate suite names across categories', () =
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('recursive discovery returns nested configs with root-relative paths and ignores non-YAML files', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'takt-eval-registry-'));
+  try {
+    const agentDirectory = join(directory, 'agents', 'review', 'nested');
+    const scenarioDirectory = join(directory, 'scenarios', 'flow');
+    mkdirSync(agentDirectory, { recursive: true });
+    mkdirSync(scenarioDirectory, { recursive: true });
+    writeFileSync(join(agentDirectory, 'alpha.yaml'), 'description: alpha\n');
+    writeFileSync(join(scenarioDirectory, 'beta.yml'), 'description: beta\n');
+    writeFileSync(join(agentDirectory, 'README.md'), '# ignored\n');
+
+    const discovered = discoverPromptEvalConfigs(directory);
+
+    assert.deepEqual(discovered, [
+      { name: 'alpha', config: 'agents/review/nested/alpha.yaml' },
+      { name: 'beta', config: 'scenarios/flow/beta.yml' },
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 test('default selection is active and default-eligible only', () => {
   const selected = selectPromptEvalSuites();
 
