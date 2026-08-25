@@ -213,6 +213,7 @@ async function executeWorkflowInternal(
     workflowCallResolver: liveWorkflowCallResolver,
     projectCwd: options.projectCwd,
     lookupCwd: cwd,
+    centralExecution: options.runPathsDirectory !== undefined,
   });
   const runLifecycle = createWorkflowRunLifecycle({
     cwd,

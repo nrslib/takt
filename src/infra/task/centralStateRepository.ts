@@ -184,10 +184,6 @@ function assertTaskId(taskId: string): void {
   if (!UUID_PATTERN.test(taskId)) throw new Error('taskId is invalid');
 }
 
-function assertRunId(runId: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(runId)) throw new Error('runId is invalid');
-}
-
 async function ensurePrivateDirectory(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const stats = await lstat(directory);
@@ -930,10 +926,17 @@ export class CentralTaskRepository {
   }
 
   async readTasks(): Promise<readonly CentralTaskRecord[]> {
+    // A repository handle is attached to an already initialized state.  A
+    // missing ledger therefore means that the ownership state was damaged or
+    // replaced after attach; treating it as an empty queue would permit a
+    // stale handle to recreate and mutate a different state.  Only `open`
+    // creates the initial empty ledger.
     try {
       return parseCentralTasks(JSON.parse(await readFile(this.paths.tasksFile, 'utf8')) as unknown);
     } catch (error) {
-      if (isMissing(error)) return [];
+      if (isMissing(error)) {
+        throw new CentralTaskCasError('Central task ledger is missing from an attached state');
+      }
       throw error;
     }
   }
@@ -1311,17 +1314,6 @@ export class CentralTaskRepository {
       if (changed) await this.writeTasks(reconciled);
       return reconciled;
     });
-  }
-
-  async writeRunMeta(runId: string, value: Readonly<Record<string, unknown>>): Promise<string> {
-    assertRunId(runId);
-    await verifyRunsRoot(this.paths, this.state.runsRootFingerprint);
-    const path = join(this.paths.runsDirectory, runId, 'meta.json');
-    await ensurePrivateDirectory(dirname(path));
-    await verifyRunsRoot(this.paths, this.state.runsRootFingerprint);
-    await atomicWrite(path, `${JSON.stringify(value, null, 2)}\n`);
-    await verifyRunsRoot(this.paths, this.state.runsRootFingerprint);
-    return path;
   }
 }
 

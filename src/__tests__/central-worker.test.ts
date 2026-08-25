@@ -43,23 +43,18 @@ async function withCentralConfig<T>(
 }
 
 describe('central Web UI worker', () => {
-  it('terminalizes an adopted task when the initial running metadata fails', async () => {
+  it('terminalizes ledger failures from the worker execution boundary', async () => {
     const { globalConfigDirectory, project, repository } = await setupWorkerFixture();
     const reserved = await repository.enqueueAndClaim({ task: 'metadata failure', workflow: 'default', worktree: false });
-    const writeRunMeta = vi.spyOn(CentralTaskRepository.prototype, 'writeRunMeta')
-      .mockRejectedValueOnce(new Error('running metadata failed'));
-    try {
-      await expect(runCentralTask({
-        globalConfigDirectory,
-        stateId: project.stateId,
-        taskId: reserved.task.taskId,
-        generation: reserved.task.generation,
-        executionId: reserved.executionId,
-        ownerToken: reserved.ownerToken,
-      })).rejects.toThrow('running metadata failed');
-    } finally {
-      writeRunMeta.mockRestore();
-    }
+    vi.mocked(runWorkflowExecution).mockRejectedValueOnce(new Error('workflow failed'));
+    await expect(runCentralTask({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      taskId: reserved.task.taskId,
+      generation: reserved.task.generation,
+      executionId: reserved.executionId,
+      ownerToken: reserved.ownerToken,
+    })).rejects.toThrow('workflow failed');
     await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({
       status: 'failed',
       failure: { code: 'worker_failed' },

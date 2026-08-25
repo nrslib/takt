@@ -126,6 +126,9 @@ describe('Web UI chat session settings', () => {
     const service = createWebChatService();
 
     const created = service.create('/repo', { workflow: 'default', mode: 'assistant' });
+    expect(mockCreateConversationSession.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      persistSession: false,
+    }));
     const switched = service.reconfigure(created.id, {
       workflow: 'review',
       mode: 'grill-me',
@@ -140,6 +143,7 @@ describe('Web UI chat session settings', () => {
     expect(initialSession.snapshotHistory).toHaveBeenCalledTimes(1);
     expect(mockCreateConversationSession.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
       handoffHistory: history,
+      persistSession: false,
     }));
 
     mockCreateAssistantConversationPlan.mockReset();
@@ -151,6 +155,7 @@ describe('Web UI chat session settings', () => {
     const restartedSessionOptions = mockCreateConversationSession.mock.calls[2];
     if (restartedSessionOptions === undefined) throw new Error('restart session was not created');
     expect(restartedSessionOptions[0]).not.toHaveProperty('handoffHistory');
+    expect(restartedSessionOptions[0]).toHaveProperty('persistSession', false);
     expect(switchedSession.snapshotHistory).not.toHaveBeenCalled();
   });
 

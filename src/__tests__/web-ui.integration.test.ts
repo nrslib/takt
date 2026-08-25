@@ -358,15 +358,7 @@ describe('Web UI HTTP boundary', () => {
       displayName: project.displayName,
       fingerprint: project.fingerprint,
     });
-    await central.writeRunMeta('20260824-example', {
-      runSlug: '20260824-example',
-      task: 'Task for 20260824-example',
-      workflow: 'default',
-      status: 'running',
-      startTime: '2026-08-24T00:00:00.000Z',
-      reportDirectory: 'runs/20260824-example/reports',
-      logsDirectory: 'runs/20260824-example/logs',
-    });
+    await writeRun(central.paths, '20260824-example');
     const launches: unknown[] = [];
     const server = await createWebUiServer({
       globalConfigDirectory,

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -47,36 +47,6 @@ describe('central task CAS repository', () => {
     expect(stateDirectory.mode & 0o777).toBe(0o700);
     expect(stateFile.mode & 0o777).toBe(0o600);
     expect(tasksFile.mode & 0o777).toBe(0o600);
-  });
-
-  it('fails closed when the central runs root is replaced by a symlink', async () => {
-    const { repository } = await setup();
-    const outside = await createTemporaryDirectory('takt-central-runs-outside-');
-    await rm(repository.paths.runsDirectory, { recursive: true, force: true });
-    await symlink(outside, repository.paths.runsDirectory);
-
-    await expect(repository.writeRunMeta('symlink-root', { status: 'running' }))
-      .rejects.toThrow(/runs root|regular directory|identity/i);
-  });
-
-  it('pins the central runs root to the initialized directory inode', async () => {
-    const { repository } = await setup();
-    const persisted = JSON.parse(await readFile(repository.paths.stateFile, 'utf8')) as {
-      runsRootFingerprint?: { dev: number; ino: number };
-    };
-    const original = await stat(repository.paths.runsDirectory);
-    expect(persisted.runsRootFingerprint).toEqual({ dev: original.dev, ino: original.ino });
-
-    // Keep the original directory alive while creating its replacement so the
-    // filesystem cannot reuse its inode on ext4/CI fixtures.
-    const replacementPath = join(repository.paths.stateDirectory, 'runs-replacement');
-    await mkdir(replacementPath);
-    await rm(repository.paths.runsDirectory, { recursive: true, force: true });
-    await rename(replacementPath, repository.paths.runsDirectory);
-    const replacement = await stat(repository.paths.runsDirectory);
-    expect(replacement.ino).not.toBe(original.ino);
-    await expect(repository.writeRunMeta('replaced-root', { status: 'running' }))
-      .rejects.toThrow(/runs root|fingerprint|identity/i);
   });
 
   it('never exposes an incomplete state lock during publication', async () => {
@@ -422,5 +392,17 @@ describe('central task CAS repository', () => {
       displayName: project.displayName,
       fingerprint: project.fingerprint,
     })).rejects.toThrow(/incomplete/i);
+  });
+
+  it('fails closed when an attached repository loses its task ledger', async () => {
+    const { repository } = await setup();
+    await unlink(repository.paths.tasksFile);
+
+    await expect(repository.readTasks()).rejects.toBeInstanceOf(CentralTaskCasError);
+    await expect(repository.enqueueAndClaim({
+      task: 'must not recreate ledger',
+      workflow: 'default',
+      worktree: false,
+    })).rejects.toBeInstanceOf(CentralTaskCasError);
   });
 });

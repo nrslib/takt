@@ -178,21 +178,10 @@ async function executeAndCommit(
   try {
     const runId = task.activeExecution?.runId ?? task.runId;
     if (runId === undefined) throw new Error('Central task run id is missing');
-    // These checks belong to the same failure boundary as the execution. If
-    // the initial running metadata cannot be committed, the adopted task is
-    // immediately terminalized by the catch below instead of remaining live.
+    // These checks belong to the same failure boundary as the execution. The
+    // workflow lifecycle owns run directory/meta publication; the worker owns
+    // only the central task ledger and must not project a competing meta file.
     await repository.verifyProjectIdentity();
-    await repository.writeRunMeta(runId, {
-      runSlug: runId,
-      task: task.task,
-      workflow: task.workflow,
-      status: 'running',
-      startTime: task.activeExecution?.startedAt ?? new Date().toISOString(),
-      reportDirectory: `runs/${runId}/reports`,
-      logsDirectory: `runs/${runId}/logs`,
-      origin: task.origin,
-      stateId: repository.state.stateId,
-    });
     let executionCwd = repository.locations.projectDirectory;
     if (task.worktree !== false) {
       await repository.verifyProjectIdentity();
@@ -229,7 +218,7 @@ async function executeAndCommit(
       sessionStorageDirectory: repository.paths.sessionsDirectory,
       skipWorktreeRuntimeProtection: true,
     });
-    const final = await repository.terminal({
+    await repository.terminal({
       taskId: task.taskId,
       generation: task.generation,
       executionId: task.activeExecution!.executionId,
@@ -238,18 +227,6 @@ async function executeAndCommit(
       ...(result.success ? {} : { failure: { code: 'workflow_failed', message: result.reason ?? 'Workflow failed' } }),
     });
     terminalized = true;
-    await repository.writeRunMeta(runId, {
-      runSlug: runId,
-      task: task.task,
-      workflow: task.workflow,
-      status: final.status,
-      startTime: task.activeExecution?.startedAt ?? new Date().toISOString(),
-      endTime: final.updatedAt,
-      reportDirectory: `runs/${runId}/reports`,
-      logsDirectory: `runs/${runId}/logs`,
-      origin: task.origin,
-      stateId: repository.state.stateId,
-    });
   } catch (error) {
     if (!terminalized && task.activeExecution !== undefined) {
       await repository.terminal({

@@ -18,6 +18,7 @@ import type {
   WorkflowCallStep,
   WorkflowConfig,
   WorkflowStep,
+  McpServerConfig,
 } from '../../../core/models/index.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/index.js';
 import type { WorkflowCallResolver } from '../../../core/workflow/types.js';
@@ -78,6 +79,161 @@ interface PreparedNode {
   readonly originalWorkflowRef: string;
   readonly config: WorkflowConfig;
   readonly binding: JsonValue;
+}
+
+const MCP_ENV_REFERENCE_PATTERN = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/u;
+const MCP_ENV_REFERENCE_MARKER = '${';
+const MCP_FLAG_NAME_PATTERN = /^--?[A-Za-z0-9][A-Za-z0-9_-]*$/u;
+const MCP_CREDENTIAL_FLAG_NAMES = new Set([
+  'access-key',
+  'access-token',
+  'api-key',
+  'apikey',
+  'auth',
+  'authorization',
+  'bearer',
+  'credential',
+  'credentials',
+  'cookie',
+  'cookies',
+  'header',
+  'headers',
+  'key',
+  'password',
+  'passphrase',
+  'pass-phrase',
+  'private-key',
+  'proxy-authorization',
+  'refresh-token',
+  'secret',
+  'session-id',
+  'set-cookie',
+  'token',
+]);
+const MCP_CREDENTIAL_FLAG_SUFFIXES = [
+  '-apikey',
+  '-auth',
+  '-authorization',
+  '-bearer',
+  '-cookie',
+  '-cookies',
+  '-credential',
+  '-credentials',
+  '-header',
+  '-headers',
+  '-key',
+  '-pass-phrase',
+  '-passphrase',
+  '-password',
+  '-secret',
+  '-session-id',
+  '-token',
+] as const;
+
+function normalizeMcpFlagName(flag: string): string {
+  return flag.replace(/^-+/u, '').replaceAll('_', '-').toLowerCase();
+}
+
+function isMcpCredentialFlag(flag: string): boolean {
+  if (/^-[^-]/u.test(flag)) return flag === '-H';
+  const normalized = normalizeMcpFlagName(flag);
+  return MCP_CREDENTIAL_FLAG_NAMES.has(normalized)
+    || MCP_CREDENTIAL_FLAG_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+}
+
+function parseMcpFlag(argument: string): { readonly name: string; readonly inlineValue?: string } | undefined {
+  if (!argument.startsWith('-') || argument === '-' || argument === '--') return undefined;
+  if (argument.startsWith('-H') && argument.length > 2 && argument[2] !== '=' && argument[2] !== ':') {
+    return { name: '-H', inlineValue: argument.slice(2) };
+  }
+  const separatorIndex = argument.search(/[=:]/u);
+  const name = separatorIndex === -1 ? argument : argument.slice(0, separatorIndex);
+  if (!MCP_FLAG_NAME_PATTERN.test(name)) return undefined;
+  return separatorIndex === -1
+    ? { name }
+    : { name, inlineValue: argument.slice(separatorIndex + 1) };
+}
+
+function requireMcpEnvironmentReference(value: string, label: string): void {
+  if (MCP_ENV_REFERENCE_PATTERN.test(value)) return;
+  throw new Error(
+    `Central workflow bundle rejects unsafe MCP value at ${label}; only a complete environment reference is allowed`,
+  );
+}
+
+function assertCentralMcpArgumentSafety(
+  args: readonly string[] | undefined,
+  label: string,
+): void {
+  if (args === undefined) return;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    const flag = parseMcpFlag(argument);
+    if (flag === undefined || !isMcpCredentialFlag(flag.name)) continue;
+    if (flag.inlineValue !== undefined) {
+      requireMcpEnvironmentReference(flag.inlineValue, `${label}.args[${index}]`);
+      continue;
+    }
+    const value = args[index + 1];
+    if (value === undefined) {
+      throw new Error(`Central workflow bundle rejects MCP argument ${argument} without an environment reference`);
+    }
+    requireMcpEnvironmentReference(value, `${label}.args[${index + 1}]`);
+    index += 1;
+  }
+}
+
+function assertCentralMcpUrlSafety(value: string, label: string): void {
+  if (MCP_ENV_REFERENCE_PATTERN.test(value)) return;
+  if (value.includes(MCP_ENV_REFERENCE_MARKER) || value.includes('?') || value.includes('#')) {
+    throw new Error(
+      `Central workflow bundle rejects unsafe MCP URL at ${label}; credentials, queries, and mixed references are unsupported`,
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`Central workflow bundle rejects invalid MCP URL at ${label}`);
+  }
+  if (parsed.username.length > 0 || parsed.password.length > 0) {
+    throw new Error(`Central workflow bundle rejects MCP URL credentials at ${label}`);
+  }
+}
+
+function assertCentralMcpServerValueSafety(
+  server: McpServerConfig,
+  label: string,
+): void {
+  if ('command' in server) {
+    for (const [key, value] of Object.entries(server.env ?? {})) {
+      requireMcpEnvironmentReference(value, `${label}.env.${key}`);
+    }
+    assertCentralMcpArgumentSafety(server.args, label);
+    return;
+  }
+
+  const remote = server as Extract<McpServerConfig, { readonly url: string }>;
+  assertCentralMcpUrlSafety(remote.url, `${label}.url`);
+  for (const [key, value] of Object.entries(remote.headers ?? {})) {
+    requireMcpEnvironmentReference(value, `${label}.headers.${key}`);
+  }
+}
+
+/**
+ * Central runs persist a portable workflow bundle below the state root. Legacy
+ * MCP definitions may carry only complete environment references across that
+ * durable boundary; arbitrary literals and mixed references are ambiguous.
+ */
+function assertCentralWorkflowBundleCredentialSafety(
+  workflow: WorkflowConfig,
+): void {
+  walkSteps(workflow.steps, (step) => {
+    if (step.kind === 'system' || step.kind === 'workflow_call' || step.mcpServers === undefined) return;
+    for (const [name, server] of Object.entries(step.mcpServers)) {
+      assertCentralMcpServerValueSafety(server, `step "${step.name}".mcpServers.${name}`);
+    }
+  });
 }
 
 export interface PreparedWorkflowExecutionBundle {
@@ -319,6 +475,8 @@ export function prepareWorkflowExecutionBundle(input: {
   readonly workflowCallResolver: WorkflowCallResolver;
   readonly projectCwd: string;
   readonly lookupCwd: string;
+  /** Reject durable legacy MCP credential literals for central state runs. */
+  readonly centralExecution?: boolean;
   readonly rootWorkflowRefOverride?: string;
   readonly workflowRefResolver?: (
     workflow: WorkflowConfig,
@@ -341,6 +499,9 @@ export function prepareWorkflowExecutionBundle(input: {
     workflowRefOverride?: string,
     context?: { readonly parentWorkflowRef: string; readonly step: WorkflowCallStep },
   ): PreparedNode => {
+    if (input.centralExecution) {
+      assertCentralWorkflowBundleCredentialSafety(original);
+    }
     const originalWorkflowRef = workflowRefOverride
       ?? input.workflowRefResolver?.(original, context)
       ?? getWorkflowReference(original);

@@ -31,7 +31,7 @@ The global config directory (default: `~/.takt/`) can be changed with the `TAKT_
 
 ## Web UI execution boundary
 
-The Web UI stores its queued tasks, runs, and sessions in channel-neutral central state below `TAKT_CONFIG_DIR`. The CLI keeps its existing project-local state behavior. Concurrent mutation of the same state through the CLI and Web UI is not supported; use one channel for a given execution state at a time.
+The Web UI stores its queued tasks, runs, and sessions in channel-neutral central state below `TAKT_CONFIG_DIR`. The CLI keeps its existing project-local state behavior. Concurrent execution or mutation of the same canonical project through the CLI and Web UI is not supported; use one channel for a given execution target at a time.
 
 ## Interactive Mode
 

@@ -130,12 +130,14 @@ steps:
     publishWorkflowExecutionBundle(paths, prepared);
     const loaded = loadWorkflowExecutionBundle(paths);
     const [first, second] = loaded.rootWorkflow.steps;
-    expect(first?.args).toEqual({
+    const firstCall = first as { readonly args?: unknown } | undefined;
+    const secondCall = second as { readonly args?: unknown } | undefined;
+    expect(firstCall?.args).toEqual({
       mode: 'first',
       personaPath: 'ordinary-persona-argument',
       partPersonaPath: 'ordinary-part-persona-argument',
     });
-    expect(second?.args).toEqual({
+    expect(secondCall?.args).toEqual({
       mode: 'second',
       companions: {
         fixed: ['reviewer'],
@@ -220,6 +222,280 @@ steps:
     expect(() => loadWorkflowExecutionBundle(paths)).toThrow('argument "companions" is invalid');
   });
 
+  it('enforces a reference-only MCP contract for central bundles while retaining local behavior', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-mcp-secret-'));
+    roots.push(root);
+    const centralWorkflow = workflow('central-mcp', [{
+      name: 'work',
+      kind: 'agent',
+      persona: 'prompt',
+      personaDisplayName: 'work',
+      instruction: '{task}',
+      mcpServers: {
+        safe: {
+          type: 'http',
+          url: 'https://example.test/mcp',
+          headers: { Authorization: '${MCP_TOKEN}' },
+        },
+      },
+    }]);
+
+    const prepared = prepareWorkflowExecutionBundle({
+      rootWorkflow: centralWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    });
+    const serialized = [...prepared.objects.values()].join('\n');
+    expect(serialized).toContain('${MCP_TOKEN}');
+    expect(serialized).not.toContain('literal-secret');
+
+    const withStdioMcpArgs = (args: string[]): WorkflowConfig => {
+      const config = structuredClone(centralWorkflow);
+      const step = config.steps[0];
+      if (step === undefined || step.kind === 'system' || step.kind === 'workflow_call') {
+        throw new Error('Expected an agent step');
+      }
+      step.mcpServers = {
+        safe: {
+          command: 'npx',
+          args,
+        },
+      };
+      return config;
+    };
+
+    const safeArgumentsWorkflow = withStdioMcpArgs([
+      '-y',
+      '-h',
+      '@modelcontextprotocol/server-filesystem',
+      'serve',
+      '--transport=stdio',
+      '--API_KEY=${MCP_TOKEN}',
+      '--authorization:${MCP_AUTHORIZATION}',
+    ]);
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: safeArgumentsWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).not.toThrow();
+
+    const safeSeparatedHeaderWorkflow = withStdioMcpArgs(['--HEADER', '${MCP_HEADER}']);
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: safeSeparatedHeaderWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).not.toThrow();
+
+    for (const args of [
+      ['-H${MCP_HEADER}'],
+      ['-H=${MCP_HEADER}'],
+      ['-H:${MCP_HEADER}'],
+      ['-H', '${MCP_HEADER}'],
+    ]) {
+      const compactHeaderWorkflow = withStdioMcpArgs(args);
+      expect(() => prepareWorkflowExecutionBundle({
+        rootWorkflow: compactHeaderWorkflow,
+        workflowCallResolver: () => null,
+        projectCwd: root,
+        lookupCwd: root,
+        centralExecution: true,
+      })).not.toThrow();
+    }
+
+    const lowerHelpWorkflow = withStdioMcpArgs(['-h=help']);
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: lowerHelpWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).not.toThrow();
+
+    const inlineLiteralWorkflow = withStdioMcpArgs(['--API_KEY=literal-secret']);
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: inlineLiteralWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).toThrow(/unsafe MCP value/i);
+
+    const mixedInlineWorkflow = withStdioMcpArgs(['--api_key=Bearer ${MCP_TOKEN}']);
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: mixedInlineWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).toThrow(/unsafe MCP value/i);
+
+    for (const args of [
+      ['-Hliteral-secret'],
+      ['-HAuthorization:literal-secret'],
+      ['-H=literal-secret'],
+      ['-H:literal-secret'],
+      ['-H', 'literal-secret'],
+    ]) {
+      const compactLiteralWorkflow = withStdioMcpArgs(args);
+      expect(() => prepareWorkflowExecutionBundle({
+        rootWorkflow: compactLiteralWorkflow,
+        workflowCallResolver: () => null,
+        projectCwd: root,
+        lookupCwd: root,
+        centralExecution: true,
+      })).toThrow(/unsafe MCP value/i);
+    }
+
+    const ordinaryCompoundFlagWorkflow = withStdioMcpArgs(['--headerish=ordinary-value']);
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: ordinaryCompoundFlagWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).not.toThrow();
+
+    for (const args of [
+      ['--auth-header=literal-secret'],
+      ['--custom-header:literal-secret'],
+      ['--authorization-header', 'literal-secret'],
+    ]) {
+      const compoundLiteralWorkflow = withStdioMcpArgs(args);
+      expect(() => prepareWorkflowExecutionBundle({
+        rootWorkflow: compoundLiteralWorkflow,
+        workflowCallResolver: () => null,
+        projectCwd: root,
+        lookupCwd: root,
+        centralExecution: true,
+      })).toThrow(/unsafe MCP value/i);
+    }
+
+    for (const args of [
+      ['--auth-header=${MCP_AUTH_HEADER}'],
+      ['--custom-header:${MCP_CUSTOM_HEADER}'],
+      ['--authorization-header', '${MCP_AUTHORIZATION_HEADER}'],
+    ]) {
+      const compoundReferenceWorkflow = withStdioMcpArgs(args);
+      expect(() => prepareWorkflowExecutionBundle({
+        rootWorkflow: compoundReferenceWorkflow,
+        workflowCallResolver: () => null,
+        projectCwd: root,
+        lookupCwd: root,
+        centralExecution: true,
+      })).not.toThrow();
+    }
+
+    const literalWorkflow = structuredClone(centralWorkflow);
+    const literalServer = literalWorkflow.steps[0];
+    if (literalServer === undefined || literalServer.kind === 'system' || literalServer.kind === 'workflow_call') {
+      throw new Error('Expected an agent step');
+    }
+    literalServer.mcpServers = {
+      safe: {
+        type: 'http',
+        url: 'https://example.test/mcp',
+        headers: { Authorization: 'Bearer literal-secret' },
+      },
+    };
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: literalWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).toThrow(/unsafe MCP value/i);
+
+    const arbitraryEnvWorkflow = structuredClone(centralWorkflow);
+    const arbitraryEnvStep = arbitraryEnvWorkflow.steps[0];
+    if (arbitraryEnvStep === undefined || arbitraryEnvStep.kind === 'system' || arbitraryEnvStep.kind === 'workflow_call') {
+      throw new Error('Expected an agent step');
+    }
+    arbitraryEnvStep.mcpServers = {
+      safe: {
+        command: 'mcp-server',
+        env: { ENDPOINT: 'https://example.test/mcp' },
+      },
+    };
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: arbitraryEnvWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).toThrow(/unsafe MCP value/i);
+
+    const mixedReferenceWorkflow = structuredClone(centralWorkflow);
+    const mixedReferenceStep = mixedReferenceWorkflow.steps[0];
+    if (mixedReferenceStep === undefined || mixedReferenceStep.kind === 'system' || mixedReferenceStep.kind === 'workflow_call') {
+      throw new Error('Expected an agent step');
+    }
+    mixedReferenceStep.mcpServers = {
+      safe: {
+        type: 'http',
+        url: 'https://example.test/mcp',
+        headers: { Authorization: 'Bearer ${MCP_TOKEN}' },
+      },
+    };
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: mixedReferenceWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).toThrow(/unsafe MCP value/i);
+
+    const separatedHeaderWorkflow = structuredClone(centralWorkflow);
+    const separatedHeaderStep = separatedHeaderWorkflow.steps[0];
+    if (separatedHeaderStep === undefined || separatedHeaderStep.kind === 'system' || separatedHeaderStep.kind === 'workflow_call') {
+      throw new Error('Expected an agent step');
+    }
+    separatedHeaderStep.mcpServers = {
+      safe: {
+        command: 'mcp-server',
+        args: ['--header', 'Authorization: literal-secret'],
+      },
+    };
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: separatedHeaderWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).toThrow(/unsafe MCP value/i);
+
+    const queryWorkflow = structuredClone(centralWorkflow);
+    const queryStep = queryWorkflow.steps[0];
+    if (queryStep === undefined || queryStep.kind === 'system' || queryStep.kind === 'workflow_call') {
+      throw new Error('Expected an agent step');
+    }
+    queryStep.mcpServers = {
+      safe: {
+        type: 'http',
+        url: 'https://example.test/mcp?token=literal-secret',
+      },
+    };
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: queryWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+      centralExecution: true,
+    })).toThrow(/unsafe MCP URL/i);
+
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: literalWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    })).not.toThrow();
+  });
+
   it('fails loudly when an object is tampered', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-tamper-'));
     roots.push(root);
@@ -253,6 +529,8 @@ steps:
       teamLeader: {
         persona: 'planning prompt',
         partPersona: partPersonaContent,
+        maxConcurrency: 1,
+        timeoutMs: 1_000,
       },
     }]);
     const paths = buildRunPaths(root, 'team-leader-run');
@@ -340,7 +618,8 @@ steps:
       ],
     }, workflowDir, { projectDir: root, workflowDir, lang: 'en' }), `project:sha256:${'r'.repeat(64)}`);
 
-    expect(config.steps[0]?.dynamicFacets?.selector?.personaPath).toBe(facetSelectorPersonaPath);
+    const configuredFacetStep = config.steps[0] as Extract<WorkflowConfig['steps'][number], { dynamicFacets?: unknown }>;
+    expect(configuredFacetStep.dynamicFacets?.selector?.personaPath).toBe(facetSelectorPersonaPath);
     const normalizedParallel = config.steps[1]?.parallel;
     if (normalizedParallel === undefined || Array.isArray(normalizedParallel)) {
       throw new Error('Expected a dynamic parallel step');
@@ -356,7 +635,8 @@ steps:
     }));
 
     const loaded = loadWorkflowExecutionBundle(paths);
-    const facetSelector = loaded.rootWorkflow.steps[0]?.dynamicFacets?.selector;
+    const loadedFacetStep = loaded.rootWorkflow.steps[0] as Extract<WorkflowConfig['steps'][number], { dynamicFacets?: unknown }>;
+    const facetSelector = loadedFacetStep.dynamicFacets?.selector;
     const parallel = loaded.rootWorkflow.steps[1]?.parallel;
     if (parallel === undefined || Array.isArray(parallel)) {
       throw new Error('Expected a dynamic parallel step');

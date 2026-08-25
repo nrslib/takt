@@ -163,6 +163,11 @@ function buildConversation(
   const session = createConversationSession({
     cwd: projectDirectory,
     outputMode: 'silent',
+    // Web chat sessions are process-local handoff state. Persisting them via
+    // the interactive session store would write framework state into the
+    // project's `.takt` directory; the one-shot worker receives its central
+    // session directory separately.
+    persistSession: false,
     ctx: plan.ctx,
     strategy: plan.strategy,
     formalSpec: plan.strategy.formalSpec,
