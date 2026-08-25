@@ -2,6 +2,8 @@ import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 
+const MAX_DIRECTORIES = 2_000;
+
 export interface BrowsedDirectory {
   readonly path: string;
   readonly parent: string | null;
@@ -39,8 +41,11 @@ export async function browseDirectory(requestedPath: string): Promise<BrowsedDir
     throw new Error('Selected path must resolve to a directory');
   }
   const entries = await readdir(path, { withFileTypes: true });
-  const directories = (await Promise.all(entries
+  const directoryEntries = entries
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .slice(0, MAX_DIRECTORIES);
+  const directories = (await Promise.all(directoryEntries
     .map(async (entry) => ({
       entry,
       accepted: await isDirectoryEntry(path, entry.name, entry.isSymbolicLink()),

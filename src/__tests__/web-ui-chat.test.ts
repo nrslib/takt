@@ -41,11 +41,11 @@ import {
   WebChatInputError,
 } from '../features/web-ui/chat.js';
 
-function createPlan(workflow: string) {
+function createPlan(workflow: string, model: string | null = `model-${workflow}`) {
   return {
     ctx: {
       providerType: 'mock',
-      model: `model-${workflow}`,
+      ...(model === null ? {} : { model }),
       lang: 'ja',
     },
     strategy: {
@@ -142,8 +142,11 @@ describe('Web UI chat session settings', () => {
       handoffHistory: history,
     }));
 
+    mockCreateAssistantConversationPlan.mockReset();
+    mockCreateAssistantConversationPlan.mockReturnValue(createPlan('review', null));
     const restarted = service.restart(created.id);
     expect(restarted.id).toBe(created.id);
+    expect(restarted).not.toHaveProperty('model');
     expect(mockCreateConversationSession.mock.calls[2]?.[0]).not.toHaveProperty('handoffHistory');
     expect(switchedSession.snapshotHistory).not.toHaveBeenCalled();
   });

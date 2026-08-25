@@ -18,6 +18,8 @@ export class NativeDirectoryPickerUnavailableError extends Error {}
 
 type ExecuteFile = (file: string, args: readonly string[]) => Promise<string>;
 
+let pickerQueue: Promise<void> = Promise.resolve();
+
 function executeFile(file: string, args: readonly string[]): Promise<string> {
   return new Promise((resolvePromise, rejectPromise) => {
     execFile(
@@ -35,7 +37,7 @@ function executeFile(file: string, args: readonly string[]): Promise<string> {
   });
 }
 
-export async function pickNativeDirectory(options: {
+async function pickNativeDirectoryOnce(options: {
   readonly platform: NodeJS.Platform;
   readonly execute: ExecuteFile;
 }): Promise<NativeDirectoryPickerResult> {
@@ -49,6 +51,16 @@ export async function pickNativeDirectory(options: {
   if (output === CANCELLED_OUTPUT) return { cancelled: true };
   if (output.length === 0) throw new Error('Finder did not return a directory path');
   return { cancelled: false, path: output };
+}
+
+export function pickNativeDirectory(options: {
+  readonly platform: NodeJS.Platform;
+  readonly execute: ExecuteFile;
+}): Promise<NativeDirectoryPickerResult> {
+  if (options.platform !== 'darwin') return pickNativeDirectoryOnce(options);
+  const result = pickerQueue.then(() => pickNativeDirectoryOnce(options));
+  pickerQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
 
 export function pickNativeDirectoryOnHost(): Promise<NativeDirectoryPickerResult> {

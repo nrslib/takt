@@ -1,10 +1,18 @@
 async function requestJson(path, options) {
   const response = await fetch(path, options);
-  const body = await response.json();
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
   if (!response.ok) {
-    const message = typeof body.error === 'string' ? body.error : `Request failed: ${response.status}`;
+    const message = typeof body?.error === 'string'
+      ? body.error
+      : `Request failed: ${response.status}`;
     throw new Error(message);
   }
+  if (body === null) throw new Error(`Invalid response: ${response.status}`);
   return body;
 }
 
@@ -52,14 +60,7 @@ export function registerProject(token, projectDirectory) {
 }
 
 export function startRun(token, request) {
-  return requestJson('/api/runs', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-TAKT-Web-Token': token,
-    },
-    body: JSON.stringify(request),
-  });
+  return requestJson('/api/runs', mutationOptions(token, request));
 }
 
 function mutationOptions(token, body) {

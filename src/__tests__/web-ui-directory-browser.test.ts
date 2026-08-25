@@ -23,4 +23,17 @@ describe('Web UI directory browser', () => {
     expect(() => parseDirectoryBrowseRequest({ path: 'relative/project' }))
       .toThrow('path must be an absolute directory path');
   });
+
+  it('caps the returned directory list before resolving entries', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'takt-directory-browser-limit-'));
+    await Promise.all(Array.from({ length: 2_005 }, (_, index) =>
+      mkdir(join(root, `directory-${String(index).padStart(4, '0')}`))));
+
+    const result = await browseDirectory(root);
+
+    expect(result.directories).toHaveLength(2_000);
+    expect(result.directories[0]?.name).toBe('directory-0000');
+    expect(result.directories.at(-1)?.name).toBe('directory-1999');
+    expect(result.directories.some(({ name }) => name === 'directory-2000')).toBe(false);
+  });
 });

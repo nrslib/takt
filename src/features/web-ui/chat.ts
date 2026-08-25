@@ -210,7 +210,10 @@ export function createWebChatService(): WebChatService {
       const replacement = buildConversation(
         sessionId,
         conversation.projectDirectory,
-        conversation.description,
+        {
+          workflow: conversation.description.workflow,
+          mode: conversation.description.mode,
+        },
       );
       conversation.description = replacement.description;
       conversation.session = replacement.session;

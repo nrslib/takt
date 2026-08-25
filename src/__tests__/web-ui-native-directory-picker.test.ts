@@ -30,4 +30,26 @@ describe('Web UI native directory picker', () => {
     await expect(pickNativeDirectory({ platform: 'linux', execute: vi.fn() }))
       .rejects.toBeInstanceOf(NativeDirectoryPickerUnavailableError);
   });
+
+  it('serializes concurrent pickers in FIFO order and continues after failure', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce('/Users/example/first/\n')
+      .mockResolvedValueOnce('/Users/example/next/\n');
+
+    const first = pickNativeDirectory({ platform: 'darwin', execute });
+    const concurrent = pickNativeDirectory({ platform: 'darwin', execute });
+
+    await expect(first).resolves.toEqual({ cancelled: false, path: '/Users/example/first/' });
+    await expect(concurrent).resolves.toEqual({ cancelled: false, path: '/Users/example/next/' });
+    expect(execute).toHaveBeenCalledTimes(2);
+
+    const failingExecute = vi.fn()
+      .mockRejectedValueOnce(new Error('Finder failed'))
+      .mockResolvedValueOnce('/Users/example/recovered/\n');
+    const failed = pickNativeDirectory({ platform: 'darwin', execute: failingExecute });
+    const recovered = pickNativeDirectory({ platform: 'darwin', execute: failingExecute });
+    await expect(failed).rejects.toThrow('Finder failed');
+    await expect(recovered).resolves.toEqual({ cancelled: false, path: '/Users/example/recovered/' });
+    expect(failingExecute).toHaveBeenCalledTimes(2);
+  });
 });
