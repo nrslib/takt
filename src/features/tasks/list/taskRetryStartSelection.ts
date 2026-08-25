@@ -51,9 +51,6 @@ function createResumeOption(
   if (options.resumePoint === undefined) {
     return undefined;
   }
-  // Resolve only to confirm the checkpoint still maps onto the current
-  // workflow; the tree UI drops the long serialized path, so the label names
-  // the workflow rather than repeating each nested step.
   const resolved = resolveTaskRetryStackPath(
     rootWorkflow,
     options.resumePoint.stack,
@@ -65,7 +62,7 @@ function createResumeOption(
   }
   return {
     value: RESUME_SELECTION_VALUE,
-    label: `${RESUME_LABEL_PREFIX}${formatTaskRetryPath([rootWorkflow.name])}`,
+    label: `${RESUME_LABEL_PREFIX}${formatTaskRetryPath(resolved.segments)}`,
     selection: { kind: 'resume', resumePoint: options.resumePoint },
   };
 }
