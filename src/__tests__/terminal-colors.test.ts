@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  DELAYED_RESPONSE_ESCAPE_TIMEOUT_MS,
   FALLBACK_USER_MESSAGE_COLORS,
   TERMINAL_BACKGROUND_QUERY_TIMEOUT_MS,
   parseTerminalBackgroundResponse,
@@ -68,10 +69,6 @@ class ReadableInput extends PassThrough {
     this.isRaw = mode;
     return this;
   }
-}
-
-async function flushReadableEvents(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 describe('user message terminal colors', () => {
@@ -260,7 +257,7 @@ describe('user message terminal colors', () => {
     }
   });
 
-  it('should isolate a delayed response from the next Ink readable input', async () => {
+  it('should isolate a delayed response split after Esc from the next Ink readable input', async () => {
     vi.useFakeTimers();
     try {
       const input = new ReadableInput();
@@ -269,7 +266,6 @@ describe('user message terminal colors', () => {
 
       await vi.advanceTimersByTimeAsync(TERMINAL_BACKGROUND_QUERY_TIMEOUT_MS);
       const resolution = await result;
-      vi.useRealTimers();
       const guard = resolution.delayedResponseGuard;
       expect(guard).toBeDefined();
       expect(input.readableFlowing).toBeNull();
@@ -286,24 +282,61 @@ describe('user message terminal colors', () => {
       input.on('readable', onReadable);
 
       input.push(Buffer.from('typed-before'));
-      await flushReadableEvents();
+      await vi.advanceTimersByTimeAsync(0);
       input.push(Buffer.from('\x1b'));
-      await flushReadableEvents();
-      input.push(Buffer.from('\x1b]11;rgb:2929'));
-      await flushReadableEvents();
+      await vi.advanceTimersByTimeAsync(0);
+      input.push(Buffer.from(']11;rgb:2929'));
+      await vi.advanceTimersByTimeAsync(0);
       input.push(Buffer.concat([
         Buffer.from('/2c2c/3333'),
         Buffer.from([0x9c]),
       ]));
       input.push(Buffer.from('typed-after'));
-      await flushReadableEvents();
+      await vi.advanceTimersByTimeAsync(DELAYED_RESPONSE_ESCAPE_TIMEOUT_MS);
 
-      expect(inkInput.join('')).toBe('typed-before\x1btyped-after');
+      expect(inkInput.join('')).toBe('typed-beforetyped-after');
 
       input.removeListener('readable', onReadable);
       guard?.detach();
       expect(input.listenerCount('readable')).toBe(0);
       expect(input.readableFlowing).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('should replay a standalone Esc after the delayed-response deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const input = new ReadableInput();
+      const output = new FakeOutput();
+      const result = queryTerminalBackground(input, output);
+
+      await vi.advanceTimersByTimeAsync(TERMINAL_BACKGROUND_QUERY_TIMEOUT_MS);
+      const resolution = await result;
+      const guard = resolution.delayedResponseGuard;
+      expect(guard).toBeDefined();
+
+      guard?.attach();
+      input.setEncoding('utf8');
+      const inkInput: string[] = [];
+      const onReadable = (): void => {
+        let chunk: Buffer | string | null;
+        while ((chunk = input.read()) !== null) {
+          inkInput.push(Buffer.from(chunk).toString());
+        }
+      };
+      input.on('readable', onReadable);
+
+      input.push(Buffer.from('\x1b'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(inkInput).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(DELAYED_RESPONSE_ESCAPE_TIMEOUT_MS);
+      expect(inkInput.join('')).toBe('\x1b');
+
+      input.removeListener('readable', onReadable);
+      guard?.detach();
     } finally {
       vi.useRealTimers();
     }

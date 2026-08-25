@@ -49,6 +49,7 @@ export interface UserMessageColorResolution {
 const OSC_BACKGROUND_QUERY = '\x1b]11;?\x1b\\';
 const OSC_BACKGROUND_PREFIX = Buffer.from('\x1b]11;');
 const TERMINAL_BACKGROUND_QUERY_TIMEOUT_MS = 50;
+const DELAYED_RESPONSE_ESCAPE_TIMEOUT_MS = 50;
 const DARK_BACKGROUND_LUMINANCE_THRESHOLD = 128;
 const DARK_BACKGROUND_ALPHA = 0.12;
 const LIGHT_BACKGROUND_ALPHA = 0.04;
@@ -234,6 +235,10 @@ class OscBackgroundResponseParser {
     this.pending = Buffer.alloc(0);
     return escape;
   }
+
+  hasStandaloneEscape(): boolean {
+    return this.pending.length === 1 && this.pending[0] === 0x1b;
+  }
 }
 
 function restoreFlowingState(stdin: TerminalInput, wasFlowing: boolean | null): boolean {
@@ -265,21 +270,58 @@ function createDelayedResponseGuard(stdin: TerminalInput): TerminalInputGuard {
   const parser = new OscBackgroundResponseParser();
   let attached = false;
   let reading = false;
+  let replayingExpiredEscape = false;
   let previousFlowing: boolean | null | undefined;
+  let escapeTimeout: ReturnType<typeof setTimeout> | undefined;
 
-  const replay = (chunks: readonly Buffer[]): void => {
+  const replay = (chunks: readonly Buffer[]): boolean => {
     if (chunks.length === 0) {
-      return;
+      return true;
     }
     try {
       stdin.unshift(Buffer.concat(chunks));
+      return true;
     } catch {
       // A stream that rejects unshift() has no safe replay operation. The guard
       // must still detach so it cannot keep the TUI alive or throw from readable.
+      return false;
     }
   };
 
+  const clearEscapeTimeout = (): void => {
+    if (escapeTimeout === undefined) {
+      return;
+    }
+    clearTimeout(escapeTimeout);
+    escapeTimeout = undefined;
+  };
+
+  const updateEscapeTimeout = (): void => {
+    if (!parser.hasStandaloneEscape()) {
+      clearEscapeTimeout();
+      return;
+    }
+    if (escapeTimeout !== undefined) {
+      return;
+    }
+    escapeTimeout = setTimeout(() => {
+      escapeTimeout = undefined;
+      const escape = parser.releaseStandaloneEscape();
+      if (escape !== null) {
+        replayingExpiredEscape = true;
+        if (!replay([escape])) {
+          replayingExpiredEscape = false;
+        }
+      }
+    }, DELAYED_RESPONSE_ESCAPE_TIMEOUT_MS);
+    escapeTimeout.unref?.();
+  };
+
   const onReadable = (): void => {
+    if (replayingExpiredEscape) {
+      replayingExpiredEscape = false;
+      return;
+    }
     if (!attached || reading) {
       return;
     }
@@ -302,12 +344,10 @@ function createDelayedResponseGuard(stdin: TerminalInput): TerminalInputGuard {
         const result = parser.push(chunk);
         unrelatedInput.push(...result.unrelatedInput);
       }
-      const standaloneEscape = parser.releaseStandaloneEscape();
-      if (standaloneEscape !== null) {
-        unrelatedInput.push(standaloneEscape);
-      }
+      updateEscapeTimeout();
       replay(unrelatedInput);
     } catch {
+      clearEscapeTimeout();
       replay([...unrelatedInput, ...parser.flush()]);
     } finally {
       reading = false;
@@ -345,6 +385,8 @@ function createDelayedResponseGuard(stdin: TerminalInput): TerminalInputGuard {
         return;
       }
       attached = false;
+      clearEscapeTimeout();
+      replayingExpiredEscape = false;
       try {
         stdin.removeListener('readable', onReadable);
       } catch {
@@ -488,4 +530,7 @@ export function resolveUserMessageColors(): Promise<UserMessageColorResolution> 
   return queryTerminalBackground(process.stdin, process.stdout);
 }
 
-export { TERMINAL_BACKGROUND_QUERY_TIMEOUT_MS };
+export {
+  DELAYED_RESPONSE_ESCAPE_TIMEOUT_MS,
+  TERMINAL_BACKGROUND_QUERY_TIMEOUT_MS,
+};
