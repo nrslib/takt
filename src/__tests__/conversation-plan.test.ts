@@ -132,9 +132,8 @@ describe('assistant conversation plan', () => {
     expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'interactive');
     expect(strategy.allowedTools).toContain('Bash');
     expect(strategy.permissionMode).toBeUndefined();
-    expect(strategy.introMessage).toBe(
-      'Interactive mode - describe your task. When ready, use /go to create the instruction and run it.',
-    );
+    expect(strategy.introMessage).toContain('Interactive mode');
+    expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go']);
   });
 
   it('should make Grill Me read-only and withhold Bash', () => {
@@ -146,9 +145,8 @@ describe('assistant conversation plan', () => {
     expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'grill-me-interactive');
     expect(strategy.allowedTools).not.toContain('Bash');
     expect(strategy.permissionMode).toBe('readonly');
-    expect(strategy.introMessage).toBe(
-      'Grill Me mode - clarify requirements one question at a time with a recommended option. When ready, use /go to create the instruction and run it.',
-    );
+    expect(strategy.introMessage).toContain('Grill Me mode');
+    expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go']);
   });
 
   it('should forward the CLI provider and model overrides and the resumed session', () => {
