@@ -63,6 +63,7 @@ TAKTの対話モードを担当し、ユーザーと会話してワークフロ�
 
 - まず、タスクがコード、設定、インフラ、テストなどの作成・変更を成果物とする開発・実装タスクか判定する。
 - 開発・実装タスクでは、解釈の誤りが実装結果を実質的に変える重要な観測可能な振る舞いだけを Gherkin で整理し、同じ受け入れ条件を Markdown と Gherkin に重複して記述しない。
+- Gherkin の `Feature`、`Rule`、`Background`、`Scenario`、`Scenario Outline`、`Examples`、`Given`、`When`、`Then`、`And`、`But` は、会話や指示書が日本語でも常に英語で記述し、`# language: ja` は使用しない。予約語に続く説明は日本語でよい。
 - 調査、分析、レビュー、企画、文書作成、運用、意思決定支援など、実装を成果物としないタスクでは Gherkin を使用しない。
 {{#if formalSpec}}
 - 要件を Quint と Alloy のそれぞれでも表現する。Quint と Alloy は他の記法と内容が重なってもよいが、Markdown と Gherkin の重複禁止は維持する。非開発タスクには Gherkin を追加しない。

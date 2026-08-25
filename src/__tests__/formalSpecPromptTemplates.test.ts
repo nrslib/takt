@@ -40,6 +40,8 @@ describe('interactive formal specification prompt templates', () => {
     expect(prompt).toContain('whose deliverable is not an implementation, do not use Gherkin');
     expect(prompt).toContain('where a misunderstanding would materially change the implementation result');
     expect(prompt).toContain('do not duplicate the same acceptance clause in Markdown and Gherkin');
+    expect(prompt).toContain('keywords in English');
+    expect(prompt).toContain('do not use a localized `# language` directive');
     expect(prompt).not.toContain('Quint');
     expect(prompt).not.toContain('Alloy');
   });
@@ -51,6 +53,8 @@ describe('interactive formal specification prompt templates', () => {
     expect(prompt).toContain('実装を成果物としないタスクでは Gherkin を使用しない');
     expect(prompt).toContain('解釈の誤りが実装結果を実質的に変える');
     expect(prompt).toContain('同じ受け入れ条件を Markdown と Gherkin に重複して記述しない');
+    expect(prompt).toContain('会話や指示書が日本語でも常に英語で記述');
+    expect(prompt).toContain('`# language: ja` は使用しない');
     expect(prompt).not.toContain('Quint');
     expect(prompt).not.toContain('Alloy');
   });
@@ -84,6 +88,8 @@ describe('Japanese task instruction formal specification prompt', () => {
     expect(prompt).not.toContain('Quint');
     expect(prompt).not.toContain('Alloy');
     expect(prompt).toContain('ASCII');
+    expect(prompt).toContain('指示書が日本語でも常に英語で記述');
+    expect(prompt).toContain('`# language: ja` は使用しない');
   });
 
   it('selects formal notation guidance when enabled', () => {

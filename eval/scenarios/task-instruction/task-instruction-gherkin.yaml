@@ -93,7 +93,13 @@ tests:
         metric: task-instruction-gherkin/structure-ja
         value: |
           const block = output.match(/```gherkin\s*([\s\S]*?)```/i)?.[1] ?? '';
-          return /Feature\s*:/i.test(block) && /Scenario\s*:/i.test(block);
+          return /Feature\s*:/i.test(block)
+            && /Scenario\s*:/i.test(block)
+            && /^\s*Given\b/im.test(block)
+            && /^\s*When\b/im.test(block)
+            && /^\s*Then\b/im.test(block)
+            && !/^\s*(?:機能|ルール|背景|シナリオ(?:アウトライン)?|例|前提|もし|ならば|かつ|しかし)(?:\s*:|\s+)/m.test(block)
+            && !/^\s*#\s*language\s*:/im.test(block);
       - type: javascript
         metric: task-instruction-gherkin/no-implementation-in-gherkin-ja
         value: |

@@ -63,6 +63,7 @@ When all material decision branches are resolved, concisely summarize the agreed
 
 - First determine whether the task is a development or implementation task whose deliverables create or change code, configuration, infrastructure, or tests.
 - For development or implementation tasks, use Gherkin only for important observable behavior where a misunderstanding would materially change the implementation result, and do not duplicate the same acceptance clause in Markdown and Gherkin.
+- Always write the Gherkin `Feature`, `Rule`, `Background`, `Scenario`, `Scenario Outline`, `Examples`, `Given`, `When`, `Then`, `And`, and `But` keywords in English, even when the conversation or instruction uses another language; do not use a localized `# language` directive. Descriptions after the keywords may use the instruction language.
 - For research, analysis, review, planning, documentation, operations, decision support, or any other task whose deliverable is not an implementation, do not use Gherkin.
 {{#if formalSpec}}
 - Express the requirements in both Quint and Alloy. Quint and Alloy may overlap with other notations, but keep the prohibition on duplicating acceptance clauses between Markdown and Gherkin. Do not add Gherkin to non-development tasks.
