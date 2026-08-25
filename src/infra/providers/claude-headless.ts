@@ -24,7 +24,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     model: options.model,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
     baseUrl: claudeOptions?.baseUrl,
-    effort: claudeOptions?.effort,
+    effort: options.effort ?? claudeOptions?.effort,
     skillsEnabled,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,

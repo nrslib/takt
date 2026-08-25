@@ -276,6 +276,7 @@ steps:
 | `takt eject` | 复制 builtin workflow/facet 以便定制 |
 | `takt workflow init` | 创建 workflow scaffold |
 | `takt workflow doctor` | 验证 workflow 定义 |
+| `takt workflow inspect` | 检查 workflow 的配置与解析来源 |
 | `takt repertoire add` | 从 GitHub 安装 repertoire package |
 
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。

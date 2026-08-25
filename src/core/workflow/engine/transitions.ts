@@ -12,6 +12,7 @@ export interface WorkflowRuleTransition {
   nextStep?: string;
   returnValue?: string;
   requiresUserInput?: boolean;
+  commandGates: 'required' | 'skip';
 }
 
 export function determineRuleTransition(
@@ -27,6 +28,7 @@ export function determineRuleTransition(
     ...(rule.next !== undefined ? { nextStep: rule.next } : {}),
     ...(rule.returnValue !== undefined ? { returnValue: rule.returnValue } : {}),
     ...(rule.requiresUserInput === true ? { requiresUserInput: true } : {}),
+    commandGates: rule.commandGates ?? 'required',
   };
 }
 

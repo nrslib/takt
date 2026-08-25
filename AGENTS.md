@@ -18,7 +18,7 @@
 - `npm run test:it`: run the light integration gate after implementation. It covers real filesystem, bounded storage, and multi-component contracts.
 - `npm run test:it:heavy`: run all child-process, Git, full-engine, and measured resource-heavy integration tests locally with one worker. Pull-request CI splits it across isolated runners; do not run it routinely during development.
 - `npm test -- <test-file>`: run a classified test through its unit, light-IT, or heavy-IT runner. When adding or changing an IT, also run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` by itself. Always run an added or changed heavy IT before handoff; the PR-wide heavy gate is not its first execution.
-- `npm run test:e2e:mock`: run E2E tests against the mock provider.
+- `npm run test:e2e:smoke`: run the focused mock E2E suite during development.
 - `npm run check:release`: run the full release verification path locally: build, lint, fast unit (adaptive local shards), light IT, heavy IT, and all E2E suites. The 8-runner unit matrix is a separate path in the main pull-request CI workflow.
 
 ## Coding Style & Naming Conventions
@@ -27,7 +27,7 @@ This project uses TypeScript ESM on Node `>=22.22.0`. Use 2-space indentation an
 
 ## Testing Guidelines
 
-Use Vitest for unit, integration, and E2E coverage. Add or update tests for behavior changes. Keep test names explicit, for example `should reject removed legacy workflow alias`. Run `npm test` during development and `npm run test:it` when implementation is complete. Run the classification contract by itself after adding or changing an IT, and run every added or changed heavy IT as a targeted test. Run `npm run test:e2e:mock` when touching CLI behavior, workflow execution, provider selection, config loading, or sandbox/runtime flows.
+Use Vitest for unit, integration, and E2E coverage. Add or update tests for behavior changes. Keep test names explicit, for example `should reject removed legacy workflow alias`. Run `npm test` during development and `npm run test:it` when implementation is complete. Run the classification contract by itself after adding or changing an IT, and run every added or changed heavy IT as a targeted test. Use `npm run test:e2e:smoke` for E2E verification during development.
 
 ## Commit & Pull Request Guidelines
 

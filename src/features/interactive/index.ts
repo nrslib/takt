@@ -22,8 +22,7 @@ export { getAssistantSessionPersona, type AssistantSessionPersona } from './assi
 
 export { selectInteractiveMode } from './modeSelection.js';
 export { selectRecentSession } from './sessionSelector.js';
-export { passthroughMode } from './passthroughMode.js';
-export { quietMode } from './quietMode.js';
+export { selectInteractiveProvider } from './providerSelection.js';
 export { personaMode } from './personaMode.js';
 export { selectRun } from './runSelector.js';
 export { listRecentRuns, findRunForTask, loadRunSessionContext, formatRunSessionForPrompt, getRunPaths, loadPreviousOrderContent, type RunSessionContext, type RunPaths } from './runSessionReader.js';

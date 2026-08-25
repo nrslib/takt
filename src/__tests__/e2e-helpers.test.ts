@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -459,6 +460,69 @@ describe('wait helper child process cleanup', () => {
     } as unknown as ReturnType<typeof spawn>;
 
     await expect(cleanupChildProcess(child, 1_000)).rejects.toThrow('kill failed');
+  });
+
+  it('should wait for termination after timeout force-kills a child', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      signalCode: NodeJS.Signals | null;
+      kill: (signal?: NodeJS.Signals | number) => boolean;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    let terminated = false;
+    child.kill = vi.fn((signal?: NodeJS.Signals | number) => {
+      if (signal === 'SIGKILL') {
+        setTimeout(() => {
+          child.signalCode = 'SIGKILL';
+          terminated = true;
+          child.emit('exit', null, 'SIGKILL');
+          child.emit('close', null, 'SIGKILL');
+        }, 20);
+      }
+      return true;
+    });
+
+    await expect(
+      cleanupChildProcess(child as unknown as ReturnType<typeof spawn>, 10),
+    ).rejects.toThrow('Process did not exit within 10ms');
+
+    expect(child.kill).toHaveBeenNthCalledWith(1, 'SIGINT');
+    expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+    expect(terminated).toBe(true);
+    expect(child.signalCode).toBe('SIGKILL');
+    expect(child.listenerCount('close')).toBe(0);
+    expect(child.listenerCount('exit')).toBe(0);
+  });
+
+  it('should stop waiting when a force-killed child never reports termination', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new EventEmitter() as EventEmitter & {
+        exitCode: number | null;
+        signalCode: NodeJS.Signals | null;
+        kill: (signal?: NodeJS.Signals | number) => boolean;
+      };
+      child.exitCode = null;
+      child.signalCode = null;
+      child.kill = vi.fn(() => true);
+
+      const cleanup = cleanupChildProcess(
+        child as unknown as ReturnType<typeof spawn>,
+        10,
+      );
+      const rejection = expect(cleanup).rejects.toThrow(
+        'Process did not terminate within 1000ms after SIGKILL',
+      );
+
+      await vi.advanceTimersByTimeAsync(1_010);
+      await rejection;
+
+      expect(child.listenerCount('close')).toBe(0);
+      expect(child.listenerCount('exit')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('should rethrow cleanup errors with the resource label', () => {

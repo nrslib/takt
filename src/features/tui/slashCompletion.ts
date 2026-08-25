@@ -14,6 +14,11 @@ const TUI_ENABLED_COMMANDS: readonly SlashCommand[] = [
   SlashCommand.Cancel,
   SlashCommand.Resume,
   SlashCommand.PasteImage,
+  SlashCommand.Workflow,
+  SlashCommand.Mode,
+  SlashCommand.Provider,
+  SlashCommand.Model,
+  SlashCommand.Effort,
 ];
 
 export interface SlashCompletion {

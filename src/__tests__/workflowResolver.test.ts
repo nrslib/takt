@@ -998,7 +998,7 @@ steps:
   });
 });
 
-describe('getWorkflowDescription interactiveMode field', () => {
+describe('getWorkflowDescription without workflow-owned interactive mode', () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -1011,27 +1011,7 @@ describe('getWorkflowDescription interactiveMode field', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should return interactiveMode when workflow defines interactive_mode', () => {
-    const workflowYaml = `name: test-mode
-initial_step: step1
-max_steps: 1
-interactive_mode: quiet
-
-steps:
-  - name: step1
-    persona: agent
-    instruction: "Do something"
-`;
-
-    const workflowPath = join(tempDir, 'test-mode.yaml');
-    writeFileSync(workflowPath, workflowYaml);
-
-    const result = getWorkflowSummary(workflowPath, tempDir);
-
-    expect(result.interactiveMode).toBe('quiet');
-  });
-
-  it('should return undefined interactiveMode when workflow omits interactive_mode', () => {
+  it('should load a workflow that omits interactive_mode', () => {
     const workflowYaml = `name: test-no-mode
 initial_step: step1
 max_steps: 1
@@ -1047,15 +1027,15 @@ steps:
 
     const result = getWorkflowSummary(workflowPath, tempDir);
 
-    expect(result.interactiveMode).toBeUndefined();
+    expect(result.name).toBe('test-no-mode');
+    expect(result.workflowStructure).toBe('1. step1');
   });
 
-  it('should return interactiveMode for each valid mode value', () => {
-    for (const mode of ['assistant', 'grill-me', 'persona', 'quiet', 'passthrough'] as const) {
-      const workflowYaml = `name: test-${mode}
+  it('should reject interactive_mode instead of accepting a compatibility path', () => {
+    const workflowYaml = `name: test-legacy-mode
 initial_step: step1
 max_steps: 1
-interactive_mode: ${mode}
+interactive_mode: assistant
 
 steps:
   - name: step1
@@ -1063,13 +1043,10 @@ steps:
     instruction: "Do something"
 `;
 
-      const workflowPath = join(tempDir, `test-${mode}.yaml`);
-      writeFileSync(workflowPath, workflowYaml);
+    const workflowPath = join(tempDir, 'test-legacy-mode.yaml');
+    writeFileSync(workflowPath, workflowYaml);
 
-      const result = getWorkflowSummary(workflowPath, tempDir);
-
-      expect(result.interactiveMode).toBe(mode);
-    }
+    expect(() => getWorkflowSummary(workflowPath, tempDir)).toThrow(/interactive_mode/u);
   });
 });
 

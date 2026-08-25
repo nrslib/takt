@@ -7,9 +7,6 @@
  */
 
 import type { SessionContext } from '../interactive/aiCaller.js';
-import type { TranscriptEntry } from './TranscriptEntryView.js';
-import type { TuiConversation } from './tuiConversation.js';
-import type { ImagePasteSink } from './useImagePaste.js';
 
 /**
  * How the session's own provider and model read on screen. Taken from the
@@ -21,23 +18,4 @@ import type { ImagePasteSink } from './useImagePaste.js';
  */
 export function describeSessionModel(ctx: SessionContext): string {
   return ctx.model === undefined ? ctx.providerType : `${ctx.providerType}/${ctx.model}`;
-}
-
-export interface TuiChatSetup {
-  /** `summarize` turns the first input straight into an instruction (quiet mode). */
-  readonly kind: 'chat' | 'summarize';
-  readonly conversation: TuiConversation;
-  /** Provider and model of this session, already formatted for the status row. */
-  readonly modelLabel: string;
-  readonly initialEntries: readonly TranscriptEntry[];
-  /** Summarize the seeded input immediately, without waiting for a keystroke. */
-  readonly autoSubmit: boolean;
-}
-
-export interface TuiPassthroughSetup {
-  readonly kind: 'passthrough';
-  readonly intro: string;
-  readonly seedText: string;
-  /** Passthrough has no session, so its image saves come straight from the store. */
-  readonly images: ImagePasteSink;
 }

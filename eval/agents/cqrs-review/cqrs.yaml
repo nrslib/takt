@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: review-backend-cqrs / cqrs-es-review (codex).
+# Run via npm run eval:prompts -- cqrs
+
+description: 'TAKT facet eval: review-backend-cqrs / cqrs-es-review'
+
+prompts:
+  - file://../../prompts/cqrs-review.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../fixtures/backend-cqrs
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'recall: planted CQRS+ES violations must be flagged'
+    vars:
+      task: file://../../cases/cqrs-account.md
+      previous_response: file://../../cases/prev-gather-cqrs.md
+    assert:
+      - type: javascript
+        metric: recall/event-not-past-tense
+        value: |
+          const text = String(output);
+          return [...text.matchAll(/OpenAccount/g)].some(({ index = 0 }) => {
+            const context = text.slice(Math.max(0, index - 240), index + 280);
+            return /OpenAccount[\s\S]{0,160}(?:過去形\s*(?:で|に)?(?:は)?(?:ない|なっていない)|現在形|命令形|動詞(?:の)?原形|past[- ]tense|present[- ]tense|verb[- ]base|imperative|AccountOpened)/i.test(context)
+              || /(?:過去形\s*(?:で|に)?(?:は)?(?:ない|なっていない)|現在形|命令形|動詞(?:の)?原形|past[- ]tense|present[- ]tense|verb[- ]base|imperative|AccountOpened)[\s\S]{0,160}OpenAccount/i.test(context);
+          });
+      - type: javascript
+        metric: recall/logic-in-apply
+        value: |
+          return /apply/i.test(output) &&
+            /(require|throw|例外|バリデーション|validat|ロジック|復元)/i.test(output);
+      - type: javascript
+        metric: recall/handler-writes-db-directly
+        value: |
+          return /(DepositHandler|handler|ハンドラ)/i.test(output) &&
+            /(直接|DB|テーブル|table|イベント|event)/i.test(output);

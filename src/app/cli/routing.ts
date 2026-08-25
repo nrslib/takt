@@ -11,8 +11,6 @@ import { executePipeline } from '../../features/pipeline/index.js';
 import {
   interactiveMode,
   selectInteractiveMode,
-  passthroughMode,
-  quietMode,
   personaMode,
   resolveLanguage,
   dispatchConversationAction,
@@ -212,10 +210,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       info(getLabel('interactive.ui.cancelled', lang));
       return;
     }
-    // The last decision the run made, which nothing dispatched on its way out:
-    // a resident session dispatches each decision as it happens and comes back
-    // here with the `cancel` that ended it, while passthrough returns the task
-    // itself. Dispatching it releases the attachments with it.
+    // A resident session dispatches each task as it happens and returns here
+    // with the final decision that ended the run. Dispatching it also releases
+    // any attachments still owned by that result.
     await finishConversation(run.workflowId, run.result);
     return;
   }
@@ -246,13 +243,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const assistantOverrideProvider = agentOverrides?.provider;
 
   {
-    const availableInteractiveModes = sourceContext && !directTask
-      ? INTERACTIVE_MODES.filter((mode) => mode !== 'passthrough')
-      : INTERACTIVE_MODES;
     const selectedMode = await selectInteractiveMode(
       lang,
-      workflowDesc.interactiveMode,
-      availableInteractiveModes,
+      INTERACTIVE_MODES,
     );
     if (selectedMode === null) {
       info(getLabel('interactive.ui.cancelled', lang));
@@ -309,14 +302,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         );
         break;
       }
-
-      case 'passthrough':
-        result = await passthroughMode(resolvedCwd, lang, directTask);
-        break;
-
-      case 'quiet':
-        result = await quietMode(resolvedCwd, interactiveSeed, workflowContext);
-        break;
 
       case 'persona': {
         if (!workflowDesc.firstStep) {

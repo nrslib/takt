@@ -31,7 +31,6 @@ steps:
       report:
         - name: loop-analysis.md
           format: loop-analysis
-          use_judge: false
     rules:
       - condition: The proposal set is general and evidence-based, and any prior finding is resolved or its affected proposal is withdrawn with evidence because it cannot be addressed
         next: COMPLETE

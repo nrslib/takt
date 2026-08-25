@@ -280,6 +280,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt eject` | Copy builtin workflows/facets for customization |
 | `takt workflow init` | Create a new workflow scaffold |
 | `takt workflow doctor` | Validate workflow definitions |
+| `takt workflow inspect` | Inspect a workflow's configuration and resolution sources |
 | `takt repertoire add` | Install a repertoire package from GitHub |
 
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.

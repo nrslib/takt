@@ -82,9 +82,8 @@ TAKT then asks for an interactive mode. Choose **Assistant** first.
 ```text
 Select interactive mode:
   ❯ Assistant
+    Grill Me
     Persona
-    Quiet
-    Passthrough
 ```
 
 ## 2. Phase 1: Build the Smallest UI

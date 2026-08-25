@@ -89,6 +89,40 @@ describe('workflow step fragments', () => {
     invalidateAllResolvedConfigCache();
   });
 
+  it('loads a block-style command gate policy on a normal rule', () => {
+    const workflowPath = writeWorkflow(projectDir, 'block-command-gate-policy', `  - name: review
+    instruction: Review
+    rules:
+      - condition: needs_fix
+        next: fix
+        command_gates: skip
+  - name: fix
+    instruction: Fix
+    rules:
+      - condition: done
+        next: COMPLETE`, 'review');
+
+    const loaded = loadWorkflowFromFile(workflowPath, projectDir);
+
+    expect(loaded.steps[0]?.rules?.[0]?.commandGates).toBe('skip');
+  });
+
+  it('rejects an invalid command gate policy at the workflow loader boundary', () => {
+    const workflowPath = writeWorkflow(projectDir, 'invalid-command-gate-policy', `  - name: review
+    instruction: Review
+    rules:
+      - condition: needs_fix
+        next: fix
+        command_gates: optional
+  - name: fix
+    instruction: Fix
+    rules:
+      - condition: done
+        next: COMPLETE`, 'review');
+
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow();
+  });
+
   afterEach(() => {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(globalConfigDir, { recursive: true, force: true });
@@ -1303,6 +1337,37 @@ model: gpt-5
       name: 'global-reviewer',
       instruction: 'global review',
     });
+  });
+
+  it('preserves a flow-style command gate policy on a fragment parallel rule', () => {
+    writeProjectFragment(projectDir, 'reviewers', 'parallel:\n  - uses: reviewer\n');
+    writeProjectFragment(projectDir, 'reviewer', 'name: project-reviewer\ninstruction: project review\n');
+    const workflowPath = writeFile(
+      projectDir,
+      '.takt/workflows/review.yaml',
+      [
+        'name: fragment-command-gate-policy',
+        'initial_step: reviewers',
+        'max_steps: 1',
+        'steps:',
+        '  - name: reviewers',
+        '    uses: reviewers',
+        '    rules:',
+        '      self:',
+        '        - condition: all("approved")',
+        '          next: COMPLETE',
+        '      parallel:',
+        '        project-reviewer: [{ condition: approved, command_gates: skip }]',
+        '',
+      ].join('\n'),
+    );
+
+    const loaded = loadWorkflowFromFile(workflowPath, projectDir);
+    const parallel = loaded.steps[0]?.parallel as Array<{
+      rules?: Array<{ commandGates?: string }>;
+    }>;
+
+    expect(parallel[0]?.rules?.[0]?.commandGates).toBe('skip');
   });
 
   it('uses the caller scope when the caller replaces a fragment parallel array', () => {

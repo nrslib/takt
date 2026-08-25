@@ -25,7 +25,7 @@ import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowStep } from 
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from '../core/workflow/engine/WorkflowRunLoop.js';
 import type { QualityGateRunResult, RunQualityGatesOptions } from '../core/workflow/quality-gates/types.js';
-import { makeResponse, makeRule, makeStep } from './engine-test-helpers.js';
+import { makeResponse, makeRule, makeStep, mockRunAgentSequence } from './engine-test-helpers.js';
 import { collectMetricPoints, metricPoint } from './observability-metrics-test-helpers.js';
 import { WorkflowEngineStepCoordinator } from '../core/workflow/engine/WorkflowEngineStepCoordinator.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
@@ -37,10 +37,14 @@ import {
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import type { ProviderActivityCallback } from '../shared/types/provider.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { RuleEvaluator as ActualRuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
+import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { determineRuleTransition } from '../core/workflow/engine/transitions.js';
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { runQualityGates as runActualQualityGates } from '../core/workflow/quality-gates/qualityGateRunner.js';
 import { createWorkflowRunLoopTestContract } from './test-helpers.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 type CommandGateRunResult = QualityGateRunResult;
 type RunQualityGatesFn = (options: RunQualityGatesOptions) => Promise<QualityGateRunResult>;
@@ -63,6 +67,29 @@ function makeFailureResponse(content: string): AgentResponse {
   });
 }
 
+function mockActualRuleSelections(labels: readonly string[]): void {
+  for (const label of labels) {
+    vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label, method: 'phase3_tag' });
+    mockRuleEvaluation.mockImplementationOnce((step, selection, context) => (
+      new ActualRuleEvaluator(step, context).evaluate(selection)
+    ));
+  }
+}
+
+function createCommandGate(
+  cwd: string,
+  name: string,
+  exitCode: number,
+): { command: string; markerPath: string } {
+  const markerPath = join(cwd, `${name}-started`);
+  const scriptPath = join(cwd, `${name}.mjs`);
+  writeFileSync(
+    scriptPath,
+    `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(markerPath)}, 'ran'); process.exit(${exitCode});`,
+  );
+  return { command: `node ${scriptPath}`, markerPath };
+}
+
 function makeDeps(
   state: WorkflowState,
   step: WorkflowStep,
@@ -83,7 +110,7 @@ function makeDeps(
     applyRuntimeEnvironment: vi.fn(),
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
-    resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE' })),
+    resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE', commandGates: 'required' as const })),
     runLoopMonitorJudge: vi.fn(),
     runStep,
     runQualityGates,
@@ -117,6 +144,588 @@ function makeDeps(
 }
 
 describe('WorkflowRunLoop command quality gates', () => {
+  it.each([
+    ['full workflow', runWorkflowToCompletion],
+    ['single iteration', runSingleWorkflowIteration],
+  ] as const)('should resolve a required transition before its gate and commit after success in %s', async (
+    _label,
+    run,
+  ) => {
+    const events: string[] = [];
+    const step = makeStep('review', {
+      qualityGates: [{ type: 'command', command: 'quality-check' }],
+      rules: [makeRule('approved', 'COMPLETE')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'review', content: 'approved' });
+    const commitTransition = vi.fn(() => events.push('commit'));
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => ({
+      response,
+      instruction,
+      commitTransition,
+    }));
+    const runQualityGates = vi.fn(async () => {
+      events.push('gate');
+      return { ok: true as const };
+    });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.resolveDoneTransition.mockImplementation(() => {
+      events.push('resolve');
+      return { nextStep: 'COMPLETE', commandGates: 'required' };
+    });
+
+    await run(deps);
+
+    expect(events).toEqual(['resolve', 'gate', 'commit']);
+    expect(commitTransition).toHaveBeenCalledWith({ kind: 'next_step', nextStep: 'COMPLETE' });
+  });
+
+  it('should apply the gate policy and target from the rule selected by the engine', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-selected-command-gate-'));
+    const gate = createCommandGate(tmpDir, 'selected-required-gate', 1);
+    const review = makeStep('review', {
+      qualityGates: [{ type: 'command', command: gate.command }],
+      rules: [
+        makeRule('approved', 'COMPLETE', { commandGates: 'required' }),
+        makeRule('needs_fix', 'fix', { commandGates: 'skip' }),
+      ],
+    });
+    const fix = makeStep('fix', {
+      rules: [makeRule('fixed', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'selected-command-gate-workflow',
+      description: 'Selected command gate workflow',
+      maxSteps: 2,
+      initialStep: review.name,
+      steps: [review, fix],
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'selected command gate task', {
+      projectCwd: tmpDir,
+      reportDirName: 'selected-command-gate',
+    });
+
+    try {
+      vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: 'needs_fix', method: 'phase3_tag' });
+      mockRuleEvaluation.mockImplementationOnce((step, selection, context) => (
+        new ActualRuleEvaluator(step, context).evaluate(selection)
+      ));
+      vi.mocked(runAgent).mockImplementationOnce(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: instruction,
+        });
+        return makeResponse({ persona: 'review', content: 'needs_fix' });
+      });
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.response.matchedRuleIndex).toBe(1);
+      expect(result.nextStep).toBe('fix');
+      expect(result.isComplete).toBe(false);
+      expect(existsSync(gate.markerPath)).toBe(false);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['omitted default', 'full workflow', undefined],
+    ['omitted default', 'single iteration', undefined],
+    ['explicit required', 'full workflow', 'required'],
+    ['explicit required', 'single iteration', 'required'],
+  ] as const)(
+    'should keep the normal step when an actual %s command gate fails in %s',
+    async (_policyLabel, mode, commandGates) => {
+      const modeId = mode === 'full workflow' ? 'full' : 'single';
+      const policyId = commandGates === undefined ? 'default' : commandGates;
+      const tmpDir = mkdtempSync(join(tmpdir(), 'takt-required-command-gate-'));
+      const gate = createCommandGate(tmpDir, `${modeId}-${policyId}-gate`, 1);
+      const review = makeStep('review', {
+        qualityGates: [{ type: 'command', command: gate.command }],
+        rules: [normalizeRule({
+          condition: 'needs_fix',
+          next: 'fix',
+          ...(commandGates === undefined ? {} : { command_gates: commandGates }),
+        })],
+      });
+      const fix = makeStep('fix', {
+        rules: [makeRule('fixed', 'COMPLETE')],
+      });
+      const config: WorkflowConfig = {
+        name: `${modeId}-${policyId}-command-gate-workflow`,
+        maxSteps: 1,
+        initialStep: review.name,
+        steps: [review, fix],
+      };
+      const engine = new WorkflowEngine(config, tmpDir, 'required command gate task', {
+        projectCwd: tmpDir,
+        reportDirName: `${modeId}-${policyId}-command-gate`,
+      });
+
+      try {
+        mockRunAgentSequence([
+          makeResponse({ persona: 'review', content: 'needs_fix' }),
+        ]);
+        mockActualRuleSelections(['needs_fix']);
+
+        if (mode === 'full workflow') {
+          const state = await engine.run();
+          expect(state.status).toBe('aborted');
+          expect(state.currentStep).toBe('review');
+        } else {
+          const result = await engine.runSingleIteration();
+          expect(result.nextStep).toBe('review');
+          expect(result.isComplete).toBe(false);
+        }
+
+        const state = engine.getState();
+        expect(state.currentStep).toBe('review');
+        expect(state.stepOutputs.has('fix')).toBe(false);
+        expect(existsSync(gate.markerPath)).toBe(true);
+      } finally {
+        engine.removeAllListeners();
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(['full workflow', 'single iteration'] as const)(
+    'should apply an actual required non-terminal next transition after a successful command gate in %s',
+    async (mode) => {
+      const modeId = mode === 'full workflow' ? 'full' : 'single';
+      const tmpDir = mkdtempSync(join(tmpdir(), 'takt-required-next-command-gate-'));
+      const gate = createCommandGate(tmpDir, `${modeId}-required-next-gate`, 0);
+      const review = makeStep('review', {
+        qualityGates: [{ type: 'command', command: gate.command }],
+        rules: [makeRule('needs_fix', 'fix', { commandGates: 'required' })],
+      });
+      const fix = makeStep('fix', {
+        rules: [makeRule('fixed', 'COMPLETE')],
+      });
+      const config: WorkflowConfig = {
+        name: `${modeId}-required-next-command-gate-workflow`,
+        maxSteps: 2,
+        initialStep: review.name,
+        steps: [review, fix],
+      };
+      const engine = new WorkflowEngine(config, tmpDir, 'required next command gate task', {
+        projectCwd: tmpDir,
+        reportDirName: `${modeId}-required-next-command-gate`,
+      });
+
+      try {
+        mockRunAgentSequence(mode === 'full workflow'
+          ? [
+              makeResponse({ persona: 'review', content: 'needs_fix' }),
+              makeResponse({ persona: 'fix', content: 'fixed' }),
+            ]
+          : [makeResponse({ persona: 'review', content: 'needs_fix' })]);
+        mockActualRuleSelections(mode === 'full workflow' ? ['needs_fix', 'fixed'] : ['needs_fix']);
+
+        if (mode === 'full workflow') {
+          const state = await engine.run();
+          expect(state.status).toBe('completed');
+          expect(state.currentStep).toBe('fix');
+          expect(state.stepOutputs.get('review')?.matchedRuleIndex).toBe(0);
+        } else {
+          const result = await engine.runSingleIteration();
+          expect(result.response.matchedRuleIndex).toBe(0);
+          expect(result.nextStep).toBe('fix');
+          expect(result.isComplete).toBe(false);
+          expect(engine.getState().currentStep).toBe('fix');
+        }
+        expect(existsSync(gate.markerPath)).toBe(true);
+      } finally {
+        engine.removeAllListeners();
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('should apply an actual selected skip rule to a non-terminal next transition in a full workflow', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-full-next-command-gate-'));
+    const gate = createCommandGate(tmpDir, 'full-next-gate', 1);
+    const review = makeStep('review', {
+      qualityGates: [{ type: 'command', command: gate.command }],
+      rules: [makeRule('needs_fix', 'fix', { commandGates: 'skip' })],
+    });
+    const fix = makeStep('fix', {
+      rules: [makeRule('fixed', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'full-next-command-gate-workflow',
+      maxSteps: 2,
+      initialStep: review.name,
+      steps: [review, fix],
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'full next command gate task', {
+      projectCwd: tmpDir,
+      reportDirName: 'full-next-command-gate',
+    });
+
+    try {
+      mockRunAgentSequence([
+        makeResponse({ persona: 'review', content: 'needs_fix' }),
+        makeResponse({ persona: 'fix', content: 'fixed' }),
+      ]);
+      mockActualRuleSelections(['needs_fix', 'fixed']);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(state.currentStep).toBe('fix');
+      expect(state.stepOutputs.get('review')?.matchedRuleIndex).toBe(0);
+      expect(existsSync(gate.markerPath)).toBe(false);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should apply an actual selected skip rule to ABORT in a full workflow', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-full-abort-command-gate-'));
+    const gate = createCommandGate(tmpDir, 'full-abort-gate', 1);
+    const review = makeStep('review', {
+      qualityGates: [{ type: 'command', command: gate.command }],
+      rules: [makeRule('cannot_continue', 'ABORT', { commandGates: 'skip' })],
+    });
+    const engine = new WorkflowEngine(makeConfig(review), tmpDir, 'full abort command gate task', {
+      projectCwd: tmpDir,
+      reportDirName: 'full-abort-command-gate',
+    });
+
+    try {
+      mockRunAgentSequence([
+        makeResponse({ persona: 'review', content: 'cannot_continue' }),
+      ]);
+      mockActualRuleSelections(['cannot_continue']);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(state.stepOutputs.get('review')?.matchedRuleIndex).toBe(0);
+      expect(existsSync(gate.markerPath)).toBe(false);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['full workflow', 'single iteration'] as const)(
+    'should propagate an actual selected skip rule to return in %s',
+    async (mode) => {
+      const modeId = mode === 'full workflow' ? 'full' : 'single';
+      const tmpDir = mkdtempSync(join(tmpdir(), 'takt-return-command-gate-'));
+      const gate = createCommandGate(tmpDir, 'return-gate', 1);
+      const review = makeStep('review', {
+        qualityGates: [{ type: 'command', command: gate.command }],
+        rules: [makeRule('need_replan', '', {
+          returnValue: 'need_replan',
+          commandGates: 'skip',
+        })],
+      });
+      const engine = new WorkflowEngine(makeConfig(review), tmpDir, 'return command gate task', {
+        projectCwd: tmpDir,
+        reportDirName: `return-command-gate-${modeId}`,
+      });
+
+      try {
+        mockRunAgentSequence([
+          makeResponse({ persona: 'review', content: 'need_replan' }),
+        ]);
+        mockActualRuleSelections(['need_replan']);
+
+        if (mode === 'full workflow') {
+          const state = await engine.run();
+          expect(state.status).toBe('completed');
+          expect(state.returnValue).toBe('need_replan');
+          expect(state.stepOutputs.get('review')?.matchedRuleIndex).toBe(0);
+        } else {
+          const result = await engine.runSingleIteration();
+          expect(result.nextStep).toBe('COMPLETE');
+          expect(result.isComplete).toBe(true);
+          expect(result.returnValue).toBe('need_replan');
+          expect(result.response.matchedRuleIndex).toBe(0);
+        }
+        expect(existsSync(gate.markerPath)).toBe(false);
+      } finally {
+        engine.removeAllListeners();
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(['full workflow', 'single iteration'] as const)(
+    'should propagate an actual selected skip rule to requires_user_input in %s',
+    async (mode) => {
+      const modeId = mode === 'full workflow' ? 'full' : 'single';
+      const tmpDir = mkdtempSync(join(tmpdir(), 'takt-user-input-command-gate-'));
+      const gate = createCommandGate(tmpDir, 'user-input-gate', 1);
+      const onUserInput = vi.fn(async () => null);
+      const review = makeStep('review', {
+        qualityGates: [{ type: 'command', command: gate.command }],
+        rules: [makeRule('needs_details', '', {
+          requiresUserInput: true,
+          commandGates: 'skip',
+        })],
+      });
+      const engine = new WorkflowEngine(makeConfig(review), tmpDir, 'user input command gate task', {
+        projectCwd: tmpDir,
+        reportDirName: `user-input-command-gate-${modeId}`,
+        onUserInput,
+      });
+
+      try {
+        mockRunAgentSequence([
+          makeResponse({ persona: 'review', content: 'needs_details' }),
+        ]);
+        mockActualRuleSelections(['needs_details']);
+
+        if (mode === 'full workflow') {
+          const state = await engine.run();
+          expect(state.status).toBe('aborted');
+          expect(state.stepOutputs.get('review')?.matchedRuleIndex).toBe(0);
+        } else {
+          const result = await engine.runSingleIteration();
+          expect(result.nextStep).toBe('ABORT');
+          expect(result.isComplete).toBe(true);
+          expect(result.response.matchedRuleIndex).toBe(0);
+        }
+        expect(onUserInput).toHaveBeenCalledOnce();
+        expect(existsSync(gate.markerPath)).toBe(false);
+      } finally {
+        engine.removeAllListeners();
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ['full workflow', runWorkflowToCompletion],
+    ['single iteration', runSingleWorkflowIteration],
+  ] as const)('should skip the gate and apply the selected transition in %s', async (
+    _label,
+    run,
+  ) => {
+    const step = makeStep('review', {
+      qualityGates: [{ type: 'command', command: 'quality-check' }],
+      rules: [makeRule('needs_fix', 'COMPLETE', { commandGates: 'skip' })],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'review', content: 'needs_fix' });
+    const commitTransition = vi.fn();
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => ({
+      response,
+      instruction,
+      commitTransition,
+    }));
+    const runQualityGates = vi.fn(async () => ({
+      ok: false as const,
+      response: makeFailureResponse('must not run'),
+    }));
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.resolveDoneTransition.mockReturnValue({
+      nextStep: 'COMPLETE',
+      commandGates: 'skip',
+    });
+
+    await run(deps);
+
+    expect(state.status).toBe('completed');
+    expect(runQualityGates).not.toHaveBeenCalled();
+    expect(commitTransition).toHaveBeenCalledWith({ kind: 'next_step', nextStep: 'COMPLETE' });
+  });
+
+  it.each([
+    ['next', { nextStep: 'fix', commandGates: 'skip' }, 'fix', false],
+    ['COMPLETE', { nextStep: 'COMPLETE', commandGates: 'skip' }, 'COMPLETE', true],
+    ['ABORT', { nextStep: 'ABORT', commandGates: 'skip' }, 'ABORT', true],
+    ['return', { returnValue: 'need_replan', commandGates: 'skip' }, 'COMPLETE', true],
+    ['requires user input', { requiresUserInput: true, commandGates: 'skip' }, 'review', false],
+  ] as const)('should apply skip consistently for a %s transition', async (
+    _label,
+    transition,
+    expectedNextStep,
+    expectedComplete,
+  ) => {
+    const step = makeStep('review', {
+      qualityGates: [{ type: 'command', command: 'quality-check' }],
+      rules: [makeRule('selected', 'COMPLETE', { commandGates: 'skip' })],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'review', content: 'selected' });
+    const commitTransition = vi.fn();
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => ({
+      response,
+      instruction,
+      commitTransition,
+    }));
+    const runQualityGates = vi.fn(async () => ({
+      ok: false as const,
+      response: makeFailureResponse('must not run'),
+    }));
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.resolveDoneTransition.mockReturnValue(transition);
+    deps.options = { onUserInput: vi.fn(async () => 'continue') };
+
+    const result = await runSingleWorkflowIteration(deps);
+
+    expect(result.nextStep).toBe(expectedNextStep);
+    expect(result.isComplete).toBe(expectedComplete);
+    expect(runQualityGates).not.toHaveBeenCalled();
+    if ('returnValue' in transition) {
+      expect(result.returnValue).toBe('need_replan');
+      expect(commitTransition).toHaveBeenCalledWith({ kind: 'return', returnValue: 'need_replan' });
+    } else if ('requiresUserInput' in transition) {
+      expect(deps.options.onUserInput).toHaveBeenCalledOnce();
+      expect(commitTransition).not.toHaveBeenCalled();
+    } else {
+      expect(commitTransition).toHaveBeenCalledWith({
+        kind: 'next_step',
+        nextStep: transition.nextStep,
+      });
+    }
+  });
+
+  it.each([
+    ['full workflow', runWorkflowToCompletion],
+    ['single iteration', runSingleWorkflowIteration],
+  ] as const)('should run a required gate before the user-input handler in %s', async (
+    _label,
+    run,
+  ) => {
+    const events: string[] = [];
+    const step = makeStep('review', {
+      qualityGates: [{ type: 'command', command: 'quality-check' }],
+      rules: [makeRule('needs_details', '', { requiresUserInput: true })],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'review', content: 'needs_details' });
+    const commitTransition = vi.fn();
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => ({
+      response,
+      instruction,
+      commitTransition,
+    }));
+    const runQualityGates = vi.fn(async () => {
+      events.push('gate');
+      return { ok: true as const };
+    });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    let abortRequested = false;
+    deps.abortRequested = () => abortRequested;
+    deps.resolveDoneTransition.mockImplementation(() => {
+      events.push('resolve');
+      return { requiresUserInput: true, commandGates: 'required' };
+    });
+    const onUserInput = vi.fn(async () => {
+      events.push('handler');
+      abortRequested = true;
+      return 'details';
+    });
+    deps.options = { onUserInput };
+
+    await run(deps);
+
+    expect(events).toEqual(['resolve', 'gate', 'handler']);
+    expect(onUserInput).toHaveBeenCalledOnce();
+    expect(deps.addUserInput).toHaveBeenCalledWith('details');
+    expect(commitTransition).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['full workflow', runWorkflowToCompletion],
+    ['single iteration', runSingleWorkflowIteration],
+  ] as const)('should not invoke the user-input handler when a required gate fails in %s', async (
+    _label,
+    run,
+  ) => {
+    const events: string[] = [];
+    const step = makeStep('review', {
+      qualityGates: [{ type: 'command', command: 'quality-check' }],
+      rules: [makeRule('needs_details', '', { requiresUserInput: true })],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'review', content: 'needs_details' });
+    const failureResponse = makeFailureResponse('Quality gate failed: quality-check');
+    const commitTransition = vi.fn();
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => ({
+      response,
+      instruction,
+      commitTransition,
+    }));
+    const runQualityGates = vi.fn(async () => {
+      events.push('gate');
+      return { ok: false as const, response: failureResponse };
+    });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.getMaxSteps = () => 1;
+    deps.resolveDoneTransition.mockImplementation(() => {
+      events.push('resolve');
+      return { requiresUserInput: true, commandGates: 'required' };
+    });
+    const onUserInput = vi.fn(async () => 'details');
+    deps.options = { onUserInput };
+
+    await run(deps);
+
+    expect(events).toEqual(['resolve', 'gate']);
+    expect(state.currentStep).toBe('review');
+    expect(onUserInput).not.toHaveBeenCalled();
+    expect(deps.addUserInput).not.toHaveBeenCalled();
+    expect(commitTransition).not.toHaveBeenCalled();
+  });
+
+  it.each(['blocked', 'error'] as const)(
+    'should preserve the %s early exit before transition resolution and command gates',
+    async (status) => {
+      const step = makeStep('review', {
+        qualityGates: [{ type: 'command', command: 'quality-check' }],
+        rules: [makeRule(status, 'ABORT', { commandGates: 'skip' })],
+      });
+      const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+      const response = makeResponse({ persona: 'review', status, content: status });
+      const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => ({ response, instruction }));
+      const runQualityGates = vi.fn(async () => ({ ok: true as const }));
+      const deps = makeDeps(state, step, runStep, runQualityGates);
+
+      const result = await runSingleWorkflowIteration(deps);
+
+      expect(result.nextStep).toBe('ABORT');
+      expect(result.isComplete).toBe(true);
+      expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
+      expect(runQualityGates).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['blocked', 'blocked'],
+    ['error', 'step_error'],
+  ] as const)(
+    'should preserve the %s early exit before transition resolution and command gates in a full workflow',
+    async (status, expectedAbortKind) => {
+      const step = makeStep('review', {
+        qualityGates: [{ type: 'command', command: 'quality-check' }],
+        rules: [makeRule(status, 'ABORT', { commandGates: 'skip' })],
+      });
+      const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+      const response = makeResponse({ persona: 'review', status, content: status });
+      const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => ({ response, instruction }));
+      const runQualityGates = vi.fn(async () => ({ ok: true as const }));
+      const deps = makeDeps(state, step, runStep, runQualityGates);
+
+      const result = await runWorkflowToCompletion(deps);
+
+      expect(result.state.status).toBe('aborted');
+      expect(result.state.currentStep).toBe('review');
+      expect(result.abort?.kind).toBe(expectedAbortKind);
+      expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
+      expect(runQualityGates).not.toHaveBeenCalled();
+    },
+  );
+
   it('should rerun the same step without exposing command output in the next instruction', async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'takt-command-gate-instruction-'));
     try {
@@ -148,23 +757,28 @@ describe('WorkflowRunLoop command quality gates', () => {
       });
       expect(failureResult.ok).toBe(false);
       const instructions: string[] = [];
+      const commitTransition = vi.fn();
       const runStep = vi
         .fn()
         .mockImplementationOnce(async (_step: WorkflowStep, instruction: string) => {
           instructions.push(instruction);
           state.stepOutputs.set(step.name, firstResponse);
           state.lastOutput = firstResponse;
-          return { response: firstResponse, instruction };
+          return { response: firstResponse, instruction, commitTransition };
         })
         .mockImplementationOnce(async (_step: WorkflowStep, instruction: string) => {
           instructions.push(instruction);
           state.stepOutputs.set(step.name, secondResponse);
           state.lastOutput = secondResponse;
-          return { response: secondResponse, instruction };
+          return { response: secondResponse, instruction, commitTransition };
         });
       const runQualityGates = vi
         .fn<() => Promise<CommandGateRunResult>>()
-        .mockResolvedValueOnce(failureResult)
+        .mockImplementationOnce(async () => {
+          expect(state.currentStep).toBe('implement');
+          expect(commitTransition).not.toHaveBeenCalled();
+          return failureResult;
+        })
         .mockResolvedValueOnce({ ok: true });
       const deps = makeDeps(state, step, runStep, runQualityGates, tmpDir);
 
@@ -181,8 +795,10 @@ describe('WorkflowRunLoop command quality gates', () => {
         runId: undefined,
         workflowName: 'command-gate-workflow',
       });
-      expect(deps.resolveDoneTransition).toHaveBeenCalledTimes(1);
+      expect(deps.resolveDoneTransition).toHaveBeenCalledTimes(2);
       expect(runStep).toHaveBeenCalledTimes(2);
+      expect(commitTransition).toHaveBeenCalledOnce();
+      expect(commitTransition).toHaveBeenCalledWith({ kind: 'next_step', nextStep: 'COMPLETE' });
       expect(instructions[1]).not.toContain(secretOutput);
       expect(instructions[1]).not.toContain(injectedInstruction);
       expect(deps.persistPreviousResponseSnapshot).toHaveBeenCalledWith(
@@ -228,7 +844,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       .mockResolvedValueOnce({ ok: false, response: failureResponse })
       .mockResolvedValueOnce({ ok: true });
     const deps = makeDeps(state, step, runStep, runQualityGates, '/worktree');
-    deps.resolveDoneTransition.mockReturnValue({ returnValue: 'need_replan' });
+    deps.resolveDoneTransition.mockReturnValue({ returnValue: 'need_replan', commandGates: 'required' });
 
     const result = await runWorkflowToCompletion(deps);
 
@@ -236,7 +852,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     expect(result.returnValue).toBe('need_replan');
     expect(runStep).toHaveBeenCalledTimes(2);
     expect(runQualityGates).toHaveBeenCalledTimes(2);
-    expect(deps.resolveDoneTransition).toHaveBeenCalledTimes(1);
+    expect(deps.resolveDoneTransition).toHaveBeenCalledTimes(2);
   });
 
   it('should snapshot command gate metadata without command output or injected instructions', async () => {
@@ -575,7 +1191,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       observabilityRunId: 'run-1',
       projectCwd: '/worktree',
     };
-    deps.resolveDoneTransition.mockReturnValue({ nextStep: 'implement' });
+    deps.resolveDoneTransition.mockReturnValue({ nextStep: 'implement', commandGates: 'required' });
     deps.cycleDetectorRecordAndCheck = () => ({
       triggered: true,
       monitor: {
@@ -616,7 +1232,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       observabilityRunId: 'run-1',
       projectCwd: '/worktree',
     };
-    deps.resolveDoneTransition.mockReturnValue({ nextStep: 'implement' });
+    deps.resolveDoneTransition.mockReturnValue({ nextStep: 'implement', commandGates: 'required' });
     deps.cycleDetectorRecordAndCheck = () => ({
       triggered: true,
       monitor: {
@@ -653,25 +1269,43 @@ describe('WorkflowRunLoop command quality gates', () => {
       rules: [makeRule('Implementation complete', 'COMPLETE')],
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
-    const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+    const response = makeResponse({
+      persona: 'implement',
+      content: 'implementation done',
+      matchedRuleIndex: 0,
+    });
     const failureResponse = makeFailureResponse('Quality gate failed: quality-check');
+    const commitTransition = vi.fn();
     const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
-      return { response, instruction };
+      return { response, instruction, commitTransition };
     });
     const runQualityGates = vi
       .fn<() => Promise<CommandGateRunResult>>()
       .mockResolvedValueOnce({ ok: false, response: failureResponse });
     const deps = makeDeps(state, step, runStep, runQualityGates, '/worktree');
+    deps.resolveDoneTransition.mockImplementation((selectedStep, selectedResponse) => {
+      if (selectedResponse.matchedRuleIndex === undefined) {
+        throw new Error('Expected a matched rule index');
+      }
+      const transition = determineRuleTransition(selectedStep, selectedResponse.matchedRuleIndex);
+      if (transition === null) {
+        throw new Error('Expected a matched rule transition');
+      }
+      return transition;
+    });
 
     const result = await runSingleWorkflowIteration(deps);
 
     expect(result.nextStep).toBe('implement');
     expect(result.isComplete).toBe(false);
+    expect(result.response).toBe(failureResponse);
     expect(state.status).toBe('running');
     expect(state.currentStep).toBe('implement');
-    expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
+    expect(deps.resolveDoneTransition).toHaveBeenCalledOnce();
+    expect(runQualityGates).toHaveBeenCalledOnce();
+    expect(commitTransition).not.toHaveBeenCalled();
   });
 
   it('should run command gates before completing a rule return value in runSingleIteration', async () => {
@@ -696,7 +1330,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       .fn<() => Promise<CommandGateRunResult>>()
       .mockResolvedValueOnce({ ok: true });
     const deps = makeDeps(state, step, runStep, runQualityGates, '/worktree');
-    deps.resolveDoneTransition.mockReturnValue({ returnValue: 'need_replan' });
+    deps.resolveDoneTransition.mockReturnValue({ returnValue: 'need_replan', commandGates: 'required' });
 
     const result = await runSingleWorkflowIteration(deps);
 
@@ -722,15 +1356,17 @@ describe('WorkflowRunLoop command quality gates', () => {
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'reviewers', content: 'invalid manager output' });
     const failureResponse = makeFailureResponse('Quality gate failed: quality-check');
+    const commitTransition = vi.fn();
     const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
-      return { response, instruction };
+      return { response, instruction, commitTransition };
     });
     const runQualityGates = vi
       .fn<() => Promise<CommandGateRunResult>>()
       .mockResolvedValueOnce({ ok: false, response: failureResponse });
     const deps = makeDeps(state, step, runStep, runQualityGates, '/worktree');
+    deps.resolveDoneTransition.mockReturnValue({ returnValue: 'need_replan', commandGates: 'required' });
 
     const result = await runSingleWorkflowIteration(deps);
 
@@ -738,7 +1374,9 @@ describe('WorkflowRunLoop command quality gates', () => {
     expect(result.isComplete).toBe(false);
     expect(result.returnValue).toBeUndefined();
     expect(state.status).toBe('running');
-    expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
+    expect(state.currentStep).toBe('reviewers');
+    expect(deps.resolveDoneTransition).toHaveBeenCalledOnce();
+    expect(commitTransition).not.toHaveBeenCalled();
   });
 });
 
@@ -808,7 +1446,7 @@ function makeDeadlineDeps(
     applyRuntimeEnvironment: vi.fn(),
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
-    resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE' })),
+    resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE', commandGates: 'required' as const })),
     runLoopMonitorJudge: vi.fn(),
     buildInstruction: vi.fn((_step: WorkflowStep, stepIteration: number) => `instruction ${stepIteration}`),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),

@@ -199,6 +199,21 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow?.name).toBe('loop-analysis');
   });
 
+  it.each(['en', 'ja'] as const)('loads builtin reports with default judgment inclusion (%s)', (language) => {
+    const projectDir = join(tempDir, language);
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
+
+    const workflow = loadWorkflowByIdentifier('simple', projectDir);
+    if (!workflow) {
+      throw new Error(`Expected builtin workflow "simple" for language "${language}"`);
+    }
+
+    const supervise = findWorkflowStep(workflow, 'supervise');
+    const summary = supervise.outputContracts?.find((contract) => contract.name === 'summary.md');
+    expect(summary?.useJudge).toBe(true);
+  });
+
   it('TEST-NEW-review-fix-contract keeps review-fix aligned with default peer-review wiring', () => {
     for (const language of ['en', 'ja'] as const) {
       const projectDir = join(tempDir, language);

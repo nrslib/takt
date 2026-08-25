@@ -757,8 +757,9 @@ describe('commentLoopAnalysisReportOnPr', () => {
     });
   });
 
-  it('Given the source branch has an existing PR, When the analysis report is published, Then the persisted UTF-8 content is posted unchanged', async () => {
+  it('Given the source branch has an existing PR, When the analysis report is published, Then the persisted UTF-8 content and source reference are posted identically', async () => {
     const reportContent = '# Loop analysis\n\n  Preserve spacing exactly.  \n';
+    const expectedReport = `${reportContent}source run: source-run\n`;
     mockFindExistingPr.mockReturnValue({
       number: 41,
       url: 'https://github.com/org/repo/pull/41',
@@ -772,15 +773,67 @@ describe('commentLoopAnalysisReportOnPr', () => {
       projectCwd: '/project',
       branch: 'takt/source-run',
       reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      sourceRunSlug: 'source-run',
     });
 
     expect(mockFindExistingPr).toHaveBeenCalledWith('takt/source-run', '/project');
     expect(mockReadPrivateFileState).toHaveBeenCalledWith(
       '/project/.takt/runs/analysis/reports/loop-analysis.md',
     );
+    expect(mockWritePrivateFile).toHaveBeenCalledWith(
+      '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      expectedReport,
+    );
+    expect(mockCommentOnPr).toHaveBeenCalledWith(41, expectedReport, '/project');
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('Given the report ends with a sentence containing the source reference, When it is published, Then a separate source reference line is appended', async () => {
+    const reportContent = 'Additional note: source run: source-run';
+    const expectedReport = `${reportContent}\nsource run: source-run\n`;
+    mockFindExistingPr.mockReturnValue({
+      number: 41,
+      url: 'https://github.com/org/repo/pull/41',
+    });
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from(reportContent),
+    });
+
+    await commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      sourceRunSlug: 'source-run',
+    });
+
+    expect(mockWritePrivateFile).toHaveBeenCalledWith(
+      '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      expectedReport,
+    );
+    expect(mockCommentOnPr).toHaveBeenCalledWith(41, expectedReport, '/project');
+  });
+
+  it('Given the report already ends with its source reference line, When it is published again, Then the reference is not duplicated', async () => {
+    const reportContent = '# Loop analysis\nsource run: source-run\n';
+    mockFindExistingPr.mockReturnValue({
+      number: 41,
+      url: 'https://github.com/org/repo/pull/41',
+    });
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from(reportContent),
+    });
+
+    await commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      sourceRunSlug: 'source-run',
+    });
+
     expect(mockWritePrivateFile).not.toHaveBeenCalled();
     expect(mockCommentOnPr).toHaveBeenCalledWith(41, reportContent, '/project');
-    expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
 
   it('Given a report contains sensitive or identifying data, When it is published, Then the persisted and posted content is sanitized', async () => {
@@ -790,8 +843,16 @@ describe('commentLoopAnalysisReportOnPr', () => {
       'Contact: jane@example.com',
       'Runner name: private-runner-7',
       'Evidence: /Users/jane/project/.takt/runs/run-1/logs/session.jsonl',
+      'Absolute at line start: /Users/jane/project/report.md',
+      'Absolute in quote: "/Users/jane/project/quoted.md"',
+      'Absolute in parentheses: (/Users/jane/project/parenthesized.md)',
+      'Absolute in backticks: `/Users/jane/project/backtick.md`',
+      'File URL: file:///Users/jane/project/url.md',
       'Windows evidence: C:/Users/jane/project/.takt/runs/run-1/logs/session.jsonl',
       'Windows backslash evidence: C:\\Users\\jane\\project\\.takt\\runs\\run-1\\logs\\session.jsonl',
+      'Relative path: reports/subworkflows/**/plan.md',
+      'Short glob: */plan.md',
+      'Relative source: src/x.ts:12',
       'Host: 192.168.10.4',
     ].join('\n');
     mockFindExistingPr.mockReturnValue({
@@ -807,6 +868,7 @@ describe('commentLoopAnalysisReportOnPr', () => {
       projectCwd: '/project',
       branch: 'takt/source-run',
       reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      sourceRunSlug: 'source-run',
     });
 
     const published = mockCommentOnPr.mock.calls[0]?.[1];
@@ -817,6 +879,10 @@ describe('commentLoopAnalysisReportOnPr', () => {
     expect(published).toContain('[REDACTED]');
     expect(published).toContain('[PII]');
     expect(published).toContain('[path]');
+    expect(published).toContain('reports/subworkflows/**/plan.md');
+    expect(published).toContain('*/plan.md');
+    expect(published).toContain('src/x.ts:12');
+    expect(published).toContain('source run: source-run');
     expect(mockWritePrivateFile).toHaveBeenCalledWith(
       '/project/.takt/runs/analysis/reports/loop-analysis.md',
       published,
@@ -830,6 +896,7 @@ describe('commentLoopAnalysisReportOnPr', () => {
       projectCwd: '/project',
       branch: 'takt/source-run',
       reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      sourceRunSlug: 'source-run',
     });
 
     expect(mockFindExistingPr).toHaveBeenCalledWith('takt/source-run', '/project');
@@ -855,6 +922,7 @@ describe('commentLoopAnalysisReportOnPr', () => {
       projectCwd: '/project',
       branch: 'takt/source-run',
       reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      sourceRunSlug: 'source-run',
     })).rejects.toThrow('comment rejected');
   });
 });

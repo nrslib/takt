@@ -224,8 +224,10 @@ Rules define how each step routes to the next step. The instruction builder auto
 rules:
   - condition: "Implementation complete"
     next: review
+    command_gates: required
   - condition: "Cannot proceed"
     next: ABORT
+    command_gates: skip
     appendix: |
       Explain what is blocking progress.
 ```
@@ -254,6 +256,10 @@ The optional `appendix` field provides a template for additional AI output when 
 ### Rule Field: `interactive_only`
 
 A rule with `interactive_only: true` is only considered during interactive execution. In non-interactive runs (e.g. `--pipeline` or `takt run`), the rule is skipped as if it were not declared, and evaluation continues with the remaining rules. Use it for transitions that require a human, such as a rule that waits for user input.
+
+### Rule Field: `command_gates`
+
+`command_gates` controls command quality gates for the selected rule. `required` runs the step's command gates after rule resolution and before applying the transition; the transition is applied only after the gates succeed. `skip` applies the selected transition without running command gates. Omitting the field is equivalent to `required`.
 
 ## Step Types
 
@@ -905,14 +911,6 @@ fields. Provider/model/options and routing are owned by `runtime.yaml` (with the
 `config.yaml` legacy mode and CLI/env overrides preserved). `rate_limit_fallback` remains a
 legacy `config.yaml` setting and is not a workflow YAML field. Workflow `capabilities` remains
 the only provider option surface in workflow YAML.
-
-### `interactive_mode`
-
-Default interactive mode used when `takt` is invoked without arguments. One of `assistant` (default), `grill-me`, `passthrough`, `quiet`, `persona`. `grill-me` resolves requirements one recommended question at a time and suggests `/go` when they are ready.
-
-```yaml
-interactive_mode: assistant
-```
 
 ### Removed workflow execution settings
 

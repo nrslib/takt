@@ -7,7 +7,7 @@ import { useEffect, useState, type ReactElement } from 'react';
  * is what leaves spinner and prompt residue behind in the scrollback.
  *
  * The live response tail rides on this row instead of a block of its own, and it
- * carries no speaker label — the confirmed reply is written once by `<Static>`.
+ * carries no speaker label — the confirmed reply is rendered in the transcript.
  */
 const SPINNER_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 const FRAME_INTERVAL_MS = 120;

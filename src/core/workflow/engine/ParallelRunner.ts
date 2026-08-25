@@ -53,6 +53,7 @@ import {
   semanticLabelsOf,
 } from '../../models/workflow-rule-condition.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
+import { determineRuleTransition } from './transitions.js';
 import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
 import { createRunFailure } from '../run/run-failure.js';
 import {
@@ -875,12 +876,20 @@ export class ParallelRunner {
             }
           }
           let match;
+          let commandGates: 'required' | 'skip' = 'required';
           try {
             match = await evaluatePostExecutionRules(
               subStep,
               () => phaseCtx,
               subRuleCtx,
             );
+            if (match !== undefined && subStep.rules !== undefined && subStep.rules.length > 0) {
+              const transition = determineRuleTransition(subStep, match.index);
+              if (transition === null) {
+                throw new RuleDetectionExhaustedError(subStep.name);
+              }
+              commandGates = transition.commandGates;
+            }
           } catch (error) {
             if (error instanceof RuleDetectionExhaustedError) {
               invalidateExpectedPersonaSession(
@@ -901,25 +910,27 @@ export class ParallelRunner {
             }
           : subResponse;
 
-        const qualityGateResult = await this.deps.runQualityGates({
-          qualityGates: subStep.qualityGates,
-          projectRoot: this.deps.getCwd(),
-          step: subStep,
-          childProcessEnv: this.deps.engineOptions.childProcessEnv,
-          observabilityEnabled: this.deps.observabilityEnabled,
-          runId: this.deps.observabilityRunId,
-          workflowName: this.deps.getWorkflowName(),
-        });
-        if (!qualityGateResult.ok) {
-          state.stepOutputs.set(subStep.name, qualityGateResult.response);
-          return {
-            subStep,
-            response: qualityGateResult.response,
-            instruction: phase1Instruction,
-            providerInfo: subPm,
-            durationMs: Math.max(0, qualityGateResult.response.timestamp.getTime() - startedAt),
-            qualityGateFailure: true,
-          };
+        if (commandGates === 'required') {
+          const qualityGateResult = await this.deps.runQualityGates({
+            qualityGates: subStep.qualityGates,
+            projectRoot: this.deps.getCwd(),
+            step: subStep,
+            childProcessEnv: this.deps.engineOptions.childProcessEnv,
+            observabilityEnabled: this.deps.observabilityEnabled,
+            runId: this.deps.observabilityRunId,
+            workflowName: this.deps.getWorkflowName(),
+          });
+          if (!qualityGateResult.ok) {
+            state.stepOutputs.set(subStep.name, qualityGateResult.response);
+            return {
+              subStep,
+              response: qualityGateResult.response,
+              instruction: phase1Instruction,
+              providerInfo: subPm,
+              durationMs: Math.max(0, qualityGateResult.response.timestamp.getTime() - startedAt),
+              qualityGateFailure: true,
+            };
+          }
         }
 
         state.stepOutputs.set(subStep.name, finalResponse);

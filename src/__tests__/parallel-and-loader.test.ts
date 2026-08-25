@@ -46,6 +46,31 @@ describe('ParallelSubStepRawSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it.each(['required', 'skip'] as const)(
+    'should accept command_gates %s on a parallel sub-step rule',
+    (commandGates) => {
+      const result = ParallelSubStepRawSchema.safeParse({
+        name: 'review',
+        instruction: 'Review',
+        rules: [{ condition: 'approved', command_gates: commandGates }],
+      });
+
+      expect(result.success).toBe(true);
+    },
+  );
+
+  it.each([
+    ['agent', { name: 'review', instruction: 'Review' }],
+    ['workflow_call', { name: 'review', kind: 'workflow_call', call: 'shared/review' }],
+  ] as const)('should reject command_gates on a %s parallel sub-step root', (_kind, subStep) => {
+    const result = ParallelSubStepRawSchema.safeParse({
+      ...subStep,
+      command_gates: 'skip',
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it.each([
     ['agent', { name: 'review', instruction: 'Review' }],
     ['workflow_call', { name: 'review', kind: 'workflow_call', call: 'shared/review' }],
@@ -265,6 +290,17 @@ describe('ParallelSubStepRawSchema', () => {
 });
 
 describe('WorkflowStepRawSchema with parallel', () => {
+  it('should reject command_gates outside a rule', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'review',
+      instruction: 'Review',
+      command_gates: 'skip',
+      rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('should accept a step with parallel sub-steps (no agent)', () => {
     const raw = {
       name: 'parallel-review',
@@ -502,6 +538,20 @@ describe('LoopMonitorJudgeSchema', () => {
 });
 
 describe('WorkflowConfigRawSchema with parallel steps', () => {
+  it('should reject an unsupported command gate policy while loading a workflow', () => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'invalid-command-gate-policy',
+      initial_step: 'review',
+      steps: [{
+        name: 'review',
+        instruction: 'Review',
+        rules: [{ condition: 'approved', next: 'COMPLETE', command_gates: 'optional' }],
+      }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('should validate a workflow with parallel step', () => {
     const raw = {
       name: 'test-parallel-workflow',

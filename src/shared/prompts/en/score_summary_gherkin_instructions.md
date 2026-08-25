@@ -7,7 +7,11 @@
 -->
 ## Markdown + Gherkin Output Format
 
-Keep the final instruction as a coherent Markdown document that a human can understand and review before execution. Use Gherkin only where a misunderstanding would materially change the implementation result.
+Keep the final instruction as a coherent Markdown document that a human can understand and review before execution.
+
+First determine whether the task is intended to develop or implement software. Only tasks whose deliverables create or change code, configuration, infrastructure, or tests are development or implementation tasks. For research, analysis, review, planning, documentation, operations, decision support, or any other task whose deliverable is not an implementation, do not use Gherkin; write the necessary instruction entirely in Markdown.
+
+For development or implementation tasks, use Gherkin only where a misunderstanding would materially change the implementation result, and follow the rules below.
 
 Before writing, assign each explicit detail from the conversation to Markdown or Gherkin. Do not invent details to fill either format, and do not state the same acceptance clause in both. Markdown may summarize the overall goal, but keep the selected detailed expected outcomes only in Gherkin.
 

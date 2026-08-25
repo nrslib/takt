@@ -1,5 +1,5 @@
 import type { McpServerConfig, PermissionMode } from '../../core/models/index.js';
-import type { ClaudeEffort, ClaudeSandboxSettings } from '../../core/models/workflow-types.js';
+import type { ClaudeSandboxSettings } from '../../core/models/workflow-types.js';
 import type {
   InternalAgentIsolation,
   ProviderActivityCallback,
@@ -15,7 +15,7 @@ export interface ClaudeHeadlessCallOptions {
   anthropicApiKey?: string;
   /** Anthropic-compatible API base URL */
   baseUrl?: string;
-  effort?: ClaudeEffort;
+  effort?: string;
   skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;

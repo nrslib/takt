@@ -5,6 +5,8 @@
 
 import { spawn } from 'node:child_process';
 
+const FORCE_KILL_GRACE_MS = 1_000;
+
 /**
  * Poll a predicate until it returns true or the timeout expires.
  * Returns true if the predicate became true, false on timeout.
@@ -24,7 +26,7 @@ export async function waitFor(
 
 /**
  * Wait for a spawned child process to exit.
- * Kills the process with SIGKILL and rejects if the timeout is exceeded.
+ * On timeout, sends SIGKILL and rejects after termination is observed.
  */
 export async function waitForClose(
   child: ReturnType<typeof spawn>,
@@ -38,16 +40,73 @@ export async function waitForClose(
   }
 
   return new Promise((resolve, reject) => {
+    let timeoutError: Error | undefined;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
+      child.removeListener('close', onClose);
+      child.removeListener('exit', onExit);
+    };
+
+    const rejectAfterCleanup = (error: unknown): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (timeoutError) {
+        reject(timeoutError);
+        return;
+      }
+      resolve({ code, signal });
+    };
+
+    const onExit = (): void => {
+      if (timeoutError) {
+        rejectAfterCleanup(timeoutError);
+      }
+    };
+
     const timeout = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`Process did not exit within ${timeoutMs}ms`));
+      timeoutError = new Error(`Process did not exit within ${timeoutMs}ms`);
+      try {
+        if (!child.kill('SIGKILL')) {
+          rejectAfterCleanup(timeoutError);
+          return;
+        }
+      } catch (error) {
+        rejectAfterCleanup(error);
+        return;
+      }
+
+      if (settled) {
+        return;
+      }
+      forceKillTimeout = setTimeout(() => {
+        rejectAfterCleanup(new Error(
+          `Process did not terminate within ${FORCE_KILL_GRACE_MS}ms after SIGKILL`,
+        ));
+      }, FORCE_KILL_GRACE_MS);
+      forceKillTimeout.unref?.();
     }, timeoutMs);
     timeout.unref?.();
 
-    child.once('close', (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
+    child.once('close', onClose);
+    child.once('exit', onExit);
   });
 }
 

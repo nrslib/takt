@@ -19,6 +19,7 @@ import {
   type ConversationSessionResult,
 } from '../interactive/conversationSession.js';
 import type { WorkflowContext } from '../interactive/interactive-summary-types.js';
+import type { ConversationMessage } from '../interactive/interactiveApplication.js';
 import {
   createClipboardImagePasteHandler,
   createImagePasteHandler,
@@ -44,8 +45,38 @@ export interface TuiConversationOptions {
   attachmentStore: ImageAttachmentStore;
   /** Task text supplied on the command line; seeds the conversation history. */
   userMessage?: string;
+  /** Previous session transcript included once as reference on the first provider call. */
+  handoffHistory?: readonly ConversationMessage[];
+  /** Keep temporary provider/model sessions out of persisted `/continue` metadata. */
+  persistSession?: boolean;
   sourceContext?: string;
+  /** Enable settings handoffs owned by the resident interactive TUI. */
+  enableSettingsCommands?: boolean;
 }
+
+type SettingsSlashCommand =
+  | typeof SlashCommand.Workflow
+  | typeof SlashCommand.Mode
+  | typeof SlashCommand.Provider
+  | typeof SlashCommand.Model
+  | typeof SlashCommand.Effort;
+
+export type TuiHandoffId =
+  | 'workflow'
+  | 'mode'
+  | 'provider'
+  | 'model'
+  | 'effort'
+  | 'exec-setup'
+  | 'exec-go';
+
+export const TUI_HANDOFF_IDS: Readonly<Record<SettingsSlashCommand, TuiHandoffId>> = {
+  [SlashCommand.Workflow]: 'workflow',
+  [SlashCommand.Mode]: 'mode',
+  [SlashCommand.Provider]: 'provider',
+  [SlashCommand.Model]: 'model',
+  [SlashCommand.Effort]: 'effort',
+};
 
 /** i18n label for every failure the session reports with a fixed cause. */
 const SESSION_ERROR_LABEL_KEYS: Readonly<
@@ -107,7 +138,7 @@ export type TuiLocalCommand =
    */
   | {
     kind: 'handoff';
-    id: string;
+    id: TuiHandoffId;
     /** What was typed alongside the command, for the run that carries it out. */
     text?: string;
   }
@@ -135,14 +166,18 @@ export interface TuiConversation {
   submit(input: TuiSubmitInput): Promise<TuiSubmission>;
   /** Summarize straight into a task instruction, skipping the chat turn. */
   createInstruction(input: TuiSubmitInput): Promise<TuiSubmission>;
-  /** Continue from a session picked with /resume. */
-  resumeSession(sessionId: string): Promise<void>;
+  /** Continue from a session picked with /resume, or return a notice to show. */
+  resumeSession(sessionId: string): Promise<string | undefined>;
   /**
    * Put a `/go` draft the user rejected back into the conversation, so the next
    * revision starts from what was proposed. Left out by a front-end whose
    * session keeps no transcript of its own (exec).
    */
   recordRejectedDraft?(task: string): void;
+  /** Snapshot all user/assistant context needed by a recreated provider session. */
+  snapshotHistory?(): readonly ConversationMessage[];
+  /** Apply an effort override to future calls on the active session. */
+  setEffort?(effort: string): void;
   /** Capture the clipboard image and return the placeholder to insert. */
   pasteClipboardImage(abortSignal: AbortSignal): Promise<string>;
   /** Refuse further images once the run ended, so a late save leaves no temp file. */
@@ -166,6 +201,10 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     // transcript; summarizing it straight away has to work.
     summarizeResumedSession: true,
     ...(options.userMessage ? { initialUserMessage: options.userMessage } : {}),
+    ...(options.handoffHistory && options.handoffHistory.length > 0
+      ? { handoffHistory: options.handoffHistory }
+      : {}),
+    ...(options.persistSession === false ? { persistSession: false } : {}),
     ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
     resolveImageAttachments: (prompt) =>
       resolvePromptImageAttachments(prompt, options.attachmentStore.listAttachments()),
@@ -178,6 +217,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
   const commandAvailability: CommandAvailability = {
     enableRetryCommand: strategy.enableRetryCommand === true,
     hasPreviousOrder: previousOrder !== undefined,
+    ...(options.enableSettingsCommands === true ? { enableSettingsCommands: true } : {}),
     ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
   };
 
@@ -197,6 +237,14 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
 
     recordRejectedDraft(task: string): void {
       session.recordRejectedDraft(task);
+    },
+
+    snapshotHistory(): readonly ConversationMessage[] {
+      return session.snapshotHistory();
+    },
+
+    setEffort(effort: string): void {
+      session.setEffort(effort);
     },
 
     resolveLocalCommand(text: string): TuiLocalCommand | null {
@@ -232,6 +280,23 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           return { kind: 'resume_session' };
         case SlashCommand.PasteImage:
           return { kind: 'paste_image' };
+        case SlashCommand.Workflow:
+        case SlashCommand.Mode:
+        case SlashCommand.Provider:
+          return match.text === ''
+            ? { kind: 'handoff', id: TUI_HANDOFF_IDS[match.command] }
+            : {
+              kind: 'notice',
+              message: getLabel('tui.errors.settingNoArguments', ctx.lang, { command: match.command }),
+            };
+        case SlashCommand.Model:
+        case SlashCommand.Effort:
+          return match.text !== ''
+            ? { kind: 'handoff', id: TUI_HANDOFF_IDS[match.command], text: match.text }
+            : {
+              kind: 'notice',
+              message: getLabel('tui.errors.settingValueRequired', ctx.lang, { command: match.command }),
+            };
         case SlashCommand.Go:
         case SlashCommand.Setup:
           return null;
@@ -312,11 +377,12 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         };
     },
 
-    async resumeSession(sessionId: string): Promise<void> {
+    async resumeSession(sessionId: string): Promise<string | undefined> {
       session.setSessionId(sessionId);
       if (strategy.resolveResumedSessionConfiguration) {
         session.setPromptConfiguration(await strategy.resolveResumedSessionConfiguration());
       }
+      return undefined;
     },
 
     pasteClipboardImage(abortSignal: AbortSignal): Promise<string> {

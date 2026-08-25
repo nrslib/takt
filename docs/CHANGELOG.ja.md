@@ -6,11 +6,55 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.61.0] - 2026-08-23
+
+### Added
+
+- Ink 製の会話 TUI を追加しました (#1452)。stdin と stdout が TTY の場合、タスク会話は Ink で描画されます。パイプ入力は従来のプレーンな読み取りのままで、`--tui` フラグは TTY 要件を明示するだけです（TTY が無い場合はフォールバックせず失敗します）。Enter で送信、Shift+Enter または Option+Enter で改行、Esc で応答中の回答を中断できます。応答中に送信した行はキューに積まれ次のターンとして送られ、入力中のドラフトはキュー送信や再マウントを越えて保持されます。workflow・モード・実行後の選択は従来のセレクタのままです。
+- assistant 会話向けの形式仕様モードを追加しました (#1454, #1457, #1466)。`assistant.formal_spec` は `true`、`false`、`"Y/n"`、`"y/N"` を受け付け、project 値が global 値より優先されます。質問形式では TTY セッション開始時に1回だけ確認し、非 TTY と ACP は標準入力を消費せず設定の既定回答を採用します。有効なセッションでは各要件を Quint と Alloy の両記法で表現し、片方の記法を省く場合は要件ごとに表現不能な理由を示します。Gherkin のガイダンスは常時利用できます。
+- `runtime.yaml` にランタイム MCP 設定を追加しました (#1137, #1218)。トップレベルの `mcp` セクションが MCP サーバ定義（`${ENV}` 補間つき）とエージェントへの割り当てを所有します。`mcp` セクションは単独でも有効で、provider 解決を legacy な `config.yaml` に残したまま MCP サーバだけを注入できます。secret を含み得る補間後の command・args・URL は log-safe な情報源によりログへ出さず、読み取り専用と分離実行の経路には準備済みサーバを渡しません。`servers` 定義のみのセクションは legacy な workflow `mcp_servers` と共存できます。
+- `runtime.yaml` にディレクトリ別のプロバイダ割り当てを追加しました (#1455)。`provider.assignments` はトップレベルの `defaults` / `targets` と同形の名前付きセットを宣言し、`provider.directories` は起動プロジェクトディレクトリ（`~` 展開・realpath 正規化・完全一致）を assignment 名に対応付けます。同一リポジトリの複数チェックアウトでプロジェクト設定を変えずに異なるプロバイダ割り当てを使い分けられます。マッチした assignment は宣言したキーだけを置換し、省略キーはトップレベルへフォールバックします。未知の assignment 名や assignment 内の未知の profile/pool/ladder 参照はロード時に失敗します。
+- `takt workflow inspect` を追加しました (#1427, #1445)。workflow を検査し、実行時と同じ解決（`--auto-strategy` を含む）で設定と解決ソースを報告します。
+- Companion のレビューモードを追加しました (#1434, #1447)。`companion.review_mode` は既定の `completion`（実装者の応答成功ごとに累積差分をレビュー）と `live`（応答中の quiet・強制・コミット契機のレビューを維持）から選べます。project 値が global 値より優先され、不正な値はロード時に失敗します。
+- Codex の fast mode を追加しました (#1425, #1426)。`provider_options.codex.fast_mode` は `true` または `false` を明示した場合だけ `features.fast_mode` を Codex へ送り、省略時は Codex 自身の既定に任せます。環境変数の上書きは `TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE` で、runtime profile・`provider_routing`・project / global 設定という通常のプロバイダオプション解決に従います。`takt exec` の assistant セッションにも適用されます。
+- workflow 選択メニューに説明を表示できるようにしました (#1456, #1459)。カテゴリファイルの `workflows` リストがインラインの `- 名前: 説明` 形式を受け付け、説明はカテゴリツリー・フラット・ブックマークの全選択経路で workflow 名の下に薄色の行として描画されます。ビルトインの全 workflow に両言語の説明を同梱しました。空の名前・空の説明と、同一ファイル内での同名 workflow への異なる説明はロードエラーです。
+- Issue から Issue を作成したとき元 Issue へリンクを自動コメントするようにしました (#1416, #1417)。対話経路で新しい Issue を作成し起点の Issue がちょうど1件の場合、確認プロンプトなしで起点 Issue に新 Issue へのリンクコメントを付けます。コメントに失敗しても警告表示のみで、作成済みの Issue とタスクは維持されます。表示する失敗理由は固定の分類（認証・権限・不存在・レート制限・ネットワーク）だけで、プロバイダの stderr を含みません。
+- OTLP メトリクスのエクスポートを追加しました (#869, #873)。`observability.enabled: true` のとき、トークン使用量・キャッシュ入力トークン・推定コスト・プロバイダ起因と分類されたエラー（リトライは別カウント）・コマンド quality gate の結果をカウンタとして出力します（observability ガイドに記載）。分類済みの失敗とリトライ数は parallel と arpeggio の集約を通しても保持されます。
+- 実行後のループ分析を追加しました（実験的）(#1430, #1441)。オプトインのトップレベル設定 `loop_analysis` を有効にすると、終了した run をビルトインの `loop-analysis` workflow で非同期に分析し、workflow ルールと facet の修正案を分析 run の `reports/loop-analysis.md`（`output: pr-comment` なら PR コメント）に書き出します。実験的機能であり、提案の質はチューニング中です。
+
+### Changed
+
+- **BREAKING:** ビルトイン workflow のカタログを再編しました (#1424, #1433, #1448)。旧 `experimental` / `takt-experimental` が新しい `default` / `takt-default` になり、旧 `simple` は `pure` に改名され、`simple` はその dynamic facet 版になりました。`review-default` は `review` に改名され `development-review` 経由でレビュアーを自動選択します。`review-fix-default` は動的な `review-fix` に置き換わり、`default-high` / `default-mini` は削除されました。既存コードの流儀を尊重して開発する `maintenance` workflow を新設しました。削除された名前（`experimental`・`takt-experimental`・`review-default`・`review-fix-default`・`default-high`・`default-mini`）を明示参照している設定は更新してください。
+- `assistant.gherkin` を廃止しました (#1431)。この旧キーは警告後に無視し、変換・永続化・設定ファイル更新は行いません。対話プロンプトと最終タスク指示書プロンプトでは Gherkin のガイダンスを常時有効にしました。
+- Team Leader ステップで `companion` と `dynamic_facets` を使えるようにし (#1402, #1409)、team leader の selector と companion の呼び出しをプロバイダの無活動デッドラインに拘束しました。
+- Companion レビュアーが自分でリポジトリを調査するようになりました (#1439)。インライン差分だけで判断せず、定義された調査範囲内でローカル作業ツリーを読み取り専用で調査し、ラウンドごとの独立した発見を保ちます。
+- ビルトインのレビュー・検証プロンプトが記録済み証跡で判断するようになりました (#1443, #1453, #1469, #1473)。レビュー収束は証跡に基づく問題トラッキングで判断し、レビュアーと最終 synthesis は記録済み証跡だけから判定します。fix verifier は最終結果の前に各有限集合と状態軸を再列挙し、見つけた不足を要素ごとに分類つきで記録し、計画上の対象外の行を修正対象にせず無変更保存境界の確認は省略しません。また fix verifier は読み取り専用を保ち、作業ツリーを編集せず所見の記録だけを行います。
+- Node.js の要件を >= 22.22.0 へ引き下げました (#1451)。下限は依存パッケージの engines が決めます。コンパイル済みの `dist/` は従来から Node 22 で動作していました。
+
+### Fixed
+
+- ステータスラインとツールスピナーが端末出力を破壊しなくなりました (#1462)。複数行のツールプレビューは表示前に1行へ畳み、スピナー行は固定120桁の上書きではなくエスケープシーケンスで消去し、対話プロンプトが入力を読む間はステータスラインを一時停止します。
+- Claude Code のサブスクリプション上限がレート制限フォールバックを発動するようになりました (#1429)。Claude CLI の「hit your weekly/5-hour/session limit」メッセージを、パース済みストリーム出力内にある場合も含めてレート制限として検出し、汎用のプロバイダ失敗として表面化しないようにしました。
+- Pi の npm 拡張が一時インストールより先に project / user スコープから解決されるようになりました (#1422, #1423, #1458)。既存のインストールは再インストールせず再利用し、無効化されたリソースしか無いスコープと解決に失敗したスコープは一時インストールへフォールスルーします。ロードできない拡張は run を失敗させずフォールバックします。
+- 再開位置ピッカーが実行可能ステップの単一ツリーを表示するようになりました (#1437)。`workflow_call` のコンテナ項目は提示せず、再開の起点になれる実ステップだけを選択できます。
+- プロンプト/レスポンスのデバッグログが workflow run 単位になりました (#1428, #1446)。`.takt/runs/<run>/logs/<sessionId>-prompts.jsonl` に書き出すため、並列 run がプロセス共通の1ファイルで混線しません。一般デバッグログは従来どおりプロセス単位です。
+- Retry と Instruct がタスクの指示書を確認つきで改訂するようになりました (#1442)。両経路とも改訂後の `order.md` を提案して承認を求め、承認時にタスクの指示書を置き換えます。再実行は古い指示書に会話メモを重ねる形ではなく改訂済みの指示書を実行します。ロケールと診断情報は保持され、否認した場合は会話へ戻ります。
+- タスク実行中の Ctrl-C が効き続けるようになりました (#1475)。共有 stdin を使うプロンプトの cleanup が stdin を pause しても run / watch の割り込みハンドラが再開して監視を続けるため、プロンプト後に Ctrl-C が効かなくなることがなくなりました。
+- Phase 3 の状態判定と AI judge が分離実行されるようになりました (#1476)。judge の呼び出しには空のツール allowlist を与え MCP サーバも渡さないため、判定が作業ツリーや外部ツールに触れることはありません。この問題への回避策だったビルトイン workflow の `use_judge: false` を削除しました。
+- 対話モードの入力をユーザーコメントとして明示するようになりました (#1460)。assistant / grill-me の各メッセージにユーザーコメントであることを示すヘッダを付け、システムプロンプトに成果物は常にタスク指示書でありコード変更ではないことを明記しました。システムプロンプトをユーザーターンへ連結するプロバイダ（Codex など）が修正依頼の形のコメントを実装依頼として解釈しなくなります。
+
+### Internal
+
+- `npm test` のユニット shard を `availableParallelism()` ベースの適応型（上限8）にし、PR CI のユニット matrix を4から8へ拡大しました (#1464)。補助ゲートの `/ci` は厳格な1回限りの birpc ノイズ再計測にオプトインします。
+- prompt-eval プローブのライフサイクルの Windows フレークを、プローブの報告と cleanup の分離で解消しました (#1438)。ACP プロンプトテストをユーザーコメントフレーミング後の契約に追従させ (#1461)、release 検証のフレークを安定化しました (#1420)。
+- 未使用の LocalLLM 由来レビュー facet と取り残し facet を削除し、implement/fix 系の quality gate に軽量統合テストを追加し (#1467)、存在しないステップ名を指すゲート設定を削除し (#1468)、TAKT 開発のドッグフーディングでのテスト実行範囲を軽量化しました (#1472)。
+- プロンプト評価スイートを suite registry に集約し、不要になった recurrence ledger 系のケースを削除しました (#1415)。
+- README をランディングページとして再構成して内部仕様を docs へ退避し、日本語ドキュメント全体から AI 的な言い回しと過剰な読点を除去しました (#1450)。
+
 ## [0.60.0] - 2026-08-18
 
 ### Added
 
-- assistant 会話向けの形式仕様モードを追加しました。`assistant.formal_spec` は `true`、`false`、`"Y/n"`、`"y/N"` を受け付け、project 値が global 値より優先されます。質問形式では TTY セッション開始時に1回だけ確認し、非 TTY と ACP は標準入力を消費せず設定の既定回答を採用します。有効なセッションには適用可能な Quint／Alloy のガイダンスを与え、Gherkin のガイダンスは常時利用できます。
 - 公式 DeepSeek Harness SDK プロバイダを追加しました (#1388)。新しい `deepseek-harness` プロバイダは、公式の DeepSeek Harness Python SDK を専用の JSON-RPC ブリッジ経由で駆動します。`provider_options.deepseek_harness` で `base_url`・`session_root`・`max_tokens`・`request_timeout_ms`・`shutdown_timeout_ms`・`runtime_mode` を設定できます（`python_path` と `cordis` は信頼済みグローバル設定と環境変数のみ）。認証情報は `DEEPSEEK_API_KEY` と任意の `DEEPSEEK_BASE_URL` から取得し、API キーはブリッジのプロセス環境にだけ渡され、コマンド引数や生成 workflow の設定には出力されません。実行には Python 3.10+ と、リリースの対応する `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` が必要で、対応プラットフォームは Linux x64/arm64 と macOS arm64 のみです。Windows と macOS x64 は他プロバイダへ黙ってフォールバックせず即座に失敗します。本プロバイダは developer preview の互換面であり、上流の API・イベント語彙はリリース間で変わり得るため、新しい SDK/runtime の組み合わせを使う前に Configuration Guide のオプトイン live smoke 手順を実行してください。
 - `takt-experimental-team` workflow を追加しました (#1401, #1404)。`takt-experimental` の計画・テスト・レビュー・final-gate の契約をそのまま保ち、実装・修正・再修正だけを静的な Team Leader の coder 実行に切り替えた実験的な TAKT 開発 workflow です。新設の callable workflow `development-implement-team` / `development-remediation-team` を呼び出し、リーダーと part のステップにはそれぞれのルーティングタグが付きます。現在のスキーマ制約により、この派生では実装側の dynamic facets と companion は使用しません。
 - `takt list` の failed タスクに instruct と PR 作成のアクションを追加しました (#1391, #1339)。failed の run に対して、completed に既にあった対話型の instruct と同じ流れを起動できます。failed の入口は run の未コミット作業ツリーを対象とし、最終裁定レポートの要約と作業ツリー差分の概要を初期コンテキストとして注入します。PR 作成アクションは completed / failed の両方から利用でき、既存の auto-commit と同じ命名でコミットし、shared clone に remote が無い場合はプロジェクトリポジトリ経由で push し、PR 本文を run の最終レポートから構成します。実行前にコミット対象のファイル一覧と本文プレビューを表示して確認を取ります。
@@ -20,7 +64,6 @@
 
 ### Changed
 
-- `assistant.gherkin` を廃止しました。この旧キーは警告後に無視し、変換・永続化・設定ファイル更新は行いません。対話プロンプトと最終タスク指示書プロンプトでは Gherkin のガイダンスを常時有効にしました。
 - **BREAKING:** workflow YAML からプロバイダ設定を削除しました (#1398)。`provider`・`model`・`provider_options`・`auto_routing`・`rate_limit_fallback`・`workflow_config.provider*`・`workflow_call.overrides` は workflow のフィールドではなくなり、これらを書いた workflow は移行先を示す診断つきでロード境界で失敗します。`promotion` のエントリは厳密に `{at: N}` の形だけになり（provider・model・provider options・`condition` は拒否）、マッチすると runtime ターゲットの `ladder` の次段へ進みます。provider・model・options・ルーティングは `runtime.yaml`（および従来どおり動作する legacy な `config.yaml` モード）が所有し、CLI と環境変数の上書きは引き続き利用できます。workflow YAML に残るプロバイダオプションの面は `capabilities` だけです。
 - Team Leader へのフィードバックを、セッションに蓄積せずレポート経由の有界要約で渡すようにしました (#1407)。part の結果はレポートとして書き出され、リーダーは上限付きの要約を受け取るため、分解が長く続いてもリーダーのコンテキストが肥大しません。リーダーにはレポート全文を開いて現物を確認することを求め、エンジンは分解フェーズと追加 part の判断フェーズに読み取り専用ツール（`read`・`glob`・`grep`）を既定で与えます（ツール allowlist をサポートするプロバイダの場合）。workflow 側で `inspect_tools` を書く必要はなくなりました。明示指定は既定を上書きし、明示的な空リストは空 allowlist として保持され、ツール制限を持たないプロバイダ（Codex など）では allowlist を設定しません。planning ステップの `{previous_response}` は従来どおり無損失で渡されます。
 - ビルトインのレビュー指示を集約しました (#1395, #1390)。レビュー範囲・finding の取り扱い・用語・family 探索・再発の指示を instruction ごとの facet partial から共有の `workflows/rules/` へ移し、`all_steps.rules` 経由で適用します。ドメインごとのレビュー基準は独立した policy facet（architecture・backend・frontend・react・cqrs-es・failure-boundary・implementation-semantics・resource-ownership・robustness・takt）に分割しました。実験的なレビュアーセットは再利用可能な step fragment になり、内部用の `experimental-review-adapter` / `takt-experimental-review-adapter` workflow は削除しました。`{review_scope}` は削除された `instructions/review-round-scope` partial ではなく共有ルール `findings-handling` からビルトインの汎用レビュアーへ届きます。親子の workflow ルールは `ref`・位置・解決後の内容が同一なら 1 回だけ適用されます。

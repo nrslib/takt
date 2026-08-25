@@ -46,7 +46,7 @@ takt hello
 ### 流程
 
 1. 选择 workflow
-2. 选择交互模式（assistant / grill-me / persona / quiet / passthrough）
+2. 选择交互模式（assistant / grill-me / persona）
 3. 通过与 AI 对话完善任务内容
 4. 使用 `/go` 完成任务指令（也可以使用 `/go additional instructions` 添加额外指令）
 5. 执行 workflow，并按需要创建 PR
@@ -58,10 +58,18 @@ takt hello
 | `assistant` | 默认模式。AI 会提出澄清问题，然后生成任务指令。 |
 | `grill-me` | 一次处理一个推荐问题，解决重要决策分支；需求准备好后建议使用 `/go`。 |
 | `persona` | 与第一个 step 的 persona 对话（使用其 system prompt 和工具）。 |
-| `quiet` | 不提问，尽力生成任务指令。 |
-| `passthrough` | 将用户输入直接作为任务文本，不经过 AI 处理。 |
 
-workflow 可以通过 YAML 中的 `interactive_mode` 字段设置默认模式。
+### 会话设置命令
+
+| 命令 | 效果 |
+|------|------|
+| `/workflow` | 选择另一个 workflow。 |
+| `/interaction` | 选择另一个交互模式。 |
+| `/provider` | 选择另一个 provider。 |
+| `/model <value>` | 为当前会话指定任意 model 名称。 |
+| `/effort <value>` | 为当前会话指定任意推理强度。 |
+
+这些选择只在当前会话中有效，不会持久化。workflow、mode、provider 或 model 的更改会在下一条普通消息或 `/go` 时创建新的 AI session，并只将之前的对话作为参考上下文传递一次。仅更改 effort 时，会应用到当前 session 的下一次调用。更改 provider 会清除临时 model 和 effort。在下一次输入前执行多个设置命令时，每项设置只应用最后一次选择的值。会话 override 不影响 workflow 执行。
 
 ### 执行示例
 
@@ -74,7 +82,7 @@ Select workflow:
     Research/
     Cancel
 
-Interactive mode - Enter task content. Commands: /go (execute), /cancel (exit)
+交互模式 - 请描述任务。准备好后，使用 /go 创建指令并运行。
 
 > I want to add user authentication feature
 
@@ -381,7 +389,13 @@ takt workflow init review-flow --template faceted --global
 # 按名称或路径验证 workflow
 takt workflow doctor sample-flow
 takt workflow doctor .takt/workflows/sample-flow.yaml
+
+# 检查 workflow 的配置与解析来源
+takt workflow inspect sample-flow
+takt workflow inspect .takt/workflows/sample-flow.yaml
 ```
+
+`takt workflow inspect` 按运行时相同的解析（包括 `--auto-strategy`）报告 workflow 的配置以及每个解析值的来源。
 
 ### `takt clear`
 

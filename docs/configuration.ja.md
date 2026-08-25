@@ -190,7 +190,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` の並列タスク数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。記法間の重複は避けず、タスクがその記法でどうしても表現できない場合にだけ省略します。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。プロジェクトの明示値がグローバル値より優先されます。Gherkin のガイダンスは独立して常時有効です。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。記法間の重複は避けず、タスクがその記法でどうしても表現できない場合にだけ省略します。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。プロジェクトの明示値がグローバル値より優先されます。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
 | `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
@@ -398,7 +398,7 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"`（global 設定またはデフォルト由来） | 要件を Alloy／Quint の両方の記法でも表現するガイダンスを追加するプロジェクト上書きです。記法間の重複は避けず、タスクがその記法でどうしても表現できない場合にだけ省略します。プロジェクト値がグローバル値より優先されます。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは常時有効です。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"`（global 設定またはデフォルト由来） | 要件を Alloy／Quint の両方の記法でも表現するガイダンスを追加するプロジェクト上書きです。記法間の重複は避けず、タスクがその記法でどうしても表現できない場合にだけ省略します。プロジェクト値がグローバル値より優先されます。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |
@@ -635,8 +635,19 @@ force-fail しても、この状態を自動復旧できる保証はありませ
 対応済みまたは根拠付きの対応不能に分類し、対応不能な案を撤回した上で再び reviewer が判定します。
 最終 report は常に分析 run の `reports/loop-analysis.md` へ保存されます。
 
+サニタイズと公開の前に、worker は完全版 report を global config dir（`TAKT_CONFIG_DIR` を設定した場合はその値）の
+`loop-analysis/<source-run-slug>-<hash>/loop-analysis.md` へ保存します。`<hash>` は source run directory のパスを
+SHA-256 でハッシュ化した先頭8桁の16進数です。同じ場所に private な `source.json` も作成し、
+version 1、`sourceRunDirectory`、`projectCwd`、任意の `branch`、`analysisReportPath`、`archivedAt`（ISO 文字列）を
+記録します。`pullRequest.number` と `pullRequest.url` は PR コメントの投稿に成功した場合だけ記録されます。
+この archive は `output: file` と `output: pr-comment` の両方で保存され、同じ source run directory を再解析した場合は
+上書きされます。分析 run の report と、存在する場合の PR コメントの末尾には
+`source run: <source-run-slug>` の行を1行だけ付けます。この行には slug だけを記載します。
+archive の保存後、worker は分析 run の report をサニタイズして公開用の内容で上書きします。
+そのため archive には完全版が残り、ファイルと PR コメントはサニタイズ後の同一内容になります。
+
 `output: pr-comment` の場合、元 run で auto-PR が有効で、その branch の PR が既に存在するときだけ、
-保存済み report と同一内容をコメントします。PR が存在しない場合は report ファイルだけを残します。
+保存済み report と同一内容をコメントします。PR が存在しない場合はコメントを投稿せず、分析 report と private archive を残します。
 `loop_analysis` 内に provider、model、provider options は指定できません。通常の runtime provider
 target で分析 step を割り当ててください。global と project の両方が `loop_analysis` を定義した場合、
 project のセクションが global のセクション全体を置き換えます。

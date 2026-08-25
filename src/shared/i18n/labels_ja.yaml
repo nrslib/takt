@@ -13,10 +13,8 @@ interactive:
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   formalSpecPrompt: "形式仕様モード（Alloy, Quint）を有効にしますか？ 既定値は assistant.formal_spec で変更できます。"
   ui:
-    intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
-    introGrillMe: "Grill Meモード - 要件の判断分岐を1問ずつ掘り下げます。要件が固まるとアシスタントが /go を案内します。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
-    introQuiet: "クワイエットモード - タスク内容を入力してください。追加質問なしで指示書を生成します。"
-    introPassthrough: "パススルーモード - タスク内容を入力してください。入力内容をそのまま実行します。"
+    intro: "対話モード - タスク内容を入力してください。準備ができたら /go で指示書を作成・実行します。"
+    introGrillMe: "Grill Meモード - 推奨案付きの質問を1問ずつ行い、要件を固めます。準備ができたら /go で指示書を作成・実行します。"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
     thinking: "アシスタントが応答を作成中..."
@@ -44,10 +42,8 @@ interactive:
     grill-meDescription: "推奨案付きの質問を1問ずつ行い、要件を固める"
     persona: "ペルソナ"
     personaDescription: "先頭エージェントのペルソナで対話"
-    quiet: "クワイエット"
-    quietDescription: "質問なしでベストエフォートの指示書を生成"
-    passthrough: "パススルー"
-    passthroughDescription: "入力をそのままタスクとして渡す"
+  providerSelection:
+    prompt: "プロバイダを選択してください:"
   runSelector:
     confirm: "前回の実行結果を参照しますか？"
     prompt: "参照するrunを選択してください:"
@@ -76,6 +72,11 @@ interactive:
     resume: "セッションを読み込む"
     pasteImage: "クリップボード画像を添付"
     setup: "exec エージェントを設定"
+    workflow: "ワークフローを切り替える"
+    mode: "対話モードを切り替える"
+    provider: "プロバイダを切り替える"
+    model: "この会話で使うモデルを指定する"
+    effort: "この会話で使う推論強度を指定する"
 
 # ===== Exec Mode UI =====
 exec:
@@ -278,7 +279,6 @@ tui:
     promptKeepHint: "Enter: 確定  空のまま Enter: 現在値のまま  Esc: キャンセル"
     promptPlaceholder: "入力してください"
     model: "モデル: {value}"
-    passthroughHint: "Enter: そのまま実行  Shift+Enter: 改行  Ctrl+C: 中止"
   errors:
     requiresTty: "--tui は対話端末 (TTY) が必要です。TTY 上で takt を実行するか --tui を外してください。"
     exitedEarly: "タスク会話が完了する前に TUI が終了しました。"
@@ -289,5 +289,8 @@ tui:
     emptyAiResponse: "アシスタントからの応答がありませんでした。"
     noConversation: "まだ会話がありません。先にタスクを説明してください。"
     instructionFailed: "タスク指示書の作成に失敗しました。"
+    conversationRebuildFailed: "会話設定の切り替えに失敗しました: {error}"
     unsupportedCommand: "このコマンドは TUI では利用できません。"
+    settingNoArguments: "{command} に引数は指定できません。"
+    settingValueRequired: "{command} には値が必要です。"
     imagePasteFailed: "画像を貼り付けられませんでした。"

@@ -22,4 +22,3 @@ output_contracts:
   report:
     - name: fix-report.md
       format: fix-report
-      use_judge: false

@@ -165,8 +165,7 @@ Select workflow:
     📁 🛠️ 開発/
     📁 🔍 レビュー/
 
-対話モード - タスク内容を入力してください。
-コマンド: /go（実行）, /cancel（終了）
+対話モード - タスク内容を入力してください。準備ができたら /go で指示書を作成・実行します。
 
 > ユーザー認証を JWT で追加して
 
@@ -283,6 +282,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt eject` | ビルトインの workflow/facet をコピーしてカスタマイズできます |
 | `takt workflow init` | カスタム workflow のひな形を作成します |
 | `takt workflow doctor` | カスタム workflow の定義を静的検証します |
+| `takt workflow inspect` | workflow の設定と解決ソースを検査します |
 | `takt repertoire add` | GitHub から repertoire パッケージをインストールします |
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。

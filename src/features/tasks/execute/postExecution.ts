@@ -16,10 +16,10 @@ import {
   getGitProvider,
   stripTaktManagedPrMarker,
 } from '../../../infra/git/index.js';
-import type { Issue, CreatePrResult, GitProvider } from '../../../infra/git/index.js';
+import type { ExistingPr, Issue, CreatePrResult, GitProvider } from '../../../infra/git/index.js';
 import type { ExecuteTaskOptions } from './types.js';
 import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
-import { sanitizeLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
+import { prepareLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
 
 const log = createLogger('postExecution');
 
@@ -60,16 +60,17 @@ export interface CommentLoopAnalysisReportOptions {
   projectCwd: string;
   branch: string;
   reportPath: string;
+  sourceRunSlug: string;
   gitProvider?: GitProvider;
 }
 
 export async function commentLoopAnalysisReportOnPr(
   options: CommentLoopAnalysisReportOptions,
-): Promise<void> {
+): Promise<ExistingPr | undefined> {
   const gitProvider = options.gitProvider ?? getGitProvider();
   const existingPr = gitProvider.findExistingPr(options.branch, options.projectCwd);
   if (existingPr === undefined) {
-    return;
+    return undefined;
   }
 
   const snapshot = readPrivateFileState(options.reportPath);
@@ -77,14 +78,15 @@ export async function commentLoopAnalysisReportOnPr(
     throw new Error('Loop analysis report is no longer available');
   }
   const report = snapshot.content.toString('utf8');
-  const sanitizedReport = sanitizeLoopAnalysisReportForPublication(report);
-  if (sanitizedReport !== report) {
-    writePrivateFile(options.reportPath, sanitizedReport);
+  const publishedReport = prepareLoopAnalysisReportForPublication(report, options.sourceRunSlug);
+  if (publishedReport !== report) {
+    writePrivateFile(options.reportPath, publishedReport);
   }
-  const result = gitProvider.commentOnPr(existingPr.number, sanitizedReport, options.projectCwd);
+  const result = gitProvider.commentOnPr(existingPr.number, publishedReport, options.projectCwd);
   if (!result.success) {
     throw new Error(result.error ?? PR_COMMENT_FAILURE_MESSAGE);
   }
+  return existingPr;
 }
 
 /**

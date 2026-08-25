@@ -418,6 +418,56 @@ describe('tree restart picker contracts', () => {
 });
 
 describe('resume checkpoint is preserved across the tree picker', () => {
+  it('should display the complete resolved path for a nested Resume default', async () => {
+    const child = makeWorkflow({
+      name: 'coding',
+      ref: 'project:child',
+      callable: true,
+      steps: [agentStep('review')],
+    });
+    const root = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [callStep('delegate', 'coding')],
+    });
+    const resumePoint: WorkflowResumePoint = {
+      version: 2,
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: 'project:root',
+          step: 'delegate',
+          kind: 'workflow_call',
+          call_instance: 1,
+        },
+        {
+          workflow: 'coding',
+          workflow_ref: 'project:child',
+          step: 'review',
+          kind: 'agent',
+        },
+      ],
+      iteration: 4,
+      elapsed_ms: 1_000,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+
+    const cap = await capturePicker(
+      root,
+      { ...pathContext, resumePoint },
+      (_options, defaultValue) => defaultValue,
+    );
+
+    const resumeOption = cap.options.find((option) => option.value === 'resume-checkpoint');
+    expect(resumeOption?.label).toBe(
+      'Resume failed position: "default" > "delegate" > "coding" > "review"',
+    );
+    expect(cap.defaultValue).toBe(resumeOption?.value);
+    expect(cap.result?.selection).toEqual({ kind: 'resume', resumePoint });
+  });
+
   it('should keep a synthesized checkpoint available and default through Resume', async () => {
     const root = makeWorkflow({
       name: 'default',
@@ -440,7 +490,7 @@ describe('resume checkpoint is preserved across the tree picker', () => {
     expect(cap.options.some((option) => option.label.startsWith('Restart from: '))).toBe(false);
     // The synthesized checkpoint is never presented as a selectable restart leaf.
     expect(cap.options.some(
-      (option) => !isHeading(option) && option.label.includes('engine-step'),
+      (option) => option.value.startsWith('restart:') && option.label.includes('engine-step'),
     )).toBe(false);
   });
 

@@ -3,7 +3,6 @@
  */
 
 import { z } from 'zod/v4';
-import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { isReviewMode, REVIEW_MODE_VALUES } from './review-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
@@ -227,6 +226,7 @@ export const WorkflowRuleSchema = z.object({
   appendix: z.string().optional(),
   requires_user_input: z.boolean().optional(),
   interactive_only: z.boolean().optional(),
+  command_gates: z.enum(['required', 'skip']).optional(),
 }).strict();
 
 const WorkflowRulesSchema = z.array(WorkflowRuleSchema).superRefine((rules, ctx) => {
@@ -518,6 +518,7 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   structured_output: z.never().optional(),
   system_inputs: z.never().optional(),
   effects: z.never().optional(),
+  command_gates: z.never().optional(),
   rules: WorkflowRulesSchema.optional(),
   output_contracts: OutputContractsFieldSchema,
   quality_gates: QualityGatesSchema,
@@ -586,6 +587,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   structured_output: z.never().optional(),
   system_inputs: z.never().optional(),
   effects: z.never().optional(),
+  command_gates: z.never().optional(),
   rules: WorkflowRulesSchema.optional(),
   output_contracts: z.never().optional(),
   quality_gates: z.never().optional(),
@@ -702,6 +704,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     structured_output: StructuredOutputRawSchema.optional(),
     system_inputs: z.array(SystemInputRawSchema).optional(),
     effects: z.array(WorkflowEffectRawSchema).optional(),
+    command_gates: z.never().optional(),
     rules: WorkflowRulesSchema.optional(),
     output_contracts: OutputContractsFieldSchema,
     quality_gates: QualityGatesSchema,
@@ -997,9 +1000,6 @@ export const LoopMonitorSchema = z.object({
   }
 });
 
-/** Interactive mode schema for workflow-level default */
-export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
-
 interface OutputContractStep {
   readonly output_contracts?: {
     readonly report?: readonly { readonly name: string }[];
@@ -1116,7 +1116,6 @@ export const WorkflowConfigRawSchema = z.object({
   initial_step: z.string().optional(),
   max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
-  interactive_mode: InteractiveModeSchema.optional(),
 }).strict().superRefine((workflow, ctx) => {
   validateOutputContractIdentities(workflow.steps as readonly OutputContractStep[], ctx);
 });

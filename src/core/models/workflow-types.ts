@@ -4,7 +4,6 @@ import type {
 } from '../../shared/types/workflow-resume.js';
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
-import type { InteractiveMode } from './interactive-mode.js';
 import type { TeamLeaderConfig } from './part.js';
 import type {
   McpServerConfig,
@@ -80,6 +79,7 @@ export interface WorkflowRule {
   appendix?: string;
   requiresUserInput?: boolean;
   interactiveOnly?: boolean;
+  commandGates?: 'required' | 'skip';
 }
 
 export interface WorkflowWideRule {
@@ -569,7 +569,6 @@ export interface WorkflowConfig {
   maxSteps: WorkflowMaxSteps;
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];
-  interactiveMode?: InteractiveMode;
   facetPools?: Record<string, ResolvedFacetPool>;
   companions?: Record<string, ResolvedCompanionDefinition>;
 }

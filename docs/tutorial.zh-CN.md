@@ -82,9 +82,8 @@ Select workflow in 🎨 Frontend:
 ```text
 Select interactive mode:
   ❯ Assistant
+    Grill Me
     Persona
-    Quiet
-    Passthrough
 ```
 
 ## 2. 阶段 1：构建最小 UI
