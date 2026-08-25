@@ -345,14 +345,17 @@ describe('E2E: Ink TUI', () => {
     tui.write(ESC);
     await tui.waitForOutput(INTERRUPTED);
     await tui.waitForOutput('QUEUE-SECOND-REPLY', 60_000);
+    await tui.waitForScreen(
+      'the queued answer to finish and the input prompt to return',
+      (currentScreen) => !currentScreen.includes(THINKING_MARKER)
+        && currentScreen.includes(PLACEHOLDER),
+      60_000,
+    );
 
     // The queued line was sent and answered, and the queue is empty again.
     const transcript = (await tui.visibleTranscript()).join('\n');
     expect(transcript).toContain('❯ after the interrupt');
     expect(transcript).not.toContain(QUEUE_HINT);
-    const screen = (await tui.visibleScreen()).join('\n');
-    expect(screen).not.toContain(THINKING_MARKER);
-    expect(screen).toContain('╭');
 
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit()).resolves.toBe(0);
