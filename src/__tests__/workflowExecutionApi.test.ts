@@ -382,7 +382,7 @@ describe('runWorkflowExecution', () => {
     );
   });
 
-  it('Given an internal analysis execution, When its options are built, Then report persistence receives the publication sanitizer', async () => {
+  it('Given an internal analysis execution, When its options are built, Then report persistence does not sanitize before the worker archives the report', async () => {
     mockExecuteTaskWorkflow.mockImplementationOnce(async (request, executor) => executor(
       { name: 'project-loop-analysis-override', steps: [], maxSteps: 3 },
       request.task,
@@ -401,11 +401,7 @@ describe('runWorkflowExecution', () => {
     const options = mockExecuteWorkflow.mock.calls[0]?.[3] as {
       reportContentSanitizer?: (content: string) => string;
     } | undefined;
-    expect(options?.reportContentSanitizer).toEqual(expect.any(Function));
-    const sanitized = options?.reportContentSanitizer?.(
-      'token=analysis-secret\nWindows path: C:/Users/jane/private/report.md',
-    );
-    expect(sanitized).not.toMatch(/analysis-secret|C:\/Users\/jane/);
+    expect(options?.reportContentSanitizer).toBeUndefined();
   });
 });
 

@@ -1,16 +1,21 @@
 import { existsSync, lstatSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { initGitProvider } from '../../../infra/git/index.js';
 import { isDirectEntrypoint } from '../../../shared/utils/entrypoint.js';
 import { PrivateArtifactPublicationConflictError } from '../../../shared/utils/private-file.js';
 import { commentLoopAnalysisReportOnPr } from './postExecution.js';
 import {
+  archiveLoopAnalysisReport,
+  recordLoopAnalysisPullRequest,
+} from './loopAnalysisArchive.js';
+import {
   appendLoopAnalysisWorkerFailure,
   readLoopAnalysisJob,
   readLoopAnalysisPublicationMarker,
   type LoopAnalysisJob,
 } from './loopAnalysisJob.js';
+import { prepareLoopAnalysisReportFileForPublication } from './loopAnalysisReportPublication.js';
 import {
   LOOP_ANALYSIS_REPORT_FILE,
   LOOP_ANALYSIS_WORKFLOW,
@@ -50,17 +55,29 @@ export async function executeLoopAnalysisJob(jobPath: string): Promise<void> {
   if (!lstatSync(reportPath, { throwIfNoEntry: false })?.isFile()) {
     throw new Error('Loop analysis completed without a report');
   }
+  const sourceRunSlug = basename(job.sourceRunDirectory);
+  const archive = archiveLoopAnalysisReport({
+    sourceRunDirectory: job.sourceRunDirectory,
+    projectCwd: job.projectCwd,
+    analysisReportPath: reportPath,
+    ...(job.branch === undefined ? {} : { branch: job.branch }),
+  });
+  prepareLoopAnalysisReportFileForPublication(reportPath, sourceRunSlug);
   if (job.branch === undefined || job.publicationMarkerPath === undefined) {
     return;
   }
 
   await waitForPublicationSettlement(job);
   initGitProvider(job.projectCwd);
-  await commentLoopAnalysisReportOnPr({
+  const pullRequest = await commentLoopAnalysisReportOnPr({
     projectCwd: job.projectCwd,
     branch: job.branch,
     reportPath,
+    sourceRunSlug,
   });
+  if (pullRequest !== undefined) {
+    recordLoopAnalysisPullRequest(archive, pullRequest);
+  }
 }
 
 export async function runLoopAnalysisWorker(jobPath: string): Promise<void> {

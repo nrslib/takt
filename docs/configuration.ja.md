@@ -635,8 +635,18 @@ force-fail しても、この状態を自動復旧できる保証はありませ
 対応済みまたは根拠付きの対応不能に分類し、対応不能な案を撤回した上で再び reviewer が判定します。
 最終 report は常に分析 run の `reports/loop-analysis.md` へ保存されます。
 
+サニタイズと公開の前に、worker は完全版 report を global config dir（`TAKT_CONFIG_DIR` を設定した場合はその値）の
+`loop-analysis/<source-run-slug>/loop-analysis.md` へ保存します。同じ場所に private な `source.json` も作成し、
+version 1、`sourceRunDirectory`、`projectCwd`、任意の `branch`、`analysisReportPath`、`archivedAt`（ISO 文字列）を
+記録します。`pullRequest.number` と `pullRequest.url` は PR コメントの投稿に成功した場合だけ記録されます。
+この archive は `output: file` と `output: pr-comment` の両方で保存され、同じ source run slug を再解析した場合は
+上書きされます。分析 run の report と、存在する場合の PR コメントの末尾には
+`source run: <source-run-slug>` の行を1行だけ付けます。この行には slug だけを記載します。
+archive の保存後、worker は分析 run の report をサニタイズして公開用の内容で上書きします。
+そのため archive には完全版が残り、ファイルと PR コメントはサニタイズ後の同一内容になります。
+
 `output: pr-comment` の場合、元 run で auto-PR が有効で、その branch の PR が既に存在するときだけ、
-保存済み report と同一内容をコメントします。PR が存在しない場合は report ファイルだけを残します。
+保存済み report と同一内容をコメントします。PR が存在しない場合はコメントを投稿せず、分析 report と private archive を残します。
 `loop_analysis` 内に provider、model、provider options は指定できません。通常の runtime provider
 target で分析 step を割り当ててください。global と project の両方が `loop_analysis` を定義した場合、
 project のセクションが global のセクション全体を置き換えます。

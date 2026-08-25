@@ -653,9 +653,23 @@ each finding as addressed or unable to be addressed with evidence, withdraws
 the affected proposal in the latter case, and returns it to the reviewer. The
 final report is always written to the analysis run's `reports/loop-analysis.md`.
 
+Before sanitization and publication, the worker also saves the complete report under
+the global config directory (`TAKT_CONFIG_DIR` when set), at
+`loop-analysis/<source-run-slug>/loop-analysis.md`. It writes a private `source.json`
+beside it with version 1, `sourceRunDirectory`, `projectCwd`, optional `branch`,
+`analysisReportPath`, `archivedAt` (an ISO timestamp), and, only after a successful
+PR comment, `pullRequest.number` and `pullRequest.url`. This archive is saved for
+both output modes and is overwritten when the same source-run slug is analyzed
+again. The analysis report and, when present, the PR comment end with one
+`source run: <source-run-slug>` line; the line contains only the slug.
+After the archive is written, the worker sanitizes the analysis run's report
+and overwrites it with the publication-safe content. The archive therefore
+retains the complete report while the file and PR comment share the sanitized
+content.
+
 With `output: pr-comment`, the same persisted report content is also posted when
 the source run has auto-PR enabled and its branch already has a pull request. If
-no pull request exists, only the report file is retained. Provider, model, and
+no pull request exists, no comment is posted; the analysis report and private archive are retained. Provider, model, and
 provider options are not valid inside `loop_analysis`; configure the analysis
 steps through normal runtime provider targets. When both runtime files define
 `loop_analysis`, the project section replaces the global section as a unit.
