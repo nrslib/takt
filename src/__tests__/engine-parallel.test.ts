@@ -2770,6 +2770,42 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(onSessionUpdate).toHaveBeenCalledWith(archSessionKey, undefined);
   });
 
+  it('should invalidate a parallel sub-step session when its matched transition is missing', async () => {
+    const config = buildParallelOnlyConfig();
+    const onSessionUpdate = vi.fn();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      onSessionUpdate,
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: String(persona),
+        userInstruction: instruction,
+      });
+      if (String(persona).includes('arch-review')) {
+        return makeResponse({ persona: String(persona), content: 'unclear', sessionId: 'arch-session' });
+      }
+      return makeResponse({ persona: String(persona), content: 'approved', sessionId: 'security-session' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
+      if (step.name === 'arch-review') {
+        return { index: 99, method: 'phase3_tag' };
+      }
+      return { index: 0, method: 'phase3_tag' };
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    const archSessionKey = '["../personas/arch-review.md","mock"]';
+    expect(state.personaSessions.has(archSessionKey)).toBe(false);
+    expect(onSessionUpdate).toHaveBeenCalledWith(archSessionKey, undefined);
+    expect(onSessionUpdate.mock.calls.filter(([sessionKey, sessionId]) => (
+      sessionKey === archSessionKey && sessionId === undefined
+    ))).toHaveLength(1);
+  });
+
   it('should keep a newer sibling session when a shared session key later exhausts rule detection', async () => {
     const config = buildParallelOnlyConfig();
     const reviewers = config.steps[0]!;

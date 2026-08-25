@@ -876,12 +876,20 @@ export class ParallelRunner {
             }
           }
           let match;
+          let commandGates: 'required' | 'skip' = 'required';
           try {
             match = await evaluatePostExecutionRules(
               subStep,
               () => phaseCtx,
               subRuleCtx,
             );
+            if (match !== undefined && subStep.rules !== undefined && subStep.rules.length > 0) {
+              const transition = determineRuleTransition(subStep, match.index);
+              if (transition === null) {
+                throw new RuleDetectionExhaustedError(subStep.name);
+              }
+              commandGates = transition.commandGates;
+            }
           } catch (error) {
             if (error instanceof RuleDetectionExhaustedError) {
               invalidateExpectedPersonaSession(
@@ -902,14 +910,6 @@ export class ParallelRunner {
             }
           : subResponse;
 
-        let commandGates: 'required' | 'skip' = 'required';
-        if (match !== undefined && subStep.rules !== undefined && subStep.rules.length > 0) {
-          const transition = determineRuleTransition(subStep, match.index);
-          if (transition === null) {
-            throw new RuleDetectionExhaustedError(subStep.name);
-          }
-          commandGates = transition.commandGates;
-        }
         if (commandGates === 'required') {
           const qualityGateResult = await this.deps.runQualityGates({
             qualityGates: subStep.qualityGates,
