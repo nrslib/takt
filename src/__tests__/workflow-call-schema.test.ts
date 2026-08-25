@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../core/models/index.js';
-import type { NormalOrTeamLeaderWorkflowStep, WorkflowCallArgValue, WorkflowConfig } from '../core/models/workflow-types.js';
-import { isNormalOrTeamLeaderWorkflowStep } from '../core/models/workflow-types.js';
+import type { WorkflowCallArgValue } from '../core/models/workflow-types.js';
 import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
 import { hasCompanionReference, parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { prepareCallableSubworkflowDiscoveryArgs } from '../infra/config/loaders/workflowCallableDiscoveryArgs.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { findAgentWorkflowStep } from './test-helpers.js';
 
 function createWorkflowCallStep(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -20,14 +20,6 @@ function createWorkflowCallStep(overrides: Record<string, unknown> = {}): Record
     ],
     ...overrides,
   };
-}
-
-function findAgentWorkflowStep(workflow: WorkflowConfig, name: string): NormalOrTeamLeaderWorkflowStep {
-  const step = workflow.steps.find((candidate) => candidate.name === name);
-  if (step === undefined || !isNormalOrTeamLeaderWorkflowStep(step)) {
-    throw new Error(`Expected agent workflow step "${name}"`);
-  }
-  return step;
 }
 
 function createDynamicPoolWorkflow(pool: unknown): Record<string, unknown> {

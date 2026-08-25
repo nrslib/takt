@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
-import { isNormalOrTeamLeaderWorkflowStep, type NormalOrTeamLeaderWorkflowStep } from '../core/models/workflow-types.js';
 
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import {
@@ -29,6 +28,7 @@ import {
   loadAllWorkflowsWithSources,
 } from '../infra/config/loaders/workflowLoader.js';
 import { getWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
+import { findAgentWorkflowStep, findWorkflowStep } from './test-helpers.js';
 
 function setBuiltinWorkflowsEnabledForTest(enabled: boolean): void {
   const configDir = process.env.TAKT_CONFIG_DIR;
@@ -66,22 +66,6 @@ steps:
     allowed_tools: [Read]
     instruction: "{task}"
 `;
-
-function findWorkflowStep(workflow: WorkflowConfig, name: string): WorkflowStep {
-  const step = workflow.steps.find((candidate) => candidate.name === name);
-  if (!step) {
-    throw new Error(`Workflow step "${name}" was not found in "${workflow.name}"`);
-  }
-  return step;
-}
-
-function findAgentWorkflowStep(workflow: WorkflowConfig, name: string): NormalOrTeamLeaderWorkflowStep {
-  const step = findWorkflowStep(workflow, name);
-  if (!isNormalOrTeamLeaderWorkflowStep(step)) {
-    throw new Error(`Expected agent workflow step "${name}"`);
-  }
-  return step;
-}
 
 function semanticTransitionMap(step: WorkflowStep): Record<string, string | undefined> {
   return Object.fromEntries((step.rules ?? []).map((rule) => {

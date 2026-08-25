@@ -23,6 +23,7 @@ import {
   recordWorkflowStepProviderActivity,
   recordWorkflowStepProviderEventActivity,
 } from '../core/workflow/engine/step-deadline.js';
+import type { ProviderActivityCallback } from '../shared/types/provider.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -603,9 +604,10 @@ describe('agent-usecases', () => {
           'review',
           event,
         ),
-        onActivity: () => recordWorkflowStepProviderActivity(
+        onActivity: (activity?: Parameters<ProviderActivityCallback>[0]) => recordWorkflowStepProviderActivity(
           deadline.recordActivity,
           'review',
+          activity,
         ),
       });
       await aiJudgeStarted;
