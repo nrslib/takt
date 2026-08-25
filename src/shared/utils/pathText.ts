@@ -1,4 +1,4 @@
-const PATH_BOUNDARY_PATTERN = /[\s'"`(){}=,:;<[]/u;
+const PATH_BOUNDARY_PATTERN = /[\s'"`(){}=,:;<>[]/u;
 
 function isPathBoundary(text: string, index: number): boolean {
   if (index === 0) {
@@ -21,6 +21,14 @@ function shouldMaskPath(text: string, index: number, candidate: string): boolean
     text.charAt(index - 1) === '<'
     && text.charAt(index + candidate.length) === '>'
     && /^\/[A-Za-z][A-Za-z0-9:-]*$/u.test(candidate)
+    && text.charAt(index - 2) !== '('
+  ) {
+    return false;
+  }
+  if (
+    text.charAt(index - 1) === '>'
+    && candidate.startsWith('/')
+    && candidate.indexOf('/', 1) === -1
   ) {
     return false;
   }

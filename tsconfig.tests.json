@@ -43,6 +43,7 @@
     "src/__tests__/loopAnalysisWorker.test.ts",
     "src/__tests__/mock-scenario-stream-chunks.test.ts",
     "src/__tests__/npmTestEntrypoint.test.ts",
+    "src/__tests__/pathText.test.ts",
     "src/__tests__/provider-mcp-adapter.test.ts",
     "src/__tests__/provider-mcp-capability-declaration.test.ts",
     "src/__tests__/provider-mcp-cleanup.test.ts",

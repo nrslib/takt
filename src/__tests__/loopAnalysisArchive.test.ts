@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
@@ -7,13 +8,25 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import {
   archiveLoopAnalysisReport,
   recordLoopAnalysisPullRequest,
 } from '../features/tasks/execute/loopAnalysisArchive.js';
+
+function getArchiveDirectory(sourceRunDirectory: string): string {
+  const sourceRunHash = createHash('sha256')
+    .update(sourceRunDirectory)
+    .digest('hex')
+    .slice(0, 8);
+  return join(
+    getGlobalConfigDir(),
+    'loop-analysis',
+    `${basename(sourceRunDirectory)}-${sourceRunHash}`,
+  );
+}
 
 describe('loop analysis archive', () => {
   const temporaryDirectories: string[] = [];
@@ -42,7 +55,7 @@ describe('loop analysis archive', () => {
       branch: 'takt/source-run',
     });
 
-    const archiveDirectory = join(getGlobalConfigDir(), 'loop-analysis', 'source-run');
+    const archiveDirectory = getArchiveDirectory(sourceRunDirectory);
     const archivedReportPath = join(archiveDirectory, 'loop-analysis.md');
     const sourceMetadataPath = join(archiveDirectory, 'source.json');
     expect(archive.sourceMetadataPath).toBe(sourceMetadataPath);
@@ -106,7 +119,7 @@ describe('loop analysis archive', () => {
       branch: 'takt/new-run',
     });
 
-    const archiveDirectory = join(getGlobalConfigDir(), 'loop-analysis', 'source-run-rerun');
+    const archiveDirectory = getArchiveDirectory(sourceRunDirectory);
     const archivedReportPath = join(archiveDirectory, 'loop-analysis.md');
     const metadata = JSON.parse(
       readFileSync(secondArchive.sourceMetadataPath, 'utf8'),
@@ -121,5 +134,47 @@ describe('loop analysis archive', () => {
       archivedAt: '2026-08-25T00:01:00.000Z',
     });
     expect(metadata).not.toHaveProperty('pullRequest');
+  });
+
+  it('Given distinct source directories share a slug, When both reports are archived, Then both archives remain available', () => {
+    const rootDirectory = mkdtempSync(join(tmpdir(), 'takt-loop-analysis-archive-collision-'));
+    temporaryDirectories.push(rootDirectory);
+    const firstProjectDirectory = join(rootDirectory, 'project-a');
+    const secondProjectDirectory = join(rootDirectory, 'project-b');
+    const firstSourceRunDirectory = join(firstProjectDirectory, '.takt', 'runs', 'shared-run');
+    const secondSourceRunDirectory = join(secondProjectDirectory, '.takt', 'runs', 'shared-run');
+    const firstReportPath = join(firstProjectDirectory, 'analysis', 'reports', 'loop-analysis.md');
+    const secondReportPath = join(secondProjectDirectory, 'analysis', 'reports', 'loop-analysis.md');
+    mkdirSync(firstSourceRunDirectory, { recursive: true });
+    mkdirSync(secondSourceRunDirectory, { recursive: true });
+    mkdirSync(join(firstProjectDirectory, 'analysis', 'reports'), { recursive: true });
+    mkdirSync(join(secondProjectDirectory, 'analysis', 'reports'), { recursive: true });
+    const firstReport = 'first report: /Users/jane/first.md\n';
+    const secondReport = 'second report: /Users/jane/second.md\n';
+    writeFileSync(firstReportPath, firstReport, { mode: 0o600 });
+    writeFileSync(secondReportPath, secondReport, { mode: 0o600 });
+
+    const firstArchive = archiveLoopAnalysisReport({
+      sourceRunDirectory: firstSourceRunDirectory,
+      projectCwd: firstProjectDirectory,
+      analysisReportPath: firstReportPath,
+    });
+    const secondArchive = archiveLoopAnalysisReport({
+      sourceRunDirectory: secondSourceRunDirectory,
+      projectCwd: secondProjectDirectory,
+      analysisReportPath: secondReportPath,
+    });
+
+    const firstArchiveDirectory = getArchiveDirectory(firstSourceRunDirectory);
+    const secondArchiveDirectory = getArchiveDirectory(secondSourceRunDirectory);
+    expect(firstArchiveDirectory).not.toBe(secondArchiveDirectory);
+    expect(readFileSync(join(firstArchiveDirectory, 'loop-analysis.md'), 'utf8')).toBe(firstReport);
+    expect(readFileSync(join(secondArchiveDirectory, 'loop-analysis.md'), 'utf8')).toBe(secondReport);
+    expect(JSON.parse(readFileSync(firstArchive.sourceMetadataPath, 'utf8'))).toMatchObject({
+      sourceRunDirectory: firstSourceRunDirectory,
+    });
+    expect(JSON.parse(readFileSync(secondArchive.sourceMetadataPath, 'utf8'))).toMatchObject({
+      sourceRunDirectory: secondSourceRunDirectory,
+    });
   });
 });

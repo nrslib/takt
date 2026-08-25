@@ -636,10 +636,11 @@ force-fail しても、この状態を自動復旧できる保証はありませ
 最終 report は常に分析 run の `reports/loop-analysis.md` へ保存されます。
 
 サニタイズと公開の前に、worker は完全版 report を global config dir（`TAKT_CONFIG_DIR` を設定した場合はその値）の
-`loop-analysis/<source-run-slug>/loop-analysis.md` へ保存します。同じ場所に private な `source.json` も作成し、
+`loop-analysis/<source-run-slug>-<hash>/loop-analysis.md` へ保存します。`<hash>` は source run directory のパスを
+SHA-256 でハッシュ化した先頭8桁の16進数です。同じ場所に private な `source.json` も作成し、
 version 1、`sourceRunDirectory`、`projectCwd`、任意の `branch`、`analysisReportPath`、`archivedAt`（ISO 文字列）を
 記録します。`pullRequest.number` と `pullRequest.url` は PR コメントの投稿に成功した場合だけ記録されます。
-この archive は `output: file` と `output: pr-comment` の両方で保存され、同じ source run slug を再解析した場合は
+この archive は `output: file` と `output: pr-comment` の両方で保存され、同じ source run directory を再解析した場合は
 上書きされます。分析 run の report と、存在する場合の PR コメントの末尾には
 `source run: <source-run-slug>` の行を1行だけ付けます。この行には slug だけを記載します。
 archive の保存後、worker は分析 run の report をサニタイズして公開用の内容で上書きします。

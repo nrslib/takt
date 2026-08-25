@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { getGlobalConfigDir } from '../../../infra/config/paths.js';
 import {
@@ -50,10 +51,14 @@ export function archiveLoopAnalysisReport(
   if (sourceRunSlug.length === 0) {
     throw new Error('Loop analysis source run directory must have a basename');
   }
+  const sourceRunHash = createHash('sha256')
+    .update(options.sourceRunDirectory)
+    .digest('hex')
+    .slice(0, 8);
   const archiveDirectory = join(
     getGlobalConfigDir(),
     LOOP_ANALYSIS_ARCHIVE_DIRECTORY,
-    sourceRunSlug,
+    `${sourceRunSlug}-${sourceRunHash}`,
   );
   ensurePrivateDirectory(archiveDirectory);
 

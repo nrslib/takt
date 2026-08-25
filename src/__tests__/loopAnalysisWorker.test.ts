@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 
@@ -87,6 +88,18 @@ const baseJob = {
   parentPid: 1234,
 };
 
+function getArchiveDirectory(sourceRunDirectory: string): string {
+  const sourceRunHash = createHash('sha256')
+    .update(sourceRunDirectory)
+    .digest('hex')
+    .slice(0, 8);
+  return join(
+    getGlobalConfigDir(),
+    'loop-analysis',
+    `${basename(sourceRunDirectory)}-${sourceRunHash}`,
+  );
+}
+
 describe('loop analysis worker', () => {
   const temporaryDirectories: string[] = [];
   const workerEvents: string[] = [];
@@ -162,7 +175,7 @@ describe('loop analysis worker', () => {
       ndjsonLogPath: join(rootDirectory, '.takt', 'runs', 'analysis-run', 'logs', 'session.ndjson'),
     });
 
-    const archiveDirectory = join(getGlobalConfigDir(), 'loop-analysis', sourceRunSlug);
+    const archiveDirectory = getArchiveDirectory(sourceRunDirectory);
     return {
       jobPath,
       reportPath,
@@ -179,7 +192,10 @@ describe('loop analysis worker', () => {
     mockLstatSync.mockReturnValue({ isFile: () => true });
     mockReadLoopAnalysisJob.mockReturnValue(baseJob);
     mockArchiveLoopAnalysisReport.mockReturnValue({
-      sourceMetadataPath: '/global/.takt/loop-analysis/source-run/source.json',
+      sourceMetadataPath: join(
+        getArchiveDirectory(baseJob.sourceRunDirectory),
+        'source.json',
+      ),
       metadata: {
         version: 1,
         sourceRunDirectory: baseJob.sourceRunDirectory,

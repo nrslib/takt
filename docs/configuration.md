@@ -655,11 +655,12 @@ final report is always written to the analysis run's `reports/loop-analysis.md`.
 
 Before sanitization and publication, the worker also saves the complete report under
 the global config directory (`TAKT_CONFIG_DIR` when set), at
-`loop-analysis/<source-run-slug>/loop-analysis.md`. It writes a private `source.json`
+`loop-analysis/<source-run-slug>-<hash>/loop-analysis.md`. Here `<hash>` is the first
+8 hexadecimal characters of the SHA-256 hash of the source run directory path. It writes a private `source.json`
 beside it with version 1, `sourceRunDirectory`, `projectCwd`, optional `branch`,
 `analysisReportPath`, `archivedAt` (an ISO timestamp), and, only after a successful
 PR comment, `pullRequest.number` and `pullRequest.url`. This archive is saved for
-both output modes and is overwritten when the same source-run slug is analyzed
+both output modes and is overwritten when the same source run directory is analyzed
 again. The analysis report and, when present, the PR comment end with one
 `source run: <source-run-slug>` line; the line contains only the slug.
 After the archive is written, the worker sanitizes the analysis run's report
