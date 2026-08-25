@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 
@@ -89,14 +89,15 @@ const baseJob = {
 };
 
 function getArchiveDirectory(sourceRunDirectory: string): string {
+  const normalizedSourceRunDirectory = resolve(sourceRunDirectory);
   const sourceRunHash = createHash('sha256')
-    .update(sourceRunDirectory)
+    .update(normalizedSourceRunDirectory)
     .digest('hex')
     .slice(0, 8);
   return join(
     getGlobalConfigDir(),
     'loop-analysis',
-    `${basename(sourceRunDirectory)}-${sourceRunHash}`,
+    `${basename(normalizedSourceRunDirectory)}-${sourceRunHash}`,
   );
 }
 
@@ -284,6 +285,59 @@ describe('loop analysis worker', () => {
     expect(publishedReport.match(/^source run: source-run$/gm)).toEqual([
       'source run: source-run',
     ]);
+  });
+
+  it('Given a job source directory contains a dot segment, When the worker publishes the report, Then all source references use the normalized directory', async () => {
+    const rootDirectory = mkdtempSync(join(tmpdir(), 'takt-loop-analysis-worker-normalized-'));
+    temporaryDirectories.push(rootDirectory);
+    const sourceRunDirectory = join(rootDirectory, '.takt', 'runs', 'source-run');
+    const rawSourceRunDirectory = `${sourceRunDirectory}${sep}.`;
+    const fullReport = 'Evidence: /Users/jane/normalized.md\n';
+    const context = await configureActualReportArtifacts(
+      rootDirectory,
+      'source-run',
+      fullReport,
+      {
+        ...baseJob,
+        output: 'pr-comment',
+        branch: 'takt/source-run',
+        publicationMarkerPath: join(rootDirectory, 'source.publication.json'),
+      },
+    );
+    const normalizedSourceRunDirectory = resolve(sourceRunDirectory);
+    mockReadLoopAnalysisJob.mockReturnValue({
+      ...baseJob,
+      projectCwd: rootDirectory,
+      sourceRunDirectory: rawSourceRunDirectory,
+      output: 'pr-comment',
+      branch: 'takt/source-run',
+      publicationMarkerPath: join(rootDirectory, 'source.publication.json'),
+    });
+    mockReadLoopAnalysisPublicationMarker.mockReturnValue('settled');
+
+    await executeLoopAnalysisJob(context.jobPath);
+
+    expect(mockRunLoopAnalysisWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
+      task: [
+        'Analyze the completed run in this absolute directory:',
+        normalizedSourceRunDirectory,
+        'Use its available session JSONL logs, trace, monitor data, and reports as evidence.',
+      ].join('\n'),
+    }));
+    expect(mockArchiveLoopAnalysisReport).toHaveBeenCalledWith(expect.objectContaining({
+      sourceRunDirectory: normalizedSourceRunDirectory,
+    }));
+    expect(readFileSync(context.archivedReportPath, 'utf8')).toBe(fullReport);
+    expect(JSON.parse(readFileSync(context.sourceMetadataPath, 'utf8'))).toMatchObject({
+      sourceRunDirectory: normalizedSourceRunDirectory,
+    });
+    const publishedReport = readFileSync(context.reportPath, 'utf8');
+    expect(publishedReport.match(/^source run: source-run$/gm)).toEqual([
+      'source run: source-run',
+    ]);
+    expect(mockCommentLoopAnalysisReportOnPr).toHaveBeenCalledWith(expect.objectContaining({
+      sourceRunSlug: 'source-run',
+    }));
   });
 
   it('Given a valid PR comment job finds no PR, When the report is saved, Then the private artifacts remain without PR metadata', async () => {

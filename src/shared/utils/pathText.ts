@@ -25,13 +25,6 @@ function shouldMaskPath(text: string, index: number, candidate: string): boolean
   ) {
     return false;
   }
-  if (
-    text.charAt(index - 1) === '>'
-    && candidate.startsWith('/')
-    && candidate.indexOf('/', 1) === -1
-  ) {
-    return false;
-  }
   if (candidate.startsWith('~/')) {
     return isPathBoundary(text, index);
   }

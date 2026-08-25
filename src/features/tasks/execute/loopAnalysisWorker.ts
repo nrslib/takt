@@ -1,5 +1,5 @@
 import { existsSync, lstatSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { initGitProvider } from '../../../infra/git/index.js';
 import { isDirectEntrypoint } from '../../../shared/utils/entrypoint.js';
@@ -29,10 +29,12 @@ const PUBLICATION_SETTLEMENT_TIMEOUT_MS = 10 * 60_000;
 
 export async function executeLoopAnalysisJob(jobPath: string): Promise<void> {
   const job = readLoopAnalysisJob(jobPath);
+  const sourceRunDirectory = resolve(job.sourceRunDirectory);
+  const sourceRunSlug = basename(sourceRunDirectory);
   const result = await runLoopAnalysisWorkflowExecution({
     task: [
       'Analyze the completed run in this absolute directory:',
-      job.sourceRunDirectory,
+      sourceRunDirectory,
       'Use its available session JSONL logs, trace, monitor data, and reports as evidence.',
     ].join('\n'),
     cwd: job.projectCwd,
@@ -55,9 +57,8 @@ export async function executeLoopAnalysisJob(jobPath: string): Promise<void> {
   if (!lstatSync(reportPath, { throwIfNoEntry: false })?.isFile()) {
     throw new Error('Loop analysis completed without a report');
   }
-  const sourceRunSlug = basename(job.sourceRunDirectory);
   const archive = archiveLoopAnalysisReport({
-    sourceRunDirectory: job.sourceRunDirectory,
+    sourceRunDirectory,
     projectCwd: job.projectCwd,
     analysisReportPath: reportPath,
     ...(job.branch === undefined ? {} : { branch: job.branch }),
