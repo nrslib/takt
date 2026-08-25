@@ -82,7 +82,7 @@ Select workflow:
     Research/
     Cancel
 
-対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /workflow（workflow変更）, /interaction（対話モード変更）, /provider（provider変更）, /model <value>（model変更）, /effort <value>（推論強度変更）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）
+対話モード - タスク内容を入力してください。準備ができたら /go で指示書を作成・実行します。
 
 > I want to add user authentication feature
 

@@ -299,9 +299,9 @@ describe('runTui', () => {
     expect(mockDisplayAndClearSessionState).toHaveBeenCalledWith('/repo', 'en');
     expect(tree.mounts.count).toBe(1);
     const intro = tree.conversationProps().initialEntries.map((entry) => entry.content).join('\n');
-    for (const command of ['/workflow', '/interaction', '/provider', '/model <value>', '/effort <value>']) {
-      expect(intro).toContain(command);
-    }
+    expect(intro).toBe(
+      'Interactive mode - describe your task. When ready, use /go to create the instruction and run it.',
+    );
 
     tree.conversationProps().onExit({ kind: 'result', result: { action: 'execute', task: 'do it' } }, { history: [], queue: [] });
     await expect(run).resolves.toEqual({

@@ -82,7 +82,7 @@ Select workflow:
     Research/
     Cancel
 
-Interactive mode - describe your task. Commands: /go (create instruction & run), /accept (use latest assistant response), /workflow (change workflow), /interaction (change interactive mode), /provider (change provider), /model <value> (change model), /effort <value> (change reasoning effort), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)
+Interactive mode - describe your task. When ready, use /go to create the instruction and run it.
 
 > I want to add user authentication feature
 

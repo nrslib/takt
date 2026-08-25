@@ -82,7 +82,7 @@ Select workflow:
     Research/
     Cancel
 
-交互模式 - 请描述任务。命令: /go（创建指令并运行）、/accept（采用最新助手回复）、/workflow（更改 workflow）、/interaction（更改交互模式）、/provider（更改 provider）、/model <value>（更改 model）、/effort <value>（更改推理强度）、/paste-image（附加剪贴板图片）、/resume（加载 session）、/cancel（退出）
+交互模式 - 请描述任务。准备好后，使用 /go 创建指令并运行。
 
 > I want to add user authentication feature
 

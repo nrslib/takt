@@ -131,7 +131,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
   ): TranscriptEntry[] {
     const entries: TranscriptEntry[] = [{
       role: 'system',
-      content: `${plan.strategy.introMessage} ${getLabel('interactive.ui.settingsCommands', options.lang)}`,
+      content: plan.strategy.introMessage,
     }];
     if (resumeNotice !== null) {
       entries.push({ role: 'system', content: resumeNotice });

@@ -13,9 +13,8 @@ interactive:
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   formalSpecPrompt: "形式仕様モード（Alloy, Quint）を有効にしますか？ 既定値は assistant.formal_spec で変更できます。"
   ui:
-    intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
-    introGrillMe: "Grill Meモード - 要件の判断分岐を1問ずつ掘り下げます。要件が固まるとアシスタントが /go を案内します。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
-    settingsCommands: "セッション設定: /workflow（workflow変更）, /interaction（対話モード変更）, /provider（provider変更）, /model <value>（model変更）, /effort <value>（推論強度変更）"
+    intro: "対話モード - タスク内容を入力してください。準備ができたら /go で指示書を作成・実行します。"
+    introGrillMe: "Grill Meモード - 推奨案付きの質問を1問ずつ行い、要件を固めます。準備ができたら /go で指示書を作成・実行します。"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
     thinking: "アシスタントが応答を作成中..."
