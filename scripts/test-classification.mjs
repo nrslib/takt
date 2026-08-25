@@ -147,6 +147,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/traced-config-runtime-bridge-mock-regression.test.ts',
   'src/__tests__/usageEventsSpanProcessor.test.ts',
   'src/__tests__/vcs-provider-config.test.ts',
+  'src/__tests__/web-ui.integration.test.ts',
   'src/__tests__/work-requirement-estimator-claude.test.ts',
   'src/__tests__/workflow-builtin-toggle.test.ts',
   'src/__tests__/workflow-category-config.test.ts',
@@ -345,7 +346,6 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-provider-aux-entry.integration.test.ts',
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
   'src/__tests__/runtime-provider-nonworkflow-seam.integration.test.ts',
-  'src/__tests__/web-ui.integration.test.ts',
 ]);
 
 export const lightIntegrationTestFiles = Object.freeze([

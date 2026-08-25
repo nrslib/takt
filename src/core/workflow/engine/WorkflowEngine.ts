@@ -254,10 +254,10 @@ export class WorkflowEngine extends EventEmitter {
       this.sharedRuntime.resumeArtifactOccurrenceIndex === undefined
       && this.options.resumeSource?.resumeMode === 'requeue'
     ) {
-      const manifest = readResumeReportSnapshotManifest(this.cwd, runPaths.slug);
+      const manifest = readResumeReportSnapshotManifest(this.cwd, runPaths.slug, this.options.runPathsDirectory);
       const sourceResumePoint = manifest === undefined
         ? undefined
-        : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug)?.resumePoint;
+        : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug, undefined, this.options.runPathsDirectory)?.resumePoint;
       if (manifest !== undefined && sourceResumePoint === undefined) {
         log.warn(
           'Requeue artifact occurrence restoration is unavailable because source run metadata or resume point is missing',
@@ -279,7 +279,13 @@ export class WorkflowEngine extends EventEmitter {
     this.maxSteps = this.sharedRuntime.maxSteps;
     this.resumeStackPrefix = this.options.resumeStackPrefix ?? [];
     this.runPaths = runPaths;
-    this.reportDir = this.runPaths.reportsRel;
+    // Local metadata keeps its historical project-relative path. Central
+    // execution must expose the state-owned absolute path to engine services;
+    // otherwise a service that resolves reportDir against cwd writes into the
+    // project/worktree instead of the central run root.
+    this.reportDir = options.runPathsDirectory === undefined
+      ? this.runPaths.reportsRel
+      : this.runPaths.reportsAbs;
     applyRuntimeEnvironment(this.cwd, this.config, 'init');
     try {
       validateWorkflowConfig(this.config, this.options);
@@ -525,6 +531,7 @@ export class WorkflowEngine extends EventEmitter {
       targetReportDirectory: this.runPaths.reportsAbs,
       reviewReportNames: reportNameResult.reportNames,
       discoveryFailures: recoverableFailures,
+      ...(this.options.runPathsDirectory === undefined ? {} : { runsDirectory: this.options.runPathsDirectory }),
     };
     try {
       const result = inheritReviewReports(inheritanceOptions);
@@ -545,6 +552,7 @@ export class WorkflowEngine extends EventEmitter {
         currentRunSlug: this.runPaths.slug,
         targetReportDirectory: this.runPaths.reportsAbs,
         reviewReportNames: [],
+        ...(this.options.runPathsDirectory === undefined ? {} : { runsDirectory: this.options.runPathsDirectory }),
       };
       const result = {
         ...(resumeSource.sourceRunSlug ? { sourceRunSlug: resumeSource.sourceRunSlug } : {}),

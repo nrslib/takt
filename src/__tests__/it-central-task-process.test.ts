@@ -126,4 +126,36 @@ describe('central task process ownership', () => {
       fingerprint: project.fingerprint,
     })).resolves.toBeDefined();
   });
+
+  it('does not recover a central lock owned by a live process', async () => {
+    const { globalConfigDirectory, project, repository } = await setup();
+    const lockPath = join(repository.paths.locksDirectory, 'state.lock');
+    const processIdentity = getProcessIdentity(process.pid);
+    await writeFile(lockPath, JSON.stringify({
+      version: 1,
+      ownerToken: 'live-owner-token',
+      pid: process.pid,
+      ...(processIdentity === undefined ? {} : { processIdentity }),
+      inode: 0,
+      startedAt: new Date(0).toISOString(),
+    }));
+    const lockStat = await lstat(lockPath);
+    await writeFile(lockPath, JSON.stringify({
+      version: 1,
+      ownerToken: 'live-owner-token',
+      pid: process.pid,
+      ...(processIdentity === undefined ? {} : { processIdentity }),
+      inode: lockStat.ino,
+      startedAt: new Date(0).toISOString(),
+    }));
+
+    await expect(CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    })).rejects.toThrow(/central state lock is busy/i);
+  });
 });

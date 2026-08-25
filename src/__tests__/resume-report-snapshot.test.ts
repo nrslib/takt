@@ -117,7 +117,7 @@ import {
   RESUME_ARTIFACTS_FILE_NAME,
   ResumeReportSnapshotSourceError,
 } from '../core/workflow/run/resume-report-snapshot.js';
-import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory } from '../core/workflow/run/run-paths.js';
 import { writeReportFile } from '../core/workflow/report-writer.js';
 
 const TEST_TMPDIR = realpathSync(tmpdir());
@@ -224,6 +224,25 @@ describe('inheritResumeReportSnapshot', () => {
     // manifest（SSOT）は新 run 直下に保存される。
     const persisted = readResumeReportSnapshotManifest(cwd, 'target-run');
     expect(persisted).toEqual(manifest);
+  });
+
+  it('uses the supplied central runs directory for resume snapshots', () => {
+    const centralRunsDirectory = join(cwd, 'central-state', 'runs');
+    const sourcePaths = buildRunPathsFromRunsDirectory(centralRunsDirectory, 'source-run');
+    mkdirSync(sourcePaths.reportsAbs, { recursive: true });
+    writeFileSync(join(sourcePaths.reportsAbs, 'plan.md'), 'central plan');
+
+    const manifest = inheritResumeReportSnapshot({
+      cwd,
+      runsDirectory: centralRunsDirectory,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+    });
+
+    const targetPaths = buildRunPathsFromRunsDirectory(centralRunsDirectory, 'target-run');
+    expect(readFileSync(join(targetPaths.reportsAbs, 'plan.md'), 'utf8')).toBe('central plan');
+    expect(existsSync(join(cwd, '.takt', 'runs', 'target-run'))).toBe(false);
+    expect(readResumeReportSnapshotManifest(cwd, 'target-run', centralRunsDirectory)).toEqual(manifest);
   });
 
   it('does not inherit internal or reserved report paths', () => {

@@ -9,7 +9,7 @@ import {
   isAgentFailureCategory,
   type AgentFailureCategory,
 } from '../../../shared/types/agent-failure.js';
-import { buildRunPaths } from './run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory } from './run-paths.js';
 import {
   decodePullRequestContext,
   type PullRequestContext,
@@ -404,12 +404,17 @@ function optionalPositiveInteger(
   return { [key]: value as number };
 }
 
-export function readRunMetaBySlug(cwd: string, slug: string, onWarning?: RunMetaWarningHandler): RunMeta | null {
+export function readRunMetaBySlug(
+  cwd: string,
+  slug: string,
+  onWarning?: RunMetaWarningHandler,
+  runsDirectory?: string,
+): RunMeta | null {
   if (!isValidReportDirName(slug)) {
     return null;
   }
 
-  const runsDir = resolve(cwd, '.takt', 'runs');
+  const runsDir = runsDirectory === undefined ? resolve(cwd, '.takt', 'runs') : resolve(runsDirectory);
   const metaPath = resolve(runsDir, slug, 'meta.json');
   if (!isPathInside(runsDir, metaPath)) {
     return null;
@@ -425,7 +430,9 @@ export function readRunMetaBySlug(cwd: string, slug: string, onWarning?: RunMeta
     );
   }
 
-  const runPaths = buildRunPaths(cwd, slug);
+  const runPaths = runsDirectory === undefined
+    ? buildRunPaths(cwd, slug)
+    : buildRunPathsFromRunsDirectory(runsDirectory, slug);
   return {
     ...meta,
     runSlug: slug,

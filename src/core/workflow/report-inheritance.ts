@@ -29,6 +29,7 @@ interface ReviewReportInheritanceResult {
 
 interface InheritReviewReportsOptions {
   readonly cwd: string;
+  readonly runsDirectory?: string;
   readonly sourceRunSlug?: string;
   readonly currentRunSlug: string;
   readonly targetReportDirectory: string;
@@ -47,8 +48,8 @@ interface CandidateSearchResult {
   readonly correspondenceFailure?: string;
 }
 
-function reportRoot(cwd: string, runSlug: string): string {
-  return resolve(cwd, '.takt', 'runs', runSlug, 'reports');
+function reportRoot(cwd: string, runSlug: string, runsDirectory?: string): string {
+  return resolve(runsDirectory ?? resolve(cwd, '.takt', 'runs'), runSlug, 'reports');
 }
 
 function normalizeReportPath(reportName: string): string {
@@ -138,7 +139,7 @@ function validateCandidate(candidate: Candidate, sourceReportDirectory: string):
 
 function resolveSourceReportDirectory(options: InheritReviewReportsOptions): string | undefined {
   if (!options.sourceRunSlug || !isValidReportDirName(options.sourceRunSlug) || options.sourceRunSlug === options.currentRunSlug) return undefined;
-  const runsDirectory = resolve(options.cwd, '.takt', 'runs');
+  const runsDirectory = resolve(options.runsDirectory ?? resolve(options.cwd, '.takt', 'runs'));
   const sourceRunDirectory = resolve(runsDirectory, options.sourceRunSlug);
   const sourceReportDirectory = join(sourceRunDirectory, 'reports');
   if (!isPathInside(runsDirectory, sourceRunDirectory)) return undefined;
@@ -152,14 +153,20 @@ function resolveSourceReportDirectory(options: InheritReviewReportsOptions): str
   return sourceReportDirectory;
 }
 
-function ensureSafeDestinationDirectory(cwd: string, currentRunSlug: string, targetDirectory: string): void {
-  const root = reportRoot(cwd, currentRunSlug);
+function ensureSafeDestinationDirectory(
+  cwd: string,
+  currentRunSlug: string,
+  targetDirectory: string,
+  runsDirectory?: string,
+): void {
+  const root = reportRoot(cwd, currentRunSlug, runsDirectory);
   const resolvedTarget = resolve(targetDirectory);
   if (!isPathInside(root, resolvedTarget) && resolvedTarget !== root) {
     throw new Error('target_report_directory_outside_current_run');
   }
-  const segments = relative(resolve(cwd), resolvedTarget).split(sep).filter(Boolean);
-  let current = resolve(cwd);
+  const trustedRoot = runsDirectory === undefined ? resolve(cwd) : resolve(runsDirectory);
+  const segments = relative(trustedRoot, resolvedTarget).split(sep).filter(Boolean);
+  let current = trustedRoot;
   for (const segment of segments) {
     current = join(current, segment);
     if (!existsSync(current)) {
@@ -175,7 +182,7 @@ function ensureSafeDestinationDirectory(cwd: string, currentRunSlug: string, tar
 }
 
 function targetNamespace(options: InheritReviewReportsOptions): string[] {
-  return relative(reportRoot(options.cwd, options.currentRunSlug), resolve(options.targetReportDirectory))
+  return relative(reportRoot(options.cwd, options.currentRunSlug, options.runsDirectory), resolve(options.targetReportDirectory))
     .split(sep)
     .filter(Boolean);
 }
@@ -189,7 +196,7 @@ export function inheritReviewReports(options: InheritReviewReportsOptions): Revi
     skipped.push({ reportName: '*', reason: `report_name_limit_exceeded:${MAX_REPORT_ENTRIES}` });
   }
   try {
-    ensureSafeDestinationDirectory(options.cwd, options.currentRunSlug, options.targetReportDirectory);
+    ensureSafeDestinationDirectory(options.cwd, options.currentRunSlug, options.targetReportDirectory, options.runsDirectory);
   } catch (error) {
     for (const reportName of names) skipped.push({ reportName, reason: `target_unavailable:${getErrorMessage(error)}` });
     return buildResult(options, undefined, copied, skipped);
@@ -238,7 +245,7 @@ export function inheritReviewReports(options: InheritReviewReportsOptions): Revi
       skipped.push({ reportName, reason: 'invalid_report_name', sourcePath: candidate.path }); continue;
     }
     try {
-      ensureSafeDestinationDirectory(options.cwd, options.currentRunSlug, join(targetPath, '..'));
+      ensureSafeDestinationDirectory(options.cwd, options.currentRunSlug, join(targetPath, '..'), options.runsDirectory);
       copyFileSync(candidate.path, targetPath, constants.COPYFILE_EXCL);
       chmodSync(targetPath, lstatSync(targetPath).mode | 0o200);
       copied.push({ reportName, sourcePath: candidate.path, targetPath });
@@ -272,6 +279,6 @@ function buildResult(
 }
 
 export function writeReviewReportInheritanceDiagnostic(options: InheritReviewReportsOptions, result: ReviewReportInheritanceResult): void {
-  ensureSafeDestinationDirectory(options.cwd, options.currentRunSlug, options.targetReportDirectory);
+  ensureSafeDestinationDirectory(options.cwd, options.currentRunSlug, options.targetReportDirectory, options.runsDirectory);
   writeFileSync(join(options.targetReportDirectory, 'review-report-inheritance.json'), JSON.stringify(result, null, 2), { flag: 'wx' });
 }

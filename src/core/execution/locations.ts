@@ -22,7 +22,7 @@ export interface StatePaths {
   readonly runsRootFingerprint?: Readonly<{ readonly dev: number; readonly ino: number }>;
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 function assertAbsolute(path: string, label: string): string {
   if (!isAbsolute(path)) throw new Error(`${label} must be an absolute path`);
@@ -36,17 +36,21 @@ function assertAbsolute(path: string, label: string): string {
 export function resolveStatePaths(globalConfigDirectory: string, stateId: string): StatePaths {
   const globalRoot = assertAbsolute(globalConfigDirectory, 'globalConfigDirectory');
   if (!UUID_PATTERN.test(stateId)) throw new Error('stateId is invalid');
-  const stateDirectory = resolve(globalRoot, 'state', 'projects', stateId);
+  return resolveStatePathsFromDirectory(resolve(globalRoot, 'state', 'projects', stateId));
+}
+
+export function resolveStatePathsFromDirectory(stateDirectory: string): StatePaths {
+  const resolvedStateDirectory = assertAbsolute(stateDirectory, 'stateDirectory');
   return {
-    stateDirectory,
-    stateFile: resolve(stateDirectory, 'state.json'),
-    tasksFile: resolve(stateDirectory, 'tasks.yaml'),
-    tasksDirectory: resolve(stateDirectory, 'tasks'),
-    runsDirectory: resolve(stateDirectory, 'runs'),
-    sessionsDirectory: resolve(stateDirectory, 'sessions'),
-    worktreeMetadataDirectory: resolve(stateDirectory, 'worktree-metadata'),
-    eventsDirectory: resolve(stateDirectory, 'events'),
-    locksDirectory: resolve(stateDirectory, 'locks'),
+    stateDirectory: resolvedStateDirectory,
+    stateFile: resolve(resolvedStateDirectory, 'state.json'),
+    tasksFile: resolve(resolvedStateDirectory, 'tasks.yaml'),
+    tasksDirectory: resolve(resolvedStateDirectory, 'tasks'),
+    runsDirectory: resolve(resolvedStateDirectory, 'runs'),
+    sessionsDirectory: resolve(resolvedStateDirectory, 'sessions'),
+    worktreeMetadataDirectory: resolve(resolvedStateDirectory, 'worktree-metadata'),
+    eventsDirectory: resolve(resolvedStateDirectory, 'events'),
+    locksDirectory: resolve(resolvedStateDirectory, 'locks'),
   };
 }
 

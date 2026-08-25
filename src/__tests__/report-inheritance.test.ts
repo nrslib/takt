@@ -142,6 +142,28 @@ describe('inheritReviewReports', () => {
     expect(existsSync(join(targetReportDirectory(projectDirectory), 'run-metadata.json'))).toBe(false);
   });
 
+  it('should inherit review reports from a central runs directory without using project .takt', () => {
+    const projectDirectory = createProjectDirectory();
+    const centralRunsDirectory = join(projectDirectory, 'central-state', 'runs');
+    const sourceDirectory = join(centralRunsDirectory, sourceRunSlug, 'reports');
+    const targetDirectory = join(centralRunsDirectory, currentRunSlug, 'reports');
+    mkdirSync(sourceDirectory, { recursive: true });
+    writeFileSync(join(sourceDirectory, reviewReportNames[0]), 'central review', 'utf8');
+
+    const result = inheritReviewReports({
+      cwd: projectDirectory,
+      runsDirectory: centralRunsDirectory,
+      sourceRunSlug,
+      currentRunSlug,
+      targetReportDirectory: targetDirectory,
+      reviewReportNames: [reviewReportNames[0]],
+    });
+
+    expect(result.status).toBe('copied');
+    expect(readFileSync(join(targetDirectory, reviewReportNames[0]), 'utf8')).toBe('central review');
+    expect(existsSync(join(projectDirectory, '.takt', 'runs'))).toBe(false);
+  });
+
   it('should record partial status and retain available reports when another review report is missing', () => {
     // Given
     const projectDirectory = createProjectDirectory();

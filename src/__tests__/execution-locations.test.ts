@@ -39,7 +39,7 @@ describe('execution locations', () => {
     expect(new ProjectLocalStateLocator().paths(locations).tasksFile).toBe(join(project, '.takt', 'tasks.yaml'));
   });
 
-  it('uses canonical path lookup with persistent state ids and rejects fingerprint replacement', async () => {
+  it('uses canonical path lookup with persistent state ids', async () => {
     const global = await mkdtemp(join(tmpdir(), 'takt-locations-registry-'));
     const parent = await mkdtemp(join(tmpdir(), 'takt-locations-parent-'));
     const project = join(parent, 'project');

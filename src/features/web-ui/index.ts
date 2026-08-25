@@ -27,7 +27,9 @@ export async function startWebUi(options: StartWebUiOptions): Promise<StartedWeb
         request,
       }),
     });
-    server.once('close', () => void lock.release());
+    server.once('close', () => {
+      void lock.release().catch(() => undefined);
+    });
     const origin = await listenWebUiServer(server, options.port);
 
     const close = () => server?.close();

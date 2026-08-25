@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildChildProcessEnv,
   enterCentralExecution,
@@ -36,6 +36,38 @@ describe('central child process environment boundary', () => {
       restore();
       if (previous === undefined) delete process.env.TAKT_CONFIG_DIR;
       else process.env.TAKT_CONFIG_DIR = previous;
+    }
+  });
+
+  it('strips central variables case-insensitively on Windows only', () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    const restore = enterCentralExecution();
+    try {
+      expect(buildChildProcessEnv({
+        takt_config_dir: '/private/central',
+        TaKt_CeNtRaL_OwNeR_ToKeN: 'secret-token',
+        ProviderCanary: 'kept',
+      })).toEqual({ ProviderCanary: 'kept' });
+    } finally {
+      restore();
+      platform.mockRestore();
+    }
+  });
+
+  it('keeps mixed-case lookalikes on case-sensitive platforms', () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    const restore = enterCentralExecution();
+    try {
+      expect(buildChildProcessEnv({
+        takt_config_dir: '/private/central',
+        TaKt_CeNtRaL_OwNeR_ToKeN: 'kept',
+      })).toEqual({
+        takt_config_dir: '/private/central',
+        TaKt_CeNtRaL_OwNeR_ToKeN: 'kept',
+      });
+    } finally {
+      restore();
+      platform.mockRestore();
     }
   });
 });

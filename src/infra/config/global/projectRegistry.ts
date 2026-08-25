@@ -12,10 +12,10 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { UUID_PATTERN } from '../../../core/execution/locations.js';
 
 const REGISTRY_VERSION = 2;
 const LOCATION_ID_PATTERN = /^[a-f0-9]{64}$/u;
-const STATE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export interface DirectoryFingerprint {
   readonly dev: number;
@@ -94,7 +94,7 @@ function parseRegistration(value: unknown, expectedLocationId: string): StoredPr
     locationId !== expectedLocationId
     || !LOCATION_ID_PATTERN.test(locationId)
     || projectIdForCanonicalDirectory(canonicalDirectory) !== locationId
-    || !STATE_ID_PATTERN.test(stateId)
+    || !UUID_PATTERN.test(stateId)
   ) {
     throw new Error('registration identity does not match its path');
   }

@@ -41,6 +41,18 @@ export interface RunPaths {
   readonly workflowBundleResourcesAbs: string;
 }
 
+/**
+ * Resolve the report directory used by workflow services.
+ *
+ * Local runs expose a project-relative report path for the persisted metadata
+ * contract, while central runs expose the state-owned absolute path to the
+ * engine services.  Keep both forms valid at this boundary instead of
+ * allowing callers to concatenate an absolute central path with cwd.
+ */
+export function resolveReportDirectory(cwd: string, reportDir: string): string {
+  return isAbsolute(reportDir) ? reportDir : join(cwd, reportDir);
+}
+
 function joinRel(base: string, namespace: string[] | undefined): string {
   return namespace && namespace.length > 0
     ? join(base, ...namespace)

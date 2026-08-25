@@ -102,8 +102,9 @@ describe('central task CAS repository', () => {
     const started = first.kind === 'started' ? first : second;
     const reused = first.kind === 'reused' ? first : second;
     expect(reused.active?.executionId).toBe(started.executionId);
+    expect(started.ownerToken).toBeTruthy();
     const raw = await readFile(repository.paths.tasksFile, 'utf8');
-    expect(raw).not.toContain(started.ownerToken ?? 'never');
+    expect(raw).not.toContain(started.ownerToken!);
     await expect(repository.adopt({
       taskId: started.task.taskId,
       generation: started.task.generation,

@@ -167,9 +167,10 @@ describe('createLoopAnalysisScheduler', () => {
       else process.env.TAKT_CENTRAL_OWNER_TOKEN = previousOwnerToken;
     }
 
-    const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
-    expect(spawnOptions?.env?.TAKT_CONFIG_DIR).toBeUndefined();
-    expect(spawnOptions?.env?.TAKT_CENTRAL_OWNER_TOKEN).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const spawnOptions = mockSpawn.mock.calls[0]![2] as { env: NodeJS.ProcessEnv };
+    expect(spawnOptions.env.TAKT_CONFIG_DIR).toBeUndefined();
+    expect(spawnOptions.env.TAKT_CENTRAL_OWNER_TOKEN).toBeUndefined();
   });
 
   it('Given terminal dispatch is requested more than once, When schedulers target the same source run, Then only one job and worker are created', () => {

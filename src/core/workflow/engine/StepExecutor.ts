@@ -62,6 +62,7 @@ import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/in
 import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
+import { resolveReportDirectory } from '../run/run-paths.js';
 import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { waitForStepDelay } from './step-delay.js';
 import { parseStructuredOutputObject } from '../../../agents/structured-caller/shared.js';
@@ -1206,7 +1207,7 @@ export class StepExecutor {
       transaction,
     );
     const workflowSteps = this.deps.getWorkflowSteps();
-    const reportDir = join(this.deps.getCwd(), this.deps.getReportDir());
+    const reportDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
     // workflow_call の子（subworkflows 名前空間）の {report:X} が親成果物へ
     // read-only フォールバックするための reports ルート。engine の runPaths から
     // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
@@ -1923,7 +1924,7 @@ export class StepExecutor {
   ): void {
     if (!step.outputContracts || step.outputContracts.length === 0) return;
     const context = this.createReportExecutionContext(execution);
-    const baseDir = join(this.deps.getCwd(), this.deps.getReportDir());
+    const baseDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
 
     for (const entry of step.outputContracts) {
       const fileName = entry.name;

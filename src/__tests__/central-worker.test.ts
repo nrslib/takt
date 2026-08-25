@@ -13,19 +13,38 @@ vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({
   runWorkflowExecution: vi.fn(async () => ({ success: true })),
 }));
 
+async function setupWorkerFixture() {
+  const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
+  const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
+  const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+  const repository = await CentralTaskRepository.open({
+    globalConfigDirectory,
+    stateId: project.stateId,
+    locationId: project.locationId,
+    canonicalDirectory: project.canonicalDirectory,
+    displayName: project.displayName,
+    fingerprint: project.fingerprint,
+  });
+  return { globalConfigDirectory, projectDirectory, project, repository };
+}
+
+async function withCentralConfig<T>(
+  globalConfigDirectory: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
+  process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
+  try {
+    return await action();
+  } finally {
+    if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
+    else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
+  }
+}
+
 describe('central Web UI worker', () => {
   it('terminalizes an adopted task when the initial running metadata fails', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
-    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
-    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
-    const repository = await CentralTaskRepository.open({
-      globalConfigDirectory,
-      stateId: project.stateId,
-      locationId: project.locationId,
-      canonicalDirectory: project.canonicalDirectory,
-      displayName: project.displayName,
-      fingerprint: project.fingerprint,
-    });
+    const { globalConfigDirectory, project, repository } = await setupWorkerFixture();
     const reserved = await repository.enqueueAndClaim({ task: 'metadata failure', workflow: 'default', worktree: false });
     const writeRunMeta = vi.spyOn(CentralTaskRepository.prototype, 'writeRunMeta')
       .mockRejectedValueOnce(new Error('running metadata failed'));
@@ -48,28 +67,16 @@ describe('central Web UI worker', () => {
   });
 
   it('commits a mock one-shot run entirely below central state', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
-    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
+    const { globalConfigDirectory, projectDirectory, project, repository } = await setupWorkerFixture();
     await mkdir(join(projectDirectory, '.takt'), { recursive: true });
     await writeFile(join(projectDirectory, '.takt', 'sentinel'), 'project-local state');
     const projectLocalSnapshot = await readFile(join(projectDirectory, '.takt', 'sentinel'), 'utf8');
-    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
-    const repository = await CentralTaskRepository.open({
-      globalConfigDirectory,
-      stateId: project.stateId,
-      locationId: project.locationId,
-      canonicalDirectory: project.canonicalDirectory,
-      displayName: project.displayName,
-      fingerprint: project.fingerprint,
-    });
     const reserved = await repository.enqueueAndClaim({
       task: 'central mock task',
       workflow: 'default',
       worktree: false,
     });
-    const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
-    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
-    try {
+    await withCentralConfig(globalConfigDirectory, async () => {
       await runCentralTask({
         globalConfigDirectory,
         stateId: project.stateId,
@@ -78,10 +85,7 @@ describe('central Web UI worker', () => {
         executionId: reserved.executionId,
         ownerToken: reserved.ownerToken,
       });
-    } finally {
-      if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
-      else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
-    }
+    });
 
     await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'completed' });
     await expect(readFile(join(projectDirectory, '.takt', 'sentinel'), 'utf8')).resolves.toBe(projectLocalSnapshot);
@@ -94,25 +98,13 @@ describe('central Web UI worker', () => {
   });
 
   it('claims and spawns exactly one successor from the central pending queue', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
-    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
-    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
-    const repository = await CentralTaskRepository.open({
-      globalConfigDirectory,
-      stateId: project.stateId,
-      locationId: project.locationId,
-      canonicalDirectory: project.canonicalDirectory,
-      displayName: project.displayName,
-      fingerprint: project.fingerprint,
-    });
+    const { globalConfigDirectory, project, repository } = await setupWorkerFixture();
     const first = await repository.enqueueOrReuse({ task: 'first', workflow: 'default', worktree: false });
     const queued = await repository.enqueueOrReuse({ task: 'second', workflow: 'default', worktree: false });
     expect(first.kind).toBe('started');
     expect(queued.kind).toBe('reused');
-    const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
-    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
     let spawnCount = 0;
-    try {
+    await withCentralConfig(globalConfigDirectory, async () => {
       await runCentralTask({
         globalConfigDirectory,
         stateId: project.stateId,
@@ -138,16 +130,15 @@ describe('central Web UI worker', () => {
               executionId: args[args.indexOf('--execution-id') + 1]!,
               ownerToken: options.env?.TAKT_CENTRAL_OWNER_TOKEN ?? '',
               pid: 7777,
-            });
-            child.emit('spawn');
+            }).then(
+              () => child.emit('spawn'),
+              (error: unknown) => child.emit('error', error),
+            ).catch(() => undefined);
           });
           return child;
         }) as never,
       });
-    } finally {
-      if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
-      else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
-    }
+    });
 
     expect(spawnCount).toBe(1);
     await expect(repository.readTask(queued.task.taskId)).resolves.toMatchObject({
@@ -158,22 +149,10 @@ describe('central Web UI worker', () => {
   });
 
   it('terminalizes a successor reservation when detached spawn fails', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
-    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
-    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
-    const repository = await CentralTaskRepository.open({
-      globalConfigDirectory,
-      stateId: project.stateId,
-      locationId: project.locationId,
-      canonicalDirectory: project.canonicalDirectory,
-      displayName: project.displayName,
-      fingerprint: project.fingerprint,
-    });
+    const { globalConfigDirectory, project, repository } = await setupWorkerFixture();
     const first = await repository.enqueueOrReuse({ task: 'first', workflow: 'default', worktree: false });
     const queued = await repository.enqueueOrReuse({ task: 'second', workflow: 'default', worktree: false });
-    const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
-    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
-    try {
+    await withCentralConfig(globalConfigDirectory, async () => {
       await expect(runCentralTask({
         globalConfigDirectory,
         stateId: project.stateId,
@@ -182,10 +161,7 @@ describe('central Web UI worker', () => {
         executionId: first.executionId!,
         ownerToken: first.ownerToken!,
       }, { spawnProcess: () => { throw new Error('successor spawn failed'); } })).rejects.toThrow('successor spawn failed');
-    } finally {
-      if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
-      else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
-    }
+    });
     await expect(repository.readTask(queued.task.taskId)).resolves.toMatchObject({
       status: 'failed',
       failure: { code: 'spawn_failed' },
@@ -193,22 +169,10 @@ describe('central Web UI worker', () => {
   });
 
   it('terminalizes a successor whose child exits before adoption', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
-    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
-    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
-    const repository = await CentralTaskRepository.open({
-      globalConfigDirectory,
-      stateId: project.stateId,
-      locationId: project.locationId,
-      canonicalDirectory: project.canonicalDirectory,
-      displayName: project.displayName,
-      fingerprint: project.fingerprint,
-    });
+    const { globalConfigDirectory, project, repository } = await setupWorkerFixture();
     const first = await repository.enqueueOrReuse({ task: 'first', workflow: 'default', worktree: false });
     const queued = await repository.enqueueOrReuse({ task: 'second', workflow: 'default', worktree: false });
-    const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
-    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
-    try {
+    await withCentralConfig(globalConfigDirectory, async () => {
       await expect(runCentralTask({
         globalConfigDirectory,
         stateId: project.stateId,
@@ -234,10 +198,7 @@ describe('central Web UI worker', () => {
           return child;
         }) as never,
       })).rejects.toThrow(/exited before adopting/i);
-    } finally {
-      if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
-      else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
-    }
+    });
     await expect(repository.readTask(queued.task.taskId)).resolves.toMatchObject({
       status: 'failed',
       failure: { code: 'spawn_failed' },
@@ -245,17 +206,7 @@ describe('central Web UI worker', () => {
   });
 
   it('does not steal a live unknown child when successor startup times out', async () => {
-    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
-    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
-    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
-    const repository = await CentralTaskRepository.open({
-      globalConfigDirectory,
-      stateId: project.stateId,
-      locationId: project.locationId,
-      canonicalDirectory: project.canonicalDirectory,
-      displayName: project.displayName,
-      fingerprint: project.fingerprint,
-    });
+    const { project, repository } = await setupWorkerFixture();
     const reserved = await repository.enqueueAndClaim({ task: 'timeout', workflow: 'default', worktree: false });
     const child = Object.assign(new EventEmitter(), {
       pid: 7799,

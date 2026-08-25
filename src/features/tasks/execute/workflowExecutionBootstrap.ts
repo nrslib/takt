@@ -224,6 +224,7 @@ function resolveMaxStepsForRestoredIteration(
 function resolveOperationJournalSourceClaims(
   cwd: string,
   immediateSourceRunSlug: string,
+  runsDirectory?: string,
 ): {
   readonly journalRunSlug: string;
   readonly claimTokens: ReadonlySet<string>;
@@ -244,7 +245,7 @@ function resolveOperationJournalSourceClaims(
       );
     }
     visited.add(sourceRunSlug);
-    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug);
+    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug, undefined, runsDirectory);
     if (sourceMeta === null) {
       throw new OperationLineageUnavailableError(
         `Resume source run "${sourceRunSlug}" is missing`,
@@ -290,6 +291,7 @@ export function resolveWorkflowExecutionResumeLineage(
   cwd: string,
   runSlug: string,
   resumeSource: WorkflowExecutionOptions['resumeSource'],
+  runsDirectory?: string,
 ): WorkflowExecutionResumeLineage {
   const sourceRunSlug = resumeSource?.sourceRunSlug;
   if (resumeSource === undefined || sourceRunSlug === undefined) {
@@ -304,7 +306,7 @@ export function resolveWorkflowExecutionResumeLineage(
   }
 
   try {
-    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource, runsDirectory);
   } catch (error) {
     if (!(error instanceof OperationLineageUnavailableError)) {
       throw error;
@@ -329,6 +331,7 @@ export function resolveWorkflowExecutionResumeLineage(
 export function resolveWorkflowExecutionResumeSourceLineage(
   cwd: string,
   resumeSource: NonNullable<WorkflowExecutionOptions['resumeSource']>,
+  runsDirectory?: string,
 ): WorkflowExecutionResumeLineage {
   const sourceRunSlug = resumeSource.sourceRunSlug;
   if (sourceRunSlug === undefined) {
@@ -337,7 +340,7 @@ export function resolveWorkflowExecutionResumeSourceLineage(
     );
   }
 
-  const sourceClaims = resolveOperationJournalSourceClaims(cwd, sourceRunSlug);
+  const sourceClaims = resolveOperationJournalSourceClaims(cwd, sourceRunSlug, runsDirectory);
   return {
     sourceRunSlug,
     artifactResumeSource: resumeSource,
@@ -441,6 +444,7 @@ export async function createWorkflowExecutionBootstrap(
         ? undefined
         : buildResumeReportSnapshotConsumerEntry({
           cwd,
+          ...(options.runPathsDirectory === undefined ? {} : { runsDirectory: options.runPathsDirectory }),
           projectCwd,
           sourceRunSlug,
           workflow: workflowConfig,
@@ -449,6 +453,7 @@ export async function createWorkflowExecutionBootstrap(
         });
       resumeArtifactsManifest = inheritResumeReportSnapshot({
         cwd,
+        ...(options.runPathsDirectory === undefined ? {} : { runsDirectory: options.runPathsDirectory }),
         sourceRunSlug,
         targetRunSlug: runSlug,
         ...(resumeReportConsumer === undefined

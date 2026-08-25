@@ -6,6 +6,10 @@
 const CENTRAL_ENV_PREFIX = 'TAKT_CENTRAL_';
 let centralExecutionDepth = 0;
 
+function normalizedEnvironmentKey(key: string): string {
+  return process.platform === 'win32' ? key.toUpperCase() : key;
+}
+
 export function enterCentralExecution(): () => void {
   centralExecutionDepth += 1;
   return () => {
@@ -23,9 +27,11 @@ export function buildChildProcessEnv(
 ): NodeJS.ProcessEnv {
   const env = { ...source };
   if (options.centralExecution === true || isCentralExecution()) {
-    delete env.TAKT_CONFIG_DIR;
     for (const key of Object.keys(env)) {
-      if (key.startsWith(CENTRAL_ENV_PREFIX)) delete env[key];
+      const normalizedKey = normalizedEnvironmentKey(key);
+      if (normalizedKey === 'TAKT_CONFIG_DIR' || normalizedKey.startsWith(CENTRAL_ENV_PREFIX)) {
+        delete env[key];
+      }
     }
   }
   return env;

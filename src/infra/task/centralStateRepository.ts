@@ -14,8 +14,7 @@ import {
 } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import type { ExecutionLocations, StatePaths } from '../../core/execution/locations.js';
-import { resolveStatePaths } from '../../core/execution/locations.js';
+import { resolveStatePaths, UUID_PATTERN, type ExecutionLocations, type StatePaths } from '../../core/execution/locations.js';
 import { getProcessIdentity, isProcessAlive, sameProcessIdentity, type ProcessIdentity } from './process.js';
 import {
   projectIdForCanonicalDirectory,
@@ -31,7 +30,6 @@ const LOCK_TIMEOUT_MS = 5_000;
 // time-based recovery exception; running tasks are recovered only by PID and
 // process identity, never by elapsed time.
 const STARTING_RESERVATION_TIMEOUT_MS = 10_000;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export type CentralTaskStatus = 'pending' | 'starting' | 'running' | 'completed' | 'failed';
 export type CentralTaskOrigin = 'web';

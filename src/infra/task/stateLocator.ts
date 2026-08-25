@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { ExecutionLocations, StatePaths } from '../../core/execution/locations.js';
+import { resolveStatePathsFromDirectory, type ExecutionLocations, type StatePaths } from '../../core/execution/locations.js';
 import { getProjectConfigDir } from '../config/paths.js';
 
 export interface StateLocator {
@@ -24,17 +24,7 @@ export class ProjectLocalStateLocator implements StateLocator {
   }
 
   paths(locations: ExecutionLocations): StatePaths {
-    return {
-      stateDirectory: locations.stateDirectory,
-      stateFile: resolve(locations.stateDirectory, 'state.json'),
-      tasksFile: resolve(locations.stateDirectory, 'tasks.yaml'),
-      tasksDirectory: resolve(locations.stateDirectory, 'tasks'),
-      runsDirectory: resolve(locations.stateDirectory, 'runs'),
-      sessionsDirectory: resolve(locations.stateDirectory, 'sessions'),
-      worktreeMetadataDirectory: resolve(locations.stateDirectory, 'worktree-metadata'),
-      eventsDirectory: resolve(locations.stateDirectory, 'events'),
-      locksDirectory: resolve(locations.stateDirectory, 'locks'),
-    };
+    return resolveStatePathsFromDirectory(locations.stateDirectory);
   }
 }
 

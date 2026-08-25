@@ -221,6 +221,7 @@ async function executeWorkflowInternal(
   const availableSourceLineage = resolveAvailableSourceLineage(
     cwd,
     options.resumeSource,
+    options.runPathsDirectory,
   );
   const activeRun = await runLifecycle.lifecycle.beginRun({
     workflowConfig,
@@ -237,6 +238,7 @@ async function executeWorkflowInternal(
       cwd,
       activeRun.runSlug,
       options.resumeSource,
+      options.runPathsDirectory,
     );
   const artifactResumeSource = resumeLineage.artifactResumeSource;
   const publishedResumeSource = resumeLineage.publishedResumeSource;
@@ -444,6 +446,7 @@ async function executeWorkflowInternal(
         resumeSource: artifactResumeSource,
         operationJournal: bootstrap.operationJournal,
         reportDirName: bootstrap.runSlug,
+        ...(options.runPathsDirectory === undefined ? {} : { runPathsDirectory: options.runPathsDirectory }),
         taskPrefix: options.taskPrefix,
         taskColorIndex: options.taskColorIndex,
         initialIteration: options.initialIterationOverride,
@@ -628,12 +631,13 @@ async function executeWorkflowInternal(
 function resolveAvailableSourceLineage(
   cwd: string,
   resumeSource: WorkflowExecutionOptions['resumeSource'],
+  runsDirectory?: string,
 ): WorkflowExecutionResumeLineage | undefined {
   if (resumeSource?.sourceRunSlug === undefined) {
     return undefined;
   }
   try {
-    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource, runsDirectory);
   } catch (error) {
     if (error instanceof OperationLineageUnavailableError) {
       return undefined;
