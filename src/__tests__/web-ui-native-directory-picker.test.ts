@@ -1,0 +1,33 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  NativeDirectoryPickerUnavailableError,
+  pickNativeDirectory,
+} from '../features/web-ui/native-directory-picker.js';
+
+describe('Web UI native directory picker', () => {
+  it('opens the macOS Finder picker with a fixed AppleScript', async () => {
+    const execute = vi.fn().mockResolvedValue('/Users/example/project/\n');
+
+    const result = await pickNativeDirectory({ platform: 'darwin', execute });
+
+    expect(result).toEqual({ cancelled: false, path: '/Users/example/project/' });
+    expect(execute).toHaveBeenCalledWith('osascript', [
+      '-e',
+      expect.stringContaining('choose folder with prompt'),
+    ]);
+  });
+
+  it('reports cancellation without treating it as an error', async () => {
+    const result = await pickNativeDirectory({
+      platform: 'darwin',
+      execute: async () => '__TAKT_DIRECTORY_PICKER_CANCELLED__\n',
+    });
+
+    expect(result).toEqual({ cancelled: true });
+  });
+
+  it('rejects native Finder selection outside macOS', async () => {
+    await expect(pickNativeDirectory({ platform: 'linux', execute: vi.fn() }))
+      .rejects.toBeInstanceOf(NativeDirectoryPickerUnavailableError);
+  });
+});

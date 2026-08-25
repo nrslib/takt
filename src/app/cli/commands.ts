@@ -3,11 +3,19 @@
  */
 
 import { join } from 'node:path';
-import type { Command } from 'commander';
+import { InvalidArgumentError, type Command } from 'commander';
 import type { RoutingTelemetryStatus } from '../../infra/config/global/globalConfigAccessors.js';
 import { parseFacetType, VALID_FACET_TYPES } from '../../features/config/facetTypes.js';
 import { program } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
+
+function parseUiPort(value: string): number {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new InvalidArgumentError('Port must be an integer between 0 and 65535');
+  }
+  return port;
+}
 
 program
   .command('run')
@@ -117,6 +125,19 @@ program
       list: opts.list === true,
       agentOverrides: resolveAgentOverrides(program),
     });
+  });
+
+program
+  .command('ui')
+  .description('Start the local TAKT Web UI')
+  .option('--port <number>', 'Local HTTP port', parseUiPort, 4178)
+  .action(async (opts: { port: number }) => {
+    const { startWebUi } = await import('../../features/web-ui/index.js');
+    const { info } = await import('../../shared/ui/index.js');
+    const { origin } = await startWebUi({
+      port: opts.port,
+    });
+    info(`TAKT Web UI: ${origin}`);
   });
 
 program

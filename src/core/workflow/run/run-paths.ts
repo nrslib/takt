@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 export interface RunPaths {
   readonly slug: string;
@@ -47,8 +47,13 @@ function joinRel(base: string, namespace: string[] | undefined): string {
     : base;
 }
 
-export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): RunPaths {
-  const runRootRel = `.takt/runs/${slug}`;
+function buildRunPathsFromRoot(
+  runsDirectory: string,
+  slug: string,
+  namespace: string[] | undefined,
+  runRootRel: string,
+): RunPaths {
+  const absoluteRunsDirectory = resolve(runsDirectory);
   const reportsRootRel = `${runRootRel}/reports`;
   const reportsRel = joinRel(reportsRootRel, namespace);
   const contextRel = joinRel(`${runRootRel}/context`, namespace);
@@ -87,23 +92,41 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     workflowBundleManifestHashRel,
     workflowBundleObjectsRel,
     workflowBundleResourcesRel,
-    runRootAbs: join(cwd, runRootRel),
-    reportsAbs: join(cwd, reportsRel),
-    reportsRootAbs: join(cwd, reportsRootRel),
-    contextAbs: join(cwd, contextRel),
-    contextTaskAbs: join(cwd, contextTaskRel),
-    contextTaskOrderAbs: join(cwd, contextTaskOrderRel),
-    contextKnowledgeAbs: join(cwd, contextKnowledgeRel),
-    contextPolicyAbs: join(cwd, contextPolicyRel),
-    contextPreviousResponsesAbs: join(cwd, contextPreviousResponsesRel),
-    logsAbs: join(cwd, logsRel),
-    operationsAbs: join(cwd, operationsRel),
-    operationJournalAbs: join(cwd, operationJournalRel),
-    metaAbs: join(cwd, metaRel),
-    workflowBundleAbs: join(cwd, workflowBundleRel),
-    workflowBundleManifestAbs: join(cwd, workflowBundleManifestRel),
-    workflowBundleManifestHashAbs: join(cwd, workflowBundleManifestHashRel),
-    workflowBundleObjectsAbs: join(cwd, workflowBundleObjectsRel),
-    workflowBundleResourcesAbs: join(cwd, workflowBundleResourcesRel),
+    runRootAbs: join(absoluteRunsDirectory, slug),
+    reportsAbs: join(absoluteRunsDirectory, slug, 'reports', ...(namespace ?? [])),
+    reportsRootAbs: join(absoluteRunsDirectory, slug, 'reports'),
+    contextAbs: join(absoluteRunsDirectory, slug, 'context', ...(namespace ?? [])),
+    contextTaskAbs: join(absoluteRunsDirectory, slug, 'context', ...(namespace ?? []), 'task'),
+    contextTaskOrderAbs: join(absoluteRunsDirectory, slug, 'context', ...(namespace ?? []), 'task', 'order.md'),
+    contextKnowledgeAbs: join(absoluteRunsDirectory, slug, 'context', ...(namespace ?? []), 'knowledge'),
+    contextPolicyAbs: join(absoluteRunsDirectory, slug, 'context', ...(namespace ?? []), 'policy'),
+    contextPreviousResponsesAbs: join(absoluteRunsDirectory, slug, 'context', ...(namespace ?? []), 'previous_responses'),
+    logsAbs: join(absoluteRunsDirectory, slug, 'logs'),
+    operationsAbs: join(absoluteRunsDirectory, slug, 'operations'),
+    operationJournalAbs: join(absoluteRunsDirectory, slug, 'operations', 'journal.json'),
+    metaAbs: join(absoluteRunsDirectory, slug, 'meta.json'),
+    workflowBundleAbs: join(absoluteRunsDirectory, slug, 'workflow-bundle'),
+    workflowBundleManifestAbs: join(absoluteRunsDirectory, slug, 'workflow-bundle', 'manifest.json'),
+    workflowBundleManifestHashAbs: join(absoluteRunsDirectory, slug, 'workflow-bundle', 'manifest.sha256'),
+    workflowBundleObjectsAbs: join(absoluteRunsDirectory, slug, 'workflow-bundle', 'objects'),
+    workflowBundleResourcesAbs: join(absoluteRunsDirectory, slug, 'workflow-bundle', 'resources'),
   };
+}
+
+export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): RunPaths {
+  const runRootRel = `.takt/runs/${slug}`;
+  return buildRunPathsFromRoot(join(cwd, '.takt', 'runs'), slug, namespace, runRootRel);
+}
+
+/** Build absolute run paths below a state-owned runs directory. */
+export function buildRunPathsFromRunsDirectory(
+  runsDirectory: string,
+  slug: string,
+  namespace?: string[],
+): RunPaths {
+  if (!isAbsolute(runsDirectory)) {
+    throw new Error('runsDirectory must be an absolute path');
+  }
+  const runRootRel = join(relative(resolve(runsDirectory, '..'), resolve(runsDirectory)), slug);
+  return buildRunPathsFromRoot(runsDirectory, slug, namespace, runRootRel);
 }

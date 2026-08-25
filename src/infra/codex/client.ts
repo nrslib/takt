@@ -15,6 +15,7 @@ import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
+import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import {
@@ -384,7 +385,7 @@ export class CodexClient {
       codexSkillConfig = options.skills
         ? buildCodexSkillConfig({
             cwd: options.cwd,
-            env: { ...process.env, ...options.childProcessEnv },
+            env: { ...buildChildProcessEnv(), ...options.childProcessEnv },
             inheritance: options.skills,
           })
         : undefined;

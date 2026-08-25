@@ -98,6 +98,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/instructMode.test.ts',
   'src/__tests__/interactive-mode.test.ts',
   'src/__tests__/interactive.test.ts',
+  'src/__tests__/it-central-task-process.test.ts',
   'src/__tests__/it-report-inheritance-task-resume.test.ts',
   'src/__tests__/kiro-config.test.ts',
   'src/__tests__/mock-call-log.test.ts',
@@ -182,6 +183,8 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/analyze-usage-command.test.ts',
   'src/__tests__/arpeggio-csv.test.ts',
   'src/__tests__/builtin-workflow-categories-path.test.ts',
+  'src/__tests__/central-task-repository.test.ts',
+  'src/__tests__/central-worker.test.ts',
   'src/__tests__/claude-headless-client.test.ts',
   'src/__tests__/claude-mcp-config.test.ts',
   'src/__tests__/claude-mcp-runtime.test.ts',
@@ -203,6 +206,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/exec-presetExport.test.ts',
   'src/__tests__/exec-presetStore.test.ts',
   'src/__tests__/executable-path.test.ts',
+  'src/__tests__/execution-locations.test.ts',
   'src/__tests__/facet-resolution.test.ts',
   'src/__tests__/global-workflowCategories.test.ts',
   'src/__tests__/image-attachment-store-seal.test.ts',
@@ -292,6 +296,10 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/tui-run.test.ts',
   'src/__tests__/usageEventLogger.test.ts',
   'src/__tests__/watcher.test.ts',
+  'src/__tests__/web-ui-directory-browser.test.ts',
+  'src/__tests__/web-ui-instance-lock.test.ts',
+  'src/__tests__/web-ui-launcher.test.ts',
+  'src/__tests__/web-ui-project-registry.test.ts',
   'src/__tests__/workflow-init.test.ts',
   'src/__tests__/workflow-inspect.test.ts',
   'src/__tests__/workflowExecution-ask-user-question.test.ts',
@@ -337,6 +345,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-provider-aux-entry.integration.test.ts',
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
   'src/__tests__/runtime-provider-nonworkflow-seam.integration.test.ts',
+  'src/__tests__/web-ui.integration.test.ts',
 ]);
 
 export const lightIntegrationTestFiles = Object.freeze([

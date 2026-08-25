@@ -11,7 +11,7 @@ import type {
 } from '../../../core/models/config-types.js';
 import type { RateLimitFallbackConfig } from '../../../core/models/workflow-types.js';
 import type { PermissionMode } from '../../../core/models/types.js';
-import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
 import {
   OperationLineageUnavailableError,
@@ -405,7 +405,7 @@ export async function createWorkflowExecutionBootstrap(
   log.debug('Session mode', { isRetry, isWorktree });
 
   const { runSlug, runPaths } = runBootstrap;
-  if (isWorktree) {
+  if (isWorktree && options.skipWorktreeRuntimeProtection !== true) {
     ensureWorktreeTaktRuntimeProtection(cwd);
   }
 
@@ -423,7 +423,9 @@ export async function createWorkflowExecutionBootstrap(
     operationJournalRunSlug,
     sourceOperationClaimTokens,
   } = resumeLineage;
-  const operationJournalPaths = buildRunPaths(cwd, operationJournalRunSlug);
+  const operationJournalPaths = options.runPathsDirectory === undefined
+    ? buildRunPaths(cwd, operationJournalRunSlug)
+    : buildRunPathsFromRunsDirectory(options.runPathsDirectory, operationJournalRunSlug);
   const operationJournal: WorkflowOperationJournalContext = {
     store: createOperationJournalStore(operationJournalPaths.operationJournalAbs),
     journalRunSlug: operationJournalRunSlug,
@@ -690,7 +692,9 @@ export async function createWorkflowExecutionBootstrap(
   });
 
   const analyticsWriterOptions = globalConfig.telemetry?.routingDecisions === true
-    ? { routingEventsDir: join(projectCwd, '.takt', 'events') }
+    ? { routingEventsDir: options.runPathsDirectory === undefined
+      ? join(projectCwd, '.takt', 'events')
+      : join(options.runPathsDirectory, '..', 'events') }
     : undefined;
   initAnalyticsWriter(
     globalConfig.analytics?.enabled === true,
@@ -709,14 +713,31 @@ export async function createWorkflowExecutionBootstrap(
   const structuredCaller = new ProviderNeutralStructuredCaller();
   const savedSessions = shouldLoadSavedSessions
     ? (isWorktree
-      ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
-      : loadPersonaSessions(projectCwd, currentProvider))
+      ? options.sessionStorageDirectory === undefined
+        ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
+        : loadWorktreeSessions(projectCwd, cwd, currentProvider, options.sessionStorageDirectory)
+      : options.sessionStorageDirectory === undefined
+        ? loadPersonaSessions(projectCwd, currentProvider)
+        : loadPersonaSessions(projectCwd, currentProvider, options.sessionStorageDirectory))
     : {};
   const sessionUpdateHandler = isWorktree
     ? (personaName: string, personaSessionId: string | undefined) =>
-        updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
+        updateWorktreeSession(
+          projectCwd,
+          cwd,
+          personaName,
+          personaSessionId,
+          currentProvider,
+          options.sessionStorageDirectory,
+        )
     : (persona: string, personaSessionId: string | undefined) =>
-        updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
+        updatePersonaSession(
+          projectCwd,
+          persona,
+          personaSessionId,
+          currentProvider,
+          options.sessionStorageDirectory,
+        );
   const observabilityOptions = globalConfig.observability.enabled
     && (
       globalConfig.observability.sessionLogExporter

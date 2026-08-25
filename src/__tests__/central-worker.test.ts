@@ -1,0 +1,276 @@
+import { lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { EventEmitter } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
+import { runCentralTask } from '../features/web-ui/central-worker.js';
+import { waitForCentralWorkerStartup } from '../features/web-ui/central-worker-spawn.js';
+import { runWorkflowExecution } from '../features/tasks/execute/workflowExecutionApi.js';
+
+vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({
+  runWorkflowExecution: vi.fn(async () => ({ success: true })),
+}));
+
+describe('central Web UI worker', () => {
+  it('terminalizes an adopted task when the initial running metadata fails', async () => {
+    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
+    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
+    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+    const repository = await CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    });
+    const reserved = await repository.enqueueAndClaim({ task: 'metadata failure', workflow: 'default', worktree: false });
+    const writeRunMeta = vi.spyOn(CentralTaskRepository.prototype, 'writeRunMeta')
+      .mockRejectedValueOnce(new Error('running metadata failed'));
+    try {
+      await expect(runCentralTask({
+        globalConfigDirectory,
+        stateId: project.stateId,
+        taskId: reserved.task.taskId,
+        generation: reserved.task.generation,
+        executionId: reserved.executionId,
+        ownerToken: reserved.ownerToken,
+      })).rejects.toThrow('running metadata failed');
+    } finally {
+      writeRunMeta.mockRestore();
+    }
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({
+      status: 'failed',
+      failure: { code: 'worker_failed' },
+    });
+  });
+
+  it('commits a mock one-shot run entirely below central state', async () => {
+    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
+    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
+    await mkdir(join(projectDirectory, '.takt'), { recursive: true });
+    await writeFile(join(projectDirectory, '.takt', 'sentinel'), 'project-local state');
+    const projectLocalSnapshot = await readFile(join(projectDirectory, '.takt', 'sentinel'), 'utf8');
+    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+    const repository = await CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    });
+    const reserved = await repository.enqueueAndClaim({
+      task: 'central mock task',
+      workflow: 'default',
+      worktree: false,
+    });
+    const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
+    try {
+      await runCentralTask({
+        globalConfigDirectory,
+        stateId: project.stateId,
+        taskId: reserved.task.taskId,
+        generation: reserved.task.generation,
+        executionId: reserved.executionId,
+        ownerToken: reserved.ownerToken,
+      });
+    } finally {
+      if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
+    }
+
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'completed' });
+    await expect(readFile(join(projectDirectory, '.takt', 'sentinel'), 'utf8')).resolves.toBe(projectLocalSnapshot);
+    await expect(lstat(join(projectDirectory, '.takt', 'tasks.yaml'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(vi.mocked(runWorkflowExecution)).toHaveBeenCalledWith(expect.objectContaining({
+      runPathsDirectory: repository.paths.runsDirectory,
+      sessionStorageDirectory: repository.paths.sessionsDirectory,
+      skipWorktreeRuntimeProtection: true,
+    }));
+  });
+
+  it('claims and spawns exactly one successor from the central pending queue', async () => {
+    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
+    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
+    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+    const repository = await CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    });
+    const first = await repository.enqueueOrReuse({ task: 'first', workflow: 'default', worktree: false });
+    const queued = await repository.enqueueOrReuse({ task: 'second', workflow: 'default', worktree: false });
+    expect(first.kind).toBe('started');
+    expect(queued.kind).toBe('reused');
+    const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
+    let spawnCount = 0;
+    try {
+      await runCentralTask({
+        globalConfigDirectory,
+        stateId: project.stateId,
+        taskId: first.task.taskId,
+        generation: first.task.generation,
+        executionId: first.executionId!,
+        ownerToken: first.ownerToken!,
+      }, {
+        spawnProcess: ((_command: string, args: readonly string[], options: { readonly env?: NodeJS.ProcessEnv }) => {
+          spawnCount += 1;
+          expect(args).not.toContain(first.ownerToken!);
+          expect(options.env?.TAKT_CENTRAL_OWNER_TOKEN).toBeTruthy();
+          const child = Object.assign(new EventEmitter(), {
+            pid: 7777,
+            exitCode: null,
+            signalCode: null,
+            unref: () => undefined,
+          });
+          queueMicrotask(() => {
+            void repository.adopt({
+              taskId: queued.task.taskId,
+              generation: Number(args[args.indexOf('--generation') + 1]),
+              executionId: args[args.indexOf('--execution-id') + 1]!,
+              ownerToken: options.env?.TAKT_CENTRAL_OWNER_TOKEN ?? '',
+              pid: 7777,
+            });
+            child.emit('spawn');
+          });
+          return child;
+        }) as never,
+      });
+    } finally {
+      if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
+    }
+
+    expect(spawnCount).toBe(1);
+    await expect(repository.readTask(queued.task.taskId)).resolves.toMatchObject({
+      status: 'running',
+      generation: queued.task.generation + 2,
+      activeExecution: { pid: 7777 },
+    });
+  });
+
+  it('terminalizes a successor reservation when detached spawn fails', async () => {
+    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
+    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
+    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+    const repository = await CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    });
+    const first = await repository.enqueueOrReuse({ task: 'first', workflow: 'default', worktree: false });
+    const queued = await repository.enqueueOrReuse({ task: 'second', workflow: 'default', worktree: false });
+    const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
+    try {
+      await expect(runCentralTask({
+        globalConfigDirectory,
+        stateId: project.stateId,
+        taskId: first.task.taskId,
+        generation: first.task.generation,
+        executionId: first.executionId!,
+        ownerToken: first.ownerToken!,
+      }, { spawnProcess: () => { throw new Error('successor spawn failed'); } })).rejects.toThrow('successor spawn failed');
+    } finally {
+      if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
+    }
+    await expect(repository.readTask(queued.task.taskId)).resolves.toMatchObject({
+      status: 'failed',
+      failure: { code: 'spawn_failed' },
+    });
+  });
+
+  it('terminalizes a successor whose child exits before adoption', async () => {
+    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
+    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
+    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+    const repository = await CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    });
+    const first = await repository.enqueueOrReuse({ task: 'first', workflow: 'default', worktree: false });
+    const queued = await repository.enqueueOrReuse({ task: 'second', workflow: 'default', worktree: false });
+    const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
+    try {
+      await expect(runCentralTask({
+        globalConfigDirectory,
+        stateId: project.stateId,
+        taskId: first.task.taskId,
+        generation: first.task.generation,
+        executionId: first.executionId!,
+        ownerToken: first.ownerToken!,
+      }, {
+        spawnProcess: ((_command: string, _args: readonly string[]) => {
+          const child = Object.assign(new EventEmitter(), {
+            pid: 7788,
+            exitCode: null as number | null,
+            signalCode: null as NodeJS.Signals | null,
+            unref: () => undefined,
+          });
+          queueMicrotask(() => {
+            child.emit('spawn');
+            queueMicrotask(() => {
+              child.exitCode = 1;
+              child.emit('exit', 1, null);
+            });
+          });
+          return child;
+        }) as never,
+      })).rejects.toThrow(/exited before adopting/i);
+    } finally {
+      if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
+    }
+    await expect(repository.readTask(queued.task.taskId)).resolves.toMatchObject({
+      status: 'failed',
+      failure: { code: 'spawn_failed' },
+    });
+  });
+
+  it('does not steal a live unknown child when successor startup times out', async () => {
+    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-global-'));
+    const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-project-'));
+    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+    const repository = await CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    });
+    const reserved = await repository.enqueueAndClaim({ task: 'timeout', workflow: 'default', worktree: false });
+    const child = Object.assign(new EventEmitter(), {
+      pid: 7799,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      unref: () => undefined,
+    });
+
+    await expect(waitForCentralWorkerStartup(repository, {
+      taskId: reserved.task.taskId,
+      generation: reserved.task.generation,
+      executionId: reserved.executionId,
+      ownerToken: reserved.ownerToken,
+      runId: reserved.runId,
+    }, child as never, 0)).rejects.toMatchObject({ recoveryRequired: true });
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'starting' });
+  });
+});

@@ -89,7 +89,7 @@ export class CloneManager {
     }
 
     return createTaskClonePath(
-      CloneManager.resolveCloneBaseDir(projectDir),
+      options.worktreeBaseDirectory ?? CloneManager.resolveCloneBaseDir(projectDir),
       timestamp,
       options.issueNumber,
       options.taskSlug,
@@ -193,8 +193,8 @@ export class CloneManager {
       fetchPullRequestBaseIntoIsolatedClone(projectDir, clonePath, options.pullRequestBaseBranch);
     }
 
-    syncProjectLocalTaktForRetry(projectDir, clonePath);
-    this.saveCloneMeta(projectDir, branch, clonePath);
+    if (!options.skipProjectLocalTaktSync) syncProjectLocalTaktForRetry(projectDir, clonePath);
+    this.saveCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory);
     log.info('Clone created', { path: clonePath, branch });
 
     return {
@@ -291,8 +291,8 @@ export class CloneManager {
       );
     }
 
-    syncProjectLocalTaktForRetry(projectDir, clonePath);
-    this.saveCloneMeta(projectDir, branch, clonePath);
+    if (!options.skipProjectLocalTaktSync) syncProjectLocalTaktForRetry(projectDir, clonePath);
+    this.saveCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory);
     log.info('Clone created', { path: clonePath, branch });
 
     return {
@@ -337,8 +337,8 @@ export class CloneManager {
     }
   }
 
-  saveCloneMeta(projectDir: string, branch: string, clonePath: string): void {
-    saveCloneMetaFile(projectDir, branch, clonePath);
+  saveCloneMeta(projectDir: string, branch: string, clonePath: string, metadataDirectory?: string): void {
+    saveCloneMetaFile(projectDir, branch, clonePath, metadataDirectory);
   }
 
   removeCloneMeta(projectDir: string, branch: string): void {
@@ -391,8 +391,8 @@ export function removeClone(clonePath: string): void {
   defaultManager.removeClone(clonePath);
 }
 
-export function saveCloneMeta(projectDir: string, branch: string, clonePath: string): void {
-  defaultManager.saveCloneMeta(projectDir, branch, clonePath);
+export function saveCloneMeta(projectDir: string, branch: string, clonePath: string, metadataDirectory?: string): void {
+  defaultManager.saveCloneMeta(projectDir, branch, clonePath, metadataDirectory);
 }
 
 export function removeCloneMeta(projectDir: string, branch: string): void {

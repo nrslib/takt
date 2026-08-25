@@ -72,6 +72,23 @@ describe('companion mailbox', () => {
     expect(readFileSync(path, 'utf8')).toContain('agent-owned audit text\n{');
   });
 
+  it('uses the injected central run root instead of rebuilding project .takt/runs', () => {
+    const project = mkdtempSync(join(tmpdir(), 'takt-companion-project-'));
+    roots.push(project);
+    const centralRunRoot = join(project, 'central-state', 'runs', 'run-1');
+    const path = buildCompanionMailboxPath({
+      cwd: project,
+      runRootDirectory: centralRunRoot,
+      runSlug: 'run-1',
+      runPathNamespace: [],
+      stepName: 'implement',
+      companionName: 'reviewer',
+    });
+
+    expect(path).toBe(join(centralRunRoot, 'companion', 'implement', 'reviewer.jsonl'));
+    expect(path).not.toContain(join('.takt', 'runs'));
+  });
+
   it('rejects appending after the mailbox is replaced with a symlink', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-companion-mailbox-symlink-'));
     roots.push(root);

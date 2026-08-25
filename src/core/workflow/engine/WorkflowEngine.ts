@@ -23,7 +23,7 @@ import {
   snapshotWorkflowCallInvocationEvidence,
 } from '../workflow-call-invocation-index.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
-import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory, type RunPaths } from '../run/run-paths.js';
 import { createRunFailure } from '../run/run-failure.js';
 import type {
   WorkflowCallChildEngine,
@@ -168,7 +168,9 @@ export class WorkflowEngine extends EventEmitter {
     }
 
     const reportDirName = options.reportDirName ?? generateReportDir(task);
-    const runPaths = buildRunPaths(cwd, reportDirName, options.runPathNamespace);
+    const runPaths = options.runPathsDirectory === undefined
+      ? buildRunPaths(cwd, reportDirName, options.runPathNamespace)
+      : buildRunPathsFromRunsDirectory(options.runPathsDirectory, reportDirName, options.runPathNamespace);
     const traceTaskMetadata = {
       ...options.traceTaskMetadata,
       runDir: runPaths.runRootAbs,

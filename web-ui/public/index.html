@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0e100f">
+    <title>TAKT Console</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <img class="brand-logo" src="/takt-logo.svg" alt="TAKT">
+        <span class="brand-product">Console</span>
+      </div>
+
+      <details id="execution-context" class="execution-context" open>
+        <summary>
+          <span class="execution-context-label">Context</span>
+          <span id="execution-context-summary">ディレクトリとworkflowを選択</span>
+        </summary>
+        <div class="execution-context-body">
+          <div class="project-selection">
+            <label for="project">Execution directory</label>
+            <div class="project-control">
+              <select id="project" name="project" required></select>
+              <button id="directory-picker-button" class="secondary-button" type="button" disabled>追加</button>
+            </div>
+            <p id="project-help">登録済みの実行先を選ぶか、新しいディレクトリを追加します。</p>
+          </div>
+
+          <div class="workflow-selection">
+            <div>
+              <label for="category">Category</label>
+              <select id="category" name="category" required></select>
+            </div>
+            <div>
+              <label for="workflow">Workflow</label>
+              <select id="workflow" name="workflow" required></select>
+            </div>
+            <div>
+              <label for="chat-mode">Chat mode</label>
+              <select id="chat-mode" name="chat-mode">
+                <option value="assistant">Assistant</option>
+                <option value="grill-me">Grill Me</option>
+                <option value="persona">Persona</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <div class="connection" aria-live="polite">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span id="connection-status">接続中</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section id="chat-pane" class="composer-panel" aria-labelledby="chat-title">
+        <section id="chat-panel" class="chat-panel">
+          <header class="chat-panel-header">
+            <h2 id="chat-title">Chat</h2>
+            <div class="chat-panel-actions">
+              <div id="chat-session-meta" class="chat-session-meta">会話はまだ始まっていません。</div>
+              <button
+                id="chat-new-button"
+                class="chat-new-button"
+                type="button"
+                disabled
+              >新しい会話</button>
+            </div>
+          </header>
+          <div id="chat-transcript" class="chat-transcript" aria-live="polite">
+            <div class="chat-placeholder">
+              <strong>会話を開始</strong>
+              <span>選択したworkflowを前提にAIと相談できます。</span>
+            </div>
+          </div>
+          <form id="chat-form" class="chat-form">
+            <label class="visually-hidden" for="chat-message">Message</label>
+            <div class="chat-composer">
+              <textarea
+                id="chat-message"
+                name="chat-message"
+                rows="1"
+                placeholder="メッセージを入力"
+                aria-keyshortcuts="Meta+Enter Control+Enter"
+                required
+              ></textarea>
+              <button id="chat-send-button" type="submit" aria-label="メッセージを送信" title="⌘ Enterで送信">↑</button>
+            </div>
+            <p class="chat-shortcut-hint"><kbd>⌘ Enter</kbd> で送信 · <code>/go</code> で実行指示にまとめる</p>
+            <p id="chat-message-status" class="form-message" role="status"></p>
+          </form>
+        </section>
+      </section>
+
+      <div class="chat-divider">
+        <button
+          id="chat-collapse-button"
+          class="chat-collapse-button"
+          type="button"
+          aria-controls="chat-pane"
+          aria-expanded="true"
+          aria-label="Chatを折りたたむ"
+          title="Chatを折りたたむ"
+        >‹</button>
+        <div
+          id="chat-resizer"
+          class="chat-resizer"
+          role="separator"
+          tabindex="0"
+          aria-controls="chat-pane"
+          aria-label="Chatの横幅を調整"
+          aria-orientation="vertical"
+          aria-valuemin="320"
+        ></div>
+      </div>
+
+      <section class="runs-panel" aria-labelledby="runs-title">
+        <div class="section-heading runs-heading">
+          <div>
+            <h2 id="runs-title">Runs</h2>
+            <p>このPCで実行されたTAKTの状態とログです。</p>
+            <p class="warning-message">Web UI実行中の同一stateに対するCLIとの同時変更はサポート対象外です。</p>
+          </div>
+          <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
+        </div>
+
+        <div class="run-layout">
+          <nav class="run-list-region" aria-label="run一覧">
+            <div id="run-list" class="run-list"></div>
+            <p id="run-list-empty" class="empty-state" hidden>runはまだありません。</p>
+          </nav>
+          <article id="run-detail" class="run-detail" aria-live="polite">
+            <div class="detail-placeholder">
+              <p>Runを選択</p>
+              <span>runを選択すると詳細を表示します。</span>
+            </div>
+          </article>
+        </div>
+        <p id="run-warning" class="warning-message" role="status"></p>
+      </section>
+    </main>
+
+    <dialog id="directory-dialog" class="directory-dialog" aria-labelledby="directory-dialog-title">
+      <div class="directory-dialog-header">
+        <div>
+          <h2 id="directory-dialog-title">実行ディレクトリを選択</h2>
+          <p>パスを入力するか、フォルダから選択できます。</p>
+        </div>
+        <button id="directory-close-button" class="secondary-button" type="button" aria-label="閉じる">閉じる</button>
+      </div>
+      <div class="directory-current">
+        <label for="directory-current-path">Current directory</label>
+        <div class="directory-path-control">
+          <input
+            id="directory-current-path"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="/Users/example/project"
+            aria-describedby="directory-message"
+          >
+          <button id="directory-native-picker-button" class="secondary-button" type="button" hidden>Finderで選択</button>
+          <button id="directory-go-button" class="secondary-button" type="button">移動</button>
+        </div>
+      </div>
+      <div class="directory-navigation">
+        <button id="directory-parent-button" class="secondary-button" type="button">上のディレクトリへ</button>
+      </div>
+      <div id="directory-list" class="directory-list" role="list" aria-label="子ディレクトリ"></div>
+      <p id="directory-message" class="form-message" role="status"></p>
+      <div class="directory-dialog-actions">
+        <button id="directory-cancel-button" class="secondary-button" type="button">キャンセル</button>
+        <button id="directory-select-button" type="button">このディレクトリを使う</button>
+      </div>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

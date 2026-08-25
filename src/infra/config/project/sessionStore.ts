@@ -4,7 +4,7 @@
  * Manages persona sessions and input history persistence.
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { getProjectConfigDir, ensureDir } from '../paths.js';
@@ -13,10 +13,11 @@ import { getProjectConfigDir, ensureDir } from '../paths.js';
  * Write file atomically using temp file + rename.
  * This prevents corruption when multiple processes write simultaneously.
  */
-export function writeFileAtomic(filePath: string, content: string): void {
+export function writeFileAtomic(filePath: string, content: string, mode = 0o644): void {
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   try {
-    writeFileSync(tempPath, content, 'utf-8');
+    writeFileSync(tempPath, content, { encoding: 'utf-8', mode });
+    chmodSync(tempPath, mode);
     renameSync(tempPath, filePath);
   } catch (error) {
     try {
@@ -121,6 +122,7 @@ function updateSessionData(
   persona: string,
   sessionId: string | undefined,
   provider?: string,
+  fileMode = 0o644,
 ): void {
   ensureSessionDir();
 
@@ -159,17 +161,21 @@ function updateSessionData(
     updatedAt: new Date().toISOString(),
     provider: provider ?? existingProvider,
   };
-  writeFileAtomic(sessionPath, JSON.stringify(data, null, 2));
+  writeFileAtomic(sessionPath, JSON.stringify(data, null, 2), fileMode);
 }
 
 /** Get path for storing persona sessions */
-export function getPersonaSessionsPath(projectDir: string): string {
-  return join(getProjectConfigDir(projectDir), 'persona_sessions.json');
+export function getPersonaSessionsPath(projectDir: string, storageDirectory?: string): string {
+  return join(storageDirectory ?? getProjectConfigDir(projectDir), 'persona_sessions.json');
 }
 
 /** Load saved persona sessions. Returns empty if provider has changed. */
-export function loadPersonaSessions(projectDir: string, currentProvider?: string): Record<string, string> {
-  return readSessionData(getPersonaSessionsPath(projectDir), currentProvider);
+export function loadPersonaSessions(
+  projectDir: string,
+  currentProvider?: string,
+  storageDirectory?: string,
+): Record<string, string> {
+  return readSessionData(getPersonaSessionsPath(projectDir, storageDirectory), currentProvider);
 }
 
 /**
@@ -198,16 +204,18 @@ export function resolvePersonaSessionId(
 export function savePersonaSessions(
   projectDir: string,
   sessions: Record<string, string>,
-  provider?: string
+  provider?: string,
+  storageDirectory?: string,
 ): void {
-  const path = getPersonaSessionsPath(projectDir);
-  ensureDir(getProjectConfigDir(projectDir));
+  const directory = storageDirectory ?? getProjectConfigDir(projectDir);
+  const path = getPersonaSessionsPath(projectDir, storageDirectory);
+  ensureDir(directory);
   const data: PersonaSessionData = {
     personaSessions: sessions,
     updatedAt: new Date().toISOString(),
     provider,
   };
-  writeFileAtomic(path, JSON.stringify(data, null, 2));
+  writeFileAtomic(path, JSON.stringify(data, null, 2), storageDirectory === undefined ? 0o644 : 0o600);
 }
 
 /**
@@ -218,14 +226,16 @@ export function updatePersonaSession(
   projectDir: string,
   persona: string,
   sessionId: string | undefined,
-  provider?: string
+  provider?: string,
+  storageDirectory?: string,
 ): void {
   updateSessionData(
-    getPersonaSessionsPath(projectDir),
-    () => ensureDir(getProjectConfigDir(projectDir)),
+    getPersonaSessionsPath(projectDir, storageDirectory),
+    () => ensureDir(storageDirectory ?? getProjectConfigDir(projectDir)),
     persona,
     sessionId,
     provider,
+    storageDirectory === undefined ? 0o644 : 0o600,
   );
 }
 
@@ -246,8 +256,8 @@ export function clearPersonaSessions(projectDir: string): void {
 // ============ Worktree Sessions ============
 
 /** Get the worktree sessions directory */
-export function getWorktreeSessionsDir(projectDir: string): string {
-  return join(getProjectConfigDir(projectDir), 'worktree-sessions');
+export function getWorktreeSessionsDir(projectDir: string, storageDirectory?: string): string {
+  return join(storageDirectory ?? getProjectConfigDir(projectDir), 'worktree-sessions');
 }
 
 /** Encode a worktree path to a safe filename */
@@ -257,8 +267,12 @@ export function encodeWorktreePath(worktreePath: string): string {
 }
 
 /** Get path for a worktree's session file */
-export function getWorktreeSessionPath(projectDir: string, worktreePath: string): string {
-  const dir = getWorktreeSessionsDir(projectDir);
+export function getWorktreeSessionPath(
+  projectDir: string,
+  worktreePath: string,
+  storageDirectory?: string,
+): string {
+  const dir = getWorktreeSessionsDir(projectDir, storageDirectory);
   const encoded = encodeWorktreePath(worktreePath);
   return join(dir, `${encoded}.json`);
 }
@@ -267,9 +281,10 @@ export function getWorktreeSessionPath(projectDir: string, worktreePath: string)
 export function loadWorktreeSessions(
   projectDir: string,
   worktreePath: string,
-  currentProvider?: string
+  currentProvider?: string,
+  storageDirectory?: string,
 ): Record<string, string> {
-  return readSessionData(getWorktreeSessionPath(projectDir, worktreePath), currentProvider);
+  return readSessionData(getWorktreeSessionPath(projectDir, worktreePath, storageDirectory), currentProvider);
 }
 
 /** Update a single persona session for a worktree (atomic) */
@@ -278,14 +293,16 @@ export function updateWorktreeSession(
   worktreePath: string,
   personaName: string,
   sessionId: string | undefined,
-  provider?: string
+  provider?: string,
+  storageDirectory?: string,
 ): void {
   updateSessionData(
-    getWorktreeSessionPath(projectDir, worktreePath),
-    () => ensureDir(getWorktreeSessionsDir(projectDir)),
+    getWorktreeSessionPath(projectDir, worktreePath, storageDirectory),
+    () => ensureDir(getWorktreeSessionsDir(projectDir, storageDirectory)),
     personaName,
     sessionId,
     provider,
+    storageDirectory === undefined ? 0o644 : 0o600,
   );
 }
 

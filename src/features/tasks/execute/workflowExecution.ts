@@ -75,6 +75,7 @@ import {
   publishWorkflowExecutionBundle,
 } from './workflowExecutionBundle.js';
 import { scheduleLoopAnalysis } from './loopAnalysis.js';
+import { buildChildProcessEnv } from '../../../shared/utils/child-process-env.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -215,6 +216,7 @@ async function executeWorkflowInternal(
   });
   const runLifecycle = createWorkflowRunLifecycle({
     cwd,
+    ...(options.runPathsDirectory === undefined ? {} : { runPathsDirectory: options.runPathsDirectory }),
   });
   const availableSourceLineage = resolveAvailableSourceLineage(
     cwd,
@@ -264,6 +266,9 @@ async function executeWorkflowInternal(
       workflowConfig,
       task,
       projectCwd: options.projectCwd,
+      ...(options.sessionStorageDirectory === undefined
+        ? {}
+        : { sessionStorageDirectory: options.sessionStorageDirectory }),
       primaryError: bootstrapError,
       resumeLineage,
       loopAnalysisScheduler: options.loopAnalysisScheduler,
@@ -274,6 +279,9 @@ async function executeWorkflowInternal(
   const terminalPublicationContext = {
     runSlug: bootstrap.runSlug,
     projectCwd: options.projectCwd,
+    ...(options.sessionStorageDirectory === undefined
+      ? {}
+      : { sessionStorageDirectory: options.sessionStorageDirectory }),
     task,
     workflowName: bootstrap.effectiveWorkflowConfig.name,
     sessionLog: bootstrap.sessionLog,
@@ -367,7 +375,7 @@ async function executeWorkflowInternal(
       });
       const childProcessEnv = resolveNestedChildProcessEnv(
         bootstrap.observability,
-        process.env,
+        buildChildProcessEnv(),
       );
       engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
         abortSignal: executionControl.signal,
@@ -639,6 +647,7 @@ async function terminalizeBootstrapFailure(input: {
   readonly workflowConfig: WorkflowConfig;
   readonly task: string;
   readonly projectCwd: string;
+  readonly sessionStorageDirectory?: string;
   readonly primaryError: unknown;
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
   readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
@@ -693,6 +702,9 @@ async function terminalizeBootstrapFailure(input: {
   const terminalPayloads = createWorkflowTerminalPayloadFactory({
     runSlug: input.activeRun.runSlug,
     projectCwd: input.projectCwd,
+    ...(input.sessionStorageDirectory === undefined
+      ? {}
+      : { sessionStorageDirectory: input.sessionStorageDirectory }),
     task: input.task,
     workflowName: input.workflowConfig.name,
     sessionLog,
