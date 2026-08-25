@@ -23,7 +23,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
-    reasoningEffort: options.providerOptions?.codex?.reasoningEffort,
+    reasoningEffort: options.effort ?? options.providerOptions?.codex?.reasoningEffort,
     fastMode: options.providerOptions?.codex?.fastMode,
     permissionMode: options.permissionMode,
     permissionControl: options.providerOptions?.codex?.permissionControl,

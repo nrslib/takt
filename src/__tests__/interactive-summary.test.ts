@@ -54,7 +54,7 @@ describe('buildSummaryPrompt', () => {
     expect(summary).toContain('Improve parser');
   });
 
-  it('includes Gherkin output rules when formal specification mode is disabled', () => {
+  it('includes task-aware Gherkin output rules when formal specification mode is disabled', () => {
     const summary = buildSummaryPrompt(
       [{ role: 'user', content: 'Improve parser' }],
       false,
@@ -68,6 +68,7 @@ describe('buildSummaryPrompt', () => {
     );
 
     expect(summary).toContain('Gherkin');
+    expect(summary).toContain('whose deliverable is not an implementation, do not use Gherkin');
     expect(summary).not.toContain('Quint');
     expect(summary).not.toContain('Alloy');
   });

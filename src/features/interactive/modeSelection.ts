@@ -14,12 +14,11 @@ import { getLabel } from '../../shared/i18n/index.js';
  * Prompt the user to select an interactive mode.
  *
  * @param lang - Display language
- * @param workflowDefault - Workflow-level default mode (overrides user default)
+ * @param availableModes - Modes available to the current front-end
  * @returns Selected mode, or null if cancelled
  */
 export async function selectInteractiveMode(
   lang: 'en' | 'ja',
-  workflowDefault?: InteractiveMode,
   availableModes?: readonly InteractiveMode[],
 ): Promise<InteractiveMode | null> {
   const resolvedModes = availableModes ?? INTERACTIVE_MODES;
@@ -31,11 +30,9 @@ export async function selectInteractiveMode(
     throw new Error('At least one interactive mode must be available.');
   }
 
-  const defaultMode = workflowDefault && resolvedModes.includes(workflowDefault)
-    ? workflowDefault
-    : (resolvedModes.includes(DEFAULT_INTERACTIVE_MODE)
-      ? DEFAULT_INTERACTIVE_MODE
-      : firstMode);
+  const defaultMode = resolvedModes.includes(DEFAULT_INTERACTIVE_MODE)
+    ? DEFAULT_INTERACTIVE_MODE
+    : firstMode;
 
   const options: { label: string; value: InteractiveMode; description: string }[] = resolvedModes.map((mode) => ({
     label: getLabel(`interactive.modeSelection.${mode}`, lang),

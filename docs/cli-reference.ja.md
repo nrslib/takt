@@ -48,7 +48,7 @@ TUI の会話履歴では、送信済みのユーザー発言を、表示幅い�
 ### フロー
 
 1. workflow を選択
-2. インタラクティブモードを選択（assistant / grill-me / persona / quiet / passthrough）
+2. インタラクティブモードを選択（assistant / grill-me / persona）
 3. AI との会話でタスク内容を精緻化
 4. `/go` でタスク指示を確定（`/go 追加の指示` のように追記も可能）
 5. 実行（workflow 実行、PR 作成）
@@ -60,10 +60,18 @@ TUI の会話履歴では、送信済みのユーザー発言を、表示幅い�
 | `assistant` | デフォルト。AI がタスク指示を生成する前に明確化のための質問を行う。 |
 | `grill-me` | 推奨案付きの質問を1問ずつ行い、重要な判断分岐を解決する。要件が固まると `/go` を案内する。 |
 | `persona` | 最初の step の persona と会話（そのシステムプロンプトとツールを使用）。 |
-| `quiet` | 質問なしでタスク指示を生成（ベストエフォート）。 |
-| `passthrough` | AI 処理なしでユーザー入力をそのままタスクテキストとして使用。 |
 
-Workflow は YAML の `interactive_mode` フィールドでデフォルトモードを設定できます。
+### 会話設定コマンド
+
+| コマンド | 効果 |
+|----------|------|
+| `/workflow` | 別の workflow を選択する。 |
+| `/interaction` | 別の interactive mode を選択する。 |
+| `/provider` | 別の provider を選択する。 |
+| `/model <value>` | この会話で使う任意の model 名を指定する。 |
+| `/effort <value>` | この会話で使う任意の推論強度を指定する。 |
+
+選択内容は一時的で永続化されません。workflow、mode、provider、model の変更は、次の通常メッセージまたは `/go` で新しい AI session を作り、以前の会話履歴を参照情報として1回だけ渡します。effort だけの変更は現在の session の次回呼び出しへ適用されます。provider を変更すると、一時的な model と effort は消去されます。次の入力までに同じ設定コマンドを複数回実行した場合は、各設定で最後に選択した値だけが適用されます。これらの会話用 override は workflow 実行には影響しません。
 
 ### 実行例
 
@@ -76,7 +84,7 @@ Select workflow:
     Research/
     Cancel
 
-Interactive mode - Enter task content. Commands: /go (execute), /cancel (exit)
+対話モード - タスク内容を入力してください。準備ができたら /go で指示書を作成・実行します。
 
 > I want to add user authentication feature
 

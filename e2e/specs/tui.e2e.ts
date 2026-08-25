@@ -141,13 +141,13 @@ describe('E2E: Ink TUI', () => {
 
     await waitForSelector(tui, MODE_PROMPT);
     const listing = tui.output();
-    for (const label of ['Assistant', 'Grill Me', 'Persona', 'Quiet', 'Passthrough']) {
+    for (const label of ['Assistant', 'Grill Me', 'Persona']) {
       expect(listing, `mode "${label}" is missing`).toContain(label);
     }
 
     // The selector's own Cancel row is the last one; choosing it ends the run
     // without ever mounting Ink.
-    tui.write(ARROW_DOWN.repeat(5));
+    tui.write(ARROW_DOWN.repeat(3));
     // The highlighted row is what says the selector consumed the keys; the
     // `Cancel` label itself is on screen from the first draw.
     await tui.waitForOutput('❯ Cancel');

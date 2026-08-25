@@ -23,7 +23,7 @@ export function omitDeprecatedAssistantGherkin(
 
 export function warnDeprecatedAssistantGherkin(): void {
   process.emitWarning(
-    'assistant.gherkin is deprecated and ignored. Gherkin is always enabled; use assistant.formal_spec for Alloy and Quint guidance.',
+    'assistant.gherkin is deprecated and ignored. Gherkin guidance applies only to development and implementation tasks; use assistant.formal_spec for Alloy and Quint guidance.',
     { code: 'TAKT_DEPRECATED_CONFIG' },
   );
 }

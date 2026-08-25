@@ -100,26 +100,59 @@ export interface AssistantConversationInput {
   runSessionContext?: RunSessionContext;
   provider?: ProviderType;
   model?: string;
+  effort?: string;
+  /** Temporary model/effort errors must remain visible until the user retries. */
+  disableSessionRetry?: boolean;
   sessionId?: string;
+  /** Already resolved provider state retained across a TUI-only session rebuild. */
+  resolvedSessionContext?: SessionContext;
+}
+
+interface ConversationSessionResolution {
+  provider?: ProviderType;
+  model?: string;
+  resolvedSessionContext?: SessionContext;
+}
+
+interface ConversationSessionOverrides extends ConversationSessionResolution {
+  effort?: string;
+  disableSessionRetry?: boolean;
+}
+
+function resolveConversationSessionContext(
+  cwd: string,
+  personaName: string,
+  overrides: ConversationSessionResolution,
+): SessionContext {
+  if (overrides.resolvedSessionContext !== undefined) {
+    return {
+      ...overrides.resolvedSessionContext,
+      personaName,
+      sessionId: undefined,
+      ...(overrides.model ? { model: overrides.model } : {}),
+    };
+  }
+  if (!overrides.provider && !overrides.model) {
+    return initializeSession(cwd, personaName);
+  }
+  return initializeSession(cwd, personaName, {
+    ...(overrides.provider ? { provider: overrides.provider } : {}),
+    ...(overrides.model ? { model: overrides.model } : {}),
+  });
 }
 
 export function createAssistantConversationPlan(
   cwd: string,
   input: AssistantConversationInput,
 ): ConversationPlan {
-  // Omitted entirely when the CLI gave no override, so the assistant provider
-  // ladder resolves exactly as it does without the flags.
   const persona = getAssistantSessionPersona(input.assistantMode);
-  // The third argument is omitted, not passed as undefined, so the assistant
-  // provider ladder sees exactly the call shape it saw before the CLI flags.
-  const sessionArgs: Parameters<typeof initializeSession> = input.provider || input.model
-    ? [cwd, persona, {
-      ...(input.provider ? { provider: input.provider } : {}),
-      ...(input.model ? { model: input.model } : {}),
-    }]
-    : [cwd, persona];
-  const baseCtx = initializeSession(...sessionArgs);
-  const ctx = input.sessionId ? { ...baseCtx, sessionId: input.sessionId } : baseCtx;
+  const baseCtx = resolveConversationSessionContext(cwd, persona, input);
+  const ctx: SessionContext = {
+    ...baseCtx,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.effort ? { effort: input.effort } : {}),
+    ...(input.disableSessionRetry ? { disableSessionRetry: true } : {}),
+  };
   const grillMe = input.assistantMode === 'grill-me';
   const assistantInitContext = loadAssistantInitContext(cwd);
   const formalSpec = input.formalSpec ?? resolveFormalSpecModeWithoutPrompt(cwd);
@@ -155,8 +188,14 @@ export function createAssistantConversationPlan(
 export function createPersonaConversationPlan(
   cwd: string,
   firstStep: FirstStepInfo,
+  overrides: ConversationSessionOverrides = {},
 ): ConversationPlan {
-  const ctx = initializeSession(cwd, 'persona-interactive');
+  const baseCtx = resolveConversationSessionContext(cwd, 'persona-interactive', overrides);
+  const ctx: SessionContext = {
+    ...baseCtx,
+    ...(overrides.effort ? { effort: overrides.effort } : {}),
+    ...(overrides.disableSessionRetry ? { disableSessionRetry: true } : {}),
+  };
 
   return {
     ctx,

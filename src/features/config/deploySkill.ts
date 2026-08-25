@@ -11,7 +11,7 @@ export async function deploySkill(): Promise<void> {
     skillResourceDirName: 'skill',
     existingInstallMessage: 'Claude Code Skill が既にインストールされています。',
     usageCommand: '使い方: /takt <workflow-name> <task>',
-    usageExample: '例:     /takt passthrough "Hello World テスト"',
+    usageExample: '例:     /takt default "Hello World テスト"',
     showReferencesSummary: false,
     includeAgentsDirectory: false,
     showAgentsSummary: false,

@@ -24,6 +24,8 @@ export interface ProviderCallOptions {
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   model?: string;
+  /** Per-call interactive reasoning effort override. */
+  effort?: string;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   /**

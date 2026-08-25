@@ -36,6 +36,7 @@
     "src/__tests__/imageAttachments.test.ts",
     "src/__tests__/instructMode.test.ts",
     "src/__tests__/interactive-mode.test.ts",
+    "src/__tests__/interactive-provider-effort.test.ts",
     "src/__tests__/interactive.test.ts",
     "src/__tests__/issue-comment-error.performance.test.ts",
     "src/__tests__/mock-scenario-stream-chunks.test.ts",
@@ -69,13 +70,13 @@
     "src/__tests__/tui-display-text.test.ts",
     "src/__tests__/tui-editor-state.test.ts",
     "src/__tests__/tui-image-paste-input.test.ts",
-    "src/__tests__/tui-passthrough-view.test.tsx",
     "src/__tests__/tui-prompt-layout.test.ts",
     "src/__tests__/tui-prompt-screen.test.tsx",
     "src/__tests__/tui-run.test.ts",
     "src/__tests__/tui-task-conversation.test.ts",
     "src/__tests__/tui-terminal-ownership.test.ts",
     "src/__tests__/workflow-inspect.test.ts",
+    "src/__tests__/workflow-preview.test.ts",
     "src/__tests__/workflowCallResolver.test.ts"
   ],
   "exclude": []

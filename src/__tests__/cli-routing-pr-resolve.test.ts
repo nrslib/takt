@@ -68,8 +68,6 @@ vi.mock('../features/pipeline/index.js', () => ({
 vi.mock('../features/interactive/index.js', () => ({
   interactiveMode: vi.fn(),
   selectInteractiveMode: vi.fn(() => 'assistant'),
-  passthroughMode: vi.fn(),
-  quietMode: vi.fn(),
   personaMode: vi.fn(),
   resolveLanguage: vi.fn(() => 'en'),
   selectRun: vi.fn(() => null),
@@ -137,8 +135,6 @@ vi.mock('../app/cli/helpers.js', () => ({
 import { selectAndExecuteTask, determineWorkflow, saveTaskFromInteractive, createIssueAndSaveTask } from '../features/tasks/index.js';
 import {
   interactiveMode,
-  passthroughMode,
-  quietMode,
   personaMode,
   selectInteractiveMode,
 } from '../features/interactive/index.js';
@@ -152,8 +148,6 @@ import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockInteractiveMode = vi.mocked(interactiveMode);
-const mockPassthroughMode = vi.mocked(passthroughMode);
-const mockQuietMode = vi.mocked(quietMode);
 const mockPersonaMode = vi.mocked(personaMode);
 const mockSelectInteractiveMode = vi.mocked(selectInteractiveMode);
 const mockExecutePipeline = vi.mocked(executePipeline);
@@ -192,8 +186,6 @@ beforeEach(() => {
   mockDetermineWorkflow.mockResolvedValue('default');
   mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] });
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
-  mockPassthroughMode.mockResolvedValue({ action: 'execute', task: 'passthrough task' });
-  mockQuietMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockPersonaMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockSelectInteractiveMode.mockResolvedValue('assistant');
   mockListAllTaskItems.mockReturnValue([]);
@@ -483,25 +475,6 @@ describe('PR resolution in routing', () => {
       );
     });
 
-    it('should pass PR context only to quiet mode', async () => {
-      mockOpts.pr = 456;
-      mockSelectInteractiveMode.mockResolvedValueOnce('quiet');
-      const prReview = createMockPrReview();
-      mockCheckCliStatus.mockReturnValue({ available: true });
-      mockFetchPrReviewComments.mockReturnValue(prReview);
-
-      await executeDefaultAction();
-
-      expect(mockQuietMode).toHaveBeenCalledWith(
-        '/test/cwd',
-        {
-          sourceContext: expect.stringContaining('Fix auth bug'),
-        },
-        expect.anything(),
-      );
-      expect(mockInteractiveMode).not.toHaveBeenCalled();
-    });
-
     it('should pass PR context only to persona mode', async () => {
       mockOpts.pr = 456;
       mockSelectInteractiveMode.mockResolvedValueOnce('persona');
@@ -533,7 +506,7 @@ describe('PR resolution in routing', () => {
       expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
 
-    it('should not offer passthrough mode when only PR source context is available', async () => {
+    it('should offer the supported modes when PR source context is available', async () => {
       mockOpts.pr = 456;
       const prReview = createMockPrReview();
       mockCheckCliStatus.mockReturnValue({ available: true });
@@ -543,8 +516,7 @@ describe('PR resolution in routing', () => {
 
       expect(mockSelectInteractiveMode).toHaveBeenCalledWith(
         'en',
-        undefined,
-        ['assistant', 'grill-me', 'persona', 'quiet'],
+        ['assistant', 'grill-me', 'persona'],
       );
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
@@ -556,7 +528,6 @@ describe('PR resolution in routing', () => {
         undefined,
         { excludeActions: ['create_issue'] },
       );
-      expect(mockPassthroughMode).not.toHaveBeenCalled();
     });
 
     it('should not resolve issues when --pr is specified', async () => {

@@ -218,7 +218,6 @@ export function normalizeWorkflowConfig(
     initialStep: parsed.initial_step ?? steps[0]!.name,
     maxSteps: parsed.max_steps,
     loopMonitors,
-    interactiveMode: parsed.interactive_mode,
     ...(facetPools === undefined ? {} : { facetPools }),
   };
   attachWorkflowResolvedSections(config, {

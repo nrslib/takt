@@ -33,8 +33,10 @@ describe('getWorkflowDescription', () => {
         name: 'implement',
         instruction: 'Implement the task',
         rules: [{ condition: 'done', next: 'COMPLETE' }],
+        engineSynthesized: true,
+        providerOptions: { claude: { allowedTools: ['Bash'] } },
       }],
-    } as WorkflowConfig;
+    } as unknown as WorkflowConfig;
   }
 
   function writePreviewRuntime(
@@ -159,6 +161,20 @@ describe('getWorkflowDescription', () => {
       providerSource: 'cli',
       modelSource: 'cli',
     });
+    const interactiveProviderOverride = getWorkflowDescription(
+      'dynamic-preview',
+      projectDir,
+      1,
+      projectDir,
+      undefined,
+      { provider: 'opencode' },
+    );
+    expect(interactiveProviderOverride.stepPreviews[0]?.substeps?.[0]).toMatchObject({
+      name: 'dynamic-selector',
+      provider: 'codex',
+      model: 'gpt-selector',
+    });
+    expect(interactiveProviderOverride.firstStep?.provider).toBe('opencode');
     expect(description.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
     expect(overridden.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
     const facetDir = join(workflowDir, 'facets', 'policies');
@@ -225,6 +241,70 @@ describe('getWorkflowDescription', () => {
     expect(description.stepPreviews[0]).toMatchObject({ model: 'gpt-default' });
     expect(description.stepPreviews[0]).toMatchObject({ provider: 'mock' });
     expect(description.companionReviewMode).toBe('completion');
+  });
+
+  it('legacy provider-only override does not inherit provider-tied options', () => {
+    const projectDir = createProject();
+    const globalConfigDir = createProject();
+    const configDir = join(projectDir, '.takt');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), [
+      'provider: codex',
+      'provider_options:',
+      '  claude:',
+      '    allowed_tools:',
+      '      - Read',
+    ].join('\n'));
+
+    const description = withGlobalConfigDirOverride(globalConfigDir, () => getWorkflowDescriptionFromConfig(
+      createProgrammaticPreviewWorkflow(),
+      projectDir,
+      1,
+      projectDir,
+      { provider: 'claude' },
+    ));
+
+    expect(description.stepPreviews[0]).toMatchObject({ provider: 'claude' });
+    expect(description.stepPreviews[0]?.allowedTools).not.toContain('Read');
+    expect(description.firstStep?.allowedTools).not.toContain('Read');
+  });
+
+  it('firstStep overrideだけをpersona previewへ適用し通常stepの解決を維持する', () => {
+    const projectDir = createProject();
+    const globalConfigDir = createProject();
+    const configDir = join(projectDir, '.takt');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), [
+      'provider: opencode',
+      'model: startup-model',
+      'provider_options:',
+      '  opencode:',
+      '    allowed_tools:',
+      '      - Read',
+      '  claude:',
+      '    allowed_tools:',
+      '      - Bash',
+    ].join('\n'));
+
+    const description = withGlobalConfigDirOverride(globalConfigDir, () => getWorkflowDescriptionFromConfig(
+      createProgrammaticPreviewWorkflow(),
+      projectDir,
+      1,
+      projectDir,
+      undefined,
+      undefined,
+      undefined,
+      { provider: 'claude' },
+    ));
+
+    expect(description.stepPreviews[0]).toMatchObject({
+      provider: 'opencode',
+      model: 'startup-model',
+      allowedTools: ['Read'],
+    });
+    expect(description.firstStep).toMatchObject({
+      allowedTools: ['Bash'],
+    });
   });
 
   it('workflow descriptionへresolved live companion review modeを保持する', () => {

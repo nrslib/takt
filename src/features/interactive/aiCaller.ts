@@ -44,6 +44,10 @@ export interface SessionContext {
   sessionId: string | undefined;
   providerOptions?: StepProviderOptions;
   permissionMode?: PermissionMode;
+  /** Free-form per-call effort override selected in the interactive TUI. */
+  effort?: string;
+  /** Do not hide an invalid temporary override behind an automatic retry. */
+  disableSessionRetry?: boolean;
 }
 
 interface CallAIWithRetryOptions {
@@ -167,6 +171,7 @@ export async function callAIWithRetry(
       ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
       ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
       providerOptions: ctx.providerOptions,
+      effort: ctx.effort,
       abortSignal: abortController.signal,
       onStream: resolveStreamHandler(display),
       imageAttachments: nativeImageAttachments,
@@ -174,7 +179,7 @@ export async function callAIWithRetry(
     display?.flush();
     const success = response.status !== 'blocked' && response.status !== 'error';
 
-    if (!success && sessionId) {
+    if (!success && sessionId && ctx.effort === undefined && ctx.disableSessionRetry !== true) {
       log.info('Session invalid, retrying without session');
       sessionId = undefined;
       const retryDisplay = outputMode === 'terminal'
@@ -188,6 +193,7 @@ export async function callAIWithRetry(
         ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
         ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
         providerOptions: ctx.providerOptions,
+        effort: ctx.effort,
         abortSignal: abortController.signal,
         onStream: resolveStreamHandler(retryDisplay),
         imageAttachments: nativeImageAttachments,

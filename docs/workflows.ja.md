@@ -895,14 +895,6 @@ schemas:
 
 `auto_routing`、provider/model の既定値、provider options、routing は workflow YAML のフィールドではありません。provider/model/options と routing は既存の `config.yaml` legacy mode と CLI/env override を維持したまま `runtime.yaml` が所有します。`rate_limit_fallback` は legacy の `config.yaml` 設定として残り、workflow YAML のフィールドではありません。workflow YAML で provider に関係する能力を指定する唯一の面は `capabilities` です。
 
-### `interactive_mode`
-
-`takt` を引数なしで起動したときのデフォルト interactive mode。`assistant`（デフォルト） / `grill-me` / `passthrough` / `quiet` / `persona` のいずれか。`grill-me` は推奨案付きの質問を1問ずつ行い、要件が固まると `/go` を案内する。
-
-```yaml
-interactive_mode: assistant
-```
-
 ### 削除された workflow 実行設定
 
 `workflow_config.provider`、`workflow_config.model`、`workflow_config.provider_options`、step の `provider` / `model` / `provider_options`、`loop_monitors.judge` の provider 設定、`workflow_call.overrides` は拒否されます。実行設定は `runtime.yaml` へ移してください。`workflow_config.runtime.prepare` の process 準備ブロックは引き続き利用できます。
