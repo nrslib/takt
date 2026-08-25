@@ -40,7 +40,13 @@ function runWithImplementation(source, { captureTrace = false } = {}) {
       HOME: tempDir,
       ...(captureTrace ? { STATE_AFTER_EVENT_TRACE_PATH: tracePath } : {}),
     };
-    execFileSync(process.execPath, ['--test'], { cwd: tempDir, env, stdio: 'pipe' });
+    execFileSync(process.execPath, ['--test'], {
+      cwd: tempDir,
+      env,
+      stdio: 'pipe',
+      timeout: 60_000,
+      killSignal: 'SIGKILL',
+    });
     passed = true;
   } catch {
     passed = false;
