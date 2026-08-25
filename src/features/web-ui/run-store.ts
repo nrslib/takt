@@ -392,8 +392,13 @@ async function readLogTail(
     const stats = await handle.stat();
     const start = Math.max(0, stats.size - MAX_LOG_BYTES);
     const buffer = Buffer.alloc(stats.size - start);
-    await handle.read(buffer, 0, buffer.length, start);
-    let text = buffer.toString('utf8');
+    let filled = 0;
+    while (filled < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, start + filled);
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    let text = buffer.subarray(0, filled).toString('utf8');
     if (start > 0) {
       const firstNewline = text.indexOf('\n');
       text = firstNewline === -1 ? '' : text.slice(firstNewline + 1);

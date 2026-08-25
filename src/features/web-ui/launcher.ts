@@ -1,9 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isAbsolute } from 'node:path';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { registerProject, type RegisteredProject } from '../../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository, type CentralWorktreeRequest } from '../../infra/task/centralStateRepository.js';
 import {
+  buildCentralWorkerStderrPath,
   buildWorkerArguments,
   CENTRAL_EXECUTION_ID_ENV,
   CENTRAL_GENERATION_ENV,
@@ -53,8 +55,16 @@ function requireText(value: unknown, label: string, maxLength: number): string {
 function parseWorktree(value: unknown): CentralWorktreeRequest {
   if (value === undefined) return true;
   if (value === false || value === true) return value;
-  if (typeof value === 'string' && value.trim().length > 0 && !value.includes('\0')) return value;
-  throw new Error('worktree must be false, true, or a non-empty path');
+  if (typeof value === 'string' && !value.includes('\0')) {
+    const trimmed = value.trim();
+    const segments = trimmed.split(/[\\/]+/u);
+    if (
+      trimmed.length > 0
+      && trimmed.length <= 4096
+      && (isAbsolute(trimmed) || !segments.includes('..'))
+    ) return trimmed;
+  }
+  throw new Error('worktree must be false, true, or a safe path');
 }
 
 export function parseLaunchRequest(value: unknown): LaunchRequest {
@@ -139,6 +149,11 @@ export async function launchTaktRun(options: {
       generation: task.generation,
       executionId: decision.executionId,
       ownerToken,
+      stderrPath: buildCentralWorkerStderrPath(
+        repository.paths.eventsDirectory,
+        task.taskId,
+        decision.executionId,
+      ),
       spawnProcess: options.spawnProcess,
     });
     child = spawned.child;

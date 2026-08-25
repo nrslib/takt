@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import {
+  chmod,
   access,
   lstat,
   mkdir,
@@ -209,6 +210,11 @@ export async function registerProject(options: {
   const locationId = projectIdForCanonicalDirectory(canonicalDirectory);
   const directory = registryDirectory(options.globalConfigDirectory);
   await mkdir(directory, { recursive: true, mode: 0o700 });
+  const directoryStats = await lstat(directory);
+  if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) {
+    throw new Error('Project registry directory is not a regular directory');
+  }
+  await chmod(directory, 0o700);
   const target = join(directory, `${locationId}.json`);
   let existing: StoredProjectRegistration | undefined;
   try {

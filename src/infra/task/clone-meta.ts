@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../shared/utils/index.js';
 
 const log = createLogger('clone');
@@ -22,9 +23,9 @@ export function saveCloneMeta(projectDir: string, branch: string, clonePath: str
   const mode = metadataDirectory === undefined ? 0o644 : 0o600;
   fs.mkdirSync(directory, { recursive: true, mode: metadataDirectory === undefined ? 0o755 : 0o700 });
   if (metadataDirectory !== undefined) fs.chmodSync(directory, 0o700);
-  const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporary, JSON.stringify({ branch, clonePath }), { encoding: 'utf8', mode });
+    fs.writeFileSync(temporary, JSON.stringify({ branch, clonePath }), { encoding: 'utf8', mode, flag: 'wx' });
     fs.chmodSync(temporary, mode);
     fs.renameSync(temporary, filePath);
   } finally {

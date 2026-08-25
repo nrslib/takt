@@ -22,47 +22,43 @@ export function resolveCentralWorktree(input: {
   readonly configuredWorktreeDirectory?: string;
   readonly centralFallbackAllowed?: boolean;
 }): CentralWorktreeResolution {
+  if (!isAbsolute(input.globalConfigDirectory) || input.globalConfigDirectory.length === 0) {
+    throw new Error('Central worktree resolution requires an absolute global config directory');
+  }
   if (input.request === false) {
     return { enabled: false, skipProjectLocalTaktSync: true };
   }
   const central = join(input.globalConfigDirectory, 'worktrees', input.stateId);
   const configured = input.configuredWorktreeDirectory;
+  const cloneMetadataDirectory = join(
+    input.globalConfigDirectory,
+    'state',
+    'projects',
+    input.stateId,
+    'worktree-metadata',
+  );
+  const provisioned = (baseDirectory: string): CentralWorktreeResolution => ({
+    enabled: true,
+    baseDirectory,
+    cloneMetadataDirectory,
+    skipProjectLocalTaktSync: true,
+  });
   if (typeof input.request === 'string') {
-    return {
-      enabled: true,
-      baseDirectory: isAbsolute(input.request)
-        ? resolve(input.request)
-        : resolve(input.executionDirectory, input.request),
-      cloneMetadataDirectory: join(input.globalConfigDirectory, 'state', 'projects', input.stateId, 'worktree-metadata'),
-      skipProjectLocalTaktSync: true,
-    };
+    return provisioned(isAbsolute(input.request)
+      ? resolve(input.request)
+      : resolve(input.executionDirectory, input.request));
   }
   if (configured !== undefined) {
-    return {
-      enabled: true,
-      baseDirectory: isAbsolute(configured)
-        ? resolve(configured)
-        : resolve(input.projectDirectory, configured),
-      cloneMetadataDirectory: join(input.globalConfigDirectory, 'state', 'projects', input.stateId, 'worktree-metadata'),
-      skipProjectLocalTaktSync: true,
-    };
+    return provisioned(isAbsolute(configured)
+      ? resolve(configured)
+      : resolve(input.projectDirectory, configured));
   }
   const sibling = resolve(input.projectDirectory, '..', 'takt-worktrees');
   if (canProvision(sibling)) {
-    return {
-      enabled: true,
-      baseDirectory: sibling,
-      cloneMetadataDirectory: join(input.globalConfigDirectory, 'state', 'projects', input.stateId, 'worktree-metadata'),
-      skipProjectLocalTaktSync: true,
-    };
+    return provisioned(sibling);
   }
   if (input.centralFallbackAllowed !== false) {
-    return {
-      enabled: true,
-      baseDirectory: central,
-      cloneMetadataDirectory: join(input.globalConfigDirectory, 'state', 'projects', input.stateId, 'worktree-metadata'),
-      skipProjectLocalTaktSync: true,
-    };
+    return provisioned(central);
   }
   throw new Error('The configured sibling worktree directory is not provisionable');
 }

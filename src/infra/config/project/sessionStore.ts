@@ -4,7 +4,8 @@
  * Manages persona sessions and input history persistence.
  */
 
-import { chmodSync, existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { getProjectConfigDir, ensureDir } from '../paths.js';
@@ -14,9 +15,9 @@ import { getProjectConfigDir, ensureDir } from '../paths.js';
  * This prevents corruption when multiple processes write simultaneously.
  */
 export function writeFileAtomic(filePath: string, content: string, mode = 0o644): void {
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(tempPath, content, { encoding: 'utf-8', mode });
+    writeFileSync(tempPath, content, { encoding: 'utf-8', mode, flag: 'wx' });
     chmodSync(tempPath, mode);
     renameSync(tempPath, filePath);
   } catch (error) {
@@ -29,6 +30,19 @@ export function writeFileAtomic(filePath: string, content: string, mode = 0o644)
     }
     throw error;
   }
+}
+
+function sessionFileMode(storageDirectory?: string): number {
+  return storageDirectory === undefined ? 0o644 : 0o600;
+}
+
+function ensureSessionDirectory(directory: string, storageDirectory?: string): void {
+  if (storageDirectory === undefined) {
+    ensureDir(directory);
+    return;
+  }
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
 }
 
 // ============ Input History ============
@@ -209,13 +223,13 @@ export function savePersonaSessions(
 ): void {
   const directory = storageDirectory ?? getProjectConfigDir(projectDir);
   const path = getPersonaSessionsPath(projectDir, storageDirectory);
-  ensureDir(directory);
+  ensureSessionDirectory(directory, storageDirectory);
   const data: PersonaSessionData = {
     personaSessions: sessions,
     updatedAt: new Date().toISOString(),
     provider,
   };
-  writeFileAtomic(path, JSON.stringify(data, null, 2), storageDirectory === undefined ? 0o644 : 0o600);
+  writeFileAtomic(path, JSON.stringify(data, null, 2), sessionFileMode(storageDirectory));
 }
 
 /**
@@ -231,11 +245,11 @@ export function updatePersonaSession(
 ): void {
   updateSessionData(
     getPersonaSessionsPath(projectDir, storageDirectory),
-    () => ensureDir(storageDirectory ?? getProjectConfigDir(projectDir)),
+    () => ensureSessionDirectory(storageDirectory ?? getProjectConfigDir(projectDir), storageDirectory),
     persona,
     sessionId,
     provider,
-    storageDirectory === undefined ? 0o644 : 0o600,
+    sessionFileMode(storageDirectory),
   );
 }
 
@@ -298,11 +312,11 @@ export function updateWorktreeSession(
 ): void {
   updateSessionData(
     getWorktreeSessionPath(projectDir, worktreePath, storageDirectory),
-    () => ensureDir(getWorktreeSessionsDir(projectDir, storageDirectory)),
+    () => ensureSessionDirectory(getWorktreeSessionsDir(projectDir, storageDirectory), storageDirectory),
     personaName,
     sessionId,
     provider,
-    storageDirectory === undefined ? 0o644 : 0o600,
+    sessionFileMode(storageDirectory),
   );
 }
 

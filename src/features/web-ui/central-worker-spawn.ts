@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { closeSync, fchmodSync, fstatSync, openSync } from 'node:fs';
+import { join } from 'node:path';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import type { CentralTaskRecord, CentralTaskRepository } from '../../infra/task/centralStateRepository.js';
 
@@ -29,6 +31,14 @@ export function buildWorkerArguments(workerEntryPath: string, input: {
   ];
 }
 
+export function buildCentralWorkerStderrPath(
+  eventsDirectory: string,
+  taskId: string,
+  executionId: string,
+): string {
+  return join(eventsDirectory, `worker-${taskId}-${executionId}.stderr.log`);
+}
+
 export interface SpawnCentralWorkerOptions {
   readonly workerEntryPath: string;
   readonly projectDirectory: string;
@@ -38,6 +48,8 @@ export interface SpawnCentralWorkerOptions {
   readonly generation: number;
   readonly executionId: string;
   readonly ownerToken: string;
+  /** Durable central-state diagnostics for failures before worker adoption. */
+  readonly stderrPath?: string;
   readonly spawnProcess?: SpawnProcess;
 }
 
@@ -217,6 +229,22 @@ export function waitForSpawn(child: ChildProcess): Promise<number> {
   });
 }
 
+function openCentralWorkerStderr(stderrPath: string): number {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(stderrPath, 'wx', 0o600);
+    const stats = fstatSync(descriptor);
+    if (!stats.isFile()) {
+      throw new CentralWorkerStartupError('Central worker diagnostics must be a regular file');
+    }
+    fchmodSync(descriptor, 0o600);
+    return descriptor;
+  } catch (error) {
+    if (descriptor !== undefined) closeSync(descriptor);
+    throw error;
+  }
+}
+
 /**
  * The owner token is deliberately present only in this private worker handoff
  * environment. It is never included in argv or the persisted task ledger.
@@ -225,25 +253,33 @@ export async function spawnCentralWorker(
   options: SpawnCentralWorkerOptions,
 ): Promise<SpawnedCentralWorker> {
   const spawnProcess = options.spawnProcess ?? spawn;
-  const child = spawnProcess(
-    process.execPath,
-    buildWorkerArguments(options.workerEntryPath, options),
-    {
-      cwd: options.projectDirectory,
-      detached: true,
-      shell: false,
-      stdio: 'ignore',
-      env: {
-        ...buildChildProcessEnv(process.env, { centralExecution: true }),
-        TAKT_CONFIG_DIR: options.globalConfigDirectory,
-        [CENTRAL_OWNER_TOKEN_ENV]: options.ownerToken,
-        [CENTRAL_STATE_ID_ENV]: options.stateId,
-        [CENTRAL_TASK_ID_ENV]: options.taskId,
-        [CENTRAL_EXECUTION_ID_ENV]: options.executionId,
-        [CENTRAL_GENERATION_ENV]: String(options.generation),
+  let stderrFd: number | undefined;
+  try {
+    if (options.stderrPath !== undefined) {
+      stderrFd = openCentralWorkerStderr(options.stderrPath);
+    }
+    const child = spawnProcess(
+      process.execPath,
+      buildWorkerArguments(options.workerEntryPath, options),
+      {
+        cwd: options.projectDirectory,
+        detached: true,
+        shell: false,
+        stdio: stderrFd === undefined ? 'ignore' : ['ignore', 'ignore', stderrFd],
+        env: {
+          ...buildChildProcessEnv(process.env, { centralExecution: true }),
+          TAKT_CONFIG_DIR: options.globalConfigDirectory,
+          [CENTRAL_OWNER_TOKEN_ENV]: options.ownerToken,
+          [CENTRAL_STATE_ID_ENV]: options.stateId,
+          [CENTRAL_TASK_ID_ENV]: options.taskId,
+          [CENTRAL_EXECUTION_ID_ENV]: options.executionId,
+          [CENTRAL_GENERATION_ENV]: String(options.generation),
+        },
       },
-    },
-  );
-  const pid = await waitForSpawn(child);
-  return { child, pid };
+    );
+    const pid = await waitForSpawn(child);
+    return { child, pid };
+  } finally {
+    if (stderrFd !== undefined) closeSync(stderrFd);
+  }
 }

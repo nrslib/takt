@@ -15,6 +15,7 @@ import {
   CENTRAL_STATE_ID_ENV,
   CENTRAL_TASK_ID_ENV,
   centralWorkerHasExited,
+  buildCentralWorkerStderrPath,
   waitForCentralWorkerStartup,
 } from './central-worker-spawn.js';
 import {
@@ -126,6 +127,11 @@ async function spawnNextCentralTask(
       generation: next.task.generation,
       executionId: next.executionId,
       ownerToken: next.ownerToken,
+      stderrPath: buildCentralWorkerStderrPath(
+        repository.paths.eventsDirectory,
+        next.task.taskId,
+        next.executionId,
+      ),
       spawnProcess: options.spawnProcess ?? spawn,
     });
     child = spawned.child;
@@ -195,7 +201,7 @@ async function executeAndCommit(
         request: task.worktree,
         projectDirectory: repository.locations.projectDirectory,
         executionDirectory: repository.locations.executionDirectory,
-        globalConfigDirectory: process.env.TAKT_CONFIG_DIR ?? '',
+        globalConfigDirectory: repository.globalConfigDirectory,
         stateId: repository.state.stateId,
         ...(configured === undefined ? {} : { configuredWorktreeDirectory: configured }),
       });

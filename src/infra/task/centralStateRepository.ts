@@ -15,7 +15,7 @@ import {
 import { constants } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { resolveStatePaths, UUID_PATTERN, type ExecutionLocations, type StatePaths } from '../../core/execution/locations.js';
-import { getProcessIdentity, isProcessAlive, sameProcessIdentity, type ProcessIdentity } from './process.js';
+import { getProcessIdentity, getSelfProcessIdentity, isProcessAlive, sameProcessIdentity, type ProcessIdentity } from './process.js';
 import {
   projectIdForCanonicalDirectory,
   resolveRegisteredProject,
@@ -272,6 +272,16 @@ interface StateLockOwner {
   readonly startedAt: string;
 }
 
+interface StateLockClaim {
+  readonly version: 1;
+  readonly claimToken: string;
+  readonly ownerToken: string;
+  readonly pid: number;
+  readonly processIdentity?: ProcessIdentity;
+  readonly dev: number;
+  readonly ino: number;
+}
+
 interface StateLockHandle {
   readonly handle: import('node:fs/promises').FileHandle;
   readonly owner: StateLockOwner;
@@ -280,6 +290,10 @@ interface StateLockHandle {
 
 function lockClaimPath(lockPath: string, ownerToken: string): string {
   return `${lockPath}.${createHash('sha256').update(ownerToken).digest('hex')}.claim`;
+}
+
+function lockInodeClaimPath(lockPath: string, ownerToken: string): string {
+  return `${lockClaimPath(lockPath, ownerToken)}.inode`;
 }
 
 function parseStateLockOwner(value: unknown): StateLockOwner | undefined {
@@ -302,9 +316,37 @@ function parseStateLockOwner(value: unknown): StateLockOwner | undefined {
   return raw as unknown as StateLockOwner;
 }
 
+function parseStateLockClaim(value: unknown): StateLockClaim | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Readonly<Record<string, unknown>>;
+  if (
+    raw.version !== 1
+    || typeof raw.claimToken !== 'string'
+    || raw.claimToken.length < 16
+    || typeof raw.ownerToken !== 'string'
+    || !Number.isSafeInteger(raw.pid)
+    || (raw.pid as number) <= 0
+    || !Number.isSafeInteger(raw.dev)
+    || !Number.isSafeInteger(raw.ino)
+  ) return undefined;
+  if (raw.processIdentity !== undefined && (
+    typeof raw.processIdentity !== 'object'
+    || typeof (raw.processIdentity as Readonly<Record<string, unknown>>).startTime !== 'string'
+  )) return undefined;
+  return raw as unknown as StateLockClaim;
+}
+
 async function readStateLockOwner(lockPath: string): Promise<StateLockOwner | undefined> {
   try {
     return parseStateLockOwner(JSON.parse(await readFile(lockPath, 'utf8')) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readStateLockClaim(claimPath: string): Promise<StateLockClaim | undefined> {
+  try {
+    return parseStateLockClaim(JSON.parse(await readFile(claimPath, 'utf8')) as unknown);
   } catch {
     return undefined;
   }
@@ -333,6 +375,93 @@ function lockOwnerIsStale(owner: StateLockOwner): boolean {
     && !sameProcessIdentity(owner.processIdentity, currentIdentity);
 }
 
+function lockClaimOwnerIsStale(claim: StateLockClaim): boolean {
+  let alive: boolean;
+  try {
+    alive = isProcessAlive(claim.pid);
+  } catch {
+    return false;
+  }
+  if (!alive) return true;
+  const currentIdentity = getProcessIdentity(claim.pid);
+  return claim.processIdentity !== undefined
+    && currentIdentity !== undefined
+    && !sameProcessIdentity(claim.processIdentity, currentIdentity);
+}
+
+async function compareDeleteClaim(
+  claimPath: string,
+  expected: StateLockClaim,
+  expectedStat: { readonly dev: number; readonly ino: number },
+): Promise<boolean> {
+  try {
+    const currentStat = await lstat(claimPath);
+    if (currentStat.dev !== expectedStat.dev || currentStat.ino !== expectedStat.ino) return false;
+    const current = await readStateLockClaim(claimPath);
+    if (current === undefined || current.claimToken !== expected.claimToken) return false;
+    const beforeDelete = await lstat(claimPath);
+    if (beforeDelete.dev !== expectedStat.dev || beforeDelete.ino !== expectedStat.ino) return false;
+    await unlink(claimPath);
+    return true;
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
+}
+
+async function publishStateLockClaim(
+  lockPath: string,
+  owner: StateLockOwner,
+  expectedStat: { readonly dev: number; readonly ino: number },
+  attempt = 0,
+): Promise<{ readonly claim: StateLockClaim; readonly claimStat: { readonly dev: number; readonly ino: number } } | undefined> {
+  const claimPath = lockClaimPath(lockPath, owner.ownerToken);
+  const temporary = `${claimPath}.${process.pid}.${randomUUID()}.tmp`;
+  const processIdentity = getSelfProcessIdentity();
+  const claim: StateLockClaim = {
+    version: 1,
+    claimToken: makeOwnerToken(),
+    ownerToken: owner.ownerToken,
+    pid: process.pid,
+    ...(processIdentity === undefined ? {} : { processIdentity }),
+    dev: expectedStat.dev,
+    ino: expectedStat.ino,
+  };
+  try {
+    await writeFile(temporary, `${JSON.stringify(claim)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    try {
+      await link(temporary, claimPath);
+    } catch (error) {
+      if (!isExists(error)) throw new CentralTaskCasError('Central state lock claim cannot be published atomically');
+      const existingStat = await lstat(claimPath).catch(() => undefined);
+      const existing = await readStateLockClaim(claimPath);
+      if (
+        existingStat !== undefined
+        && existing !== undefined
+        && existing.ownerToken === owner.ownerToken
+        && existing.dev === expectedStat.dev
+        && existing.ino === expectedStat.ino
+        && lockClaimOwnerIsStale(existing)
+      ) {
+        const inodeClaimPath = lockInodeClaimPath(lockPath, owner.ownerToken);
+        const inodeStat = await lstat(inodeClaimPath).catch(() => undefined);
+        if (inodeStat !== undefined && inodeStat.dev === expectedStat.dev && inodeStat.ino === expectedStat.ino) {
+          await unlink(inodeClaimPath).catch((unlinkError: unknown) => {
+            if (!isMissing(unlinkError)) throw unlinkError;
+          });
+        }
+        if (attempt > 0 || !(await compareDeleteClaim(claimPath, existing, existingStat))) return undefined;
+        return publishStateLockClaim(lockPath, owner, expectedStat, attempt + 1);
+      }
+      return undefined;
+    }
+    const claimStat = await lstat(claimPath);
+    return { claim, claimStat: { dev: claimStat.dev, ino: claimStat.ino } };
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+  }
+}
+
 /**
  * Remove exactly the inode observed by this cleaner. Every remover uses the
  * deterministic hard-link claim, so a replacement canonical lock can never
@@ -344,25 +473,30 @@ async function compareDeleteStateLock(
   expectedStat: { readonly dev: number; readonly ino: number },
 ): Promise<boolean> {
   const claimPath = lockClaimPath(lockPath, owner.ownerToken);
+  const claim = await publishStateLockClaim(lockPath, owner, expectedStat);
+  if (claim === undefined) return false;
+  const inodeClaimPath = lockInodeClaimPath(lockPath, owner.ownerToken);
   try {
-    await link(lockPath, claimPath);
-  } catch (error) {
-    if (isMissing(error) || isExists(error)) return false;
-    throw new CentralTaskCasError('Central state lock hard-link claim is unavailable');
-  }
-  try {
-    const [canonicalStat, claimStat, currentOwner] = await Promise.all([
+    try {
+      await link(lockPath, inodeClaimPath);
+    } catch (error) {
+      if (!isExists(error)) throw error;
+    }
+    const [canonicalStat, inodeStat, currentOwner, currentClaim] = await Promise.all([
       lstat(lockPath),
-      lstat(claimPath),
-      readStateLockOwner(claimPath),
+      lstat(inodeClaimPath),
+      readStateLockOwner(lockPath),
+      readStateLockClaim(claimPath),
     ]);
     if (
       canonicalStat.dev !== expectedStat.dev
       || canonicalStat.ino !== expectedStat.ino
-      || claimStat.dev !== expectedStat.dev
-      || claimStat.ino !== expectedStat.ino
+      || inodeStat.dev !== expectedStat.dev
+      || inodeStat.ino !== expectedStat.ino
       || currentOwner === undefined
       || !sameLockOwner(currentOwner, owner)
+      || currentClaim === undefined
+      || currentClaim.claimToken !== claim.claim.claimToken
     ) return false;
     const beforeDelete = await lstat(lockPath);
     if (beforeDelete.dev !== expectedStat.dev || beforeDelete.ino !== expectedStat.ino) return false;
@@ -372,9 +506,13 @@ async function compareDeleteStateLock(
     if (isMissing(error)) return false;
     throw error;
   } finally {
-    await unlink(claimPath).catch((error: unknown) => {
-      if (!isMissing(error)) throw error;
-    });
+    const inodeStat = await lstat(inodeClaimPath).catch(() => undefined);
+    if (inodeStat?.dev === expectedStat.dev && inodeStat.ino === expectedStat.ino) {
+      await unlink(inodeClaimPath).catch((error: unknown) => {
+        if (!isMissing(error)) throw error;
+      });
+    }
+    await compareDeleteClaim(claimPath, claim.claim, claim.claimStat);
   }
 }
 
@@ -389,7 +527,7 @@ async function waitForLock(lockPath: string): Promise<StateLockHandle> {
     try {
       temporaryHandle = await open(temporary, 'wx', 0o600);
       const fileStat = await temporaryHandle.stat();
-      const processIdentity = getProcessIdentity(process.pid);
+      const processIdentity = getSelfProcessIdentity();
       const owner: StateLockOwner = {
         version: 1,
         ownerToken: makeOwnerToken(),
@@ -450,8 +588,8 @@ async function waitForLock(lockPath: string): Promise<StateLockHandle> {
     if (owner !== undefined) {
       const lockStat = await lstat(lockPath).catch(() => undefined);
       if (lockStat !== undefined && lockOwnerIsStale(owner)) {
-        await compareDeleteStateLock(lockPath, owner, { dev: lockStat.dev, ino: lockStat.ino });
-        continue;
+        const removed = await compareDeleteStateLock(lockPath, owner, { dev: lockStat.dev, ino: lockStat.ino });
+        if (removed) continue;
       }
     }
     // An incomplete legacy lock has no safe owner identity. Leave it in
@@ -1140,11 +1278,16 @@ export class CentralTaskRepository {
         const currentIdentity = active.pid > 0 ? getProcessIdentity(active.pid) : undefined;
         const startingExpired = task.status === 'starting'
           && Date.parse(active.startedAt) + STARTING_RESERVATION_TIMEOUT_MS <= Date.now();
-        const processStale = active.pid > 0 && !isProcessAlive(active.pid)
-          || active.pid > 0
-            && active.processIdentity !== undefined
-            && currentIdentity !== undefined
-            && !sameProcessIdentity(active.processIdentity, currentIdentity);
+        let processStale = false;
+        try {
+          processStale = active.pid > 0 && !isProcessAlive(active.pid)
+            || active.pid > 0
+              && active.processIdentity !== undefined
+              && currentIdentity !== undefined
+              && !sameProcessIdentity(active.processIdentity, currentIdentity);
+        } catch {
+          processStale = false;
+        }
         const stale = startingExpired || processStale;
         if (!stale) return task;
         changed = true;

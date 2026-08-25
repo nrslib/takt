@@ -417,7 +417,7 @@ export class CodexClient {
     }
 
     const codexEnvironment = buildEnvWithNestedObservabilitySnapshot(
-      process.env,
+      buildChildProcessEnv(),
       options.childProcessEnv,
     ) as Record<string, string>;
     const shellPath = codexEnvironment.PATH;

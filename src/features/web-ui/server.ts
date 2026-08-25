@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -99,8 +99,50 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
 }
 
 function requireSessionToken(request: IncomingMessage, sessionToken: string): void {
-  if (request.headers['x-takt-web-token'] !== sessionToken) {
+  const candidate = request.headers['x-takt-web-token'];
+  if (
+    typeof candidate !== 'string'
+    || candidate.length !== sessionToken.length
+    || !timingSafeEqual(Buffer.from(candidate), Buffer.from(sessionToken))
+  ) {
     throw new HttpError(403, 'Session token is invalid');
+  }
+}
+
+function requireLoopbackOrigin(request: IncomingMessage): void {
+  const host = request.headers.host;
+  if (typeof host !== 'string' || host.length === 0) {
+    throw new HttpError(403, 'Host header is missing');
+  }
+  let parsedHost: URL;
+  try {
+    parsedHost = new URL(`http://${host}`);
+  } catch {
+    throw new HttpError(403, 'Host header is invalid');
+  }
+  const hostname = parsedHost.hostname.toLowerCase();
+  if (!new Set(['127.0.0.1', 'localhost', '[::1]', '::1']).has(hostname)) {
+    throw new HttpError(403, 'Host header is not allowed');
+  }
+  const localPort = request.socket.localPort;
+  if (localPort !== undefined && parsedHost.port !== '' && Number(parsedHost.port) !== localPort) {
+    throw new HttpError(403, 'Host port is not allowed');
+  }
+  const origin = request.headers.origin;
+  if (origin !== undefined) {
+    let parsedOrigin: URL;
+    try {
+      parsedOrigin = new URL(origin);
+    } catch {
+      throw new HttpError(403, 'Origin is not allowed');
+    }
+    if (
+      parsedOrigin.protocol !== 'http:'
+      || parsedOrigin.hostname.toLowerCase() !== hostname
+      || (localPort !== undefined && parsedOrigin.port !== '' && Number(parsedOrigin.port) !== localPort)
+    ) {
+      throw new HttpError(403, 'Origin is not allowed');
+    }
   }
 }
 
@@ -326,6 +368,7 @@ export async function createWebUiServer(options: {
       const method = request.method;
       const requestUrl = request.url;
       if (requestUrl === undefined) throw new HttpError(400, 'Request URL is missing');
+      requireLoopbackOrigin(request);
       const url = new URL(requestUrl, 'http://127.0.0.1');
       const asset = method === 'GET' ? assets.get(url.pathname) : undefined;
       if (asset !== undefined) {
@@ -465,6 +508,10 @@ export async function createWebUiServer(options: {
       }
       sendJson(response, 404, { error: 'Not found' });
     } catch (error) {
+      if (response.headersSent || response.writableEnded || response.destroyed) {
+        if (!response.writableEnded && !response.destroyed) response.end();
+        return;
+      }
       const httpError = asHttpError(error);
       sendJson(response, httpError.status, { error: httpError.message });
     }

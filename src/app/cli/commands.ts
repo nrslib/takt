@@ -9,7 +9,10 @@ import { parseFacetType, VALID_FACET_TYPES } from '../../features/config/facetTy
 import { program } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 
-function parseUiPort(value: string): number {
+export function parseUiPort(value: string): number {
+  if (!/^\d+$/u.test(value)) {
+    throw new InvalidArgumentError('Port must be a decimal integer between 0 and 65535');
+  }
   const port = Number(value);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new InvalidArgumentError('Port must be an integer between 0 and 65535');

@@ -1,4 +1,5 @@
 import { lstat, mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,6 +11,17 @@ import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 
 const servers: Array<{ close: () => void }> = [];
+
+function requestStatus(url: string, headers: Record<string, string>): Promise<number> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = httpRequest(url, { headers }, (response) => {
+      response.resume();
+      response.once('end', () => resolvePromise(response.statusCode ?? 0));
+    });
+    request.once('error', rejectPromise);
+    request.end();
+  });
+}
 
 afterEach(() => {
   for (const server of servers.splice(0)) server.close();
@@ -180,6 +192,21 @@ describe('Web UI run artifacts', () => {
 });
 
 describe('Web UI HTTP boundary', () => {
+  it('rejects non-loopback Host and Origin before exposing the session token', async () => {
+    const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-web-ui-global-'));
+    const server = await createWebUiServer({
+      globalConfigDirectory,
+      launch: async () => ({ pid: 9001, disposition: 'started' as const, mode: 'run' as const }),
+    });
+    servers.push(server);
+    const origin = await listenWebUiServer(server, 0);
+
+    await expect(requestStatus(`${origin}/api/session`, { Host: 'attacker.example' }))
+      .resolves.toBe(403);
+    await expect(fetch(`${origin}/api/session`, { headers: { Origin: 'http://attacker.example' } }))
+      .resolves.toMatchObject({ status: 403 });
+  });
+
   it('serves a chat-only composer with header execution context', async () => {
     const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-web-ui-global-'));
     const server = await createWebUiServer({

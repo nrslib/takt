@@ -13,7 +13,9 @@ export interface ProcessIdentity {
   readonly startTime: string;
 }
 
-export function getProcessIdentity(pid: number): ProcessIdentity | undefined {
+let selfProcessIdentity: ProcessIdentity | null | undefined;
+
+function readProcessIdentity(pid: number): ProcessIdentity | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
   if (process.platform !== 'darwin' && process.platform !== 'linux') return undefined;
   try {
@@ -35,6 +37,23 @@ export function getProcessIdentity(pid: number): ProcessIdentity | undefined {
   }
 }
 
+/** Resolve the current process identity once; its start time cannot change. */
+export function getSelfProcessIdentity(): ProcessIdentity | undefined {
+  if (selfProcessIdentity === undefined) {
+    selfProcessIdentity = readProcessIdentity(process.pid) ?? null;
+  }
+  return selfProcessIdentity ?? undefined;
+}
+
+export function getProcessIdentity(pid: number): ProcessIdentity | undefined {
+  if (pid === process.pid) return getSelfProcessIdentity();
+  return readProcessIdentity(pid);
+}
+
+/**
+ * Returns true only when both identities are known and equal. Unknown identity
+ * is never treated as a match, so callers remain fail-closed.
+ */
 export function sameProcessIdentity(
   first: ProcessIdentity | undefined,
   second: ProcessIdentity | undefined,
