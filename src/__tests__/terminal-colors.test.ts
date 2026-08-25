@@ -342,6 +342,46 @@ describe('user message terminal colors', () => {
     }
   });
 
+  it('should replay a pending Esc once when detached before the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const input = new ReadableInput();
+      const output = new FakeOutput();
+      const result = queryTerminalBackground(input, output);
+
+      await vi.advanceTimersByTimeAsync(TERMINAL_BACKGROUND_QUERY_TIMEOUT_MS);
+      const resolution = await result;
+      const guard = resolution.delayedResponseGuard;
+      expect(guard).toBeDefined();
+
+      guard?.attach();
+      input.setEncoding('utf8');
+      const inkInput: string[] = [];
+      const onReadable = (): void => {
+        let chunk: Buffer | string | null;
+        while ((chunk = input.read()) !== null) {
+          inkInput.push(Buffer.from(chunk).toString());
+        }
+      };
+      input.on('readable', onReadable);
+
+      input.push(Buffer.from('\x1b'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(inkInput).toEqual([]);
+
+      guard?.detach();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(inkInput.join('')).toBe('\x1b');
+
+      await vi.advanceTimersByTimeAsync(DELAYED_RESPONSE_ESCAPE_TIMEOUT_MS);
+      expect(inkInput.join('')).toBe('\x1b');
+
+      input.removeListener('readable', onReadable);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('should fall back when installing the probe data listener throws', async () => {
     const input = new FakeInput();
     const output = new FakeOutput();
