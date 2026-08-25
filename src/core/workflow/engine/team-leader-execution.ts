@@ -198,6 +198,7 @@ export async function runTeamLeaderExecution(
     };
     let feedbackPromise: Promise<MorePartsResponse> | undefined;
     let planningCorrectionForCompanionFindings = false;
+    let reviewCompletionFailed = false;
 
     try {
       let feedback: MorePartsResponse;
@@ -235,7 +236,13 @@ export async function runTeamLeaderExecution(
         && isTerminalFeedback(feedback)
         && options.reviewCompletion !== undefined
       ) {
-        const findings = await options.reviewCompletion(buildFeedbackArgs());
+        let findings: readonly CompanionFinding[];
+        try {
+          findings = await options.reviewCompletion(buildFeedbackArgs());
+        } catch (error) {
+          reviewCompletionFailed = true;
+          throw error;
+        }
         if (findings.length === 0) {
           break;
         }
@@ -300,6 +307,9 @@ export async function runTeamLeaderExecution(
         throw error;
       }
       if (isProviderStreamParseError(error)) {
+        throw error;
+      }
+      if (reviewCompletionFailed) {
         throw error;
       }
       options.onPlanningError?.(error);

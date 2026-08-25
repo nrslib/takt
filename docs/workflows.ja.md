@@ -1116,7 +1116,7 @@ step や Companion 定義単位の上書きはできません。
 
 workflow の遷移ルールから `companion.*` state は参照できません。Companion の指摘と失敗は advisory な診断情報であり、主 workflow の遷移は通常の semantic condition と Phase 3 の判定だけで決まります。
 
-Team Leader step では、各 part が独立した Companion runtime を持ちます。part 応答後にその時点の累積 diff をレビューし、採用 finding を同じ part session へ渡し、part-level loop が settle してから `PartResult` を公開します。他の part は並行実行を継続します。全 part が完了し、Team Leader が追加作業なしと判断した後は、aggregated response の確定前に別の Team 完了レビューを行います。採用された Team finding は typed evidence として既存の追加 part 計画へ渡され、修正 part も通常の part 実行経路を使います。part 専用 worktree、patch、changed-path 所有権、Companion 専用 scheduler は作成しません。
+Team Leader step では、各 part が独立した Companion runtime を持ちます。part 応答後にその時点の累積 diff をレビューし、採用 finding を同じ part session へ渡し、part-level loop が settle してから `PartResult` を公開します。他の part は並行実行を継続します。全 part が完了し、Team Leader が追加作業なしと判断した後は、aggregated response の確定前に別の Team 完了レビューを行います。採用された Team finding は typed evidence として既存の追加 part 計画へ渡され、修正 part も通常の part 実行経路を使います。修正 part が完了した場合は、aggregated response を確定する前に Team 完了レビューを再実行します。part 専用 worktree、patch、changed-path 所有権、Companion 専用 scheduler は作成しません。
 
 定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。
 

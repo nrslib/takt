@@ -49,7 +49,7 @@ export function makeStep(name: string, overrides: Partial<WorkflowStep> = {}): W
     instruction: `Run ${name}`,
     passPreviousResponse: true,
     ...overrides,
-  };
+  } as WorkflowStep;
 }
 
 export function makeResolvedFacetPool(

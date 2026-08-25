@@ -13,7 +13,7 @@ import {
   requestMoreParts as requestMorePartsImpl,
   type DecomposeTaskOptions,
 } from '../agents/agent-usecases.js';
-import type { CompanionFinding } from '../core/models/index.js';
+import type { AgentResponse, CompanionFinding } from '../core/models/index.js';
 import { runTagJudgeStage as runTagJudgeStageImpl } from '../agents/judge-status-usecase.js';
 import { requestDecompositionRawResponse as requestDecompositionRawResponseImpl } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
@@ -60,7 +60,7 @@ vi.mock('../agents/judge-utils.js', async (importOriginal) => {
   };
 });
 
-function doneResponse(content: string, structuredOutput?: Record<string, unknown>) {
+function doneResponse(content: string, structuredOutput?: Record<string, unknown>): AgentResponse {
   return {
     persona: 'tester',
     status: 'done' as const,
@@ -603,10 +603,9 @@ describe('agent-usecases', () => {
           'review',
           event,
         ),
-        onActivity: (activity) => recordWorkflowStepProviderActivity(
+        onActivity: () => recordWorkflowStepProviderActivity(
           deadline.recordActivity,
           'review',
-          activity,
         ),
       });
       await aiJudgeStarted;
@@ -1504,7 +1503,7 @@ describe('agent-usecases', () => {
         persona: 'team-leader',
         cancellablePartIds: [],
         workflowMeta,
-      } as DecomposeTaskOptions & { workflowMeta: typeof workflowMeta },
+      } as Parameters<typeof requestMorePartsImpl>[3],
     );
 
     expect(runAgent).toHaveBeenCalledWith(

@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import { isNormalOrTeamLeaderWorkflowStep, type NormalOrTeamLeaderWorkflowStep } from '../core/models/workflow-types.js';
 
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import {
@@ -70,6 +71,14 @@ function findWorkflowStep(workflow: WorkflowConfig, name: string): WorkflowStep 
   const step = workflow.steps.find((candidate) => candidate.name === name);
   if (!step) {
     throw new Error(`Workflow step "${name}" was not found in "${workflow.name}"`);
+  }
+  return step;
+}
+
+function findAgentWorkflowStep(workflow: WorkflowConfig, name: string): NormalOrTeamLeaderWorkflowStep {
+  const step = findWorkflowStep(workflow, name);
+  if (!isNormalOrTeamLeaderWorkflowStep(step)) {
+    throw new Error(`Expected agent workflow step "${name}"`);
   }
   return step;
 }
@@ -276,9 +285,9 @@ describe('loadWorkflowByIdentifier', () => {
       );
       const defaultTeam = loadWorkflowByIdentifier('takt-default-team', projectDir);
 
-      const implementationStep = findWorkflowStep(implementation, 'implement');
-      const fixStep = findWorkflowStep(remediation, 'fix');
-      const retryStep = findWorkflowStep(remediation, 'fix-retry');
+      const implementationStep = findAgentWorkflowStep(implementation, 'implement');
+      const fixStep = findAgentWorkflowStep(remediation, 'fix');
+      const retryStep = findAgentWorkflowStep(remediation, 'fix-retry');
       const developStep = findWorkflowStep(defaultTeam!, 'develop');
 
       expect(implementationStep.companion).toEqual({
@@ -287,7 +296,9 @@ describe('loadWorkflowByIdentifier', () => {
       });
       expect(fixStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
       expect(retryStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
-      expect(developStep.kind).toBe('workflow_call');
+      if (developStep.kind !== 'workflow_call') {
+        throw new Error('Expected default team develop to be a workflow_call step');
+      }
       expect(developStep.args).toEqual(expect.objectContaining({
         implementation_companions: expectedSelection,
       }));

@@ -329,6 +329,36 @@ describe('runTeamLeaderExecution', () => {
     expect(onCompletionPlanningFailure).not.toHaveBeenCalled();
   });
 
+  it('Team 完了レビューの失敗を計画失敗後の再レビューとして扱わない', async () => {
+    const parts = ['p1', 'p2'].map(makePart);
+    const reviewError = new Error('completion review failed');
+    const reviewCompletion = vi.fn().mockRejectedValue(reviewError);
+    const requestMoreParts = vi.fn().mockResolvedValue({
+      done: true,
+      reasoning: 'all work completed',
+      cancelPartIds: [],
+      parts: [],
+    });
+    const onPlanningError = vi.fn();
+    const onCompletionPlanningFailure = vi.fn();
+
+    const execution = runTeamLeaderExecution({
+      initialParts: parts,
+      maxConcurrency: 1,
+      runPart: vi.fn(async (part: PartDefinition) => makeResult(part)),
+      requestMoreParts,
+      reviewCompletion,
+      onPlanningError,
+      onCompletionPlanningFailure,
+    });
+
+    await expect(execution).rejects.toBe(reviewError);
+    expect(requestMoreParts).toHaveBeenCalledOnce();
+    expect(reviewCompletion).toHaveBeenCalledOnce();
+    expect(onPlanningError).not.toHaveBeenCalled();
+    expect(onCompletionPlanningFailure).not.toHaveBeenCalled();
+  });
+
   it('追加計画の失敗後に Team 指摘を検出した場合は completion failure を確定する', async () => {
     const part = makePart('p1');
     const planningError = new Error('feedback failed');
@@ -664,7 +694,7 @@ describe('runTeamLeaderExecution', () => {
           return makeResult(part);
         }
         await new Promise<void>((resolve) => {
-          signal.addEventListener('abort', resolve, { once: true });
+          signal.addEventListener('abort', () => resolve(), { once: true });
         });
         throw signal.reason;
       },
@@ -738,7 +768,7 @@ describe('runTeamLeaderExecution', () => {
       abortSignal: parentController.signal,
       runPart: async (part, _partIndex, _publicationFence, signal) => {
         if (part.id === 'p1') return makeResult(part);
-        await new Promise<void>((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
         cancellationObserved?.();
         await Promise.resolve();
         throw signal.reason;

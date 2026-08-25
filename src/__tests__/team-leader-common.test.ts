@@ -237,7 +237,7 @@ describe('createTeamLeaderPlanningStep', () => {
       companion: { fixed: ['reviewer'], pool: [] },
     };
     const context = makeInstructionContext({
-      companion: { mailboxDirectory: '/tmp/takt-mailbox' },
+      companion: { mailboxDirectory: '/tmp/takt-mailbox', reviewMode: 'completion' },
     });
 
     const planningPrompt = new InstructionBuilder(

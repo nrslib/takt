@@ -304,6 +304,9 @@ export class TeamLeaderRunner {
         },
       );
     using activeTeamCompanionRuntime = teamCompanionRuntime;
+    const composedLeaderOptions = activeTeamCompanionRuntime?.composeOptions(leaderBaseOptions)
+      ?? leaderBaseOptions;
+    activeTeamCompanionRuntime?.beginReviewAttempt();
     let teamCompanionFollowUpRound = 0;
     const completeTeamCompanionReview = async (
       implementerResponse: string,
@@ -316,7 +319,7 @@ export class TeamLeaderRunner {
       );
       return review.findings;
     };
-    const leaderStream = leaderBaseOptions.onStream;
+    const leaderStream = composedLeaderOptions.onStream;
     const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
     const inspectGuidance = isTeamLeaderInspectGuidanceApplicable(teamLeaderConfig.inspectTools);
     const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);

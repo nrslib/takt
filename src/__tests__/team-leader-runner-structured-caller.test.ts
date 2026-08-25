@@ -24,6 +24,7 @@ import type {
   AgentResponse,
   AgentWorkflowStep,
   CompanionFinding,
+  TeamLeaderWorkflowStep,
   WorkflowStep,
   WorkflowState,
 } from '../core/models/types.js';
@@ -192,7 +193,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             dispose: vi.fn(),
             inactivityTimeoutMs: 60_000,
           }),
-      runWith: vi.fn((deadline, operation) => deadlineContext.runWith(deadline, operation)),
+      runWith: vi.fn<WorkflowStepExecutionDeadlineContext['runWith']>(
+        <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>) => (
+          deadlineContext.runWith<T>(deadline, operation)
+        ),
+      ) as unknown as WorkflowStepExecutionDeadlineContext['runWith'],
     };
     const providerStreamBuilder = new OptionsBuilder(
       { projectCwd: '/tmp/project', provider: 'opencode' },
@@ -201,7 +206,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => undefined,
       () => '/tmp/project/.takt/runs/sample/reports',
       () => 'ja',
-      () => [{ name: 'implement' }],
+      () => [{ name: 'implement', personaDisplayName: 'implement', instruction: 'implement' }],
       () => 'workflow',
       () => undefined,
       undefined,
@@ -255,7 +260,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       observabilityEnabled: true,
       observabilityRunId: 'run-1',
       sanitizeObservabilityText: (text: string) => text,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
@@ -431,7 +436,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const deadlineContext = createWorkflowStepAbortSignalContext(undefined);
     const executionDeadlineContext: WorkflowStepExecutionDeadlineContext = {
       begin: vi.fn(() => selectorDeadline),
-      runWith: vi.fn((deadline, operation) => deadlineContext.runWith(deadline, operation)),
+      runWith: vi.fn<WorkflowStepExecutionDeadlineContext['runWith']>(
+        <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>) => (
+          deadlineContext.runWith<T>(deadline, operation)
+        ),
+      ) as unknown as WorkflowStepExecutionDeadlineContext['runWith'],
     };
     const prepareDynamicFacetStep = vi.fn(async (candidate: AgentWorkflowStep) => {
       expect(deadlineContext.getAbortSignal()).toBe(selectorDeadline.signal);
@@ -446,12 +455,13 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
 
     await expect(runner.runTeamLeaderStep(
       {
         name: 'implement',
         persona: 'coder',
+        personaDisplayName: 'coder',
         instruction: 'leader instruction',
         teamLeader: { maxConcurrency: 1, timeoutMs: 1_000 },
         dynamicFacets: { pool: 'implementation', maxSelected: 1 },
@@ -489,13 +499,26 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const deadlineContext = createWorkflowStepAbortSignalContext(undefined);
     const events: string[] = [];
     const runtimeSignals: AbortSignal[] = [];
+    const companionRuntimeCreations: Array<{
+      stepName: string;
+      abortSignal: AbortSignal | undefined;
+      deadlineSignal: AbortSignal | undefined;
+      runtimeOptions: { readonly diffBaseline?: typeof diffBaseline } | undefined;
+    }> = [];
     const completionSignals: Array<AbortSignal | undefined> = [];
+    const recordUsageCallbacks: Array<
+      ((success: boolean, usage: AgentResponse['providerUsage']) => void) | undefined
+    > = [];
     const diffBaseline = { resolve: vi.fn().mockResolvedValue('baseline') };
     const createCompanionDiffBaseline = vi.fn().mockReturnValue(diffBaseline);
     const makeCompanionRuntime = () => ({
       beginReviewAttempt: vi.fn(),
       composeOptions: vi.fn((options: Record<string, unknown>) => options),
-      complete: vi.fn(async () => {
+      complete: vi.fn(async (
+        _state: WorkflowState,
+        _response: string,
+        _context: { followUpRound: number },
+      ) => {
         completionSignals.push(deadlineContext.getAbortSignal());
         return { findings: [] };
       }),
@@ -513,16 +536,13 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
     ) => {
       events.push('create-companion-runtime');
-      expect(diffBaseline.resolve).toHaveBeenCalledOnce();
-      expect(deadlineContext.getAbortSignal()).toBe(leaderDeadline.signal);
-      expect(abortSignal).toBeDefined();
       runtimeSignals.push(abortSignal!);
-      if (candidateStep.name === 'implement') {
-        expect(abortSignal).toBe(leaderDeadline.signal);
-        expect(runtimeOptions).toEqual({ diffBaseline });
-      } else {
-        expect(runtimeOptions).toEqual({ diffBaseline });
-      }
+      companionRuntimeCreations.push({
+        stepName: candidateStep.name,
+        abortSignal,
+        deadlineSignal: deadlineContext.getAbortSignal(),
+        runtimeOptions,
+      });
       return candidateStep.name === 'implement' ? teamCompanionRuntime : partCompanionRuntime;
     });
     const completeCompanionReview = vi.fn(async (input: {
@@ -531,7 +551,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       companionRuntime: ReturnType<typeof makeCompanionRuntime>;
       recordUsage?: (success: boolean, usage: AgentResponse['providerUsage']) => void;
     }) => {
-      expect(input.recordUsage).toEqual(expect.any(Function));
+      recordUsageCallbacks.push(input.recordUsage);
       await input.companionRuntime.complete(input.state, input.initialResponse.content, {
         followUpRound: 0,
       });
@@ -542,7 +562,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         events.push(`begin:${executionUnitKey}`);
         return leaderDeadline;
       }),
-      runWith: vi.fn((deadline, operation) => deadlineContext.runWith(deadline, operation)),
+      runWith: vi.fn<WorkflowStepExecutionDeadlineContext['runWith']>(
+        <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>) => (
+          deadlineContext.runWith<T>(deadline, operation)
+        ),
+      ) as unknown as WorkflowStepExecutionDeadlineContext['runWith'],
     };
     const structuredCaller = {
       decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
@@ -582,12 +606,13 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
       observabilityEnabled: false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
 
     await runner.runTeamLeaderStep(
       {
         name: 'implement',
         persona: 'coder',
+        personaDisplayName: 'coder',
         instruction: 'leader instruction',
         teamLeader: { maxConcurrency: 1, timeoutMs: 1_000 },
         companion: { fixed: ['reviewer'], pool: [] },
@@ -606,12 +631,26 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       events.indexOf('create-companion-runtime'),
     );
     expect(completionSignals).toEqual([leaderDeadline.signal, leaderDeadline.signal]);
+    expect(recordUsageCallbacks).toEqual([expect.any(Function)]);
     expect(partCompanionRuntime[Symbol.dispose]).toHaveBeenCalledOnce();
     expect(teamCompanionRuntime[Symbol.dispose]).toHaveBeenCalledOnce();
     leaderAbortController.abort(new Error('leader deadline reached'));
     expect(leaderDeadline.signal.aborted).toBe(true);
     expect(runtimeSignals).toHaveLength(2);
     expect(runtimeSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(companionRuntimeCreations.map(({ stepName }) => stepName)).toEqual([
+      'implement',
+      'implement.part-1',
+    ]);
+    expect(companionRuntimeCreations.map(({ runtimeOptions }) => runtimeOptions)).toEqual([
+      { diffBaseline },
+      { diffBaseline },
+    ]);
+    expect(companionRuntimeCreations.map(({ deadlineSignal }) => deadlineSignal)).toEqual([
+      leaderDeadline.signal,
+      leaderDeadline.signal,
+    ]);
+    expect(companionRuntimeCreations[0]?.abortSignal).toBe(leaderDeadline.signal);
     expect(createCompanionDiffBaseline).toHaveBeenCalledWith(leaderDeadline.signal);
     expect(diffBaseline.resolve).toHaveBeenCalledOnce();
   });
@@ -673,7 +712,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder', status: 'done', content: 'done', timestamp: new Date(),
     });
@@ -721,15 +760,20 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     }> = [];
     let feedbackCallCount = 0;
     let partCallCount = 0;
-    let teamReviewStarted = false;
+    const teamReviewStepOutputs: Array<{
+      hasImplement: boolean;
+      hasCorrectionPart: boolean;
+    }> = [];
+    const partReviewStepOutputs: boolean[] = [];
+    const correctionPartReviewStepOutputs: boolean[] = [];
+    const recordUsageCallbacks: Array<
+      ((success: boolean, usage: AgentResponse['providerUsage']) => void) | undefined
+    > = [];
     mockExecuteAgent.mockImplementation(async (
       _persona: string | undefined,
       _prompt: string,
     ): Promise<AgentResponse> => {
       const currentPartCall = partCallCount++;
-      if (currentPartCall === 0) {
-        expect(teamReviewStarted).toBe(false);
-      }
       return {
         persona: 'coder',
         status: 'done',
@@ -742,19 +786,30 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
 
     const teamRuntime = {
-      beginReviewAttempt: vi.fn(() => {
-        teamReviewStarted = true;
-      }),
+      beginReviewAttempt: vi.fn(),
       beginFollowUpRound: vi.fn(),
       composeOptions: vi.fn((options: Record<string, unknown>) => options),
       complete: vi.fn()
-        .mockImplementationOnce(async (reviewState: WorkflowState) => {
-          expect(reviewState.stepOutputs.has('implement')).toBe(false);
+        .mockImplementationOnce(async (
+          reviewState: WorkflowState,
+          _response: string,
+          _context: { followUpRound: number },
+        ) => {
+          teamReviewStepOutputs.push({
+            hasImplement: reviewState.stepOutputs.has('implement'),
+            hasCorrectionPart: reviewState.stepOutputs.has('implement.part-2'),
+          });
           return { findings: [finding] };
         })
-        .mockImplementationOnce(async (reviewState: WorkflowState) => {
-          expect(reviewState.stepOutputs.has('implement.part-2')).toBe(true);
-          expect(reviewState.stepOutputs.has('implement')).toBe(false);
+        .mockImplementationOnce(async (
+          reviewState: WorkflowState,
+          _response: string,
+          _context: { followUpRound: number },
+        ) => {
+          teamReviewStepOutputs.push({
+            hasImplement: reviewState.stepOutputs.has('implement'),
+            hasCorrectionPart: reviewState.stepOutputs.has('implement.part-2'),
+          });
           return { findings: [] };
         })
         .mockResolvedValue({ findings: [] }),
@@ -764,8 +819,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       beginReviewAttempt: vi.fn(),
       beginFollowUpRound: vi.fn(),
       composeOptions: vi.fn((options: Record<string, unknown>) => options),
-      complete: vi.fn(async (reviewState: WorkflowState) => {
-        expect(reviewState.stepOutputs.has('implement.part-1')).toBe(false);
+      complete: vi.fn(async (
+        reviewState: WorkflowState,
+        _response: string,
+        _context: { followUpRound: number },
+      ) => {
+        partReviewStepOutputs.push(reviewState.stepOutputs.has('implement.part-1'));
         return { findings: [] };
       }),
       [Symbol.dispose]: vi.fn(),
@@ -782,8 +841,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       beginReviewAttempt: vi.fn(),
       beginFollowUpRound: vi.fn(),
       composeOptions: vi.fn((options: Record<string, unknown>) => options),
-      complete: vi.fn(async (reviewState: WorkflowState) => {
-        expect(reviewState.stepOutputs.has('implement.part-2')).toBe(false);
+      complete: vi.fn(async (
+        reviewState: WorkflowState,
+        _response: string,
+        _context: { followUpRound: number },
+      ) => {
+        correctionPartReviewStepOutputs.push(reviewState.stepOutputs.has('implement.part-2'));
         markCorrectionReviewStarted?.();
         await correctionReviewGate;
         return { findings: [] };
@@ -843,7 +906,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       companionRuntime: typeof partRuntime;
       recordUsage?: (success: boolean, usage: AgentResponse['providerUsage']) => void;
     }) => {
-      expect(input.recordUsage).toEqual(expect.any(Function));
+      recordUsageCallbacks.push(input.recordUsage);
       await input.companionRuntime.complete(input.state, input.initialResponse.content, {
         followUpRound: 0,
       });
@@ -876,7 +939,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
       observabilityEnabled: false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
     const state = buildMinimalTeamLeaderState();
     const step: WorkflowStep = {
       name: 'implement',
@@ -902,13 +965,21 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     expect(feedbackRequests[0]?.inspectTools).toEqual(['Read', 'Glob', 'Grep']);
     expect(feedbackRequests[1]?.companionFindings).toEqual([finding]);
     expect(feedbackRequests[2]?.companionFindings).toBeUndefined();
-    expect(teamRuntime.beginReviewAttempt).not.toHaveBeenCalled();
+    expect(teamRuntime.beginReviewAttempt).toHaveBeenCalledOnce();
+    expect(teamRuntime.composeOptions).toHaveBeenCalledOnce();
     expect(teamRuntime.complete).toHaveBeenCalledTimes(2);
     expect(teamRuntime.beginFollowUpRound).toHaveBeenCalledOnce();
     expect(completeCompanionReview).toHaveBeenCalledTimes(2);
+    expect(recordUsageCallbacks).toEqual([expect.any(Function), expect.any(Function)]);
     expect(partRuntime.complete).toHaveBeenCalledOnce();
     expect(correctionPartRuntime.complete).toHaveBeenCalledOnce();
     expect(result.response.content).toContain('part-2');
+    expect(teamReviewStepOutputs).toEqual([
+      { hasImplement: false, hasCorrectionPart: false },
+      { hasImplement: false, hasCorrectionPart: true },
+    ]);
+    expect(partReviewStepOutputs).toEqual([false]);
+    expect(correctionPartReviewStepOutputs).toEqual([false]);
     expect(state.stepOutputs.get('implement.part-1')).toMatchObject({
       content: 'initial part completed',
     });
@@ -976,12 +1047,16 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
       observabilityEnabled: false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
     const state: WorkflowState = {
       workflowName: 'workflow', currentStep: 'implement', iteration: 1,
       stepOutputs: new Map(), structuredOutputs: new Map(), systemContexts: new Map(), effectResults: new Map(),
       lastOutput: undefined, previousResponseSourcePath: undefined, userInputs: [], personaSessions: new Map(),
-      stepIterations: new Map(), status: 'running',
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
     };
     const result = await runner.runTeamLeaderStep({
       name: 'implement', persona: 'coder', personaDisplayName: 'coder', instruction: 'leader instruction',
@@ -1048,6 +1123,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       reviewedAt: '2026-08-23T00:00:00.000Z',
       reviewedDigest: 'failed-team-digest',
       severity: 'must_fix',
+      file: 'src/failed-team.ts',
+      line: 1,
       finding: 'Do not plan corrections for a terminal Team failure.',
     };
     const structuredCaller = {
@@ -1072,6 +1149,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const teamRuntime = {
       beginReviewAttempt: vi.fn(),
       beginFollowUpRound: vi.fn(),
+      composeOptions: vi.fn((options: Record<string, unknown>) => options),
       completeFollowUpFailure: vi.fn(),
       complete: vi.fn().mockResolvedValue({ findings: [finding] }),
       [Symbol.dispose]: vi.fn(),
@@ -1100,7 +1178,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
       observabilityEnabled: false,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
     const state = buildMinimalTeamLeaderState();
 
     const result = await runner.runTeamLeaderStep({
@@ -1159,7 +1237,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => undefined,
       () => '.takt/runs/sample/reports',
       () => 'ja',
-      () => [{ name: 'implement' }],
+      () => [{ name: 'implement', personaDisplayName: 'implement', instruction: 'implement' }],
       () => 'workflow',
       () => 'test workflow',
     );
@@ -1184,7 +1262,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
       observabilityEnabled: false,
-    });
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
     const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
@@ -1259,7 +1337,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => undefined,
       () => '.takt/runs/sample/reports',
       () => 'ja',
-      () => [{ name: 'implement' }],
+      () => [{ name: 'implement', personaDisplayName: 'implement', instruction: 'implement' }],
       () => 'workflow',
       () => 'test workflow',
     );
@@ -1284,10 +1362,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
       observabilityEnabled: false,
-    });
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
     const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
+      personaDisplayName: 'coder',
       instruction: 'Task: {task}',
       passPreviousResponse: true,
       provider: 'cursor',
@@ -1331,7 +1410,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       sessionId: undefined,
     });
     const partSessionKey = buildPartScopedSessionKey(
-      { name: 'implement.part-1', instruction: 'Implement API' },
+      { name: 'implement.part-1', personaDisplayName: 'implement.part-1', instruction: 'Implement API' },
       { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
     );
     const sessions = new Map<string, string>([
@@ -1462,6 +1541,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
+      personaDisplayName: 'coder',
       instruction: 'Task',
       passPreviousResponse: false,
       teamLeader: { maxConcurrency: 1, timeoutMs: 1000, partPersona: 'coder' },
@@ -1495,6 +1575,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
+      personaDisplayName: 'coder',
       instruction: 'Task',
       passPreviousResponse: false,
       teamLeader: { maxConcurrency: 1, timeoutMs: 1000, partPersona: 'coder' },
@@ -1516,7 +1597,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       controller.signal,
       {
         forceNewSession: false,
-        providerInfo: { provider: 'opencode' },
+        providerInfo: { provider: 'opencode', model: undefined },
         createCompanionRuntime: vi.fn().mockRejectedValue(new Error('runtime setup failed')),
       },
     );
@@ -1577,7 +1658,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         undefined,
         {
           forceNewSession: false,
-          providerInfo: { provider: 'opencode' },
+          providerInfo: { provider: 'opencode', model: undefined },
           createCompanionRuntime,
           completeCompanionReview,
         },
@@ -1622,6 +1703,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
 
     const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
       decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
@@ -1662,7 +1745,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
@@ -1744,6 +1827,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
 
     const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
       decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
@@ -1797,7 +1882,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
@@ -1862,6 +1947,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
 
     const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
       decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
@@ -1918,7 +2005,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'takt-default',
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: {
         projectCwd: string;
         structuredCaller: typeof structuredCaller;
@@ -2036,7 +2123,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
 
@@ -2186,7 +2273,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => buildRunPaths(projectDir, 'run'),
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
@@ -2305,7 +2392,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => buildRunPaths(projectDir, 'run'),
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
@@ -2422,7 +2509,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => buildRunPaths(projectDir, 'run'),
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
 
@@ -2537,7 +2624,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         getWorkflowName: () => 'workflow',
         getInteractive: () => false,
         getRunPaths: () => buildRunPaths(worktreeDir, 'run'),
-      } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
         engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
       });
 
@@ -2582,7 +2669,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         provider: 'opencode',
       }));
-      const feedbackEntry = (feedbackResults as Array<{ id: string; content: string }>)[0];
+      const feedbackEntry = (feedbackResults as Array<{ id: string; content: string }>)[0]!;
       expect(feedbackEntry.id).toBe('part-1');
       expect(feedbackEntry.content.length).toBeLessThan(fullContent.length);
       expect(feedbackEntry.content).toContain('[truncated:');
@@ -2654,7 +2741,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => buildRunPaths(projectDir, 'run'),
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
@@ -2704,7 +2791,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       inspectGuidance: true,
     }));
     const [, feedbackResults] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
-    const feedbackEntry = (feedbackResults as Array<{ id: string; content: string }>)[0];
+    const feedbackEntry = (feedbackResults as Array<{ id: string; content: string }>)[0]!;
     expect(feedbackEntry.content).not.toContain(fullContent);
     expect(feedbackEntry.content).toContain('[truncated:');
     const reportPath = buildTeamLeaderPartReportPath({
@@ -2770,7 +2857,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => buildRunPaths(projectDir, 'run'),
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
@@ -2881,7 +2968,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
 
@@ -2928,11 +3015,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
 
     const partOneSessionKey = buildPartScopedSessionKey(
-      { name: 'implement.part-1', instruction: 'Implement API' },
+      { name: 'implement.part-1', personaDisplayName: 'implement.part-1', instruction: 'Implement API' },
       { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
     );
     const partTwoSessionKey = buildPartScopedSessionKey(
-      { name: 'implement.part-2', instruction: 'Implement UI' },
+      { name: 'implement.part-2', personaDisplayName: 'implement.part-2', instruction: 'Implement UI' },
       { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
     );
 
@@ -2949,7 +3036,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     expect(updatePersonaSession).toHaveBeenCalledWith(partOneSessionKey, 'session-opencode-1');
     expect(updatePersonaSession).toHaveBeenCalledWith(partTwoSessionKey, 'session-opencode-2');
     expect(sessions.has(buildPartScopedSessionKey(
-      { name: 'coder', instruction: 'Task: {task}' },
+      { name: 'coder', personaDisplayName: 'coder', instruction: 'Task: {task}' },
       { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
     ))).toBe(false);
   });
@@ -3007,7 +3094,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
 
@@ -3057,11 +3144,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
 
     const partSessionKey = buildPartScopedSessionKey(
-      { name: 'implement.part-1', instruction: 'Implement API' },
+      { name: 'implement.part-1', personaDisplayName: 'implement.part-1', instruction: 'Implement API' },
       { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
     );
     const coderSessionKey = buildPartScopedSessionKey(
-      { name: 'coder', instruction: 'Task: {task}' },
+      { name: 'coder', personaDisplayName: 'coder', instruction: 'Task: {task}' },
       { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
     );
 
@@ -3126,7 +3213,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => defaultTeamLeaderRunPaths,
-    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
 
@@ -3222,7 +3309,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         getWorkflowName: () => 'workflow',
         getInteractive: () => false,
         getRunPaths: () => defaultTeamLeaderRunPaths,
-      } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
         engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
       });
     }
@@ -3329,7 +3416,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
   });
 
   describe('timeout feedback failure fallback', () => {
-    function buildStep(maxConcurrency: number, failOnPartError = false): WorkflowStep {
+    function buildStep(maxConcurrency: number, failOnPartError = false): TeamLeaderWorkflowStep {
       return {
         name: 'implement',
         persona: 'coder',
@@ -3406,7 +3493,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         getInteractive: () => false,
         getRunPaths: () => defaultTeamLeaderRunPaths,
         observabilityEnabled: false,
-      } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
         engineOptions: { projectCwd: string; language: 'en'; structuredCaller: typeof structuredCaller };
       });
     }
