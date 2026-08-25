@@ -138,7 +138,6 @@ steps:
               format: supervisor-validation
             - name: summary.md
               format: supervisor-summary
-              use_judge: false
     rules:
       - condition: any("error")
         next: reviewers
@@ -200,7 +199,6 @@ steps:
       report:
         - name: ai-antipattern-fix-report.md
           format: fix-report
-          use_judge: false
 
   - name: supervise_fix
     capabilities: edit

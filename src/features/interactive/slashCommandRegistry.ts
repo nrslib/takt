@@ -5,7 +5,7 @@
  * and provides filtering utilities for the completion menu.
  */
 
-import { SlashCommand } from '../../shared/constants.js';
+import { INTERACTIVE_SETTING_COMMANDS, SlashCommand } from '../../shared/constants.js';
 
 /** i18n label key for each slash command description */
 const SLASH_COMMAND_LABEL_KEYS: Readonly<Record<SlashCommand, string>> = {
@@ -17,6 +17,11 @@ const SLASH_COMMAND_LABEL_KEYS: Readonly<Record<SlashCommand, string>> = {
   '/resume': 'interactive.commands.resume',
   '/paste-image': 'interactive.commands.pasteImage',
   '/setup': 'interactive.commands.setup',
+  '/workflow': 'interactive.commands.workflow',
+  '/interaction': 'interactive.commands.mode',
+  '/provider': 'interactive.commands.provider',
+  '/model': 'interactive.commands.model',
+  '/effort': 'interactive.commands.effort',
 } as const;
 
 /**
@@ -36,6 +41,7 @@ export interface CommandAvailability {
   readonly enableRetryCommand?: boolean;
   readonly hasPreviousOrder?: boolean;
   readonly enableSetupCommand?: boolean;
+  readonly enableSettingsCommands?: boolean;
   readonly enabledCommands?: readonly SlashCommand[];
 }
 
@@ -50,13 +56,16 @@ export const filterSlashCommands = (
   readonly labelKey: string;
 }[] => {
   const lower = prefix.toLowerCase();
-  return SLASH_COMMAND_REGISTRY.filter((entry) => {
+  const matches = SLASH_COMMAND_REGISTRY.filter((entry) => {
     if (!entry.command.startsWith(lower)) return false;
     if (availability?.enabledCommands && !availability.enabledCommands.includes(entry.command)) return false;
     if (entry.command === SlashCommand.Setup && availability?.enableSetupCommand !== true) return false;
+    if (INTERACTIVE_SETTING_COMMANDS.has(entry.command) && availability?.enableSettingsCommands !== true) return false;
     if (!availability) return true;
     if (entry.command === SlashCommand.Retry && !availability.enableRetryCommand) return false;
     if (entry.command === SlashCommand.Replay && !availability.hasPreviousOrder) return false;
     return true;
   });
+  const exact = matches.find((entry) => entry.command === lower);
+  return exact === undefined ? matches : [exact];
 };

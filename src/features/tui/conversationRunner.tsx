@@ -9,6 +9,7 @@
  * a finished summary, and what to do with the decision.
  */
 
+import { renderToString } from 'ink';
 import { getLabel } from '../../shared/i18n/index.js';
 import { info } from '../../shared/ui/index.js';
 import type { PostSummaryAction } from '../interactive/interactive-summary.js';
@@ -21,8 +22,9 @@ import {
 } from './ConversationView.js';
 import type { EditorDraft } from './editorState.js';
 import { mountInk } from './inkMount.js';
-import type { TranscriptEntry } from './TranscriptEntryView.js';
-import type { InteractiveResultSource, TuiConversation } from './tuiConversation.js';
+import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
+import { resolveUserMessageColors } from './terminalColors.js';
+import type { InteractiveResultSource, TuiConversation, TuiHandoffId } from './tuiConversation.js';
 
 export interface TuiConversationRunOptions {
   readonly cwd: string;
@@ -62,7 +64,7 @@ export interface TuiConversationRunOptions {
    * whatever was typed alongside the command. It answers with the line to greet
    * the session with, or with the result that ends the run.
    */
-  readonly onHandoff?: (id: string, text: string) => Promise<TuiHandoffOutcome>;
+  readonly onHandoff?: (id: TuiHandoffId, text: string) => Promise<TuiHandoffOutcome>;
 }
 
 export type TuiHandoffOutcome =
@@ -87,6 +89,21 @@ export async function runTuiConversation(
    * had reached by then are theirs to keep.
    */
   let draft: EditorDraft | undefined;
+  // Resolve before Ink owns stdin/stdout; the same result is used for every
+  // remount and for the final scrollback frame.
+  const colorResolution = await resolveUserMessageColors();
+  const userMessageColors = colorResolution.colors;
+  let pendingTranscriptOutput: string | undefined;
+  const finalizeTranscript = (entries: readonly TranscriptEntry[], columns: number): void => {
+    if (entries.length === 0) {
+      pendingTranscriptOutput = undefined;
+      return;
+    }
+    pendingTranscriptOutput = `${renderToString(
+      <TranscriptView entries={entries} userMessageColors={userMessageColors} />,
+      { columns },
+    )}\n`;
+  };
 
   /**
    * What happens once the conversation has decided on something. Leaving ends
@@ -124,15 +141,17 @@ export async function runTuiConversation(
         lang={options.lang}
         conversation={options.conversation}
         initialEntries={initialEntries}
+        userMessageColors={userMessageColors}
         submitMode={options.submitMode}
         autoSubmit={autoSubmit}
         initialHistory={history}
         initialDraft={draft}
         initialQueue={queue}
-        modelLabel={options.modelLabel()}
+        modelLabel={options.modelLabel}
         // A caller that carries decisions out mounts this view again, so the
         // images it pasted have to stay available.
         residentSession={options.dispatch !== undefined}
+        finalizeTranscript={finalizeTranscript}
         onExit={(exit, carried) => {
           // A failure ends the run rather than the mount, so it is reported as
           // the mount's own failure and outranks anything the teardown hits.
@@ -143,12 +162,18 @@ export async function runTuiConversation(
           settle({ exit, carried });
         }}
       />
-    ), exitedEarly);
+    ), exitedEarly, colorResolution.delayedResponseGuard);
+
+    const transcriptOutput = pendingTranscriptOutput;
+    pendingTranscriptOutput = undefined;
+    if (transcriptOutput !== undefined) {
+      process.stdout.write(transcriptOutput);
+    }
 
     history = settled.carried.history;
     queue = settled.carried.queue;
     draft = settled.carried.draft;
-    // The transcript is already in the scrollback; printing it again doubles it.
+    // The previous mount finalized its transcript into the scrollback.
     initialEntries = [];
     autoSubmit = false;
 
@@ -188,8 +213,13 @@ export async function runTuiConversation(
       case 'resume_session': {
         const selected = await selectRecentSession(options.cwd, options.lang);
         if (selected !== null) {
-          await options.conversation.resumeSession(selected);
-          info(getLabel('interactive.resumeSessionLoaded', options.lang));
+          const notice = await options.conversation.resumeSession(selected);
+          initialEntries = notice === undefined
+            ? []
+            : [{ role: 'system', content: notice }];
+          if (notice === undefined) {
+            info(getLabel('interactive.resumeSessionLoaded', options.lang));
+          }
         }
         break;
       }

@@ -141,13 +141,13 @@ describe('E2E: Ink TUI', () => {
 
     await waitForSelector(tui, MODE_PROMPT);
     const listing = tui.output();
-    for (const label of ['Assistant', 'Grill Me', 'Persona', 'Quiet', 'Passthrough']) {
+    for (const label of ['Assistant', 'Grill Me', 'Persona']) {
       expect(listing, `mode "${label}" is missing`).toContain(label);
     }
 
     // The selector's own Cancel row is the last one; choosing it ends the run
     // without ever mounting Ink.
-    tui.write(ARROW_DOWN.repeat(5));
+    tui.write(ARROW_DOWN.repeat(3));
     // The highlighted row is what says the selector consumed the keys; the
     // `Cancel` label itself is on screen from the first draw.
     await tui.waitForOutput('❯ Cancel');
@@ -345,14 +345,17 @@ describe('E2E: Ink TUI', () => {
     tui.write(ESC);
     await tui.waitForOutput(INTERRUPTED);
     await tui.waitForOutput('QUEUE-SECOND-REPLY', 60_000);
+    await tui.waitForScreen(
+      'the queued answer to finish and the input prompt to return',
+      (currentScreen) => !currentScreen.includes(THINKING_MARKER)
+        && currentScreen.includes(PLACEHOLDER),
+      60_000,
+    );
 
     // The queued line was sent and answered, and the queue is empty again.
     const transcript = (await tui.visibleTranscript()).join('\n');
     expect(transcript).toContain('❯ after the interrupt');
     expect(transcript).not.toContain(QUEUE_HINT);
-    const screen = (await tui.visibleScreen()).join('\n');
-    expect(screen).not.toContain(THINKING_MARKER);
-    expect(screen).toContain('╭');
 
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit()).resolves.toBe(0);

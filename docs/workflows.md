@@ -912,14 +912,6 @@ fields. Provider/model/options and routing are owned by `runtime.yaml` (with the
 legacy `config.yaml` setting and is not a workflow YAML field. Workflow `capabilities` remains
 the only provider option surface in workflow YAML.
 
-### `interactive_mode`
-
-Default interactive mode used when `takt` is invoked without arguments. One of `assistant` (default), `grill-me`, `passthrough`, `quiet`, `persona`. `grill-me` resolves requirements one recommended question at a time and suggests `/go` when they are ready.
-
-```yaml
-interactive_mode: assistant
-```
-
 ### Removed workflow execution settings
 
 `workflow_config.provider`, `workflow_config.model`, `workflow_config.provider_options`, step

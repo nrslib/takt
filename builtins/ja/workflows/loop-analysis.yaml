@@ -31,7 +31,6 @@ steps:
       report:
         - name: loop-analysis.md
           format: loop-analysis
-          use_judge: false
     rules:
       - condition: 改善案が汎用的で根拠に基づき、過去の指摘がある場合は修正済みまたは根拠付きで対応不能として提案から除外され、人間が検討できる状態になっている
         next: COMPLETE

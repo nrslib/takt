@@ -3,6 +3,11 @@ import type { ReactElement } from 'react';
 import { KITTY_KEYBOARD_DISABLE, KITTY_KEYBOARD_ENABLE } from './keyProtocol.js';
 import { takeTerminalOwnership } from './terminalOwnership.js';
 
+export interface InkInputGuard {
+  attach(): void;
+  detach(): void;
+}
+
 /**
  * Surfaces the first failure. A teardown that also failed rides along as the
  * cause so it stays observable without hiding what actually went wrong.
@@ -51,6 +56,7 @@ export async function mountInk<T>(
     fail: (error: unknown) => void;
   }) => ReactElement,
   exitedEarlyMessage: string,
+  inputGuard?: InkInputGuard,
 ): Promise<T> {
   let settle!: (value: T) => void;
   let fail!: (error: unknown) => void;
@@ -86,6 +92,7 @@ export async function mountInk<T>(
   try {
     let instance: Instance | undefined;
     try {
+      inputGuard?.attach();
       // Enabled inside the guaranteed range so the matching disable always runs,
       // even if this very write throws. Without the protocol a terminal sends a
       // bare CR for Shift+Enter, and for Option+Enter too under iTerm2's default
@@ -140,6 +147,7 @@ export async function mountInk<T>(
           process.stdin.ref();
         }
       });
+      await teardown(() => inputGuard?.detach());
     }
   } catch (error) {
     recordFailure(error);

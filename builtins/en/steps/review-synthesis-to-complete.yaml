@@ -16,4 +16,3 @@ output_contracts:
       format: supervisor-validation
     - name: summary.md
       format: supervisor-summary
-      use_judge: false

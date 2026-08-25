@@ -1,5 +1,5 @@
 /**
- * Tests for interactive mode variants (assistant, grill-me, persona, quiet, passthrough)
+ * Tests for interactive mode variants (assistant, grill-me, persona)
  */
 
 import * as fs from 'node:fs';
@@ -66,13 +66,12 @@ vi.mock('../shared/prompt/confirm.js', () => ({
 
 import { getProvider } from '../infra/providers/index.js';
 import { selectOptionWithDefault, selectOption } from '../shared/prompt/index.js';
-import { info } from '../shared/ui/index.js';
 import { confirm } from '../shared/prompt/confirm.js';
+import { PROVIDER_TYPES } from '../shared/types/provider.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOptionWithDefault = vi.mocked(selectOptionWithDefault);
 const mockSelectOption = vi.mocked(selectOption);
-const mockInfo = vi.mocked(info);
 const mockConfirm = vi.mocked(confirm);
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
@@ -107,10 +106,8 @@ import { makeProvider } from './test-helpers.js';
 
 import { INTERACTIVE_MODES, DEFAULT_INTERACTIVE_MODE } from '../core/models/interactive-mode.js';
 import { selectInteractiveMode } from '../features/interactive/modeSelection.js';
-import { passthroughMode } from '../features/interactive/passthroughMode.js';
-import { quietMode } from '../features/interactive/quietMode.js';
+import { selectInteractiveProvider } from '../features/interactive/providerSelection.js';
 import { personaMode } from '../features/interactive/personaMode.js';
-import type { WorkflowContext } from '../features/interactive/interactive.js';
 import type { FirstStepInfo } from '../infra/config/loaders/workflowResolver.js';
 
 // ── Setup ──
@@ -134,8 +131,8 @@ afterEach(() => {
 // ── InteractiveMode type & constants tests ──
 
 describe('InteractiveMode type', () => {
-  it('should define all five modes', () => {
-    expect(INTERACTIVE_MODES).toEqual(['assistant', 'grill-me', 'persona', 'quiet', 'passthrough']);
+  it('should define only the three supported modes', () => {
+    expect(INTERACTIVE_MODES).toEqual(['assistant', 'grill-me', 'persona']);
   });
 
   it('should have assistant as default mode', () => {
@@ -146,7 +143,7 @@ describe('InteractiveMode type', () => {
 // ── Mode selection tests ──
 
 describe('selectInteractiveMode', () => {
-  it('should call selectOptionWithDefault with five mode options', async () => {
+  it('should call selectOptionWithDefault with three mode options', async () => {
     // When
     await selectInteractiveMode('en');
 
@@ -157,28 +154,14 @@ describe('selectInteractiveMode', () => {
         expect.objectContaining({ value: 'assistant' }),
         expect.objectContaining({ value: 'grill-me' }),
         expect.objectContaining({ value: 'persona' }),
-        expect.objectContaining({ value: 'quiet' }),
-        expect.objectContaining({ value: 'passthrough' }),
       ]),
       'assistant',
     );
   });
 
-  it('should use workflow default when provided', async () => {
+  it('should exclude unavailable modes and use assistant as the default', async () => {
     // When
-    await selectInteractiveMode('en', 'quiet');
-
-    // Then
-    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(Array),
-      'quiet',
-    );
-  });
-
-  it('should exclude unavailable modes and fall back to assistant by default', async () => {
-    // When
-    await selectInteractiveMode('en', 'passthrough', ['assistant', 'persona', 'quiet']);
+    await selectInteractiveMode('en', ['assistant', 'persona']);
 
     // Then
     expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
@@ -186,9 +169,21 @@ describe('selectInteractiveMode', () => {
       [
         expect.objectContaining({ value: 'assistant' }),
         expect.objectContaining({ value: 'persona' }),
-        expect.objectContaining({ value: 'quiet' }),
       ],
       'assistant',
+    );
+  });
+
+  it('should use the first available mode when the default is unavailable', async () => {
+    await selectInteractiveMode('en', ['grill-me', 'persona']);
+
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      expect.any(String),
+      [
+        expect.objectContaining({ value: 'grill-me' }),
+        expect.objectContaining({ value: 'persona' }),
+      ],
+      'grill-me',
     );
   });
 
@@ -223,163 +218,29 @@ describe('selectInteractiveMode', () => {
     expect(options?.[0]?.value).toBe('assistant');
     expect(options?.[1]?.value).toBe('grill-me');
     expect(options?.[2]?.value).toBe('persona');
-    expect(options?.[3]?.value).toBe('quiet');
-    expect(options?.[4]?.value).toBe('passthrough');
   });
 });
 
-// ── Passthrough mode tests ──
+describe('selectInteractiveProvider', () => {
+  it('should offer providers with the current provider as the default', async () => {
+    mockSelectOptionWithDefault.mockResolvedValueOnce('claude');
 
-describe('passthroughMode', () => {
-  it('should return initialInput directly when provided', async () => {
-    // When
-    const result = await passthroughMode('/repo', 'en', 'my task text');
+    const selected = await selectInteractiveProvider('en', 'codex');
 
-    // Then
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('my task text');
+    expect(selected).toBe('claude');
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      expect.any(String),
+      PROVIDER_TYPES.map((provider) => ({ label: provider, value: provider })),
+      'codex',
+    );
   });
 
-  it('should show an intro when prompting for passthrough input', async () => {
-    // Given
-    setupRawStdin(toRawInputs([null]));
+  it('should return null when provider selection is cancelled', async () => {
+    mockSelectOptionWithDefault.mockResolvedValueOnce(null);
 
-    // When
-    await passthroughMode('/repo', 'ja');
+    const selected = await selectInteractiveProvider('ja', 'codex');
 
-    // Then
-    expect(mockInfo).toHaveBeenCalled();
-  });
-
-  it('should return cancel when user sends EOF', async () => {
-    // Given
-    setupRawStdin(toRawInputs([null]));
-
-    // When
-    const result = await passthroughMode('/repo', 'en');
-
-    // Then
-    expect(result.action).toBe('cancel');
-    expect(result.task).toBe('');
-  });
-
-  it('should return cancel when user enters empty input', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['']));
-
-    // When
-    const result = await passthroughMode('/repo', 'en');
-
-    // Then
-    expect(result.action).toBe('cancel');
-  });
-
-  it('should return user input as task when entered', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['implement login feature']));
-
-    // When
-    const result = await passthroughMode('/repo', 'en');
-
-    // Then
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('implement login feature');
-  });
-
-  it('should trim whitespace from user input', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['  my task  ']));
-
-    // When
-    const result = await passthroughMode('/repo', 'en');
-
-    // Then
-    expect(result.task).toBe('my task');
-  });
-});
-
-// ── Quiet mode tests ──
-
-describe('quietMode', () => {
-  it('should generate instructions from a direct task without questions', async () => {
-    // Given
-    setupMockProvider(['Generated task instruction for login feature.']);
-    mockSelectOption.mockResolvedValue('execute');
-
-    // When
-    const result = await quietMode('/project', { userMessage: 'implement login feature' });
-
-    // Then
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('Generated task instruction for login feature.');
-  });
-
-  it('should show an intro when prompting for quiet input', async () => {
-    // Given
-    setupRawStdin(toRawInputs([null]));
-
-    // When
-    await quietMode('/project');
-
-    // Then
-    expect(mockInfo).toHaveBeenCalled();
-  });
-
-  it('should return cancel when user sends EOF for input', async () => {
-    // Given
-    setupRawStdin(toRawInputs([null]));
-    setupMockProvider([]);
-
-    // When
-    const result = await quietMode('/project');
-
-    // Then
-    expect(result.action).toBe('cancel');
-  });
-
-  it('should return cancel when user enters empty input', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['']));
-    setupMockProvider([]);
-
-    // When
-    const result = await quietMode('/project');
-
-    // Then
-    expect(result.action).toBe('cancel');
-  });
-
-  it('should prompt for input when no initialInput is provided', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['fix the bug']));
-    setupMockProvider(['Fix the bug instruction.']);
-    mockSelectOption.mockResolvedValue('execute');
-
-    // When
-    const result = await quietMode('/project');
-
-    // Then
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('Fix the bug instruction.');
-  });
-
-  it('should include workflow context in summary generation', async () => {
-    // Given
-    const workflowContext: WorkflowContext = {
-      name: 'test-workflow',
-      description: 'A test workflow',
-      workflowStructure: '1. implement\n2. review',
-      stepPreviews: [],
-    };
-    setupMockProvider(['Instruction with workflow context.']);
-    mockSelectOption.mockResolvedValue('execute');
-
-    // When
-    const result = await quietMode('/project', { userMessage: 'some task' }, workflowContext);
-
-    // Then
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('Instruction with workflow context.');
+    expect(selected).toBeNull();
   });
 });
 

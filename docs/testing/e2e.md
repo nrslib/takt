@@ -102,7 +102,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 備考: 生の出力は消去済みフレームも含むため、画面に実際に残る内容は `@xterm/headless` に食わせた `visibleTranscript()` / `visibleScreen()` で検証する。
   - 手順（ユーザー行動/コマンド）:
     - PTY 上でフラグなしに `takt --workflow e2e/fixtures/workflows/mock-single-step.yaml` を起動し、モード選択が従来の readline セレクタ（`(default)` 表記）で出たあと、会話だけが Ink（枠付き入力ボックス）になることを確認する。
-    - モード選択に Assistant / Grill Me / Persona / Quiet / Passthrough が表示され、Cancel 行を選ぶと Ink を起動せず exit 0 になることを確認する。
+    - モード選択に Assistant / Grill Me / Persona が表示され、Cancel 行を選ぶと Ink を起動せず exit 0 になることを確認する。
     - `--workflow` を省略して起動し、従来のカテゴリ付きワークフローセレクタでカテゴリ → ワークフローと選べること、セレクタ上の Ctrl+C は従来どおり exit 130 になることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-conversation.json` でメッセージ送信 → 応答表示、ストリーミング中はマーカー `●` が出ず確定後に1回だけ出ること、`/cancel` で exit 0 を確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-go-handoff.json` で `/go` → アクション選択（Execute now）→ ワークフロー実行のあと、TUI が同じセッションで再開し実行結果（前回タスクの完了通知）が transcript に出ること、過去の会話が二重表示されないこと、`/cancel` で初めて exit 0 になることを確認する。
@@ -114,7 +114,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - 端末幅を超える長文を入力し、末尾が画面に残る（折り返される）こと・入力ボックスが縦に伸びて最下部に張り付いたままであることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-queue.json`（遅延ストリーミング + 2件目の応答）で、応答中に入力できること・Enter がキューへ積まれヒントが出ること・応答完了後にキューが自動送信されることを確認する。
     - 同シナリオで、キュー投入後の ↑ がキュー項目をドラフトへ戻して編集できることを確認する。
-    - 同シナリオで、ストリーミング中に次の行をキューへ積んでから Esc を押すと、応答が中断され「Response interrupted.」が出たうえでキューが即送信され、その応答が返ることを確認する（中断してもキューは破棄されない仕様）。
+    - 同シナリオで、ストリーミング中に次の行をキューへ積んでから Esc を押すと、応答が中断され「Response interrupted.」が出たうえでキューが即送信され、その応答が完了して入力欄へ戻ることを現在画面で確認する（中断してもキューは破棄されない仕様）。
     - `takt list` から completed タスクの Instruct を選び（ワークフロー再利用確認は Enter）、会話が Ink で開くこと・イントロが `/replay` を案内すること・`/replay` で前回 order がそのまま再実行され（`TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-instruct.json`）タスクが完了して一覧へ戻ることを確認する。
     - PTY 上で `takt exec backend` を起動し、会話が Ink（枠付き入力ボックス）で行われること・`/setup` で Ink が閉じて従来のセレクタが出ること（画面に入力ボックスの枠が残らない）を確認する。
     - PTY なし（`runTakt`）で `--tui` を実行し、exit 1 と `--tui requires an interactive terminal` を確認する。
@@ -196,7 +196,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
       - グローバル `config.yaml` 不在の環境で `takt add` を2回実行し、`takt run --provider mock` を実行する。
       - タスク実行完了後に `.takt/tasks/` 配下の2タスクディレクトリ生成、`.takt/.gitignore` 生成、`.takt/tasks.yaml` に2件の completed 履歴が残ることを確認する。
 - Run tasks graceful shutdown on SIGINT（`e2e/specs/run-sigint-graceful.e2e.ts`）
-  - 目的: `takt run` を並列実行中に `Ctrl+C` した際、新規クローン投入を止めてグレースフルに終了することを確認。
+  - 目的: `takt run` を並列実行中に `Ctrl+C` した際、新規クローン投入を止めてグレースフルに終了することと、共有 stdin が pause された後も実 PTY の Ctrl+C を受信できることを確認。
   - LLM: 呼び出さない（`--provider mock` 固定）
   - 手順（ユーザー行動/コマンド）:
     - `.takt/tasks.yaml` に `worktree: true` の pending タスクを3件投入する（`concurrency: 2`）。
@@ -205,6 +205,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt run --provider mock` を起動し、`=== Running Workflow:` が出たら `Ctrl+C` を送る。
     - 3件目タスク（`sigint-c`）が開始されないことを確認する。
     - `=== Tasks Summary ===` 以降に新規タスク開始やクローン作成ログが出ないことを確認する。
+    - `concurrency: 3` の実 PTY 上で3タスクすべてが mock provider の応答待ちに入ったことを call log で確認し、共有 stdin を pause した後に Kitty keyboard protocol の Ctrl+C（CSI-u）を送って、3呼び出しが abort されプロセスが速やかに終了することを確認する。
 - Runtime config injection with provider（`e2e/specs/runtime-config-provider.e2e.ts`）
   - 目的: `config.yaml` の `runtime.prepare` が provider 呼び出し前に反映される正例と未設定時のenv未注入をmockで確認し、任意の実provider E2Eでは子プロセスへの伝播も確認。
   - LLM: 通常CIでは呼び出さない（mockでprovider呼び出し時のruntime環境を検証）。`TAKT_E2E_PROVIDER` が `claude` / `claude-sdk` / `codex` / `opencode` の場合のみ、実コマンド伝播の追加テストを実行。

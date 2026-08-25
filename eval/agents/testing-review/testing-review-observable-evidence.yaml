@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: testing review requires observable uncovered failures, not structural proxies'
+
+prompts:
+  - file://../../prompts/testing-review-observable-evidence.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../fixtures/testing-review-observable-evidence
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'initial testing review: distinguish covered multi-module behavior from an uncovered coupling failure'
+    vars:
+      task: file://../../cases/testing-review-observable-evidence-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: review/testing-observable-evidence
+        value: |
+          Judge the substance of the testing decision, not headings, labels, or exact wording. Pass only if the review does all of the following:
+
+          - It identifies that `timeoutMs` is verified separately by the option resolver and provider tests but is dropped by the real `execute()` composition, so the current suite cannot detect the observable propagation failure required by the task.
+          - It requests one minimal behavior-level regression test through `execute()` for the timeout propagation. It may also report the confirmed production wiring defect exposed by that missing test.
+          - It accepts the existing `traceLabel` behavior coverage through `execute()` and does not request duplicate tests in every module or consumer merely because the value crosses four modules.
+          - It does not require a full call-chain matrix, per-hop assertions, return/throw/catch path enumeration, generic parser invalid-shape cases, file-layout assertions, or other tests without a concrete uncovered failure tied to the task contract.
+
+          Fail if the review approves without identifying the timeout coverage gap, or if it expands tests for the already-covered trace-label behavior based on module count, call-chain length, or internal structure.

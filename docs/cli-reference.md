@@ -43,10 +43,12 @@ takt hello
 
 **Note:** `--task` option skips interactive mode and executes the task directly. Issue references (`#6`, `--issue`) are used as initial input in interactive mode.
 
+In the TUI conversation history, submitted user messages are shown with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. The current, unsubmitted draft remains in the normal input area and does not use this styling.
+
 ### Flow
 
 1. Select workflow
-2. Select interactive mode (assistant / grill-me / persona / quiet / passthrough)
+2. Select interactive mode (assistant / grill-me / persona)
 3. Refine task content through conversation with AI
 4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`)
 5. Execute (run workflow, create PR)
@@ -58,10 +60,18 @@ takt hello
 | `assistant` | Default. AI asks clarifying questions before generating task instructions. |
 | `grill-me` | Resolves material decision branches one recommended question at a time, then suggests `/go` when the requirements are ready. |
 | `persona` | Conversation with the first step's persona (uses its system prompt and tools). |
-| `quiet` | Generates task instructions without asking questions (best-effort). |
-| `passthrough` | Passes user input directly as task text without AI processing. |
 
-Workflows can set a default mode via the `interactive_mode` field in YAML.
+### Conversation Settings Commands
+
+| Command | Effect |
+|---------|--------|
+| `/workflow` | Select another workflow. |
+| `/interaction` | Select another interactive mode. |
+| `/provider` | Select another provider. |
+| `/model <value>` | Use a free-form model override for this conversation. |
+| `/effort <value>` | Use a free-form reasoning effort override for this conversation. |
+
+Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
 
 ### Execution Example
 
@@ -74,7 +84,7 @@ Select workflow:
     Research/
     Cancel
 
-Interactive mode - Enter task content. Commands: /go (execute), /cancel (exit)
+Interactive mode - describe your task. When ready, use /go to create the instruction and run it.
 
 > I want to add user authentication feature
 
@@ -386,7 +396,13 @@ takt workflow init review-flow --template faceted --global
 # Validate workflows by name or path
 takt workflow doctor sample-flow
 takt workflow doctor .takt/workflows/sample-flow.yaml
+
+# Inspect a workflow's configuration and resolution sources
+takt workflow inspect sample-flow
+takt workflow inspect .takt/workflows/sample-flow.yaml
 ```
+
+`takt workflow inspect` reports the workflow's configuration and where each resolved value comes from, using the same resolution a run would use — including `--auto-strategy`.
 
 ### takt clear
 

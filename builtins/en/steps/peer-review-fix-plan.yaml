@@ -31,4 +31,3 @@ output_contracts:
     - name: fix-plan.md
       format:
         $param: plan_report_format
-      use_judge: false

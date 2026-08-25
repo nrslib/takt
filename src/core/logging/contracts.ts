@@ -4,6 +4,7 @@ export const PROVIDER_EVENTS_LOG_FILE_SUFFIX = '-provider-events.jsonl';
 export const USAGE_EVENTS_LOG_FILE_SUFFIX = '-usage-events.jsonl';
 export const PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX = '-usage-events.phase.jsonl';
 export const OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX = '-otel-session-shadow.jsonl';
+export const PROMPT_LOG_FILE_SUFFIX = '-prompts.jsonl';
 
 export const USAGE_MISSING_REASONS = {
   NOT_AVAILABLE: 'usage_not_available',

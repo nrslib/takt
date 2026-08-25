@@ -26,7 +26,6 @@ parallel:
       report:
         - name: ai-antipattern-fix-report.md
           format: fix-report
-          use_judge: false
   - name: supervise_fix_parallel
     capabilities: edit
     tags:

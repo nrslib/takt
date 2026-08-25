@@ -217,7 +217,6 @@ steps:
           format: supervisor-validation
         - name: summary.md
           format: supervisor-summary
-          use_judge: false
     rules:
       - condition: BLOCKED
         next: ABORT

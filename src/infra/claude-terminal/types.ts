@@ -1,5 +1,4 @@
 import type { McpServerConfig, PermissionMode } from '../../core/models/index.js';
-import type { ClaudeEffort } from '../../core/models/workflow-types.js';
 import type { PermissionHandler, AskUserQuestionHandler, AskUserQuestionInput } from '../../core/workflow/types.js';
 import type {
   InternalAgentIsolation,
@@ -101,7 +100,7 @@ export interface ClaudeTerminalCallOptions {
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   model?: string;
-  effort?: ClaudeEffort;
+  effort?: string;
   skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
@@ -132,7 +131,7 @@ export interface BuildClaudeTerminalCommandOptions {
   pathToClaudeCodeExecutable?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   model?: string;
-  effort?: ClaudeEffort;
+  effort?: string;
   skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpConfigPath?: string;

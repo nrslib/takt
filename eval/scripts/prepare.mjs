@@ -321,6 +321,8 @@ const TARGETS = [
   },
 ];
 
+export const PREPARE_TARGET_IDS = Object.freeze(TARGETS.map(({ id }) => id));
+
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
 process.env.TAKT_CONFIG_DIR = resolve(scriptDir, '../config');

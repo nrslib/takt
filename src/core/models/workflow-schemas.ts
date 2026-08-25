@@ -3,7 +3,6 @@
  */
 
 import { z } from 'zod/v4';
-import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { isReviewMode, REVIEW_MODE_VALUES } from './review-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
@@ -1001,9 +1000,6 @@ export const LoopMonitorSchema = z.object({
   }
 });
 
-/** Interactive mode schema for workflow-level default */
-export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
-
 interface OutputContractStep {
   readonly output_contracts?: {
     readonly report?: readonly { readonly name: string }[];
@@ -1120,7 +1116,6 @@ export const WorkflowConfigRawSchema = z.object({
   initial_step: z.string().optional(),
   max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
-  interactive_mode: InteractiveModeSchema.optional(),
 }).strict().superRefine((workflow, ctx) => {
   validateOutputContractIdentities(workflow.steps as readonly OutputContractStep[], ctx);
 });

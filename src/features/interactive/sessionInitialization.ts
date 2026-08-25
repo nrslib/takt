@@ -27,7 +27,8 @@ export function initializeSession(
 ): SessionContext {
   const { language } = resolveConfigValues(cwd, ['language']);
   const lang = language === 'ja' ? 'ja' : 'en';
-  const usesAssistantProvider = ['interactive', 'grill-me-interactive', 'instruct', 'retry'].includes(personaName);
+  const usesAssistantProvider = ['interactive', 'grill-me-interactive', 'instruct', 'retry'].includes(personaName)
+    || (personaName === 'persona-interactive' && assistantCliOverrides !== undefined);
   const resolved = usesAssistantProvider
     ? resolveAssistantProviderModel(cwd, assistantCliOverrides)
     : resolveNonWorkflowProviderModel(cwd);

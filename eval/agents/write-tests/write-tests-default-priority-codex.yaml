@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet cross-eval: Codex closes the primary Requeue-to-runner path'
+
+prompts:
+  - file://../../prompts/write-tests-default-priority-codex.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: ../../.work/write-tests-default-priority-codex
+      sandbox_mode: workspace-write
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: medium
+
+tests:
+  - description: 'write-tests: Codex traces manual Requeue through pending storage to the normal runner'
+    vars:
+      task: file://../../cases/write-tests-default-priority-task.md
+      previous_response: file://../../cases/write-tests-default-priority-plan.md
+    assert:
+      - type: javascript
+        metric: primary-requeue/write-tests-path-codex
+        value: file://../../asserts/write-tests-default-priority-codex.mjs
