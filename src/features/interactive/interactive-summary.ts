@@ -175,10 +175,11 @@ export function formatTaskHistorySummary(taskHistory: TaskHistorySummaryItem[], 
 export function buildTaskInstructionFormat(
   lang: 'en' | 'ja',
   formalSpec: boolean,
+  formalSpecComments = true,
 ): string {
   const gherkinInstructions = loadTemplate('score_summary_gherkin_instructions', lang).trim();
   const formalSpecInstructions = formalSpec
-    ? `\n\n${loadTemplate('score_summary_formal_spec_instructions', lang).trim()}`
+    ? `\n\n${loadTemplate('score_summary_formal_spec_instructions', lang, { formalSpecComments }).trim()}`
     : '';
   return `\n${gherkinInstructions}${formalSpecInstructions}`;
 }
@@ -200,6 +201,7 @@ export function buildSummaryPrompt(
   promptContext?: string,
   formalSpec = false,
   hasReferenceHistory = false,
+  formalSpecComments = true,
 ): string {
   let conversation = '';
   if (history.length > 0) {
@@ -224,7 +226,7 @@ export function buildSummaryPrompt(
     ? formatTaskHistorySummary(workflowContext.taskHistory, lang)
     : '';
 
-  const taskInstructionFormat = buildTaskInstructionFormat(lang, formalSpec);
+  const taskInstructionFormat = buildTaskInstructionFormat(lang, formalSpec, formalSpecComments);
   const summaryPrompt = loadTemplate('score_summary_system_prompt', lang, {
     hasWorkflowPreview: hasWorkflow,
     workflowName: workflowContext?.name ?? '',

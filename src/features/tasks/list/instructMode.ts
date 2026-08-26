@@ -40,7 +40,7 @@ import type { InstructModeAction, InstructModeResult, InstructUIText } from '../
 import { renderPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
 import { SlashCommand } from '../../../shared/constants.js';
 import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
-import { resolveFormalSpecModeWithoutPrompt } from '../../interactive/taskInstructionFormat.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from '../../interactive/taskInstructionFormat.js';
 
 export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
@@ -149,7 +149,7 @@ export async function runInstructMode(
   const canonicalOrderContent = (previousOrderContent ?? options.taskContent).trim();
   const globalConfig = resolveWorkflowConfigValues(cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
-  const formalSpec = resolveFormalSpecModeWithoutPrompt(cwd);
+  const formalSpecConfiguration = resolveFormalSpecConfigurationWithoutPrompt(cwd);
 
   const baseCtx = initializeSession(cwd, 'instruct');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };
@@ -168,7 +168,8 @@ export async function runInstructMode(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
-    formalSpec,
+    formalSpec: formalSpecConfiguration.mode,
+    formalSpecComments: formalSpecConfiguration.comments,
     allowedTools: INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),

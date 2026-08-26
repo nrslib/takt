@@ -35,7 +35,10 @@ import { selectInteractiveMode } from '../interactive/modeSelection.js';
 import { selectInteractiveProvider } from '../interactive/providerSelection.js';
 import { formatSessionStatus } from '../interactive/interactive.js';
 import type { InteractiveModeResult, InteractiveUIText } from '../interactive/interactive.js';
-import { resolveFormalSpecMode } from '../interactive/taskInstructionFormat.js';
+import {
+  resolveFormalSpecConfiguration,
+  type ResolvedFormalSpecConfiguration,
+} from '../interactive/taskInstructionFormat.js';
 import { runTuiConversation } from './conversationRunner.js';
 import { handOverAttachments } from './attachmentHandover.js';
 import type { TranscriptEntry } from './TranscriptEntryView.js';
@@ -181,7 +184,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     let selectedEffort: string | undefined;
     let temporaryProviderActive = false;
     let temporaryModelActive = false;
-    let formalSpec: boolean | undefined;
+    let formalSpecConfiguration: ResolvedFormalSpecConfiguration | undefined;
     let currentPlan: ConversationPlan;
     let currentConversation: TuiConversation;
     let pendingRebuild = false;
@@ -211,8 +214,8 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       const context = workflowContext(description);
       const personaFallback = selectedMode === 'persona' && description.firstStep === undefined;
       const usePersonaPlan = selectedMode === 'persona' && description.firstStep !== undefined;
-      if (!usePersonaPlan && formalSpec === undefined) {
-        formalSpec = await resolveFormalSpecMode(options.cwd);
+      if (!usePersonaPlan && formalSpecConfiguration === undefined) {
+        formalSpecConfiguration = await resolveFormalSpecConfiguration(options.cwd);
       }
       const continued = initial
         ? resolveContinuedSession(selectedMode)
@@ -228,15 +231,23 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           ? { disableSessionRetry: true }
           : {}),
       };
-      const nextPlan = usePersonaPlan
-        ? createPersonaConversationPlan(options.cwd, description.firstStep!, overrides)
-        : createAssistantConversationPlan(options.cwd, {
+      let nextPlan: ConversationPlan;
+      if (usePersonaPlan) {
+        nextPlan = createPersonaConversationPlan(options.cwd, description.firstStep!, overrides);
+      } else {
+        if (formalSpecConfiguration === undefined) {
+          throw new Error('Formal specification configuration is required for assistant mode');
+        }
+        nextPlan = createAssistantConversationPlan(options.cwd, {
           assistantMode: selectedMode === 'grill-me' ? 'grill-me' : 'assistant',
-          formalSpec,
+          formalSpec: formalSpecConfiguration.mode,
+          formalSpecComments: formalSpecConfiguration.comments,
+          resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(options.cwd),
           workflowContext: context,
           ...overrides,
           ...(continued.sessionId ? { sessionId: continued.sessionId } : {}),
         });
+      }
       const nextConversation = createTuiConversation({
         cwd: options.cwd,
         plan: nextPlan,
@@ -377,8 +388,8 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           const mode = await selectInteractiveMode(options.lang, INTERACTIVE_MODES);
           if (mode !== null && mode !== selectedMode) {
             selectedMode = mode;
-            if (mode !== 'persona' && formalSpec === undefined) {
-              formalSpec = await resolveFormalSpecMode(options.cwd);
+            if (mode !== 'persona' && formalSpecConfiguration === undefined) {
+              formalSpecConfiguration = await resolveFormalSpecConfiguration(options.cwd);
             }
             requestRebuild();
           }

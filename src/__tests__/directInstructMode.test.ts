@@ -10,7 +10,7 @@ const {
   mockLoadTemplate,
   mockSelectOption,
   mockConfirm,
-  mockResolveFormalSpecModeWithoutPrompt,
+  mockResolveFormalSpecConfigurationWithoutPrompt,
 } = vi.hoisted(() => ({
   mockResolveWorkflowConfigValues: vi.fn(),
   mockInitializeSession: vi.fn(),
@@ -19,7 +19,7 @@ const {
   mockLoadTemplate: vi.fn(),
   mockSelectOption: vi.fn(),
   mockConfirm: vi.fn(),
-  mockResolveFormalSpecModeWithoutPrompt: vi.fn(),
+  mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -61,7 +61,7 @@ vi.mock('../shared/prompt/confirm.js', () => ({
 }));
 
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({
-  resolveFormalSpecModeWithoutPrompt: mockResolveFormalSpecModeWithoutPrompt,
+  resolveFormalSpecConfigurationWithoutPrompt: mockResolveFormalSpecConfigurationWithoutPrompt,
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -110,7 +110,7 @@ describe('runDirectInstructMode', () => {
     mockInitializeSession.mockReturnValue({ sessionId: 'session-1' });
     mockLoadTemplate.mockReturnValue('direct instruct system prompt');
     mockRunConversationLoop.mockResolvedValue({ action: 'execute', task: 'Add regression coverage' });
-    mockResolveFormalSpecModeWithoutPrompt.mockReturnValue(false);
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
   });
 
   afterEach(() => {
@@ -227,12 +227,12 @@ describe('runDirectInstructMode', () => {
   it.each([false, true])(
     'passes resolved formal specification mode=%s without prompting',
     async (formalSpec) => {
-      mockResolveFormalSpecModeWithoutPrompt.mockReturnValue(formalSpec);
+      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: formalSpec, comments: true });
 
       await runDirectInstructMode(buildOptions(null));
 
       const strategy = mockRunConversationLoop.mock.calls[0]?.[2] as { formalSpec: boolean };
-      expect(mockResolveFormalSpecModeWithoutPrompt).toHaveBeenCalledWith('/project');
+      expect(mockResolveFormalSpecConfigurationWithoutPrompt).toHaveBeenCalledWith('/project');
       expect(strategy.formalSpec).toBe(formalSpec);
       expect(mockConfirm).not.toHaveBeenCalled();
     },

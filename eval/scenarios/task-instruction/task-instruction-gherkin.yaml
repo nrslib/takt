@@ -130,6 +130,7 @@ tests:
     vars:
       language: en
       formalSpec: true
+      formalSpecComments: true
       conversation: |
         Add a lease service with Requested, Active, Expired, and Released states.
         Activation is allowed only from Requested. An active lease eventually
@@ -177,6 +178,7 @@ tests:
     vars:
       language: ja
       formalSpec: true
+      formalSpecComments: true
       conversation: |
         予約サービスを追加してほしい。予約は Requested, Confirmed, Cancelled,
         Fulfilled の状態を持つ。Confirmed にできるのは Requested からだけ。
@@ -214,3 +216,26 @@ tests:
           形式構造は複数行または1つの完全な隣接コメントで説明してよく、言語上の
           足場や入れ子の各部分式にまで個別コメントを要求しない。コメントは形式表現を
           置き換えず、形式仕様の量または網羅性を減らしてはならない。
+
+  - description: 'Formal specification mode keeps notation when meaning comments are disabled'
+    vars:
+      language: en
+      formalSpec: true
+      formalSpecComments: false
+      conversation: |
+        Add a lease service with Requested, Active, Expired, and Released states.
+        Activation is allowed only from Requested. An active lease eventually
+        becomes Expired unless it is released first. Each resource has at most one
+        active lease, and every lease belongs to exactly one resource and one owner.
+        Keep observable API behavior in Gherkin and use actual formal syntax.
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-formal-spec/comments-disabled
+        value: |
+          Pass only if the generated task instruction still contains actual Quint
+          and Alloy specifications with the requested states, transitions, temporal
+          behavior, and ownership/cardinality requirements. The output must retain
+          the formal-specification amount, requirement coverage, and valid-syntax and
+          correctness guidance. Do not require natural-language meaning comments in
+          the formal blocks and do not fail merely because the model writes comments
+          on its own; this scenario disables only the forced comment guidance.

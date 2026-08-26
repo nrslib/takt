@@ -43,7 +43,7 @@ import {
 } from '../../core/workflow/pr-context.js';
 import { SlashCommand } from '../../shared/constants.js';
 import { hasInteractiveTerminal } from '../../shared/utils/index.js';
-import { resolveFormalSpecModeWithoutPrompt } from './taskInstructionFormat.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from './taskInstructionFormat.js';
 
 /** Failure information for a retry task */
 export interface RetryFailureInfo {
@@ -175,7 +175,7 @@ async function runRetryConversation(
     ctx.lang,
     loadTemplate('score_retry_system_prompt', ctx.lang, templateVars),
   );
-  const formalSpec = resolveFormalSpecModeWithoutPrompt(cwd);
+  const formalSpecConfiguration = resolveFormalSpecConfigurationWithoutPrompt(cwd);
 
   const retryIntro = getLabel('retry.ui.intro', ctx.lang);
   const subjectLabel = formatRetrySubjectLabel(retryContext.subject.kind, ctx.lang);
@@ -185,7 +185,8 @@ async function runRetryConversation(
 
   const strategy: ConversationStrategy = {
     systemPrompt,
-    formalSpec,
+    formalSpec: formalSpecConfiguration.mode,
+    formalSpecComments: formalSpecConfiguration.comments,
     allowedTools: RETRY_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),

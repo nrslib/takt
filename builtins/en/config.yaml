@@ -65,7 +65,10 @@ language: en        # UI language: en | ja
 # Interactive mode
 # interactive_preview_steps: 3 # Number of step previews in interactive mode (0-10)
 # assistant:
-#   formal_spec: 'y/N'         # true/false never asks; Y/n or y/N asks on TTY with that default (unset: y/N). Non-TTY uses the default answer. Expresses requirements in both notations; duplication across notations is not avoided, and a notation is omitted only when the task cannot be expressed in it.
+#   formal_spec:
+#     mode: 'y/N'              # true/false never asks; Y/n or y/N asks on TTY (unset: y/N)
+#     comments: true            # Require natural-language meaning comments for formal constructs (default: true)
+#   # Legacy scalar form (`formal_spec: 'y/N'`) remains accepted as a mode-only setting.
 # Gherkin guidance applies only to development and implementation tasks. Deprecated assistant.gherkin is warned about and ignored without migration.
 
 # Provider routing for workflow steps (recommended)

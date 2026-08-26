@@ -664,6 +664,7 @@ describe('/go command', () => {
       undefined,
       undefined,
       true,
+      true,
     );
   });
 

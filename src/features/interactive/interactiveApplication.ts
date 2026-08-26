@@ -29,6 +29,7 @@ export function buildConversationSummaryPrompt(
   promptContext?: string,
   formalSpec = false,
   context?: ConversationSummaryContext,
+  formalSpecComments = true,
 ): string {
   const trimmedNote = userNote.trim();
   const summaryHistory = trimmedNote
@@ -47,5 +48,6 @@ export function buildConversationSummaryPrompt(
     promptContext,
     formalSpec,
     context?.hasReferenceHistory === true,
+    formalSpecComments,
   );
 }
