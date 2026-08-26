@@ -50,11 +50,11 @@ export async function startWebUi(options: StartWebUiOptions): Promise<StartedWeb
         ...(registeredProject === undefined ? {} : { registeredProject }),
         request,
       }),
-      requeue: (projectDirectory, runId, registeredProject) => requeueWithNodeSpawn({
+      requeue: (projectDirectory, taskId, registeredProject) => requeueWithNodeSpawn({
         projectDirectory,
         globalConfigDirectory,
         ...(registeredProject === undefined ? {} : { registeredProject }),
-        runId,
+        taskId,
       }),
       control: {
         token: lock.controlToken,

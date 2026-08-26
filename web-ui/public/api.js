@@ -63,8 +63,8 @@ export function getSession() {
   return refreshSession();
 }
 
-export function getRuns() {
-  return requestJson('/api/runs');
+export function getTasks() {
+  return requestJson('/api/tasks');
 }
 
 export function getProjects() {
@@ -93,12 +93,12 @@ export function registerProject(projectDirectory) {
   return requestMutation('/api/projects', { projectDirectory });
 }
 
-export function startRun(request) {
-  return requestMutation('/api/runs', request);
+export function startTask(request) {
+  return requestMutation('/api/tasks', request);
 }
 
-export function requeueRun(projectId, slug) {
-  return requestMutation(`/api/runs/${encodeURIComponent(slug)}/requeue`, { projectId });
+export function requeueTask(projectId, taskId) {
+  return requestMutation(`/api/tasks/${encodeURIComponent(taskId)}/requeue`, { projectId });
 }
 
 function mutationOptions(token, body) {

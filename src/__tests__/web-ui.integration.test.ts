@@ -225,6 +225,29 @@ describe('Web UI run artifacts', () => {
 describe('Web UI HTTP boundary', () => {
   it('gracefully stops the owned Web UI through its private control endpoint', async () => {
     const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
+    const projectDirectory = await createProject();
+    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+    const repository = await CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    });
+    const execution = await repository.enqueueAndClaim({
+      task: 'keep running across UI restart',
+      workflow: 'default',
+      worktree: false,
+    });
+    await repository.setStartingPid({
+      taskId: execution.task.taskId,
+      generation: execution.task.generation,
+      executionId: execution.executionId,
+      ownerToken: execution.ownerToken,
+      pid: process.pid,
+      runId: execution.runId,
+    });
     const lock = await acquireWebUiInstanceLock(globalConfigDirectory, 0);
     let server: Server | undefined;
     server = await createWebUiServer({
@@ -251,6 +274,10 @@ describe('Web UI HTTP boundary', () => {
 
     expect(server.listening).toBe(false);
     await expect(readWebUiInstance(globalConfigDirectory)).resolves.toBeUndefined();
+    await expect(repository.readTask(execution.task.taskId)).resolves.toMatchObject({
+      status: 'starting',
+      activeExecution: { pid: process.pid, runId: execution.runId },
+    });
     servers.splice(servers.indexOf(server), 1);
   });
 
@@ -400,7 +427,12 @@ describe('Web UI HTTP boundary', () => {
       displayName: project.displayName,
       fingerprint: project.fingerprint,
     });
-    await writeRun(central.paths, '20260824-example');
+    const centralTask = await central.enqueueAndClaim({
+      task: 'Task for 20260824-example',
+      workflow: 'default',
+      worktree: false,
+    });
+    await writeRun(central.paths, centralTask.runId);
     const launches: unknown[] = [];
     const requeues: unknown[] = [];
     const server = await createWebUiServer({
@@ -409,22 +441,23 @@ describe('Web UI HTTP boundary', () => {
         launches.push({ directory, request });
         return { pid: 9001, disposition: 'started' as const, mode: 'run' as const };
       },
-      requeue: async (directory, runId) => {
-        requeues.push({ directory, runId });
+      requeue: async (directory, taskId) => {
+        requeues.push({ directory, taskId });
         return { pid: 9002, disposition: 'started' as const, mode: 'run' as const };
       },
     });
     servers.push(server);
     const origin = await listenWebUiServer(server, 0);
 
-    const listResponse = await fetch(`${origin}/api/runs`);
+    const listResponse = await fetch(`${origin}/api/tasks`);
     expect(listResponse.status).toBe(200);
-    const runs = (await listResponse.json() as { runs: Array<Record<string, unknown>> }).runs;
-    expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({
-      slug: '20260824-example',
+    const tasks = (await listResponse.json() as { tasks: Array<Record<string, unknown>> }).tasks;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      taskId: centralTask.task.taskId,
       projectId: project.id,
       projectDirectory,
+      runs: [{ slug: centralTask.runId, attempt: 1 }],
     });
 
     const projectsResponse = await fetch(`${origin}/api/projects`);
@@ -433,7 +466,7 @@ describe('Web UI HTTP boundary', () => {
       projects: [{ id: project.id, projectDirectory, available: true }],
     });
 
-    const rejected = await fetch(`${origin}/api/runs`, {
+    const rejected = await fetch(`${origin}/api/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ projectId: project.id, prompt: 'Build it', workflow: 'default' }),
@@ -441,7 +474,7 @@ describe('Web UI HTTP boundary', () => {
     expect(rejected.status).toBe(403);
 
     const token = (await (await fetch(`${origin}/api/session`)).json() as { token: string }).token;
-    const invalidProject = await fetch(`${origin}/api/runs`, {
+    const invalidProject = await fetch(`${origin}/api/tasks`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -455,7 +488,7 @@ describe('Web UI HTTP boundary', () => {
     });
     expect(invalidProject.status).toBe(400);
 
-    const accepted = await fetch(`${origin}/api/runs`, {
+    const accepted = await fetch(`${origin}/api/tasks`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -480,7 +513,7 @@ describe('Web UI HTTP boundary', () => {
       },
     }]);
 
-    const requeueResponse = await fetch(`${origin}/api/runs/20260824-example/requeue`, {
+    const requeueResponse = await fetch(`${origin}/api/tasks/${centralTask.task.taskId}/requeue`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -494,7 +527,7 @@ describe('Web UI HTTP boundary', () => {
       disposition: 'started',
       mode: 'run',
     });
-    expect(requeues).toEqual([{ directory: projectDirectory, runId: '20260824-example' }]);
+    expect(requeues).toEqual([{ directory: projectDirectory, taskId: centralTask.task.taskId }]);
   });
 
   it('joins project discovery with central consumer status without stale cleanup', async () => {

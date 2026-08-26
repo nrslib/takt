@@ -106,7 +106,7 @@ describe('central task CAS repository', () => {
     })).rejects.toBeInstanceOf(CentralTaskCasError);
   });
 
-  it('requeues a failed run with the same execution settings exactly once', async () => {
+  it('starts another run for a failed task with the same execution settings', async () => {
     const { repository } = await setup();
     const started = await repository.enqueueAndClaim({
       task: 'retry me',
@@ -132,7 +132,7 @@ describe('central task CAS repository', () => {
       failure: { code: 'workflow_failed', message: 'failed' },
     });
 
-    const requeued = await repository.requeueFailedRun(started.runId);
+    const requeued = await repository.requeueFailedTask(started.task.taskId);
 
     expect(requeued.kind).toBe('started');
     expect(requeued.runId).not.toBe(started.runId);
@@ -140,6 +140,7 @@ describe('central task CAS repository', () => {
       taskId: started.task.taskId,
       status: 'starting',
       attempt: 2,
+      runIds: [started.runId, requeued.runId],
       worktree: '/tmp/takt-worktrees',
       branch: 'feature/retry-me',
       baseBranch: 'main',
@@ -147,9 +148,37 @@ describe('central task CAS repository', () => {
       draftPr: true,
     });
     expect(requeued.task.failure).toBeUndefined();
-    await expect(repository.requeueFailedRun(started.runId)).rejects.toThrow(
-      'Run is not attached to a central task',
+    await expect(readFile(repository.paths.tasksFile, 'utf8').then((value) => JSON.parse(value)))
+      .resolves.toMatchObject({
+        version: 1,
+        tasks: [{ runId: requeued.runId, runIds: [started.runId, requeued.runId] }],
+      });
+    await expect(repository.requeueFailedTask(started.task.taskId)).rejects.toThrow(
+      'Only failed tasks can be requeued',
     );
+  });
+
+  it('reads the previous single-run ledger as task run history', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({
+      task: 'existing task',
+      workflow: 'default',
+      worktree: false,
+    });
+    const stored = JSON.parse(await readFile(repository.paths.tasksFile, 'utf8')) as {
+      version: number;
+      tasks: Array<Record<string, unknown>>;
+    };
+    const legacyTasks = stored.tasks.map(({ runIds: _runIds, ...task }) => ({
+      ...task,
+      runId: started.runId,
+    }));
+    await writeFile(repository.paths.tasksFile, `${JSON.stringify({ version: 1, tasks: legacyTasks })}\n`);
+
+    await expect(repository.readTask(started.task.taskId)).resolves.toMatchObject({
+      attempt: 1,
+      runIds: [started.runId],
+    });
   });
 
   it('keeps separate TAKT_CONFIG_DIR namespaces independent', async () => {

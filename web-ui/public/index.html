@@ -136,8 +136,8 @@
       <section class="runs-panel" aria-labelledby="runs-title">
         <div class="section-heading runs-heading">
           <div>
-            <h2 id="runs-title">Runs</h2>
-            <p>このPCで実行されたTAKTの状態とログです。</p>
+            <h2 id="runs-title">Tasks</h2>
+            <p>タスクごとに指示と再実行を管理し、各runのログを確認できます。</p>
             <p class="warning-message">同一canonical projectでのCLIとWeb UIの同時実行・mutationはサポート対象外です。</p>
           </div>
           <div class="runs-actions">
@@ -147,9 +147,9 @@
         </div>
 
         <div class="run-layout">
-          <nav class="run-list-region" aria-label="run一覧">
+          <nav class="run-list-region" aria-label="task一覧">
             <div id="run-list" class="run-list"></div>
-            <p id="run-list-empty" class="empty-state" hidden>runはまだありません。</p>
+            <p id="run-list-empty" class="empty-state" hidden>taskはまだありません。</p>
           </nav>
           <p id="run-status-live" class="visually-hidden" aria-live="polite"></p>
           <article id="run-detail" class="run-detail">

@@ -81,13 +81,20 @@ export interface CentralTaskRecord {
   readonly updatedAt: string;
   readonly activeExecution?: CentralActiveExecution;
   readonly failure?: CentralTaskFailure;
+  /** Latest run pointer retained so workers started before run history support can finish safely. */
   readonly runId?: string;
+  readonly runIds: readonly string[];
   readonly prUrl?: string;
 }
 
 interface StoredTasks {
   readonly version: typeof TASKS_VERSION;
   readonly tasks: readonly CentralTaskRecord[];
+}
+
+interface StoredCentralTaskRecord extends Omit<CentralTaskRecord, 'runIds'> {
+  readonly runIds?: unknown;
+  readonly runId?: string;
 }
 
 export interface CentralTaskHandle {
@@ -173,6 +180,7 @@ function startPendingTask(task: CentralTaskRecord, now: string): CentralTaskHand
     attempt: task.attempt + 1,
     updatedAt: now,
     runId,
+    runIds: [...task.runIds, runId],
     activeExecution: {
       executionId,
       runId,
@@ -185,7 +193,7 @@ function startPendingTask(task: CentralTaskRecord, now: string): CentralTaskHand
   return { task: started, ownerToken, executionId, runId };
 }
 
-function requeueFailedTask(task: CentralTaskRecord, now: string): CentralTaskRecord {
+function resetFailedTaskToPending(task: CentralTaskRecord, now: string): CentralTaskRecord {
   return {
     taskId: task.taskId,
     generation: task.generation + 1,
@@ -201,6 +209,7 @@ function requeueFailedTask(task: CentralTaskRecord, now: string): CentralTaskRec
     ...(task.draftPr === undefined ? {} : { draftPr: task.draftPr }),
     createdAt: task.createdAt,
     updatedAt: now,
+    runIds: task.runIds,
   };
 }
 
@@ -636,11 +645,31 @@ async function withLock<T>(paths: StatePaths, action: () => Promise<T>): Promise
   }
 }
 
+function normalizeTaskRunHistory(task: StoredCentralTaskRecord): CentralTaskRecord {
+  if (task.runIds !== undefined && !Array.isArray(task.runIds)) {
+    return task as CentralTaskRecord;
+  }
+  const persistedRunIds = task.runIds as readonly string[] | undefined;
+  const runIds = task.runId === undefined
+    ? persistedRunIds ?? []
+    : persistedRunIds?.at(-1) === task.runId
+      ? persistedRunIds
+      : [...persistedRunIds ?? [], task.runId];
+  return {
+    ...task,
+    ...(persistedRunIds === undefined ? { attempt: runIds.length } : {}),
+    runIds,
+  };
+}
+
 function parseTasks(value: unknown): StoredTasks {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new CentralTaskCasError('Central tasks file is malformed');
   const raw = value as Readonly<Record<string, unknown>>;
   if (raw.version !== TASKS_VERSION || !Array.isArray(raw.tasks)) throw new CentralTaskCasError('Central tasks file version is unsupported');
-  return { version: TASKS_VERSION, tasks: raw.tasks as CentralTaskRecord[] };
+  return {
+    version: TASKS_VERSION,
+    tasks: (raw.tasks as StoredCentralTaskRecord[]).map(normalizeTaskRunHistory),
+  };
 }
 
 function assertIsoTimestamp(value: unknown, label: string): void {
@@ -652,7 +681,7 @@ function assertIsoTimestamp(value: unknown, label: string): void {
 function validateTask(task: CentralTaskRecord): void {
   assertTaskId(task.taskId);
   if (!Number.isSafeInteger(task.generation) || task.generation < 0) throw new CentralTaskCasError('Central task generation is invalid');
-  if (!Number.isSafeInteger(task.attempt) || task.attempt < 1) throw new CentralTaskCasError('Central task attempt is invalid');
+  if (!Number.isSafeInteger(task.attempt) || task.attempt < 0) throw new CentralTaskCasError('Central task attempt is invalid');
   if (!['pending', 'starting', 'running', 'completed', 'failed'].includes(task.status)) throw new CentralTaskCasError('Central task status is invalid');
   if (task.origin !== 'web') throw new CentralTaskCasError('Central task origin is invalid');
   if (typeof task.task !== 'string' || task.task.length === 0 || typeof task.workflow !== 'string' || task.workflow.length === 0) {
@@ -690,6 +719,17 @@ function validateTask(task: CentralTaskRecord): void {
   if (task.autoPr === true && task.worktree === false) {
     throw new CentralTaskCasError('Central task auto PR requires a worktree');
   }
+  if (
+    !Array.isArray(task.runIds)
+    || task.runIds.some((runId) => typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(runId))
+    || new Set(task.runIds).size !== task.runIds.length
+    || task.runIds.length !== task.attempt
+  ) {
+    throw new CentralTaskCasError('Central task run history is invalid');
+  }
+  if (task.runId !== undefined && task.runId !== task.runIds.at(-1)) {
+    throw new CentralTaskCasError('Central task latest run does not match its run history');
+  }
   assertIsoTimestamp(task.createdAt, 'task.createdAt');
   assertIsoTimestamp(task.updatedAt, 'task.updatedAt');
   if (task.activeExecution !== undefined) {
@@ -715,6 +755,12 @@ function validateTask(task: CentralTaskRecord): void {
   }
   if ((task.status === 'starting' || task.status === 'running') !== (task.activeExecution !== undefined)) {
     throw new CentralTaskCasError('Central task active execution does not match its status');
+  }
+  if (
+    task.activeExecution !== undefined
+    && task.runIds.at(-1) !== task.activeExecution.runId
+  ) {
+    throw new CentralTaskCasError('Central task active execution does not match its run history');
   }
   if (task.failure !== undefined) {
     if (
@@ -1044,6 +1090,7 @@ export class CentralTaskRepository {
         createdAt: now,
         updatedAt: now,
         runId,
+        runIds: [runId],
         activeExecution: {
           executionId,
           runId,
@@ -1081,7 +1128,7 @@ export class CentralTaskRepository {
           generation: 0,
           status: 'pending',
           origin: 'web',
-          attempt: 1,
+          attempt: 0,
           task: input.task,
           workflow: input.workflow,
           worktree: input.worktree,
@@ -1091,6 +1138,7 @@ export class CentralTaskRepository {
           ...(input.draftPr === undefined ? {} : { draftPr: input.draftPr }),
           createdAt: now,
           updatedAt: now,
+          runIds: [],
         };
         await this.writeTasks([...tasks, pending]);
         return { kind: 'reused', task: pending, active: active.activeExecution };
@@ -1104,7 +1152,7 @@ export class CentralTaskRepository {
           generation: 0,
           status: 'pending',
           origin: 'web',
-          attempt: 1,
+          attempt: 0,
           task: input.task,
           workflow: input.workflow,
           worktree: input.worktree,
@@ -1114,6 +1162,7 @@ export class CentralTaskRepository {
           ...(input.draftPr === undefined ? {} : { draftPr: input.draftPr }),
           createdAt: now,
           updatedAt: now,
+          runIds: [],
         };
         tasks[pendingIndex] = claimed.task;
         tasks.push(incoming);
@@ -1147,6 +1196,7 @@ export class CentralTaskRepository {
         createdAt: now,
         updatedAt: now,
         runId,
+        runIds: [runId],
         activeExecution: {
           executionId,
           runId,
@@ -1161,23 +1211,21 @@ export class CentralTaskRepository {
     });
   }
 
-  /** Requeue one failed run while preserving its exact execution settings. */
-  async requeueFailedRun(runId: string): Promise<CentralTaskLaunchDecision> {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(runId)) {
-      throw new CentralTaskRequeueError('Run id is invalid');
-    }
+  /** Start another run for one failed task while preserving its execution settings. */
+  async requeueFailedTask(taskId: string): Promise<CentralTaskLaunchDecision> {
+    assertTaskId(taskId);
     return withLock(this.paths, async () => {
       const tasks = [...await this.readTasks()];
-      const failedIndex = tasks.findIndex((task) => task.runId === runId);
+      const failedIndex = tasks.findIndex((task) => task.taskId === taskId);
       const failed = failedIndex < 0 ? undefined : tasks[failedIndex];
       if (failed === undefined) {
-        throw new CentralTaskRequeueError('Run is not attached to a central task');
+        throw new CentralTaskRequeueError('Task was not found');
       }
       if (failed.status !== 'failed') {
-        throw new CentralTaskRequeueError('Only failed runs can be requeued');
+        throw new CentralTaskRequeueError('Only failed tasks can be requeued');
       }
       const now = new Date().toISOString();
-      tasks[failedIndex] = requeueFailedTask(failed, now);
+      tasks[failedIndex] = resetFailedTaskToPending(failed, now);
       const active = tasks.find((task) => task.status === 'starting' || task.status === 'running');
       if (active?.activeExecution !== undefined) {
         await this.writeTasks(tasks);
@@ -1243,7 +1291,7 @@ export class CentralTaskRepository {
       // this reservation; never mutate the terminal record.
       if (
         (task.status === 'completed' || task.status === 'failed')
-        && task.runId === input.runId
+        && task.runIds.at(-1) === input.runId
         && task.generation >= input.generation + 2
       ) {
         return task;

@@ -34,7 +34,7 @@ import {
 } from '../../infra/task/centralStateRepository.js';
 
 const MAX_REQUEST_BYTES = 128 * 1024;
-const MAX_GLOBAL_RUNS = 100;
+const MAX_GLOBAL_TASKS = 100;
 
 interface StaticAsset {
   readonly content: Buffer;
@@ -213,8 +213,8 @@ function routeRunSlug(pathname: string): string | null {
   return match?.[1] ?? null;
 }
 
-function routeRunRequeueSlug(pathname: string): string | null {
-  const match = pathname.match(/^\/api\/runs\/([A-Za-z0-9][A-Za-z0-9._-]*)\/requeue$/u);
+function routeTaskRequeueId(pathname: string): string | null {
+  const match = pathname.match(/^\/api\/tasks\/([0-9a-f-]{36})\/requeue$/u);
   return match?.[1] ?? null;
 }
 
@@ -334,45 +334,73 @@ async function resolveProject(globalConfigDirectory: string, id: string): Promis
   }
 }
 
-async function readGlobalRuns(globalConfigDirectory: string) {
+async function readGlobalTasks(globalConfigDirectory: string) {
   const registry = await readProjectRegistry(globalConfigDirectory);
   const results = await Promise.all(registry.projects.map(async (project) => {
     if (!project.available) {
-      return { runs: [], warnings: [`${project.projectDirectory}: project directory is unavailable`] };
+      return { tasks: [], warnings: [`${project.projectDirectory}: project directory is unavailable`] };
     }
     try {
       const statePaths = resolveStatePaths(globalConfigDirectory, project.stateId);
       if (!existsSync(statePaths.runsDirectory) || !existsSync(statePaths.stateFile)) {
-        return { runs: [], warnings: [] };
+        return { tasks: [], warnings: [] };
       }
       const repository = await CentralTaskRepository.openByState({
         globalConfigDirectory,
         stateId: project.stateId,
       });
       const collection = await readRunCollection(repository.paths);
+      const runsBySlug = new Map(collection.runs.map((run) => [run.slug, run]));
+      const tasks = (await repository.readTasks()).map((task) => ({
+        taskId: task.taskId,
+        status: task.status === 'starting' ? 'running' : task.status,
+        task: task.task,
+        workflow: task.workflow,
+        attempt: task.attempt,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        worktree: task.worktree,
+        ...(task.branch === undefined ? {} : { branch: task.branch }),
+        ...(task.baseBranch === undefined ? {} : { baseBranch: task.baseBranch }),
+        autoPr: task.autoPr === true,
+        draftPr: task.draftPr === true,
+        ...(task.failure === undefined ? {} : { failure: task.failure }),
+        ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
+        actions: { requeue: task.status === 'failed' },
+        projectId: project.id,
+        locationId: project.locationId,
+        stateId: project.stateId,
+        projectName: project.displayName,
+        projectDirectory: project.projectDirectory,
+        runs: task.runIds.flatMap((runId, index) => {
+          const run = runsBySlug.get(runId);
+          if (run === undefined) return [];
+          const isLatest = index === task.runIds.length - 1;
+          return [{
+            ...run,
+            attempt: index + 1,
+            ...(isLatest
+              ? { status: task.status === 'starting' ? 'running' : task.status }
+              : {}),
+          }];
+        }),
+      }));
       return {
-        runs: collection.runs.map((run) => ({
-          ...run,
-          projectId: project.locationId,
-          locationId: project.locationId,
-          stateId: project.stateId,
-          projectName: project.displayName,
-          projectDirectory: project.projectDirectory,
-        })),
+        tasks,
         warnings: collection.warnings.map((warning) => `${project.displayName}: ${warning}`),
       };
     } catch (error) {
       return {
-        runs: [],
+        tasks: [],
         warnings: [`${project.projectDirectory}: ${errorMessage(error)}`],
       };
     }
   }));
   return {
-    runs: results
-      .flatMap((result) => result.runs)
-      .sort((left, right) => right.startTime.localeCompare(left.startTime))
-      .slice(0, MAX_GLOBAL_RUNS),
+    tasks: results
+      .flatMap((result) => result.tasks)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .slice(0, MAX_GLOBAL_TASKS),
     warnings: [...registry.warnings, ...results.flatMap((result) => result.warnings)],
   };
 }
@@ -408,7 +436,7 @@ export async function createWebUiServer(options: {
   ) => Promise<LaunchResult>;
   readonly requeue?: (
     projectDirectory: string,
-    runId: string,
+    taskId: string,
     project?: RegisteredProject,
   ) => Promise<LaunchResult>;
   readonly getWorkflowCatalog?: (
@@ -476,8 +504,8 @@ export async function createWebUiServer(options: {
         ));
         return;
       }
-      if (method === 'GET' && url.pathname === '/api/runs') {
-        sendJson(response, 200, await readGlobalRuns(options.globalConfigDirectory));
+      if (method === 'GET' && url.pathname === '/api/tasks') {
+        sendJson(response, 200, await readGlobalTasks(options.globalConfigDirectory));
         return;
       }
       if (method === 'GET' && url.pathname === '/api/workflows') {
@@ -506,28 +534,33 @@ export async function createWebUiServer(options: {
           stateId: project.stateId,
         });
         const detail = await readRunDetail(repository.paths, slug);
-        const task = (await repository.readTasks()).find((candidate) => candidate.runId === slug);
+        const task = (await repository.readTasks()).find((candidate) => candidate.runIds.includes(slug));
+        const isLatestTaskRun = task?.runIds.at(-1) === slug;
         sendJson(response, 200, {
           project,
           ...detail,
           ...(task === undefined
-            ? { actions: { requeue: false } }
+            ? {}
             : {
+                taskId: task.taskId,
                 meta: {
                   ...detail.meta,
-                  status: task.status === 'starting' ? 'running' : task.status,
-                  ...(task.failure === undefined ? {} : { reason: task.failure.message }),
+                  ...(isLatestTaskRun
+                    ? { status: task.status === 'starting' ? 'running' : task.status }
+                    : {}),
+                  ...(isLatestTaskRun && task.failure !== undefined
+                    ? { reason: task.failure.message }
+                    : {}),
                 },
-                actions: { requeue: task.status === 'failed' },
                 ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
               }),
         });
         return;
       }
-      const requeueSlug = method === 'POST' ? routeRunRequeueSlug(url.pathname) : null;
-      if (requeueSlug !== null) {
+      const requeueTaskId = method === 'POST' ? routeTaskRequeueId(url.pathname) : null;
+      if (requeueTaskId !== null) {
         requireSessionToken(request, sessionToken);
-        if (options.requeue === undefined) throw new HttpError(501, 'Run requeue is unavailable');
+        if (options.requeue === undefined) throw new HttpError(501, 'Task requeue is unavailable');
         const body = await readJsonBody(request);
         const project = await resolveProject(
           options.globalConfigDirectory,
@@ -536,11 +569,11 @@ export async function createWebUiServer(options: {
         sendJson(
           response,
           202,
-          await options.requeue(project.projectDirectory, requeueSlug, project),
+          await options.requeue(project.projectDirectory, requeueTaskId, project),
         );
         return;
       }
-      if (method === 'POST' && url.pathname === '/api/runs') {
+      if (method === 'POST' && url.pathname === '/api/tasks') {
         requireSessionToken(request, sessionToken);
         const body = await readJsonBody(request);
         const project = await resolveProject(

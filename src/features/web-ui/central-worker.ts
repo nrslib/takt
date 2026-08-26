@@ -176,7 +176,7 @@ async function executeAndCommit(
 ): Promise<void> {
   let terminalized = false;
   try {
-    const runId = task.activeExecution?.runId ?? task.runId;
+    const runId = task.activeExecution?.runId;
     if (runId === undefined) throw new Error('Central task run id is missing');
     // These checks belong to the same failure boundary as the execution. The
     // workflow lifecycle owns run directory/meta publication; the worker owns

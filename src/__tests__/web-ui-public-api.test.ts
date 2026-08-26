@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getSession, sendChatMessage, startRun } from '../../web-ui/public/api.js';
+import { getSession, sendChatMessage, startTask } from '../../web-ui/public/api.js';
 
 describe('Web UI public API response handling', () => {
   const fetchMock = vi.fn();
@@ -52,7 +52,7 @@ describe('Web UI public API response handling', () => {
     await expect(getSession()).rejects.toThrow('Invalid response: 204');
   });
 
-  it('uses the shared mutation options for starting a run', async () => {
+  it('uses the shared mutation options for starting a task', async () => {
     await initializeSession();
     fetchMock.mockResolvedValueOnce({
       ok: true,
@@ -60,9 +60,9 @@ describe('Web UI public API response handling', () => {
       json: async () => ({ started: true }),
     });
 
-    await expect(startRun({ projectId: 'project', workflow: 'default' }))
+    await expect(startTask({ projectId: 'project', workflow: 'default' }))
       .resolves.toEqual({ started: true });
-    expect(fetchMock).toHaveBeenLastCalledWith('/api/runs', {
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/tasks', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -91,13 +91,13 @@ describe('Web UI public API response handling', () => {
         json: async () => ({ started: true }),
       });
 
-    await expect(startRun({ projectId: 'project', workflow: 'default' }))
+    await expect(startTask({ projectId: 'project', workflow: 'default' }))
       .resolves.toEqual({ started: true });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/runs', expect.objectContaining({
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/tasks', expect.objectContaining({
       headers: expect.objectContaining({ 'X-TAKT-Web-Token': 'expired-token' }),
     }));
     expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/session', undefined);
-    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/runs', expect.objectContaining({
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/tasks', expect.objectContaining({
       headers: expect.objectContaining({ 'X-TAKT-Web-Token': 'fresh-token' }),
     }));
   });

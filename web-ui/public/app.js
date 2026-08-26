@@ -2,17 +2,17 @@ import {
   browseDirectories,
   createChatSession,
   getRun,
-  getRuns,
+  getTasks,
   getProjects,
   getSession,
   getWorkflows,
   pickNativeDirectory,
-  requeueRun,
+  requeueTask,
   reconfigureChatSession,
   registerProject,
   restartChatSession,
   sendChatMessage,
-  startRun,
+  startTask,
 } from './api.js';
 import {
   buildExecutionSettingsRequest,
@@ -122,6 +122,7 @@ function formatDate(value) {
 
 function statusLabel(status) {
   const labels = {
+    pending: 'PENDING',
     running: 'RUNNING',
     completed: 'COMPLETED',
     aborted: 'ABORTED',
@@ -647,7 +648,7 @@ async function launchTaskInstruction(task, settings, button) {
   button.disabled = true;
   elements.chatStatus.textContent = 'runを開始しています…';
   try {
-    const result = await startRun({
+    const result = await startTask({
       projectId: selectedProjectId(),
       prompt: task,
       workflow: elements.workflow.value,
@@ -944,35 +945,56 @@ async function submitChat(event) {
   }
 }
 
-function renderRunList(runs) {
+function renderTaskList(tasks) {
   elements.runList.replaceChildren();
-  elements.runListEmpty.hidden = runs.length !== 0;
-  for (const run of runs) {
-    const button = createElement('button', 'run-card');
-    button.type = 'button';
-    button.dataset.selected = String(
-      run.slug === selectedRun?.slug && run.projectId === selectedRun?.projectId,
-    );
-    button.addEventListener('click', () => {
-      selectedRun = { projectId: run.projectId, slug: run.slug };
-      void refreshRuns();
-    });
-
+  elements.runListEmpty.hidden = tasks.length !== 0;
+  for (const task of tasks) {
+    const card = createElement('article', 'task-card');
+    card.dataset.selected = String(task.taskId === selectedRun?.taskId);
     const top = createElement('span', 'run-card-top');
     top.append(
-      createElement('span', `status-badge status-${run.status}`, statusLabel(run.status)),
-      createElement('time', 'run-time', formatDate(run.startTime)),
+      createElement('span', `status-badge status-${task.status}`, statusLabel(task.status)),
+      createElement('time', 'run-time', formatDate(task.updatedAt)),
     );
-    button.append(
+    const header = createElement('div', 'task-card-header');
+    header.append(
       top,
-      createElement('strong', 'run-task', run.task),
+      createElement('strong', 'run-task', task.task),
       createElement(
         'span',
         'run-meta',
-        `${run.projectName} · ${run.workflow} · ${run.currentStep ?? '待機中'}`,
+        `${task.projectName} · ${task.workflow} · ${task.runs.length} run`,
       ),
     );
-    elements.runList.append(button);
+    if (task.actions.requeue) {
+      const requeue = createElement('button', 'task-requeue-button', 'Requeue');
+      requeue.type = 'button';
+      requeue.addEventListener('click', () => void requeueSelectedTask(task, requeue));
+      header.append(requeue);
+    }
+    const attempts = createElement('div', 'task-run-list');
+    for (const run of task.runs) {
+      const button = createElement('button', 'task-run-button');
+      button.type = 'button';
+      button.dataset.selected = String(
+        run.slug === selectedRun?.slug && task.projectId === selectedRun?.projectId,
+      );
+      button.addEventListener('click', () => {
+        selectedRun = { projectId: task.projectId, taskId: task.taskId, slug: run.slug };
+        void refreshRuns();
+      });
+      button.append(
+        createElement('span', '', `Run ${run.attempt}`),
+        createElement('span', `status-badge status-${run.status}`, statusLabel(run.status)),
+        createElement('time', 'run-time', formatDate(run.startTime)),
+      );
+      attempts.append(button);
+    }
+    if (task.runs.length === 0) {
+      attempts.append(createElement('p', 'task-run-empty', '実行待ち'));
+    }
+    card.append(header, attempts);
+    elements.runList.append(card);
   }
 }
 
@@ -1037,7 +1059,7 @@ function renderLogEvents(events) {
 }
 
 function renderRunDetail(detail, expectedRun) {
-  const { meta, reports, events, project, actions } = detail;
+  const { meta, reports, events, project } = detail;
   if (!sameRunSelectionState(
     { projectId: project.id, slug: meta.runSlug },
     expectedRun,
@@ -1051,12 +1073,6 @@ function renderRunDetail(detail, expectedRun) {
   headerStatus.append(
     createElement('span', `status-badge status-${meta.status}`, statusLabel(meta.status)),
   );
-  if (actions?.requeue === true) {
-    const requeue = createElement('button', 'secondary-button', 'Requeue');
-    requeue.type = 'button';
-    requeue.addEventListener('click', () => void requeueSelectedRun(expectedRun, requeue));
-    headerStatus.append(requeue);
-  }
   header.append(
     headerStatus,
     createElement('h2', '', meta.workflow),
@@ -1095,14 +1111,25 @@ function renderRunDetail(detail, expectedRun) {
   return true;
 }
 
-async function requeueSelectedRun(run, button) {
+function renderRunPlaceholder() {
+  const placeholder = createElement('div', 'detail-placeholder');
+  placeholder.append(
+    createElement('p', '', 'Runを選択'),
+    createElement('span', '', 'task配下のrunを選択するとログを表示します。'),
+  );
+  delete elements.runDetail.dataset.projectId;
+  delete elements.runDetail.dataset.runSlug;
+  elements.runDetail.replaceChildren(placeholder);
+}
+
+async function requeueSelectedTask(task, button) {
   button.disabled = true;
   elements.runWarning.textContent = '';
   try {
-    const result = await requeueRun(run.projectId, run.slug);
+    const result = await requeueTask(task.projectId, task.taskId);
     elements.chatStatus.textContent = result.disposition === 'reused'
-      ? '失敗したrunをキューへ戻しました。'
-      : `失敗したrunを再実行しました。PID: ${result.pid}`;
+      ? '失敗したtaskをキューへ戻しました。'
+      : `taskの新しいrunを開始しました。PID: ${result.pid}`;
     await refreshRuns();
   } catch (error) {
     elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
@@ -1114,15 +1141,20 @@ async function refreshRuns() {
   if (refreshing || document.visibilityState === 'hidden') return;
   refreshing = true;
   try {
-    const collection = await getRuns();
-    const hasSelected = selectedRun !== null && collection.runs.some(
-      (run) => run.slug === selectedRun.slug && run.projectId === selectedRun.projectId,
+    const collection = await getTasks();
+    const hasSelected = selectedRun !== null && collection.tasks.some(
+      (task) => task.projectId === selectedRun.projectId
+        && task.taskId === selectedRun.taskId
+        && task.runs.some((run) => run.slug === selectedRun.slug),
     );
     if (!hasSelected) {
-      const first = collection.runs[0];
-      selectedRun = first === undefined ? null : { projectId: first.projectId, slug: first.slug };
+      const firstTask = collection.tasks.find((task) => task.runs.length > 0);
+      const latestRun = firstTask?.runs.at(-1);
+      selectedRun = firstTask === undefined || latestRun === undefined
+        ? null
+        : { projectId: firstTask.projectId, taskId: firstTask.taskId, slug: latestRun.slug };
     }
-    renderRunList(collection.runs);
+    renderTaskList(collection.tasks);
     updateWarnings(collection.warnings);
     if (selectedRun !== null) {
       const requestedRun = { ...selectedRun };
@@ -1134,6 +1166,8 @@ async function refreshRuns() {
       } catch (error) {
         if (sameRunSelectionState(selectedRun, requestedRun)) throw error;
       }
+    } else {
+      renderRunPlaceholder();
     }
     elements.connection.textContent = '接続済み';
   } catch (error) {

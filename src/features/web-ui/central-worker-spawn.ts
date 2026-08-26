@@ -104,7 +104,7 @@ function isTerminalReservation(
   input: CentralWorkerReservation,
 ): boolean {
   return (task?.status === 'completed' || task?.status === 'failed')
-    && task.runId === input.runId
+    && task.runIds.at(-1) === input.runId
     && task.generation >= input.generation + 2;
 }
 

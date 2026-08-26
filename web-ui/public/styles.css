@@ -819,28 +819,79 @@ button {
 
 .run-list { display: grid; }
 
-.run-card {
+.task-card {
   position: relative;
   display: grid;
-  gap: 7px;
+  gap: 10px;
   width: 100%;
   padding: 14px 15px;
   border-bottom: 1px solid var(--border);
-  border-radius: 0;
   color: var(--text);
-  text-align: left;
   background: transparent;
 }
 
-.run-card:hover { background: var(--surface-raised); }
-.run-card[data-selected="true"] { background: var(--surface-selected); }
+.task-card[data-selected="true"] { background: var(--surface-selected); }
 
-.run-card[data-selected="true"]::before {
+.task-card[data-selected="true"]::before {
   position: absolute;
   inset: 9px auto 9px 0;
   width: 2px;
   background: var(--accent);
   content: "";
+}
+
+.task-card-header {
+  display: grid;
+  gap: 7px;
+}
+
+.task-requeue-button {
+  justify-self: start;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  background: transparent;
+}
+
+.task-requeue-button:hover { background: var(--surface-raised); }
+
+.task-run-list {
+  display: grid;
+  gap: 3px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-strong);
+}
+
+.task-run-button {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-align: left;
+  background: transparent;
+}
+
+.task-run-button:hover,
+.task-run-button[data-selected="true"] { background: var(--surface-raised); }
+
+.task-run-button .run-time {
+  text-align: right;
+}
+
+.task-run-empty {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
 }
 
 .run-card-top {
@@ -870,6 +921,7 @@ button {
 }
 
 .status-running { color: var(--accent); }
+.status-pending { color: var(--muted); }
 .status-completed { color: var(--complete); }
 .status-aborted { color: var(--warning); }
 .status-failed { color: var(--danger); }

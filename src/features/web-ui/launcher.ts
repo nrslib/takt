@@ -166,9 +166,10 @@ async function spawnReservedDecision(options: {
     ?? fileURLToPath(new URL('./worker-entry.js', import.meta.url));
   const task = decision.task;
   const ownerToken = decision.ownerToken;
-  if (ownerToken === undefined || decision.executionId === undefined) {
+  if (ownerToken === undefined || decision.executionId === undefined || decision.runId === undefined) {
     throw new Error('Central worker reservation is incomplete');
   }
+  const runId = decision.runId;
   let child: ChildProcess | undefined;
   let spawnAcknowledged = false;
   try {
@@ -195,7 +196,7 @@ async function spawnReservedDecision(options: {
       generation: task.generation,
       executionId: decision.executionId,
       ownerToken,
-      runId: task.runId,
+      runId,
     }, child);
     await repository.setStartingPid({
       taskId: task.taskId,
@@ -203,7 +204,7 @@ async function spawnReservedDecision(options: {
       executionId: decision.executionId,
       ownerToken,
       pid: spawned.pid,
-      runId: task.runId,
+      runId,
     });
     return { pid: spawned.pid, disposition: 'started', mode: 'run' };
   } catch (error) {
@@ -258,12 +259,12 @@ export async function launchTaktRun(options: {
   });
 }
 
-export async function requeueTaktRun(options: {
+export async function requeueTaktTask(options: {
   readonly workerEntryPath?: string;
   readonly projectDirectory: string;
   readonly globalConfigDirectory?: string;
   readonly registeredProject?: RegisteredProject;
-  readonly runId: string;
+  readonly taskId: string;
   readonly spawnProcess: SpawnProcess;
 }): Promise<LaunchResult> {
   const globalConfigDirectory = options.globalConfigDirectory ?? getGlobalConfigDir();
@@ -273,7 +274,7 @@ export async function requeueTaktRun(options: {
     ...(options.registeredProject === undefined ? {} : { registeredProject: options.registeredProject }),
   });
   const repository = await openProjectRepository(globalConfigDirectory, project);
-  const decision = await repository.requeueFailedRun(options.runId);
+  const decision = await repository.requeueFailedTask(options.taskId);
   return spawnReservedDecision({
     ...(options.workerEntryPath === undefined ? {} : { workerEntryPath: options.workerEntryPath }),
     globalConfigDirectory,
@@ -288,6 +289,6 @@ export function launchWithNodeSpawn(options: Omit<Parameters<typeof launchTaktRu
   return launchTaktRun({ ...options, spawnProcess: spawn });
 }
 
-export function requeueWithNodeSpawn(options: Omit<Parameters<typeof requeueTaktRun>[0], 'spawnProcess'>): Promise<LaunchResult> {
-  return requeueTaktRun({ ...options, spawnProcess: spawn });
+export function requeueWithNodeSpawn(options: Omit<Parameters<typeof requeueTaktTask>[0], 'spawnProcess'>): Promise<LaunchResult> {
+  return requeueTaktTask({ ...options, spawnProcess: spawn });
 }
