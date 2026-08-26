@@ -173,6 +173,27 @@ describe('assistant provider entry gates', () => {
     },
   );
 
+  it('passes comments=false to instruct conversation while keeping formal specifications enabled', async () => {
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: false });
+
+    await runInstructMode({
+      cwd: '/project',
+      branchContext: 'branch context',
+      branchName: 'feature-branch',
+      taskName: 'my-task',
+      taskContent: 'Do something',
+      retryNote: '',
+    });
+
+    const strategy = mockRunConversationLoop.mock.calls[0]?.[2] as {
+      formalSpec: boolean;
+      formalSpecComments: boolean;
+    };
+    expect(mockResolveFormalSpecConfigurationWithoutPrompt).toHaveBeenCalledWith('/project');
+    expect(strategy.formalSpec).toBe(true);
+    expect(strategy.formalSpecComments).toBe(false);
+  });
+
   it.each([false, true])(
     'passes resolved formal specification mode=%s to retry conversation',
     async (formalSpec) => {

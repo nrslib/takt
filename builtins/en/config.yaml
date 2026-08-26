@@ -68,7 +68,6 @@ language: en        # UI language: en | ja
 #   formal_spec:
 #     mode: 'y/N'              # true/false never asks; Y/n or y/N asks on TTY (unset: y/N)
 #     comments: true            # Require natural-language meaning comments for formal constructs (default: true)
-#   # Legacy scalar form (`formal_spec: 'y/N'`) remains accepted as a mode-only setting.
 # Gherkin guidance applies only to development and implementation tasks. Deprecated assistant.gherkin is warned about and ignored without migration.
 
 # Provider routing for workflow steps (recommended)

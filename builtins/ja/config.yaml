@@ -68,7 +68,6 @@ language: ja         # 表示言語: ja | en
 #   formal_spec:
 #     mode: 'y/N'              # true/false は質問なし。Y/n／y/N は TTY で質問（未設定: y/N）
 #     comments: true           # 各形式構造への自然言語の意味コメントを要求（デフォルト: true）
-#   # 旧 scalar 形式（`formal_spec: 'y/N'`）も mode のみの設定として利用可能です。
 # Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済み assistant.gherkin は警告後に無視され、移行されません。
 
 # workflow step の provider routing（推奨）

@@ -526,6 +526,45 @@ describe('/resume command', () => {
     },
   );
 
+  it('should apply resumed comments=false to the summary prompt while keeping formal specifications enabled', async () => {
+    const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
+    setupRawStdin(toRawInputs(['/resume', '/go add rollback plan']));
+    mockSelectRecentSession.mockResolvedValue('resumed-session-xyz');
+    const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue({
+      systemPrompt: 'resumed system prompt',
+      formalSpec: true,
+      formalSpecComments: false,
+    });
+    const { provider } = createScenarioProvider([
+      { content: 'Generated task instruction.' },
+    ]);
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'],
+    });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      formalSpec: true,
+      formalSpecComments: true,
+      resolveResumedSessionConfiguration,
+    }, undefined, undefined);
+
+    expect(result.action).toBe('execute');
+    expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
+    expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
+      expect.any(Array),
+      true,
+      'en',
+      expect.any(String),
+      expect.any(String),
+      undefined,
+      undefined,
+      undefined,
+      true,
+      false,
+    );
+  });
+
   it('should keep inline /go text as user note after resuming a session', async () => {
     setupRawStdin(toRawInputs(['/resume', '/go add rollback plan']));
     mockSelectRecentSession.mockResolvedValue('resumed-session-xyz');
