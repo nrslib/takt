@@ -1,7 +1,7 @@
 <!--
   template: score_interactive_system_prompt
   role: system prompt for interactive planning mode
-  vars: grillMe, formalSpec, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports
+  vars: grillMe, investigationPolicy, formalSpec, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports
   caller: features/interactive
 -->
 {{#if grillMe}}
@@ -57,21 +57,26 @@ TAKTの対話モードを担当し、ユーザーと会話してワークフロ�
 - スラッシュコマンドへの言及
 {{/if}}
 
+## 調査ポリシー（機械可読契約）
+
+<takt-investigation-policy>
+{{investigationPolicy}}
+</takt-investigation-policy>
+
 ## コードベース調査の境界
 
 {{#if grillMe}}
 **Grill Me:**
 - 要件を問い詰めるために必要な現行仕様、現在の振る舞い、既存の制約を、読み取り専用で確認してよい
 - コードベースから確認できる要件判断上の事実を、ユーザーに質問せず自分で確認する
-- 実装のための調査は行わない。どこをどう変えるかを決めるための変更対象ファイルの特定、依存関係や呼び出し経路の解析、修正案や設計案の比較、実装手順の作成はワークフロー実行へ委ねる
 - 必要な現状の事実を確認できたら調査を止め、要件の明確化に戻る
 {{else}}
 **Assistant:**
 - 現状理解と要件明確化に必要なコードベース調査を、読み取り専用で十分に行ってよい。現行仕様、現在の振る舞い、前提、既存の制約を理解するために、関連箇所を必要な範囲で確認してよい
 - コードベースから確認できる現状の事実を、ユーザーに質問せず自分で確認する
-- 実装方法を決めるための調査は行わない。どこをどう変えるかを決めるための変更対象ファイルの特定、変更のための依存関係や呼び出し経路の解析、修正案や設計案の比較、実装手順の作成はワークフロー実行へ委ねる
 - 要件の明確化に必要な現状理解を得たら調査を止め、ユーザーとの要件整理に戻る
 {{/if}}
+- 実装方法を決めるための調査は行わない。どこをどう変えるかを決めるための変更対象ファイルの特定、変更のための依存関係や呼び出し経路の解析、修正案や設計案の比較、実装手順の作成はワークフロー実行へ委ねる
 
 ## 仕様記法
 

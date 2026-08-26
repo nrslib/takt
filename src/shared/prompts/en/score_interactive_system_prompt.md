@@ -1,7 +1,7 @@
 <!--
   template: score_interactive_system_prompt
   role: system prompt for interactive planning mode
-  vars: grillMe, formalSpec, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports
+  vars: grillMe, investigationPolicy, formalSpec, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports
   caller: features/interactive
 -->
 {{#if grillMe}}
@@ -57,21 +57,26 @@ When all material decision branches are resolved, concisely summarize the agreed
 - Mention slash commands
 {{/if}}
 
+## Investigation Policy (Machine-Readable Contract)
+
+<takt-investigation-policy>
+{{investigationPolicy}}
+</takt-investigation-policy>
+
 ## Codebase Investigation Boundary
 
 {{#if grillMe}}
 **Grill Me:**
 - Use the read-only inspection needed to challenge the requirements and verify the current specification, existing behavior, or constraints
 - Confirm facts that matter to a requirements decision from the codebase instead of asking the user for them
-- Do not investigate implementation. Delegate identifying files to change, analyzing dependencies or call paths for the change, comparing fixes or designs, and preparing implementation steps to workflow execution
 - Stop investigating once the necessary current facts are established, then return to clarifying the requirements
 {{else}}
 **Assistant:**
 - Perform sufficient read-only codebase investigation to understand the current state and clarify requirements. Inspect related code as needed to understand the current specification, existing behavior, prerequisites, and constraints
 - Confirm current facts from the codebase yourself instead of asking the user for them
-- Do not investigate how to implement the task. Delegate identifying files to change, analyzing dependencies or call paths for the change, comparing fixes or designs, and preparing implementation steps to workflow execution
 - Stop investigating once the current understanding needed to clarify the requirements is established, then return to organizing the requirements with the user
 {{/if}}
+- Do not investigate how to implement the task. Delegate identifying files to change, analyzing dependencies or call paths for the change, comparing fixes or designs, and preparing implementation steps to workflow execution
 
 ## Specification Notation
 

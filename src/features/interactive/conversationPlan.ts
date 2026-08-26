@@ -58,6 +58,27 @@ const EMPTY_RUN_SESSION_VARS = {
   runReports: '',
 };
 
+const INTERACTIVE_INVESTIGATION_POLICIES = {
+  assistant: {
+    currentStateScope: 'current-state-and-prerequisites',
+    implementationInvestigationOwner: 'workflow-execution',
+  },
+  grillMe: {
+    currentStateScope: 'requirements-decisions-only',
+    implementationInvestigationOwner: 'workflow-execution',
+  },
+} as const;
+
+function serializeInvestigationPolicy(
+  policy: (typeof INTERACTIVE_INVESTIGATION_POLICIES)[keyof typeof INTERACTIVE_INVESTIGATION_POLICIES],
+): string {
+  const serialized = JSON.stringify(policy);
+  if (serialized === undefined) {
+    throw new Error('Interactive investigation policy must be serializable');
+  }
+  return serialized;
+}
+
 export interface InteractiveSystemPromptInput {
   grillMe: boolean;
   formalSpec?: boolean;
@@ -74,9 +95,13 @@ export function buildInteractiveSystemPrompt(
   const runSessionVars = input.runSessionContext
     ? formatRunSessionForPrompt(input.runSessionContext)
     : EMPTY_RUN_SESSION_VARS;
+  const investigationPolicy = input.grillMe
+    ? INTERACTIVE_INVESTIGATION_POLICIES.grillMe
+    : INTERACTIVE_INVESTIGATION_POLICIES.assistant;
 
   return loadTemplate('score_interactive_system_prompt', lang, {
     grillMe: input.grillMe,
+    investigationPolicy: serializeInvestigationPolicy(investigationPolicy),
     formalSpec: input.formalSpec ?? false,
     hasWorkflowPreview,
     workflowStructure: input.workflowContext?.workflowStructure ?? '',
