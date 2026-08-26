@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getSession, startRun } from '../../web-ui/public/api.js';
+import { getSession, sendChatMessage, startRun } from '../../web-ui/public/api.js';
 
 describe('Web UI public API response handling', () => {
   const fetchMock = vi.fn();
@@ -60,5 +60,43 @@ describe('Web UI public API response handling', () => {
       },
       body: JSON.stringify({ projectId: 'project', workflow: 'default' }),
     });
+  });
+
+  it('streams thinking chunks before returning the final chat reply', async () => {
+    const payload = [
+      JSON.stringify({ type: 'thinking', content: '調査中' }),
+      JSON.stringify({ type: 'thinking', content: 'です。' }),
+      JSON.stringify({
+        type: 'reply',
+        reply: { kind: 'assistant_response', content: '回答です。' },
+      }),
+      '',
+    ].join('\n');
+    const encoded = new TextEncoder().encode(payload);
+    fetchMock.mockResolvedValue(new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoded.subarray(0, 31));
+        controller.enqueue(encoded.subarray(31));
+        controller.close();
+      },
+    }), { status: 200 }));
+    const thinking: string[] = [];
+
+    await expect(sendChatMessage('web-token', 'session-1', '相談', (content) => {
+      thinking.push(content);
+    })).resolves.toEqual({ kind: 'assistant_response', content: '回答です。' });
+    expect(thinking).toEqual(['調査中', 'です。']);
+  });
+
+  it('surfaces an error emitted after chat streaming starts', async () => {
+    const payload = [
+      JSON.stringify({ type: 'thinking', content: '確認中' }),
+      JSON.stringify({ type: 'error', message: 'provider failed' }),
+      '',
+    ].join('\n');
+    fetchMock.mockResolvedValue(new Response(payload, { status: 200 }));
+
+    await expect(sendChatMessage('web-token', 'session-1', '相談', () => {}))
+      .rejects.toThrow('provider failed');
   });
 });

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { StreamCallback } from '../shared/types/provider.js';
 
 const {
   mockCreateAssistantConversationPlan,
@@ -61,7 +62,7 @@ function createPlan(workflow: string, model: string | null = `model-${workflow}`
 function createSessionDouble(history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }> = []) {
   return {
     snapshotHistory: vi.fn(() => history),
-    handleUserMessage: vi.fn(async () => ({
+    handleUserMessage: vi.fn(async (_input: { text: string; onStream?: StreamCallback }) => ({
       kind: 'assistant_response' as const,
       content: 'response',
     })),
@@ -180,5 +181,23 @@ describe('Web UI chat session settings', () => {
       content: 'response',
     });
     expect(initialSession.handleUserMessage).toHaveBeenCalledWith({ text: '続ける' });
+  });
+
+  it('forwards only provider thinking events to the Web UI stream', async () => {
+    const session = createSessionDouble();
+    session.handleUserMessage.mockImplementationOnce(async (input) => {
+      input.onStream?.({ type: 'thinking', data: { thinking: '調査中' } });
+      input.onStream?.({ type: 'text', data: { text: '回答の断片' } });
+      input.onStream?.({ type: 'thinking', data: { thinking: 'です。' } });
+      return { kind: 'assistant_response', content: 'response' };
+    });
+    mockCreateConversationSession.mockReturnValue(session);
+    const service = createWebChatService();
+    const created = service.create('/repo', { workflow: 'default', mode: 'assistant' });
+    const thinking: string[] = [];
+
+    await expect(service.send(created.id, '相談', (content) => thinking.push(content)))
+      .resolves.toEqual({ kind: 'assistant_response', content: 'response' });
+    expect(thinking).toEqual(['調査中', 'です。']);
   });
 });

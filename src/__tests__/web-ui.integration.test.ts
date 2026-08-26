@@ -288,6 +288,8 @@ describe('Web UI HTTP boundary', () => {
     expect(html).toContain('aria-keyshortcuts="Meta+Enter Control+Enter"');
     expect(html).toContain('id="chat-new-button"');
     expect(html).toContain('>新しい会話</button>');
+    expect(html).toContain('id="chat-thinking"');
+    expect(html).toContain('id="chat-thinking-content"');
     expect(html).toContain('id="chat-collapse-button"');
     expect(html).toContain('id="chat-resizer"');
     expect(html).toContain('role="separator"');
@@ -544,8 +546,10 @@ describe('Web UI HTTP boundary', () => {
           model: 'gpt-5',
         };
       },
-      send: async (sessionId, text) => {
+      send: async (sessionId, text, onThinking) => {
         messages.push({ sessionId, text });
+        onThinking?.('確認しています。');
+        if (text === '失敗する') throw new Error('provider failed');
         return { kind: 'assistant_response', content: '回答です。' };
       },
     };
@@ -642,10 +646,27 @@ describe('Web UI HTTP boundary', () => {
       body: JSON.stringify({ text: '相談したい' }),
     });
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      kind: 'assistant_response',
-      content: '回答です。',
-    });
+    expect(response.headers.get('content-type')).toBe('application/x-ndjson; charset=utf-8');
+    const records = (await response.text()).trim().split('\n').map((line) => JSON.parse(line) as unknown);
+    expect(records).toEqual([
+      { type: 'thinking', content: '確認しています。' },
+      { type: 'reply', reply: { kind: 'assistant_response', content: '回答です。' } },
+    ]);
     expect(messages).toEqual([{ sessionId: 'chat-session-1', text: '相談したい' }]);
+
+    const failedResponse = await fetch(`${origin}/api/chat/sessions/chat-session-1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-TAKT-Web-Token': token,
+      },
+      body: JSON.stringify({ text: '失敗する' }),
+    });
+    const failedRecords = (await failedResponse.text()).trim().split('\n')
+      .map((line) => JSON.parse(line) as unknown);
+    expect(failedRecords).toEqual([
+      { type: 'thinking', content: '確認しています。' },
+      { type: 'error', message: 'provider failed' },
+    ]);
   });
 });

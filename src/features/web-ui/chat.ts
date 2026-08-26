@@ -41,7 +41,11 @@ export interface WebChatService {
   create(projectDirectory: string, request: CreateWebChatRequest): WebChatSessionDescription;
   reconfigure(sessionId: string, request: CreateWebChatRequest): WebChatSessionDescription;
   restart(sessionId: string): WebChatSessionDescription;
-  send(sessionId: string, text: string): Promise<WebChatReply>;
+  send(
+    sessionId: string,
+    text: string,
+    onThinking?: (content: string) => void,
+  ): Promise<WebChatReply>;
 }
 
 interface ActiveConversation {
@@ -225,11 +229,20 @@ export function createWebChatService(): WebChatService {
       return replacement.description;
     },
 
-    async send(sessionId, text): Promise<WebChatReply> {
+    async send(sessionId, text, onThinking): Promise<WebChatReply> {
       const conversation = requireConversation(conversations, sessionId);
       conversation.busy = true;
       try {
-        return toWebReply(await conversation.session.handleUserMessage({ text }));
+        return toWebReply(await conversation.session.handleUserMessage({
+          text,
+          ...(onThinking === undefined
+            ? {}
+            : {
+                onStream: (event) => {
+                  if (event.type === 'thinking') onThinking(event.data.thinking);
+                },
+              }),
+        }));
       } finally {
         conversation.busy = false;
       }

@@ -64,6 +64,36 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(JSON.stringify(value));
 }
 
+function writeChatStreamRecord(response: ServerResponse, value: unknown): void {
+  if (!response.headersSent) {
+    setSecurityHeaders(response);
+    response.writeHead(200, {
+      'Cache-Control': 'no-store',
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+    });
+  }
+  if (!response.writableEnded && !response.destroyed) {
+    response.write(`${JSON.stringify(value)}\n`);
+  }
+}
+
+async function streamChatReply(
+  response: ServerResponse,
+  send: (onThinking: (content: string) => void) => Promise<unknown>,
+): Promise<void> {
+  try {
+    const reply = await send((content) => {
+      writeChatStreamRecord(response, { type: 'thinking', content });
+    });
+    writeChatStreamRecord(response, { type: 'reply', reply });
+    if (!response.writableEnded && !response.destroyed) response.end();
+  } catch (error) {
+    if (!response.headersSent) throw error;
+    writeChatStreamRecord(response, { type: 'error', message: asHttpError(error).message });
+    if (!response.writableEnded && !response.destroyed) response.end();
+  }
+}
+
 function sendStatic(
   response: ServerResponse,
   asset: StaticAsset,
@@ -517,12 +547,13 @@ export async function createWebUiServer(options: {
         : null;
       if (chatMessageSessionId !== null) {
         requireSessionToken(request, sessionToken);
-        sendJson(
+        const text = parseWebChatMessage(await readJsonBody(request));
+        await streamChatReply(
           response,
-          200,
-          await chat.send(
+          (onThinking) => chat.send(
             chatMessageSessionId,
-            parseWebChatMessage(await readJsonBody(request)),
+            text,
+            onThinking,
           ),
         );
         return;

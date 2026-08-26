@@ -72,6 +72,16 @@
               >新しい会話</button>
             </div>
           </header>
+          <details id="chat-thinking" class="chat-thinking" hidden>
+            <summary>
+              <span class="chat-thinking-heading">
+                <span class="chat-thinking-spinner" aria-hidden="true"></span>
+                <span id="chat-thinking-label">考え中</span>
+              </span>
+              <span id="chat-thinking-state" class="chat-thinking-state">応答を待っています</span>
+            </summary>
+            <pre id="chat-thinking-content" class="chat-thinking-content"></pre>
+          </details>
           <div id="chat-transcript" class="chat-transcript" aria-live="polite">
             <div class="chat-placeholder">
               <strong>会話を開始</strong>

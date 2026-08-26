@@ -42,6 +42,10 @@ const elements = {
   chatSendButton: document.querySelector('#chat-send-button'),
   chatSessionMeta: document.querySelector('#chat-session-meta'),
   chatStatus: document.querySelector('#chat-message-status'),
+  chatThinking: document.querySelector('#chat-thinking'),
+  chatThinkingContent: document.querySelector('#chat-thinking-content'),
+  chatThinkingLabel: document.querySelector('#chat-thinking-label'),
+  chatThinkingState: document.querySelector('#chat-thinking-state'),
   chatTranscript: document.querySelector('#chat-transcript'),
   directoryCancel: document.querySelector('#directory-cancel-button'),
   directoryClose: document.querySelector('#directory-close-button'),
@@ -439,10 +443,47 @@ function renderChatPlaceholder() {
   elements.chatTranscript.replaceChildren(placeholder);
 }
 
+function clearChatThinking() {
+  elements.chatThinking.hidden = true;
+  elements.chatThinking.open = false;
+  elements.chatThinking.dataset.active = 'false';
+  elements.chatThinkingContent.textContent = '';
+  elements.chatThinkingLabel.textContent = '考え中';
+  elements.chatThinkingState.textContent = '応答を待っています';
+}
+
+function beginChatThinking() {
+  elements.chatThinking.hidden = false;
+  elements.chatThinking.open = false;
+  elements.chatThinking.dataset.active = 'true';
+  elements.chatThinkingContent.textContent = '';
+  elements.chatThinkingLabel.textContent = '考え中';
+  elements.chatThinkingState.textContent = '応答を待っています';
+}
+
+function appendChatThinking(content) {
+  elements.chatThinking.open = true;
+  elements.chatThinkingContent.textContent += content;
+  elements.chatThinkingState.textContent = '受信中';
+  elements.chatThinkingContent.scrollTop = elements.chatThinkingContent.scrollHeight;
+}
+
+function finishChatThinking(completed) {
+  elements.chatThinking.dataset.active = 'false';
+  if (elements.chatThinkingContent.textContent === '') {
+    clearChatThinking();
+    return;
+  }
+  elements.chatThinking.open = false;
+  elements.chatThinkingLabel.textContent = 'Thinking';
+  elements.chatThinkingState.textContent = completed ? '完了' : '中断';
+}
+
 function resetChatSession() {
   chatSession = null;
   elements.chatSessionMeta.textContent = '会話はまだ始まっていません。';
   elements.chatStatus.textContent = '';
+  clearChatThinking();
   renderChatPlaceholder();
   syncChatControls();
 }
@@ -686,6 +727,7 @@ async function startNewConversation() {
     const session = await restartChatSession(sessionToken, chatSession.id);
     chatSession = session;
     updateChatSessionDescription(session);
+    clearChatThinking();
     elements.chatTranscript.replaceChildren();
     if (session.intro === '') {
       renderChatPlaceholder();
@@ -711,7 +753,10 @@ async function submitChat(event) {
   }
   const messageRevision = chatMessageRevision;
   let messageWasCleared = false;
+  let responseCompleted = false;
   setChatOperationInProgress(true);
+  beginChatThinking();
+  elements.chatStatus.dataset.busy = 'true';
   elements.chatStatus.textContent = 'AIが応答を作成しています…';
   try {
     const session = await ensureChatSession();
@@ -721,7 +766,12 @@ async function submitChat(event) {
       resizeChatMessage();
       messageWasCleared = true;
     }
-    const reply = await sendChatMessage(sessionToken, session.id, text);
+    const reply = await sendChatMessage(
+      sessionToken,
+      session.id,
+      text,
+      appendChatThinking,
+    );
     if (reply.kind === 'assistant_response') {
       appendChatEntry('assistant', reply.content);
     } else if (reply.kind === 'task_instruction') {
@@ -729,6 +779,7 @@ async function submitChat(event) {
     } else {
       appendChatEntry('system', reply.message);
     }
+    responseCompleted = reply.kind !== 'error';
     elements.chatStatus.textContent = '';
   } catch (error) {
     if (
@@ -741,6 +792,8 @@ async function submitChat(event) {
     }
     elements.chatStatus.textContent = error instanceof Error ? error.message : String(error);
   } finally {
+    finishChatThinking(responseCompleted);
+    delete elements.chatStatus.dataset.busy;
     setChatOperationInProgress(false);
   }
 }

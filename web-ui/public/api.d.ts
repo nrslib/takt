@@ -14,4 +14,9 @@ export function reconfigureChatSession(
   request: unknown,
 ): Promise<unknown>;
 export function restartChatSession(token: string, sessionId: string): Promise<unknown>;
-export function sendChatMessage(token: string, sessionId: string, text: string): Promise<unknown>;
+export function sendChatMessage(
+  token: string,
+  sessionId: string,
+  text: string,
+  onThinking: (content: string) => void,
+): Promise<unknown>;
