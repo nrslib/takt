@@ -5,6 +5,11 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readRunCollection, readRunDetail } from '../features/web-ui/run-store.js';
 import { createWebUiServer, listenWebUiServer } from '../features/web-ui/server.js';
+import {
+  acquireWebUiInstanceLock,
+  readWebUiInstance,
+  stopWebUiInstance,
+} from '../features/web-ui/instance-lock.js';
 import type { WebChatService } from '../features/web-ui/chat.js';
 import { resolveStatePaths, type StatePaths } from '../core/execution/locations.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
@@ -218,6 +223,37 @@ describe('Web UI run artifacts', () => {
 });
 
 describe('Web UI HTTP boundary', () => {
+  it('gracefully stops the owned Web UI through its private control endpoint', async () => {
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
+    const lock = await acquireWebUiInstanceLock(globalConfigDirectory, 0);
+    let server: Server | undefined;
+    server = await createWebUiServer({
+      globalConfigDirectory,
+      launch: async () => ({ pid: 9001, disposition: 'started' as const, mode: 'run' as const }),
+      control: {
+        token: lock.controlToken,
+        onStopRequested: () => server?.close(),
+      },
+    });
+    servers.push(server);
+    server.once('close', () => {
+      void lock.release();
+    });
+    const origin = await listenWebUiServer(server, 0);
+    await lock.publishOrigin(origin);
+
+    await expect(fetch(`${origin}/api/control/stop`, { method: 'POST' }))
+      .resolves.toMatchObject({ status: 403 });
+    await expect(stopWebUiInstance(globalConfigDirectory)).resolves.toMatchObject({
+      disposition: 'stopped',
+      instance: { origin, pid: process.pid },
+    });
+
+    expect(server.listening).toBe(false);
+    await expect(readWebUiInstance(globalConfigDirectory)).resolves.toBeUndefined();
+    servers.splice(servers.indexOf(server), 1);
+  });
+
   it('rejects non-loopback Host and Origin before exposing the session token', async () => {
     const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const server = await createWebUiServer({

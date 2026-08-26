@@ -13,6 +13,11 @@ CLI の project-local state と Web UI の central state は characterization �
 ```sh
 takt ui
 takt ui --port 4180
+takt ui stop
+takt ui restart
+takt ui restart --port 4180
 ```
 
-既定では `http://127.0.0.1:4178` で起動します。
+既定では `http://127.0.0.1:4178` で起動します。`takt ui` の実行時に同じ `TAKT_CONFIG_DIR` の Web UI がすでに動いている場合は二重起動せず、既存インスタンスの URL と PID を表示します。`stop` はそのインスタンスをグレースフルに停止し、`restart` は停止完了後に同じ端末で起動し直します。
+
+run を開始するには、実行ディレクトリと workflow を選んで Chat へ相談内容を入力します。`/go` を送ると会話が実行指示へ変換されるので、表示された「この指示で実行」を押します。Web UI は中央 task へ投入して one-shot worker を起動し、実行中の状態とログを Run ペインへ表示します。

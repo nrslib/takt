@@ -31,6 +31,8 @@
 
 ## Web UI の実行境界
 
+`takt ui` はローカル Web UI を `http://127.0.0.1:4178` で起動し、`--port` でポートを変更できます。同じ `TAKT_CONFIG_DIR` のインスタンスがすでに動いている場合は二重起動せず、実際の URL と PID を表示します。グレースフルに停止するには `takt ui stop`、停止後に起動し直すには `takt ui restart [--port <number>]` を使用します。
+
 Web UI がキューしたタスク、実行、セッションは `TAKT_CONFIG_DIR` 配下のチャネル非依存な中央 state に保存されます。CLI は従来どおりプロジェクトローカルの state を使用します。同一 canonical project に対する CLI と Web UI の同時実行・mutationはサポート対象外です。1つの実行先につき、利用するチャネルを1つにしてください。
 
 中央 workflow bundle は通常の MCP 設定を移植可能な形で保持します。`LOG_LEVEL`、`NODE_ENV`、`ENDPOINT`、`Content-Type` などの credential ではない env/header 値はリテラルを許可します。credential を表す env/header key と stdio 引数の credential flag の値は、完全な単一 `${ENV_VAR}` 参照でなければならず、リテラルや混在値は拒否します。MCP URL は userinfo と credential を表す query/fragment key を拒否しますが、`version=2` のような通常のメタデータは許可します。ローカル CLI bundle の挙動は変更しません。

@@ -20,6 +20,13 @@ export function parseUiPort(value: string): number {
   return port;
 }
 
+export type UiAction = 'start' | 'stop' | 'restart';
+
+export function parseUiAction(value: string): UiAction {
+  if (value === 'start' || value === 'stop' || value === 'restart') return value;
+  throw new InvalidArgumentError('UI action must be start, stop, or restart');
+}
+
 program
   .command('run')
   .description('Run all pending tasks from .takt/tasks.yaml')
@@ -132,15 +139,32 @@ program
 
 program
   .command('ui')
-  .description('Start the local TAKT Web UI')
+  .description('Start, stop, or restart the local TAKT Web UI')
+  .argument('[action]', 'UI action (start|stop|restart)', parseUiAction, 'start')
   .option('--port <number>', 'Local HTTP port', parseUiPort, 4178)
-  .action(async (opts: { port: number }) => {
-    const { startWebUi } = await import('../../features/web-ui/index.js');
+  .action(async (action: UiAction, opts: { port: number }) => {
+    const { openWebUi, restartWebUi, stopWebUi } = await import('../../features/web-ui/index.js');
     const { info } = await import('../../shared/ui/index.js');
-    const { origin } = await startWebUi({
+    if (action === 'stop') {
+      const result = await stopWebUi();
+      info(result.disposition === 'stopped'
+        ? `TAKT Web UI stopped: ${result.instance.origin}`
+        : 'TAKT Web UI is not running');
+      return;
+    }
+    if (action === 'restart') {
+      const { origin } = await restartWebUi({ port: opts.port });
+      info(`TAKT Web UI restarted: ${origin}`);
+      return;
+    }
+    const result = await openWebUi({
       port: opts.port,
     });
-    info(`TAKT Web UI: ${origin}`);
+    if (result.disposition === 'existing') {
+      info(`TAKT Web UI is already running: ${result.instance.origin} (PID ${result.instance.pid})`);
+      return;
+    }
+    info(`TAKT Web UI: ${result.origin}`);
   });
 
 program

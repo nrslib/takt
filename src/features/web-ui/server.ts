@@ -109,6 +109,17 @@ function requireSessionToken(request: IncomingMessage, sessionToken: string): vo
   }
 }
 
+function requireControlToken(request: IncomingMessage, controlToken: string): void {
+  const candidate = request.headers['x-takt-web-control-token'];
+  if (
+    typeof candidate !== 'string'
+    || candidate.length !== controlToken.length
+    || !timingSafeEqual(Buffer.from(candidate), Buffer.from(controlToken))
+  ) {
+    throw new HttpError(403, 'Control token is invalid');
+  }
+}
+
 function requireLoopbackOrigin(request: IncomingMessage): void {
   const host = request.headers.host;
   if (typeof host !== 'string' || host.length === 0) {
@@ -357,13 +368,17 @@ export async function createWebUiServer(options: {
   ) => WebWorkflowCatalog | Promise<WebWorkflowCatalog>;
   readonly chat?: WebChatService;
   readonly pickNativeDirectory?: () => Promise<NativeDirectoryPickerResult>;
+  readonly control?: {
+    readonly token: string;
+    readonly onStopRequested: () => void;
+  };
 }): Promise<Server> {
   const assets = await loadAssets();
   const sessionToken = randomBytes(24).toString('base64url');
   const chat = options.chat ?? createWebChatService();
   const pickNativeDirectory = options.pickNativeDirectory ?? pickNativeDirectoryOnHost;
 
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     try {
       const method = request.method;
       const requestUrl = request.url;
@@ -373,6 +388,12 @@ export async function createWebUiServer(options: {
       const asset = method === 'GET' ? assets.get(url.pathname) : undefined;
       if (asset !== undefined) {
         sendStatic(response, asset);
+        return;
+      }
+      if (method === 'POST' && url.pathname === '/api/control/stop' && options.control !== undefined) {
+        requireControlToken(request, options.control.token);
+        response.once('finish', options.control.onStopRequested);
+        sendJson(response, 202, { stopping: true });
         return;
       }
       if (method === 'GET' && url.pathname === '/api/session') {
@@ -516,6 +537,7 @@ export async function createWebUiServer(options: {
       sendJson(response, httpError.status, { error: httpError.message });
     }
   });
+  return server;
 }
 
 export function listenWebUiServer(server: Server, port: number): Promise<string> {

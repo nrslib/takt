@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { program } from '../app/cli/program.js';
-import { parseUiPort } from '../app/cli/commands.js';
+import { parseUiAction, parseUiPort } from '../app/cli/commands.js';
 
 describe('CLI command registration', () => {
   it('should register the optional task argument on the root command', () => {
@@ -45,6 +45,14 @@ describe('CLI command registration', () => {
 
   it.each(['', ' ', '1e2', '+80', '-1', '65536'])('rejects invalid UI port %s', (value) => {
     expect(() => parseUiPort(value)).toThrow(/Port must be/);
+  });
+
+  it.each(['start', 'stop', 'restart'] as const)('accepts UI action %s', (action) => {
+    expect(parseUiAction(action)).toBe(action);
+  });
+
+  it.each(['status', 'reload', ''])('rejects invalid UI action %s', (action) => {
+    expect(() => parseUiAction(action)).toThrow(/UI action must be/);
   });
 
   it.each([
