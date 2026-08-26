@@ -6,6 +6,8 @@ import {
   readRunLogArtifacts,
   type RunLogArtifacts,
 } from './run-log-cache.js';
+import type { WorkflowResumePoint } from '../../core/models/index.js';
+import { parseWorkflowResumePoint } from '../../core/workflow/resume-point-codec.js';
 const NOFOLLOW = (constants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
 
 const RUN_STATUSES = new Set(['running', 'completed', 'aborted', 'failed']);
@@ -35,6 +37,8 @@ interface RunMeta {
   readonly updatedAt?: string;
   readonly endTime?: string;
   readonly reason?: string;
+  readonly resumePoint?: WorkflowResumePoint;
+  readonly failure?: { readonly step: string; readonly error: string };
 }
 
 function requireRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -74,6 +78,20 @@ function parseRunMeta(value: unknown, expectedSlug: string): RunMeta {
     throw new Error('status is invalid');
   }
 
+  const rawFailure = raw.failure;
+  const failure = rawFailure !== null
+    && typeof rawFailure === 'object'
+    && !Array.isArray(rawFailure)
+    && typeof (rawFailure as Readonly<Record<string, unknown>>).step === 'string'
+    && typeof (rawFailure as Readonly<Record<string, unknown>>).error === 'string'
+    ? {
+        step: (rawFailure as Readonly<Record<string, unknown>>).step as string,
+        error: (rawFailure as Readonly<Record<string, unknown>>).error as string,
+      }
+    : undefined;
+  const resumePoint = raw.resumePoint === undefined
+    ? undefined
+    : parseWorkflowResumePoint(raw.resumePoint);
   return {
     runSlug,
     task: requireString(raw.task, 'task'),
@@ -89,6 +107,8 @@ function parseRunMeta(value: unknown, expectedSlug: string): RunMeta {
     updatedAt: optionalString(raw.updatedAt, 'updatedAt'),
     endTime: optionalString(raw.endTime, 'endTime'),
     reason: optionalString(raw.reason, 'reason'),
+    ...(resumePoint === undefined ? {} : { resumePoint }),
+    ...(failure === undefined ? {} : { failure }),
   };
 }
 

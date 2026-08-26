@@ -10,6 +10,14 @@ import {
   type CentralWorktreeRequest,
 } from '../../infra/task/centralStateRepository.js';
 import {
+  CentralTaskActionError,
+  enrichTaskActionConversationContext,
+  executeCentralTaskAction,
+  type CentralTaskAction,
+  type CentralTaskActionResult,
+} from './task-actions.js';
+import type { WebChatService, WebTaskActionClaim, WebTaskActionKind } from './chat.js';
+import {
   buildCentralWorkerStderrPath,
   buildWorkerArguments,
   CENTRAL_EXECUTION_ID_ENV,
@@ -129,7 +137,7 @@ function resolveProject(options: {
   });
 }
 
-async function openProjectRepository(
+export async function openProjectRepository(
   globalConfigDirectory: string,
   project: RegisteredProject,
 ): Promise<CentralTaskRepository> {
@@ -145,7 +153,7 @@ async function openProjectRepository(
   return repository;
 }
 
-async function spawnReservedDecision(options: {
+export async function spawnReservedDecision(options: {
   readonly workerEntryPath?: string;
   readonly globalConfigDirectory: string;
   readonly project: RegisteredProject;
@@ -291,4 +299,95 @@ export function launchWithNodeSpawn(options: Omit<Parameters<typeof launchTaktRu
 
 export function requeueWithNodeSpawn(options: Omit<Parameters<typeof requeueTaktTask>[0], 'spawnProcess'>): Promise<LaunchResult> {
   return requeueTaktTask({ ...options, spawnProcess: spawn });
+}
+
+/**
+ * Execute an action against the central ledger selected by the registered
+ * project. Unlike the legacy requeue endpoint this never constructs a
+ * project-local TaskRunner or touches tasks.yaml.
+ */
+export async function executeCentralTaskActionWithNodeSpawn(options: {
+  readonly projectDirectory: string;
+  readonly globalConfigDirectory?: string;
+  readonly registeredProject?: RegisteredProject;
+  readonly taskId: string;
+  readonly action: CentralTaskAction;
+  readonly input?: string;
+  readonly conversationId?: string;
+  readonly taskActionClaim?: WebTaskActionClaim;
+}): Promise<CentralTaskActionResult> {
+  const globalConfigDirectory = options.globalConfigDirectory ?? getGlobalConfigDir();
+  const project = await resolveProject({
+    globalConfigDirectory,
+    projectDirectory: options.projectDirectory,
+    ...(options.registeredProject === undefined ? {} : { registeredProject: options.registeredProject }),
+  });
+  const repository = await openProjectRepository(globalConfigDirectory, project);
+  const task = await repository.readTask(options.taskId);
+  if (task === undefined) {
+    throw new CentralTaskActionError('Central task was not found', 404);
+  }
+  return executeCentralTaskAction({
+    globalConfigDirectory,
+    projectDirectory: project.canonicalDirectory,
+    projectId: project.id,
+    repository,
+    task,
+    action: options.action,
+    ...(options.input === undefined ? {} : { input: options.input }),
+    ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
+    ...(options.taskActionClaim === undefined ? {} : { taskActionClaim: options.taskActionClaim }),
+    spawnDecision: (decision, decisionRepository) => spawnReservedDecision({
+      globalConfigDirectory,
+      project,
+      repository: decisionRepository,
+      decision,
+      spawnProcess: spawn,
+    }),
+  });
+}
+
+/** Open retry/instruct without mutating the central task until the user uses /go. */
+export async function startCentralTaskActionConversation(options: {
+  readonly projectDirectory: string;
+  readonly globalConfigDirectory?: string;
+  readonly registeredProject?: RegisteredProject;
+  readonly taskId: string;
+  readonly action: WebTaskActionKind;
+  readonly chat: WebChatService;
+}): Promise<CentralTaskActionResult> {
+  const globalConfigDirectory = options.globalConfigDirectory ?? getGlobalConfigDir();
+  const project = await resolveProject({
+    globalConfigDirectory,
+    projectDirectory: options.projectDirectory,
+    ...(options.registeredProject === undefined ? {} : { registeredProject: options.registeredProject }),
+  });
+  const repository = await openProjectRepository(globalConfigDirectory, project);
+  const task = await repository.readTask(options.taskId);
+  if (task === undefined) throw new CentralTaskActionError('Central task was not found', 404);
+  const enriched = await enrichTaskActionConversationContext(
+    task,
+    options.action,
+    project.canonicalDirectory,
+    repository,
+  );
+  const context = {
+    ...enriched,
+    projectId: project.id,
+    stateId: project.stateId,
+    projectDirectory: project.canonicalDirectory,
+  } as const;
+  const createTaskAction = options.chat.createTaskAction;
+  if (createTaskAction === undefined) {
+    throw new CentralTaskActionError('Task action conversation is unavailable after Web UI restart', 501);
+  }
+  const conversationCwd = context.worktreePath ?? project.canonicalDirectory;
+  const chatSession = createTaskAction(conversationCwd, context);
+  return {
+    action: options.action,
+    taskId: task.taskId,
+    status: 'conversation',
+    taskStatus: context.status as CentralTaskActionResult['taskStatus'],
+    chatSession,
+  };
 }

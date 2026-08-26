@@ -1,6 +1,7 @@
 import { getLocale, t } from './i18n.js';
 import { workflowDisplayName } from './execution-model.js';
 import { markdownTitle } from './markdown-view.js';
+import { taskActionButtonModel } from './task-action-ui.js';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -18,8 +19,44 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString(getLocale() === 'en' ? 'en-US' : 'ja-JP');
 }
 
-function renderTask(task, selection, onSelectRun, onRequeue) {
+function availableActions(task) {
+  if (Array.isArray(task.actionList)) return task.actionList;
+  return Object.entries(task.actions ?? {})
+    .filter(([, available]) => available === true)
+    .map(([action]) => action);
+}
+
+function renderTaskActions(task, onAction, onRequeue) {
+  const actions = availableActions(task);
+  if (actions.length === 0) return null;
+  const disclosure = element('details', 'task-actions');
+  const summary = element('summary', 'task-actions-summary', t('task.actions'));
+  summary.title = t('task.actionsHint');
+  disclosure.append(summary);
+  const list = element('div', 'task-actions-list');
+  for (const action of actions) {
+    const model = taskActionButtonModel(task, action);
+    const button = element('button', `task-action task-action-${model.action}`, t(model.labelKey));
+    button.type = 'button';
+    button.dataset.action = model.action;
+    button.dataset.taskId = model.taskId;
+    button.title = t(`task.actionHint.${model.action}`);
+    button.addEventListener('click', () => {
+      if (typeof onAction === 'function') {
+        onAction(task, model.action, button);
+      } else if (model.action === 'requeue' && typeof onRequeue === 'function') {
+        onRequeue(task, button);
+      }
+    });
+    list.append(button);
+  }
+  disclosure.append(list);
+  return disclosure;
+}
+
+function renderTask(task, selection, onSelectRun, onAction, onRequeue) {
   const card = element('article', 'task-card');
+  card.dataset.taskId = task.taskId;
   card.dataset.selected = String(task.taskId === selection?.taskId);
   const header = element('header', 'task-card-header');
   const statusLine = element('div', 'task-card-status');
@@ -30,19 +67,15 @@ function renderTask(task, selection, onSelectRun, onRequeue) {
     (() => {
       const workflow = workflowDisplayName(task.workflow, getLocale());
       const context = element('span', 'task-card-context', t('task.context', {
-      project: task.projectName,
+        project: task.projectName,
         workflow,
       }));
       if (workflow !== task.workflow) context.title = task.workflow;
       return context;
     })(),
   );
-  if (task.actions.requeue) {
-    const requeue = element('button', 'task-requeue-button', t('task.requeue'));
-    requeue.type = 'button';
-    requeue.addEventListener('click', () => onRequeue(task, requeue));
-    header.append(requeue);
-  }
+  const taskActions = renderTaskActions(task, onAction, onRequeue);
+  if (taskActions !== null) header.append(taskActions);
 
   const attempts = element('div', 'task-attempts');
   attempts.setAttribute('aria-label', t('task.attempts'));
@@ -84,6 +117,7 @@ export function renderTaskNavigator(options) {
       task,
       options.selection,
       options.onSelectRun,
+      options.onAction,
       options.onRequeue,
     ));
   }

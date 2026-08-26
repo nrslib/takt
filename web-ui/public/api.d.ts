@@ -8,6 +8,14 @@ export function pickNativeDirectory(): Promise<unknown>;
 export function registerProject(projectDirectory: string): Promise<unknown>;
 export function startTask(request: unknown): Promise<unknown>;
 export function requeueTask(projectId: string, taskId: string): Promise<unknown>;
+export function runTaskAction(
+  projectId: string,
+  taskId: string,
+  action: string,
+  input?: string,
+  conversationId?: string,
+  taskActionOptionId?: string,
+): Promise<unknown>;
 export function createChatSession(request: unknown): Promise<unknown>;
 export function reconfigureChatSession(
   sessionId: string,
@@ -18,4 +26,5 @@ export function sendChatMessage(
   sessionId: string,
   text: string,
   onThinking: (content: string) => void,
+  taskActionOptionId?: string,
 ): Promise<unknown>;

@@ -1,7 +1,13 @@
 import type { Server } from 'node:http';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { launchWithNodeSpawn, requeueWithNodeSpawn } from './launcher.js';
+import {
+  executeCentralTaskActionWithNodeSpawn,
+  launchWithNodeSpawn,
+  requeueWithNodeSpawn,
+  startCentralTaskActionConversation,
+} from './launcher.js';
 import { createWebUiServer, listenWebUiServer } from './server.js';
+import { createWebChatService } from './chat.js';
 import {
   acquireWebUiInstanceLock,
   stopWebUiInstance,
@@ -43,6 +49,7 @@ export async function startWebUi(options: StartWebUiOptions): Promise<StartedWeb
   const globalConfigDirectory = getGlobalConfigDir();
   const lock = await acquireWebUiInstanceLock(globalConfigDirectory, options.port);
   let server: Server | undefined;
+  const chat = createWebChatService();
   const close = () => {
     void closeWebUiServer(server).catch(() => undefined);
   };
@@ -61,6 +68,27 @@ export async function startWebUi(options: StartWebUiOptions): Promise<StartedWeb
         ...(registeredProject === undefined ? {} : { registeredProject }),
         taskId,
       }),
+      taskAction: (projectDirectory, taskId, action, input, conversationId, registeredProject, taskActionClaim) =>
+        executeCentralTaskActionWithNodeSpawn({
+          projectDirectory,
+          globalConfigDirectory,
+          ...(registeredProject === undefined ? {} : { registeredProject }),
+          taskId,
+          action,
+          ...(input === undefined ? {} : { input }),
+          ...(conversationId === undefined ? {} : { conversationId }),
+          ...(taskActionClaim === undefined ? {} : { taskActionClaim }),
+        }),
+      taskActionConversation: (projectDirectory, taskId, action, registeredProject) =>
+        startCentralTaskActionConversation({
+          projectDirectory,
+          globalConfigDirectory,
+          ...(registeredProject === undefined ? {} : { registeredProject }),
+          taskId,
+          action,
+          chat,
+        }),
+      chat,
       control: {
         token: lock.controlToken,
         onStopRequested: close,

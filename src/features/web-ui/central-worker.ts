@@ -8,6 +8,7 @@ import {
   CentralTaskRepository,
   type CentralTaskRecord,
 } from '../../infra/task/centralStateRepository.js';
+import { assertCentralWorktreeOwnership } from '../../infra/task/centralWorktreeOwnership.js';
 import {
   CENTRAL_EXECUTION_ID_ENV,
   CENTRAL_GENERATION_ENV,
@@ -186,36 +187,71 @@ async function executeAndCommit(
     let branch: string | undefined;
     if (task.worktree !== false) {
       await repository.verifyProjectIdentity();
-      const configured = resolveConfigValue(repository.locations.projectDirectory, 'worktreeDir');
-      const worktree = resolveCentralWorktree({
-        request: task.worktree,
-        projectDirectory: repository.locations.projectDirectory,
-        executionDirectory: repository.locations.executionDirectory,
-        globalConfigDirectory: repository.globalConfigDirectory,
-        stateId: repository.state.stateId,
-        ...(configured === undefined ? {} : { configuredWorktreeDirectory: configured }),
-      });
-      if (worktree.baseDirectory === undefined) throw new Error('Central worktree path is missing');
-      const clone = await createSharedCloneAbortable(repository.locations.projectDirectory, {
-        worktree: task.worktree,
-        worktreeBaseDirectory: worktree.baseDirectory,
-        ...(worktree.cloneMetadataDirectory === undefined ? {} : { cloneMetadataDirectory: worktree.cloneMetadataDirectory }),
-        skipProjectLocalTaktSync: true,
-        taskSlug: task.taskId.slice(0, 12),
-        ...(task.branch === undefined ? {} : { branch: task.branch }),
-        ...(task.baseBranch === undefined ? {} : { baseBranch: task.baseBranch }),
-      });
-      executionCwd = clone.path;
-      branch = clone.branch;
+      // A terminal re-execution must reuse the worktree recorded by the
+      // central ledger.  Falling back to a new clone here would split the
+      // ownership boundary and could execute against an unrelated checkout.
+      if (task.attempt > 1 || task.worktreePath !== undefined) {
+        const owned = assertCentralWorktreeOwnership(
+          repository.locations.projectDirectory,
+          repository.globalConfigDirectory,
+          repository.state.stateId,
+          task,
+        );
+        executionCwd = owned.worktreePath;
+        branch = owned.branch;
+      } else {
+        const configured = resolveConfigValue(repository.locations.projectDirectory, 'worktreeDir');
+        const worktree = resolveCentralWorktree({
+          request: task.worktree,
+          projectDirectory: repository.locations.projectDirectory,
+          executionDirectory: repository.locations.executionDirectory,
+          globalConfigDirectory: repository.globalConfigDirectory,
+          stateId: repository.state.stateId,
+          ...(configured === undefined ? {} : { configuredWorktreeDirectory: configured }),
+        });
+        if (worktree.baseDirectory === undefined) throw new Error('Central worktree path is missing');
+        const clone = await createSharedCloneAbortable(repository.locations.projectDirectory, {
+          worktree: task.worktree,
+          worktreeBaseDirectory: worktree.baseDirectory,
+          ...(worktree.cloneMetadataDirectory === undefined ? {} : { cloneMetadataDirectory: worktree.cloneMetadataDirectory }),
+          skipProjectLocalTaktSync: true,
+          taskSlug: task.taskId.slice(0, 12),
+          ...(task.branch === undefined ? {} : { branch: task.branch }),
+          ...(task.baseBranch === undefined ? {} : { baseBranch: task.baseBranch }),
+        });
+        executionCwd = clone.path;
+        branch = clone.branch;
+      }
     }
+    await repository.updateExecutionContext({
+      taskId: task.taskId,
+      generation: task.generation,
+      executionId: task.activeExecution!.executionId,
+      ownerToken,
+      worktreePath: executionCwd,
+      ...(branch === undefined ? {} : { branch }),
+    });
     // Providers are loaded only after the private owner token was consumed by
     // the worker entrypoint. The workflow run itself writes below state/runs.
     const { runWorkflowExecution } = await import('../tasks/execute/workflowExecutionApi.js');
+    const executionRequest = task.executionRequest;
     const result = await runWorkflowExecution({
       task: task.task,
       cwd: executionCwd,
       projectCwd: repository.locations.projectDirectory,
       workflowIdentifier: task.workflow,
+      ...(executionRequest?.startStep === undefined ? {} : { startStep: executionRequest.startStep }),
+      ...(executionRequest?.resumePoint === undefined ? {} : { resumePoint: executionRequest.resumePoint }),
+      ...(executionRequest?.restartPoint === undefined ? {} : { restartPoint: executionRequest.restartPoint }),
+      ...(executionRequest?.retryNote === undefined ? {} : { retryNote: executionRequest.retryNote }),
+      ...(executionRequest === undefined ? {} : {
+        resumeSource: {
+          resumeMode: executionRequest.resumeMode,
+          ...(executionRequest.sourceRunSlug === undefined
+            ? {}
+            : { sourceRunSlug: executionRequest.sourceRunSlug }),
+        },
+      }),
       outputMode: 'silent',
       reportDirName: runId,
       runPathsDirectory: repository.paths.runsDirectory,

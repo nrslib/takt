@@ -5,6 +5,7 @@ import {
   workflowDisplayName,
 } from './execution-model.js';
 import {
+  DEFAULT_MAP_SCALE,
   disposeExecutionMap,
   renderExecutionMap,
   updateExecutionMapSelection,
@@ -105,6 +106,7 @@ export function createExecutionView(options) {
   let taskList = [];
   let taskSelection = null;
   let customNodePositions = new Map();
+  let mapScale = DEFAULT_MAP_SCALE;
 
   function renderTaskList(tasks, selection) {
     taskList = tasks;
@@ -116,6 +118,7 @@ export function createExecutionView(options) {
       tasks,
       selection,
       onSelectRun: options.onSelectRun,
+      onAction: options.onAction,
       onRequeue: options.onRequeue,
     });
   }
@@ -133,6 +136,10 @@ export function createExecutionView(options) {
       customNodePositions,
       onMoveNode(nodeId, position) {
         customNodePositions = new Map(customNodePositions).set(nodeId, position);
+      },
+      scale: mapScale,
+      onScaleChange(scale) {
+        mapScale = scale;
       },
     });
     if (meta.reason !== undefined) section.append(element('p', 'run-reason', meta.reason));
@@ -368,9 +375,9 @@ export function createExecutionView(options) {
       (candidate) => candidate.id === selected.occurrence.id,
     );
     const entries = [
-      [t('viewer.execution'), selected.occurrence.iteration === undefined
-        ? t('map.pass', { number: occurrenceIndex + 1 })
-        : t('map.iteration', { number: selected.occurrence.iteration })],
+      [t('viewer.execution'), t('map.pass', {
+        number: selected.occurrence.ordinal ?? occurrenceIndex + 1,
+      })],
       [t('viewer.phase'), selected.occurrence.phases.join(' / ') || '—'],
       [t('viewer.persona'), selected.occurrence.personas.join(' / ') || '—'],
     ];
@@ -427,6 +434,7 @@ export function createExecutionView(options) {
       selectedOccurrenceId = null;
       selectedReport = '';
       customNodePositions = new Map();
+      mapScale = DEFAULT_MAP_SCALE;
     }
     currentDetail = detail;
     const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary, getLocale());
@@ -473,6 +481,7 @@ export function createExecutionView(options) {
     currentDetail = null;
     currentTrace = null;
     selectedOccurrenceId = null;
+    mapScale = DEFAULT_MAP_SCALE;
     disposeExecutionMap(options.runDetail);
     options.runDetail.replaceChildren(renderEmpty(
       t('viewer.noRun'),

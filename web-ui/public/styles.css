@@ -397,6 +397,130 @@ body[data-screen="task"] .viewer-screen {
   gap: 8px;
 }
 
+.task-actions {
+  justify-self: start;
+  min-width: 0;
+}
+
+.task-actions-summary {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  list-style: none;
+}
+
+.task-actions-summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-actions-summary::after {
+  margin-left: 7px;
+  color: var(--faint);
+  content: "⌄";
+}
+
+.task-actions[open] .task-actions-summary::after {
+  content: "⌃";
+}
+
+.task-actions-summary:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+.task-actions-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-top: 6px;
+}
+
+.task-action {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.task-action:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+.task-action-delete,
+.task-action-force_fail,
+.task-action-merge,
+.task-action-try {
+  color: #e1a6a6;
+}
+
+.task-action-dialog {
+  width: min(960px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 48px);
+  padding: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: 0 30px 90px rgb(0 0 0 / 64%);
+}
+
+.task-action-dialog::backdrop {
+  background: rgb(0 0 0 / 65%);
+  backdrop-filter: blur(3px);
+}
+
+.task-action-dialog h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.task-action-dialog-status {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-action-output {
+  max-height: min(65vh, 640px);
+  margin: 18px 0;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-action-result-link {
+  display: block;
+  margin: 18px 0;
+  overflow-wrap: anywhere;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.task-action-dialog > .secondary-button {
+  margin-top: 18px;
+}
+
 .task-card-status {
   display: flex;
   gap: 8px;
@@ -755,11 +879,46 @@ body[data-screen="task"] .viewer-screen {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 12px;
+  flex-wrap: wrap;
 }
 
 .execution-map-key {
   color: var(--faint);
   text-align: right;
+}
+
+.execution-map-legend {
+  display: inline-flex;
+  gap: 9px;
+  align-items: center;
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.execution-map-legend-item {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.execution-map-legend-mark {
+  display: inline-block;
+  width: 17px;
+  border-top: 2px solid currentcolor;
+}
+
+.execution-map-legend-loop {
+  color: var(--accent);
+}
+
+.execution-map-legend-call {
+  color: var(--warning);
+}
+
+.execution-map-legend-call .execution-map-legend-mark {
+  border-top-width: 2px;
 }
 
 .execution-map {
@@ -784,6 +943,7 @@ body[data-screen="task"] .viewer-screen {
   position: relative;
   min-width: 640px;
   min-height: 300px;
+  transform-origin: 0 0;
 }
 
 .execution-edge-overlay {
@@ -810,10 +970,36 @@ body[data-screen="task"] .viewer-screen {
 .execution-parallel-label {
   position: absolute;
   inset: 5px auto auto 10px;
+  z-index: 1;
+  max-width: calc(100% - 20px);
+  overflow: hidden;
+  padding: 0;
+  border: 0;
   color: var(--warning);
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: .05em;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-parallel-group-header {
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+
+.execution-parallel-group-header:hover {
+  color: var(--text);
+}
+
+.execution-parallel-group[data-moving="true"] .execution-parallel-group-header {
+  cursor: grabbing;
+}
+
+.execution-parallel-group[data-moving="true"] {
+  z-index: 4;
 }
 
 .execution-edge {
@@ -828,7 +1014,6 @@ body[data-screen="task"] .viewer-screen {
 
 .execution-edge-loop {
   stroke: var(--accent);
-  stroke-dasharray: 4 4;
   opacity: .78;
 }
 
@@ -879,7 +1064,7 @@ body[data-screen="task"] .viewer-screen {
 
 .execution-step-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -889,6 +1074,16 @@ body[data-screen="task"] .viewer-screen {
   background: transparent;
   cursor: grab;
   touch-action: none;
+}
+
+.execution-step[data-current="true"] {
+  border-top-color: var(--accent);
+}
+
+.execution-current-marker {
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 1;
 }
 
 .execution-step[data-moving="true"] {
@@ -1526,6 +1721,75 @@ body[data-screen="task"] .viewer-screen {
   line-height: 1.5;
 }
 
+.chat-task-action-context,
+.chat-task-action-options {
+  max-width: 620px;
+  margin-top: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.chat-task-action-heading {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.chat-task-action-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 13px;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.chat-task-action-facts dt {
+  color: var(--faint);
+}
+
+.chat-task-action-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.chat-task-action-option-label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-task-action-option-select {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--chrome);
+  font-size: 12px;
+}
+
+.chat-task-action-option-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-task-action-option-message {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .chat-panel-actions {
   display: flex;
   flex: 0 1 auto;
@@ -1560,7 +1824,7 @@ body[data-screen="task"] .viewer-screen {
 }
 
 .chat-new-button:hover:not(:disabled),
-.chat-command-button:hover,
+.chat-command-button:hover:not(:disabled),
 .chat-close-button:hover {
   border-color: var(--border-strong);
   color: var(--text);
@@ -1570,6 +1834,12 @@ body[data-screen="task"] .viewer-screen {
 .chat-new-button:disabled {
   cursor: default;
   opacity: .4;
+}
+
+.chat-command-button:disabled,
+.chat-task-action-option-select:disabled {
+  cursor: not-allowed;
+  opacity: .45;
 }
 
 .chat-thinking {
@@ -1755,10 +2025,12 @@ body[data-screen="task"] .viewer-screen {
 }
 
 .chat-composer {
+  position: relative;
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 6px 6px 6px 11px;
+  align-items: center;
+  min-width: 0;
+  padding: 6px;
+  padding-left: 11px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--surface);
@@ -1769,9 +2041,13 @@ body[data-screen="task"] .viewer-screen {
 }
 
 .chat-composer textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
   min-height: 27px;
   max-height: 180px;
-  padding: 3px 0;
+  box-sizing: border-box;
+  padding: 3px 43px 3px 0;
   resize: none;
   border: 0;
   outline: 0;
@@ -1781,10 +2057,12 @@ body[data-screen="task"] .viewer-screen {
 }
 
 #chat-send-button {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
   display: grid;
   width: 35px;
   height: 35px;
-  flex: 0 0 auto;
   place-items: center;
   border-radius: 50%;
   color: #07120d;
@@ -1798,7 +2076,7 @@ body[data-screen="task"] .viewer-screen {
 }
 
 #chat-send-button:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: .45;
 }
 
@@ -2200,6 +2478,15 @@ kbd {
   .chat-session-meta,
   .chat-new-button {
     display: none;
+  }
+
+  .chat-task-action-facts {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .chat-task-action-facts dd {
+    margin-bottom: 5px;
   }
 
   .workflow-selection,

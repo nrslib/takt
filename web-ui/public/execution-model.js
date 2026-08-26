@@ -89,33 +89,22 @@ function logicalStepId(workflow, step, kind, childWorkflow) {
   return `step:${encodeIdPart(workflow)}:${kind}:${encodeIdPart(target)}`;
 }
 
-function occurrenceKey(event, kind, workflow) {
-  const scope = stackPathKey(event.stack);
-  if (kind === 'workflow') {
-    const call = event.callInstance ?? (
-      eventIteration(event) === undefined ? 'single' : `iteration:${eventIteration(event)}`
-    );
-    return `scope:${scope}:call:${call}`;
-  }
-  const iteration = eventIteration(event) === undefined
-    ? 'single'
-    : `iteration:${eventIteration(event)}`;
-  return `workflow:${workflow}:scope:${scope}:${iteration}`;
-}
-
 function eventDescriptor(event, meta) {
   if (event.step === undefined) return null;
   const workflow = eventWorkflow(event, meta.workflow);
   const kind = isWorkflowCall(event) ? 'workflow' : 'step';
   const childWorkflow = kind === 'workflow' ? event.childWorkflow : undefined;
   const logicalId = logicalStepId(workflow, event.step, kind, childWorkflow);
-  const key = occurrenceKey(event, kind, workflow);
+  const baseKey = `${logicalId}:scope:${stackPathKey(event.stack)}`;
   return {
     workflow,
     kind,
     childWorkflow,
     logicalId,
-    occurrenceId: `${logicalId}:${encodeIdPart(key)}`,
+    baseKey,
+    ...(typeof event.occurrenceId === 'string' && event.occurrenceId.length > 0
+      ? { occurrenceId: event.occurrenceId }
+      : {}),
   };
 }
 
@@ -186,10 +175,27 @@ function replaceOccurrence(nodesByLogicalId, occurrence) {
   });
 }
 
+function isOccurrenceStart(event) {
+  return event.type === 'step_start' || event.type === 'workflow_call_start';
+}
+
+function isOccurrenceTerminal(event) {
+  return TERMINAL_EVENT_TYPES.has(event.type);
+}
+
 function addGraphEvent(event, index, meta, graph) {
-  const descriptor = eventDescriptor(event, meta);
-  if (descriptor === null) return;
-  const previous = graph.occurrencesById.get(descriptor.occurrenceId);
+  const initialDescriptor = eventDescriptor(event, meta);
+  if (initialDescriptor === null) return;
+  const existingId = initialDescriptor.occurrenceId
+    ?? (!isOccurrenceStart(event) ? graph.activeOccurrenceIds.get(initialDescriptor.baseKey) : undefined);
+  const previous = existingId === undefined ? undefined : graph.occurrencesById.get(existingId);
+  let occurrenceId = existingId;
+  if (occurrenceId === undefined || (isOccurrenceStart(event) && previous !== undefined)) {
+    const nextOccurrence = (graph.occurrenceCounters.get(initialDescriptor.baseKey) ?? 0) + 1;
+    graph.occurrenceCounters.set(initialDescriptor.baseKey, nextOccurrence);
+    occurrenceId = `${initialDescriptor.baseKey}:occurrence:${nextOccurrence}`;
+  }
+  const descriptor = { ...initialDescriptor, occurrenceId };
   const occurrence = previous === undefined
     ? createOccurrence(event, descriptor, index, graph.recordEventIndexes)
     : updateOccurrence(previous, event, index, graph.recordEventIndexes);
@@ -209,6 +215,8 @@ function addGraphEvent(event, index, meta, graph) {
       occurrences: [occurrence],
     });
   }
+  if (isOccurrenceTerminal(event)) graph.activeOccurrenceIds.delete(initialDescriptor.baseKey);
+  else graph.activeOccurrenceIds.set(initialDescriptor.baseKey, occurrence.id);
   if (descriptor.kind === 'workflow' && descriptor.childWorkflow !== undefined) {
     const previousCall = graph.callsByOccurrenceId.get(occurrence.id);
     graph.callsByOccurrenceId.set(occurrence.id, {
@@ -272,18 +280,14 @@ function createCurrentOccurrence(meta, graph, nextEventIndex) {
     iteration: meta.currentIteration,
   };
   const descriptor = eventDescriptor(event, meta);
-  if (descriptor === null || graph.occurrencesById.has(descriptor.occurrenceId)) return;
-  const occurrence = createOccurrence(event, descriptor, nextEventIndex, graph.recordEventIndexes);
-  graph.occurrencesById.set(occurrence.id, occurrence);
-  graph.nodesByLogicalId.set(descriptor.logicalId, {
-    id: descriptor.logicalId,
-    workflow: descriptor.workflow,
-    kind: descriptor.kind,
-    label: meta.currentStep,
-    childWorkflow: undefined,
-    firstEventIndex: nextEventIndex,
-    occurrences: [occurrence],
-  });
+  if (descriptor === null) return;
+  const currentNode = graph.nodesByLogicalId.get(descriptor.logicalId);
+  const latestObserved = [...graph.occurrenceByEventIndex.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .at(-1)?.[1];
+  if (currentNode?.occurrences.some((occurrence) => occurrence.status === 'running')
+    || latestObserved?.logicalId === descriptor.logicalId) return;
+  addGraphEvent(event, nextEventIndex, meta, graph);
 }
 
 function createGraph(events, meta, recordEventIndexes) {
@@ -292,6 +296,8 @@ function createGraph(events, meta, recordEventIndexes) {
     occurrencesById: new Map(),
     occurrenceByEventIndex: new Map(),
     callsByOccurrenceId: new Map(),
+    occurrenceCounters: new Map(),
+    activeOccurrenceIds: new Map(),
     recordEventIndexes,
   };
   events.forEach((event, index) => addGraphEvent(event, index, meta, graph));
@@ -301,11 +307,38 @@ function createGraph(events, meta, recordEventIndexes) {
 
 function annotateLiveEventIndexes(nodes, liveEvents, meta) {
   const indexesByOccurrenceId = new Map();
+  const occurrencesByBaseKey = new Map();
+  for (const node of nodes) {
+    for (const occurrence of node.occurrences) {
+      const baseKey = `${occurrence.logicalId}:scope:${stackPathKey(occurrence.stack)}`;
+      const candidates = occurrencesByBaseKey.get(baseKey) ?? [];
+      occurrencesByBaseKey.set(baseKey, [...candidates, occurrence]);
+    }
+  }
+  const activeOccurrenceIds = new Map();
+  const occurrenceCursor = new Map();
   liveEvents.forEach((event, index) => {
     const descriptor = eventDescriptor(event, meta);
     if (descriptor === null) return;
-    const indexes = indexesByOccurrenceId.get(descriptor.occurrenceId) ?? [];
-    indexesByOccurrenceId.set(descriptor.occurrenceId, [...indexes, index]);
+    let occurrenceId = descriptor.occurrenceId;
+    if (occurrenceId === undefined) {
+      const candidates = occurrencesByBaseKey.get(descriptor.baseKey) ?? [];
+      if (isOccurrenceStart(event)) {
+        const cursor = occurrenceCursor.get(descriptor.baseKey) ?? 0;
+        const candidate = candidates[cursor];
+        if (candidate !== undefined) {
+          occurrenceId = candidate.id;
+          occurrenceCursor.set(descriptor.baseKey, cursor + 1);
+        }
+      } else {
+        occurrenceId = activeOccurrenceIds.get(descriptor.baseKey);
+      }
+    }
+    if (occurrenceId === undefined) return;
+    const indexes = indexesByOccurrenceId.get(occurrenceId) ?? [];
+    indexesByOccurrenceId.set(occurrenceId, [...indexes, index]);
+    if (isOccurrenceTerminal(event)) activeOccurrenceIds.delete(descriptor.baseKey);
+    else activeOccurrenceIds.set(descriptor.baseKey, occurrenceId);
   });
   return nodes.map((node) => ({
     ...node,
@@ -327,10 +360,29 @@ function annotateLiveEventIndexes(nodes, liveEvents, meta) {
       return {
         ...updated,
         eventIndexes,
-        lastEventIndex: eventIndexes.at(-1) ?? occurrence.lastEventIndex,
+        // `eventIndexes` belongs to the bounded live-log tail. Keep the
+        // canonical graph position for ordering and terminal selection.
+        lastEventIndex: occurrence.lastEventIndex,
         ...(preview === undefined ? {} : { preview }),
       };
     }),
+  }));
+}
+
+function assignOccurrenceOrdinals(nodes) {
+  const ordered = nodes
+    .flatMap((node) => node.occurrences.map((occurrence) => ({ nodeId: node.id, occurrence })))
+    .sort((left, right) => (
+      left.occurrence.firstEventIndex - right.occurrence.firstEventIndex
+      || left.occurrence.id.localeCompare(right.occurrence.id)
+    ));
+  const ordinals = new Map(ordered.map(({ occurrence }, index) => [occurrence.id, index + 1]));
+  return nodes.map((node) => ({
+    ...node,
+    occurrences: node.occurrences.map((occurrence) => ({
+      ...occurrence,
+      ordinal: ordinals.get(occurrence.id),
+    })),
   }));
 }
 
@@ -339,61 +391,48 @@ function applyTerminalRunStatus(meta, nodes) {
     ? meta.status
     : null;
   if (finalStatus === null) return nodes;
-  const last = nodes.at(-1);
-  if (last === undefined) return nodes;
-  const occurrences = last.occurrences.map((occurrence, index) =>
-    index === last.occurrences.length - 1 && occurrence.status === 'running'
-      ? { ...occurrence, status: finalStatus }
-      : occurrence,
-  );
-  return [...nodes.slice(0, -1), { ...last, occurrences }];
+  const finalOccurrence = nodes
+    .flatMap((node) => node.occurrences)
+    .reduce((latest, occurrence) => (
+      latest === undefined || occurrence.lastEventIndex > latest.lastEventIndex
+        ? occurrence
+        : latest
+    ), undefined);
+  if (finalOccurrence === undefined || finalOccurrence.status !== 'running') return nodes;
+  return nodes.map((node) => ({
+    ...node,
+    occurrences: node.occurrences.map((occurrence) => (
+      occurrence.id === finalOccurrence.id
+        ? { ...occurrence, status: finalStatus }
+        : occurrence
+    )),
+  }));
 }
 
 function buildTransitions(events, occurrenceByEventIndex) {
   const transitions = [];
   let previous = null;
-  const previousByLogicalId = new Map();
+  const visitedLogicalIds = new Set();
   for (let index = 0; index < events.length; index += 1) {
     const current = occurrenceByEventIndex.get(index);
     if (current === undefined || current.kind !== 'step' || current.id === previous?.id) continue;
-    const previousLogicalOccurrence = previousByLogicalId.get(current.logicalId);
-    if (
-      previousLogicalOccurrence !== undefined
-      && previous?.id !== previousLogicalOccurrence.id
-      && isLoop(previousLogicalOccurrence, current)
-    ) {
-      transitions.push({
-        id: `${previousLogicalOccurrence.id}->${current.id}:loop`,
-        source: previousLogicalOccurrence.id,
-        target: current.id,
-        sourceLogicalId: previousLogicalOccurrence.logicalId,
-        targetLogicalId: current.logicalId,
-        kind: 'loop',
-      });
-    }
-    if (previous !== null) {
+    // A repeated occurrence of the same logical step is represented by the
+    // chips on that card. It is not a transition by itself. Every connector
+    // below therefore joins only consecutive, distinct step occurrences.
+    if (previous !== null && previous.logicalId !== current.logicalId) {
       transitions.push({
         id: `${previous.id}->${current.id}`,
         source: previous.id,
         target: current.id,
         sourceLogicalId: previous.logicalId,
         targetLogicalId: current.logicalId,
-        kind: isLoop(previous, current) ? 'loop' : 'transition',
+        kind: visitedLogicalIds.has(current.logicalId) ? 'loop' : 'transition',
       });
     }
-    previousByLogicalId.set(current.logicalId, current);
+    visitedLogicalIds.add(current.logicalId);
     previous = current;
   }
   return transitions;
-}
-
-function isLoop(previous, current) {
-  return previous.logicalId === current.logicalId
-    && previous.kind === 'step'
-    && current.kind === 'step'
-    && previous.iteration !== undefined
-    && current.iteration !== undefined
-    && previous.iteration !== current.iteration;
 }
 
 function buildLoops(transitions, nodes) {
@@ -412,7 +451,7 @@ function buildLoops(transitions, nodes) {
       logicalId: transition.sourceLogicalId,
       from: transition.source,
       to: transition.target,
-      iteration: occurrencesById.get(transition.target)?.iteration,
+      ordinal: occurrencesById.get(transition.target)?.ordinal,
     }));
 }
 
@@ -489,7 +528,7 @@ function collectCallObservations(newestFirstEvents, newestFirstHistory, meta) {
   for (const event of [...source].reverse()) {
     if (!isWorkflowCall(event)) continue;
     const descriptor = eventDescriptor(event, meta);
-    if (descriptor === null) continue;
+    if (descriptor?.occurrenceId === undefined) continue;
     const previous = observations.get(descriptor.occurrenceId);
     observations.set(descriptor.occurrenceId, {
       startObserved: event.type === 'workflow_call_start' || previous?.startObserved === true,
@@ -504,29 +543,11 @@ function mergeGraphEvents(summaryEvents, history, liveEvents, meta) {
   // indexes and observed transitions retain their one-record granularity.
   if (summaryEvents.length === 0) return history.length > 0 ? history : liveEvents;
 
-  const merged = [];
-  const indexesByOccurrenceId = new Map();
-
-  const merge = (event) => {
-    const descriptor = eventDescriptor(event, meta);
-    if (descriptor === null) return;
-    const existingIndex = indexesByOccurrenceId.get(descriptor.occurrenceId);
-    if (existingIndex === undefined) {
-      indexesByOccurrenceId.set(descriptor.occurrenceId, merged.length);
-      merged.push(event);
-      return;
-    }
-    // Summary entries are canonical topology records. Recent history/live
-    // records may only enrich their status and metadata, never duplicate the
-    // occurrence or alter its first-seen ordering.
-    merged[existingIndex] = { ...merged[existingIndex], ...event };
-  };
-
-  summaryEvents.forEach(merge);
-  [...history, ...liveEvents].forEach(merge);
-  return merged.length > MAX_GRAPH_OCCURRENCES
-    ? merged.slice(-MAX_GRAPH_OCCURRENCES)
-    : merged;
+  // The cache has already merged every lifecycle record into one canonical
+  // snapshot per chronological occurrence. Replaying history/live records
+  // here would make repeated steps indistinguishable when their iteration
+  // metadata is missing or duplicated, so the summary is the topology SSOT.
+  return summaryEvents;
 }
 
 export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory, graphSummary, locale = 'ja') {
@@ -547,6 +568,7 @@ export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory,
     nodes = annotateLiveEventIndexes(nodes, events, meta);
   }
   nodes = applyTerminalRunStatus(meta, nodes);
+  nodes = assignOccurrenceOrdinals(nodes);
   const callObservations = collectCallObservations(newestFirstEvents, newestFirstHistory, meta);
   const calls = attachCallTargets([...graph.callsByOccurrenceId.values()].map((call) => {
     const observation = callObservations.get(call.occurrenceId);

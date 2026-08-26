@@ -102,7 +102,10 @@ describe('central worker and workflow lifecycle', () => {
       ownerToken: reserved.ownerToken,
     });
 
-    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'completed' });
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({
+      status: 'completed',
+      worktreePath: projectDirectory,
+    });
     const metaPath = join(repository.paths.runsDirectory, reserved.runId, 'meta.json');
     await expect(stat(metaPath)).resolves.toBeDefined();
     const meta = JSON.parse(await readFile(metaPath, 'utf8')) as Record<string, unknown>;
@@ -173,5 +176,53 @@ describe('central worker and workflow lifecycle', () => {
     const contents = await readAllFiles(repository.paths.stateDirectory);
     expect(contents.every((content) => !content.includes(secretCanary))).toBe(true);
     expect(contents.some((content) => content.includes('${MCP_TOKEN}'))).toBe(true);
+  });
+
+  it('terminalizes the central run artifact before force-failing its task ledger entry', async () => {
+    const { repository, workflowPath } = await createFixture();
+    const reserved = await repository.enqueueAndClaim({
+      task: 'force fail artifact task',
+      workflow: workflowPath,
+      worktree: false,
+    });
+    const runRoot = join(repository.paths.runsDirectory, reserved.runId);
+    await mkdir(runRoot, { recursive: true });
+    await writeFile(join(runRoot, 'meta.json'), JSON.stringify({
+      runSlug: reserved.runId,
+      task: reserved.task.task,
+      workflow: reserved.task.workflow,
+      status: 'running',
+    }));
+
+    const failed = await repository.forceFailTask(reserved.task.taskId, 'stopped from the viewer');
+    expect(failed.drainingExecution).toMatchObject({
+      executionId: reserved.executionId,
+      generation: reserved.task.generation,
+    });
+
+    // A worker can finish its own lifecycle and overwrite the metadata before
+    // it sends the force-fail acknowledgement. The acknowledgement must put
+    // the central artifact back into the force-failed state.
+    await writeFile(join(runRoot, 'meta.json'), JSON.stringify({
+      runSlug: reserved.runId,
+      status: 'completed',
+    }));
+    await repository.terminal({
+      taskId: reserved.task.taskId,
+      generation: reserved.task.generation,
+      executionId: reserved.executionId,
+      ownerToken: reserved.ownerToken,
+      status: 'completed',
+    });
+
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({
+      status: 'failed',
+      failure: { code: 'force_failed', message: 'stopped from the viewer' },
+    });
+    const meta = JSON.parse(await readFile(join(runRoot, 'meta.json'), 'utf8')) as Record<string, unknown>;
+    expect(meta).toMatchObject({
+      status: 'failed',
+      reason: 'stopped from the viewer',
+    });
   });
 });

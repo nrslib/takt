@@ -18,9 +18,11 @@ import { parseLaunchRequest, type LaunchRequest, type LaunchResult } from './lau
 import {
   createWebChatService,
   parseCreateWebChatRequest,
-  parseWebChatMessage,
+  parseWebChatMessageRequest,
   WebChatInputError,
   type WebChatService,
+  type WebTaskActionContext,
+  type WebTaskActionClaim,
 } from './chat.js';
 import { readWorkflowCatalog, type WebWorkflowCatalog } from './workflow-catalog.js';
 import { browseDirectory, parseDirectoryBrowseRequest } from './directory-browser.js';
@@ -32,10 +34,20 @@ import {
 import { resolveStatePaths } from '../../core/execution/locations.js';
 import {
   CentralTaskBusyError,
+  CentralTaskCasError,
   CentralTaskRepository,
   CentralTaskRequeueError,
+  type CentralTaskRecord,
   parseCentralTasks,
 } from '../../infra/task/centralStateRepository.js';
+import {
+  CentralTaskActionError,
+  getCentralTaskActions,
+  parseCentralTaskAction,
+  projectCentralTaskStatus,
+  type CentralTaskAction,
+  type CentralTaskActionResult,
+} from './task-actions.js';
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const MAX_GLOBAL_TASKS = 100;
@@ -305,6 +317,11 @@ function routeTaskRequeueId(pathname: string): string | null {
   return match?.[1] ?? null;
 }
 
+function routeTaskAction(pathname: string): { taskId: string; action: string } | null {
+  const match = pathname.match(/^\/api\/tasks\/([0-9a-f-]{36})\/actions\/([A-Za-z0-9_-]+)$/u);
+  return match === null ? null : { taskId: match[1]!, action: match[2]! };
+}
+
 function routeChatSessionId(
   pathname: string,
   action: 'messages' | 'settings' | 'restart',
@@ -331,6 +348,12 @@ function asHttpError(error: unknown): HttpError {
   if (error instanceof CentralTaskRequeueError) {
     return new HttpError(409, error.message);
   }
+  if (error instanceof CentralTaskActionError) {
+    return new HttpError(error.status, error.message);
+  }
+  if (error instanceof CentralTaskCasError) {
+    return new HttpError(409, error.message);
+  }
   if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
     return new HttpError(404, 'Run not found');
   }
@@ -354,6 +377,50 @@ function projectIdFromBody(value: unknown): string {
     throw new HttpError(400, 'projectId is required');
   }
   return projectId;
+}
+
+function optionalActionInput(value: unknown): string | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpError(400, 'Request body must be an object');
+  }
+  const input = (value as Readonly<Record<string, unknown>>).input;
+  if (input === undefined) return undefined;
+  if (typeof input !== 'string') throw new HttpError(400, 'input must be a string');
+  return input;
+}
+
+function optionalConversationId(value: unknown): string | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpError(400, 'Request body must be an object');
+  }
+  const conversationId = (value as Readonly<Record<string, unknown>>).conversationId;
+  if (conversationId === undefined) return undefined;
+  if (
+    typeof conversationId !== 'string'
+    || conversationId.length === 0
+    || conversationId.length > 256
+    || conversationId.includes('\0')
+  ) {
+    throw new HttpError(400, 'conversationId is invalid');
+  }
+  return conversationId;
+}
+
+function optionalTaskActionOptionId(value: unknown): string | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpError(400, 'Request body must be an object');
+  }
+  const optionId = (value as Readonly<Record<string, unknown>>).taskActionOptionId;
+  if (optionId === undefined) return undefined;
+  if (
+    typeof optionId !== 'string'
+    || optionId.trim().length === 0
+    || optionId.length > 256
+    || optionId.includes('\0')
+  ) {
+    throw new HttpError(400, 'taskActionOptionId is invalid');
+  }
+  return optionId;
 }
 
 function projectDirectoryFromBody(value: unknown): string {
@@ -421,6 +488,68 @@ async function resolveProject(globalConfigDirectory: string, id: string): Promis
   }
 }
 
+async function verifyTaskActionAvailability(
+  globalConfigDirectory: string,
+  project: RegisteredProject,
+  taskId: string,
+  action: CentralTaskAction,
+): Promise<CentralTaskRecord> {
+  const repository = await CentralTaskRepository.openByState({
+    globalConfigDirectory,
+    stateId: project.stateId,
+  });
+  await repository.reconcile();
+  const task = await repository.readTask(taskId);
+  if (task === undefined) {
+    throw new CentralTaskActionError('Central task was not found', 404);
+  }
+  if (!getCentralTaskActions(task).includes(action)) {
+    throw new CentralTaskActionError(`Action ${action} is not available for task ${taskId}`);
+  }
+  return task;
+}
+
+function assertTaskActionSnapshot(
+  context: WebTaskActionContext,
+  project: RegisteredProject,
+  task: CentralTaskRecord,
+  action: CentralTaskAction,
+): void {
+  if (
+    context.taskId !== task.taskId
+    || context.action !== action
+    || context.projectId !== project.id
+    || context.stateId !== project.stateId
+    || context.projectDirectory !== project.canonicalDirectory
+    || context.generation !== task.generation
+    || context.sourceRunId !== task.runId
+    || context.runId !== task.runId
+    || context.worktreePath !== task.worktreePath
+    || context.status !== projectCentralTaskStatus(task)
+    || context.runIds.length !== task.runIds.length
+    || context.runIds.some((runId, index) => runId !== task.runIds[index])
+  ) {
+    throw new CentralTaskActionError('Task action conversation is stale', 409);
+  }
+}
+
+function releaseTaskActionReservation(
+  chat: WebChatService,
+  conversationId: string | undefined,
+  reservationToken: string,
+  originalError: unknown,
+): void {
+  if (conversationId === undefined) return;
+  try {
+    chat.releaseTaskAction(conversationId, reservationToken);
+  } catch (releaseError) {
+    // Preserve the action error and retain the cleanup failure for diagnostics.
+    if (originalError instanceof Error && originalError.cause === undefined) {
+      originalError.cause = releaseError;
+    }
+  }
+}
+
 async function readGlobalTasks(globalConfigDirectory: string) {
   const registry = await readProjectRegistry(globalConfigDirectory);
   const results = await Promise.all(registry.projects.map(async (project) => {
@@ -438,40 +567,44 @@ async function readGlobalTasks(globalConfigDirectory: string) {
       });
       const collection = await readRunCollection(repository.paths);
       const runsBySlug = new Map(collection.runs.map((run) => [run.slug, run]));
-      const tasks = (await repository.readTasks()).map((task) => ({
-        taskId: task.taskId,
-        status: task.status === 'starting' ? 'running' : task.status,
-        task: task.task,
-        workflow: task.workflow,
-        attempt: task.attempt,
-        createdAt: task.createdAt,
-        updatedAt: task.updatedAt,
-        worktree: task.worktree,
-        ...(task.branch === undefined ? {} : { branch: task.branch }),
-        ...(task.baseBranch === undefined ? {} : { baseBranch: task.baseBranch }),
-        autoPr: task.autoPr === true,
-        draftPr: task.draftPr === true,
-        ...(task.failure === undefined ? {} : { failure: task.failure }),
-        ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
-        actions: { requeue: task.status === 'failed' },
-        projectId: project.id,
-        locationId: project.locationId,
-        stateId: project.stateId,
-        projectName: project.displayName,
-        projectDirectory: project.projectDirectory,
-        runs: task.runIds.flatMap((runId, index) => {
-          const run = runsBySlug.get(runId);
-          if (run === undefined) return [];
-          const isLatest = index === task.runIds.length - 1;
-          return [{
-            ...run,
-            attempt: index + 1,
-            ...(isLatest
-              ? { status: task.status === 'starting' ? 'running' : task.status }
-              : {}),
-          }];
-        }),
-      }));
+      const tasks = (await repository.readTasks()).map((task) => {
+        const status = projectCentralTaskStatus(task);
+        const actions = getCentralTaskActions(task);
+        return {
+          taskId: task.taskId,
+          status,
+          task: task.task,
+          workflow: task.workflow,
+          attempt: task.attempt,
+          createdAt: task.createdAt,
+          updatedAt: task.updatedAt,
+          worktree: task.worktree,
+          ...(task.branch === undefined ? {} : { branch: task.branch }),
+          ...(task.baseBranch === undefined ? {} : { baseBranch: task.baseBranch }),
+          ...(task.worktreePath === undefined ? {} : { worktreePath: task.worktreePath }),
+          autoPr: task.autoPr === true,
+          draftPr: task.draftPr === true,
+          ...(task.failure === undefined ? {} : { failure: task.failure }),
+          ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
+          actions: Object.fromEntries(actions.map((action) => [action, true])),
+          actionList: actions,
+          projectId: project.id,
+          locationId: project.locationId,
+          stateId: project.stateId,
+          projectName: project.displayName,
+          projectDirectory: project.projectDirectory,
+          runs: task.runIds.flatMap((runId, index) => {
+            const run = runsBySlug.get(runId);
+            if (run === undefined) return [];
+            const isLatest = index === task.runIds.length - 1;
+            return [{
+              ...run,
+              attempt: index + 1,
+              ...(isLatest ? { status } : {}),
+            }];
+          }),
+        };
+      });
       return {
         tasks,
         warnings: collection.warnings.map((warning) => `${project.displayName}: ${warning}`),
@@ -514,7 +647,7 @@ async function readRunView(
           meta: {
             ...detail.meta,
             ...(isLatestTaskRun
-              ? { status: task.status === 'starting' ? 'running' : task.status }
+              ? { status: projectCentralTaskStatus(task) }
               : {}),
             ...(isLatestTaskRun && task.failure !== undefined
               ? { reason: task.failure.message }
@@ -535,10 +668,29 @@ async function readProjectDiscovery(globalConfigDirectory: string) {
     if (!existsSync(statePaths.tasksFile)) return project;
     try {
       const tasks = parseCentralTasks(JSON.parse(await readFile(statePaths.tasksFile, 'utf8')) as unknown);
-      const active = tasks.find((task) => task.status === 'starting' || task.status === 'running');
-      return active?.activeExecution === undefined
+      const active = tasks.find((task) => (
+        task.activeExecution !== undefined || task.drainingExecution !== undefined
+      ));
+      if (active?.activeExecution !== undefined) {
+        return {
+          ...project,
+          state: {
+            stateId: project.stateId,
+            status: active.status,
+            activeExecution: active.activeExecution,
+          },
+        };
+      }
+      return active?.drainingExecution === undefined
         ? project
-        : { ...project, state: { stateId: project.stateId, status: active.status, activeExecution: active.activeExecution } };
+        : {
+            ...project,
+            state: {
+              stateId: project.stateId,
+              status: active.status,
+              drainingExecution: active.drainingExecution,
+            },
+          };
     } catch (error) {
       warnings.push(`${project.projectDirectory}: central state is unavailable (${errorMessage(error)})`);
       return project;
@@ -559,6 +711,21 @@ export async function createWebUiServer(options: {
     taskId: string,
     project?: RegisteredProject,
   ) => Promise<LaunchResult>;
+  readonly taskAction?: (
+    projectDirectory: string,
+    taskId: string,
+    action: CentralTaskAction,
+    input: string | undefined,
+    conversationId: string | undefined,
+    project?: RegisteredProject,
+    taskActionClaim?: WebTaskActionClaim,
+  ) => Promise<CentralTaskActionResult>;
+  readonly taskActionConversation?: (
+    projectDirectory: string,
+    taskId: string,
+    action: 'retry' | 'instruct',
+    project?: RegisteredProject,
+  ) => Promise<CentralTaskActionResult>;
   readonly getWorkflowCatalog?: (
     projectDirectory: string,
   ) => WebWorkflowCatalog | Promise<WebWorkflowCatalog>;
@@ -573,6 +740,7 @@ export async function createWebUiServer(options: {
   const sessionToken = randomBytes(24).toString('base64url');
   const chat = options.chat ?? createWebChatService();
   const pickNativeDirectory = options.pickNativeDirectory ?? pickNativeDirectoryOnHost;
+  const actionInFlight = new Map<string, Promise<unknown>>();
 
   const server = createServer(async (request, response) => {
     try {
@@ -636,6 +804,120 @@ export async function createWebUiServer(options: {
         );
         return;
       }
+      const taskActionRoute = method === 'POST' ? routeTaskAction(url.pathname) : null;
+      if (taskActionRoute !== null) {
+        requireSessionToken(request, sessionToken);
+        const body = await readJsonBody(request);
+        const project = await resolveProject(
+          options.globalConfigDirectory,
+          projectIdFromBody(body),
+        );
+        const action = parseCentralTaskAction(taskActionRoute.action);
+        const input = optionalActionInput(body);
+        const conversationId = optionalConversationId(body);
+        const taskActionOptionId = optionalTaskActionOptionId(body);
+        const startsConversation = (action === 'retry' || action === 'instruct')
+          && input === undefined;
+        if (startsConversation && taskActionOptionId !== undefined) {
+          throw new HttpError(400, 'taskActionOptionId is only valid when completing a task conversation');
+        }
+        if (!startsConversation && options.taskAction === undefined) {
+          throw new HttpError(501, 'Task actions are unavailable');
+        }
+        if (startsConversation && options.taskActionConversation === undefined) {
+          throw new HttpError(501, 'Task action conversation is unavailable');
+        }
+        if (!startsConversation && (action === 'retry' || action === 'instruct') && conversationId === undefined) {
+          throw new HttpError(409, `${action} must be completed from its task conversation`);
+        }
+        if (!startsConversation && action !== 'retry' && action !== 'instruct' && taskActionOptionId !== undefined) {
+          throw new HttpError(400, 'taskActionOptionId is only valid for retry or instruct');
+        }
+        const key = `${project.id}:${taskActionRoute.taskId}`;
+        if (actionInFlight.has(key)) {
+          throw new HttpError(409, 'This task action is already running');
+        }
+        // Reserve the task key before any asynchronous snapshot validation so
+        // different actions cannot pass the check concurrently.
+        const reservation = new Promise<CentralTaskActionResult>(() => undefined);
+        actionInFlight.set(key, reservation);
+        let pending: Promise<CentralTaskActionResult> = reservation;
+        let taskActionClaim: WebTaskActionClaim | undefined;
+        let taskActionCommitted = false;
+        try {
+          const task = await verifyTaskActionAvailability(
+            options.globalConfigDirectory,
+            project,
+            taskActionRoute.taskId,
+            action,
+          );
+          if (startsConversation) {
+            const startConversation = options.taskActionConversation;
+            if (startConversation === undefined) {
+              throw new HttpError(501, 'Task action conversation is unavailable');
+            }
+            pending = startConversation(
+              project.projectDirectory,
+              taskActionRoute.taskId,
+              action,
+              project,
+            );
+          } else {
+            if (action === 'retry' || action === 'instruct') {
+              if (chat.claimTaskAction === undefined || conversationId === undefined) {
+                throw new HttpError(501, 'Task action conversation finalization is unavailable');
+              }
+              taskActionClaim = chat.claimTaskAction(conversationId, taskActionOptionId);
+              assertTaskActionSnapshot(taskActionClaim.context, project, task, action);
+              // Availability was checked before claiming the process-local
+              // session. Re-read after the claim so a stale terminal record
+              // cannot be requeued by a conversation that raced a worker.
+              const currentTask = await verifyTaskActionAvailability(
+                options.globalConfigDirectory,
+                project,
+                taskActionRoute.taskId,
+                action,
+              );
+              assertTaskActionSnapshot(taskActionClaim.context, project, currentTask, action);
+            }
+            if (options.taskAction === undefined) throw new HttpError(501, 'Task actions are unavailable');
+            pending = options.taskAction(
+              project.projectDirectory,
+              taskActionRoute.taskId,
+              action,
+              input,
+              conversationId,
+              project,
+              taskActionClaim,
+            );
+          }
+          actionInFlight.set(key, pending);
+          const result = await pending;
+          if (taskActionClaim !== undefined) {
+            if (conversationId === undefined) {
+              throw new HttpError(500, 'Task action conversation id is missing');
+            }
+            chat.commitTaskAction(conversationId, taskActionClaim.reservationToken);
+            taskActionCommitted = true;
+          }
+          sendJson(response, result.status === 'accepted' ? 202 : 200, result);
+        } catch (error) {
+          if (taskActionClaim !== undefined && !taskActionCommitted) {
+            releaseTaskActionReservation(
+              chat,
+              conversationId,
+              taskActionClaim.reservationToken,
+              error,
+            );
+          }
+          throw error;
+        } finally {
+          if (actionInFlight.get(key) === pending || actionInFlight.get(key) === reservation) {
+            actionInFlight.delete(key);
+          }
+        }
+        return;
+      }
       if (method === 'GET' && url.pathname === '/api/workflows') {
         const project = await resolveProject(
           options.globalConfigDirectory,
@@ -690,11 +972,17 @@ export async function createWebUiServer(options: {
           options.globalConfigDirectory,
           projectIdFromBody(body),
         );
-        sendJson(
-          response,
-          202,
-          await options.requeue(project.projectDirectory, requeueTaskId, project),
-        );
+        const key = `${project.id}:${requeueTaskId}`;
+        if (actionInFlight.has(key)) {
+          throw new HttpError(409, 'This task action is already running');
+        }
+        const pending = options.requeue(project.projectDirectory, requeueTaskId, project);
+        actionInFlight.set(key, pending);
+        try {
+          sendJson(response, 202, await pending);
+        } finally {
+          if (actionInFlight.get(key) === pending) actionInFlight.delete(key);
+        }
         return;
       }
       if (method === 'POST' && url.pathname === '/api/tasks') {
@@ -751,13 +1039,21 @@ export async function createWebUiServer(options: {
         : null;
       if (chatMessageSessionId !== null) {
         requireSessionToken(request, sessionToken);
-        const text = parseWebChatMessage(await readJsonBody(request));
+        const message = parseWebChatMessageRequest(await readJsonBody(request));
+        if (
+          message.taskActionOptionId !== undefined
+          && chat.getTaskActionContext !== undefined
+          && chat.getTaskActionContext(chatMessageSessionId) === undefined
+        ) {
+          throw new HttpError(400, 'taskActionOptionId is only valid for task action conversations');
+        }
         await streamChatReply(
           response,
           (onThinking) => chat.send(
             chatMessageSessionId,
-            text,
+            message.text,
             onThinking,
+            message.taskActionOptionId,
           ),
         );
         return;

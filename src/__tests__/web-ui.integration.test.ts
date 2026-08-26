@@ -1,4 +1,5 @@
 import { appendFile, lstat, mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,16 +7,27 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { readRunCollection, readRunDetail } from '../features/web-ui/run-store.js';
 import { readRunLogArtifactsForDiagnostics } from '../features/web-ui/run-log-cache.js';
 import { startWebUi, stopWebUi } from '../features/web-ui/index.js';
+import { startCentralTaskActionConversation } from '../features/web-ui/launcher.js';
 import { createWebUiServer, listenWebUiServer } from '../features/web-ui/server.js';
 import {
   acquireWebUiInstanceLock,
   readWebUiInstance,
   stopWebUiInstance,
 } from '../features/web-ui/instance-lock.js';
-import type { WebChatService } from '../features/web-ui/chat.js';
+import {
+  WebChatInputError,
+  type WebChatService,
+  type WebTaskActionClaim,
+  type WebTaskActionContext,
+} from '../features/web-ui/chat.js';
+import {
+  CentralTaskActionError,
+  executeCentralTaskAction,
+} from '../features/web-ui/task-actions.js';
 import { resolveStatePaths, type StatePaths } from '../core/execution/locations.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
+import { createSharedClone } from '../infra/task/index.js';
 import { buildExecutionTrace } from '../../web-ui/public/execution-model.js';
 
 const servers: Server[] = [];
@@ -87,6 +99,94 @@ async function createTemporaryDirectory(prefix: string): Promise<string> {
   const directory = await realpath(await mkdtemp(join(tmpdir(), prefix)));
   temporaryDirectories.add(directory);
   return directory;
+}
+
+function runFixtureGit(cwd: string, args: readonly string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: 'pipe',
+    env: {
+      ...process.env,
+      GIT_EDITOR: 'true',
+      GIT_TERMINAL_PROMPT: '0',
+    },
+  });
+}
+
+async function createGitProjectFixture() {
+  const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-git-global-');
+  const projectDirectory = await createProject();
+  runFixtureGit(projectDirectory, ['init', '-b', 'main']);
+  runFixtureGit(projectDirectory, ['config', 'user.name', 'TAKT Test']);
+  runFixtureGit(projectDirectory, ['config', 'user.email', 'takt-test@example.invalid']);
+  await writeFile(join(projectDirectory, 'README.md'), 'fixture\n');
+  runFixtureGit(projectDirectory, ['add', 'README.md']);
+  runFixtureGit(projectDirectory, ['commit', '-m', 'fixture']);
+  const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+  const repository = await CentralTaskRepository.open({
+    globalConfigDirectory,
+    stateId: project.stateId,
+    locationId: project.locationId,
+    canonicalDirectory: project.canonicalDirectory,
+    displayName: project.displayName,
+    fingerprint: project.fingerprint,
+  });
+  return { globalConfigDirectory, projectDirectory, project, repository };
+}
+
+async function createCompletedGitTask(
+  options: { readonly branch?: string; readonly worktree?: string } = {},
+) {
+  const fixture = await createGitProjectFixture();
+  const branch = options.branch ?? 'feature/action';
+  const worktreePath = options.worktree ?? join(
+    await createTemporaryDirectory('takt-web-ui-worktrees-'),
+    'clone',
+  );
+  const reserved = await fixture.repository.enqueueAndClaim({
+    task: 'completed action task',
+    workflow: 'default',
+    worktree: worktreePath,
+    branch,
+    baseBranch: 'main',
+  });
+  const adopted = await fixture.repository.adopt({
+    taskId: reserved.task.taskId,
+    generation: reserved.task.generation,
+    executionId: reserved.executionId,
+    ownerToken: reserved.ownerToken,
+  });
+  const clone = createSharedClone(fixture.projectDirectory, {
+    worktree: worktreePath,
+    worktreeBaseDirectory: join(worktreePath, '..'),
+    branch,
+    baseBranch: 'main',
+    cloneMetadataDirectory: fixture.repository.paths.worktreeMetadataDirectory,
+    skipProjectLocalTaktSync: true,
+    taskSlug: 'action-fixture',
+  });
+  await fixture.repository.updateExecutionContext({
+    taskId: reserved.task.taskId,
+    generation: adopted.generation,
+    executionId: reserved.executionId,
+    ownerToken: reserved.ownerToken,
+    worktreePath: clone.path,
+    branch: clone.branch,
+  });
+  await writeFile(join(clone.path, 'change.txt'), 'change\n');
+  runFixtureGit(clone.path, ['add', 'change.txt']);
+  runFixtureGit(clone.path, ['commit', '-m', 'change']);
+  await fixture.repository.terminal({
+    taskId: reserved.task.taskId,
+    generation: adopted.generation,
+    executionId: reserved.executionId,
+    ownerToken: reserved.ownerToken,
+    status: 'completed',
+  });
+  const task = await fixture.repository.readTask(reserved.task.taskId);
+  if (task === undefined) throw new Error('fixture task was not persisted');
+  return { ...fixture, task, clonePath: clone.path, branch };
 }
 
 async function createArtifactState(): Promise<StatePaths> {
@@ -170,7 +270,7 @@ describe('Web UI run artifacts', () => {
       content: '# Result\nDone',
       omitted: false,
     }]);
-    expect(detail.events).toEqual([
+    expect(detail.events).toMatchObject([
       {
         type: 'phase_complete',
         step: 'implement',
@@ -178,14 +278,104 @@ describe('Web UI run artifacts', () => {
         status: 'done',
         content: 'Implemented',
         timestamp: '2026-08-24T00:00:02.000Z',
+        occurrenceId: expect.any(String),
       },
       {
         type: 'phase_start',
         step: 'implement',
         phaseName: 'execute',
         timestamp: '2026-08-24T00:00:01.000Z',
+        occurrenceId: expect.any(String),
       },
     ]);
+    expect(detail.events[0]?.occurrenceId).toBe(detail.events[1]?.occurrenceId);
+  });
+
+  it('assigns lifecycle occurrence IDs without closing on phase completion or merging orphan completions', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'occurrence-boundaries');
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      { type: 'step_start', step: 'review', iteration: 1 },
+      { type: 'phase_start', step: 'review', phaseName: 'plan' },
+      { type: 'phase_complete', step: 'review', phaseName: 'plan', status: 'done' },
+      { type: 'step_complete', step: 'review', iteration: 1, status: 'done' },
+      { type: 'step_start', step: 'review', iteration: 2 },
+      { type: 'step_complete', step: 'review', iteration: 2, status: 'done' },
+      { type: 'step_complete', step: 'orphan', status: 'done' },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+    const detail = await readRunDetail(statePaths, 'occurrence-boundaries');
+    const chronologicalHistory = detail.history.slice().reverse();
+    const reviewStarts = chronologicalHistory.filter((event) => (
+      event.type === 'step_start' && event.step === 'review'
+    ));
+    const firstReviewId = reviewStarts[0]?.occurrenceId;
+    const secondReviewId = reviewStarts[1]?.occurrenceId;
+    const phaseEvents = chronologicalHistory.filter((event) => event.step === 'review' && event.type.startsWith('phase_'));
+    const reviewCompletions = chronologicalHistory.filter((event) => (
+      event.type === 'step_complete' && event.step === 'review'
+    ));
+    const orphanCompletion = chronologicalHistory.find((event) => event.step === 'orphan');
+    const lifecycleIds = chronologicalHistory
+      .filter((event) => event.step !== undefined)
+      .map((event) => event.occurrenceId);
+
+    expect(firstReviewId).toBeDefined();
+    expect(secondReviewId).toBeDefined();
+    expect(firstReviewId).not.toBe(secondReviewId);
+    expect(phaseEvents.every((event) => event.occurrenceId === firstReviewId)).toBe(true);
+    expect(reviewCompletions.map((event) => event.occurrenceId)).toEqual([
+      firstReviewId,
+      secondReviewId,
+    ]);
+    expect(orphanCompletion?.occurrenceId).toBeDefined();
+    expect(orphanCompletion?.occurrenceId).not.toBe(firstReviewId);
+    expect(orphanCompletion?.occurrenceId).not.toBe(secondReviewId);
+    expect(detail.events.filter((event) => event.step !== undefined)
+      .every((event) => lifecycleIds.includes(event.occurrenceId))).toBe(true);
+    expect(detail.graphSummary.occurrences.every((event) => lifecycleIds.includes(event.occurrenceId))).toBe(true);
+    expect(detail.graphSummary.totalOccurrences).toBe(3);
+  });
+
+  it('keeps occurrence IDs unique across session logs and shared across workflow call boundaries', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'occurrence-log-files');
+    await writeFile(join(runRoot, 'logs', 'session-a.jsonl'), [
+      {
+        type: 'workflow_call_start',
+        workflow: 'default',
+        step: 'delegate',
+        childWorkflow: 'child',
+        callInstance: '1',
+      },
+      {
+        type: 'workflow_call_complete',
+        workflow: 'default',
+        step: 'delegate',
+        childWorkflow: 'child',
+        callInstance: '1',
+        status: 'done',
+      },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+    await writeFile(join(runRoot, 'logs', 'session-b.jsonl'), [
+      { type: 'step_start', step: 'shared' },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+    await writeFile(join(runRoot, 'logs', 'session-c.jsonl'), [
+      { type: 'step_start', step: 'shared' },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+    const detail = await readRunDetail(statePaths, 'occurrence-log-files');
+    const callEvents = detail.history.filter((event) => event.type.startsWith('workflow_call_'));
+    const sharedIds = detail.history
+      .filter((event) => event.type === 'step_start' && event.step === 'shared')
+      .map((event) => event.occurrenceId);
+    const summaryIds = detail.graphSummary.occurrences.map((event) => event.occurrenceId);
+
+    expect(callEvents).toHaveLength(2);
+    expect(callEvents[0]?.occurrenceId).toBe(callEvents[1]?.occurrenceId);
+    expect(new Set(sharedIds).size).toBe(2);
+    expect(new Set(summaryIds).size).toBe(summaryIds.length);
+    expect(summaryIds.every((id) => detail.history.some((event) => event.occurrenceId === id))).toBe(true);
   });
 
   it('preserves numeric workflow call instances for the execution map', async () => {
@@ -288,6 +478,8 @@ describe('Web UI run artifacts', () => {
     ))?.stack).toEqual(childStack(1));
     expect(child?.occurrences).toHaveLength(2);
     expect(new Set(child?.occurrences.map((occurrence) => occurrence.id)).size).toBe(2);
+    expect(trace.calls).toHaveLength(2);
+    expect(trace.calls.every((call) => call.startObserved && call.targetObserved)).toBe(true);
   });
 
   it('keeps lifecycle history beyond the bounded live-log tail and omits content', async () => {
@@ -1014,6 +1206,210 @@ describe('Web UI HTTP boundary', () => {
     expect(requeues).toEqual([{ directory: projectDirectory, taskId: centralTask.task.taskId }]);
   });
 
+  it('authorizes task actions, revalidates availability, and releases the task lock', async () => {
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-action-global-');
+    const projectDirectory = await createProject();
+    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+    const repository = await CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    });
+    const reserved = await repository.enqueueAndClaim({
+      task: 'action task',
+      workflow: 'default',
+      worktree: false,
+    });
+    await repository.failStarting({
+      taskId: reserved.task.taskId,
+      generation: reserved.task.generation,
+      executionId: reserved.executionId,
+      ownerToken: reserved.ownerToken,
+      message: 'startup failed',
+    });
+
+    const calls: Array<{ directory: string; taskId: string; action: string; input: string | undefined }> = [];
+    let invocation = 0;
+    let releaseFirst!: () => void;
+    const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let handlerStarted!: () => void;
+    const firstHandlerStarted = new Promise<void>((resolve) => { handlerStarted = resolve; });
+    const server = await createWebUiServer({
+      globalConfigDirectory,
+      launch: async () => ({ pid: 9001, disposition: 'started' as const, mode: 'run' as const }),
+      taskAction: async (directory, taskId, action, input) => {
+        calls.push({ directory, taskId, action, input });
+        invocation += 1;
+        if (invocation === 1) {
+          handlerStarted();
+          await firstRelease;
+        } else if (invocation === 2) {
+          throw new CentralTaskActionError('simulated action failure');
+        }
+        return { action, taskId, status: 'completed' as const };
+      },
+    });
+    servers.push(server);
+    const origin = await listenWebUiServer(server, 0);
+    const token = (await (await fetch(`${origin}/api/session`)).json() as { token: string }).token;
+    const actionUrl = (action: string) => `${origin}/api/tasks/${reserved.task.taskId}/actions/${action}`;
+    const actionInit = (body: Record<string, unknown>, includeToken = true): RequestInit => ({
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(includeToken ? { 'X-TAKT-Web-Token': token } : {}),
+      },
+      body: JSON.stringify({ projectId: project.id, ...body }),
+    });
+
+    await expect(fetch(actionUrl('requeue'), actionInit({ input: 'payload' }, false)))
+      .resolves.toMatchObject({ status: 403 });
+    await expect(fetch(`${origin}/api/tasks/${reserved.task.taskId}/actions/unknown`, actionInit({})))
+      .resolves.toMatchObject({ status: 400 });
+    await expect(fetch(actionUrl('diff'), actionInit({})))
+      .resolves.toMatchObject({ status: 409 });
+
+    const first = fetch(actionUrl('requeue'), actionInit({ input: 'payload' }));
+    await firstHandlerStarted;
+    const concurrent = await fetch(actionUrl('delete'), actionInit({}));
+    expect(concurrent.status).toBe(409);
+    releaseFirst();
+    expect((await first).status).toBe(200);
+    expect(calls).toEqual([{
+      directory: projectDirectory,
+      taskId: reserved.task.taskId,
+      action: 'requeue',
+      input: 'payload',
+    }]);
+
+    const failed = await fetch(actionUrl('delete'), actionInit({}));
+    expect(failed.status).toBe(409);
+    const recovered = await fetch(actionUrl('requeue'), actionInit({}));
+    expect(recovered.status).toBe(200);
+    expect(calls.map((call) => call.action)).toEqual(['requeue', 'delete', 'requeue']);
+  });
+
+  it('guards try/merge against dirty or non-base roots and protects task deletion boundaries', async () => {
+    const fixture = await createCompletedGitTask();
+    const execute = (action: 'try' | 'merge' | 'delete') => executeCentralTaskAction({
+      globalConfigDirectory: fixture.globalConfigDirectory,
+      projectDirectory: fixture.projectDirectory,
+      repository: fixture.repository,
+      task: fixture.task,
+      action,
+      spawnDecision: async () => ({ pid: 0, disposition: 'reused' as const, mode: 'run' as const }),
+    });
+
+    await writeFile(join(fixture.projectDirectory, 'dirty.txt'), 'uncommitted\n');
+    await expect(execute('try')).rejects.toThrow(/uncommitted/i);
+    await expect(execute('merge')).rejects.toThrow(/uncommitted/i);
+    await rm(join(fixture.projectDirectory, 'dirty.txt'));
+
+    runFixtureGit(fixture.projectDirectory, ['checkout', '-b', 'wrong-root']);
+    await expect(execute('try')).rejects.toThrow(/base branch/i);
+    await expect(execute('merge')).rejects.toThrow(/base branch/i);
+    runFixtureGit(fixture.projectDirectory, ['checkout', 'main']);
+
+    runFixtureGit(fixture.projectDirectory, ['branch', fixture.branch]);
+    runFixtureGit(fixture.projectDirectory, ['checkout', fixture.branch]);
+    await expect(execute('delete')).rejects.toThrow(/current branch/i);
+    runFixtureGit(fixture.projectDirectory, ['checkout', 'main']);
+
+    const baseFixture = await createCompletedGitTask({
+      branch: 'main',
+      worktree: join(await createTemporaryDirectory('takt-web-ui-base-worktree-'), 'clone'),
+    });
+    await expect(executeCentralTaskAction({
+      globalConfigDirectory: baseFixture.globalConfigDirectory,
+      projectDirectory: baseFixture.projectDirectory,
+      repository: baseFixture.repository,
+      task: baseFixture.task,
+      action: 'delete',
+      spawnDecision: async () => ({ pid: 0, disposition: 'reused' as const, mode: 'run' as const }),
+    })).rejects.toThrow(/(?:base|current) branch/i);
+    await expect(baseFixture.repository.readTask(baseFixture.task.taskId)).resolves.toBeDefined();
+  });
+
+  it('deletes only owned central resources and preserves the project for worktree=false tasks', async () => {
+    const fixture = await createCompletedGitTask();
+    runFixtureGit(fixture.projectDirectory, ['branch', fixture.branch]);
+    await mkdir(join(fixture.repository.paths.runsDirectory, fixture.task.runId!), { recursive: true });
+    const metadataPath = join(fixture.repository.paths.worktreeMetadataDirectory, 'feature--action.json');
+    const executeDelete = () => executeCentralTaskAction({
+      globalConfigDirectory: fixture.globalConfigDirectory,
+      projectDirectory: fixture.projectDirectory,
+      repository: fixture.repository,
+      task: fixture.task,
+      action: 'delete',
+      spawnDecision: async () => ({ pid: 0, disposition: 'reused' as const, mode: 'run' as const }),
+    });
+
+    await expect(executeDelete()).resolves.toMatchObject({ status: 'completed', action: 'delete' });
+    await expect(lstat(fixture.clonePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(metadataPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(join(fixture.repository.paths.runsDirectory, fixture.task.runId!)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(fixture.projectDirectory)).resolves.toBeDefined();
+    expect(() => runFixtureGit(fixture.projectDirectory, [
+      'show-ref', '--verify', '--quiet', `refs/heads/${fixture.branch}`,
+    ])).toThrow();
+
+    const failedCleanup = await createCompletedGitTask({
+      worktree: join(await createTemporaryDirectory('takt-web-ui-failed-cleanup-'), 'clone'),
+    });
+    await rm(join(
+      failedCleanup.repository.paths.worktreeMetadataDirectory,
+      'feature--action.json',
+    ));
+    await expect(executeCentralTaskAction({
+      globalConfigDirectory: failedCleanup.globalConfigDirectory,
+      projectDirectory: failedCleanup.projectDirectory,
+      repository: failedCleanup.repository,
+      task: failedCleanup.task,
+      action: 'delete',
+      spawnDecision: async () => ({ pid: 0, disposition: 'reused' as const, mode: 'run' as const }),
+    })).rejects.toThrow(/ownership metadata/i);
+    await expect(failedCleanup.repository.readTask(failedCleanup.task.taskId)).resolves.toBeDefined();
+
+    const noWorktree = await createGitProjectFixture();
+    const reserved = await noWorktree.repository.enqueueAndClaim({
+      task: 'no worktree task',
+      workflow: 'default',
+      worktree: false,
+    });
+    const adopted = await noWorktree.repository.adopt({
+      taskId: reserved.task.taskId,
+      generation: reserved.task.generation,
+      executionId: reserved.executionId,
+      ownerToken: reserved.ownerToken,
+    });
+    await noWorktree.repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: reserved.executionId,
+      ownerToken: reserved.ownerToken,
+      status: 'completed',
+    });
+    const noWorktreeTask = await noWorktree.repository.readTask(reserved.task.taskId);
+    if (noWorktreeTask === undefined || noWorktreeTask.runId === undefined) throw new Error('missing no-worktree fixture task');
+    await mkdir(join(noWorktree.repository.paths.runsDirectory, noWorktreeTask.runId), { recursive: true });
+    await expect(executeCentralTaskAction({
+      globalConfigDirectory: noWorktree.globalConfigDirectory,
+      projectDirectory: noWorktree.projectDirectory,
+      repository: noWorktree.repository,
+      task: noWorktreeTask,
+      action: 'delete',
+      spawnDecision: async () => ({ pid: 0, disposition: 'reused' as const, mode: 'run' as const }),
+    })).resolves.toMatchObject({ status: 'completed', action: 'delete' });
+    await expect(lstat(noWorktree.projectDirectory)).resolves.toBeDefined();
+    await expect(lstat(join(noWorktree.repository.paths.runsDirectory, noWorktreeTask.runId)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(noWorktree.repository.readTask(noWorktreeTask.taskId)).resolves.toBeUndefined();
+  });
+
   it('joins project discovery with central consumer status without stale cleanup', async () => {
     const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const projectDirectory = await createProject();
@@ -1100,6 +1496,8 @@ describe('Web UI HTTP boundary', () => {
         if (text === '失敗する') throw new Error('provider failed');
         return { kind: 'assistant_response', content: '回答です。' };
       },
+      commitTaskAction: () => {},
+      releaseTaskAction: () => {},
     };
     const server = await createWebUiServer({
       globalConfigDirectory,
@@ -1216,5 +1614,280 @@ describe('Web UI HTTP boundary', () => {
       { type: 'thinking', content: '確認しています。' },
       { type: 'error', message: 'provider failed' },
     ]);
+  });
+
+  it('finalizes a task-action conversation only once against its central snapshot', async () => {
+    const fixture = await createCompletedGitTask();
+    const context: WebTaskActionContext = {
+      taskId: fixture.task.taskId,
+      action: 'instruct',
+      projectId: fixture.project.id,
+      stateId: fixture.project.stateId,
+      projectDirectory: fixture.project.canonicalDirectory,
+      task: fixture.task.task,
+      workflow: fixture.task.workflow,
+      status: 'completed',
+      attempt: fixture.task.attempt,
+      runIds: fixture.task.runIds,
+      generation: fixture.task.generation,
+      runId: fixture.task.runId,
+      sourceRunId: fixture.task.runId,
+      worktreePath: fixture.task.worktreePath,
+    };
+    const claimedIds = new Set<string>();
+    const committedReservations: Array<{ sessionId: string; token: string }> = [];
+    const releasedReservations: Array<{ sessionId: string; token: string }> = [];
+    const claims = new Map<string, WebTaskActionClaim>([
+      ['conversation-1', { reservationToken: 'reservation-conversation-1', context }],
+      ['wrong-task', { reservationToken: 'reservation-wrong-task', context: { ...context, taskId: '00000000-0000-4000-8000-000000000000' } }],
+      ['wrong-project', { reservationToken: 'reservation-wrong-project', context: { ...context, projectId: 'other-project' } }],
+      ['wrong-action', { reservationToken: 'reservation-wrong-action', context: { ...context, action: 'retry' } }],
+      ['wrong-generation', { reservationToken: 'reservation-wrong-generation', context: { ...context, generation: context.generation! + 1 } }],
+      ['wrong-runs', { reservationToken: 'reservation-wrong-runs', context: { ...context, runIds: ['other-run'] } }],
+      ['wrong-source', { reservationToken: 'reservation-wrong-source', context: { ...context, sourceRunId: 'other-run' } }],
+      ['wrong-worktree', { reservationToken: 'reservation-wrong-worktree', context: { ...context, worktreePath: '/other/worktree' } }],
+      ['wrong-status', { reservationToken: 'reservation-wrong-status', context: { ...context, status: 'failed' } }],
+    ]);
+    const chat: WebChatService = {
+      create: () => ({
+        id: 'ordinary', workflow: 'default', mode: 'assistant', intro: '', provider: 'mock',
+      }),
+      reconfigure: (id, request) => ({ id, ...request, intro: '', provider: 'mock' }),
+      restart: (id) => ({ id, workflow: 'default', mode: 'assistant', intro: '', provider: 'mock' }),
+      send: async () => ({ kind: 'assistant_response', content: 'ok' }),
+      createTaskAction: (_directory, actionContext) => ({
+        id: 'conversation-1',
+        workflow: actionContext.workflow,
+        mode: 'assistant',
+        intro: 'existing task',
+        provider: 'mock',
+      }),
+      getTaskActionContext: (id) => claims.get(id)?.context,
+      claimTaskAction: (id) => {
+        if (claimedIds.has(id)) throw new WebChatInputError(409, 'Task action conversation has already been finalized');
+        const claim = claims.get(id);
+        if (claim === undefined) throw new WebChatInputError(404, 'Chat session not found');
+        claimedIds.add(id);
+        return claim;
+      },
+      commitTaskAction: (sessionId, token) => {
+        committedReservations.push({ sessionId, token });
+      },
+      releaseTaskAction: (sessionId, token) => {
+        releasedReservations.push({ sessionId, token });
+      },
+    };
+    const calls: Array<{ taskId: string; action: string; input: string | undefined; claim?: WebTaskActionClaim }> = [];
+    const server = await createWebUiServer({
+      globalConfigDirectory: fixture.globalConfigDirectory,
+      launch: async () => ({ pid: 1, disposition: 'started' as const, mode: 'run' as const }),
+      taskActionConversation: async (_directory, taskId, action) => ({
+        action,
+        taskId,
+        status: 'conversation' as const,
+        taskStatus: 'completed' as const,
+        chatSession: {
+          id: 'conversation-1',
+          workflow: 'default',
+          mode: 'assistant' as const,
+          intro: 'existing task',
+          provider: 'mock',
+        },
+      }),
+      taskAction: async (_directory, taskId, action, input, _conversationId, _project, claim) => {
+        calls.push({ taskId, action, input, ...(claim === undefined ? {} : { claim }) });
+        return { action, taskId, status: 'accepted' as const, taskStatus: 'running' as const };
+      },
+      chat,
+    });
+    servers.push(server);
+    const origin = await listenWebUiServer(server, 0);
+    const token = (await (await fetch(`${origin}/api/session`)).json() as { token: string }).token;
+    const actionUrl = `${origin}/api/tasks/${fixture.task.taskId}/actions/instruct`;
+    const headers = { 'Content-Type': 'application/json', 'X-TAKT-Web-Token': token };
+
+    const start = await fetch(actionUrl, {
+      method: 'POST', headers,
+      body: JSON.stringify({ projectId: fixture.project.id }),
+    });
+    expect(start.status).toBe(200);
+    expect(await start.json()).toMatchObject({ status: 'conversation', taskId: fixture.task.taskId });
+    await expect(fixture.repository.readTask(fixture.task.taskId)).resolves.toMatchObject({
+      generation: fixture.task.generation,
+      runIds: fixture.task.runIds,
+    });
+
+    for (const conversationId of [
+      'wrong-task',
+      'wrong-project',
+      'wrong-action',
+      'wrong-generation',
+      'wrong-runs',
+      'wrong-source',
+      'wrong-worktree',
+      'wrong-status',
+    ]) {
+      const mismatch = await fetch(actionUrl, {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          projectId: fixture.project.id,
+          input: 'stale action',
+          conversationId,
+        }),
+      });
+      expect(mismatch.status).toBe(409);
+    }
+
+    const finalized = await fetch(actionUrl, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        projectId: fixture.project.id,
+        input: 'add docs',
+        conversationId: 'conversation-1',
+      }),
+    });
+    expect(finalized.status).toBe(202);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ taskId: fixture.task.taskId, action: 'instruct', input: 'add docs' });
+    expect(calls[0]?.claim?.context.runIds).toEqual(fixture.task.runIds);
+    expect(committedReservations).toEqual([{
+      sessionId: 'conversation-1',
+      token: 'reservation-conversation-1',
+    }]);
+    expect(releasedReservations.map((entry) => entry.sessionId)).toEqual([
+      'wrong-task',
+      'wrong-project',
+      'wrong-action',
+      'wrong-generation',
+      'wrong-runs',
+      'wrong-source',
+      'wrong-worktree',
+      'wrong-status',
+    ]);
+
+    const duplicate = await fetch(actionUrl, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        projectId: fixture.project.id,
+        input: 'duplicate',
+        conversationId: 'conversation-1',
+      }),
+    });
+    expect(duplicate.status).toBe(409);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('keeps the task action error when reservation release also fails', async () => {
+    const fixture = await createCompletedGitTask();
+    const context: WebTaskActionContext = {
+      taskId: fixture.task.taskId,
+      action: 'instruct',
+      projectId: fixture.project.id,
+      stateId: fixture.project.stateId,
+      projectDirectory: fixture.project.canonicalDirectory,
+      task: fixture.task.task,
+      workflow: fixture.task.workflow,
+      status: 'completed',
+      attempt: fixture.task.attempt,
+      runIds: fixture.task.runIds,
+      generation: fixture.task.generation,
+      runId: fixture.task.runId,
+      sourceRunId: fixture.task.runId,
+      worktreePath: fixture.task.worktreePath,
+    };
+    let releaseCount = 0;
+    const chat: WebChatService = {
+      create: () => ({ id: 'ordinary', workflow: 'default', mode: 'assistant', intro: '', provider: 'mock' }),
+      reconfigure: (id, request) => ({ id, ...request, intro: '', provider: 'mock' }),
+      restart: (id) => ({ id, workflow: 'default', mode: 'assistant', intro: '', provider: 'mock' }),
+      send: async () => ({ kind: 'assistant_response', content: 'ok' }),
+      claimTaskAction: () => ({
+        reservationToken: 'reservation-error',
+        context,
+      }),
+      commitTaskAction: () => {
+        throw new Error('commit must not run after action failure');
+      },
+      releaseTaskAction: () => {
+        releaseCount += 1;
+        throw new Error('reservation release failed');
+      },
+    };
+    const server = await createWebUiServer({
+      globalConfigDirectory: fixture.globalConfigDirectory,
+      launch: async () => ({ pid: 1, disposition: 'started' as const, mode: 'run' as const }),
+      taskAction: async () => {
+        throw new CentralTaskActionError('primary action failure', 409);
+      },
+      chat,
+    });
+    servers.push(server);
+    const origin = await listenWebUiServer(server, 0);
+    const token = (await (await fetch(`${origin}/api/session`)).json() as { token: string }).token;
+    const response = await fetch(`${origin}/api/tasks/${fixture.task.taskId}/actions/instruct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-TAKT-Web-Token': token },
+      body: JSON.stringify({
+        projectId: fixture.project.id,
+        input: 'add docs',
+        conversationId: 'conversation-error',
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: 'primary action failure' });
+    expect(releaseCount).toBe(1);
+  });
+
+  it('starts task-action chat in the owned worktree and fails closed on ownership drift', async () => {
+    const fixture = await createCompletedGitTask();
+    let receivedDirectory = '';
+    let receivedContext: WebTaskActionContext | undefined;
+    const chat: WebChatService = {
+      create: () => ({ id: 'ordinary', workflow: 'default', mode: 'assistant', intro: '', provider: 'mock' }),
+      reconfigure: (id, request) => ({ id, ...request, intro: '', provider: 'mock' }),
+      restart: (id) => ({ id, workflow: 'default', mode: 'assistant', intro: '', provider: 'mock' }),
+      send: async () => ({ kind: 'assistant_response', content: 'ok' }),
+      commitTaskAction: () => {},
+      releaseTaskAction: () => {},
+      createTaskAction: (directory, context) => {
+        receivedDirectory = directory;
+        receivedContext = context;
+        return {
+          id: 'task-action-chat',
+          workflow: context.workflow,
+          mode: 'assistant',
+          intro: 'existing task',
+          provider: 'mock',
+        };
+      },
+    };
+
+    await expect(startCentralTaskActionConversation({
+      projectDirectory: fixture.projectDirectory,
+      globalConfigDirectory: fixture.globalConfigDirectory,
+      registeredProject: fixture.project,
+      taskId: fixture.task.taskId,
+      action: 'instruct',
+      chat,
+    })).resolves.toMatchObject({ status: 'conversation', taskId: fixture.task.taskId });
+    expect(receivedDirectory).toBe(fixture.clonePath);
+    expect(receivedContext).toMatchObject({
+      projectId: fixture.project.id,
+      stateId: fixture.project.stateId,
+      projectDirectory: fixture.project.canonicalDirectory,
+      taskId: fixture.task.taskId,
+      runIds: fixture.task.runIds,
+    });
+
+    await rm(join(fixture.repository.paths.worktreeMetadataDirectory, 'feature--action.json'));
+    await expect(startCentralTaskActionConversation({
+      projectDirectory: fixture.projectDirectory,
+      globalConfigDirectory: fixture.globalConfigDirectory,
+      registeredProject: fixture.project,
+      taskId: fixture.task.taskId,
+      action: 'instruct',
+      chat,
+    })).rejects.toThrow(/ownership metadata/i);
   });
 });

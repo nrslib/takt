@@ -9,12 +9,18 @@ import {
   readFile,
   realpath,
   rename,
+  rm,
   unlink,
   writeFile,
 } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { resolveStatePaths, UUID_PATTERN, type ExecutionLocations, type StatePaths } from '../../core/execution/locations.js';
+import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../core/models/index.js';
+import {
+  WorkflowRestartPointSchema,
+  WorkflowResumePointSchema,
+} from '../../core/models/workflow-resume-schema.js';
 import { getProcessIdentity, getSelfProcessIdentity, isProcessAlive, sameProcessIdentity, type ProcessIdentity } from './process.js';
 import {
   projectIdForCanonicalDirectory,
@@ -34,6 +40,21 @@ const STARTING_RESERVATION_TIMEOUT_MS = 10_000;
 export type CentralTaskStatus = 'pending' | 'starting' | 'running' | 'completed' | 'failed';
 export type CentralTaskOrigin = 'web';
 export type CentralWorktreeRequest = false | true | string;
+
+/** Validated execution intent for the next central run.
+ *
+ * This is deliberately persisted with the task rather than inferred from the
+ * task text.  The worker can therefore consume exactly the option selected by
+ * the conversation, even after a process restart.
+ */
+export interface CentralExecutionRequest {
+  readonly resumeMode: 'requeue' | 'retry' | 'instruct';
+  readonly sourceRunSlug?: string;
+  readonly startStep?: string;
+  readonly resumePoint?: WorkflowResumePoint;
+  readonly restartPoint?: WorkflowRestartPoint;
+  readonly retryNote?: string;
+}
 
 export interface CentralStateRecord {
   readonly version: typeof STATE_VERSION;
@@ -58,6 +79,23 @@ export interface CentralActiveExecution {
   readonly startedAt: string;
 }
 
+/**
+ * A worker that was force-failed is still allowed to finish its process. The
+ * ledger keeps this lease separate from the task status until that worker
+ * acknowledges its terminal state.
+ */
+export interface CentralDrainingExecution extends CentralActiveExecution {
+  readonly generation: number;
+  readonly markedAt: string;
+}
+
+/** A requeue requested while the previous worker is still draining. */
+export interface CentralRequeueAfterDrain {
+  readonly task: string;
+  readonly requestedAt: string;
+  readonly executionRequest?: CentralExecutionRequest;
+}
+
 export interface CentralTaskFailure {
   readonly code: string;
   readonly message: string;
@@ -73,6 +111,8 @@ export interface CentralTaskRecord {
   readonly task: string;
   readonly workflow: string;
   readonly worktree: CentralWorktreeRequest;
+  /** Exact worktree path owned by this central task after worker setup. */
+  readonly worktreePath?: string;
   readonly branch?: string;
   readonly baseBranch?: string;
   readonly autoPr?: boolean;
@@ -80,6 +120,10 @@ export interface CentralTaskRecord {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly activeExecution?: CentralActiveExecution;
+  readonly drainingExecution?: CentralDrainingExecution;
+  readonly requeueAfterDrain?: CentralRequeueAfterDrain;
+  /** Request consumed by the next claimed run. */
+  readonly executionRequest?: CentralExecutionRequest;
   readonly failure?: CentralTaskFailure;
   /** Latest run pointer retained so workers started before run history support can finish safely. */
   readonly runId?: string;
@@ -193,16 +237,28 @@ function startPendingTask(task: CentralTaskRecord, now: string): CentralTaskHand
   return { task: started, ownerToken, executionId, runId };
 }
 
-function resetFailedTaskToPending(task: CentralTaskRecord, now: string): CentralTaskRecord {
-  return {
+function liveExecution(
+  task: Pick<CentralTaskRecord, 'activeExecution' | 'drainingExecution'>,
+): CentralActiveExecution | CentralDrainingExecution | undefined {
+  return task.activeExecution ?? task.drainingExecution;
+}
+
+function resetFailedTaskToPending(
+  task: CentralTaskRecord,
+  now: string,
+  taskContent = task.task,
+  executionRequest?: CentralExecutionRequest,
+): CentralTaskRecord {
+  const reset: CentralTaskRecord = {
     taskId: task.taskId,
     generation: task.generation + 1,
     status: 'pending',
     origin: task.origin,
     attempt: task.attempt,
-    task: task.task,
+    task: taskContent,
     workflow: task.workflow,
     worktree: task.worktree,
+    ...(task.worktreePath === undefined ? {} : { worktreePath: task.worktreePath }),
     ...(task.branch === undefined ? {} : { branch: task.branch }),
     ...(task.baseBranch === undefined ? {} : { baseBranch: task.baseBranch }),
     ...(task.autoPr === undefined ? {} : { autoPr: task.autoPr }),
@@ -210,7 +266,9 @@ function resetFailedTaskToPending(task: CentralTaskRecord, now: string): Central
     createdAt: task.createdAt,
     updatedAt: now,
     runIds: task.runIds,
+    ...(executionRequest === undefined ? {} : { executionRequest }),
   };
+  return reset;
 }
 
 function assertStateId(stateId: string): void {
@@ -294,6 +352,60 @@ async function atomicWrite(path: string, content: string): Promise<void> {
   } finally {
     await unlink(temporary).catch(() => undefined);
   }
+}
+
+async function terminalizeCentralRunArtifact(
+  paths: StatePaths,
+  runId: string,
+  message: string,
+  at: string,
+): Promise<void> {
+  const runsRoot = resolve(paths.runsDirectory);
+  const runPath = resolve(runsRoot, runId);
+  const relativeRunPath = relative(runsRoot, runPath);
+  if (
+    relativeRunPath === ''
+    || relativeRunPath.startsWith('..')
+    || isAbsolute(relativeRunPath)
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(runId)
+  ) {
+    throw new CentralTaskCasError('Central run artifact path is invalid');
+  }
+  const runStats = await lstat(runPath).catch((error: unknown) => {
+    if (isMissing(error)) return null;
+    throw error;
+  });
+  if (runStats === null) return;
+  if (!runStats.isDirectory() || runStats.isSymbolicLink()) {
+    throw new CentralTaskCasError('Central run artifact directory is invalid');
+  }
+  const metaPath = join(runPath, 'meta.json');
+  const metaStats = await lstat(metaPath).catch((error: unknown) => {
+    if (isMissing(error)) return null;
+    throw error;
+  });
+  if (metaStats === null) return;
+  if (!metaStats.isFile() || metaStats.isSymbolicLink()) {
+    throw new CentralTaskCasError('Central run metadata is invalid');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(metaPath, 'utf8')) as unknown;
+  } catch (error) {
+    throw new CentralTaskCasError(
+      `Central run metadata cannot be terminalized: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new CentralTaskCasError('Central run metadata is malformed');
+  }
+  await atomicWrite(metaPath, `${JSON.stringify({
+    ...(parsed as Readonly<Record<string, unknown>>),
+    status: 'failed',
+    reason: message,
+    endTime: at,
+    updatedAt: at,
+  }, null, 2)}\n`);
 }
 
 interface StateLockOwner {
@@ -678,6 +790,70 @@ function assertIsoTimestamp(value: unknown, label: string): void {
   }
 }
 
+function validateExecutionShape(
+  value: unknown,
+  label: 'active execution' | 'draining execution',
+): asserts value is CentralActiveExecution | CentralDrainingExecution {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new CentralTaskCasError(`Central ${label} is malformed`);
+  }
+  const execution = value as CentralActiveExecution | CentralDrainingExecution;
+  if (
+    !UUID_PATTERN.test(execution.executionId)
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(execution.runId)
+    || !/^[a-f0-9]{64}$/u.test(execution.ownerTokenHash)
+    || !Number.isSafeInteger(execution.pid)
+    || execution.pid < 0
+  ) {
+    throw new CentralTaskCasError(`Central ${label} is malformed`);
+  }
+  assertIsoTimestamp(execution.startTime, `${label} startTime`);
+  assertIsoTimestamp(execution.startedAt, `${label} startedAt`);
+  if (execution.processIdentity !== undefined && (
+    typeof execution.processIdentity !== 'object'
+    || execution.processIdentity === null
+    || typeof execution.processIdentity.startTime !== 'string'
+    || execution.processIdentity.startTime.length === 0
+  )) {
+    throw new CentralTaskCasError(`Central ${label} process identity is malformed`);
+  }
+}
+
+function validateExecutionRequest(request: CentralExecutionRequest): void {
+  if (request === null || typeof request !== 'object' || Array.isArray(request)) {
+    throw new CentralTaskCasError('Central execution request is malformed');
+  }
+  if (!['requeue', 'retry', 'instruct'].includes(request.resumeMode)) {
+    throw new CentralTaskCasError('Central execution request mode is invalid');
+  }
+  if (request.sourceRunSlug !== undefined
+    && (typeof request.sourceRunSlug !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(request.sourceRunSlug))) {
+    throw new CentralTaskCasError('Central execution request source run is invalid');
+  }
+  if (request.startStep !== undefined
+    && (typeof request.startStep !== 'string'
+      || request.startStep.trim().length === 0
+      || request.startStep.includes('\0'))) {
+    throw new CentralTaskCasError('Central execution request start step is invalid');
+  }
+  if (request.retryNote !== undefined
+    && (typeof request.retryNote !== 'string'
+      || request.retryNote.length > 64 * 1024
+      || request.retryNote.includes('\0'))) {
+    throw new CentralTaskCasError('Central execution request retry note is invalid');
+  }
+  if (request.resumePoint !== undefined && request.restartPoint !== undefined) {
+    throw new CentralTaskCasError('Central execution request cannot contain both resume and restart points');
+  }
+  if (request.resumePoint !== undefined && !WorkflowResumePointSchema.safeParse(request.resumePoint).success) {
+    throw new CentralTaskCasError('Central execution request resume point is invalid');
+  }
+  if (request.restartPoint !== undefined && !WorkflowRestartPointSchema.safeParse(request.restartPoint).success) {
+    throw new CentralTaskCasError('Central execution request restart point is invalid');
+  }
+}
+
 function validateTask(task: CentralTaskRecord): void {
   assertTaskId(task.taskId);
   if (!Number.isSafeInteger(task.generation) || task.generation < 0) throw new CentralTaskCasError('Central task generation is invalid');
@@ -695,6 +871,12 @@ function validateTask(task: CentralTaskRecord): void {
   }
   if (task.baseBranch !== undefined && (typeof task.baseBranch !== 'string' || task.baseBranch.length === 0)) {
     throw new CentralTaskCasError('Central task base branch is invalid');
+  }
+  if (
+    task.worktreePath !== undefined
+    && (!isAbsolute(task.worktreePath) || task.worktreePath.includes('\0') || task.worktreePath.length === 0)
+  ) {
+    throw new CentralTaskCasError('Central task worktree path is invalid');
   }
   if (task.autoPr !== undefined && typeof task.autoPr !== 'boolean') {
     throw new CentralTaskCasError('Central task auto PR setting is invalid');
@@ -732,29 +914,42 @@ function validateTask(task: CentralTaskRecord): void {
   }
   assertIsoTimestamp(task.createdAt, 'task.createdAt');
   assertIsoTimestamp(task.updatedAt, 'task.updatedAt');
-  if (task.activeExecution !== undefined) {
-    const active = task.activeExecution;
-    if (
-      !UUID_PATTERN.test(active.executionId)
-      || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(active.runId)
-      || !/^[a-f0-9]{64}$/u.test(active.ownerTokenHash)
-      || !Number.isSafeInteger(active.pid)
-      || active.pid < 0
-    ) {
-      throw new CentralTaskCasError('Central active execution is malformed');
-    }
-    assertIsoTimestamp(active.startTime, 'active execution startTime');
-    assertIsoTimestamp(active.startedAt, 'active execution startedAt');
-    if (active.processIdentity !== undefined && (
-      typeof active.processIdentity !== 'object'
-      || typeof active.processIdentity.startTime !== 'string'
-      || active.processIdentity.startTime.length === 0
-    )) {
-      throw new CentralTaskCasError('Central active process identity is malformed');
-    }
+  if (task.activeExecution !== undefined) validateExecutionShape(task.activeExecution, 'active execution');
+  if (task.drainingExecution !== undefined) validateExecutionShape(task.drainingExecution, 'draining execution');
+  if (task.activeExecution !== undefined && task.drainingExecution !== undefined) {
+    throw new CentralTaskCasError('Central task cannot have active and draining executions together');
   }
   if ((task.status === 'starting' || task.status === 'running') !== (task.activeExecution !== undefined)) {
     throw new CentralTaskCasError('Central task active execution does not match its status');
+  }
+  if (task.drainingExecution !== undefined) {
+    const draining = task.drainingExecution;
+    if (
+      task.status !== 'failed'
+      || task.failure?.code !== 'force_failed'
+      || !Number.isSafeInteger(draining.generation)
+      || draining.generation < 0
+      || draining.generation >= task.generation
+    ) {
+      throw new CentralTaskCasError('Central task draining execution does not match its status');
+    }
+    assertIsoTimestamp(draining.markedAt, 'draining execution markedAt');
+    if (draining.runId !== task.runIds.at(-1)) {
+      throw new CentralTaskCasError('Central task draining execution does not match its run history');
+    }
+  }
+  if (task.requeueAfterDrain !== undefined) {
+    if (task.drainingExecution === undefined) {
+      throw new CentralTaskCasError('Central task requeue reservation has no draining execution');
+    }
+    if (
+      typeof task.requeueAfterDrain.task !== 'string'
+      || task.requeueAfterDrain.task.trim().length === 0
+      || task.requeueAfterDrain.task.includes('\0')
+    ) {
+      throw new CentralTaskCasError('Central task requeue reservation is invalid');
+    }
+    assertIsoTimestamp(task.requeueAfterDrain.requestedAt, 'requeue reservation requestedAt');
   }
   if (
     task.activeExecution !== undefined
@@ -772,6 +967,10 @@ function validateTask(task: CentralTaskRecord): void {
       throw new CentralTaskCasError('Central task failure is malformed');
     }
     assertIsoTimestamp(task.failure.at, 'task failure');
+  }
+  if (task.executionRequest !== undefined) validateExecutionRequest(task.executionRequest);
+  if (task.requeueAfterDrain?.executionRequest !== undefined) {
+    validateExecutionRequest(task.requeueAfterDrain.executionRequest);
   }
 }
 
@@ -1068,7 +1267,7 @@ export class CentralTaskRepository {
     if (!input.task.trim() || !input.workflow.trim()) throw new Error('task and workflow are required');
     return withLock(this.paths, async () => {
       const tasks = [...await this.readTasks()];
-      if (tasks.some((task) => task.status === 'starting' || task.status === 'running')) throw new CentralTaskBusyError();
+      if (tasks.some((task) => liveExecution(task) !== undefined)) throw new CentralTaskBusyError();
       const now = new Date().toISOString();
       const taskId = randomUUID();
       const executionId = randomUUID();
@@ -1120,8 +1319,9 @@ export class CentralTaskRepository {
   }): Promise<CentralTaskLaunchDecision> {
     return withLock(this.paths, async () => {
       const tasks = [...await this.readTasks()];
-      const active = tasks.find((task) => task.status === 'starting' || task.status === 'running');
-      if (active?.activeExecution !== undefined) {
+      const active = tasks.find((task) => liveExecution(task) !== undefined);
+      const activeExecution = active === undefined ? undefined : liveExecution(active);
+      if (activeExecution !== undefined) {
         const now = new Date().toISOString();
         const pending: CentralTaskRecord = {
           taskId: randomUUID(),
@@ -1141,7 +1341,7 @@ export class CentralTaskRepository {
           runIds: [],
         };
         await this.writeTasks([...tasks, pending]);
-        return { kind: 'reused', task: pending, active: active.activeExecution };
+        return { kind: 'reused', task: pending, active: activeExecution };
       }
       const pendingIndex = tasks.findIndex((task) => task.status === 'pending');
       if (pendingIndex >= 0) {
@@ -1213,23 +1413,88 @@ export class CentralTaskRepository {
 
   /** Start another run for one failed task while preserving its execution settings. */
   async requeueFailedTask(taskId: string): Promise<CentralTaskLaunchDecision> {
+    const current = await this.readTask(taskId);
+    if (current?.status !== 'failed') {
+      throw new CentralTaskRequeueError(current === undefined
+        ? 'Task was not found'
+        : 'Only failed tasks can be requeued');
+    }
+    return this.requeueTask(taskId);
+  }
+
+  /**
+   * Start another run for an existing terminal task. The task id and central
+   * run history remain stable; an optional instruction is persisted as the
+   * next run's task text instead of creating a project-local tasks.yaml entry.
+   */
+  async requeueTask(
+    taskId: string,
+    options: {
+      readonly task?: string;
+      readonly executionRequest?: CentralExecutionRequest;
+    } = {},
+  ): Promise<CentralTaskLaunchDecision> {
     assertTaskId(taskId);
     return withLock(this.paths, async () => {
       const tasks = [...await this.readTasks()];
-      const failedIndex = tasks.findIndex((task) => task.taskId === taskId);
-      const failed = failedIndex < 0 ? undefined : tasks[failedIndex];
-      if (failed === undefined) {
+      const taskIndex = tasks.findIndex((task) => task.taskId === taskId);
+      const task = taskIndex < 0 ? undefined : tasks[taskIndex];
+      if (task === undefined) {
         throw new CentralTaskRequeueError('Task was not found');
       }
-      if (failed.status !== 'failed') {
-        throw new CentralTaskRequeueError('Only failed tasks can be requeued');
+      if (task.status !== 'failed' && task.status !== 'completed') {
+        throw new CentralTaskRequeueError('Only terminal tasks can be requeued');
+      }
+      const taskContent = options.task?.trim();
+      if (taskContent !== undefined && (taskContent.length === 0 || taskContent.includes('\0'))) {
+        throw new CentralTaskRequeueError('Task instruction is invalid');
+      }
+      const executionRequest = options.executionRequest ?? {
+        resumeMode: 'requeue' as const,
+        ...(task.runId === undefined ? {} : { sourceRunSlug: task.runId }),
+      };
+      validateExecutionRequest(executionRequest);
+      // A force-failed worker may still be unwinding. Keep the task terminal
+      // and reuse that lease; starting a replacement would run concurrently
+      // with the old worker and violate the single-execution invariant.
+      if (task.drainingExecution !== undefined) {
+        const requestedTask = taskContent ?? task.requeueAfterDrain?.task ?? task.task;
+        if (task.requeueAfterDrain !== undefined && (
+          task.requeueAfterDrain.task !== requestedTask
+          || JSON.stringify(task.requeueAfterDrain.executionRequest ?? executionRequest)
+            !== JSON.stringify(executionRequest)
+        )) {
+          throw new CentralTaskRequeueError('A different requeue is already scheduled while the worker drains');
+        }
+        if (task.requeueAfterDrain !== undefined) {
+          return { kind: 'reused', task, active: task.drainingExecution };
+        }
+        const now = new Date().toISOString();
+        const reserved: CentralTaskRecord = {
+          ...task,
+          updatedAt: now,
+          requeueAfterDrain: {
+            task: requestedTask,
+            requestedAt: now,
+            executionRequest,
+          },
+        };
+        tasks[taskIndex] = reserved;
+        await this.writeTasks(tasks);
+        return { kind: 'reused', task: reserved, active: reserved.drainingExecution };
       }
       const now = new Date().toISOString();
-      tasks[failedIndex] = resetFailedTaskToPending(failed, now);
-      const active = tasks.find((task) => task.status === 'starting' || task.status === 'running');
-      if (active?.activeExecution !== undefined) {
+      tasks[taskIndex] = resetFailedTaskToPending(
+        task,
+        now,
+        taskContent ?? task.task,
+        executionRequest,
+      );
+      const active = tasks.find((task) => liveExecution(task) !== undefined);
+      const activeExecution = active === undefined ? undefined : liveExecution(active);
+      if (activeExecution !== undefined) {
         await this.writeTasks(tasks);
-        return { kind: 'reused', task: tasks[failedIndex]!, active: active.activeExecution };
+        return { kind: 'reused', task: tasks[taskIndex]!, active: activeExecution };
       }
       const pendingIndex = tasks.findIndex((task) => task.status === 'pending');
       if (pendingIndex < 0) throw new CentralTaskCasError('Requeued task was not persisted as pending');
@@ -1250,7 +1515,7 @@ export class CentralTaskRepository {
   async claimNextPending(): Promise<CentralTaskHandle | undefined> {
     return withLock(this.paths, async () => {
       const tasks = [...await this.readTasks()];
-      if (tasks.some((task) => task.status === 'starting' || task.status === 'running')) return undefined;
+      if (tasks.some((task) => liveExecution(task) !== undefined)) return undefined;
       const pendingIndex = tasks.findIndex((task) => task.status === 'pending');
       if (pendingIndex < 0) return undefined;
       const claimed = startPendingTask(tasks[pendingIndex]!, new Date().toISOString());
@@ -1317,6 +1582,138 @@ export class CentralTaskRepository {
       tasks[index] = updated;
       await this.writeTasks(tasks);
       return updated;
+    });
+  }
+
+  /** Persist the worktree/branch selected by the central worker. */
+  async updateExecutionContext(input: {
+    readonly taskId: string;
+    readonly generation: number;
+    readonly executionId: string;
+    readonly ownerToken: string;
+    readonly worktreePath?: string;
+    readonly branch?: string;
+  }): Promise<CentralTaskRecord> {
+    assertTaskId(input.taskId);
+    if (input.worktreePath !== undefined && !isAbsolute(input.worktreePath)) {
+      throw new CentralTaskCasError('Central execution worktree path must be absolute');
+    }
+    return withLock(this.paths, async () => {
+      const tasks = [...await this.readTasks()];
+      const index = tasks.findIndex((task) => task.taskId === input.taskId);
+      const task = index < 0 ? undefined : tasks[index];
+      if (
+        task === undefined
+        || task.status !== 'running'
+        || task.generation !== input.generation
+        || task.activeExecution?.executionId !== input.executionId
+        || task.activeExecution.ownerTokenHash !== hashToken(input.ownerToken)
+      ) {
+        throw new CentralTaskCasError('Central execution context compare-and-swap failed');
+      }
+      const updated: CentralTaskRecord = {
+        ...task,
+        ...(input.worktreePath === undefined ? {} : { worktreePath: input.worktreePath }),
+        ...(input.branch === undefined ? {} : { branch: input.branch }),
+        updatedAt: new Date().toISOString(),
+      };
+      tasks[index] = updated;
+      await this.writeTasks(tasks);
+      return updated;
+    });
+  }
+
+  /** Mark a central task failed from a control-plane action. */
+  async forceFailTask(taskId: string, message = 'Task was marked as failed from the Web UI'): Promise<CentralTaskRecord> {
+    assertTaskId(taskId);
+    return withLock(this.paths, async () => {
+      await this.readAndVerifyPersistedIdentityUnlocked();
+      const tasks = [...await this.readTasks()];
+      const index = tasks.findIndex((task) => task.taskId === taskId);
+      const task = index < 0 ? undefined : tasks[index];
+      if (task === undefined) throw new CentralTaskCasError('Central task was not found');
+      if (task.status !== 'starting' && task.status !== 'running') {
+        throw new CentralTaskCasError('Only a running task can be marked as failed');
+      }
+      const now = new Date().toISOString();
+      const active = task.activeExecution;
+      if (active === undefined) {
+        throw new CentralTaskCasError('Central task active execution is missing');
+      }
+      const runId = active.runId;
+      if (runId !== undefined) {
+        await terminalizeCentralRunArtifact(this.paths, runId, message, now);
+      }
+      const failed: CentralTaskRecord = {
+        ...task,
+        generation: task.generation + 1,
+        status: 'failed',
+        updatedAt: now,
+        failure: { code: 'force_failed', message, at: now },
+        drainingExecution: {
+          ...active,
+          generation: task.generation,
+          markedAt: now,
+        },
+      };
+      delete (failed as { activeExecution?: CentralActiveExecution }).activeExecution;
+      tasks[index] = failed;
+      await this.writeTasks(tasks);
+      return failed;
+    });
+  }
+
+  /** Persist a PR URL without touching project-local task state. */
+  async setPullRequestUrl(taskId: string, prUrl: string): Promise<CentralTaskRecord> {
+    assertTaskId(taskId);
+    if (!prUrl.trim() || prUrl.includes('\0')) throw new CentralTaskCasError('Pull request URL is invalid');
+    return withLock(this.paths, async () => {
+      const tasks = [...await this.readTasks()];
+      const index = tasks.findIndex((task) => task.taskId === taskId);
+      const task = index < 0 ? undefined : tasks[index];
+      if (task === undefined) throw new CentralTaskCasError('Central task was not found');
+      if (task.status === 'starting' || task.status === 'running' || task.drainingExecution !== undefined) {
+        throw new CentralTaskBusyError();
+      }
+      const updated = { ...task, prUrl, updatedAt: new Date().toISOString() };
+      tasks[index] = updated;
+      await this.writeTasks(tasks);
+      return updated;
+    });
+  }
+
+  /** Delete a terminal/pending task and its central run artifacts atomically. */
+  async deleteTask(
+    taskId: string,
+    expectedGeneration?: number,
+    options: { readonly cleanup?: (task: CentralTaskRecord) => Promise<void> } = {},
+  ): Promise<CentralTaskRecord> {
+    assertTaskId(taskId);
+    return withLock(this.paths, async () => {
+      const tasks = [...await this.readTasks()];
+      const index = tasks.findIndex((task) => task.taskId === taskId);
+      const task = index < 0 ? undefined : tasks[index];
+      if (task === undefined) throw new CentralTaskCasError('Central task was not found');
+      if (liveExecution(task) !== undefined) {
+        throw new CentralTaskBusyError();
+      }
+      if (expectedGeneration !== undefined && task.generation !== expectedGeneration) {
+        throw new CentralTaskCasError('Central task generation changed before delete');
+      }
+      // Resource cleanup runs while the same state lock is held. If cleanup
+      // fails, leave the ledger untouched so a caller can retry safely.
+      await options.cleanup?.(task);
+      for (const runId of task.runIds) {
+        const runPath = resolve(this.paths.runsDirectory, runId);
+        const relativePath = relative(resolve(this.paths.runsDirectory), runPath);
+        if (relativePath === '' || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+          throw new CentralTaskCasError('Central run artifact path is invalid');
+        }
+        await rm(runPath, { recursive: true, force: true });
+      }
+      tasks.splice(index, 1);
+      await this.writeTasks(tasks);
+      return task;
     });
   }
 
@@ -1419,6 +1816,45 @@ export class CentralTaskRepository {
       const tasks = [...await this.readTasks()];
       const index = tasks.findIndex((task) => task.taskId === input.taskId);
       const task = index < 0 ? undefined : tasks[index];
+      if (task?.drainingExecution !== undefined) {
+        const draining = task.drainingExecution;
+        if (
+          task.status !== 'failed'
+          || task.failure?.code !== 'force_failed'
+          || input.generation !== draining.generation
+          || input.executionId !== draining.executionId
+          || hashToken(input.ownerToken) !== draining.ownerTokenHash
+        ) {
+          throw new CentralTaskCasError('Central task terminal compare-and-swap failed');
+        }
+        const now = new Date().toISOString();
+        await terminalizeCentralRunArtifact(
+          this.paths,
+          draining.runId,
+          task.failure?.message ?? 'Task was marked as failed from the Web UI',
+          now,
+        );
+        if (task.requeueAfterDrain !== undefined) {
+          const pending = resetFailedTaskToPending(
+            task,
+            now,
+            task.requeueAfterDrain.task,
+            task.requeueAfterDrain.executionRequest,
+          );
+          tasks[index] = pending;
+          await this.writeTasks(tasks);
+          return pending;
+        }
+        const acknowledged: CentralTaskRecord = {
+          ...task,
+          generation: task.generation + 1,
+          updatedAt: now,
+        };
+        delete (acknowledged as { drainingExecution?: CentralDrainingExecution }).drainingExecution;
+        tasks[index] = acknowledged;
+        await this.writeTasks(tasks);
+        return acknowledged;
+      }
       if (task === undefined || task.generation !== input.generation || !task.activeExecution || task.activeExecution.executionId !== input.executionId || task.activeExecution.ownerTokenHash !== hashToken(input.ownerToken) || task.status !== 'running') {
         throw new CentralTaskCasError('Central task terminal compare-and-swap failed');
       }
@@ -1432,6 +1868,7 @@ export class CentralTaskRepository {
         ...(input.prUrl === undefined ? {} : { prUrl: input.prUrl }),
       };
       delete (terminal as { activeExecution?: CentralActiveExecution }).activeExecution;
+      delete (terminal as { executionRequest?: CentralExecutionRequest }).executionRequest;
       tasks[index] = terminal;
       await this.writeTasks(tasks);
       return terminal;
@@ -1444,6 +1881,41 @@ export class CentralTaskRepository {
       const tasks = [...await this.readTasks()];
       let changed = false;
       const reconciled = tasks.map((task) => {
+        const draining = task.drainingExecution;
+        if (draining !== undefined) {
+          let processStale = false;
+          try {
+            const currentIdentity = draining.pid > 0 ? getProcessIdentity(draining.pid) : undefined;
+            processStale = draining.pid > 0 && !isProcessAlive(draining.pid)
+              || draining.pid > 0
+                && draining.processIdentity !== undefined
+                && currentIdentity !== undefined
+                && !sameProcessIdentity(draining.processIdentity, currentIdentity);
+          } catch {
+            processStale = false;
+          }
+          const stale = draining.pid === 0
+            ? Date.parse(draining.markedAt) + STARTING_RESERVATION_TIMEOUT_MS <= Date.now()
+            : processStale;
+          if (!stale) return task;
+          changed = true;
+          const now = new Date().toISOString();
+          if (task.requeueAfterDrain !== undefined) {
+            return resetFailedTaskToPending(
+              task,
+              now,
+              task.requeueAfterDrain.task,
+              task.requeueAfterDrain.executionRequest,
+            );
+          }
+          const cleared: CentralTaskRecord = {
+            ...task,
+            generation: task.generation + 1,
+            updatedAt: now,
+          };
+          delete (cleared as { drainingExecution?: CentralDrainingExecution }).drainingExecution;
+          return cleared;
+        }
         const active = task.activeExecution;
         if (active === undefined || task.status === 'completed' || task.status === 'failed') return task;
         const currentIdentity = active.pid > 0 ? getProcessIdentity(active.pid) : undefined;

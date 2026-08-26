@@ -158,6 +158,55 @@ describe('central task CAS repository', () => {
     );
   });
 
+  it('persists the server-resolved execution request on the same task lineage', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'retry me', workflow: 'default', worktree: false });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    await repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'failed',
+      failure: { code: 'workflow_failed', message: 'failed' },
+    });
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'plan',
+        kind: 'agent' as const,
+        occurrence: 1,
+      }],
+      iteration: 1,
+      elapsed_ms: 10,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    const executionRequest = {
+      resumeMode: 'retry' as const,
+      sourceRunSlug: started.runId,
+      startStep: 'plan',
+      resumePoint,
+      retryNote: 'retry with additional context',
+    };
+    const requeued = await repository.requeueTask(started.task.taskId, {
+      task: 'retry with additional context',
+      executionRequest,
+    });
+    expect(requeued.task).toMatchObject({
+      taskId: started.task.taskId,
+      runIds: [started.runId, requeued.runId],
+      executionRequest,
+    });
+  });
+
   it('reads the previous single-run ledger as task run history', async () => {
     const { repository } = await setup();
     const started = await repository.enqueueAndClaim({
@@ -374,6 +423,116 @@ describe('central task CAS repository', () => {
       failure: { code: 'worker_crashed' },
     });
     expect((await repository.readTasks()).filter((task) => task.status === 'pending')).toHaveLength(0);
+  });
+
+  it('keeps a force-failed worker lease until its terminal acknowledgement', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'force fail', workflow: 'default', worktree: false });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    const queued = await repository.enqueueOrReuse({ task: 'queued', workflow: 'default', worktree: false });
+    expect(queued.kind).toBe('reused');
+
+    const failed = await repository.forceFailTask(started.task.taskId, 'stopped');
+    expect(failed).toMatchObject({
+      status: 'failed',
+      failure: { code: 'force_failed' },
+      drainingExecution: {
+        executionId: started.executionId,
+        generation: adopted.generation,
+      },
+    });
+    await expect(repository.enqueueAndClaim({ task: 'must wait', workflow: 'default', worktree: false }))
+      .rejects.toThrow('already starting or running');
+    await expect(repository.claimNextPending()).resolves.toBeUndefined();
+    await expect(repository.requeueTask(started.task.taskId)).resolves.toMatchObject({
+      kind: 'reused',
+      task: {
+        status: 'failed',
+        taskId: started.task.taskId,
+        requeueAfterDrain: { task: 'force fail' },
+      },
+      active: { executionId: started.executionId },
+    });
+    await expect(repository.requeueTask(started.task.taskId)).resolves.toMatchObject({
+      kind: 'reused',
+      task: { requeueAfterDrain: { task: 'force fail' } },
+    });
+    await expect(repository.requeueTask(started.task.taskId, { task: 'different task' }))
+      .rejects.toThrow('already scheduled');
+
+    await expect(repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: 'wrong-owner-token',
+      status: 'completed',
+    })).rejects.toBeInstanceOf(CentralTaskCasError);
+    await expect(repository.readTask(started.task.taskId)).resolves.toMatchObject({
+      status: 'failed',
+      failure: { code: 'force_failed' },
+      drainingExecution: { executionId: started.executionId },
+    });
+
+    await expect(repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'completed',
+    })).resolves.toMatchObject({
+      status: 'pending',
+      task: 'force fail',
+    });
+    const acknowledged = await repository.readTask(started.task.taskId);
+    expect(acknowledged).toMatchObject({ status: 'pending', task: 'force fail' });
+    expect(acknowledged).not.toHaveProperty('drainingExecution');
+    expect(acknowledged).not.toHaveProperty('requeueAfterDrain');
+    const next = await repository.claimNextPending();
+    expect(next?.task.taskId).toBe(started.task.taskId);
+    expect(next?.task.runIds).toHaveLength(2);
+    expect(next?.task.runIds[0]).toBe(started.runId);
+    const nextAdopted = await repository.adopt({
+      taskId: next!.task.taskId,
+      generation: next!.task.generation,
+      executionId: next!.executionId,
+      ownerToken: next!.ownerToken,
+    });
+    await repository.terminal({
+      taskId: nextAdopted.taskId,
+      generation: nextAdopted.generation,
+      executionId: next!.executionId,
+      ownerToken: next!.ownerToken,
+      status: 'completed',
+    });
+    const queuedNext = await repository.claimNextPending();
+    expect(queuedNext?.task.taskId).toBe(queued.task.taskId);
+  });
+
+  it('clears a stale force-failed worker lease during reconciliation', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'stale force fail', workflow: 'default', worktree: false });
+    await repository.setStartingPid({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      pid: 999_999,
+    });
+    await repository.forceFailTask(started.task.taskId, 'stopped');
+
+    const reconciled = await repository.reconcile();
+    expect(reconciled[0]).toMatchObject({
+      taskId: started.task.taskId,
+      status: 'failed',
+      failure: { code: 'force_failed', message: 'stopped' },
+    });
+    expect(reconciled[0]).not.toHaveProperty('drainingExecution');
+    await expect(repository.claimNextPending()).resolves.toBeUndefined();
   });
 
   it('expires only an unadopted startup reservation at its fixed deadline', async () => {

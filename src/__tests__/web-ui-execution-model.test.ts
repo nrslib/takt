@@ -10,6 +10,9 @@ import {
 } from '../../web-ui/public/execution-model.js';
 import type { ExecutionEvent, ExecutionStackFrame } from '../../web-ui/public/execution-model.js';
 import {
+  MAX_MAP_SCALE,
+  MIN_MAP_SCALE,
+  clampMapScale,
   disposeExecutionMap,
   renderExecutionMap,
 } from '../../web-ui/public/execution-map.js';
@@ -20,7 +23,33 @@ class FakeDomNode {
   children: FakeDomNode[] = [];
   dataset: Record<string, string> = {};
   attributes: Record<string, string> = {};
-  style = { setProperty: (_property: string, _value: string) => undefined };
+  style: {
+    left: string;
+    top: string;
+    width: string;
+    height: string;
+    transform: string;
+    transformOrigin: string;
+    userSelect: string;
+    setProperty: (property: string, value: string) => void;
+  } = {
+    left: '',
+    top: '',
+    width: '',
+    height: '',
+    transform: '',
+    transformOrigin: '',
+    userSelect: '',
+    setProperty(property, value) {
+      if (property === 'transform-origin') this.transformOrigin = value;
+      else if (property === 'user-select') this.userSelect = value;
+      else if (property in this) {
+        (this as unknown as Record<string, unknown>)[property] = value;
+      }
+    },
+  };
+  offsetWidth = 220;
+  offsetHeight = 136;
   scrollLeft = 0;
   scrollTop = 0;
   scrollWidth = 640;
@@ -157,7 +186,7 @@ describe('Web UI execution model', () => {
     });
   });
 
-  it('represents repeated logical steps as selectable loop passes', () => {
+  it('keeps repeated logical steps as chronological occurrences without synthetic self-loops', () => {
     const trace = buildExecutionTrace(
       { workflow: 'default', status: 'running', currentStep: 'review', currentIteration: 2 },
       [
@@ -173,16 +202,80 @@ describe('Web UI execution model', () => {
     const review = trace.nodes.find((node) => node.label === 'review');
     expect(review?.occurrences.map((occurrence) => occurrence.iteration)).toEqual([1, 2]);
     expect(review?.occurrences.every((occurrence) => occurrence.status === 'completed')).toBe(true);
+    expect(review?.occurrences.map((occurrence) => occurrence.ordinal)).toEqual([1, 3]);
+    expect(trace.nodes.find((node) => node.label === 'plan')?.occurrences[0]?.ordinal).toBe(2);
     expect(trace.loops).toEqual([
       expect.objectContaining({
-        logicalId: review?.id,
-        iteration: 2,
+        logicalId: trace.nodes.find((node) => node.label === 'plan')?.id,
+        ordinal: 3,
       }),
     ]);
-    expect(trace.transitions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'loop', sourceLogicalId: review?.id, targetLogicalId: review?.id }),
-    ]));
+    expect(trace.transitions).toEqual([
+      expect.objectContaining({
+        kind: 'transition',
+        source: review?.occurrences[0]?.id,
+        target: trace.nodes.find((node) => node.label === 'plan')?.occurrences[0]?.id,
+      }),
+      expect.objectContaining({
+        kind: 'loop',
+        source: trace.nodes.find((node) => node.label === 'plan')?.occurrences[0]?.id,
+        target: review?.occurrences[1]?.id,
+      }),
+    ]);
     expect(trace.totalOccurrences).toBe(3);
+  });
+
+  it('assigns ordinals and consecutive edges from event order even when iteration metadata is unreliable', () => {
+    const events: ExecutionEvent[] = [
+      { type: 'step_start', step: 'A', iteration: 9 },
+      { type: 'step_start', step: 'B', iteration: 2 },
+      { type: 'step_start', step: 'C', iteration: 2 },
+      { type: 'step_start', step: 'A', iteration: 1 },
+    ];
+    const trace = buildExecutionTrace(
+      { workflow: 'default', status: 'running' },
+      events.slice().reverse(),
+    );
+    const occurrences = trace.nodes
+      .flatMap((node) => node.occurrences.map((occurrence) => ({ node, occurrence })))
+      .sort((left, right) => left.occurrence.ordinal! - right.occurrence.ordinal!);
+
+    expect(occurrences.map(({ node }) => node.label)).toEqual(['A', 'B', 'C', 'A']);
+    expect(occurrences.map(({ occurrence }) => occurrence.ordinal)).toEqual([1, 2, 3, 4]);
+    expect(trace.transitions).toHaveLength(3);
+    expect(trace.transitions.map((transition) => [transition.source, transition.target])).toEqual([
+      [occurrences[0]?.occurrence.id, occurrences[1]?.occurrence.id],
+      [occurrences[1]?.occurrence.id, occurrences[2]?.occurrence.id],
+      [occurrences[2]?.occurrence.id, occurrences[3]?.occurrence.id],
+    ]);
+    expect(trace.transitions.some((transition) => (
+      transition.sourceLogicalId === transition.targetLogicalId
+    ))).toBe(false);
+    expect(trace.transitions[2]?.kind).toBe('loop');
+  });
+
+  it('applies terminal status only to the latest observed occurrence after a real return', () => {
+    const events: ExecutionEvent[] = [
+      { type: 'step_start', step: 'A', iteration: 1 },
+      { type: 'step_complete', step: 'A', iteration: 1, status: 'done' },
+      { type: 'step_start', step: 'B', iteration: 1 },
+      { type: 'step_complete', step: 'B', iteration: 1, status: 'done' },
+      { type: 'step_start', step: 'A', iteration: 1 },
+    ];
+    const trace = buildExecutionTrace(
+      { workflow: 'default', status: 'completed' },
+      events.slice().reverse(),
+    );
+    const a = trace.nodes.find((node) => node.label === 'A');
+    const b = trace.nodes.find((node) => node.label === 'B');
+
+    expect(a?.occurrences.map((occurrence) => occurrence.status)).toEqual(['completed', 'completed']);
+    expect(b?.occurrences[0]?.status).toBe('completed');
+    expect(trace.transitions.map((transition) => [transition.source, transition.target])).toEqual([
+      [a?.occurrences[0]?.id, b?.occurrences[0]?.id],
+      [b?.occurrences[0]?.id, a?.occurrences[1]?.id],
+    ]);
+    expect(trace.transitions[1]?.kind).toBe('loop');
   });
 
   it('keeps workflow calls distinct and links an observed child after call start', () => {
@@ -484,6 +577,8 @@ describe('Web UI execution model', () => {
         },
         { type: 'step_start', step: 'review', iteration: 1 },
         { type: 'step_complete', step: 'review', iteration: 1, status: 'done' },
+        { type: 'step_start', step: 'plan', iteration: 7 },
+        { type: 'step_complete', step: 'plan', iteration: 7, status: 'done' },
         { type: 'step_start', step: 'review', iteration: 2 },
         { type: 'step_complete', step: 'review', iteration: 2, status: 'done' },
       ];
@@ -501,11 +596,11 @@ describe('Web UI execution model', () => {
       expect(section.querySelectorAll('.workflow-lane')).toHaveLength(0);
       expect(section.querySelectorAll('.execution-call-boundary')).toHaveLength(0);
       expect(section.querySelectorAll('.execution-map-relations')).toHaveLength(0);
-      expect(section.querySelectorAll('.execution-step')).toHaveLength(3);
-      expect(section.querySelectorAll('.execution-edge-transition')).toHaveLength(1);
+      expect(section.querySelectorAll('.execution-step')).toHaveLength(4);
+      expect(section.querySelectorAll('.execution-edge-transition')).toHaveLength(2);
       expect(section.querySelectorAll('.execution-edge-loop')).toHaveLength(1);
       expect(section.querySelectorAll('.execution-edge-call')).toHaveLength(1);
-      expect(section.querySelectorAll('[data-edge]')).toHaveLength(3);
+      expect(section.querySelectorAll('[data-edge]')).toHaveLength(4);
       const loopPath = section.querySelectorAll('.execution-edge-loop')[0] as FakeDomNode | undefined;
       const callPath = section.querySelectorAll('.execution-edge-call')[0] as FakeDomNode | undefined;
       expect(loopPath?.attributes['data-source-occurrence-id']).toBeDefined();
@@ -608,6 +703,149 @@ describe('Web UI execution model', () => {
       expect(groups[0]?.textContent).toBe('');
       expect(groups[0]?.children[0]?.textContent).toBe('PARALLEL · review');
       expect(section.querySelectorAll('.workflow-lane')).toHaveLength(0);
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('moves every parallel member by one scaled delta and reports each node position', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const parent: ExecutionStackFrame = {
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'review',
+        kind: 'parallel',
+        occurrence: 1,
+      };
+      const event = (step: string): ExecutionEvent => ({
+        type: 'step_start',
+        workflow: 'default',
+        step,
+        iteration: 1,
+        stack: [parent, {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step,
+          kind: 'agent',
+          occurrence: 1,
+        }],
+      });
+      const trace = buildExecutionTrace(
+        { workflow: 'default', status: 'running' },
+        [event('architecture-review'), event('coding-review')],
+      );
+      const moved: Array<{ id: string; x: number; y: number }> = [];
+      const section = renderExecutionMap(trace, {
+        liveIndicator: new FakeDomNode('span'),
+        emptyState: new FakeDomNode('div'),
+        selectedOccurrenceId: null,
+        onSelectOccurrence: () => undefined,
+        onMoveNode: (id, position) => moved.push({ id, ...position }),
+      });
+      const steps = section.querySelectorAll('.execution-step') as FakeDomNode[];
+      const header = section.querySelectorAll('.execution-parallel-group-header')[0] as FakeDomNode;
+      const before = steps.map((step) => ({
+        id: step.dataset.stepId,
+        x: Number.parseFloat(step.style.left),
+        y: Number.parseFloat(step.style.top),
+      }));
+
+      header.dispatchEvent('pointerdown', {
+        pointerId: 12,
+        clientX: 40,
+        clientY: 40,
+        button: 0,
+      });
+      header.dispatchEvent('pointermove', {
+        pointerId: 12,
+        clientX: 100,
+        clientY: 70,
+        preventDefault: () => undefined,
+      });
+      header.dispatchEvent('pointerup', { pointerId: 12 });
+
+      const after = steps.map((step) => ({
+        id: step.dataset.stepId,
+        x: Number.parseFloat(step.style.left),
+        y: Number.parseFloat(step.style.top),
+      }));
+      expect(after.map((position, index) => [
+        position.x - before[index]!.x,
+        position.y - before[index]!.y,
+      ])).toEqual([[60, 30], [60, 30]]);
+      expect(moved.map(({ id }) => id)).toEqual(after.map(({ id }) => id));
+      expect(moved.map(({ x, y }) => [x, y])).toEqual(after.map(({ x, y }) => [x, y]));
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('zooms only for Cmd/Ctrl wheel with cursor-centered scroll correction and clamps bounds', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const trace = buildExecutionTrace(
+        { workflow: 'default', status: 'running' },
+        [{ type: 'step_start', step: 'plan', iteration: 1 }],
+      );
+      const scales: number[] = [];
+      const section = renderExecutionMap(trace, {
+        liveIndicator: new FakeDomNode('span'),
+        emptyState: new FakeDomNode('div'),
+        selectedOccurrenceId: null,
+        onSelectOccurrence: () => undefined,
+        onScaleChange: (scale) => scales.push(scale),
+      });
+      const map = section.querySelectorAll('.execution-map')[0] as FakeDomNode;
+      const canvas = section.querySelectorAll('.execution-map-canvas')[0] as FakeDomNode;
+      map.rect = { left: 10, top: 20, right: 410, width: 400, height: 300 };
+      map.scrollLeft = 100;
+      map.scrollTop = 50;
+
+      let prevented = false;
+      map.dispatchEvent('wheel', {
+        deltaY: -1,
+        clientX: 110,
+        clientY: 120,
+        metaKey: false,
+        ctrlKey: false,
+        preventDefault: () => { prevented = true; },
+      });
+      expect(prevented).toBe(false);
+      expect(canvas.dataset.scale).toBe('1');
+
+      map.dispatchEvent('wheel', {
+        deltaY: -100000,
+        clientX: 110,
+        clientY: 120,
+        metaKey: true,
+        ctrlKey: false,
+        preventDefault: () => { prevented = true; },
+      });
+      expect(prevented).toBe(true);
+      expect(Number(canvas.dataset.scale)).toBe(MAX_MAP_SCALE);
+      expect(map.scrollLeft).toBe(300);
+      expect(map.scrollTop).toBe(200);
+
+      prevented = false;
+      map.dispatchEvent('wheel', {
+        deltaY: 100000,
+        clientX: 210,
+        clientY: 170,
+        metaKey: false,
+        ctrlKey: true,
+        preventDefault: () => { prevented = true; },
+      });
+      expect(prevented).toBe(true);
+      expect(Number(canvas.dataset.scale)).toBe(MIN_MAP_SCALE);
+      expect(scales).toEqual([MAX_MAP_SCALE, MIN_MAP_SCALE]);
+      expect(clampMapScale(Number.NaN)).toBe(1);
+      expect(clampMapScale(-10)).toBe(MIN_MAP_SCALE);
+      expect(clampMapScale(10)).toBe(MAX_MAP_SCALE);
     } finally {
       runtime.document = previousDocument;
     }

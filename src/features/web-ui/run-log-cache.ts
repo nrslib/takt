@@ -23,15 +23,7 @@ const LIFECYCLE_EVENT_TYPES = new Set([
   'workflow_call_complete',
 ]);
 const OCCURRENCE_START_EVENT_TYPES = new Set(['step_start', 'workflow_call_start']);
-const TERMINAL_EVENT_STATUSES = new Set([
-  'done',
-  'completed',
-  'failed',
-  'blocked',
-  'error',
-  'rate_limited',
-  'aborted',
-]);
+const OCCURRENCE_TERMINAL_EVENT_TYPES = new Set(['step_complete', 'workflow_call_complete']);
 
 export interface RunLogEvent {
   readonly type: string;
@@ -52,6 +44,7 @@ export interface RunLogEvent {
   readonly reason?: string;
   readonly preview?: string;
   readonly previewTruncated?: boolean;
+  readonly occurrenceId?: string;
 }
 
 export interface RunLogGraphSummary {
@@ -117,6 +110,7 @@ interface SessionLogState {
   events: ScannedRecord[];
   history: ScannedRecord[];
   graph: Map<string, GraphRecord>;
+  activeGraphOccurrences: Map<string, string>;
   warnings: string[];
   historyDropped: number;
   graphTotalOccurrences: number;
@@ -205,23 +199,24 @@ function parseLogEvent(value: unknown): RunLogEvent | null {
 function toHistoryEvent(event: RunLogEvent): RunLogEvent {
   return {
     type: event.type,
-    timestamp: event.timestamp,
-    step: event.step,
-    phase: event.phase,
-    phaseName: event.phaseName,
-    phaseExecutionId: event.phaseExecutionId,
-    iteration: event.iteration,
-    persona: event.persona,
-    workflow: event.workflow,
-    childWorkflow: event.childWorkflow,
-    callInstance: event.callInstance,
-    stack: event.stack,
-    status: event.status,
+    ...(event.timestamp === undefined ? {} : { timestamp: event.timestamp }),
+    ...(event.step === undefined ? {} : { step: event.step }),
+    ...(event.phase === undefined ? {} : { phase: event.phase }),
+    ...(event.phaseName === undefined ? {} : { phaseName: event.phaseName }),
+    ...(event.phaseExecutionId === undefined ? {} : { phaseExecutionId: event.phaseExecutionId }),
+    ...(event.iteration === undefined ? {} : { iteration: event.iteration }),
+    ...(event.persona === undefined ? {} : { persona: event.persona }),
+    ...(event.workflow === undefined ? {} : { workflow: event.workflow }),
+    ...(event.childWorkflow === undefined ? {} : { childWorkflow: event.childWorkflow }),
+    ...(event.callInstance === undefined ? {} : { callInstance: event.callInstance }),
+    ...(event.stack === undefined ? {} : { stack: event.stack }),
+    ...(event.status === undefined ? {} : { status: event.status }),
+    ...(event.occurrenceId === undefined ? {} : { occurrenceId: event.occurrenceId }),
     ...previewForEvent(event),
   };
 }
 
-function graphOccurrenceKey(event: RunLogEvent): string | null {
+function graphOccurrenceBaseKey(event: RunLogEvent): string | null {
   if (event.step === undefined) return null;
   const stack = event.stack?.map((frame) => [
     frame.workflow,
@@ -235,9 +230,19 @@ function graphOccurrenceKey(event: RunLogEvent): string | null {
     event.step,
     event.childWorkflow,
     event.callInstance,
-    event.iteration,
     stack,
   ]);
+}
+
+function isOccurrenceStart(event: RunLogEvent): boolean {
+  return OCCURRENCE_START_EVENT_TYPES.has(event.type);
+}
+
+function isOccurrenceTerminal(event: RunLogEvent): boolean {
+  // Phase completion is progress inside an occurrence; only the lifecycle
+  // boundary closes it. Status text alone is not a reliable boundary because
+  // providers can report a terminal-looking phase status before step_complete.
+  return OCCURRENCE_TERMINAL_EVENT_TYPES.has(event.type);
 }
 
 function createState(path: string, identity: FileIdentity, size: number, modifiedAt: number): SessionLogState {
@@ -259,6 +264,7 @@ function createState(path: string, identity: FileIdentity, size: number, modifie
     events: [],
     history: [],
     graph: new Map(),
+    activeGraphOccurrences: new Map(),
     warnings: [],
     historyDropped: 0,
     graphTotalOccurrences: 0,
@@ -279,8 +285,7 @@ function appendBounded(target: ScannedRecord[], record: ScannedRecord, limit: nu
 }
 
 function isCurrentGraphRecord(record: GraphRecord): boolean {
-  return !TERMINAL_EVENT_STATUSES.has(record.event.status ?? '')
-    && !record.event.type.endsWith('_complete');
+  return !OCCURRENCE_TERMINAL_EVENT_TYPES.has(record.event.type);
 }
 
 function evictOldestGraphRecord(state: SessionLogState): void {
@@ -294,21 +299,26 @@ function evictOldestGraphRecord(state: SessionLogState): void {
   if (oldest !== undefined) state.graph.delete(oldest[0]);
 }
 
-function updateGraph(state: SessionLogState, event: RunLogEvent, order: number): void {
-  if (!LIFECYCLE_EVENT_TYPES.has(event.type)) return;
-  const key = graphOccurrenceKey(event);
-  if (key === null) return;
+function updateGraph(state: SessionLogState, event: RunLogEvent, order: number): string | undefined {
+  if (!LIFECYCLE_EVENT_TYPES.has(event.type)) return undefined;
+  const baseKey = graphOccurrenceBaseKey(event);
+  if (baseKey === null) return undefined;
+  const activeKey = state.activeGraphOccurrences.get(baseKey);
+  const key = isOccurrenceStart(event)
+    ? `${baseKey}:occurrence:${order}`
+    : activeKey ?? `${baseKey}:occurrence:${order}`;
   const previous = state.graph.get(key);
   const nextEvent = {
     ...previous?.event,
     ...toHistoryEvent(event),
+    occurrenceId: key,
   };
   if (previous === undefined) {
     // A start record is the canonical occurrence boundary. Completion and
     // phase records update that boundary, but must not inflate the total.
     // A completion-only log is accepted once while there is still capacity.
     if (state.graph.size >= MAX_GRAPH_OCCURRENCES && !OCCURRENCE_START_EVENT_TYPES.has(event.type)) {
-      return;
+      return undefined;
     }
     if (state.graph.size >= MAX_GRAPH_OCCURRENCES) evictOldestGraphRecord(state);
     state.graphTotalOccurrences += 1;
@@ -317,18 +327,24 @@ function updateGraph(state: SessionLogState, event: RunLogEvent, order: number):
     event: nextEvent,
     order: previous?.order ?? order,
   });
+  if (isOccurrenceTerminal(event)) state.activeGraphOccurrences.delete(baseKey);
+  else state.activeGraphOccurrences.set(baseKey, key);
+  return key;
 }
 
 function acceptEvent(state: SessionLogState, cache: RunLogCache, event: RunLogEvent): void {
   const order = cache.nextOrder;
   cache.nextOrder += 1;
-  appendBounded(state.events, { event, order }, MAX_LOG_EVENTS);
   if (LIFECYCLE_EVENT_TYPES.has(event.type)) {
-    if (appendBounded(state.history, { event: toHistoryEvent(event), order }, MAX_HISTORY_EVENTS)) {
+    const occurrenceId = updateGraph(state, event, order);
+    const annotatedEvent = occurrenceId === undefined ? event : { ...event, occurrenceId };
+    appendBounded(state.events, { event: annotatedEvent, order }, MAX_LOG_EVENTS);
+    if (appendBounded(state.history, { event: toHistoryEvent(annotatedEvent), order }, MAX_HISTORY_EVENTS)) {
       state.historyDropped += 1;
     }
-    updateGraph(state, event, order);
+    return;
   }
+  appendBounded(state.events, { event, order }, MAX_LOG_EVENTS);
 }
 
 function parseCompleteLine(state: SessionLogState, cache: RunLogCache, line: string): void {

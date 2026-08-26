@@ -4,11 +4,15 @@ import type { StreamCallback } from '../shared/types/provider.js';
 const {
   mockCreateAssistantConversationPlan,
   mockCreateConversationSession,
+  mockCreateInstructConversationPlan,
+  mockCreateRetryConversationPlan,
   mockGetWorkflowDescription,
   mockResolveFormalSpecModeWithoutPrompt,
 } = vi.hoisted(() => ({
   mockCreateAssistantConversationPlan: vi.fn(),
   mockCreateConversationSession: vi.fn(),
+  mockCreateInstructConversationPlan: vi.fn(),
+  mockCreateRetryConversationPlan: vi.fn(),
   mockGetWorkflowDescription: vi.fn(),
   mockResolveFormalSpecModeWithoutPrompt: vi.fn(),
 }));
@@ -35,11 +39,18 @@ vi.mock('../features/interactive/taskInstructionFormat.js', async (importOrigina
     mockResolveFormalSpecModeWithoutPrompt(...args),
 }));
 
+vi.mock('../features/interactive/taskActionConversationPlan.js', () => ({
+  createInstructConversationPlan: (...args: unknown[]) => mockCreateInstructConversationPlan(...args),
+  createRetryConversationPlan: (...args: unknown[]) => mockCreateRetryConversationPlan(...args),
+}));
+
 import {
   createWebChatService,
   parseCreateWebChatRequest,
   parseWebChatMessage,
+  parseWebChatMessageRequest,
   WebChatInputError,
+  type WebTaskActionContext,
 } from '../features/web-ui/chat.js';
 
 function createPlan(workflow: string, model: string | null = `model-${workflow}`) {
@@ -88,6 +99,8 @@ beforeEach(() => {
     _cwd: string,
     options: { workflowContext: { name: string } },
   ) => createPlan(options.workflowContext.name));
+  mockCreateRetryConversationPlan.mockReturnValue(createPlan('retry'));
+  mockCreateInstructConversationPlan.mockReturnValue(createPlan('instruct'));
 });
 
 describe('Web UI chat input', () => {
@@ -108,6 +121,185 @@ describe('Web UI chat input', () => {
 
   it('normalizes a chat message', () => {
     expect(parseWebChatMessage({ text: '  相談したい  ' })).toBe('相談したい');
+    expect(parseWebChatMessageRequest({
+      text: '  /go  ',
+      taskActionOptionId: 'restart:plan',
+    })).toEqual({ text: '/go', taskActionOptionId: 'restart:plan' });
+    expect(() => parseWebChatMessageRequest({ text: '/go', taskActionOptionId: '' }))
+      .toThrow('taskActionOptionId is invalid');
+  });
+
+  it('binds task-action options to a process-local single-use claim', async () => {
+    const service = createWebChatService();
+    const context: WebTaskActionContext = {
+      taskId: 'task-1',
+      action: 'retry',
+      projectId: 'project-1',
+      stateId: 'state-1',
+      projectDirectory: '/repo',
+      task: 'fix it',
+      workflow: 'default',
+      status: 'failed',
+      attempt: 1,
+      runIds: ['run-1'],
+      generation: 2,
+      runId: 'run-1',
+      sourceRunId: 'run-1',
+      retryStartOptions: {
+        defaultId: 'restart:plan',
+        options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+      },
+      retryStartSelections: [{
+        id: 'restart:plan',
+        selection: {
+          kind: 'restart',
+          restartPoint: {
+            stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
+          },
+        },
+      }],
+    };
+    const created = service.createTaskAction?.('/repo', context);
+    if (
+      created === undefined
+      || service.claimTaskAction === undefined
+      || service.commitTaskAction === undefined
+      || service.releaseTaskAction === undefined
+    ) {
+      throw new Error('task-action chat support is unavailable');
+    }
+    const firstClaim = service.claimTaskAction(created.id, 'restart:plan');
+    expect(firstClaim).toMatchObject({
+      context: { taskId: 'task-1', projectId: 'project-1', stateId: 'state-1', generation: 2 },
+      retrySelection: { kind: 'restart' },
+    });
+    expect(firstClaim.reservationToken).toEqual(expect.any(String));
+    await expect(service.send(created.id, 'もう一度')).rejects.toThrow('already been finalized');
+    expect(() => service.claimTaskAction!(created.id, 'restart:plan'))
+      .toThrow('already been finalized');
+    expect(() => service.releaseTaskAction!(created.id, 'wrong-reservation'))
+      .toThrow('not owned');
+    service.releaseTaskAction(created.id, firstClaim.reservationToken);
+    const reclaimed = service.claimTaskAction(created.id, 'restart:plan');
+    expect(reclaimed.reservationToken).not.toBe(firstClaim.reservationToken);
+    service.commitTaskAction(created.id, reclaimed.reservationToken);
+    await expect(service.send(created.id, 'もう一度')).rejects.toThrow('already been finalized');
+    expect(() => service.restart!(created.id)).toThrow('already been finalized');
+    expect(() => service.releaseTaskAction!(created.id, reclaimed.reservationToken))
+      .toThrow('not owned');
+    expect(() => service.commitTaskAction!(created.id, reclaimed.reservationToken))
+      .toThrow('already been finalized');
+    expect(() => service.claimTaskAction!('unknown-session', 'restart:plan'))
+      .toThrow('Chat session not found');
+    const instruct = service.createTaskAction?.('/repo', {
+      ...context,
+      taskId: 'task-instruct',
+      action: 'instruct',
+      status: 'completed',
+    });
+    if (instruct === undefined) throw new Error('instruct task-action chat was not created');
+    expect(() => service.claimTaskAction!(instruct.id, 'restart:plan'))
+      .toThrow('does not accept a retry start option');
+
+    // The oldest process-local session is evicted once the bounded map is full.
+    for (let index = 0; index < 20; index += 1) {
+      service.createTaskAction?.('/repo', { ...context, taskId: `task-${index + 2}` });
+    }
+    expect(() => service.claimTaskAction!(created.id, 'restart:plan'))
+      .toThrow('Chat session not found');
+  });
+
+  it('protects a reserved task-action session from bounded-session eviction', () => {
+    const service = createWebChatService();
+    if (service.createTaskAction === undefined || service.claimTaskAction === undefined) {
+      throw new Error('task-action chat support is unavailable');
+    }
+    const context: WebTaskActionContext = {
+      taskId: 'reserved-task',
+      action: 'retry',
+      projectDirectory: '/repo',
+      task: 'fix it',
+      workflow: 'default',
+      status: 'failed',
+      attempt: 1,
+      runIds: ['run-1'],
+      retryStartSelections: [{
+        id: 'restart:plan',
+        selection: {
+          kind: 'restart',
+          restartPoint: {
+            stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
+          },
+        },
+      }],
+    };
+    const reserved = service.createTaskAction('/repo', context);
+    const claim = service.claimTaskAction(reserved.id, 'restart:plan');
+
+    for (let index = 0; index < 20; index += 1) {
+      service.create('/repo', { workflow: 'default', mode: 'assistant' });
+    }
+
+    expect(service.getTaskActionContext?.(reserved.id)).toMatchObject({ taskId: 'reserved-task' });
+    service.releaseTaskAction(reserved.id, claim.reservationToken);
+  });
+
+  it('protects a busy conversation from bounded-session eviction', async () => {
+    let resolveMessage!: () => void;
+    const session = createSessionDouble();
+    session.handleUserMessage.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveMessage = () => resolve({ kind: 'assistant_response', content: 'response' });
+    }));
+    mockCreateConversationSession.mockReturnValue(session);
+    const service = createWebChatService();
+    const created = service.create('/repo', { workflow: 'default', mode: 'assistant' });
+    const pending = service.send(created.id, '待機');
+    await Promise.resolve();
+
+    for (let index = 0; index < 20; index += 1) {
+      service.create('/repo', { workflow: 'default', mode: 'assistant' });
+    }
+
+    await expect(service.send(created.id, '再送')).rejects.toThrow('busy');
+    resolveMessage();
+    await expect(pending).resolves.toEqual({ kind: 'assistant_response', content: 'response' });
+  });
+
+  it('rejects creation when every existing session is protected', () => {
+    const service = createWebChatService();
+    if (service.createTaskAction === undefined || service.claimTaskAction === undefined) {
+      throw new Error('task-action chat support is unavailable');
+    }
+    const sessions = Array.from({ length: 20 }, (_, index) => service.createTaskAction!('/repo', {
+      taskId: `protected-${index}`,
+      action: 'retry',
+      projectDirectory: '/repo',
+      task: 'fix it',
+      workflow: 'default',
+      status: 'failed',
+      attempt: 1,
+      runIds: [`run-${index}`],
+      retryStartSelections: [{
+        id: 'restart:plan',
+        selection: {
+          kind: 'restart',
+          restartPoint: {
+            stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
+          },
+        },
+      }],
+    }));
+    for (const session of sessions) {
+      service.claimTaskAction(session.id, 'restart:plan');
+    }
+
+    try {
+      service.create('/repo', { workflow: 'default', mode: 'assistant' });
+      throw new Error('expected session capacity rejection');
+    } catch (error) {
+      expect(error).toBeInstanceOf(WebChatInputError);
+      expect((error as WebChatInputError).status).toBe(503);
+    }
   });
 });
 
@@ -199,5 +391,7 @@ describe('Web UI chat session settings', () => {
     await expect(service.send(created.id, '相談', (content) => thinking.push(content)))
       .resolves.toEqual({ kind: 'assistant_response', content: 'response' });
     expect(thinking).toEqual(['調査中', 'です。']);
+    await expect(service.send(created.id, '通常会話', undefined, 'restart:plan'))
+      .rejects.toThrow('only valid for task action conversations');
   });
 });

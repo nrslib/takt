@@ -154,6 +154,11 @@ describe('Web UI execution context boundary', () => {
     expect(shouldCloseExecutionContext({ composedPath: () => [{}] }, context, dialog)).toBe(true);
   });
 
+  it('treats a viewer sibling as outside when the event has no composed path', () => {
+    const viewerRun = {};
+    expect(shouldCloseExecutionContext({ target: viewerRun }, context, dialog)).toBe(true);
+  });
+
   it('keeps the context open while a directory dialog owns the event', () => {
     const openDialog = { open: true };
     expect(shouldCloseExecutionContext({ composedPath: () => [openDialog, {}] }, context, openDialog)).toBe(false);

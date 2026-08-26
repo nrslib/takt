@@ -59,7 +59,17 @@ describe('Web UI i18n', () => {
     expect(getLocale()).toBe('en');
     expect(t('app.createTask')).toBe('New task');
     expect(t('map.summarySteps', { steps: 2, passes: 3 })).toBe('2 steps · 3 passes');
+    expect(t('task.action.retry')).toBe('Retry');
+    expect(t('task.action.instruct')).toBe('Instruct');
     expect(storage.setItem).toHaveBeenCalledWith('takt.ui.locale', 'en');
+  });
+
+  it('keeps the Japanese task-action labels natural before switching to English', () => {
+    expect(t('task.action.retry')).toBe('リトライ');
+    expect(t('task.action.instruct')).toBe('追加指示');
+    expect(t('app.existingTask')).toBe('既存タスク');
+    setLocale('en');
+    expect(t('app.existingTask')).toBe('Existing task');
   });
 
   it('translates static text, placeholder, title, and aria label attributes', () => {

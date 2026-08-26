@@ -17,6 +17,8 @@ export interface ExecutionEvent {
   readonly reason?: string;
   readonly preview?: string;
   readonly previewTruncated?: boolean;
+  /** Stable identity emitted by the server's chronological graph cache. */
+  readonly occurrenceId?: string;
 }
 
 export interface ExecutionStackFrame {
@@ -51,6 +53,8 @@ export interface ExecutionOccurrence {
   readonly eventIndexes: readonly number[];
   readonly firstEventIndex: number;
   readonly lastEventIndex: number;
+  /** One-based chronological ordinal across all observed step occurrences. */
+  readonly ordinal?: number;
 }
 
 export interface ExecutionNode {
@@ -88,7 +92,7 @@ export interface ExecutionLoop {
   readonly logicalId: string;
   readonly from: string;
   readonly to: string;
-  readonly iteration?: number;
+  readonly ordinal?: number;
 }
 
 export interface ExecutionTrace {

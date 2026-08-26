@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getSession, sendChatMessage, startTask } from '../../web-ui/public/api.js';
+import {
+  getSession,
+  runTaskAction,
+  sendChatMessage,
+  startTask,
+} from '../../web-ui/public/api.js';
 
 describe('Web UI public API response handling', () => {
   const fetchMock = vi.fn();
@@ -29,7 +34,11 @@ describe('Web UI public API response handling', () => {
       json: async () => ({ error: 'run already exists' }),
     });
 
-    await expect(getSession()).rejects.toThrow('run already exists');
+    const error = await getSession().then(() => null, (caught: unknown) => caught);
+    expect(error).toMatchObject({
+      message: 'run already exists',
+      status: 409,
+    });
   });
 
   it('uses HTTP status when an error response is not JSON', async () => {
@@ -127,6 +136,81 @@ describe('Web UI public API response handling', () => {
       thinking.push(content);
     })).resolves.toEqual({ kind: 'assistant_response', content: '回答です。' });
     expect(thinking).toEqual(['調査中', 'です。']);
+  });
+
+  it('sends only the selected task-action option id with a chat message', async () => {
+    await initializeSession();
+    const payload = [
+      JSON.stringify({
+        type: 'reply',
+        reply: {
+          kind: 'task_instruction',
+          task: 'revised task',
+          taskActionOptionId: 'resume:plan',
+        },
+      }),
+      '',
+    ].join('\n');
+    fetchMock.mockResolvedValue(new Response(payload, { status: 200 }));
+
+    await sendChatMessage('session/1', '/go', () => {}, 'resume:plan');
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/chat/sessions/session%2F1/messages',
+      expect.objectContaining({
+        body: JSON.stringify({ text: '/go', taskActionOptionId: 'resume:plan' }),
+      }),
+    );
+  });
+
+  it('sends the task-action finalize payload without raw checkpoints', async () => {
+    await initializeSession();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ action: 'retry', status: 'accepted' }),
+    });
+
+    await runTaskAction(
+      'project-1',
+      'task/1',
+      'retry',
+      'revised task',
+      'conversation-1',
+      'resume:plan',
+    );
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/tasks/task%2F1/actions/retry',
+      expect.objectContaining({
+        body: JSON.stringify({
+          projectId: 'project-1',
+          input: 'revised task',
+          conversationId: 'conversation-1',
+          taskActionOptionId: 'resume:plan',
+        }),
+      }),
+    );
+    const body = JSON.parse(fetchMock.mock.calls.at(-1)?.[1]?.body as string) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('startStep');
+    expect(body).not.toHaveProperty('resumePoint');
+    expect(body).not.toHaveProperty('restartPoint');
+  });
+
+  it('preserves HTTP status for a chat request rejected before streaming', async () => {
+    await initializeSession();
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Task action was already accepted' }),
+    });
+
+    const error = await sendChatMessage('session-1', '/go', () => {})
+      .then(() => null, (caught: unknown) => caught);
+    expect(error).toMatchObject({
+      message: 'Task action was already accepted',
+      status: 409,
+    });
   });
 
   it('surfaces an error emitted after chat streaming starts', async () => {

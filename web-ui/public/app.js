@@ -11,11 +11,22 @@ import {
   reconfigureChatSession,
   registerProject,
   restartChatSession,
+  runTaskAction,
   sendChatMessage,
   startTask,
 } from './api.js';
 import { createExecutionView } from './execution-view.js';
 import { subscribeRun, subscribeTasks } from './live-stream.js';
+import {
+  buildTaskActionDialogModel,
+  taskActionGoState,
+  taskActionCanRestart,
+  taskActionFinalizationState,
+  taskActionNeedsConfirmation,
+  taskActionSurfaceModel,
+  taskActionSurfaceWithState,
+  taskInstructionRoute,
+} from './task-action-ui.js';
 import {
   buildExecutionSettingsRequest,
   createDirectoryRequestTracker,
@@ -47,6 +58,8 @@ const elements = {
   chatSurface: document.querySelector('#chat-surface'),
   chatSurfaceDescription: document.querySelector('#chat-surface-description'),
   chatSurfaceLabel: document.querySelector('#chat-surface-label'),
+  chatTaskActionContext: document.querySelector('#chat-task-action-context'),
+  chatTaskActionOptions: document.querySelector('#chat-task-action-options'),
   chatTitle: document.querySelector('#chat-title'),
   chatMessage: document.querySelector('#chat-message'),
   chatMode: document.querySelector('#chat-mode'),
@@ -113,6 +126,7 @@ let registryWarnings = [];
 let workflowWarnings = [];
 let browsedDirectory = null;
 let taskSurfaceOpen = false;
+let taskActionSurface = null;
 let screenMode = 'viewer';
 let screenTransitionId = 0;
 let screenTransitionTimer = null;
@@ -120,6 +134,8 @@ let executionEnabled = false;
 let chatOperationInProgress = false;
 let chatMessageRevision = 0;
 let chatStatusDescriptor = null;
+const taskActionsInFlight = new Set();
+let taskActionDialogSequence = 0;
 let executionSettings = {
   worktreeMode: 'auto',
   worktreePath: '',
@@ -137,6 +153,7 @@ const executionView = createExecutionView({
   inspector: elements.runInspector,
   onSelectRun: selectRun,
   onRequeue: (task, button) => void requeueSelectedTask(task, button),
+  onAction: (task, action, button) => void runSelectedTaskAction(task, action, button),
   onStatusChange: (status) => {
     const label = t(`app.status.${status}`);
     if (elements.runStatusLive.textContent !== label) elements.runStatusLive.textContent = label;
@@ -185,16 +202,143 @@ function updateWarnings(runWarnings = []) {
   ].join('\n');
 }
 
+function taskActionLabelKey(action) {
+  return action === 'retry' ? 'app.taskActionRetry' : 'app.taskActionInstruct';
+}
+
+function taskActionTitleKey(action) {
+  return action === 'retry' ? 'app.taskActionRetryTitle' : 'app.taskActionInstructTitle';
+}
+
+function updateChatSurfaceHeader() {
+  if (taskActionSurface === null) {
+    elements.chatSurfaceLabel.textContent = t('app.newTask');
+    elements.chatTitle.textContent = t('app.createTask');
+    elements.chatSurfaceDescription.textContent = t('app.startConversationDescription');
+    return;
+  }
+  elements.chatSurfaceLabel.textContent = t('app.existingTask');
+  elements.chatTitle.textContent = t(taskActionTitleKey(taskActionSurface.action));
+  elements.chatSurfaceDescription.textContent = t(taskActionLabelKey(taskActionSurface.action));
+}
+
+function taskActionSnapshotValue(value) {
+  return typeof value === 'string' && value.length > 0 ? value : t('app.notAvailable');
+}
+
+function renderTaskActionContext() {
+  elements.chatTaskActionContext.replaceChildren();
+  elements.chatTaskActionOptions.replaceChildren();
+  if (taskActionSurface === null) {
+    elements.chatTaskActionContext.hidden = true;
+    elements.chatTaskActionOptions.hidden = true;
+    return;
+  }
+
+  const snapshot = taskActionSurface.snapshot;
+  const finalizationState = taskActionFinalizationState(taskActionSurface);
+  elements.chatTaskActionContext.hidden = false;
+  const heading = createElement('strong', 'chat-task-action-heading', t('app.taskActionTarget'));
+  heading.dataset.i18n = 'app.taskActionTarget';
+  const facts = document.createElement('dl');
+  facts.className = 'chat-task-action-facts';
+  const fields = [
+    ['app.taskActionTaskId', snapshot.taskId],
+    ['app.taskActionStatus', typeof snapshot.status === 'string'
+      ? t(`app.status.${snapshot.status}`)
+      : undefined],
+    ['app.taskActionLatestRun', snapshot.latestRun],
+    ['app.taskActionBranch', snapshot.branch],
+    ['app.taskActionWorkflow', snapshot.workflow],
+  ];
+  for (const [labelKey, value] of fields) {
+    const label = createElement('dt', '', t(labelKey));
+    label.dataset.i18n = labelKey;
+    facts.append(label, createElement('dd', '', taskActionSnapshotValue(value)));
+  }
+  elements.chatTaskActionContext.append(heading, facts);
+
+  if (taskActionSurface.action !== 'retry') {
+    elements.chatTaskActionOptions.hidden = true;
+    return;
+  }
+  elements.chatTaskActionOptions.hidden = false;
+  const label = createElement('label', 'chat-task-action-option-label', t('app.retryStartPoint'));
+  label.dataset.i18n = 'app.retryStartPoint';
+  const select = document.createElement('select');
+  select.className = 'chat-task-action-option-select';
+  select.id = 'chat-task-action-option';
+  select.name = 'task-action-option';
+  select.setAttribute('aria-describedby', 'chat-task-action-option-message');
+  if (taskActionSurface.selectedOptionId === undefined) {
+    const placeholder = createElement('option', '', t('app.retryStartPointPlaceholder'));
+    placeholder.value = '';
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    select.append(placeholder);
+  }
+  for (const option of taskActionSurface.retryStartOptions) {
+    const entry = createElement('option', '', option.label ?? option.id);
+    entry.value = option.id;
+    entry.selected = option.id === taskActionSurface.selectedOptionId;
+    select.append(entry);
+  }
+  select.disabled = finalizationState === 'finalizing'
+    || finalizationState === 'accepted'
+    || taskActionSurface.retryStartOptions.length === 0;
+  select.addEventListener('change', () => {
+    if (taskActionSurface === null) return;
+    const selectedOptionId = select.value;
+    taskActionSurface = {
+      ...taskActionSurface,
+      selectedOptionId: selectedOptionId === '' ? undefined : selectedOptionId,
+      canFinalizeRetry: selectedOptionId !== '',
+    };
+    syncChatControls();
+  });
+  const message = createElement(
+    'p',
+    'chat-task-action-option-message',
+    taskActionSurface.canFinalizeRetry ? t('app.retryStartPointHint') : t('app.retryOptionRequired'),
+  );
+  message.id = 'chat-task-action-option-message';
+  message.dataset.i18n = taskActionSurface.canFinalizeRetry
+    ? 'app.retryStartPointHint'
+    : 'app.retryOptionRequired';
+  elements.chatTaskActionOptions.append(label, select, message);
+  label.htmlFor = select.id;
+}
+
 function syncChatControls() {
   const settingsDisabled = !executionEnabled || chatOperationInProgress;
-  elements.category.disabled = settingsDisabled;
-  elements.workflow.disabled = settingsDisabled;
-  elements.chatMode.disabled = settingsDisabled;
-  elements.chatMessage.disabled = !executionEnabled;
-  elements.chatSendButton.disabled = !executionEnabled || chatOperationInProgress;
-  elements.chatGoButton.disabled = !executionEnabled || chatOperationInProgress;
-  elements.chatSetupButton.disabled = !executionEnabled || chatOperationInProgress;
-  elements.chatNewButton.disabled = chatSession === null || settingsDisabled;
+  const taskAction = taskActionSurface !== null;
+  const taskActionState = taskActionFinalizationState(taskActionSurface);
+  const taskActionLocked = taskActionState === 'finalizing' || taskActionState === 'accepted';
+  const hasProjects = [...elements.project.options].some((option) => option.value !== '');
+  const taskActionCannotFinalize = taskAction
+    && (taskActionLocked
+      || taskActionSurface.action === 'retry' && taskActionSurface.canFinalizeRetry !== true);
+  const typedTaskActionGo = taskAction
+    ? taskActionGoState(taskActionSurface, elements.chatMessage.value)
+    : { canSubmit: true };
+  const taskActionGoBlocked = taskAction && typedTaskActionGo.goCommand !== false
+    && typedTaskActionGo.canSubmit !== true;
+  elements.category.disabled = settingsDisabled || taskAction;
+  elements.project.disabled = taskAction || !hasProjects;
+  elements.workflow.disabled = settingsDisabled || taskAction;
+  elements.chatMode.disabled = settingsDisabled || taskAction;
+  elements.chatMessage.disabled = !executionEnabled || taskActionLocked;
+  elements.chatSendButton.disabled = !executionEnabled
+    || chatOperationInProgress
+    || taskActionLocked
+    || taskActionGoBlocked;
+  elements.chatGoButton.disabled = !executionEnabled
+    || chatOperationInProgress
+    || taskActionCannotFinalize;
+  elements.chatSetupButton.disabled = !executionEnabled || chatOperationInProgress || taskAction;
+  elements.chatNewButton.disabled = chatSession === null
+    || chatOperationInProgress
+    || taskAction && !taskActionCanRestart(taskActionSurface);
 }
 
 function setExecutionEnabled(enabled) {
@@ -530,20 +674,26 @@ function finishChatThinking(completed) {
 
 function resetChatSession() {
   chatSession = null;
+  taskActionSurface = null;
   elements.chatSessionMeta.textContent = t('app.startConversation');
   setChatStatusRaw('');
   clearChatThinking();
   renderChatPlaceholder();
+  updateChatSurfaceHeader();
+  renderTaskActionContext();
   syncChatControls();
 }
 
 function updateChatSessionDescription(session) {
-  elements.chatSessionMeta.textContent = [
-    session.workflow,
-    session.mode,
-    session.provider,
-    session.model,
-  ].filter(Boolean).join(' · ');
+  elements.chatSessionMeta.textContent = taskActionSurface === null
+    ? [
+      session.workflow,
+      session.mode,
+      session.provider,
+      session.model,
+    ].filter(Boolean).join(' · ')
+    : `${t('app.existingTask')} · ${taskActionSurface.taskId}`;
+  updateChatSurfaceHeader();
   syncChatControls();
 }
 
@@ -561,6 +711,44 @@ function appendChatEntry(role, content) {
   elements.chatTranscript.querySelector('.chat-placeholder')?.remove();
   elements.chatTranscript.append(entry);
   elements.chatTranscript.scrollTop = elements.chatTranscript.scrollHeight;
+}
+
+function taskActionTask() {
+  if (taskActionSurface === null) return undefined;
+  return taskCollection.tasks.find((task) => task.projectId === taskActionSurface.projectId
+    && task.taskId === taskActionSurface.taskId);
+}
+
+function openTaskActionConversation(task, session) {
+  const model = taskActionSurfaceModel(session, task);
+  if (model === null) throw new Error('Task action conversation is missing its task reference');
+  taskActionSurface = {
+    ...taskActionSurfaceWithState(model, 'active'),
+    projectId: task.projectId,
+  };
+  chatSession = session;
+  setExecutionEnabled(true);
+  setChatStatusRaw('');
+  clearChatThinking();
+  elements.chatTranscript.replaceChildren();
+  updateChatSessionDescription(session);
+  renderTaskActionContext();
+  setScreen('task');
+  if (session.intro !== '') appendChatEntry('assistant', session.intro);
+  else renderChatPlaceholder();
+  elements.chatMessage.focus();
+}
+
+function appendTaskActionResult(result) {
+  const mode = result.mode === undefined ? '' : ` · ${result.mode}`;
+  const pid = result.pid === undefined ? '' : ` · PID ${result.pid}`;
+  const disposition = result.disposition === 'reused'
+    ? t('app.queued')
+    : result.disposition === 'started' ? t('app.started') : t('app.taskActionDone');
+  appendChatEntry(
+    'system',
+    `${t('app.taskActionCompleted')} ${disposition}${mode}${pid}`,
+  );
 }
 
 function createSettingsField(labelKey, control) {
@@ -769,7 +957,15 @@ function handleChatMessageInput() {
 function submitGoCommand() {
   if (elements.chatGoButton.disabled) return;
   const draft = elements.chatMessage.value.trim();
-  elements.chatMessage.value = draft === '' ? '/go' : `${draft} /go`;
+  const nextText = draft === '' ? '/go' : `${draft} /go`;
+  if (taskActionSurface !== null) {
+    const goState = taskActionGoState(taskActionSurface, nextText);
+    if (!goState.canSubmit) {
+      setChatStatusMessage(goState.reasonKey ?? 'app.taskActionFinalized');
+      return;
+    }
+  }
+  elements.chatMessage.value = nextText;
   chatMessageRevision += 1;
   resizeChatMessage();
   elements.chatForm.requestSubmit();
@@ -807,9 +1003,7 @@ function setScreen(nextScreen) {
   elements.viewerScreen.inert = isTaskScreen;
   elements.viewerScreen.setAttribute('aria-hidden', String(isTaskScreen));
   elements.chatCollapseButton.hidden = false;
-  elements.chatSurfaceLabel.textContent = t('app.newTask');
-  elements.chatTitle.textContent = t('app.createTask');
-  elements.chatSurfaceDescription.textContent = t('app.startConversationDescription');
+  updateChatSurfaceHeader();
   elements.chatSurface.dataset.transition = isTaskScreen ? 'entering' : 'exiting';
   if (isTaskScreen) {
     document.body.dataset.screen = 'task';
@@ -850,6 +1044,11 @@ function closeTaskSurface() {
   if (screenMode === 'task') {
     setScreen('viewer');
   }
+}
+
+function openNewTaskSurface() {
+  if (taskActionSurface !== null) resetChatSession();
+  setScreen('task');
 }
 
 function initializeTaskSurface() {
@@ -897,6 +1096,7 @@ function describeChatSettingsChange(previous, next) {
 async function reconfigureActiveChatSession() {
   updateExecutionContextSummary();
   if (chatSession === null) return;
+  if (taskActionSurface !== null) return;
   const previous = chatSession;
   const request = {
     workflow: elements.workflow.value,
@@ -925,14 +1125,26 @@ async function reconfigureActiveChatSession() {
 
 async function startNewConversation() {
   if (chatSession === null || chatOperationInProgress) return;
+  const restartingTaskAction = taskActionSurface !== null;
+  const previousTaskActionState = taskActionFinalizationState(taskActionSurface);
+  if (restartingTaskAction && !taskActionCanRestart(taskActionSurface)) return;
   setChatOperationInProgress(true);
   setChatStatusMessage('app.chatPreparing');
   try {
     const session = await restartChatSession(chatSession.id);
+    if (restartingTaskAction) {
+      const model = taskActionSurfaceModel(session, taskActionTask());
+      if (model === null) throw new Error('Restarted task action conversation is missing its task reference');
+      taskActionSurface = {
+        ...taskActionSurfaceWithState(model, 'active'),
+        projectId: taskActionSurface.projectId,
+      };
+    }
     chatSession = session;
     updateChatSessionDescription(session);
     clearChatThinking();
     elements.chatTranscript.replaceChildren();
+    renderTaskActionContext();
     if (session.intro === '') {
       renderChatPlaceholder();
     } else {
@@ -941,10 +1153,28 @@ async function startNewConversation() {
     setChatStatusMessage('app.chatStarted');
     elements.chatMessage.focus();
   } catch (error) {
-    setChatStatusRaw(error instanceof Error ? error.message : String(error));
+    if (
+      restartingTaskAction
+      && previousTaskActionState === 'failed'
+      && isHttpConflict(error)
+    ) {
+      taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'accepted');
+      renderTaskActionContext();
+      syncChatControls();
+      setChatStatusMessage('app.taskActionAlreadyAccepted');
+    } else {
+      setChatStatusRaw(error instanceof Error ? error.message : String(error));
+    }
   } finally {
     setChatOperationInProgress(false);
   }
+}
+
+function isHttpConflict(error) {
+  return error !== null
+    && typeof error === 'object'
+    && 'status' in error
+    && error.status === 409;
 }
 
 async function submitChat(event) {
@@ -955,7 +1185,18 @@ async function submitChat(event) {
     setChatStatusMessage(EMPTY_CHAT_MESSAGE_KEY);
     return;
   }
+  const taskActionGo = taskActionSurface === null
+    ? { canSubmit: true, goCommand: false }
+    : taskActionGoState(taskActionSurface, text);
+  if (!taskActionGo.canSubmit) {
+    setChatStatusMessage(taskActionGo.reasonKey ?? 'app.taskActionFinalized');
+    return;
+  }
   if (text === '/setup') {
+    if (taskActionSurface !== null) {
+      setChatStatusMessage('app.taskActionSettingsDisabled');
+      return;
+    }
     appendChatEntry('user', text);
     elements.chatMessage.value = '';
     chatMessageRevision += 1;
@@ -967,6 +1208,7 @@ async function submitChat(event) {
   const messageRevision = chatMessageRevision;
   let messageWasCleared = false;
   let responseCompleted = false;
+  let taskActionFinalizationStarted = false;
   setChatOperationInProgress(true);
   beginChatThinking();
   elements.chatStatus.dataset.busy = 'true';
@@ -983,16 +1225,54 @@ async function submitChat(event) {
       session.id,
       text,
       appendChatThinking,
+      taskActionGo.taskActionOptionId,
     );
     if (reply.kind === 'assistant_response') {
       appendChatEntry('assistant', reply.content);
     } else if (reply.kind === 'task_instruction') {
-      appendTaskInstruction(reply.task);
+      const instructionRoute = taskInstructionRoute(session, reply);
+      if (instructionRoute?.kind === 'new-task') {
+        appendTaskInstruction(instructionRoute.task);
+      } else if (instructionRoute?.kind === 'task-action' && taskActionSurface !== null) {
+        const reference = instructionRoute.taskAction;
+        const taskActionOptionId = instructionRoute.taskActionOptionId;
+        if (
+          reference.sessionId !== session.id
+          || reference.taskId !== taskActionSurface.taskId
+          || reference.action !== taskActionSurface.action
+          || taskActionSurface.action === 'retry'
+          && taskActionOptionId !== taskActionGo.taskActionOptionId
+        ) {
+          throw new Error('Task action conversation response is invalid');
+        }
+        taskActionFinalizationStarted = true;
+        taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'finalizing');
+        syncChatControls();
+        setChatStatusMessage('app.taskActionFinalizing');
+        const result = await runTaskAction(
+          taskActionSurface.projectId,
+          reference.taskId,
+          reference.action,
+          instructionRoute.task,
+          reference.sessionId,
+          taskActionOptionId,
+        );
+        taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'accepted');
+        responseCompleted = true;
+        messageWasCleared = false;
+        renderTaskActionContext();
+        syncChatControls();
+        appendTaskActionResult(result);
+        setChatStatusMessage('app.taskActionCompleted');
+        await refreshRuns();
+      } else {
+        throw new Error('Task action conversation response is invalid');
+      }
     } else {
       appendChatEntry('system', reply.message);
     }
     responseCompleted = reply.kind !== 'error';
-    setChatStatusRaw('');
+    if (!taskActionFinalizationStarted) setChatStatusRaw('');
   } catch (error) {
     if (
       messageWasCleared
@@ -1002,7 +1282,20 @@ async function submitChat(event) {
       elements.chatMessage.value = text;
       resizeChatMessage();
     }
-    setChatStatusRaw(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    const finalizationState = taskActionFinalizationState(taskActionSurface);
+    if (taskActionFinalizationStarted && finalizationState === 'finalizing') {
+      taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'failed');
+      renderTaskActionContext();
+      syncChatControls();
+      appendChatEntry('system', `${message}\n${t('app.taskActionReopen')}`);
+      setChatStatusRaw(t('app.taskActionReopen'));
+    } else if (taskActionFinalizationStarted && finalizationState === 'accepted') {
+      appendChatEntry('system', message);
+      setChatStatusMessage('app.taskActionCompleted');
+    } else {
+      setChatStatusRaw(message);
+    }
   } finally {
     finishChatThinking(responseCompleted);
     delete elements.chatStatus.dataset.busy;
@@ -1105,6 +1398,16 @@ function applyTaskCollection(collection) {
     else selectedRun = nextRun;
   }
   executionView.renderTaskList(collection.tasks, selectedRun);
+  syncTaskActionButtons();
+  if (taskActionSurface !== null) {
+    const task = collection.tasks.find((candidate) => candidate.projectId === taskActionSurface.projectId
+      && candidate.taskId === taskActionSurface.taskId);
+    const model = taskActionSurfaceModel(chatSession, task);
+    if (model !== null) {
+      taskActionSurface = { ...taskActionSurface, snapshot: model.snapshot };
+      renderTaskActionContext();
+    }
+  }
   elements.viewerScreen.dataset.mobileView = selectedRun === null ? 'list' : 'detail';
   updateWarnings(collection.warnings);
   if (selectedRun === null) {
@@ -1113,6 +1416,87 @@ function applyTaskCollection(collection) {
     return;
   }
   if (!sameRunSelectionState(previous, selectedRun)) startLiveRunStream(runSelectionGeneration);
+}
+
+function syncTaskActionButtons() {
+  for (const button of elements.runList.querySelectorAll('button.task-action')) {
+    const taskId = button.dataset.taskId;
+    const busy = taskId !== undefined && taskActionsInFlight.has(taskId);
+    button.disabled = busy;
+    button.setAttribute('aria-busy', String(busy));
+  }
+}
+
+function actionNeedsConfirmation(action) {
+  return taskActionNeedsConfirmation(action);
+}
+
+function showTaskActionResult(result) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'task-action-dialog';
+  const model = buildTaskActionDialogModel(result, ++taskActionDialogSequence);
+  dialog.setAttribute('aria-labelledby', model.titleId);
+  const title = createElement('h2', '', t(model.titleKey));
+  title.id = model.titleId;
+  const status = createElement(
+    'p',
+    'task-action-dialog-status',
+    t(model.statusKey),
+  );
+  dialog.append(title, status);
+  if (model.taskStatusKey !== undefined) {
+    dialog.append(createElement('p', 'task-action-dialog-status', t(model.taskStatusKey)));
+  }
+  if (model.diff !== undefined) {
+    dialog.append(createElement('pre', 'task-action-output', model.diff));
+  }
+  if (model.prUrl !== undefined) {
+    const link = document.createElement('a');
+    link.className = 'task-action-result-link';
+    link.href = model.prUrl;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.textContent = model.prUrl;
+    dialog.append(link);
+  }
+  const close = createElement('button', 'secondary-button', t('app.close'));
+  close.type = 'button';
+  close.addEventListener('click', () => dialog.close());
+  dialog.append(close);
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
+  close.focus();
+}
+
+async function runSelectedTaskAction(task, action, button) {
+  if (taskActionsInFlight.has(task.taskId)) return;
+  if (actionNeedsConfirmation(action) && !window.confirm(t(`task.confirm.${action}`))) return;
+  taskActionsInFlight.add(task.taskId);
+  syncTaskActionButtons();
+  elements.runWarning.textContent = '';
+  try {
+    const result = await runTaskAction(task.projectId, task.taskId, action);
+    if (
+      (action === 'retry' || action === 'instruct')
+      && result.status === 'conversation'
+      && result.chatSession !== undefined
+    ) {
+      openTaskActionConversation(task, result.chatSession);
+    } else {
+      showTaskActionResult(result);
+    }
+    await refreshRuns();
+  } catch (error) {
+    elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    taskActionsInFlight.delete(task.taskId);
+    syncTaskActionButtons();
+    if (button !== undefined) button.disabled = false;
+  }
 }
 
 async function requeueSelectedTask(task, button) {
@@ -1239,8 +1623,10 @@ function closeExecutionContextFromOutside(event) {
   }
 }
 
-document.addEventListener('pointerdown', closeExecutionContextFromOutside);
-document.addEventListener('click', closeExecutionContextFromOutside);
+// Capture outside interactions before viewer controls can stop propagation.
+// Events owned by the context or directory dialog are rejected by the pure boundary check.
+document.addEventListener('pointerdown', closeExecutionContextFromOutside, true);
+document.addEventListener('click', closeExecutionContextFromOutside, true);
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
@@ -1263,7 +1649,7 @@ elements.chatSetupButton.addEventListener('click', submitSetupCommand);
 elements.chatGoButton.addEventListener('click', submitGoCommand);
 elements.chatNewButton.addEventListener('click', () => void startNewConversation());
 elements.viewerNav.addEventListener('click', () => setScreen('viewer'));
-elements.newTaskButton.addEventListener('click', () => setScreen('task'));
+elements.newTaskButton.addEventListener('click', openNewTaskSurface);
 elements.mobileTaskListButton.addEventListener('click', () => {
   elements.viewerScreen.dataset.mobileView = 'list';
 });
@@ -1398,9 +1784,8 @@ subscribeLocaleChange(() => {
   applyTranslations();
   updateLanguageToggle();
   updateExecutionContextSummary();
-  elements.chatSurfaceLabel.textContent = t('app.newTask');
-  elements.chatTitle.textContent = t('app.createTask');
-  elements.chatSurfaceDescription.textContent = t('app.startConversationDescription');
+  updateChatSurfaceHeader();
+  renderTaskActionContext();
   refreshChatLocale();
   executionView.refreshLocale();
 });

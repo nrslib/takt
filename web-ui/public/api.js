@@ -1,3 +1,5 @@
+import { buildTaskActionRequest } from './task-action-ui.js';
+
 async function readJsonOrNull(response) {
   try {
     return await response.json();
@@ -12,6 +14,12 @@ function responseErrorMessage(response, body) {
     : `Request failed: ${response.status}`;
 }
 
+function responseError(response, body) {
+  const error = new Error(responseErrorMessage(response, body));
+  error.status = response.status;
+  return error;
+}
+
 async function requestJson(path, options) {
   const response = await fetch(path, options);
   return readJsonResponse(response);
@@ -20,7 +28,7 @@ async function requestJson(path, options) {
 async function readJsonResponse(response) {
   const body = await readJsonOrNull(response);
   if (!response.ok) {
-    throw new Error(responseErrorMessage(response, body));
+    throw responseError(response, body);
   }
   if (body === null) throw new Error(`Invalid response: ${response.status}`);
   return body;
@@ -48,7 +56,7 @@ async function fetchMutation(path, body) {
 
   const errorBody = await readJsonOrNull(response);
   if (errorBody?.error !== 'Session token is invalid') {
-    throw new Error(responseErrorMessage(response, errorBody));
+    throw responseError(response, errorBody);
   }
 
   await refreshSession();
@@ -99,6 +107,21 @@ export function startTask(request) {
 
 export function requeueTask(projectId, taskId) {
   return requestMutation(`/api/tasks/${encodeURIComponent(taskId)}/requeue`, { projectId });
+}
+
+export function runTaskAction(projectId, taskId, action, input, conversationId, taskActionOptionId) {
+  const request = buildTaskActionRequest(
+    projectId,
+    taskId,
+    action,
+    input,
+    conversationId,
+    taskActionOptionId,
+  );
+  return requestMutation(
+    request.path,
+    request.body,
+  );
 }
 
 function mutationOptions(token, body) {
@@ -177,13 +200,16 @@ async function readChatStream(response, onThinking) {
   return reply;
 }
 
-export async function sendChatMessage(sessionId, text, onThinking) {
+export async function sendChatMessage(sessionId, text, onThinking, taskActionOptionId) {
   const response = await fetchMutation(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
-    { text },
+    {
+      text,
+      ...(taskActionOptionId === undefined ? {} : { taskActionOptionId }),
+    },
   );
   if (!response.ok) {
-    throw new Error(responseErrorMessage(response, await readJsonOrNull(response)));
+    throw responseError(response, await readJsonOrNull(response));
   }
   return readChatStream(response, onThinking);
 }
