@@ -178,8 +178,10 @@ function normalizeMcpFlagName(flag: string): string {
 
 function isMcpCredentialFlag(flag: string): boolean {
   // Only the standard compact credential aliases are protected. Generic
-  // short options such as -k, -p, -t, and -A are command-specific.
-  if (/^-[^-]/u.test(flag)) return flag === '-H' || flag === '-u';
+  // short options such as -k, -p, -t, and -A are command-specific. Curl's
+  // -uVALUE/-UVALUE forms are intentionally parsed as compact credentials;
+  // this makes -url unavoidably ambiguous with -u + "rl".
+  if (/^-[^-]/u.test(flag)) return flag === '-H' || flag === '-u' || flag === '-U';
   const normalized = normalizeMcpFlagName(flag);
   return MCP_CREDENTIAL_FLAG_NAMES.has(normalized)
     || MCP_CREDENTIAL_FLAG_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
@@ -203,6 +205,9 @@ function parseMcpFlag(argument: string): { readonly name: string; readonly inlin
   }
   if (argument.startsWith('-u') && argument.length > 2 && argument[2] !== '=' && argument[2] !== ':') {
     return { name: '-u', inlineValue: argument.slice(2) };
+  }
+  if (argument.startsWith('-U') && argument.length > 2 && argument[2] !== '=' && argument[2] !== ':') {
+    return { name: '-U', inlineValue: argument.slice(2) };
   }
   const separatorIndex = argument.search(/[=:]/u);
   const name = separatorIndex === -1 ? argument : argument.slice(0, separatorIndex);
