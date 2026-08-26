@@ -106,6 +106,52 @@ describe('central task CAS repository', () => {
     })).rejects.toBeInstanceOf(CentralTaskCasError);
   });
 
+  it('requeues a failed run with the same execution settings exactly once', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({
+      task: 'retry me',
+      workflow: 'default',
+      worktree: '/tmp/takt-worktrees',
+      branch: 'feature/retry-me',
+      baseBranch: 'main',
+      autoPr: true,
+      draftPr: true,
+    });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    await repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'failed',
+      failure: { code: 'workflow_failed', message: 'failed' },
+    });
+
+    const requeued = await repository.requeueFailedRun(started.runId);
+
+    expect(requeued.kind).toBe('started');
+    expect(requeued.runId).not.toBe(started.runId);
+    expect(requeued.task).toMatchObject({
+      taskId: started.task.taskId,
+      status: 'starting',
+      attempt: 2,
+      worktree: '/tmp/takt-worktrees',
+      branch: 'feature/retry-me',
+      baseBranch: 'main',
+      autoPr: true,
+      draftPr: true,
+    });
+    expect(requeued.task.failure).toBeUndefined();
+    await expect(repository.requeueFailedRun(started.runId)).rejects.toThrow(
+      'Run is not attached to a central task',
+    );
+  });
+
   it('keeps separate TAKT_CONFIG_DIR namespaces independent', async () => {
     const { projectDirectory, globalConfigDirectory, project, repository } = await setup();
     const otherGlobal = await createTemporaryDirectory('takt-central-other-global-');

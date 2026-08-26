@@ -73,11 +73,16 @@ export interface CentralTaskRecord {
   readonly task: string;
   readonly workflow: string;
   readonly worktree: CentralWorktreeRequest;
+  readonly branch?: string;
+  readonly baseBranch?: string;
+  readonly autoPr?: boolean;
+  readonly draftPr?: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly activeExecution?: CentralActiveExecution;
   readonly failure?: CentralTaskFailure;
   readonly runId?: string;
+  readonly prUrl?: string;
 }
 
 interface StoredTasks {
@@ -108,6 +113,10 @@ export class CentralTaskBusyError extends Error {
   constructor() {
     super('A Web UI task is already starting or running for this state');
   }
+}
+
+export class CentralTaskRequeueError extends Error {
+  readonly code = 'CENTRAL_TASK_REQUEUE_INVALID';
 }
 
 export class CentralTaskCasError extends Error {
@@ -174,6 +183,25 @@ function startPendingTask(task: CentralTaskRecord, now: string): CentralTaskHand
     },
   };
   return { task: started, ownerToken, executionId, runId };
+}
+
+function requeueFailedTask(task: CentralTaskRecord, now: string): CentralTaskRecord {
+  return {
+    taskId: task.taskId,
+    generation: task.generation + 1,
+    status: 'pending',
+    origin: task.origin,
+    attempt: task.attempt,
+    task: task.task,
+    workflow: task.workflow,
+    worktree: task.worktree,
+    ...(task.branch === undefined ? {} : { branch: task.branch }),
+    ...(task.baseBranch === undefined ? {} : { baseBranch: task.baseBranch }),
+    ...(task.autoPr === undefined ? {} : { autoPr: task.autoPr }),
+    ...(task.draftPr === undefined ? {} : { draftPr: task.draftPr }),
+    createdAt: task.createdAt,
+    updatedAt: now,
+  };
 }
 
 function assertStateId(stateId: string): void {
@@ -633,6 +661,35 @@ function validateTask(task: CentralTaskRecord): void {
   if (task.worktree !== false && task.worktree !== true && typeof task.worktree !== 'string') {
     throw new CentralTaskCasError('Central task worktree policy is invalid');
   }
+  if (task.branch !== undefined && (typeof task.branch !== 'string' || task.branch.length === 0)) {
+    throw new CentralTaskCasError('Central task branch is invalid');
+  }
+  if (task.baseBranch !== undefined && (typeof task.baseBranch !== 'string' || task.baseBranch.length === 0)) {
+    throw new CentralTaskCasError('Central task base branch is invalid');
+  }
+  if (task.autoPr !== undefined && typeof task.autoPr !== 'boolean') {
+    throw new CentralTaskCasError('Central task auto PR setting is invalid');
+  }
+  if (task.draftPr !== undefined && typeof task.draftPr !== 'boolean') {
+    throw new CentralTaskCasError('Central task draft PR setting is invalid');
+  }
+  if (task.draftPr === true && task.autoPr !== true) {
+    throw new CentralTaskCasError('Central task draft PR requires auto PR');
+  }
+  if (task.prUrl !== undefined) {
+    let url: URL;
+    try {
+      url = new URL(task.prUrl);
+    } catch {
+      throw new CentralTaskCasError('Central task PR URL is invalid');
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      throw new CentralTaskCasError('Central task PR URL is invalid');
+    }
+  }
+  if (task.autoPr === true && task.worktree === false) {
+    throw new CentralTaskCasError('Central task auto PR requires a worktree');
+  }
   assertIsoTimestamp(task.createdAt, 'task.createdAt');
   assertIsoTimestamp(task.updatedAt, 'task.updatedAt');
   if (task.activeExecution !== undefined) {
@@ -956,6 +1013,10 @@ export class CentralTaskRepository {
     readonly task: string;
     readonly workflow: string;
     readonly worktree: CentralWorktreeRequest;
+    readonly branch?: string;
+    readonly baseBranch?: string;
+    readonly autoPr?: boolean;
+    readonly draftPr?: boolean;
     readonly origin?: CentralTaskOrigin;
   }): Promise<CentralTaskHandle> {
     if (!input.task.trim() || !input.workflow.trim()) throw new Error('task and workflow are required');
@@ -976,6 +1037,10 @@ export class CentralTaskRepository {
         task: input.task,
         workflow: input.workflow,
         worktree: input.worktree,
+        ...(input.branch === undefined ? {} : { branch: input.branch }),
+        ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
+        ...(input.autoPr === undefined ? {} : { autoPr: input.autoPr }),
+        ...(input.draftPr === undefined ? {} : { draftPr: input.draftPr }),
         createdAt: now,
         updatedAt: now,
         runId,
@@ -1001,6 +1066,10 @@ export class CentralTaskRepository {
     readonly task: string;
     readonly workflow: string;
     readonly worktree: CentralWorktreeRequest;
+    readonly branch?: string;
+    readonly baseBranch?: string;
+    readonly autoPr?: boolean;
+    readonly draftPr?: boolean;
   }): Promise<CentralTaskLaunchDecision> {
     return withLock(this.paths, async () => {
       const tasks = [...await this.readTasks()];
@@ -1016,6 +1085,10 @@ export class CentralTaskRepository {
           task: input.task,
           workflow: input.workflow,
           worktree: input.worktree,
+          ...(input.branch === undefined ? {} : { branch: input.branch }),
+          ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
+          ...(input.autoPr === undefined ? {} : { autoPr: input.autoPr }),
+          ...(input.draftPr === undefined ? {} : { draftPr: input.draftPr }),
           createdAt: now,
           updatedAt: now,
         };
@@ -1035,6 +1108,10 @@ export class CentralTaskRepository {
           task: input.task,
           workflow: input.workflow,
           worktree: input.worktree,
+          ...(input.branch === undefined ? {} : { branch: input.branch }),
+          ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
+          ...(input.autoPr === undefined ? {} : { autoPr: input.autoPr }),
+          ...(input.draftPr === undefined ? {} : { draftPr: input.draftPr }),
           createdAt: now,
           updatedAt: now,
         };
@@ -1063,6 +1140,10 @@ export class CentralTaskRepository {
         task: input.task,
         workflow: input.workflow,
         worktree: input.worktree,
+        ...(input.branch === undefined ? {} : { branch: input.branch }),
+        ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
+        ...(input.autoPr === undefined ? {} : { autoPr: input.autoPr }),
+        ...(input.draftPr === undefined ? {} : { draftPr: input.draftPr }),
         createdAt: now,
         updatedAt: now,
         runId,
@@ -1077,6 +1158,43 @@ export class CentralTaskRepository {
       };
       await this.writeTasks([...tasks, record]);
       return { kind: 'started', task: record, ownerToken, executionId, runId };
+    });
+  }
+
+  /** Requeue one failed run while preserving its exact execution settings. */
+  async requeueFailedRun(runId: string): Promise<CentralTaskLaunchDecision> {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(runId)) {
+      throw new CentralTaskRequeueError('Run id is invalid');
+    }
+    return withLock(this.paths, async () => {
+      const tasks = [...await this.readTasks()];
+      const failedIndex = tasks.findIndex((task) => task.runId === runId);
+      const failed = failedIndex < 0 ? undefined : tasks[failedIndex];
+      if (failed === undefined) {
+        throw new CentralTaskRequeueError('Run is not attached to a central task');
+      }
+      if (failed.status !== 'failed') {
+        throw new CentralTaskRequeueError('Only failed runs can be requeued');
+      }
+      const now = new Date().toISOString();
+      tasks[failedIndex] = requeueFailedTask(failed, now);
+      const active = tasks.find((task) => task.status === 'starting' || task.status === 'running');
+      if (active?.activeExecution !== undefined) {
+        await this.writeTasks(tasks);
+        return { kind: 'reused', task: tasks[failedIndex]!, active: active.activeExecution };
+      }
+      const pendingIndex = tasks.findIndex((task) => task.status === 'pending');
+      if (pendingIndex < 0) throw new CentralTaskCasError('Requeued task was not persisted as pending');
+      const claimed = startPendingTask(tasks[pendingIndex]!, now);
+      tasks[pendingIndex] = claimed.task;
+      await this.writeTasks(tasks);
+      return {
+        kind: 'started',
+        task: claimed.task,
+        ownerToken: claimed.ownerToken,
+        executionId: claimed.executionId,
+        runId: claimed.runId,
+      };
     });
   }
 
@@ -1247,6 +1365,7 @@ export class CentralTaskRepository {
     readonly ownerToken: string;
     readonly status: 'completed' | 'failed';
     readonly failure?: { readonly code: string; readonly message: string };
+    readonly prUrl?: string;
   }): Promise<CentralTaskRecord> {
     return withLock(this.paths, async () => {
       const tasks = [...await this.readTasks()];
@@ -1262,6 +1381,7 @@ export class CentralTaskRepository {
         status: input.status,
         updatedAt: now,
         ...(input.failure === undefined ? {} : { failure: { ...input.failure, at: now } }),
+        ...(input.prUrl === undefined ? {} : { prUrl: input.prUrl }),
       };
       delete (terminal as { activeExecution?: CentralActiveExecution }).activeExecution;
       tasks[index] = terminal;

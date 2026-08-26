@@ -7,6 +7,7 @@ export function browseDirectories(path: string | null): Promise<unknown>;
 export function pickNativeDirectory(): Promise<unknown>;
 export function registerProject(projectDirectory: string): Promise<unknown>;
 export function startRun(request: unknown): Promise<unknown>;
+export function requeueRun(projectId: string, slug: string): Promise<unknown>;
 export function createChatSession(request: unknown): Promise<unknown>;
 export function reconfigureChatSession(
   sessionId: string,

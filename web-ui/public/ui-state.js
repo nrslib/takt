@@ -24,6 +24,25 @@ export function resolveChatPaneWidth(workspaceWidth, currentWidth, manuallyAdjus
   );
 }
 
+export function snapshotExecutionSettings(settings) {
+  return { ...settings };
+}
+
+export function buildExecutionSettingsRequest(settings) {
+  const worktree = settings.worktreeMode === 'none'
+    ? false
+    : settings.worktreeMode === 'custom'
+      ? settings.worktreePath
+      : true;
+  return {
+    worktree,
+    ...(settings.branch === '' ? {} : { branch: settings.branch }),
+    ...(settings.baseBranch === '' ? {} : { baseBranch: settings.baseBranch }),
+    autoPr: settings.autoPr,
+    draftPr: settings.draftPr,
+  };
+}
+
 export function isWorkflowCatalogReady(selectedProjectId, catalogProjectId, categories) {
   return selectedProjectId !== ''
     && selectedProjectId === catalogProjectId

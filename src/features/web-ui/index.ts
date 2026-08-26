@@ -1,6 +1,6 @@
 import type { Server } from 'node:http';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { launchWithNodeSpawn } from './launcher.js';
+import { launchWithNodeSpawn, requeueWithNodeSpawn } from './launcher.js';
 import { createWebUiServer, listenWebUiServer } from './server.js';
 import {
   acquireWebUiInstanceLock,
@@ -49,6 +49,12 @@ export async function startWebUi(options: StartWebUiOptions): Promise<StartedWeb
         globalConfigDirectory,
         ...(registeredProject === undefined ? {} : { registeredProject }),
         request,
+      }),
+      requeue: (projectDirectory, runId, registeredProject) => requeueWithNodeSpawn({
+        projectDirectory,
+        globalConfigDirectory,
+        ...(registeredProject === undefined ? {} : { registeredProject }),
+        runId,
       }),
       control: {
         token: lock.controlToken,

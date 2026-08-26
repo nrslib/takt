@@ -15,6 +15,26 @@ export declare function resolveChatPaneWidth(
   manuallyAdjusted: boolean,
 ): number;
 
+export interface ExecutionSettings {
+  worktreeMode: 'auto' | 'custom' | 'none';
+  worktreePath: string;
+  branch: string;
+  baseBranch: string;
+  autoPr: boolean;
+  draftPr: boolean;
+}
+
+export interface ExecutionSettingsRequest {
+  worktree: boolean | string;
+  branch?: string;
+  baseBranch?: string;
+  autoPr: boolean;
+  draftPr: boolean;
+}
+
+export declare function snapshotExecutionSettings(settings: ExecutionSettings): ExecutionSettings;
+export declare function buildExecutionSettingsRequest(settings: ExecutionSettings): ExecutionSettingsRequest;
+
 export declare function isWorkflowCatalogReady(
   selectedProjectId: string,
   catalogProjectId: string,

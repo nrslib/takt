@@ -705,6 +705,43 @@ button {
   opacity: 0.45;
 }
 
+.chat-settings-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.chat-setting-field {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.chat-setting-field input:not([type="checkbox"]),
+.chat-setting-field select {
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-setting-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 5px 0;
+}
+
+.chat-settings-form > button { justify-self: start; }
+
+.chat-settings-intro,
+.chat-settings-summary {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
 #watch-button[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
@@ -890,6 +927,21 @@ button {
   font-weight: 620;
   letter-spacing: -0.015em;
   overflow-wrap: anywhere;
+}
+
+.detail-header-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-pr-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 .detail-grid {
@@ -1221,6 +1273,7 @@ pre {
   .workflow-selection,
   .project-control,
   .directory-path-control,
+  .chat-settings-form,
   .detail-grid { grid-template-columns: 1fr; }
 
   .detail-row:nth-child(odd),

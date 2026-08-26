@@ -35,6 +35,8 @@ Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`
 
 The Web UI stores its queued tasks, runs, and sessions in channel-neutral central state below `TAKT_CONFIG_DIR`. The CLI keeps its existing project-local state behavior. Concurrent execution or mutation of the same canonical project through the CLI and Web UI is not supported; use one channel for a given execution target at a time.
 
+Use `/setup` in Chat to configure the worktree, task branch, base branch, automatic pull-request creation, and draft status. An instruction produced by `/go` keeps a snapshot of those settings. When automatic PR creation is enabled, a successful workflow is committed, pushed, and published as a PR. A failed central task can be submitted again with the same settings from `Requeue` in its Run detail.
+
 Central workflow bundles keep ordinary MCP configuration portable. Non-credential environment variables and headers (for example `LOG_LEVEL`, `NODE_ENV`, `ENDPOINT`, and `Content-Type`) may remain literal. Credential-bearing environment/header keys and credential flags in stdio arguments must use one complete `${ENV_VAR}` reference; mixed or literal credential values are rejected. MCP URLs reject userinfo and credential-bearing query or fragment keys, while ordinary metadata such as `version=2` is allowed. Local CLI bundles keep their existing behavior.
 
 ## Interactive Mode

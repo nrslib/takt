@@ -7,6 +7,7 @@ import {
   getSession,
   getWorkflows,
   pickNativeDirectory,
+  requeueRun,
   reconfigureChatSession,
   registerProject,
   restartChatSession,
@@ -14,6 +15,7 @@ import {
   startRun,
 } from './api.js';
 import {
+  buildExecutionSettingsRequest,
   clampChatPaneWidth,
   captureRunDetailViewState,
   createDirectoryRequestTracker,
@@ -24,6 +26,7 @@ import {
   resolveChatPaneWidth,
   restoreRunDetailViewState,
   sameRunSelection as sameRunSelectionState,
+  snapshotExecutionSettings,
   shouldCloseExecutionContext,
 } from './ui-state.js';
 
@@ -36,6 +39,7 @@ const elements = {
   category: document.querySelector('#category'),
   chatForm: document.querySelector('#chat-form'),
   chatGoButton: document.querySelector('#chat-go-button'),
+  chatSetupButton: document.querySelector('#chat-setup-button'),
   chatCollapseButton: document.querySelector('#chat-collapse-button'),
   chatResizer: document.querySelector('#chat-resizer'),
   chatMessage: document.querySelector('#chat-message'),
@@ -94,6 +98,14 @@ let chatPaneWidthManuallyAdjusted = false;
 let executionEnabled = false;
 let chatOperationInProgress = false;
 let chatMessageRevision = 0;
+let executionSettings = {
+  worktreeMode: 'auto',
+  worktreePath: '',
+  branch: '',
+  baseBranch: '',
+  autoPr: true,
+  draftPr: true,
+};
 
 function createElement(tag, className, text) {
   const element = document.createElement(tag);
@@ -161,6 +173,7 @@ function syncChatControls() {
   elements.chatMessage.disabled = !executionEnabled;
   elements.chatSendButton.disabled = !executionEnabled || chatOperationInProgress;
   elements.chatGoButton.disabled = !executionEnabled || chatOperationInProgress;
+  elements.chatSetupButton.disabled = !executionEnabled || chatOperationInProgress;
   elements.chatNewButton.disabled = chatSession === null || settingsDisabled;
 }
 
@@ -513,21 +526,124 @@ function appendChatEntry(role, content) {
   elements.chatTranscript.scrollTop = elements.chatTranscript.scrollHeight;
 }
 
+function createSettingsField(label, control) {
+  const field = createElement('label', 'chat-setting-field');
+  field.append(createElement('span', '', label), control);
+  return field;
+}
+
+function executionSettingsSummary(settings = executionSettings) {
+  const worktree = settings.worktreeMode === 'none'
+    ? 'なし'
+    : settings.worktreeMode === 'custom'
+      ? settings.worktreePath
+      : '自動';
+  return [
+    `Worktree: ${worktree}`,
+    `Branch: ${settings.branch || '自動'}`,
+    `Base branch: ${settings.baseBranch || '既定'}`,
+    `Auto PR: ${settings.autoPr ? 'yes' : 'no'}`,
+    `Draft PR: ${settings.draftPr ? 'yes' : 'no'}`,
+  ].join(' · ');
+}
+
+function appendExecutionSettings() {
+  const entry = createElement('article', 'chat-entry chat-entry-settings');
+  entry.append(
+    createElement('span', 'chat-role', 'SETUP'),
+    createElement('p', 'chat-settings-intro', 'この会話から実行するタスクの設定です。'),
+  );
+  const form = createElement('form', 'chat-settings-form');
+  const worktreeMode = document.createElement('select');
+  for (const [value, label] of [['auto', '自動'], ['custom', 'パスを指定'], ['none', '使用しない']]) {
+    const option = createElement('option', '', label);
+    option.value = value;
+    option.selected = executionSettings.worktreeMode === value;
+    worktreeMode.append(option);
+  }
+  const worktreePath = document.createElement('input');
+  worktreePath.type = 'text';
+  worktreePath.value = executionSettings.worktreePath;
+  worktreePath.placeholder = '/path/to/task-worktree';
+  const branch = document.createElement('input');
+  branch.type = 'text';
+  branch.value = executionSettings.branch;
+  branch.placeholder = '自動生成';
+  const baseBranch = document.createElement('input');
+  baseBranch.type = 'text';
+  baseBranch.value = executionSettings.baseBranch;
+  baseBranch.placeholder = 'リポジトリの既定ブランチ';
+  const autoPr = document.createElement('input');
+  autoPr.type = 'checkbox';
+  autoPr.checked = executionSettings.autoPr;
+  const draftPr = document.createElement('input');
+  draftPr.type = 'checkbox';
+  draftPr.checked = executionSettings.draftPr;
+  const syncDependencies = () => {
+    worktreePath.disabled = worktreeMode.value !== 'custom';
+    branch.disabled = worktreeMode.value === 'none';
+    baseBranch.disabled = worktreeMode.value === 'none';
+    autoPr.disabled = worktreeMode.value === 'none';
+    if (autoPr.disabled) autoPr.checked = false;
+    draftPr.disabled = !autoPr.checked;
+    if (draftPr.disabled) draftPr.checked = false;
+  };
+  worktreeMode.addEventListener('change', syncDependencies);
+  autoPr.addEventListener('change', syncDependencies);
+  syncDependencies();
+  const save = createElement('button', 'secondary-button', '設定を保存');
+  save.type = 'submit';
+  form.append(
+    createSettingsField('Worktree', worktreeMode),
+    createSettingsField('Worktree path', worktreePath),
+    createSettingsField('Branch name', branch),
+    createSettingsField('Base branch', baseBranch),
+    createSettingsField('Auto-create PR', autoPr),
+    createSettingsField('Create as draft', draftPr),
+    save,
+  );
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const next = {
+      worktreeMode: worktreeMode.value,
+      worktreePath: worktreePath.value.trim(),
+      branch: worktreeMode.value === 'none' ? '' : branch.value.trim(),
+      baseBranch: worktreeMode.value === 'none' ? '' : baseBranch.value.trim(),
+      autoPr: autoPr.checked,
+      draftPr: draftPr.checked,
+    };
+    if (next.worktreeMode === 'custom' && next.worktreePath === '') {
+      elements.chatStatus.textContent = 'Worktree pathを入力してください。';
+      worktreePath.focus();
+      return;
+    }
+    executionSettings = next;
+    form.replaceChildren(createElement('p', 'chat-settings-summary', executionSettingsSummary()));
+    elements.chatStatus.textContent = '実行設定を保存しました。';
+  });
+  entry.append(form);
+  elements.chatTranscript.querySelector('.chat-placeholder')?.remove();
+  elements.chatTranscript.append(entry);
+  elements.chatTranscript.scrollTop = elements.chatTranscript.scrollHeight;
+}
+
 function appendTaskInstruction(task) {
+  const settings = snapshotExecutionSettings(executionSettings);
   const entry = createElement('article', 'chat-entry chat-entry-task');
   entry.append(
     createElement('span', 'chat-role', 'TASK'),
     createElement('pre', '', task),
+    createElement('p', 'chat-settings-summary', executionSettingsSummary(settings)),
   );
   const button = createElement('button', 'secondary-button', 'この指示で実行');
   button.type = 'button';
-  button.addEventListener('click', () => void launchTaskInstruction(task, button));
+  button.addEventListener('click', () => void launchTaskInstruction(task, settings, button));
   entry.append(button);
   elements.chatTranscript.append(entry);
   elements.chatTranscript.scrollTop = elements.chatTranscript.scrollHeight;
 }
 
-async function launchTaskInstruction(task, button) {
+async function launchTaskInstruction(task, settings, button) {
   button.disabled = true;
   elements.chatStatus.textContent = 'runを開始しています…';
   try {
@@ -535,6 +651,7 @@ async function launchTaskInstruction(task, button) {
       projectId: selectedProjectId(),
       prompt: task,
       workflow: elements.workflow.value,
+      ...buildExecutionSettingsRequest(settings),
     });
     const modeLabel = result.mode === 'watch' ? 'watch' : 'run';
     const dispositionLabel = result.disposition === 'reused'
@@ -579,6 +696,14 @@ function submitGoCommand() {
   if (elements.chatGoButton.disabled) return;
   const draft = elements.chatMessage.value.trim();
   elements.chatMessage.value = draft === '' ? '/go' : `${draft} /go`;
+  chatMessageRevision += 1;
+  resizeChatMessage();
+  elements.chatForm.requestSubmit();
+}
+
+function submitSetupCommand() {
+  if (elements.chatSetupButton.disabled) return;
+  elements.chatMessage.value = '/setup';
   chatMessageRevision += 1;
   resizeChatMessage();
   elements.chatForm.requestSubmit();
@@ -764,6 +889,15 @@ async function submitChat(event) {
     elements.chatStatus.textContent = EMPTY_CHAT_MESSAGE;
     return;
   }
+  if (text === '/setup') {
+    appendChatEntry('user', text);
+    elements.chatMessage.value = '';
+    chatMessageRevision += 1;
+    resizeChatMessage();
+    appendExecutionSettings();
+    elements.chatStatus.textContent = '';
+    return;
+  }
   const messageRevision = chatMessageRevision;
   let messageWasCleared = false;
   let responseCompleted = false;
@@ -903,7 +1037,7 @@ function renderLogEvents(events) {
 }
 
 function renderRunDetail(detail, expectedRun) {
-  const { meta, reports, events, project } = detail;
+  const { meta, reports, events, project, actions } = detail;
   if (!sameRunSelectionState(
     { projectId: project.id, slug: meta.runSlug },
     expectedRun,
@@ -913,11 +1047,28 @@ function renderRunDetail(detail, expectedRun) {
     ? captureRunDetailViewState(elements.runDetail)
     : null;
   const header = createElement('header', 'detail-header');
-  header.append(
+  const headerStatus = createElement('div', 'detail-header-status');
+  headerStatus.append(
     createElement('span', `status-badge status-${meta.status}`, statusLabel(meta.status)),
+  );
+  if (actions?.requeue === true) {
+    const requeue = createElement('button', 'secondary-button', 'Requeue');
+    requeue.type = 'button';
+    requeue.addEventListener('click', () => void requeueSelectedRun(expectedRun, requeue));
+    headerStatus.append(requeue);
+  }
+  header.append(
+    headerStatus,
     createElement('h2', '', meta.workflow),
     createElement('p', 'detail-slug', `${project.projectDirectory} · ${meta.runSlug}`),
   );
+  if (detail.prUrl !== undefined) {
+    const prLink = createElement('a', 'detail-pr-link', 'Pull request');
+    prLink.href = detail.prUrl;
+    prLink.target = '_blank';
+    prLink.rel = 'noreferrer';
+    header.append(prLink);
+  }
 
   const progress = createElement('dl', 'detail-grid');
   progress.append(
@@ -942,6 +1093,21 @@ function renderRunDetail(detail, expectedRun) {
   const status = statusLabel(meta.status);
   if (elements.runStatusLive.textContent !== status) elements.runStatusLive.textContent = status;
   return true;
+}
+
+async function requeueSelectedRun(run, button) {
+  button.disabled = true;
+  elements.runWarning.textContent = '';
+  try {
+    const result = await requeueRun(run.projectId, run.slug);
+    elements.chatStatus.textContent = result.disposition === 'reused'
+      ? '失敗したrunをキューへ戻しました。'
+      : `失敗したrunを再実行しました。PID: ${result.pid}`;
+    await refreshRuns();
+  } catch (error) {
+    elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
+    button.disabled = false;
+  }
 }
 
 async function refreshRuns() {
@@ -1036,6 +1202,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 elements.chatForm.addEventListener('submit', (event) => void submitChat(event));
+elements.chatSetupButton.addEventListener('click', submitSetupCommand);
 elements.chatGoButton.addEventListener('click', submitGoCommand);
 elements.chatNewButton.addEventListener('click', () => void startNewConversation());
 elements.chatCollapseButton.addEventListener('click', () => {

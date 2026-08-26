@@ -183,6 +183,7 @@ async function executeAndCommit(
     // only the central task ledger and must not project a competing meta file.
     await repository.verifyProjectIdentity();
     let executionCwd = repository.locations.projectDirectory;
+    let branch: string | undefined;
     if (task.worktree !== false) {
       await repository.verifyProjectIdentity();
       const configured = resolveConfigValue(repository.locations.projectDirectory, 'worktreeDir');
@@ -201,8 +202,11 @@ async function executeAndCommit(
         ...(worktree.cloneMetadataDirectory === undefined ? {} : { cloneMetadataDirectory: worktree.cloneMetadataDirectory }),
         skipProjectLocalTaktSync: true,
         taskSlug: task.taskId.slice(0, 12),
+        ...(task.branch === undefined ? {} : { branch: task.branch }),
+        ...(task.baseBranch === undefined ? {} : { baseBranch: task.baseBranch }),
       });
       executionCwd = clone.path;
+      branch = clone.branch;
     }
     // Providers are loaded only after the private owner token was consumed by
     // the worker entrypoint. The workflow run itself writes below state/runs.
@@ -218,13 +222,50 @@ async function executeAndCommit(
       sessionStorageDirectory: repository.paths.sessionsDirectory,
       skipWorktreeRuntimeProtection: true,
     });
+    let postExecutionFailure: { readonly code: string; readonly message: string } | undefined;
+    let prUrl: string | undefined;
+    if (result.success && task.worktree !== false) {
+      const { postExecutionFlow } = await import('../tasks/execute/postExecution.js');
+      const postResult = await postExecutionFlow({
+        execCwd: executionCwd,
+        projectCwd: repository.locations.projectDirectory,
+        task: task.task,
+        ...(branch === undefined ? {} : { branch }),
+        ...(task.baseBranch === undefined ? {} : { baseBranch: task.baseBranch }),
+        shouldCreatePr: task.autoPr === true,
+        draftPr: task.draftPr === true,
+        workflowIdentifier: task.workflow,
+        outputMode: 'silent',
+      });
+      prUrl = postResult.prUrl;
+      if (postResult.taskFailed) {
+        postExecutionFailure = {
+          code: 'post_execution_failed',
+          message: postResult.taskError ?? 'Post-execution processing failed',
+        };
+      } else if (postResult.prFailed) {
+        postExecutionFailure = {
+          code: 'pr_failed',
+          message: postResult.prError ?? 'Pull request creation failed',
+        };
+      }
+    }
+    const succeeded = result.success && postExecutionFailure === undefined;
     await repository.terminal({
       taskId: task.taskId,
       generation: task.generation,
       executionId: task.activeExecution!.executionId,
       ownerToken,
-      status: result.success ? 'completed' : 'failed',
-      ...(result.success ? {} : { failure: { code: 'workflow_failed', message: result.reason ?? 'Workflow failed' } }),
+      status: succeeded ? 'completed' : 'failed',
+      ...(succeeded
+        ? {}
+        : {
+            failure: postExecutionFailure ?? {
+              code: 'workflow_failed',
+              message: result.reason ?? 'Workflow failed',
+            },
+          }),
+      ...(prUrl === undefined ? {} : { prUrl }),
     });
     terminalized = true;
   } catch (error) {

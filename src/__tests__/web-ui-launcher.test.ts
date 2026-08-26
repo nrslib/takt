@@ -35,7 +35,38 @@ describe('Web UI central launcher', () => {
       prompt: 'Build it',
       workflow: 'default',
       worktree: true,
+      autoPr: false,
+      draftPr: false,
     });
+  });
+
+  it('validates task execution settings used by the central worker', () => {
+    expect(parseLaunchRequest({
+      prompt: 'task',
+      workflow: 'default',
+      worktree: '/tmp/takt-worktrees',
+      branch: 'feature/web-ui',
+      baseBranch: 'main',
+      autoPr: true,
+      draftPr: true,
+    })).toMatchObject({
+      worktree: '/tmp/takt-worktrees',
+      branch: 'feature/web-ui',
+      baseBranch: 'main',
+      autoPr: true,
+      draftPr: true,
+    });
+    expect(() => parseLaunchRequest({
+      prompt: 'task',
+      workflow: 'default',
+      worktree: false,
+      autoPr: true,
+    })).toThrow(/autoPr requires worktree/);
+    expect(() => parseLaunchRequest({
+      prompt: 'task',
+      workflow: 'default',
+      branch: '../invalid',
+    })).toThrow(/branch is invalid/);
   });
 
   it('normalizes safe worktree paths and rejects traversal', () => {

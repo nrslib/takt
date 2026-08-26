@@ -287,6 +287,7 @@ describe('Web UI HTTP boundary', () => {
     expect(html).toContain('rows="1"');
     expect(html).toContain('aria-keyshortcuts="Meta+Enter Control+Enter"');
     expect(html).toContain('id="chat-go-button"');
+    expect(html).toContain('id="chat-setup-button"');
     expect(html).toContain('id="watch-button"');
     expect(html).toContain('id="refresh-button"');
     expect(html).toContain('id="chat-new-button"');
@@ -401,11 +402,16 @@ describe('Web UI HTTP boundary', () => {
     });
     await writeRun(central.paths, '20260824-example');
     const launches: unknown[] = [];
+    const requeues: unknown[] = [];
     const server = await createWebUiServer({
       globalConfigDirectory,
       launch: async (directory, request) => {
         launches.push({ directory, request });
         return { pid: 9001, disposition: 'started' as const, mode: 'run' as const };
+      },
+      requeue: async (directory, runId) => {
+        requeues.push({ directory, runId });
+        return { pid: 9002, disposition: 'started' as const, mode: 'run' as const };
       },
     });
     servers.push(server);
@@ -465,8 +471,30 @@ describe('Web UI HTTP boundary', () => {
     });
     expect(launches).toEqual([{
       directory: projectDirectory,
-      request: { prompt: 'Build it', workflow: 'default', worktree: true },
+      request: {
+        prompt: 'Build it',
+        workflow: 'default',
+        worktree: true,
+        autoPr: false,
+        draftPr: false,
+      },
     }]);
+
+    const requeueResponse = await fetch(`${origin}/api/runs/20260824-example/requeue`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-TAKT-Web-Token': token,
+      },
+      body: JSON.stringify({ projectId: project.id }),
+    });
+    expect(requeueResponse.status).toBe(202);
+    await expect(requeueResponse.json()).resolves.toEqual({
+      pid: 9002,
+      disposition: 'started',
+      mode: 'run',
+    });
+    expect(requeues).toEqual([{ directory: projectDirectory, runId: '20260824-example' }]);
   });
 
   it('joins project discovery with central consumer status without stale cleanup', async () => {

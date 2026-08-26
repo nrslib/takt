@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildExecutionSettingsRequest,
   captureRunDetailViewState,
   clampChatPaneWidth,
   createDirectoryRequestTracker,
@@ -10,6 +11,7 @@ import {
   resolveChatPaneWidth,
   restoreRunDetailViewState,
   sameRunSelection,
+  snapshotExecutionSettings,
   shouldCloseExecutionContext,
 } from '../../web-ui/public/ui-state.js';
 import type { DirectoryRequestToken } from '../../web-ui/public/ui-state.js';
@@ -25,6 +27,58 @@ describe('Web UI chat pane state', () => {
     expect(resolveChatPaneWidth(1200, 320, false)).toBe(600);
     expect(resolveChatPaneWidth(1200, 700, true)).toBe(700);
     expect(resolveChatPaneWidth(900, 700, true)).toBe(460);
+  });
+});
+
+describe('Web UI execution settings', () => {
+  it('keeps a task instruction snapshot independent from later setup changes', () => {
+    const current = {
+      worktreeMode: 'auto' as const,
+      worktreePath: '',
+      branch: 'feature/original',
+      baseBranch: 'main',
+      autoPr: true,
+      draftPr: true,
+    };
+    const snapshot = snapshotExecutionSettings(current);
+
+    current.branch = 'feature/next';
+    current.autoPr = false;
+
+    expect(buildExecutionSettingsRequest(snapshot)).toEqual({
+      worktree: true,
+      branch: 'feature/original',
+      baseBranch: 'main',
+      autoPr: true,
+      draftPr: true,
+    });
+  });
+
+  it('maps custom and disabled worktree settings to the launch boundary', () => {
+    expect(buildExecutionSettingsRequest({
+      worktreeMode: 'custom',
+      worktreePath: '/tmp/takt-worktrees',
+      branch: '',
+      baseBranch: '',
+      autoPr: false,
+      draftPr: false,
+    })).toEqual({
+      worktree: '/tmp/takt-worktrees',
+      autoPr: false,
+      draftPr: false,
+    });
+    expect(buildExecutionSettingsRequest({
+      worktreeMode: 'none',
+      worktreePath: '',
+      branch: '',
+      baseBranch: '',
+      autoPr: false,
+      draftPr: false,
+    })).toEqual({
+      worktree: false,
+      autoPr: false,
+      draftPr: false,
+    });
   });
 });
 

@@ -8,9 +8,19 @@ import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { runCentralTask } from '../features/web-ui/central-worker.js';
 import { waitForCentralWorkerStartup } from '../features/web-ui/central-worker-spawn.js';
 import { runWorkflowExecution } from '../features/tasks/execute/workflowExecutionApi.js';
+import { createSharedCloneAbortable } from '../infra/task/clone.js';
+import { postExecutionFlow } from '../features/tasks/execute/postExecution.js';
 
 vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({
   runWorkflowExecution: vi.fn(async () => ({ success: true })),
+}));
+
+vi.mock('../infra/task/clone.js', () => ({
+  createSharedCloneAbortable: vi.fn(),
+}));
+
+vi.mock('../features/tasks/execute/postExecution.js', () => ({
+  postExecutionFlow: vi.fn(),
 }));
 
 async function setupWorkerFixture() {
@@ -90,6 +100,91 @@ describe('central Web UI worker', () => {
       sessionStorageDirectory: repository.paths.sessionsDirectory,
       skipWorktreeRuntimeProtection: true,
     }));
+  });
+
+  it('applies saved worktree and pull-request settings after a successful run', async () => {
+    const { globalConfigDirectory, projectDirectory, project, repository } = await setupWorkerFixture();
+    const worktreeDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-worktree-'));
+    vi.mocked(createSharedCloneAbortable).mockResolvedValueOnce({
+      path: worktreeDirectory,
+      branch: 'feature/web-task',
+    });
+    vi.mocked(postExecutionFlow).mockResolvedValueOnce({ prUrl: 'https://example.test/pull/1' });
+    const reserved = await repository.enqueueAndClaim({
+      task: 'central PR task',
+      workflow: 'default',
+      worktree: true,
+      branch: 'feature/web-task',
+      baseBranch: 'main',
+      autoPr: true,
+      draftPr: true,
+    });
+
+    await withCentralConfig(globalConfigDirectory, async () => {
+      await runCentralTask({
+        globalConfigDirectory,
+        stateId: project.stateId,
+        taskId: reserved.task.taskId,
+        generation: reserved.task.generation,
+        executionId: reserved.executionId,
+        ownerToken: reserved.ownerToken,
+      });
+    });
+
+    expect(vi.mocked(createSharedCloneAbortable)).toHaveBeenCalledWith(
+      projectDirectory,
+      expect.objectContaining({ branch: 'feature/web-task', baseBranch: 'main' }),
+    );
+    expect(vi.mocked(postExecutionFlow)).toHaveBeenCalledWith(expect.objectContaining({
+      execCwd: worktreeDirectory,
+      projectCwd: projectDirectory,
+      branch: 'feature/web-task',
+      baseBranch: 'main',
+      shouldCreatePr: true,
+      draftPr: true,
+    }));
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({
+      status: 'completed',
+      prUrl: 'https://example.test/pull/1',
+    });
+  });
+
+  it('records pull-request publication failures as requeueable task failures', async () => {
+    const { globalConfigDirectory, projectDirectory, project, repository } = await setupWorkerFixture();
+    vi.mocked(createSharedCloneAbortable).mockResolvedValueOnce({
+      path: projectDirectory,
+      branch: 'feature/pr-failure',
+    });
+    vi.mocked(postExecutionFlow).mockResolvedValueOnce({
+      prFailed: true,
+      prError: 'Pull request creation failed',
+    });
+    const reserved = await repository.enqueueAndClaim({
+      task: 'central PR failure task',
+      workflow: 'default',
+      worktree: true,
+      autoPr: true,
+      draftPr: true,
+    });
+
+    await withCentralConfig(globalConfigDirectory, async () => {
+      await runCentralTask({
+        globalConfigDirectory,
+        stateId: project.stateId,
+        taskId: reserved.task.taskId,
+        generation: reserved.task.generation,
+        executionId: reserved.executionId,
+        ownerToken: reserved.ownerToken,
+      });
+    });
+
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({
+      status: 'failed',
+      failure: {
+        code: 'pr_failed',
+        message: 'Pull request creation failed',
+      },
+    });
   });
 
   it('claims and spawns exactly one successor from the central pending queue', async () => {

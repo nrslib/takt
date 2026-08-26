@@ -97,6 +97,10 @@ export function startRun(request) {
   return requestMutation('/api/runs', request);
 }
 
+export function requeueRun(projectId, slug) {
+  return requestMutation(`/api/runs/${encodeURIComponent(slug)}/requeue`, { projectId });
+}
+
 function mutationOptions(token, body) {
   return {
     method: 'POST',

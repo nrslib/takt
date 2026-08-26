@@ -26,7 +26,12 @@ import {
   type NativeDirectoryPickerResult,
 } from './native-directory-picker.js';
 import { resolveStatePaths } from '../../core/execution/locations.js';
-import { CentralTaskBusyError, CentralTaskRepository, parseCentralTasks } from '../../infra/task/centralStateRepository.js';
+import {
+  CentralTaskBusyError,
+  CentralTaskRepository,
+  CentralTaskRequeueError,
+  parseCentralTasks,
+} from '../../infra/task/centralStateRepository.js';
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const MAX_GLOBAL_RUNS = 100;
@@ -208,6 +213,11 @@ function routeRunSlug(pathname: string): string | null {
   return match?.[1] ?? null;
 }
 
+function routeRunRequeueSlug(pathname: string): string | null {
+  const match = pathname.match(/^\/api\/runs\/([A-Za-z0-9][A-Za-z0-9._-]*)\/requeue$/u);
+  return match?.[1] ?? null;
+}
+
 function routeChatSessionId(
   pathname: string,
   action: 'messages' | 'settings' | 'restart',
@@ -229,6 +239,9 @@ function asHttpError(error: unknown): HttpError {
     return new HttpError(501, error.message);
   }
   if (error instanceof CentralTaskBusyError) {
+    return new HttpError(409, error.message);
+  }
+  if (error instanceof CentralTaskRequeueError) {
     return new HttpError(409, error.message);
   }
   if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
@@ -393,6 +406,11 @@ export async function createWebUiServer(options: {
     request: LaunchRequest,
     project?: RegisteredProject,
   ) => Promise<LaunchResult>;
+  readonly requeue?: (
+    projectDirectory: string,
+    runId: string,
+    project?: RegisteredProject,
+  ) => Promise<LaunchResult>;
   readonly getWorkflowCatalog?: (
     projectDirectory: string,
   ) => WebWorkflowCatalog | Promise<WebWorkflowCatalog>;
@@ -487,10 +505,39 @@ export async function createWebUiServer(options: {
           globalConfigDirectory: options.globalConfigDirectory,
           stateId: project.stateId,
         });
+        const detail = await readRunDetail(repository.paths, slug);
+        const task = (await repository.readTasks()).find((candidate) => candidate.runId === slug);
         sendJson(response, 200, {
           project,
-          ...await readRunDetail(repository.paths, slug),
+          ...detail,
+          ...(task === undefined
+            ? { actions: { requeue: false } }
+            : {
+                meta: {
+                  ...detail.meta,
+                  status: task.status === 'starting' ? 'running' : task.status,
+                  ...(task.failure === undefined ? {} : { reason: task.failure.message }),
+                },
+                actions: { requeue: task.status === 'failed' },
+                ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
+              }),
         });
+        return;
+      }
+      const requeueSlug = method === 'POST' ? routeRunRequeueSlug(url.pathname) : null;
+      if (requeueSlug !== null) {
+        requireSessionToken(request, sessionToken);
+        if (options.requeue === undefined) throw new HttpError(501, 'Run requeue is unavailable');
+        const body = await readJsonBody(request);
+        const project = await resolveProject(
+          options.globalConfigDirectory,
+          projectIdFromBody(body),
+        );
+        sendJson(
+          response,
+          202,
+          await options.requeue(project.projectDirectory, requeueSlug, project),
+        );
         return;
       }
       if (method === 'POST' && url.pathname === '/api/runs') {
