@@ -99,6 +99,8 @@ describe('interactive formal specification prompt templates', () => {
     expect(prompt).toContain('Alloy');
     expect(prompt).toContain('ASCII');
     expect(prompt).toContain('keep the prohibition on duplicating acceptance clauses between Markdown and Gherkin');
+    expect(prompt).toContain('By reading only the comments inside the Quint block');
+    expect(prompt).toContain('Comments supplement the formal specification');
   });
 
   it('selects Japanese formal notation guidance when enabled', () => {
@@ -109,6 +111,8 @@ describe('interactive formal specification prompt templates', () => {
     expect(prompt).toContain('Alloy');
     expect(prompt).toContain('ASCII');
     expect(prompt).toContain('Markdown と Gherkin の重複禁止は維持する');
+    expect(prompt).toContain('Quint ブロック内のコメントだけを読んだ場合');
+    expect(prompt).toContain('コメントは形式仕様を補足するものであり');
   });
 });
 
@@ -133,5 +137,7 @@ describe('Japanese task instruction formal specification prompt', () => {
     expect(prompt).toContain('ASCII');
     expect(prompt).toContain('非開発タスクには Gherkin を追加しない');
     expect(prompt).toContain('Markdown と Gherkin の重複禁止は維持する');
+    expect(prompt).toContain('Quint ブロック内のコメントだけを読んだ場合');
+    expect(prompt).toContain('コメントは形式仕様を補足するものであり');
   });
 });

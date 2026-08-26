@@ -90,6 +90,8 @@ describe('buildSummaryPrompt', () => {
     expect(summary).toContain('Quint');
     expect(summary).toContain('Alloy');
     expect(summary).toContain('ASCII');
+    expect(summary).toContain('By reading only the comments inside the Quint block');
+    expect(summary).toContain('Comments supplement the formal specification');
   });
 
 });
