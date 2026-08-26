@@ -58,6 +58,9 @@ export interface ExecutionNode {
   readonly workflow: string;
   readonly kind: 'step' | 'workflow';
   readonly label: string;
+  /** Human-readable label; raw label/id remains available for identity. */
+  readonly displayLabel?: string;
+  readonly displayWorkflow?: string;
   readonly childWorkflow?: string;
   readonly firstEventIndex: number;
   readonly occurrences: readonly ExecutionOccurrence[];
@@ -66,6 +69,7 @@ export interface ExecutionNode {
 export interface ExecutionLane {
   readonly id: string;
   readonly workflow: string;
+  readonly displayWorkflow?: string;
   readonly depth: number;
   readonly steps: readonly ExecutionNode[];
 }
@@ -103,9 +107,16 @@ export interface ExecutionCall {
   readonly id: string;
   readonly occurrenceId: string;
   readonly workflow: string;
+  readonly step: string;
   readonly childWorkflow: string;
+  readonly displayWorkflow?: string;
+  readonly displayChildWorkflow?: string;
   readonly callInstance?: string;
   readonly stack?: readonly ExecutionStackFrame[];
+  readonly startEventIndex?: number;
+  readonly completeEventIndex?: number;
+  /** True only when a workflow_call_start was observed for this occurrence. */
+  readonly startObserved: boolean;
   readonly targetOccurrenceId?: string;
   readonly targetObserved: boolean;
 }
@@ -122,9 +133,13 @@ export function buildExecutionTrace(
   newestFirstEvents: readonly ExecutionEvent[],
   newestFirstHistory?: readonly ExecutionEvent[],
   graphSummary?: ExecutionGraphSummary,
+  locale?: 'ja' | 'en',
 ): ExecutionTrace;
 
 export function encodeIdPart(value: string | number): string;
+export function isBuiltinWorkflowRef(value: unknown): boolean;
+export function shortBuiltinDigest(value: unknown): string;
+export function workflowDisplayName(value: string, locale?: 'ja' | 'en', stack?: readonly ExecutionStackFrame[]): string;
 
 export function reportDisplayName(filename: string): string;
 export function reportDirectory(filename: string): string;

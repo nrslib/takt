@@ -20,6 +20,6 @@ takt ui restart --port 4180
 
 既定では `http://127.0.0.1:20525` で起動します。起動時には、この Web UI が実験的機能であり、予告なく仕様が変更される可能性があることを表示します。`takt ui` の実行時に同じ `TAKT_CONFIG_DIR` の Web UI がすでに動いている場合は二重起動せず、既存インスタンスの URL と PID を表示します。`stop` はそのインスタンスをグレースフルに停止し、`restart` は停止完了後に同じ端末で起動し直します。
 
-run を開始するには、Viewer の「タスクを作成」を開き、実行ディレクトリと workflow を選んで Chat へ相談内容を入力します。`/setup` では、TUI の task 追加時と同じ Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を会話内で設定できます。`/go` を送ると会話が実行指示へ変換され、設定のスナップショットとともに表示されるので、「この指示で実行」を押します。Web UI は中央 task へ投入して one-shot worker を起動し、Viewer の Tasks と run workspace で実行マップ、ライブログ、レポートを確認できます。Viewer の「AIに相談」からは、現在の表示を確認しながら Chat drawer を開けます。自動 PR を有効にした実行は、workflow 成功後に commit、push、PR 作成まで行います。
+run を開始するには、Viewer の「タスクを作成」を開き、実行ディレクトリと workflow を選んで Chat へ相談内容を入力します。`/setup` では、TUI の task 追加時と同じ Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を会話内で設定できます。`/go` を送ると会話が実行指示へ変換され、設定のスナップショットとともに表示されるので、「この指示で実行」を押します。Web UI は中央 task へ投入して one-shot worker を起動し、Viewer の Tasks と run workspace で実行経路、ライブログ、レポートを確認できます。Viewer は実行状況の閲覧に専念し、会話は「タスクを作成」から始めます。表示言語はヘッダーの切り替えボタンで日本語・英語を選べます。自動 PR を有効にした実行は、workflow 成功後に commit、push、PR 作成まで行います。
 
 中央 task が失敗した場合は Run 詳細の `Requeue` から、同じ workflow と実行設定を引き継いで再投入できます。Requeue は失敗した中央 task にだけ表示され、同じ失敗 run を重複して再投入しません。

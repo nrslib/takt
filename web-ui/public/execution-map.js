@@ -1,10 +1,7 @@
-const STATUS_LABELS = {
-  running: 'Running',
-  completed: 'Completed',
-  aborted: 'Aborted',
-  failed: 'Failed',
-};
+import { t } from './i18n.js';
+
 const executionMapDisposers = new WeakMap();
+const PAN_THRESHOLD = 4;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -13,42 +10,39 @@ function element(tag, className, text) {
   return node;
 }
 
+function statusLabel(status) {
+  return t(`app.status.${status}`);
+}
+
 function statusBadge(status) {
-  return element('span', `status-badge status-${status}`, STATUS_LABELS[status] ?? status);
+  return element('span', `status-badge status-${status}`, statusLabel(status));
+}
+
+function nodeLabel(node) {
+  return node.displayLabel ?? node.label;
+}
+
+function workflowLabel(value, nodeOrCall) {
+  return nodeOrCall?.displayWorkflow ?? value;
 }
 
 function occurrenceLabel(occurrence, index) {
   const callFrame = Array.isArray(occurrence.stack)
     ? [...occurrence.stack].reverse().find((frame) => frame.kind === 'workflow_call')
     : undefined;
-  const callLabel = occurrence.callInstance === undefined && callFrame === undefined
-    ? ''
-    : ` · call ${occurrence.callInstance ?? callFrame?.occurrence}`;
+  const callValue = occurrence.callInstance ?? callFrame?.occurrence;
+  const callLabel = callValue === undefined ? '' : ` · ${t('map.call', { value: callValue })}`;
   return occurrence.iteration === undefined
-    ? `pass ${index + 1}${callLabel}`
-    : `#${occurrence.iteration}${callLabel}`;
+    ? `${t('map.pass', { number: index + 1 })}${callLabel}`
+    : `${t('map.iteration', { number: occurrence.iteration })}${callLabel}`;
 }
 
 function occurrenceDescription(occurrence, index) {
-  const details = [
+  return [
     occurrenceLabel(occurrence, index),
     occurrence.phases.join(' / '),
     occurrence.personas.join(' / '),
-  ].filter(Boolean);
-  return details.join(' · ');
-}
-
-function renderLaneHeader(lane) {
-  const header = element('header', 'workflow-lane-header');
-  const marker = element('span', 'workflow-lane-marker', String(lane.depth + 1).padStart(2, '0'));
-  marker.setAttribute('aria-hidden', 'true');
-  const copy = element('div', 'workflow-lane-copy');
-  copy.append(
-    element('strong', '', lane.workflow),
-    element('span', '', `${lane.steps.length} logical step${lane.steps.length === 1 ? '' : 's'}`),
-  );
-  header.append(marker, copy);
-  return header;
+  ].filter(Boolean).join(' · ');
 }
 
 function renderIterationChip(node, occurrence, index, selectedOccurrenceId, onSelectOccurrence) {
@@ -57,38 +51,47 @@ function renderIterationChip(node, occurrence, index, selectedOccurrenceId, onSe
   button.dataset.occurrenceId = occurrence.id;
   button.dataset.selected = String(occurrence.id === selectedOccurrenceId);
   button.setAttribute('aria-pressed', String(occurrence.id === selectedOccurrenceId));
-  button.setAttribute('aria-label', `${node.label} ${occurrenceDescription(occurrence, index)}`);
-  button.title = occurrenceDescription(occurrence, index);
+  const label = `${nodeLabel(node)} ${occurrenceDescription(occurrence, index)}`;
+  button.setAttribute('aria-label', label);
+  button.title = label;
   button.append(
     element('span', 'iteration-chip-label', occurrenceLabel(occurrence, index)),
-    element('span', 'iteration-chip-status', STATUS_LABELS[occurrence.status] ?? occurrence.status),
+    element('span', 'iteration-chip-status', statusLabel(occurrence.status)),
   );
   button.addEventListener('click', () => onSelectOccurrence(node, occurrence));
   return button;
 }
 
-function renderStep(node, selectedOccurrenceId, onSelectOccurrence) {
-  const step = element('article', `execution-step execution-step-${node.occurrences.at(-1).status}`);
+function renderStep(node, position, selectedOccurrenceId, onSelectOccurrence) {
+  const latest = node.occurrences.at(-1);
+  if (latest === undefined) return null;
+  const step = element('article', `execution-step execution-step-${latest.status}`);
   step.dataset.stepId = node.id;
+  step.dataset.kind = 'step';
   step.dataset.repeated = String(node.occurrences.length > 1);
   step.dataset.active = String(node.occurrences.some(
     (occurrence) => occurrence.id === selectedOccurrenceId,
   ));
-  const latest = node.occurrences.at(-1);
+  step.dataset.layoutX = String(position.x);
+  step.dataset.layoutY = String(position.y);
+  step.style.setProperty('left', `${position.x}px`);
+  step.style.setProperty('top', `${position.y}px`);
+  const fullIdentity = node.workflow === nodeLabel(node) ? '' : node.workflow;
+  if (fullIdentity !== '') step.title = fullIdentity;
   const headerButton = element('button', 'execution-step-header');
   headerButton.type = 'button';
   headerButton.dataset.stepId = node.id;
-  headerButton.setAttribute('aria-label', `${node.label} の最新の実行を表示`);
+  headerButton.setAttribute('aria-label', t('map.showStep', { step: nodeLabel(node) }));
   headerButton.append(
     element('span', 'execution-step-index', String(node.firstEventIndex + 1).padStart(2, '0')),
-    element('span', 'execution-step-title', node.label),
+    element('span', 'execution-step-title', nodeLabel(node)),
     statusBadge(latest.status),
   );
   headerButton.addEventListener('click', () => onSelectOccurrence(node, latest));
   const iterations = element('div', 'execution-iterations');
   const iterationHeader = element('div', 'execution-iterations-header');
   iterationHeader.append(
-    element('span', '', node.occurrences.length > 1 ? 'Loop passes' : 'Pass'),
+    element('span', '', node.occurrences.length > 1 ? t('map.loopPasses') : t('map.passSingle')),
     node.occurrences.length > 1
       ? element('span', 'loop-badge', `↻ ${node.occurrences.length}`)
       : element('span', 'loop-badge loop-badge-muted', '1'),
@@ -99,55 +102,12 @@ function renderStep(node, selectedOccurrenceId, onSelectOccurrence) {
   });
   iterations.append(iterationHeader, chips);
   const metadata = [
-    node.kind === 'workflow' ? `calls ${node.childWorkflow ?? node.label}` : node.workflow,
+    workflowLabel(node.workflow, node),
     latest.phases.join(' / '),
     latest.personas.join(' / '),
   ].filter(Boolean);
   step.append(headerButton, iterations, element('p', 'execution-step-meta', metadata.join(' · ')));
   return step;
-}
-
-function renderLane(lane, selectedOccurrenceId, onSelectOccurrence) {
-  const section = element('section', 'workflow-lane');
-  section.dataset.workflow = lane.workflow;
-  section.style.setProperty('--lane-depth', String(lane.depth));
-  const track = element('div', 'workflow-lane-track');
-  lane.steps.forEach((node, index) => {
-    if (index > 0) {
-      const arrow = element('span', 'workflow-step-arrow', '→');
-      arrow.setAttribute('aria-hidden', 'true');
-      track.append(arrow);
-    }
-    track.append(renderStep(node, selectedOccurrenceId, onSelectOccurrence));
-  });
-  section.append(renderLaneHeader(lane), track);
-  return section;
-}
-
-function renderTransitionSummary(trace) {
-  const transitions = trace.transitions.filter((transition) => transition.kind === 'transition');
-  if (transitions.length === 0) return null;
-  const summary = element('div', 'execution-transition-summary');
-  summary.append(element('span', 'execution-transition-label', 'Observed path'));
-  const path = element('div', 'execution-transition-path');
-  const visible = transitions.slice(0, 8);
-  visible.forEach((transition, index) => {
-    const source = trace.nodes.find((node) => node.id === transition.sourceLogicalId);
-    const target = trace.nodes.find((node) => node.id === transition.targetLogicalId);
-    if (source === undefined || target === undefined) return;
-    if (index === 0) path.append(element('span', 'transition-path-node', source.label));
-    path.append(element('span', 'transition-path-arrow', '→'));
-    path.append(element(
-      'span',
-      'transition-path-node',
-      target.label,
-    ));
-  });
-  if (transitions.length > visible.length) {
-    path.append(element('span', 'transition-path-more', `+${transitions.length - visible.length}`));
-  }
-  summary.append(path);
-  return summary;
 }
 
 function findOccurrence(trace, occurrenceId) {
@@ -156,6 +116,126 @@ function findOccurrence(trace, occurrenceId) {
     if (occurrence !== undefined) return { node, occurrence };
   }
   return null;
+}
+
+function stepNodes(trace) {
+  return trace.nodes.filter((node) => node.kind === 'step' && node.occurrences.length > 0);
+}
+
+function sameStackFrame(left, right) {
+  return left?.workflow === right?.workflow
+    && left?.workflow_ref === right?.workflow_ref
+    && left?.step === right?.step
+    && left?.kind === right?.kind
+    && left?.occurrence === right?.occurrence;
+}
+
+function isStackPrefix(parent, child) {
+  if (!Array.isArray(parent) || !Array.isArray(child) || parent.length === 0) return false;
+  if (child.length < parent.length) return false;
+  return parent.every((frame, index) => sameStackFrame(frame, child[index]));
+}
+
+function parentContextMatches(candidateStack, callStack) {
+  if (callStack === undefined) return candidateStack === undefined;
+  const lastCallFrame = callStack.at(-1);
+  const parentStack = lastCallFrame?.kind === 'workflow_call'
+    ? callStack.slice(0, -1)
+    : callStack;
+  if (candidateStack === undefined) return parentStack.length === 0;
+  const candidateParent = candidateStack.at(-1)?.kind === 'agent'
+    ? candidateStack.slice(0, -1)
+    : candidateStack;
+  return parentStack.length === candidateParent.length
+    && parentStack.every((frame, index) => sameStackFrame(frame, candidateParent[index]));
+}
+
+function layoutSteps(trace) {
+  const nodes = stepNodes(trace).slice().sort((left, right) => (
+    left.firstEventIndex - right.firstEventIndex || left.id.localeCompare(right.id)
+  ));
+  const positions = new Map();
+  const depthByLogicalId = new Map();
+  const nodeByLogicalId = new Map(nodes.map((node) => [node.id, node]));
+  for (const node of nodes) depthByLogicalId.set(node.id, 0);
+  const orderedTransitions = trace.transitions
+    .filter((candidate) => candidate.kind === 'transition')
+    .filter((candidate) => {
+      const source = nodeByLogicalId.get(candidate.sourceLogicalId);
+      const target = nodeByLogicalId.get(candidate.targetLogicalId);
+      return source !== undefined
+        && target !== undefined
+        && target.firstEventIndex > source.firstEventIndex;
+    })
+    .sort((left, right) => left.source.localeCompare(right.source));
+  // A bounded relaxation keeps the layout deterministic even when the
+  // observed execution contains a branch that is not topologically sorted.
+  for (let pass = 0; pass < nodes.length; pass += 1) {
+    let changed = false;
+    for (const transition of orderedTransitions) {
+      const source = nodeByLogicalId.get(transition.sourceLogicalId);
+      const target = nodeByLogicalId.get(transition.targetLogicalId);
+      if (source === undefined || target === undefined || source.id === target.id) continue;
+      const depth = (depthByLogicalId.get(source.id) ?? 0) + 1;
+      if (depth <= (depthByLogicalId.get(target.id) ?? 0)) continue;
+      depthByLogicalId.set(target.id, depth);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  const columns = new Map();
+  let maxX = 0;
+  let maxY = 0;
+  nodes.forEach((node, index) => {
+    const depth = depthByLogicalId.get(node.id) ?? 0;
+    const column = columns.get(depth) ?? [];
+    const nesting = Math.max(...node.occurrences.map((occurrence) => occurrence.stack?.length ?? 0), 0);
+    const baseY = 28 + nesting * 144 + (index % 3) * 34;
+    let y = baseY;
+    while (column.some((position) => Math.abs(position - y) < 154)) y += 154;
+    column.push(y);
+    columns.set(depth, column);
+    const x = 28 + depth * 270;
+    positions.set(node.id, { x, y });
+    maxX = Math.max(maxX, x + 220);
+    maxY = Math.max(maxY, y + 136);
+  });
+  return { positions, width: Math.max(640, maxX + 36), height: Math.max(300, maxY + 36) };
+}
+
+function visibleTransitionRelations(trace) {
+  const callPairs = new Set(visibleCallRelations(trace).map((call) => `${call.sourceOccurrenceId}->${call.targetOccurrenceId}`));
+  return trace.transitions.filter((transition) => {
+    const source = findOccurrence(trace, transition.source);
+    const target = findOccurrence(trace, transition.target);
+    return source?.node.kind === 'step'
+      && target?.node.kind === 'step'
+      && !callPairs.has(`${transition.source}->${transition.target}`);
+  });
+}
+
+function findCallSource(trace, call) {
+  if (call.startObserved !== true) return undefined;
+  const callOccurrence = findOccurrence(trace, call.occurrenceId)?.occurrence;
+  if (callOccurrence === undefined) return undefined;
+  const candidates = stepNodes(trace)
+    .filter((node) => node.workflow === call.workflow && node.label === call.step)
+    .flatMap((node) => node.occurrences)
+    .filter((candidate) => candidate.firstEventIndex < callOccurrence.firstEventIndex)
+    .filter((candidate) => parentContextMatches(candidate.stack, call.stack))
+    .sort((left, right) => left.firstEventIndex - right.firstEventIndex);
+  if (candidates.length === 0) return undefined;
+  return candidates.at(-1)?.id;
+}
+
+function visibleCallRelations(trace) {
+  return trace.calls.map((call) => {
+    const parentOccurrenceId = findCallSource(trace, call);
+    return {
+      ...call,
+      sourceOccurrenceId: parentOccurrenceId,
+    };
+  }).filter((call) => call.sourceOccurrenceId !== undefined && call.targetObserved);
 }
 
 function svgElement(tag) {
@@ -187,11 +267,12 @@ function anchorPoint(anchor, canvas, side) {
 
 function curvePath(source, target, kind) {
   if (kind === 'loop') {
-    const height = Math.max(30, Math.abs(source.x - target.x) * 0.2);
-    return `M ${source.x} ${source.y} C ${source.x + 30} ${source.y - height}, ${target.x - 30} ${target.y - height}, ${target.x} ${target.y}`;
+    const height = Math.max(36, Math.abs(source.x - target.x) * 0.2);
+    return `M ${source.x} ${source.y} C ${source.x + 34} ${source.y - height}, ${target.x - 34} ${target.y - height}, ${target.x} ${target.y}`;
   }
-  const distance = Math.max(36, Math.abs(target.x - source.x) * 0.45);
-  return `M ${source.x} ${source.y} C ${source.x + distance} ${source.y}, ${target.x - distance} ${target.y}, ${target.x} ${target.y}`;
+  const distance = Math.max(42, Math.abs(target.x - source.x) * 0.42);
+  const vertical = kind === 'call' ? Math.sign(target.y - source.y) * 20 : 0;
+  return `M ${source.x} ${source.y} C ${source.x + distance} ${source.y + vertical}, ${target.x - distance} ${target.y - vertical}, ${target.x} ${target.y}`;
 }
 
 function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas) {
@@ -206,25 +287,15 @@ function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas
   path.setAttribute('data-relation-id', relation.id);
   path.setAttribute('data-source-occurrence-id', relation.source);
   path.setAttribute('data-target-occurrence-id', relation.target);
-  if (relation.targetWorkflow !== undefined) {
-    path.setAttribute('data-target-workflow', relation.targetWorkflow);
-  }
+  if (relation.targetWorkflow !== undefined) path.setAttribute('data-target-workflow', relation.targetWorkflow);
   path.setAttribute('marker-end', 'url(#execution-edge-arrow)');
   svg.append(path);
 }
 
 function updateExecutionMapGeometry(svg, canvas, trace) {
   const canvasRect = rectFor(canvas);
-  const width = Math.max(
-    canvasRect.width,
-    typeof canvas.scrollWidth === 'number' ? canvas.scrollWidth : 0,
-    1,
-  );
-  const height = Math.max(
-    canvasRect.height,
-    typeof canvas.scrollHeight === 'number' ? canvas.scrollHeight : 0,
-    1,
-  );
+  const width = Math.max(canvasRect.width, canvas.scrollWidth ?? 0, 1);
+  const height = Math.max(canvasRect.height, canvas.scrollHeight ?? 0, 1);
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.setAttribute('width', String(width));
   svg.setAttribute('height', String(height));
@@ -243,7 +314,23 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
   marker.append(arrow);
   defs.append(marker);
   svg.append(defs);
+
+  for (const transition of visibleTransitionRelations(trace).filter((candidate) => candidate.kind === 'transition')) {
+    appendEdge(
+      svg,
+      transition.kind === 'loop'
+        ? 'execution-edge execution-edge-loop'
+        : 'execution-edge execution-edge-transition',
+      transition,
+      findOccurrenceAnchor(canvas, transition.source),
+      findOccurrenceAnchor(canvas, transition.target),
+      canvas,
+    );
+  }
   for (const loop of trace.loops) {
+    const source = findOccurrence(trace, loop.from);
+    const target = findOccurrence(trace, loop.to);
+    if (source?.node.kind !== 'step' || target?.node.kind !== 'step') continue;
     appendEdge(
       svg,
       'execution-edge execution-edge-loop',
@@ -253,7 +340,7 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
       canvas,
     );
   }
-  for (const call of trace.calls) {
+  for (const call of visibleCallRelations(trace)) {
     if (!call.targetObserved || call.targetOccurrenceId === undefined) continue;
     appendEdge(
       svg,
@@ -261,15 +348,24 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
       {
         id: call.id,
         kind: 'call',
-        source: call.occurrenceId,
+        source: call.sourceOccurrenceId,
         target: call.targetOccurrenceId,
         targetWorkflow: call.childWorkflow,
       },
-      findOccurrenceAnchor(canvas, call.occurrenceId),
+      findOccurrenceAnchor(canvas, call.sourceOccurrenceId),
       findOccurrenceAnchor(canvas, call.targetOccurrenceId),
       canvas,
     );
   }
+}
+
+function isInteractiveTarget(target) {
+  if (typeof target?.closest === 'function') {
+    return target.closest('button, a, input, select, textarea, summary, [data-interactive="true"]') !== null;
+  }
+  const tagName = String(target?.tagName ?? '').toLowerCase();
+  return ['button', 'a', 'input', 'select', 'textarea', 'summary'].includes(tagName)
+    || target?.dataset?.interactive === 'true';
 }
 
 function renderRelationOverlay(section, map, canvas, trace) {
@@ -292,114 +388,64 @@ function renderRelationOverlay(section, map, canvas, trace) {
     windowResize = update;
     window.addEventListener('resize', windowResize);
   }
+
+  let panState = null;
+  const clearPan = (event) => {
+    if (panState === null || (event?.pointerId !== undefined && event.pointerId !== panState.pointerId)) return;
+    const pointerId = panState.pointerId;
+    panState = null;
+    delete map.dataset.panPending;
+    delete map.dataset.panning;
+    map.style.setProperty('user-select', '');
+    if (map.hasPointerCapture?.(pointerId)) map.releasePointerCapture?.(pointerId);
+  };
+  const pointerDown = (event) => {
+    if (isInteractiveTarget(event.target)) return;
+    if (event.button !== undefined && event.button !== 0) return;
+    panState = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      scrollLeft: map.scrollLeft ?? 0,
+      scrollTop: map.scrollTop ?? 0,
+      dragging: false,
+    };
+    map.dataset.panPending = 'true';
+    map.setPointerCapture?.(event.pointerId);
+  };
+  const pointerMove = (event) => {
+    if (panState === null || event.pointerId !== panState.pointerId) return;
+    const deltaX = event.clientX - panState.clientX;
+    const deltaY = event.clientY - panState.clientY;
+    if (!panState.dragging && Math.hypot(deltaX, deltaY) < PAN_THRESHOLD) return;
+    panState.dragging = true;
+    map.dataset.panning = 'true';
+    delete map.dataset.panPending;
+    map.style.setProperty('user-select', 'none');
+    map.scrollLeft = panState.scrollLeft - deltaX;
+    map.scrollTop = panState.scrollTop - deltaY;
+    event.preventDefault?.();
+  };
+  map.addEventListener('pointerdown', pointerDown);
+  map.addEventListener('pointermove', pointerMove);
+  map.addEventListener('pointerup', clearPan);
+  map.addEventListener('pointercancel', clearPan);
+  map.addEventListener('lostpointercapture', clearPan);
+
   executionMapDisposers.set(section, () => {
     if (disposed) return;
     disposed = true;
     map.removeEventListener('scroll', update);
+    map.removeEventListener('pointerdown', pointerDown);
+    map.removeEventListener('pointermove', pointerMove);
+    map.removeEventListener('pointerup', clearPan);
+    map.removeEventListener('pointercancel', clearPan);
+    map.removeEventListener('lostpointercapture', clearPan);
+    clearPan();
     observer?.disconnect();
-    if (windowResize !== undefined && typeof window !== 'undefined') {
-      window.removeEventListener('resize', windowResize);
-    }
+    if (windowResize !== undefined && typeof window !== 'undefined') window.removeEventListener('resize', windowResize);
   });
   return svg;
-}
-
-function renderLoopConnector(trace, loop) {
-  const source = findOccurrence(trace, loop.from);
-  const target = findOccurrence(trace, loop.to);
-  if (source === null || target === null) return null;
-  const sourceLabel = occurrenceLabel(
-    source.occurrence,
-    source.node.occurrences.indexOf(source.occurrence),
-  );
-  const targetLabel = occurrenceLabel(
-    target.occurrence,
-    target.node.occurrences.indexOf(target.occurrence),
-  );
-  const connector = element('div', 'execution-loop-connector');
-  connector.dataset.loopId = loop.id;
-  connector.dataset.sourceOccurrenceId = loop.from;
-  connector.dataset.targetOccurrenceId = loop.to;
-  connector.setAttribute('data-loop-id', loop.id);
-  connector.setAttribute('data-source-occurrence-id', loop.from);
-  connector.setAttribute('data-target-occurrence-id', loop.to);
-  connector.setAttribute('role', 'img');
-  connector.setAttribute(
-    'aria-label',
-    `${source.node.label} ${sourceLabel} から ${target.node.label} ${targetLabel} へ戻る loop`,
-  );
-  connector.append(
-    element('span', 'execution-relation-glyph', '↶'),
-    element('span', 'execution-relation-source', `${source.node.label} ${sourceLabel}`),
-    element('span', 'execution-relation-line', 'return'),
-    element('span', 'execution-relation-target', `${target.node.label} ${targetLabel}`),
-  );
-  return connector;
-}
-
-function renderCallConnector(trace, call) {
-  const source = findOccurrence(trace, call.occurrenceId);
-  if (source === null) return null;
-  const target = call.targetOccurrenceId === undefined
-    ? null
-    : findOccurrence(trace, call.targetOccurrenceId);
-  const targetLabel = target === null
-    ? `${call.childWorkflow} · not observed`
-    : `${target.node.label} ${occurrenceLabel(
-      target.occurrence,
-      target.node.occurrences.indexOf(target.occurrence),
-    )}`;
-  const connector = element('div', 'execution-call-connector');
-  connector.dataset.callId = call.id;
-  connector.dataset.sourceOccurrenceId = call.occurrenceId;
-  connector.dataset.sourceWorkflow = call.workflow;
-  connector.dataset.targetWorkflow = call.childWorkflow;
-  connector.dataset.targetOccurrenceId = call.targetOccurrenceId ?? '';
-  connector.dataset.targetObserved = String(call.targetObserved === true && target !== null);
-  connector.setAttribute('data-call-id', call.id);
-  connector.setAttribute('data-source-occurrence-id', call.occurrenceId);
-  connector.setAttribute('data-source-workflow', call.workflow);
-  connector.setAttribute('data-target-workflow', call.childWorkflow);
-  connector.setAttribute('data-target-occurrence-id', call.targetOccurrenceId ?? '');
-  connector.setAttribute('data-target-observed', String(call.targetObserved === true && target !== null));
-  connector.setAttribute('data-target-lane', call.childWorkflow);
-  connector.setAttribute('role', 'img');
-  connector.setAttribute(
-    'aria-label',
-    `${call.workflow} の ${source.node.label} から ${call.childWorkflow} lane を呼び出し`,
-  );
-  connector.append(
-    element('span', 'execution-relation-source', `${call.workflow} · ${source.node.label}`),
-    element('span', 'execution-relation-line', 'calls'),
-    element('span', 'execution-relation-arrow', '↘'),
-    element('span', 'execution-relation-target', targetLabel),
-  );
-  return connector;
-}
-
-function renderObservedRelations(trace) {
-  const loops = trace.loops.flatMap((loop) => {
-    const connector = renderLoopConnector(trace, loop);
-    return connector === null ? [] : [connector];
-  });
-  const calls = trace.calls.flatMap((call) => {
-    const connector = renderCallConnector(trace, call);
-    return connector === null ? [] : [connector];
-  });
-  if (loops.length === 0 && calls.length === 0) return null;
-  const relations = element('div', 'execution-map-relations');
-  relations.setAttribute('aria-label', '観測された workflow 関係');
-  if (loops.length > 0) {
-    const loopGroup = element('section', 'execution-relation-group');
-    loopGroup.append(element('h4', '', 'Loop returns'), ...loops);
-    relations.append(loopGroup);
-  }
-  if (calls.length > 0) {
-    const callGroup = element('section', 'execution-relation-group');
-    callGroup.append(element('h4', '', 'Workflow calls'), ...calls);
-    relations.append(callGroup);
-  }
-  return relations;
 }
 
 export function renderExecutionMap(trace, options) {
@@ -407,46 +453,60 @@ export function renderExecutionMap(trace, options) {
   const heading = element('div', 'panel-heading');
   const copy = element('div', 'panel-heading-copy');
   copy.append(
-    element('h3', '', 'Execution map'),
-    element('p', '', '実行イベントから構成した観測済みの workflow map。カード内の ↻ は同じ step の再実行です。'),
+    element('h3', '', t('map.title')),
+    element('p', '', t('map.description')),
   );
   heading.append(copy, options.liveIndicator);
   section.append(heading);
-  if (trace.nodes.length === 0) {
+  const nodes = stepNodes(trace);
+  if (nodes.length === 0) {
     section.append(options.emptyState);
     return section;
   }
 
+  const layout = layoutSteps(trace);
   const mapHeader = element('div', 'execution-map-header');
   mapHeader.append(
-    element('span', 'execution-map-summary', `${trace.lanes.length} lanes · ${trace.nodes.length} steps · ${trace.totalOccurrences} passes`),
-    element('span', 'execution-map-key', '選択すると該当passのログを表示'),
+    element('span', 'execution-map-summary', t('map.summarySteps', {
+      steps: nodes.length,
+      passes: trace.totalOccurrences,
+      lanes: trace.lanes.length,
+    })),
+    element('span', 'execution-map-key', t('map.selectPass')),
   );
   section.append(mapHeader);
 
   const map = element('div', 'execution-map');
   map.id = 'execution-map';
   map.setAttribute('role', 'group');
-  map.setAttribute('aria-label', '観測済みの実行マップ');
+  map.setAttribute('aria-label', t('map.ariaLabel'));
+  map.setAttribute('aria-description', t('map.panHint'));
+  map.dataset.panHint = t('map.panHint');
   const canvas = element('div', 'execution-map-canvas');
-  for (const lane of trace.lanes) {
-    canvas.append(renderLane(lane, options.selectedOccurrenceId, options.onSelectOccurrence));
+  canvas.style.setProperty('width', `${layout.width}px`);
+  canvas.style.setProperty('height', `${layout.height}px`);
+  for (const node of nodes) {
+    const step = renderStep(
+      node,
+      layout.positions.get(node.id) ?? { x: 28, y: 28 },
+      options.selectedOccurrenceId,
+      options.onSelectOccurrence,
+    );
+    if (step !== null) canvas.append(step);
   }
-  const relations = renderObservedRelations(trace);
-  if (relations !== null) canvas.append(relations);
-  const overlay = renderRelationOverlay(section, map, canvas, trace);
-  canvas.append(overlay);
   map.append(canvas);
   section.append(map);
-  const transitionSummary = renderTransitionSummary(trace);
-  if (transitionSummary !== null) section.append(transitionSummary);
+  // Measure anchors after the map is attached. Detached nodes have zero
+  // geometry in browsers, which would leave the initial SVG paths at 0,0.
+  const overlay = renderRelationOverlay(section, map, canvas, trace);
+  canvas.append(overlay);
   return section;
 }
 
 export function disposeExecutionMap(container) {
   const sections = [];
   if (container?.matches?.('.execution-map-section')) sections.push(container);
-  sections.push(...container.querySelectorAll('.execution-map-section'));
+  sections.push(...(container?.querySelectorAll?.('.execution-map-section') ?? []));
   for (const section of sections) {
     const dispose = executionMapDisposers.get(section);
     if (dispose === undefined) continue;

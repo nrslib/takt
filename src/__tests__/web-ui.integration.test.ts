@@ -760,8 +760,10 @@ describe('Web UI HTTP boundary', () => {
     expect(html.indexOf('id="execution-context"')).toBeLessThan(html.indexOf('<main'));
     expect(html).toContain('id="viewer-screen"');
     expect(html).toContain('id="new-task-button"');
-    expect(html).toContain('id="ai-consult-button"');
+    expect(html).toContain('id="language-toggle"');
     expect(html).toContain('id="chat-surface"');
+    expect(html).toContain('id="run-inspector"');
+    expect(html).not.toContain('id="ai-consult-button"');
     expect(html).not.toContain('class="workspace"');
     expect(html).toContain('<section id="chat-panel" class="chat-panel">');
     expect(html).toContain('rows="1"');
@@ -775,13 +777,15 @@ describe('Web UI HTTP boundary', () => {
     expect(html).toContain('id="chat-thinking"');
     expect(html).toContain('id="chat-thinking-content"');
     expect(html).toContain('id="chat-collapse-button"');
-    expect(html).toContain('id="chat-resizer"');
-    expect(html).toContain('role="separator"');
+    expect(html).not.toContain('id="chat-resizer"');
     expect(html).not.toContain('data-composer-mode');
     expect(html).not.toContain('id="run-form"');
 
     const uiStateResponse = await fetch(`${origin}/ui-state.js`);
     expect(uiStateResponse.status).toBe(200);
+    const i18nResponse = await fetch(`${origin}/i18n.js`);
+    expect(i18nResponse.status).toBe(200);
+    expect(await i18nResponse.text()).toContain("DEFAULT_LOCALE = 'ja'");
     const executionMapResponse = await fetch(`${origin}/execution-map.js`);
     expect(executionMapResponse.status).toBe(200);
     expect(await executionMapResponse.text()).toContain('renderExecutionMap');

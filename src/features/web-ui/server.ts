@@ -271,6 +271,7 @@ async function loadAssets() {
   const definitions = [
     ['/', '../../../web-ui/public/index.html', 'text/html; charset=utf-8'],
     ['/app.js', '../../../web-ui/public/app.js', 'text/javascript; charset=utf-8'],
+    ['/i18n.js', '../../../web-ui/public/i18n.js', 'text/javascript; charset=utf-8'],
     ['/api.js', '../../../web-ui/public/api.js', 'text/javascript; charset=utf-8'],
     ['/execution-model.js', '../../../web-ui/public/execution-model.js', 'text/javascript; charset=utf-8'],
     ['/execution-map.js', '../../../web-ui/public/execution-map.js', 'text/javascript; charset=utf-8'],

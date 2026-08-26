@@ -19,6 +19,7 @@ import { subscribeRun, subscribeTasks } from './live-stream.js';
 import {
   buildExecutionSettingsRequest,
   createDirectoryRequestTracker,
+  isCurrentRunRequest as isCurrentRunRequestState,
   isCurrentWorkflowRequest as isCurrentWorkflowRequestState,
   isWorkflowCatalogReady,
   projectSelectionForRefresh,
@@ -26,11 +27,15 @@ import {
   snapshotExecutionSettings,
   shouldCloseExecutionContext,
 } from './ui-state.js';
+import {
+  applyTranslations,
+  getLocale,
+  setLocale,
+  subscribeLocaleChange,
+  t,
+} from './i18n.js';
 
-const EMPTY_CHAT_MESSAGE = 'メッセージを入力してください。';
-const CHAT_RESIZE_STEP = 16;
-const CHAT_DRAWER_MIN_WIDTH = 360;
-const CHAT_DRAWER_MAX_WIDTH = 560;
+const EMPTY_CHAT_MESSAGE_KEY = 'app.emptyMessage';
 
 const elements = {
   connection: document.querySelector('#connection-status'),
@@ -39,7 +44,6 @@ const elements = {
   chatGoButton: document.querySelector('#chat-go-button'),
   chatSetupButton: document.querySelector('#chat-setup-button'),
   chatCollapseButton: document.querySelector('#chat-collapse-button'),
-  chatResizer: document.querySelector('#chat-resizer'),
   chatSurface: document.querySelector('#chat-surface'),
   chatSurfaceDescription: document.querySelector('#chat-surface-description'),
   chatSurfaceLabel: document.querySelector('#chat-surface-label'),
@@ -69,16 +73,18 @@ const elements = {
   executionContext: document.querySelector('#execution-context'),
   executionContextToggle: document.querySelector('#execution-context > summary'),
   executionContextSummary: document.querySelector('#execution-context-summary'),
-  aiConsultButton: document.querySelector('#ai-consult-button'),
+  languageToggle: document.querySelector('#language-toggle'),
   newTaskButton: document.querySelector('#new-task-button'),
   viewerNav: document.querySelector('#viewer-nav'),
   viewerScreen: document.querySelector('#viewer-screen'),
   mobileTaskListButton: document.querySelector('#mobile-task-list-button'),
+  mobileInspectorButton: document.querySelector('#mobile-inspector-button'),
   taskCount: document.querySelector('#task-count'),
   project: document.querySelector('#project'),
   projectHelp: document.querySelector('#project-help'),
   refresh: document.querySelector('#refresh-button'),
   runDetail: document.querySelector('#run-detail'),
+  runInspector: document.querySelector('#run-inspector'),
   runStatusLive: document.querySelector('#run-status-live'),
   runList: document.querySelector('#run-list'),
   runListEmpty: document.querySelector('#run-list-empty'),
@@ -90,9 +96,12 @@ const elements = {
 const directoryRequests = createDirectoryRequestTracker();
 
 let selectedRun = null;
+let runSelectionGeneration = 0;
+let liveSnapshotRevision = 0;
 let refreshing = false;
 let stopTaskStream = null;
 let stopRunStream = null;
+let liveStreamGeneration = 0;
 let liveUpdatesEnabled = true;
 let taskCollection = { tasks: [], warnings: [] };
 let workflowCatalog = [];
@@ -103,13 +112,14 @@ let chatSession = null;
 let registryWarnings = [];
 let workflowWarnings = [];
 let browsedDirectory = null;
-let chatDrawerWidth = null;
-let chatDrawerWidthManuallyAdjusted = false;
-let chatDrawerOpen = false;
+let taskSurfaceOpen = false;
 let screenMode = 'viewer';
+let screenTransitionId = 0;
+let screenTransitionTimer = null;
 let executionEnabled = false;
 let chatOperationInProgress = false;
 let chatMessageRevision = 0;
+let chatStatusDescriptor = null;
 let executionSettings = {
   worktreeMode: 'auto',
   worktreePath: '',
@@ -124,10 +134,11 @@ const executionView = createExecutionView({
   runListEmpty: elements.runListEmpty,
   taskCount: elements.taskCount,
   runDetail: elements.runDetail,
+  inspector: elements.runInspector,
   onSelectRun: selectRun,
   onRequeue: (task, button) => void requeueSelectedTask(task, button),
   onStatusChange: (status) => {
-    const label = status.toUpperCase();
+    const label = t(`app.status.${status}`);
     if (elements.runStatusLive.textContent !== label) elements.runStatusLive.textContent = label;
   },
 });
@@ -156,10 +167,10 @@ function updateExecutionContextSummary() {
   const categoryOption = elements.category.selectedOptions[0];
   const workflowOption = elements.workflow.selectedOptions[0];
   if (selectedProjectId() === '' || workflowOption === undefined) {
-    elements.executionContextSummary.textContent = 'ディレクトリとworkflowを選択';
+    elements.executionContextSummary.textContent = t('app.chooseContext');
     return;
   }
-  const projectName = projectOption?.textContent?.split(' — ')[0] ?? '実行先';
+  const projectName = projectOption?.textContent?.split(' — ')[0] ?? t('app.executionTarget');
   const category = categoryOption?.textContent ?? '';
   elements.executionContextSummary.textContent = [projectName, category, workflowOption.value]
     .filter(Boolean)
@@ -196,12 +207,22 @@ function setChatOperationInProgress(inProgress) {
   syncChatControls();
 }
 
+function setChatStatusRaw(message) {
+  chatStatusDescriptor = null;
+  elements.chatStatus.textContent = message;
+}
+
+function setChatStatusMessage(key, variables = {}) {
+  chatStatusDescriptor = { key, variables };
+  elements.chatStatus.textContent = t(key, variables);
+}
+
 function populateProjects(snapshot, preferredProjectId = '') {
   const previousProjectId = selectedProjectId();
   registryWarnings = [...snapshot.warnings];
   elements.project.replaceChildren();
   const availableProjects = snapshot.projects.filter((candidate) => candidate.available);
-  const placeholder = createElement('option', '', '実行ディレクトリを選択');
+  const placeholder = createElement('option', '', t('app.executionDirectory'));
   placeholder.value = '';
   placeholder.disabled = true;
   placeholder.selected = true;
@@ -217,9 +238,7 @@ function populateProjects(snapshot, preferredProjectId = '') {
   elements.project.disabled = !available;
   if (selectedProjectId() !== previousProjectId) clearWorkflowCatalog();
   setExecutionEnabled(preferredAvailable && workflowCatalogReady(preferredProjectId));
-  elements.projectHelp.textContent = available
-    ? 'Chatを始める前に、実行ディレクトリを選択してください。'
-    : '登録済みディレクトリがありません。対象ディレクトリでtaktコマンドを一度実行してください。';
+  elements.projectHelp.textContent = t(available ? 'app.projectHelpAvailable' : 'app.projectHelpEmpty');
   updateExecutionContextSummary();
   updateWarnings();
 }
@@ -282,7 +301,7 @@ function renderBrowsedDirectory(directory) {
   elements.directoryCurrentPath.title = directory.path;
   elements.directoryList.replaceChildren();
   if (directory.directories.length === 0) {
-    renderDirectoryEmptyState('子ディレクトリはありません。');
+    renderDirectoryEmptyState(t('app.noChildDirectories'));
     syncDirectoryControls();
     return;
   }
@@ -301,7 +320,7 @@ function renderBrowsedDirectory(directory) {
 async function loadDirectory(path) {
   const directoryRequest = directoryRequests.beginRequest('browse');
   if (directoryRequest === null) return;
-  elements.directoryMessage.textContent = 'ディレクトリを読み込んでいます…';
+  elements.directoryMessage.textContent = t('app.directoryLoading');
   syncDirectoryControls();
   try {
     const directory = await browseDirectories(path);
@@ -320,12 +339,12 @@ async function openNativeDirectoryPicker() {
   const directoryRequest = directoryRequests.beginPendingOperation('native-picker');
   if (directoryRequest === null) return;
   syncDirectoryControls();
-  elements.directoryMessage.textContent = 'Finderでディレクトリを選択してください。';
+  elements.directoryMessage.textContent = t('app.finder');
   try {
     const result = await pickNativeDirectory();
     if (!directoryRequests.isCurrent(directoryRequest)) return;
     if (result.cancelled) {
-      elements.directoryMessage.textContent = 'ディレクトリ選択をキャンセルしました。';
+      elements.directoryMessage.textContent = t('app.directoryCancelled');
       return;
     }
     renderBrowsedDirectory(result.directory);
@@ -379,7 +398,7 @@ async function selectBrowsedDirectory() {
   const directoryRequest = directoryRequests.beginPendingOperation('select');
   if (directoryRequest === null) return;
   syncDirectoryControls();
-  elements.directoryMessage.textContent = 'ディレクトリを登録しています…';
+  elements.directoryMessage.textContent = t('app.directoryRegistered');
   let workflowRequest = null;
   try {
     const directory = await browseDirectories(requestedPath);
@@ -397,7 +416,7 @@ async function selectBrowsedDirectory() {
     const catalog = await getWorkflows(project.id);
     if (!directoryRequests.isCurrent(directoryRequest) || !isCurrentWorkflowRequest(workflowRequest)) return;
     if (selectedProjectId() !== project.id) {
-      elements.directoryMessage.textContent = '登録したディレクトリを選択できませんでした。';
+      elements.directoryMessage.textContent = t('app.directoryUnavailable');
       return;
     }
     populateWorkflowCatalog(catalog, project.id);
@@ -463,8 +482,8 @@ async function loadWorkflowsForProject() {
 function renderChatPlaceholder() {
   const placeholder = createElement('div', 'chat-placeholder');
   placeholder.append(
-    createElement('strong', '', '会話を開始'),
-    createElement('span', '', '選択したworkflowを前提にAIと相談できます。'),
+    createElement('strong', '', t('app.startConversation')),
+    createElement('span', '', t('app.startConversationDescription')),
   );
   elements.chatTranscript.replaceChildren(placeholder);
 }
@@ -474,8 +493,9 @@ function clearChatThinking() {
   elements.chatThinking.open = false;
   elements.chatThinking.dataset.active = 'false';
   elements.chatThinkingContent.textContent = '';
-  elements.chatThinkingLabel.textContent = '考え中';
-  elements.chatThinkingState.textContent = '応答を待っています';
+  elements.chatThinking.dataset.stateKey = 'app.waitingResponse';
+  elements.chatThinkingLabel.textContent = t('app.thinking');
+  elements.chatThinkingState.textContent = t('app.waitingResponse');
 }
 
 function beginChatThinking() {
@@ -483,14 +503,16 @@ function beginChatThinking() {
   elements.chatThinking.open = false;
   elements.chatThinking.dataset.active = 'true';
   elements.chatThinkingContent.textContent = '';
-  elements.chatThinkingLabel.textContent = '考え中';
-  elements.chatThinkingState.textContent = '応答を待っています';
+  elements.chatThinking.dataset.stateKey = 'app.waitingResponse';
+  elements.chatThinkingLabel.textContent = t('app.thinking');
+  elements.chatThinkingState.textContent = t('app.waitingResponse');
 }
 
 function appendChatThinking(content) {
   elements.chatThinking.open = true;
   elements.chatThinkingContent.textContent += content;
-  elements.chatThinkingState.textContent = '受信中';
+  elements.chatThinking.dataset.stateKey = 'app.receiving';
+  elements.chatThinkingState.textContent = t('app.receiving');
   elements.chatThinkingContent.scrollTop = elements.chatThinkingContent.scrollHeight;
 }
 
@@ -501,14 +523,15 @@ function finishChatThinking(completed) {
     return;
   }
   elements.chatThinking.open = false;
-  elements.chatThinkingLabel.textContent = 'Thinking';
-  elements.chatThinkingState.textContent = completed ? '完了' : '中断';
+  elements.chatThinking.dataset.stateKey = completed ? 'app.completed' : 'app.interrupted';
+  elements.chatThinkingLabel.textContent = t('app.thinkingLabel');
+  elements.chatThinkingState.textContent = completed ? t('app.completed') : t('app.interrupted');
 }
 
 function resetChatSession() {
   chatSession = null;
-  elements.chatSessionMeta.textContent = '会話はまだ始まっていません。';
-  elements.chatStatus.textContent = '';
+  elements.chatSessionMeta.textContent = t('app.startConversation');
+  setChatStatusRaw('');
   clearChatThinking();
   renderChatPlaceholder();
   syncChatControls();
@@ -526,8 +549,13 @@ function updateChatSessionDescription(session) {
 
 function appendChatEntry(role, content) {
   const entry = createElement('article', `chat-entry chat-entry-${role}`);
+  const roleKey = role === 'user'
+    ? 'app.roleUser'
+    : role === 'assistant' ? 'app.roleAssistant' : 'app.roleSystem';
+  const roleLabel = createElement('span', 'chat-role', t(roleKey));
+  roleLabel.dataset.i18n = roleKey;
   entry.append(
-    createElement('span', 'chat-role', role === 'user' ? 'YOU' : role === 'assistant' ? 'AI' : 'SYSTEM'),
+    roleLabel,
     createElement('p', '', content),
   );
   elements.chatTranscript.querySelector('.chat-placeholder')?.remove();
@@ -535,37 +563,57 @@ function appendChatEntry(role, content) {
   elements.chatTranscript.scrollTop = elements.chatTranscript.scrollHeight;
 }
 
-function createSettingsField(label, control) {
+function createSettingsField(labelKey, control) {
   const field = createElement('label', 'chat-setting-field');
-  field.append(createElement('span', '', label), control);
+  const label = createElement('span', '', t(labelKey));
+  label.dataset.i18n = labelKey;
+  field.append(label, control);
   return field;
 }
 
 function executionSettingsSummary(settings = executionSettings) {
   const worktree = settings.worktreeMode === 'none'
-    ? 'なし'
+    ? t('app.worktreeNone')
     : settings.worktreeMode === 'custom'
       ? settings.worktreePath
-      : '自動';
+      : t('app.worktreeAuto');
   return [
-    `Worktree: ${worktree}`,
-    `Branch: ${settings.branch || '自動'}`,
-    `Base branch: ${settings.baseBranch || '既定'}`,
-    `Auto PR: ${settings.autoPr ? 'yes' : 'no'}`,
-    `Draft PR: ${settings.draftPr ? 'yes' : 'no'}`,
+    `${t('app.worktree')}: ${worktree}`,
+    `${t('app.branchName')}: ${settings.branch || t('app.worktreeAuto')}`,
+    `${t('app.baseBranch')}: ${settings.baseBranch || t('app.defaultBranch')}`,
+    `${t('app.autoCreatePr')}: ${settings.autoPr ? t('app.yes') : t('app.no')}`,
+    `${t('app.createDraft')}: ${settings.draftPr ? t('app.yes') : t('app.no')}`,
   ].join(' · ');
+}
+
+function settingsSummaryElement(settings) {
+  const summary = createElement('p', 'chat-settings-summary', executionSettingsSummary(settings));
+  summary.dataset.settingsSummary = 'true';
+  summary.dataset.settingsSnapshot = JSON.stringify(settings);
+  return summary;
 }
 
 function appendExecutionSettings() {
   const entry = createElement('article', 'chat-entry chat-entry-settings');
+  const role = createElement('span', 'chat-role', t('app.roleSetup'));
+  role.dataset.i18n = 'app.roleSetup';
   entry.append(
-    createElement('span', 'chat-role', 'SETUP'),
-    createElement('p', 'chat-settings-intro', 'この会話から実行するタスクの設定です。'),
+    role,
+    (() => {
+      const intro = createElement('p', 'chat-settings-intro', t('app.settingsIntro'));
+      intro.dataset.i18n = 'app.settingsIntro';
+      return intro;
+    })(),
   );
   const form = createElement('form', 'chat-settings-form');
   const worktreeMode = document.createElement('select');
-  for (const [value, label] of [['auto', '自動'], ['custom', 'パスを指定'], ['none', '使用しない']]) {
-    const option = createElement('option', '', label);
+  for (const [value, label] of [
+    ['auto', 'app.worktreeAuto'],
+    ['custom', 'app.worktreeCustom'],
+    ['none', 'app.worktreeNone'],
+  ]) {
+    const option = createElement('option', '', t(label));
+    option.dataset.i18n = label;
     option.value = value;
     option.selected = executionSettings.worktreeMode === value;
     worktreeMode.append(option);
@@ -573,15 +621,18 @@ function appendExecutionSettings() {
   const worktreePath = document.createElement('input');
   worktreePath.type = 'text';
   worktreePath.value = executionSettings.worktreePath;
-  worktreePath.placeholder = '/path/to/task-worktree';
+  worktreePath.placeholder = t('app.worktreePlaceholder');
+  worktreePath.dataset.i18nPlaceholder = 'app.worktreePlaceholder';
   const branch = document.createElement('input');
   branch.type = 'text';
   branch.value = executionSettings.branch;
-  branch.placeholder = '自動生成';
+  branch.placeholder = t('app.autoGenerated');
+  branch.dataset.i18nPlaceholder = 'app.autoGenerated';
   const baseBranch = document.createElement('input');
   baseBranch.type = 'text';
   baseBranch.value = executionSettings.baseBranch;
-  baseBranch.placeholder = 'リポジトリの既定ブランチ';
+  baseBranch.placeholder = t('app.defaultBranch');
+  baseBranch.dataset.i18nPlaceholder = 'app.defaultBranch';
   const autoPr = document.createElement('input');
   autoPr.type = 'checkbox';
   autoPr.checked = executionSettings.autoPr;
@@ -600,15 +651,16 @@ function appendExecutionSettings() {
   worktreeMode.addEventListener('change', syncDependencies);
   autoPr.addEventListener('change', syncDependencies);
   syncDependencies();
-  const save = createElement('button', 'secondary-button', '設定を保存');
+  const save = createElement('button', 'secondary-button', t('app.saveSettings'));
+  save.dataset.i18n = 'app.saveSettings';
   save.type = 'submit';
   form.append(
-    createSettingsField('Worktree', worktreeMode),
-    createSettingsField('Worktree path', worktreePath),
-    createSettingsField('Branch name', branch),
-    createSettingsField('Base branch', baseBranch),
-    createSettingsField('Auto-create PR', autoPr),
-    createSettingsField('Create as draft', draftPr),
+    createSettingsField('app.worktree', worktreeMode),
+    createSettingsField('app.worktreePath', worktreePath),
+    createSettingsField('app.branchName', branch),
+    createSettingsField('app.baseBranch', baseBranch),
+    createSettingsField('app.autoCreatePr', autoPr),
+    createSettingsField('app.createDraft', draftPr),
     save,
   );
   form.addEventListener('submit', (event) => {
@@ -622,13 +674,13 @@ function appendExecutionSettings() {
       draftPr: draftPr.checked,
     };
     if (next.worktreeMode === 'custom' && next.worktreePath === '') {
-      elements.chatStatus.textContent = 'Worktree pathを入力してください。';
+      setChatStatusMessage('app.enterWorktreePath');
       worktreePath.focus();
       return;
     }
     executionSettings = next;
-    form.replaceChildren(createElement('p', 'chat-settings-summary', executionSettingsSummary()));
-    elements.chatStatus.textContent = '実行設定を保存しました。';
+    form.replaceChildren(settingsSummaryElement(executionSettings));
+    setChatStatusMessage('app.settingsSaved');
   });
   entry.append(form);
   elements.chatTranscript.querySelector('.chat-placeholder')?.remove();
@@ -639,12 +691,18 @@ function appendExecutionSettings() {
 function appendTaskInstruction(task) {
   const settings = snapshotExecutionSettings(executionSettings);
   const entry = createElement('article', 'chat-entry chat-entry-task');
+  const role = createElement('span', 'chat-role', t('app.roleTask'));
+  role.dataset.i18n = 'app.roleTask';
+  const settingsSummary = settingsSummaryElement(settings);
   entry.append(
-    createElement('span', 'chat-role', 'TASK'),
+    role,
     createElement('pre', '', task),
-    createElement('p', 'chat-settings-summary', executionSettingsSummary(settings)),
+    settingsSummary,
   );
-  const button = createElement('button', 'secondary-button', 'この指示で実行');
+  const button = createElement('button', 'secondary-button', t('app.runFromInstruction'));
+  button.dataset.i18n = 'app.runFromInstruction';
+  button.dataset.i18nAriaLabel = 'app.runFromInstructionAria';
+  button.setAttribute('aria-label', t('app.runFromInstructionAria'));
   button.type = 'button';
   button.addEventListener('click', () => void launchTaskInstruction(task, settings, button));
   entry.append(button);
@@ -654,7 +712,7 @@ function appendTaskInstruction(task) {
 
 async function launchTaskInstruction(task, settings, button) {
   button.disabled = true;
-  elements.chatStatus.textContent = 'runを開始しています…';
+  setChatStatusMessage('app.taskStarting');
   try {
     const result = await startTask({
       projectId: selectedProjectId(),
@@ -664,13 +722,20 @@ async function launchTaskInstruction(task, settings, button) {
     });
     const modeLabel = result.mode === 'watch' ? 'watch' : 'run';
     const dispositionLabel = result.disposition === 'reused'
-      ? '実行中のone-shot taskにキューしました'
-      : 'TAKTを起動しました';
-    elements.chatStatus.textContent = `${dispositionLabel}（${modeLabel}）。PID: ${result.pid}`;
-    button.textContent = `${result.disposition === 'reused' ? 'キュー済み' : '起動済み'} · ${modeLabel} · PID ${result.pid}`;
+      ? t('app.startDispositionQueued')
+      : t('app.startDispositionStarted');
+    setChatStatusMessage('app.taskStartedStatus', {
+      message: dispositionLabel,
+      mode: modeLabel,
+      pid: result.pid,
+    });
+    button.textContent = `${result.disposition === 'reused' ? t('app.queued') : t('app.started')} · ${modeLabel} · PID ${result.pid}`;
+    button.dataset.launchDisposition = result.disposition;
+    button.dataset.launchMode = modeLabel;
+    button.dataset.launchPid = String(result.pid);
     await refreshRuns();
   } catch (error) {
-    elements.chatStatus.textContent = error instanceof Error ? error.message : String(error);
+    setChatStatusRaw(error instanceof Error ? error.message : String(error));
     button.disabled = false;
   }
 }
@@ -696,8 +761,8 @@ function submitChatWithShortcut(event) {
 function handleChatMessageInput() {
   chatMessageRevision += 1;
   resizeChatMessage();
-  if (elements.chatStatus.textContent === EMPTY_CHAT_MESSAGE) {
-    elements.chatStatus.textContent = '';
+  if (elements.chatStatus.textContent === t(EMPTY_CHAT_MESSAGE_KEY)) {
+    setChatStatusRaw('');
   }
 }
 
@@ -718,131 +783,80 @@ function submitSetupCommand() {
   elements.chatForm.requestSubmit();
 }
 
-function chatDrawerWidthBounds() {
-  const max = Math.min(CHAT_DRAWER_MAX_WIDTH, Math.round(window.innerWidth * 0.48));
-  return {
-    min: CHAT_DRAWER_MIN_WIDTH,
-    max: Math.max(CHAT_DRAWER_MIN_WIDTH, max),
-  };
-}
-
-function setChatDrawerWidth(requestedWidth) {
-  const bounds = chatDrawerWidthBounds();
-  chatDrawerWidth = Math.min(Math.max(requestedWidth, bounds.min), bounds.max);
-  elements.chatSurface.style.setProperty('--chat-drawer-width', String(chatDrawerWidth) + 'px');
-  elements.chatResizer.setAttribute('aria-valuemin', String(Math.round(bounds.min)));
-  elements.chatResizer.setAttribute('aria-valuemax', String(Math.round(bounds.max)));
-  elements.chatResizer.setAttribute('aria-valuenow', String(Math.round(chatDrawerWidth)));
-}
-
-function setChatDrawerWidthFromUser(requestedWidth) {
-  chatDrawerWidthManuallyAdjusted = true;
-  setChatDrawerWidth(requestedWidth);
-}
-
-function setChatDrawerOpen(open) {
-  chatDrawerOpen = open;
+function setTaskSurfaceOpen(open) {
+  taskSurfaceOpen = open;
   elements.chatSurface.dataset.open = String(open);
   elements.chatSurface.setAttribute('aria-hidden', String(!open));
   elements.chatSurface.inert = !open;
-  elements.aiConsultButton.setAttribute('aria-expanded', String(open));
   elements.chatCollapseButton.setAttribute('aria-expanded', String(open));
-  elements.chatResizer.tabIndex = open && screenMode === 'viewer' ? 0 : -1;
 }
 
 function setScreen(nextScreen) {
+  if (nextScreen !== 'viewer' && nextScreen !== 'task') return;
+  if (screenMode === nextScreen && screenTransitionTimer === null) return;
+  screenTransitionId += 1;
+  const transitionId = screenTransitionId;
+  if (screenTransitionTimer !== null) window.clearTimeout(screenTransitionTimer);
+  screenTransitionTimer = null;
   screenMode = nextScreen;
-  document.body.dataset.screen = nextScreen;
   const isTaskScreen = nextScreen === 'task';
   elements.viewerNav.classList.toggle('nav-button-active', !isTaskScreen);
   elements.viewerNav.setAttribute('aria-current', isTaskScreen ? 'false' : 'page');
   elements.newTaskButton.classList.toggle('nav-button-active', isTaskScreen);
   elements.newTaskButton.setAttribute('aria-current', isTaskScreen ? 'page' : 'false');
+  elements.viewerScreen.inert = isTaskScreen;
   elements.viewerScreen.setAttribute('aria-hidden', String(isTaskScreen));
-  elements.aiConsultButton.hidden = isTaskScreen;
-  elements.chatSurface.dataset.mode = isTaskScreen ? 'task' : 'drawer';
-  elements.chatCollapseButton.hidden = isTaskScreen;
-  elements.chatSurfaceLabel.textContent = isTaskScreen ? 'New task' : 'Assistant';
-  elements.chatTitle.textContent = isTaskScreen ? 'タスクを作成' : 'AIに相談';
-  elements.chatSurfaceDescription.textContent = isTaskScreen
-    ? 'AIと相談しながら、実行する内容を組み立てます。'
-    : 'Viewerを見ながら、TAKTに相談できます。';
-  if (isTaskScreen) {
-    setChatDrawerOpen(true);
-    requestAnimationFrame(() => elements.chatMessage.focus());
-  } else {
-    setChatDrawerOpen(false);
-  }
-}
-
-function openChatDrawer() {
-  if (screenMode !== 'viewer') return;
-  elements.chatSurface.dataset.mode = 'drawer';
   elements.chatCollapseButton.hidden = false;
-  setChatDrawerOpen(true);
-  requestAnimationFrame(() => elements.chatMessage.focus());
-}
-
-function closeChatDrawer() {
-  if (screenMode !== 'viewer') return;
-  setChatDrawerOpen(false);
-  elements.aiConsultButton.focus();
-}
-
-function resizeChatDrawerFromPointer(event) {
-  setChatDrawerWidthFromUser(window.innerWidth - event.clientX);
-}
-
-function startChatDrawerResize(event) {
-  if (event.button !== 0 || screenMode !== 'viewer' || !chatDrawerOpen) return;
-  event.preventDefault();
-  elements.chatResizer.setPointerCapture(event.pointerId);
-  elements.chatSurface.dataset.resizing = 'true';
-  resizeChatDrawerFromPointer(event);
-}
-
-function stopChatDrawerResize(event) {
-  if (elements.chatResizer.hasPointerCapture(event.pointerId)) {
-    elements.chatResizer.releasePointerCapture(event.pointerId);
+  elements.chatSurfaceLabel.textContent = t('app.newTask');
+  elements.chatTitle.textContent = t('app.createTask');
+  elements.chatSurfaceDescription.textContent = t('app.startConversationDescription');
+  elements.chatSurface.dataset.transition = isTaskScreen ? 'entering' : 'exiting';
+  if (isTaskScreen) {
+    document.body.dataset.screen = 'task';
+    setTaskSurfaceOpen(true);
+    requestAnimationFrame(() => {
+      if (transitionId !== screenTransitionId) return;
+      elements.chatSurface.dataset.transition = 'entered';
+      elements.chatMessage.focus();
+    });
+  } else {
+    // Keep the surface interactive until the right-origin exit transition has
+    // completed. This prevents an abrupt focus/inert change halfway through
+    // the animation and lets repeated navigation settle on the latest state.
+    taskSurfaceOpen = false;
+    elements.chatSurface.dataset.open = 'false';
+    elements.chatSurface.setAttribute('aria-hidden', 'false');
+    elements.chatSurface.inert = false;
+    elements.chatCollapseButton.setAttribute('aria-expanded', 'false');
+    const finish = () => {
+      if (transitionId !== screenTransitionId) return;
+      screenTransitionTimer = null;
+      elements.chatSurface.dataset.transition = 'exited';
+      elements.chatSurface.inert = true;
+      elements.chatSurface.setAttribute('aria-hidden', 'true');
+      document.body.dataset.screen = 'viewer';
+      elements.viewerScreen.inert = false;
+      elements.viewerScreen.setAttribute('aria-hidden', 'false');
+      elements.newTaskButton.focus();
+    };
+    const reducedMotion = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reducedMotion) finish();
+    else screenTransitionTimer = window.setTimeout(finish, 200);
   }
-  delete elements.chatSurface.dataset.resizing;
 }
 
-function resizeChatDrawerWithKeyboard(event) {
-  if (!chatDrawerOpen || screenMode !== 'viewer' || chatDrawerWidth === null) return;
-  const bounds = chatDrawerWidthBounds();
-  const widths = {
-    ArrowLeft: chatDrawerWidth + CHAT_RESIZE_STEP,
-    ArrowRight: chatDrawerWidth - CHAT_RESIZE_STEP,
-    Home: bounds.min,
-    End: bounds.max,
-  };
-  const requestedWidth = widths[event.key];
-  if (requestedWidth === undefined) return;
-  event.preventDefault();
-  setChatDrawerWidthFromUser(requestedWidth);
+function closeTaskSurface() {
+  if (screenMode === 'task') {
+    setScreen('viewer');
+  }
 }
 
-function initializeChatDrawer() {
-  chatDrawerWidthManuallyAdjusted = false;
-  const bounds = chatDrawerWidthBounds();
-  setChatDrawerWidth(Math.min(
-    bounds.max,
-    Math.max(bounds.min, Math.round(window.innerWidth * 0.38)),
-  ));
+function initializeTaskSurface() {
+  setTaskSurfaceOpen(false);
+  elements.chatSurface.inert = true;
+  elements.viewerScreen.inert = false;
   setScreen('viewer');
-}
-
-function updateChatDrawerWidthForLayout() {
-  const bounds = chatDrawerWidthBounds();
-  if (chatDrawerWidthManuallyAdjusted && chatDrawerWidth !== null) {
-    setChatDrawerWidth(chatDrawerWidth);
-    return;
-  }
-  setChatDrawerWidth(Math.min(
-    bounds.max,
-    Math.max(bounds.min, Math.round(window.innerWidth * 0.38)),
-  ));
 }
 
 async function ensureChatSession() {
@@ -872,10 +886,10 @@ function restoreChatSettings(session) {
 function describeChatSettingsChange(previous, next) {
   const changes = [];
   if (previous.workflow !== next.workflow) {
-    changes.push(`workflow: ${previous.workflow} → ${next.workflow}`);
+    changes.push(t('app.workflowChanged', { from: previous.workflow, to: next.workflow }));
   }
   if (previous.mode !== next.mode) {
-    changes.push(`mode: ${previous.mode} → ${next.mode}`);
+    changes.push(t('app.modeChanged', { from: previous.mode, to: next.mode }));
   }
   return changes.join(' · ');
 }
@@ -891,19 +905,19 @@ async function reconfigureActiveChatSession() {
   if (previous.workflow === request.workflow && previous.mode === request.mode) return;
 
   setChatOperationInProgress(true);
-  elements.chatStatus.textContent = '会話を引き継いで設定を切り替えています…';
+  setChatStatusMessage('app.chatSwitching');
   try {
     const next = await reconfigureChatSession(previous.id, request);
     chatSession = next;
     updateChatSessionDescription(next);
     appendChatEntry(
       'system',
-      `${describeChatSettingsChange(previous, next)} · これまでの会話を引き継ぎました。`,
+    `${describeChatSettingsChange(previous, next)} · ${t('app.chatHandoff')}`,
     );
-    elements.chatStatus.textContent = '';
+    setChatStatusRaw('');
   } catch (error) {
     restoreChatSettings(previous);
-    elements.chatStatus.textContent = error instanceof Error ? error.message : String(error);
+    setChatStatusRaw(error instanceof Error ? error.message : String(error));
   } finally {
     setChatOperationInProgress(false);
   }
@@ -912,7 +926,7 @@ async function reconfigureActiveChatSession() {
 async function startNewConversation() {
   if (chatSession === null || chatOperationInProgress) return;
   setChatOperationInProgress(true);
-  elements.chatStatus.textContent = '新しい会話を準備しています…';
+  setChatStatusMessage('app.chatPreparing');
   try {
     const session = await restartChatSession(chatSession.id);
     chatSession = session;
@@ -924,10 +938,10 @@ async function startNewConversation() {
     } else {
       appendChatEntry('assistant', session.intro);
     }
-    elements.chatStatus.textContent = '新しい会話を開始しました。';
+    setChatStatusMessage('app.chatStarted');
     elements.chatMessage.focus();
   } catch (error) {
-    elements.chatStatus.textContent = error instanceof Error ? error.message : String(error);
+    setChatStatusRaw(error instanceof Error ? error.message : String(error));
   } finally {
     setChatOperationInProgress(false);
   }
@@ -938,7 +952,7 @@ async function submitChat(event) {
   if (elements.chatSendButton.disabled) return;
   const text = elements.chatMessage.value.trim();
   if (text === '') {
-    elements.chatStatus.textContent = EMPTY_CHAT_MESSAGE;
+    setChatStatusMessage(EMPTY_CHAT_MESSAGE_KEY);
     return;
   }
   if (text === '/setup') {
@@ -947,7 +961,7 @@ async function submitChat(event) {
     chatMessageRevision += 1;
     resizeChatMessage();
     appendExecutionSettings();
-    elements.chatStatus.textContent = '';
+    setChatStatusRaw('');
     return;
   }
   const messageRevision = chatMessageRevision;
@@ -956,7 +970,7 @@ async function submitChat(event) {
   setChatOperationInProgress(true);
   beginChatThinking();
   elements.chatStatus.dataset.busy = 'true';
-  elements.chatStatus.textContent = 'AIが応答を作成しています…';
+  setChatStatusMessage('app.thinking');
   try {
     const session = await ensureChatSession();
     appendChatEntry('user', text);
@@ -978,7 +992,7 @@ async function submitChat(event) {
       appendChatEntry('system', reply.message);
     }
     responseCompleted = reply.kind !== 'error';
-    elements.chatStatus.textContent = '';
+    setChatStatusRaw('');
   } catch (error) {
     if (
       messageWasCleared
@@ -988,7 +1002,7 @@ async function submitChat(event) {
       elements.chatMessage.value = text;
       resizeChatMessage();
     }
-    elements.chatStatus.textContent = error instanceof Error ? error.message : String(error);
+    setChatStatusRaw(error instanceof Error ? error.message : String(error));
   } finally {
     finishChatThinking(responseCompleted);
     delete elements.chatStatus.dataset.busy;
@@ -997,45 +1011,79 @@ async function submitChat(event) {
 }
 
 function stopLiveRunStream() {
+  liveStreamGeneration += 1;
   if (stopRunStream === null) return;
   stopRunStream();
   stopRunStream = null;
 }
 
-function startLiveRunStream() {
+function isCurrentRunSelection(expectedRun, generation) {
+  return generation === runSelectionGeneration
+    && sameRunSelectionState(selectedRun, expectedRun);
+}
+
+function beginRunSelection(nextRun) {
+  selectedRun = nextRun;
+  runSelectionGeneration += 1;
+  return runSelectionGeneration;
+}
+
+function startLiveRunStream(generation = runSelectionGeneration) {
   stopLiveRunStream();
   if (!liveUpdatesEnabled || selectedRun === null) return;
   const expectedRun = { ...selectedRun };
+  const streamGeneration = liveStreamGeneration;
   executionView.setLiveState('connecting');
   stopRunStream = subscribeRun(expectedRun.projectId, expectedRun.slug, {
     onSnapshot(detail) {
-      if (sameRunSelectionState(selectedRun, expectedRun)) {
-        executionView.renderDetail(detail, expectedRun);
-      }
+      if (streamGeneration !== liveStreamGeneration
+        || !isCurrentRunSelection(expectedRun, generation)) return;
+      liveSnapshotRevision += 1;
+      executionView.renderDetail(detail, expectedRun);
     },
     onConnectionChange(state) {
-      if (!sameRunSelectionState(selectedRun, expectedRun)) return;
+      if (streamGeneration !== liveStreamGeneration
+        || !isCurrentRunSelection(expectedRun, generation)) return;
       executionView.setLiveState(state);
-      elements.connection.textContent = state === 'live' ? 'Live' : '再接続中';
+      elements.connection.textContent = state === 'live' ? t('app.live') : t('app.statusReconnecting');
     },
     onError(error) {
-      if (!sameRunSelectionState(selectedRun, expectedRun)) return;
+      if (streamGeneration !== liveStreamGeneration
+        || !isCurrentRunSelection(expectedRun, generation)) return;
       elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
     },
   });
 }
 
 async function selectRun(nextRun) {
-  selectedRun = nextRun;
+  const generation = beginRunSelection(nextRun);
   elements.viewerScreen.dataset.mobileView = 'detail';
   executionView.renderTaskList(taskCollection.tasks, selectedRun);
-  startLiveRunStream();
-  if (liveUpdatesEnabled) return;
+  startLiveRunStream(generation);
+  const request = {
+    generation,
+    snapshotRevision: liveSnapshotRevision,
+    selection: { ...nextRun },
+  };
   try {
     const detail = await getRun(nextRun.projectId, nextRun.slug);
-    executionView.renderDetail(detail, nextRun);
+    if (isCurrentRunRequestState(
+      request,
+      runSelectionGeneration,
+      selectedRun,
+      liveSnapshotRevision,
+    )) {
+      executionView.renderDetail(detail, nextRun);
+    }
   } catch (error) {
-    elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
+    if (isCurrentRunRequestState(
+      request,
+      runSelectionGeneration,
+      selectedRun,
+      liveSnapshotRevision,
+    )) {
+      elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
+    }
   }
 }
 
@@ -1050,9 +1098,11 @@ function applyTaskCollection(collection) {
   if (!hasSelected) {
     const firstTask = collection.tasks.find((task) => task.runs.length > 0);
     const latestRun = firstTask?.runs.at(-1);
-    selectedRun = firstTask === undefined || latestRun === undefined
+    const nextRun = firstTask === undefined || latestRun === undefined
       ? null
       : { projectId: firstTask.projectId, taskId: firstTask.taskId, slug: latestRun.slug };
+    if (!sameRunSelectionState(previous, nextRun)) beginRunSelection(nextRun);
+    else selectedRun = nextRun;
   }
   executionView.renderTaskList(collection.tasks, selectedRun);
   elements.viewerScreen.dataset.mobileView = selectedRun === null ? 'list' : 'detail';
@@ -1062,7 +1112,7 @@ function applyTaskCollection(collection) {
     executionView.renderPlaceholder();
     return;
   }
-  if (!sameRunSelectionState(previous, selectedRun)) startLiveRunStream();
+  if (!sameRunSelectionState(previous, selectedRun)) startLiveRunStream(runSelectionGeneration);
 }
 
 async function requeueSelectedTask(task, button) {
@@ -1070,9 +1120,11 @@ async function requeueSelectedTask(task, button) {
   elements.runWarning.textContent = '';
   try {
     const result = await requeueTask(task.projectId, task.taskId);
-    elements.chatStatus.textContent = result.disposition === 'reused'
-      ? '失敗したtaskをキューへ戻しました。'
-      : `taskの新しいrunを開始しました。PID: ${result.pid}`;
+    if (result.disposition === 'reused') {
+      setChatStatusMessage('app.failedRequeued');
+    } else {
+      setChatStatusMessage('app.newTaskRunStarted', { pid: result.pid });
+    }
     await refreshRuns();
   } catch (error) {
     elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
@@ -1088,18 +1140,35 @@ async function refreshRuns() {
     applyTaskCollection(collection);
     if (selectedRun !== null) {
       const requestedRun = { ...selectedRun };
+      const request = {
+        generation: runSelectionGeneration,
+        snapshotRevision: liveSnapshotRevision,
+        selection: requestedRun,
+      };
       try {
         const detail = await getRun(requestedRun.projectId, requestedRun.slug);
-        if (sameRunSelectionState(selectedRun, requestedRun)) {
+        if (isCurrentRunRequestState(
+          request,
+          runSelectionGeneration,
+          selectedRun,
+          liveSnapshotRevision,
+        )) {
           executionView.renderDetail(detail, requestedRun);
         }
       } catch (error) {
-        if (sameRunSelectionState(selectedRun, requestedRun)) throw error;
+        if (isCurrentRunRequestState(
+          request,
+          runSelectionGeneration,
+          selectedRun,
+          liveSnapshotRevision,
+        )) {
+          throw error;
+        }
       }
     }
-    elements.connection.textContent = liveUpdatesEnabled ? 'Live' : '接続済み';
+    elements.connection.textContent = liveUpdatesEnabled ? t('app.live') : t('app.statusConnected');
   } catch (error) {
-    elements.connection.textContent = '接続エラー';
+    elements.connection.textContent = t('app.statusError');
     elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     refreshing = false;
@@ -1113,7 +1182,7 @@ function startTaskStream() {
       applyTaskCollection(collection);
     },
     onConnectionChange(state) {
-      elements.connection.textContent = state === 'live' ? 'Live' : '再接続中';
+      elements.connection.textContent = state === 'live' ? t('app.live') : t('app.statusReconnecting');
     },
     onError(error) {
       elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
@@ -1132,14 +1201,14 @@ function setLiveUpdatesEnabled(enabled) {
     stopTaskStream = null;
     stopLiveRunStream();
     executionView.setLiveState('paused');
-    elements.connection.textContent = '手動更新';
+    elements.connection.textContent = t('app.manualRefresh');
   }
   elements.watch.setAttribute('aria-pressed', String(enabled));
-  elements.watch.textContent = enabled ? 'Live on' : 'Live off';
+  elements.watch.textContent = enabled ? t('app.liveOn') : t('app.liveOff');
 }
 
 async function initialize() {
-  initializeChatDrawer();
+  initializeTaskSurface();
   resizeChatMessage();
   try {
     const session = await getSession();
@@ -1149,7 +1218,7 @@ async function initialize() {
     await refreshRuns();
     startTaskStream();
   } catch (error) {
-    elements.connection.textContent = '初期化エラー';
+    elements.connection.textContent = t('app.statusInitializing');
     elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
   }
 }
@@ -1175,9 +1244,9 @@ document.addEventListener('click', closeExecutionContextFromOutside);
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
-  if (screenMode === 'viewer' && chatDrawerOpen) {
+  if (screenMode === 'task' && taskSurfaceOpen) {
     event.preventDefault();
-    closeChatDrawer();
+    closeTaskSurface();
     return;
   }
   if (!elements.executionContext.open) return;
@@ -1193,23 +1262,15 @@ elements.chatForm.addEventListener('submit', (event) => void submitChat(event));
 elements.chatSetupButton.addEventListener('click', submitSetupCommand);
 elements.chatGoButton.addEventListener('click', submitGoCommand);
 elements.chatNewButton.addEventListener('click', () => void startNewConversation());
-elements.aiConsultButton.addEventListener('click', openChatDrawer);
 elements.viewerNav.addEventListener('click', () => setScreen('viewer'));
 elements.newTaskButton.addEventListener('click', () => setScreen('task'));
 elements.mobileTaskListButton.addEventListener('click', () => {
   elements.viewerScreen.dataset.mobileView = 'list';
 });
-elements.chatCollapseButton.addEventListener('click', closeChatDrawer);
-elements.chatResizer.addEventListener('pointerdown', startChatDrawerResize);
-elements.chatResizer.addEventListener('pointermove', (event) => {
-  if (elements.chatResizer.hasPointerCapture(event.pointerId)) resizeChatDrawerFromPointer(event);
+elements.mobileInspectorButton.addEventListener('click', () => {
+  elements.viewerScreen.dataset.mobileView = 'inspector';
 });
-elements.chatResizer.addEventListener('pointerup', stopChatDrawerResize);
-elements.chatResizer.addEventListener('pointercancel', stopChatDrawerResize);
-elements.chatResizer.addEventListener('lostpointercapture', () => {
-  delete elements.chatSurface.dataset.resizing;
-});
-elements.chatResizer.addEventListener('keydown', resizeChatDrawerWithKeyboard);
+elements.chatCollapseButton.addEventListener('click', closeTaskSurface);
 elements.chatMessage.addEventListener('input', handleChatMessageInput);
 elements.chatMessage.addEventListener('keydown', submitChatWithShortcut);
 elements.directoryPicker.addEventListener('click', openDirectoryPicker);
@@ -1239,7 +1300,7 @@ elements.directoryCurrentPath.addEventListener('input', () => {
   }
   directoryRequests.invalidateRequest();
   browsedDirectory = null;
-  renderDirectoryEmptyState('Enterまたは「移動」でディレクトリを開きます。');
+    renderDirectoryEmptyState(t('app.directoryEnter'));
   syncDirectoryControls();
 });
 elements.directoryParent.addEventListener('click', () => {
@@ -1290,9 +1351,59 @@ window.addEventListener('beforeunload', () => {
   if (stopTaskStream !== null) stopTaskStream();
   stopLiveRunStream();
 });
-window.addEventListener('resize', () => {
-  if (window.innerWidth > 760) {
-    updateChatDrawerWidthForLayout();
+
+function updateLanguageToggle() {
+  const english = getLocale() === 'en';
+  elements.languageToggle.textContent = english ? t('app.languageJapanese') : t('app.languageEnglish');
+  const label = english ? t('app.languageSwitchToJa') : t('app.languageSwitch');
+  elements.languageToggle.setAttribute('aria-label', label);
+  elements.languageToggle.title = label;
+  elements.languageToggle.setAttribute('aria-pressed', String(english));
+}
+
+function refreshChatLocale() {
+  if (chatSession !== null) updateChatSessionDescription(chatSession);
+  for (const summary of elements.chatTranscript.querySelectorAll('[data-settings-summary="true"]')) {
+    let settings = executionSettings;
+    try {
+      const snapshot = JSON.parse(summary.dataset.settingsSnapshot ?? '');
+      if (snapshot !== null && typeof snapshot === 'object') settings = snapshot;
+    } catch {
+      // A stale transcript entry falls back to the current settings safely.
+    }
+    summary.textContent = executionSettingsSummary(settings);
   }
+  for (const button of elements.chatTranscript.querySelectorAll('[data-launch-disposition]')) {
+    const label = button.dataset.launchDisposition === 'reused' ? t('app.queued') : t('app.started');
+    button.textContent = `${label} · ${button.dataset.launchMode} · PID ${button.dataset.launchPid}`;
+  }
+  if (chatStatusDescriptor !== null) {
+    elements.chatStatus.textContent = t(
+      chatStatusDescriptor.key,
+      chatStatusDescriptor.variables,
+    );
+  }
+  elements.chatThinkingLabel.textContent = t(
+    elements.chatThinking.dataset.active === 'true' ? 'app.thinking' : 'app.thinkingLabel',
+  );
+  elements.chatThinkingState.textContent = t(
+    elements.chatThinking.dataset.stateKey ?? 'app.waitingResponse',
+  );
+}
+
+elements.languageToggle.addEventListener('click', () => {
+  setLocale(getLocale() === 'ja' ? 'en' : 'ja');
 });
+subscribeLocaleChange(() => {
+  applyTranslations();
+  updateLanguageToggle();
+  updateExecutionContextSummary();
+  elements.chatSurfaceLabel.textContent = t('app.newTask');
+  elements.chatTitle.textContent = t('app.createTask');
+  elements.chatSurfaceDescription.textContent = t('app.startConversationDescription');
+  refreshChatLocale();
+  executionView.refreshLocale();
+});
+applyTranslations();
+updateLanguageToggle();
 void initialize();

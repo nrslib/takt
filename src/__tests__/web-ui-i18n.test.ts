@@ -1,0 +1,84 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  DEFAULT_LOCALE,
+  getLocale,
+  setLocale,
+  t,
+  applyTranslations,
+} from '../../web-ui/public/i18n.js';
+
+class TranslationNode {
+  textContent = '';
+  placeholder = '';
+  title = '';
+  readonly attributes = new Map<string, string>();
+  readonly children: TranslationNode[] = [];
+
+  constructor(readonly key: string, readonly attribute = 'data-i18n') {
+    this.attributes.set(attribute, key);
+  }
+
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null;
+  }
+
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value);
+  }
+
+  querySelectorAll() {
+    return this.children;
+  }
+}
+
+describe('Web UI i18n', () => {
+  beforeEach(() => {
+    setLocale(DEFAULT_LOCALE);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses Japanese as the canonical default and supports interpolation/fallback', () => {
+    expect(DEFAULT_LOCALE).toBe('ja');
+    expect(getLocale()).toBe('ja');
+    expect(t('map.summarySteps', { steps: 2, passes: 3 })).toBe('2 処理 · 3 回');
+    expect(t('missing.translation.key')).toBe('missing.translation.key');
+  });
+
+  it('switches complete UI copy to English and persists the choice', () => {
+    let stored = '';
+    const storage = {
+      getItem: vi.fn(() => stored),
+      setItem: vi.fn((_key: string, value: string) => { stored = value; }),
+    };
+    vi.stubGlobal('localStorage', storage);
+
+    expect(setLocale('en')).toBe('en');
+    expect(getLocale()).toBe('en');
+    expect(t('app.createTask')).toBe('New task');
+    expect(t('map.summarySteps', { steps: 2, passes: 3 })).toBe('2 steps · 3 passes');
+    expect(storage.setItem).toHaveBeenCalledWith('takt.ui.locale', 'en');
+  });
+
+  it('translates static text, placeholder, title, and aria label attributes', () => {
+    const text = new TranslationNode('app.createTask');
+    const placeholder = new TranslationNode('app.messagePlaceholder', 'data-i18n-placeholder');
+    const title = new TranslationNode('app.sendShortcut', 'data-i18n-title');
+    const aria = new TranslationNode('app.close', 'data-i18n-aria-label');
+    const root = {
+      documentElement: { lang: '' },
+      querySelectorAll: () => [text, placeholder, title, aria],
+    };
+
+    setLocale('en');
+    applyTranslations(root);
+
+    expect(text.textContent).toBe('New task');
+    expect(placeholder.placeholder).toBe('Describe what you want to discuss');
+    expect(title.title).toBe('⌘ Enter to send');
+    expect(aria.getAttribute('aria-label')).toBe('Close');
+    expect(root.documentElement.lang).toBe('en');
+  });
+});

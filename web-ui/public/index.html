@@ -5,51 +5,50 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#0b0e0c">
-    <title>TAKT Console</title>
+    <title>TAKT</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body data-screen="viewer">
     <header class="app-header">
-      <div class="brand" aria-label="TAKT Console">
+      <div class="brand" aria-label="TAKT">
         <img class="brand-logo" src="/takt-logo.svg" alt="TAKT">
-        <span class="brand-product">Console</span>
       </div>
 
-      <nav class="global-nav" aria-label="メインナビゲーション">
-        <button id="viewer-nav" class="nav-button nav-button-active" type="button" aria-current="page">Viewer</button>
-        <button id="new-task-button" class="nav-button" type="button">タスクを作成</button>
+      <nav class="global-nav" aria-label="メインナビゲーション" data-i18n-aria-label="app.mainNavigation">
+        <button id="viewer-nav" class="nav-button nav-button-active" type="button" aria-current="page" data-i18n="app.viewer">Viewer</button>
+        <button id="new-task-button" class="nav-button" type="button" data-i18n="app.createTask">タスクを作成</button>
       </nav>
 
       <details id="execution-context" class="execution-context" open>
         <summary>
-          <span class="execution-context-label">Workspace</span>
-          <span id="execution-context-summary">ディレクトリとworkflowを選択</span>
+          <span class="execution-context-label" data-i18n="app.workspace">WORKSPACE</span>
+          <span id="execution-context-summary" data-i18n="app.chooseContext">ディレクトリと Workflow を選択</span>
         </summary>
         <div class="execution-context-body">
           <div class="project-selection">
-            <label for="project">Execution directory</label>
+            <label for="project" data-i18n="app.executionDirectory">実行ディレクトリ</label>
             <div class="project-control">
               <select id="project" name="project" required></select>
-              <button id="directory-picker-button" class="secondary-button" type="button" disabled>追加</button>
+              <button id="directory-picker-button" class="secondary-button" type="button" disabled data-i18n="app.add">追加</button>
             </div>
-            <p id="project-help">登録済みの実行先を選ぶか、新しいディレクトリを追加します。</p>
+            <p id="project-help" data-i18n="app.directoryHelp">登録済みの実行先を選ぶか、新しいディレクトリを追加します。</p>
           </div>
 
           <div class="workflow-selection">
             <div>
-              <label for="category">Category</label>
+              <label for="category" data-i18n="app.category">カテゴリ</label>
               <select id="category" name="category" required></select>
             </div>
             <div>
-              <label for="workflow">Workflow</label>
+              <label for="workflow" data-i18n="app.workflow">Workflow</label>
               <select id="workflow" name="workflow" required></select>
             </div>
             <div>
-              <label for="chat-mode">Chat mode</label>
+              <label for="chat-mode" data-i18n="app.chatMode">会話モード</label>
               <select id="chat-mode" name="chat-mode">
-                <option value="assistant">Assistant</option>
-                <option value="grill-me">Grill Me</option>
-                <option value="persona">Persona</option>
+                <option value="assistant" data-i18n="app.assistant">Assistant</option>
+                <option value="grill-me" data-i18n="app.grillMe">Grill Me</option>
+                <option value="persona" data-i18n="app.persona">Persona</option>
               </select>
             </div>
           </div>
@@ -57,79 +56,77 @@
       </details>
 
       <div class="header-actions">
-        <button id="ai-consult-button" class="header-action-button" type="button" aria-expanded="false" aria-controls="chat-surface">AIに相談</button>
+        <button id="language-toggle" class="language-toggle" type="button" aria-label="表示言語を英語に切り替え" title="表示言語を英語に切り替え">EN</button>
         <div class="connection" aria-live="polite">
           <span class="connection-dot" aria-hidden="true"></span>
-          <span id="connection-status">接続中</span>
+          <span id="connection-status" data-i18n="app.connection">接続中</span>
         </div>
       </div>
     </header>
 
     <main id="app-main" class="app-main">
       <section id="viewer-screen" class="viewer-screen" data-mobile-view="detail" aria-labelledby="viewer-title">
-        <aside class="task-sidebar" aria-label="Tasks">
+        <aside class="task-sidebar" aria-label="TASKS" data-i18n-aria-label="app.tasks">
           <header class="task-sidebar-header">
             <div>
-              <span class="section-kicker">Queue</span>
-              <h1>Tasks</h1>
+              <span class="section-kicker" data-i18n="app.queue">QUEUE</span>
+              <h1 data-i18n="app.tasks">TASKS</h1>
             </div>
             <span id="task-count" class="task-count">0</span>
           </header>
           <div class="task-sidebar-caption">
-            <span>最新の実行</span>
-            <span class="task-sidebar-caption-key">Live</span>
+            <span data-i18n="app.latestRuns">RUNS</span>
+            <span class="task-sidebar-caption-key" data-i18n="app.live">LIVE</span>
           </div>
           <div id="run-list" class="run-list"></div>
-          <p id="run-list-empty" class="empty-state" hidden>taskはまだありません。</p>
+          <p id="run-list-empty" class="empty-state" hidden data-i18n="app.noTasks">タスクはまだありません。</p>
         </aside>
 
         <section class="viewer-content">
           <header class="viewer-toolbar">
             <div class="viewer-heading">
-              <button id="mobile-task-list-button" class="mobile-back-button" type="button">← Tasks</button>
-              <span class="section-kicker">Execution viewer</span>
-              <h1 id="viewer-title">Run workspace</h1>
-              <p>タスクの現在地、実行マップ、ログ、成果物を一つの流れで確認します。</p>
+              <button id="mobile-task-list-button" class="mobile-back-button" type="button" data-i18n="app.mobileTasks">← タスク</button>
+              <span class="section-kicker" data-i18n="app.executionViewer">VIEWER</span>
+              <h1 id="viewer-title" data-i18n="app.runWorkspace">RUN</h1>
+              <p data-i18n="app.viewerDescription">タスクの進行状況、実行経路、ログ、成果物を確認します。</p>
             </div>
             <div class="viewer-actions">
-              <button id="watch-button" class="secondary-button live-toggle" type="button" aria-pressed="true">Live on</button>
-              <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
+              <button id="mobile-inspector-button" class="mobile-inspector-button" type="button" data-i18n="viewer.inspector">実行の詳細</button>
+              <button id="watch-button" class="secondary-button live-toggle" type="button" aria-pressed="true" data-i18n="app.liveOn">ライブ更新</button>
+              <button id="refresh-button" class="secondary-button" type="button" data-i18n="app.refresh">更新</button>
             </div>
           </header>
 
           <p id="run-status-live" class="visually-hidden" aria-live="polite"></p>
           <article id="run-detail" class="run-detail">
             <div class="workspace-empty">
-              <strong>Run を選択</strong>
-              <span>Tasksからrunを選ぶと、実行マップと成果物を確認できます。</span>
+              <strong data-i18n="app.selectRun">Run を選択</strong>
+              <span data-i18n="app.selectRunDescription">タスクから Run を選ぶと、実行経路と成果物を確認できます。</span>
             </div>
           </article>
-          <p class="execution-notice">同一 canonical project に対する CLI と Web UI の同時 mutation はサポート対象外です。</p>
+          <p class="execution-notice" data-i18n="app.executionNotice">同じプロジェクトに対して、CLI と Web UI から同時に更新操作を行うことはできません。</p>
           <p id="run-warning" class="warning-message" role="status"></p>
         </section>
+
+        <aside id="run-inspector" class="run-inspector" aria-label="実行の詳細" data-i18n-aria-label="viewer.inspector">
+          <div class="inspector-placeholder">
+            <strong data-i18n="viewer.noRun">Run を選択</strong>
+            <span data-i18n="viewer.noRunDescription">タスクから Run を選ぶと、実行経路と成果物を確認できます。</span>
+          </div>
+        </aside>
       </section>
 
-      <aside id="chat-surface" class="chat-surface" data-mode="drawer" data-open="false" aria-hidden="true" aria-labelledby="chat-title">
-        <div
-          id="chat-resizer"
-          class="chat-resizer"
-          role="separator"
-          tabindex="0"
-          aria-controls="chat-surface"
-          aria-label="Chatの横幅を調整"
-          aria-orientation="vertical"
-          aria-valuemin="360"
-        ></div>
+      <aside id="chat-surface" class="chat-surface" data-open="false" aria-hidden="true" aria-labelledby="chat-title">
         <section id="chat-panel" class="chat-panel">
           <header class="chat-panel-header">
             <div class="chat-panel-heading">
-              <span id="chat-surface-label" class="surface-label">New task</span>
-              <h2 id="chat-title">タスクを作成</h2>
-              <p id="chat-surface-description">AIと相談しながら、実行する内容を組み立てます。</p>
+              <span id="chat-surface-label" class="surface-label" data-i18n="app.newTask">新しいタスク</span>
+              <h2 id="chat-title" data-i18n="app.createTask">タスクを作成</h2>
+              <p id="chat-surface-description" data-i18n="app.startConversationDescription">選択した Workflow を前提に AI と相談できます。</p>
             </div>
             <div class="chat-panel-actions">
-              <div id="chat-session-meta" class="chat-session-meta">会話はまだ始まっていません。</div>
-              <button id="chat-new-button" class="chat-new-button" type="button" disabled>新しい会話</button>
+              <div id="chat-session-meta" class="chat-session-meta" data-i18n="app.startConversation">会話を開始</div>
+              <button id="chat-new-button" class="chat-new-button" type="button" disabled data-i18n="app.newConversation">新しい会話</button>
               <button
                 id="chat-collapse-button"
                 class="chat-close-button"
@@ -138,6 +135,9 @@
                 aria-expanded="false"
                 aria-label="Chatを閉じる"
                 title="Chatを閉じる"
+                data-i18n-aria-label="app.close"
+                data-i18n-title="app.close"
+                data-i18n="app.close"
               >閉じる</button>
             </div>
           </header>
@@ -145,35 +145,36 @@
             <summary>
               <span class="chat-thinking-heading">
                 <span class="chat-thinking-spinner" aria-hidden="true"></span>
-                <span id="chat-thinking-label">考え中</span>
+                <span id="chat-thinking-label" data-i18n="app.thinking">考え中</span>
               </span>
-              <span id="chat-thinking-state" class="chat-thinking-state">応答を待っています</span>
+              <span id="chat-thinking-state" class="chat-thinking-state" data-i18n="app.waitingResponse">応答を待っています</span>
             </summary>
             <pre id="chat-thinking-content" class="chat-thinking-content"></pre>
           </details>
           <div id="chat-transcript" class="chat-transcript" aria-live="polite">
             <div class="chat-placeholder">
-              <strong>会話を開始</strong>
-              <span>選択したworkflowを前提にAIと相談できます。</span>
+              <strong data-i18n="app.startConversation">会話を開始</strong>
+              <span data-i18n="app.startConversationDescription">選択した Workflow を前提に AI と相談できます。</span>
             </div>
           </div>
           <form id="chat-form" class="chat-form">
-            <label class="visually-hidden" for="chat-message">Message</label>
+            <label class="visually-hidden" for="chat-message" data-i18n="app.message">メッセージ</label>
             <div class="chat-composer">
               <textarea
                 id="chat-message"
                 name="chat-message"
                 rows="1"
                 placeholder="相談したい内容を入力"
+                data-i18n-placeholder="app.messagePlaceholder"
                 aria-keyshortcuts="Meta+Enter Control+Enter"
                 required
               ></textarea>
-              <button id="chat-send-button" type="submit" aria-label="メッセージを送信" title="⌘ Enterで送信">↑</button>
+              <button id="chat-send-button" type="submit" aria-label="メッセージを送信" title="⌘ Enterで送信" data-i18n-aria-label="app.sendMessage" data-i18n-title="app.sendShortcut">↑</button>
             </div>
             <div class="chat-command-row">
-              <button id="chat-setup-button" class="chat-command-button" type="button">/setup</button>
-              <button id="chat-go-button" class="chat-command-button" type="button">/go</button>
-              <p class="chat-shortcut-hint"><kbd>⌘ Enter</kbd> で送信</p>
+              <button id="chat-setup-button" class="chat-command-button" type="button" data-i18n="app.setup">/setup</button>
+              <button id="chat-go-button" class="chat-command-button" type="button" data-i18n="app.go">/go</button>
+              <p class="chat-shortcut-hint"><kbd>⌘ Enter</kbd> <span data-i18n="app.sendShortcutSuffix">で送信</span></p>
             </div>
             <p id="chat-message-status" class="form-message" role="status"></p>
           </form>
@@ -184,27 +185,27 @@
     <dialog id="directory-dialog" class="directory-dialog" aria-labelledby="directory-dialog-title">
       <div class="directory-dialog-header">
         <div>
-          <h2 id="directory-dialog-title">実行ディレクトリを選択</h2>
-          <p>パスを入力するか、フォルダから選択できます。</p>
+          <h2 id="directory-dialog-title" data-i18n="app.directoryDialogTitle">実行ディレクトリを選択</h2>
+          <p data-i18n="app.directoryDialogDescription">パスを入力するか、フォルダから選択できます。</p>
         </div>
-        <button id="directory-close-button" class="secondary-button" type="button" aria-label="閉じる">閉じる</button>
+        <button id="directory-close-button" class="secondary-button" type="button" aria-label="閉じる" data-i18n-aria-label="app.close" data-i18n="app.close">閉じる</button>
       </div>
       <div class="directory-current">
-        <label for="directory-current-path">Current directory</label>
+        <label for="directory-current-path" data-i18n="app.currentDirectory">現在のディレクトリ</label>
         <div class="directory-path-control">
-          <input id="directory-current-path" type="text" autocomplete="off" spellcheck="false" placeholder="/Users/example/project" aria-describedby="directory-message">
-          <button id="directory-native-picker-button" class="secondary-button" type="button" hidden>Finderで選択</button>
-          <button id="directory-go-button" class="secondary-button" type="button">移動</button>
+          <input id="directory-current-path" type="text" autocomplete="off" spellcheck="false" placeholder="/Users/example/project" data-i18n-placeholder="app.pathPlaceholder" aria-describedby="directory-message">
+          <button id="directory-native-picker-button" class="secondary-button" type="button" hidden data-i18n="app.finder">Finderで選択</button>
+          <button id="directory-go-button" class="secondary-button" type="button" data-i18n="app.move">移動</button>
         </div>
       </div>
       <div class="directory-navigation">
-        <button id="directory-parent-button" class="secondary-button" type="button">上のディレクトリへ</button>
+        <button id="directory-parent-button" class="secondary-button" type="button" data-i18n="app.parentDirectory">上のディレクトリへ</button>
       </div>
-      <div id="directory-list" class="directory-list" role="list" aria-label="子ディレクトリ"></div>
+      <div id="directory-list" class="directory-list" role="list" aria-label="子ディレクトリ" data-i18n-aria-label="app.childDirectories"></div>
       <p id="directory-message" class="form-message" role="status"></p>
       <div class="directory-dialog-actions">
-        <button id="directory-cancel-button" class="secondary-button" type="button">キャンセル</button>
-        <button id="directory-select-button" type="button">このディレクトリを使う</button>
+        <button id="directory-cancel-button" class="secondary-button" type="button" data-i18n="app.cancel">キャンセル</button>
+        <button id="directory-select-button" type="button" data-i18n="app.useDirectory">このディレクトリを使う</button>
       </div>
     </dialog>
 

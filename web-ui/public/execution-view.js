@@ -2,6 +2,7 @@ import {
   buildExecutionTrace,
   reportDirectory,
   reportDisplayName,
+  workflowDisplayName,
 } from './execution-model.js';
 import {
   disposeExecutionMap,
@@ -9,20 +10,7 @@ import {
   updateExecutionMapSelection,
 } from './execution-map.js';
 import { renderTaskNavigator } from './task-navigator.js';
-
-const STATUS_LABELS = {
-  pending: 'Pending',
-  running: 'Running',
-  completed: 'Completed',
-  aborted: 'Aborted',
-  failed: 'Failed',
-};
-const LIVE_STATE_LABELS = {
-  connecting: 'Connecting',
-  live: 'Live',
-  paused: 'Paused',
-  reconnecting: 'Reconnecting',
-};
+import { getLocale, t } from './i18n.js';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -34,11 +22,21 @@ function element(tag, className, text) {
 function formatDate(value) {
   if (value === undefined) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ja-JP');
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(getLocale() === 'en' ? 'en-US' : 'ja-JP');
 }
 
 function statusBadge(status) {
-  return element('span', `status-badge status-${status}`, STATUS_LABELS[status] ?? status);
+  return element('span', `status-badge status-${status}`, t(`app.status.${status}`));
+}
+
+function liveStateLabel(state) {
+  const key = {
+    connecting: 'app.statusConnecting',
+    live: 'app.live',
+    paused: 'app.manualRefresh',
+    reconnecting: 'app.statusReconnecting',
+  }[state];
+  return key === undefined ? state : t(key);
 }
 
 function runKey(selection) {
@@ -46,7 +44,7 @@ function runKey(selection) {
 }
 
 function eventTitle(event) {
-  const location = [event.workflow, event.step, event.phaseName].filter(Boolean).join(' / ');
+  const location = [workflowDisplayName(event.workflow, getLocale()), event.step, event.phaseName].filter(Boolean).join(' / ');
   return location === '' ? event.type : `${location} · ${event.type}`;
 }
 
@@ -60,12 +58,12 @@ function renderLogPreview(occurrence) {
   const panel = element('article', 'log-preview');
   const header = element('header', 'log-event-header');
   header.append(
-    element('strong', '', '履歴プレビュー'),
-    element('span', 'log-preview-badge', 'live tail外'),
+    element('strong', '', t('viewer.historyPreview')),
+    element('span', 'log-preview-badge', t('viewer.liveTailOutside')),
   );
   panel.append(header, element('pre', '', occurrence.preview));
   if (occurrence.previewTruncated === true) {
-    panel.append(element('p', 'log-preview-note', '内容は安全上の上限で切り詰められています。'));
+    panel.append(element('p', 'log-preview-note', t('viewer.previewTruncated')));
   }
   return panel;
 }
@@ -73,14 +71,14 @@ function renderLogPreview(occurrence) {
 function renderArtifactWarnings(detail, trace) {
   const warnings = [
     ...(Array.isArray(detail.warnings) ? detail.warnings : []),
-    ...(detail.historyTruncated === true ? ['履歴ログは上限件数まで保持しています。'] : []),
-    ...(trace.graphTruncated ? [`Graph summary is capped at ${trace.graphOccurrenceCount} occurrences.`] : []),
+    ...(detail.historyTruncated === true ? [t('viewer.historyLimited')] : []),
+    ...(trace.graphTruncated ? [t('viewer.summaryCapped', { count: trace.graphOccurrenceCount })] : []),
   ];
   if (warnings.length === 0) return null;
   const panel = element('aside', 'run-artifact-warning');
   panel.setAttribute('role', 'status');
   panel.append(
-    element('strong', '', '一部の実行データを要約しています'),
+    element('strong', '', t('viewer.dataSummarized')),
     element('p', '', warnings.join(' ')),
   );
   return panel;
@@ -96,17 +94,17 @@ function findOccurrence(trace, occurrenceId) {
 
 function selectionText(trace, selectedOccurrenceId) {
   if (selectedOccurrenceId === null) {
-    return 'All events · select a pass to focus the log';
+    return t('map.allEvents');
   }
   const selected = findOccurrence(trace, selectedOccurrenceId);
-  if (selected === null) return 'All events · select a pass to focus the log';
+  if (selected === null) return t('map.allEvents');
   const occurrenceIndex = selected.node.occurrences.findIndex(
     (occurrence) => occurrence.id === selected.occurrence.id,
   );
   const pass = selected.occurrence.iteration === undefined
-    ? `pass ${occurrenceIndex + 1}`
-    : `#${selected.occurrence.iteration}`;
-  return `${selected.node.label} · ${pass} · ${STATUS_LABELS[selected.occurrence.status]}`;
+    ? t('map.pass', { number: occurrenceIndex + 1 })
+    : t('map.iteration', { number: selected.occurrence.iteration });
+  return `${selected.node.displayLabel ?? selected.node.label} · ${pass} · ${t(`app.status.${selected.occurrence.status}`)}`;
 }
 
 export function createExecutionView(options) {
@@ -118,8 +116,12 @@ export function createExecutionView(options) {
   let currentTrace = null;
   let liveState = 'connecting';
   let followLog = true;
+  let taskList = [];
+  let taskSelection = null;
 
   function renderTaskList(tasks, selection) {
+    taskList = tasks;
+    taskSelection = selection;
     renderTaskNavigator({
       container: options.runList,
       empty: options.runListEmpty,
@@ -132,18 +134,18 @@ export function createExecutionView(options) {
   }
 
   function liveIndicator() {
-    return element('span', `live-state live-state-${liveState}`, LIVE_STATE_LABELS[liveState]);
+    return element('span', `live-state live-state-${liveState}`, liveStateLabel(liveState));
   }
 
   function renderSelectionSummary(trace) {
     const summary = element('div', 'trace-selection');
     summary.id = 'trace-selection';
     summary.append(
-      element('span', 'trace-selection-label', 'Focus'),
+      element('span', 'trace-selection-label', t('map.focus')),
       element('strong', '', selectionText(trace, selectedOccurrenceId)),
     );
     if (selectedOccurrenceId !== null && findOccurrence(trace, selectedOccurrenceId) !== null) {
-      const clear = element('button', 'toolbar-button', 'Show all');
+      const clear = element('button', 'toolbar-button', t('map.showAll'));
       clear.type = 'button';
       clear.addEventListener('click', () => selectOccurrence(null, null));
       summary.append(clear);
@@ -154,11 +156,10 @@ export function createExecutionView(options) {
   function renderTrace(trace, meta) {
     const section = renderExecutionMap(trace, {
       liveIndicator: liveIndicator(),
-      emptyState: renderEmpty('実行開始を待っています', '最初のstepが始まるとカードが表示されます。'),
+      emptyState: renderEmpty(t('viewer.waitingForExecution'), t('viewer.firstStepDescription')),
       selectedOccurrenceId,
       onSelectOccurrence: selectOccurrence,
     });
-    if (trace.nodes.length > 0) section.append(renderSelectionSummary(trace));
     if (meta.reason !== undefined) section.append(element('p', 'run-reason', meta.reason));
     return section;
   }
@@ -178,9 +179,11 @@ export function createExecutionView(options) {
     const summary = element(
       'span',
       'detail-toolbar-summary',
-      selectedOccurrenceId === null ? `${events.length} events` : `${events.length} events · focused`,
+      selectedOccurrenceId === null
+        ? t('viewer.events', { count: events.length })
+        : `${t('viewer.events', { count: events.length })} · ${t('viewer.eventsFocused')}`,
     );
-    const follow = element('button', 'toolbar-button', followLog ? 'Following' : 'Follow latest');
+    const follow = element('button', 'toolbar-button', followLog ? t('viewer.following') : t('viewer.followLatest'));
     follow.type = 'button';
     follow.setAttribute('aria-pressed', String(followLog));
     follow.addEventListener('click', () => {
@@ -197,7 +200,7 @@ export function createExecutionView(options) {
           return panel;
         }
       }
-      panel.append(renderEmpty('ログはまだありません', 'イベントを受信するとここへ追加されます。'));
+      panel.append(renderEmpty(t('viewer.logsEmpty'), t('viewer.logsEmptyDescription')));
       return panel;
     }
     const list = element('ol', 'log-events');
@@ -210,7 +213,7 @@ export function createExecutionView(options) {
       );
       item.append(header);
       const result = event.error ?? event.reason ?? event.content;
-      if (event.status !== undefined) item.append(element('span', 'log-event-status', event.status));
+      if (event.status !== undefined) item.append(element('span', 'log-event-status', t(`app.status.${event.status}`)));
       if (result !== undefined) item.append(element('pre', '', result));
       list.append(item);
     }
@@ -221,13 +224,13 @@ export function createExecutionView(options) {
   function renderReportsPanel(reports) {
     const panel = element('section', 'detail-panel reports-panel');
     if (reports.length === 0) {
-      panel.append(renderEmpty('レポートはまだありません', '生成されたMarkdownはここへ追加されます。'));
+      panel.append(renderEmpty(t('viewer.reportsEmpty'), t('viewer.reportsEmptyDescription')));
       return panel;
     }
     const selected = reports.find((report) => report.filename === selectedReport) ?? reports[0];
     selectedReport = selected.filename;
     const list = element('nav', 'report-list');
-    list.setAttribute('aria-label', 'レポート一覧');
+    list.setAttribute('aria-label', t('viewer.reportList'));
     for (const report of reports) {
       const button = element('button', 'report-list-item');
       button.type = 'button';
@@ -238,7 +241,7 @@ export function createExecutionView(options) {
       });
       button.append(
         element('strong', '', reportDisplayName(report.filename)),
-        element('span', '', reportDirectory(report.filename) || 'run report'),
+        element('span', '', reportDirectory(report.filename) || t('viewer.reportFile')),
       );
       list.append(button);
     }
@@ -250,7 +253,7 @@ export function createExecutionView(options) {
     );
     viewer.append(
       header,
-      element('pre', '', selected.omitted ? 'ファイルサイズが表示上限を超えています。' : selected.content),
+      element('pre', '', selected.omitted ? t('viewer.reportOmitted') : selected.content),
     );
     panel.append(list, viewer);
     return panel;
@@ -267,9 +270,9 @@ export function createExecutionView(options) {
     const tabs = element('div', 'tab-list');
     tabs.setAttribute('role', 'tablist');
     const definitions = [
-      ['live', 'Live log', trace.events.length],
-      ['reports', 'Reports', detail.reports.length],
-      ['task', 'Task', null],
+      ['live', t('viewer.runLog'), trace.events.length],
+      ['reports', t('viewer.runReports'), detail.reports.length],
+      ['task', t('viewer.runTask'), null],
     ];
     for (const [id, label, count] of definitions) {
       const button = element('button', 'tab-button', count === null ? label : `${label} ${count}`);
@@ -294,7 +297,7 @@ export function createExecutionView(options) {
         event.preventDefault();
         activeTab = definitions[nextIndex][0];
         renderDetailPanel();
-        options.runDetail.querySelector('[role="tab"][aria-selected="true"]')?.focus();
+        (options.inspector ?? options.runDetail).querySelector('[role="tab"][aria-selected="true"]')?.focus();
       });
       tabs.append(button);
     }
@@ -312,12 +315,14 @@ export function createExecutionView(options) {
 
   function captureViewState() {
     const map = options.runDetail.querySelector('.execution-map');
-    const logs = options.runDetail.querySelector('.log-events');
+    const inspector = options.inspector ?? options.runDetail;
+    const logs = inspector.querySelector('.log-events');
     return {
       detailScrollTop: options.runDetail.scrollTop,
       mapScrollLeft: map?.scrollLeft ?? 0,
       mapScrollTop: map?.scrollTop ?? 0,
       logScrollTop: logs?.scrollTop ?? 0,
+      inspectorScrollTop: inspector.scrollTop ?? 0,
     };
   }
 
@@ -328,17 +333,62 @@ export function createExecutionView(options) {
       map.scrollLeft = state.mapScrollLeft;
       map.scrollTop = state.mapScrollTop;
     }
-    const logs = options.runDetail.querySelector('.log-events');
+    const logs = (options.inspector ?? options.runDetail).querySelector('.log-events');
     if (logs !== null) logs.scrollTop = followLog ? logs.scrollHeight : state.logScrollTop;
+    const inspector = options.inspector;
+    if (inspector !== undefined && inspector !== null) inspector.scrollTop = state.inspectorScrollTop ?? 0;
   }
 
   function renderDetailPanel() {
     if (currentDetail === null || currentTrace === null) return;
-    const tabs = options.runDetail.querySelector('.detail-tabs');
+    const tabs = (options.inspector ?? options.runDetail).querySelector('.detail-tabs');
     if (tabs === null) return;
     const state = captureViewState();
     tabs.replaceWith(renderTabs(currentDetail, currentTrace));
     restoreViewState(state);
+  }
+
+  function renderInspectorSummary(detail) {
+    const summary = element('section', 'inspector-run-summary');
+    const heading = element('div', 'inspector-run-heading');
+    heading.append(
+      element('span', 'section-kicker', t('viewer.inspector')),
+      statusBadge(detail.meta.status),
+    );
+    const facts = element('dl', 'run-facts');
+    const entries = [
+      [t('viewer.current'), detail.meta.currentStep ?? t('viewer.waiting')],
+      [t('viewer.iteration'), detail.meta.currentIteration === undefined ? '—' : String(detail.meta.currentIteration)],
+      [t('viewer.updated'), formatDate(detail.meta.updatedAt)],
+    ];
+    for (const [label, value] of entries) {
+      const fact = element('div', 'run-fact');
+      fact.append(element('dt', '', label), element('dd', '', value));
+      facts.append(fact);
+    }
+    summary.append(heading, facts);
+    if (detail.prUrl !== undefined) {
+      const link = element('a', 'pr-link', t('viewer.openPullRequest'));
+      link.href = detail.prUrl;
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      summary.append(link);
+    }
+    return summary;
+  }
+
+  function renderInspector(detail, trace) {
+    const inspector = element('section', 'inspector-content');
+    const back = element('button', 'mobile-inspector-back', t('viewer.backToGraph'));
+    back.type = 'button';
+    back.addEventListener('click', () => {
+      const screen = options.inspector?.closest?.('.viewer-screen');
+      if (screen !== null && screen !== undefined) screen.dataset.mobileView = 'detail';
+    });
+    inspector.append(back, renderInspectorSummary(detail));
+    inspector.append(renderSelectionSummary(trace));
+    inspector.append(renderTabs(detail, trace));
+    return inspector;
   }
 
   function selectOccurrence(_node, occurrence) {
@@ -346,10 +396,8 @@ export function createExecutionView(options) {
     activeTab = 'live';
     const map = options.runDetail.querySelector('.execution-map');
     if (map !== null) updateExecutionMapSelection(map, selectedOccurrenceId);
-    const summary = options.runDetail.querySelector('#trace-selection');
-    if (summary !== null && currentTrace !== null) {
-      summary.replaceWith(renderSelectionSummary(currentTrace));
-    }
+    const summary = (options.inspector ?? options.runDetail).querySelector('#trace-selection');
+    if (summary !== null && currentTrace !== null) summary.replaceWith(renderSelectionSummary(currentTrace));
     renderDetailPanel();
   }
 
@@ -366,48 +414,36 @@ export function createExecutionView(options) {
       selectedReport = '';
     }
     currentDetail = detail;
-    const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary);
+    const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary, getLocale());
     if (sameRun && selectedOccurrenceId !== null && findOccurrence(trace, selectedOccurrenceId) === null) {
       selectedOccurrenceId = null;
     }
     currentTrace = trace;
     const title = element('div', 'run-detail-title');
+    const displayWorkflow = workflowDisplayName(detail.meta.workflow, getLocale());
+    const workflowHeading = element('h2', '', displayWorkflow);
+    if (displayWorkflow !== detail.meta.workflow) workflowHeading.title = detail.meta.workflow;
     title.append(
-      statusBadge(detail.meta.status),
-      element('h2', '', detail.meta.workflow),
+      workflowHeading,
       element('p', '', `${detail.project.displayName} / ${detail.meta.runSlug}`),
       element('p', 'run-task-summary', detail.meta.task),
     );
-    const facts = element('dl', 'run-facts');
-    const entries = [
-      ['Current', detail.meta.currentStep ?? 'Waiting'],
-      ['Iteration', detail.meta.currentIteration === undefined ? '—' : String(detail.meta.currentIteration)],
-      ['Updated', formatDate(detail.meta.updatedAt)],
-    ];
-    for (const [label, value] of entries) {
-      const fact = element('div', 'run-fact');
-      fact.append(element('dt', '', label), element('dd', '', value));
-      facts.append(fact);
-    }
     const header = element('header', 'run-detail-header');
-    header.append(title, facts);
-    if (detail.prUrl !== undefined) {
-      const link = element('a', 'pr-link', 'Open pull request');
-      link.href = detail.prUrl;
-      link.target = '_blank';
-      link.rel = 'noreferrer';
-      header.append(link);
-    }
+    header.append(title);
     const warning = renderArtifactWarnings(detail, trace);
     disposeExecutionMap(options.runDetail);
     options.runDetail.replaceChildren(
       header,
       ...(warning === null ? [] : [warning]),
       renderTrace(trace, detail.meta),
-      renderTabs(detail, trace),
     );
+    if (options.inspector !== undefined && options.inspector !== null) {
+      options.inspector.replaceChildren(renderInspector(detail, trace));
+    } else {
+      options.runDetail.append(renderInspector(detail, trace));
+    }
     if (state !== null) restoreViewState(state);
-    else restoreViewState({ detailScrollTop: 0, mapScrollLeft: 0, mapScrollTop: 0, logScrollTop: 0 });
+    else restoreViewState({ detailScrollTop: 0, mapScrollLeft: 0, mapScrollTop: 0, logScrollTop: 0, inspectorScrollTop: 0 });
     options.onStatusChange(detail.meta.status);
     return true;
   }
@@ -419,15 +455,25 @@ export function createExecutionView(options) {
     selectedOccurrenceId = null;
     disposeExecutionMap(options.runDetail);
     options.runDetail.replaceChildren(renderEmpty(
-      'Run を選択',
-      'タスクからrunを選ぶと、実行マップと成果物を確認できます。',
+      t('viewer.noRun'),
+      t('viewer.noRunDescription'),
     ));
+    options.inspector?.replaceChildren(renderEmpty(t('viewer.noRun'), t('viewer.noRunDescription')));
   }
 
   return {
     renderTaskList,
     renderDetail,
     renderPlaceholder,
+    refreshLocale() {
+      renderTaskList(taskList, taskSelection);
+      if (currentDetail === null) return;
+      const selection = {
+        projectId: currentDetail.project.id,
+        slug: currentDetail.meta.runSlug,
+      };
+      renderDetail(currentDetail, selection);
+    },
     dispose() {
       disposeExecutionMap(options.runDetail);
     },
@@ -436,7 +482,7 @@ export function createExecutionView(options) {
       const indicator = options.runDetail.querySelector('.live-state');
       if (indicator !== null) {
         indicator.className = `live-state live-state-${liveState}`;
-        indicator.textContent = LIVE_STATE_LABELS[liveState];
+        indicator.textContent = liveStateLabel(liveState);
       }
     },
   };

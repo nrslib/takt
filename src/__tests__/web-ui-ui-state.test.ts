@@ -3,6 +3,7 @@ import {
   buildExecutionSettingsRequest,
   captureRunDetailViewState,
   createDirectoryRequestTracker,
+  isCurrentRunRequest,
   isCurrentWorkflowRequest,
   isWorkflowCatalogReady,
   projectSelectionForRefresh,
@@ -218,6 +219,19 @@ describe('Web UI execution readiness and run detail view state', () => {
     expect(sameRunSelection(projectA, projectA)).toBe(true);
     expect(sameRunSelection(projectA, projectB)).toBe(false);
     expect(sameRunSelection(projectA, null)).toBe(false);
+  });
+
+  it('rejects stale run details across A-B-A selection and newer stream snapshots', () => {
+    const runA = { projectId: 'project-a', slug: 'run-a' };
+    const runB = { projectId: 'project-a', slug: 'run-b' };
+    const requestA1 = { generation: 1, snapshotRevision: 0, selection: runA };
+    const requestB = { generation: 2, snapshotRevision: 0, selection: runB };
+    const requestA2 = { generation: 3, snapshotRevision: 0, selection: runA };
+
+    expect(isCurrentRunRequest(requestA1, 3, runA, 0)).toBe(false);
+    expect(isCurrentRunRequest(requestB, 3, runA, 0)).toBe(false);
+    expect(isCurrentRunRequest(requestA2, 3, runA, 0)).toBe(true);
+    expect(isCurrentRunRequest(requestA2, 3, runA, 1)).toBe(false);
   });
 
   it('keeps a user selection made during refresh instead of restoring the old one', () => {

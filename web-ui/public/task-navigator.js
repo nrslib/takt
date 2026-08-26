@@ -1,10 +1,5 @@
-const STATUS_LABELS = {
-  pending: 'Pending',
-  running: 'Running',
-  completed: 'Completed',
-  aborted: 'Aborted',
-  failed: 'Failed',
-};
+import { getLocale, t } from './i18n.js';
+import { workflowDisplayName } from './execution-model.js';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -14,12 +9,12 @@ function element(tag, className, text) {
 }
 
 function statusBadge(status) {
-  return element('span', `status-badge status-${status}`, STATUS_LABELS[status]);
+  return element('span', `status-badge status-${status}`, t(`app.status.${status}`));
 }
 
 function formatDate(value) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ja-JP');
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(getLocale() === 'en' ? 'en-US' : 'ja-JP');
 }
 
 function renderTask(task, selection, onSelectRun, onRequeue) {
@@ -31,17 +26,25 @@ function renderTask(task, selection, onSelectRun, onRequeue) {
   header.append(
     statusLine,
     element('strong', 'task-card-title', task.task),
-    element('span', 'task-card-context', `${task.projectName} / ${task.workflow}`),
+    (() => {
+      const workflow = workflowDisplayName(task.workflow, getLocale());
+      const context = element('span', 'task-card-context', t('task.context', {
+      project: task.projectName,
+        workflow,
+      }));
+      if (workflow !== task.workflow) context.title = task.workflow;
+      return context;
+    })(),
   );
   if (task.actions.requeue) {
-    const requeue = element('button', 'task-requeue-button', 'Requeue task');
+    const requeue = element('button', 'task-requeue-button', t('task.requeue'));
     requeue.type = 'button';
     requeue.addEventListener('click', () => onRequeue(task, requeue));
     header.append(requeue);
   }
 
   const attempts = element('div', 'task-attempts');
-  attempts.setAttribute('aria-label', 'Run attempts');
+  attempts.setAttribute('aria-label', t('task.attempts'));
   for (const run of task.runs) {
     const button = element('button', 'task-attempt');
     button.type = 'button';
@@ -54,17 +57,19 @@ function renderTask(task, selection, onSelectRun, onRequeue) {
       slug: run.slug,
     }));
     button.append(
-      element('span', 'task-attempt-name', `Run ${run.attempt}`),
+      element('span', 'task-attempt-name', t('task.run', { number: run.attempt })),
       element(
         'span',
         'task-attempt-progress',
-        run.currentStep === undefined ? task.workflow : run.currentStep,
+        run.currentStep === undefined
+          ? workflowDisplayName(task.workflow, getLocale())
+          : t('task.current', { step: run.currentStep }),
       ),
       statusBadge(run.status),
     );
     attempts.append(button);
   }
-  if (task.runs.length === 0) attempts.append(element('p', 'task-run-empty', '実行待ち'));
+  if (task.runs.length === 0) attempts.append(element('p', 'task-run-empty', t('task.waiting')));
   card.append(header, attempts);
   return card;
 }

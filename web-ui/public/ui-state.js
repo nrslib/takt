@@ -36,6 +36,12 @@ export function sameRunSelection(left, right) {
     && left.slug === right.slug;
 }
 
+export function isCurrentRunRequest(request, currentGeneration, currentSelection, currentSnapshotRevision) {
+  return request.generation === currentGeneration
+    && request.snapshotRevision === currentSnapshotRevision
+    && sameRunSelection(request.selection, currentSelection);
+}
+
 export function projectSelectionForRefresh(preferredProjectId, currentProjectId) {
   return preferredProjectId === currentProjectId ? preferredProjectId : currentProjectId;
 }

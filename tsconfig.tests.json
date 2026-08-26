@@ -100,6 +100,7 @@
     "src/__tests__/web-ui-chat.test.ts",
     "src/__tests__/web-ui-directory-browser.test.ts",
     "src/__tests__/web-ui-execution-model.test.ts",
+    "src/__tests__/web-ui-i18n.test.ts",
     "src/__tests__/web-ui-launcher.test.ts",
     "src/__tests__/web-ui-native-directory-picker.test.ts",
     "src/__tests__/web-ui-public-api.test.ts",

@@ -9,6 +9,36 @@ const EVENT_STATUS_MAP = new Map([
   ['aborted', 'aborted'],
 ]);
 const MAX_GRAPH_OCCURRENCES = 10_000;
+const BUILTIN_WORKFLOW_REF = /^builtin:sha256:([0-9a-f]{64})$/iu;
+
+export function isBuiltinWorkflowRef(value) {
+  return typeof value === 'string' && BUILTIN_WORKFLOW_REF.test(value);
+}
+
+export function shortBuiltinDigest(value) {
+  const match = typeof value === 'string' ? value.match(BUILTIN_WORKFLOW_REF) : null;
+  return match === null ? '' : match[1].slice(0, 8);
+}
+
+function stackWorkflowName(stack, fallback, value) {
+  if (!Array.isArray(stack)) return fallback;
+  const matching = [...stack].reverse().find((frame) => (
+    (frame?.workflow === value || frame?.workflow_ref === value)
+      && typeof frame?.workflow === 'string'
+      && !isBuiltinWorkflowRef(frame.workflow)
+  ));
+  return matching?.workflow ?? fallback;
+}
+
+export function workflowDisplayName(value, locale = 'ja', stack) {
+  if (!isBuiltinWorkflowRef(value)) return value ?? '';
+  const humanName = stackWorkflowName(stack, undefined, value);
+  if (humanName !== undefined && !isBuiltinWorkflowRef(humanName)) return humanName;
+  const digest = shortBuiltinDigest(value);
+  return locale === 'en'
+    ? `Builtin workflow · ${digest}`
+    : `組み込み workflow · ${digest}`;
+}
 
 function eventWorkflow(event, fallback) {
   if (typeof event.workflow === 'string') return event.workflow;
@@ -180,13 +210,24 @@ function addGraphEvent(event, index, meta, graph) {
     });
   }
   if (descriptor.kind === 'workflow' && descriptor.childWorkflow !== undefined) {
+    const previousCall = graph.callsByOccurrenceId.get(occurrence.id);
     graph.callsByOccurrenceId.set(occurrence.id, {
-      id: `call:${encodeIdPart(occurrence.id)}`,
+      ...previousCall,
+      id: previousCall?.id ?? `call:${encodeIdPart(occurrence.id)}`,
       occurrenceId: occurrence.id,
       workflow: descriptor.workflow,
+      step: event.step,
       childWorkflow: descriptor.childWorkflow,
-      callInstance: event.callInstance,
-      stack: event.stack,
+      callInstance: event.callInstance ?? previousCall?.callInstance,
+      stack: previousCall?.stack ?? event.stack,
+      startEventIndex: event.type === 'workflow_call_start'
+        ? index
+        : previousCall?.startEventIndex,
+      completeEventIndex: event.type === 'workflow_call_complete'
+        ? index
+        : previousCall?.completeEventIndex,
+      startObserved: event.type === 'workflow_call_start'
+        || previousCall?.startObserved === true,
     });
   }
 }
@@ -314,7 +355,7 @@ function buildTransitions(events, occurrenceByEventIndex) {
   const previousByLogicalId = new Map();
   for (let index = 0; index < events.length; index += 1) {
     const current = occurrenceByEventIndex.get(index);
-    if (current === undefined || current.id === previous?.id) continue;
+    if (current === undefined || current.kind !== 'step' || current.id === previous?.id) continue;
     const previousLogicalOccurrence = previousByLogicalId.get(current.logicalId);
     if (
       previousLogicalOccurrence !== undefined
@@ -375,7 +416,7 @@ function buildLoops(transitions, nodes) {
     }));
 }
 
-function buildLanes(nodes, calls) {
+function buildLanes(nodes, calls, locale) {
   const laneMap = new Map();
   for (const node of nodes) {
     const lane = laneMap.get(node.workflow);
@@ -383,6 +424,7 @@ function buildLanes(nodes, calls) {
       laneMap.set(node.workflow, {
         id: `lane:${encodeIdPart(node.workflow)}`,
         workflow: node.workflow,
+        displayWorkflow: workflowDisplayName(node.workflow, locale, node.occurrences[0]?.stack),
         steps: [node],
       });
     } else {
@@ -408,14 +450,19 @@ function isStackPrefix(parent, child) {
   return parent.every((frame, index) => sameStackFrame(frame, child[index]));
 }
 
+function callStackMatches(callStack, occurrenceStack) {
+  if (!Array.isArray(callStack)) return occurrenceStack === undefined;
+  return isStackPrefix(callStack, occurrenceStack);
+}
+
 function findCallTarget(call, occurrences) {
+  if (call.startObserved !== true) return undefined;
+  const callOccurrence = occurrences.find((occurrence) => occurrence.id === call.occurrenceId);
+  if (callOccurrence === undefined) return undefined;
   const candidates = occurrences
     .filter((occurrence) => occurrence.workflow === call.childWorkflow)
-    .filter((occurrence) => (
-      call.stack === undefined
-        ? true
-        : isStackPrefix(call.stack, occurrence.stack)
-    ))
+    .filter((occurrence) => occurrence.firstEventIndex > callOccurrence.firstEventIndex)
+    .filter((occurrence) => callStackMatches(call.stack, occurrence.stack))
     .sort((left, right) => left.firstEventIndex - right.firstEventIndex);
   if (candidates.length === 0) return undefined;
   if (call.stack === undefined && candidates.length > 1) return undefined;
@@ -432,6 +479,24 @@ function attachCallTargets(calls, nodes) {
       targetObserved: targetOccurrenceId !== undefined,
     };
   });
+}
+
+function collectCallObservations(newestFirstEvents, newestFirstHistory, meta) {
+  const source = newestFirstHistory === undefined || newestFirstHistory.length === 0
+    ? newestFirstEvents
+    : newestFirstHistory;
+  const observations = new Map();
+  for (const event of [...source].reverse()) {
+    if (!isWorkflowCall(event)) continue;
+    const descriptor = eventDescriptor(event, meta);
+    if (descriptor === null) continue;
+    const previous = observations.get(descriptor.occurrenceId);
+    observations.set(descriptor.occurrenceId, {
+      startObserved: event.type === 'workflow_call_start' || previous?.startObserved === true,
+      stack: previous?.stack ?? event.stack,
+    });
+  }
+  return observations;
 }
 
 function mergeGraphEvents(summaryEvents, history, liveEvents, meta) {
@@ -464,7 +529,7 @@ function mergeGraphEvents(summaryEvents, history, liveEvents, meta) {
     : merged;
 }
 
-export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory, graphSummary) {
+export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory, graphSummary, locale = 'ja') {
   const events = [...newestFirstEvents].reverse();
   const history = newestFirstHistory === undefined ? [] : [...newestFirstHistory].reverse();
   const summaryEvents = graphSummary?.occurrences === undefined
@@ -482,8 +547,35 @@ export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory,
     nodes = annotateLiveEventIndexes(nodes, events, meta);
   }
   nodes = applyTerminalRunStatus(meta, nodes);
-  const calls = attachCallTargets([...graph.callsByOccurrenceId.values()], nodes);
-  const lanes = buildLanes(nodes, calls)
+  const callObservations = collectCallObservations(newestFirstEvents, newestFirstHistory, meta);
+  const calls = attachCallTargets([...graph.callsByOccurrenceId.values()].map((call) => {
+    const observation = callObservations.get(call.occurrenceId);
+    return {
+      ...call,
+      stack: call.stack ?? observation?.stack,
+      startObserved: call.startObserved === true || observation?.startObserved === true,
+    };
+  }), nodes);
+  locale = locale === 'en' ? 'en' : 'ja';
+  nodes = nodes.map((node) => ({
+    ...node,
+    displayWorkflow: workflowDisplayName(
+      node.workflow,
+      locale,
+      node.occurrences.at(-1)?.stack ?? node.occurrences[0]?.stack,
+    ),
+    displayLabel: workflowDisplayName(
+      node.label,
+      locale,
+      node.occurrences.at(-1)?.stack ?? node.occurrences[0]?.stack,
+    ),
+  }));
+  const localizedCalls = calls.map((call) => ({
+    ...call,
+    displayWorkflow: workflowDisplayName(call.workflow, locale, call.stack),
+    displayChildWorkflow: workflowDisplayName(call.childWorkflow, locale, call.stack),
+  }));
+  const lanes = buildLanes(nodes, localizedCalls, locale)
     .sort((left, right) => left.depth - right.depth || left.steps[0].firstEventIndex - right.steps[0].firstEventIndex);
   const transitions = buildTransitions(graphEvents, graph.occurrenceByEventIndex);
   const loops = buildLoops(transitions, nodes);
@@ -493,7 +585,7 @@ export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory,
     nodes,
     transitions,
     loops,
-    calls,
+    calls: localizedCalls,
     totalOccurrences: nodes.reduce((total, node) => total + node.occurrences.length, 0),
     graphOccurrenceCount: graphSummary?.totalOccurrences ?? nodes.reduce(
       (total, node) => total + node.occurrences.length,

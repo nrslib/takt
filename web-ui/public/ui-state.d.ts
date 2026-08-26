@@ -35,6 +35,19 @@ export declare function sameRunSelection(
   right: { projectId: string; slug: string } | null,
 ): boolean;
 
+export interface RunRequestToken {
+  generation: number;
+  snapshotRevision: number;
+  selection: { projectId: string; slug: string };
+}
+
+export declare function isCurrentRunRequest(
+  request: RunRequestToken,
+  currentGeneration: number,
+  currentSelection: { projectId: string; slug: string } | null,
+  currentSnapshotRevision: number,
+): boolean;
+
 export declare function projectSelectionForRefresh(
   preferredProjectId: string,
   currentProjectId: string,

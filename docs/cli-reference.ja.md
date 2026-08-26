@@ -35,7 +35,7 @@
 
 Web UI がキューしたタスク、実行、セッションは `TAKT_CONFIG_DIR` 配下のチャネル非依存な中央 state に保存されます。CLI は従来どおりプロジェクトローカルの state を使用します。同一 canonical project に対する CLI と Web UI の同時実行・mutationはサポート対象外です。1つの実行先につき、利用するチャネルを1つにしてください。
 
-Viewer の「タスクを作成」から開く Chat の `/setup` では、Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を設定できます。`/go` で作成された実行指示はその時点の設定を保持し、Viewer の run workspace では実行マップ、ライブログ、レポートを確認できます。Viewer の「AIに相談」では、runを見ながら汎用の Chat drawer を開けます。自動 PR を有効にした実行は workflow 成功後に commit、push、PR 作成まで行います。失敗した中央 task は run 詳細の `Requeue` から、同じ設定で再投入できます。
+Viewer は実行状況、観測された実行経路、ライブログ、レポートの確認に集中した画面です。「タスクを作成」から専用の会話画面を開けます。Chat の `/setup` では Worktree、作業ブランチ、ベースブランチ、自動 PR、Draft PR を設定できます。`/go` で作成された実行指示はその時点の設定を保持します。ヘッダーの言語切り替えで日本語と英語を選べ、選択はブラウザに保存されます。自動 PR を有効にした実行は workflow 成功後に commit、push、PR 作成まで行います。失敗した中央 task は run 詳細の `Requeue` から、同じ設定で再投入できます。
 
 中央 workflow bundle は通常の MCP 設定を移植可能な形で保持します。`LOG_LEVEL`、`NODE_ENV`、`ENDPOINT`、`Content-Type` などの credential ではない env/header 値はリテラルを許可します。credential を表す env/header key と stdio 引数の credential flag の値は、完全な単一 `${ENV_VAR}` 参照でなければならず、リテラルや混在値は拒否します。MCP URL は userinfo と credential を表す query/fragment key を拒否しますが、`version=2` のような通常のメタデータは許可します。ローカル CLI bundle の挙動は変更しません。
 
