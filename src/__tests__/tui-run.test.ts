@@ -1975,31 +1975,78 @@ describe('runTui', () => {
       await expect(run).resolves.toMatchObject({ result: { action: 'cancel' } });
     });
 
-    it('should report what the finished run recorded about itself', async () => {
+    it.each([
+      {
+        outcome: 'successful',
+        sessionState: {
+          status: 'success',
+          workflowName: 'review',
+          taskContent: 'ship it',
+          timestamp: '2026-01-02T03:04:05.000Z',
+        } satisfies SessionState,
+        expectedStatus: 'Previous task completed successfully',
+      },
+      {
+        outcome: 'failed',
+        sessionState: {
+          status: 'error',
+          workflowName: 'review',
+          taskContent: 'ship it',
+          errorMessage: 'provider unavailable',
+          timestamp: '2026-01-02T03:04:05.000Z',
+        } satisfies SessionState,
+        expectedStatus: 'Previous task failed: provider unavailable',
+      },
+    ])('should report a $outcome run and continue the same conversation', async ({
+      sessionState,
+      expectedStatus,
+    }) => {
       const tree = scriptRender();
-      // The shape the run actually writes (SessionState), so the greeting is
-      // built from the same fields a real run leaves behind.
-      const sessionState: SessionState = {
-        status: 'success',
-        workflowName: 'review',
-        taskContent: 'ship it',
-        timestamp: '2026-01-02T03:04:05.000Z',
+      const conversation = createConversationDouble();
+      mockCreateTuiConversation.mockReturnValue(conversation);
+      const startupState: SessionState = {
+        status: 'error',
+        workflowName: 'old-workflow',
+        errorMessage: 'stale provider error',
+        timestamp: '2026-01-01T00:00:00.000Z',
       };
-      mockTakeSessionState.mockReturnValue(sessionState);
+      mockTakeSessionState
+        .mockReturnValueOnce(startupState)
+        .mockReturnValueOnce(sessionState)
+        .mockReturnValue(null);
       const run = startRun({ dispatch: vi.fn().mockResolvedValue(undefined) });
       await waitForMount(tree, 1);
 
-      tree.conversationProps()
-        .onExit({ kind: 'result', result: { action: 'save_task', task: 'ship it' } }, { history: [], queue: [] });
+      const first = tree.conversationProps();
+      const startupNotice = first.initialEntries.map((entry) => entry.content).join('\n');
+      expect(startupNotice).not.toContain(startupState.workflowName);
+      expect(startupNotice).not.toContain(startupState.errorMessage);
+      expect(startupNotice).not.toContain(startupState.timestamp);
+      first.onExit(
+        { kind: 'result', result: { action: 'execute', task: 'ship it' } },
+        { history: [], queue: [] },
+      );
       await waitForMount(tree, 2);
 
-      const notice = tree.conversationProps().initialEntries.map((entry) => entry.content).join('\n');
+      const second = tree.conversationProps();
+      const notice = second.initialEntries.map((entry) => entry.content).join('\n');
       expect(notice).toContain('review');
-      // The status and the time it finished are what the banner reports.
-      expect(notice).toContain('completed successfully');
+      expect(notice).toContain(expectedStatus);
       expect(notice).toContain(new Date(sessionState.timestamp).toLocaleString('en-US'));
+      expect(second.conversation).toBe(first.conversation);
+      expect(mockTakeSessionState).toHaveBeenCalledTimes(2);
+      expect(mockTakeSessionState).toHaveBeenNthCalledWith(1, '/repo');
+      expect(mockTakeSessionState).toHaveBeenNthCalledWith(2, '/repo');
 
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+      const nextInput = {
+        text: 'describe the next task',
+        abortSignal: new AbortController().signal,
+        onAssistantChunk: vi.fn(),
+      };
+      await second.conversation.submit(nextInput);
+      expect(conversation.submit).toHaveBeenCalledExactlyOnceWith(nextInput);
+
+      second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
     });
 

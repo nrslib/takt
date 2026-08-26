@@ -449,6 +449,6 @@ export interface SelectAndExecuteOptions {
   reportDirName?: string;
   /** Provider permission profile overrides supplied by a trusted runtime boundary. */
   providerProfileOverrides?: ProviderPermissionProfiles;
-  /** When false, throw an error instead of calling process.exit(1) on task failure (default: true). */
-  exitOnFailure?: boolean;
+  /** How to complete when task execution reports failure (default: exit). */
+  failureMode?: 'exit' | 'throw' | 'return';
 }

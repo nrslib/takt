@@ -18,11 +18,33 @@ import { createExecSessionContext, type ExecSessionContext } from '../features/e
 import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import { saveExecPreset, saveLastUsedExecConfig } from '../features/exec/presetStore.js';
 import type { ExecActorConfig, ExecConfig, ResolvedExecConfig } from '../features/exec/types.js';
+import type { ConversationViewProps } from '../features/tui/ConversationView.js';
+import type { SessionState } from '../infra/config/project/sessionState.js';
 import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { makeProvider } from './test-helpers.js';
 
-const execAttachmentStores = vi.hoisted(() => ({ stores: [] as ImageAttachmentStore[] }));
+const {
+  execAttachmentStores,
+  mockInkRender,
+  mockInkRenderToString,
+  mockTakeSessionState,
+} = vi.hoisted(() => ({
+  execAttachmentStores: { stores: [] as ImageAttachmentStore[] },
+  mockInkRender: vi.fn(),
+  mockInkRenderToString: vi.fn(),
+  mockTakeSessionState: vi.fn(),
+}));
+
+vi.mock('ink', () => ({
+  render: (...args: unknown[]) => mockInkRender(...args),
+  renderToString: (...args: unknown[]) => mockInkRenderToString(...args),
+  Box: () => null,
+  Text: () => null,
+  useInput: () => undefined,
+  useStdout: () => ({ stdout: undefined }),
+  useWindowSize: () => ({ columns: 100, rows: 24 }),
+}));
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(() => ({ setup: vi.fn() })),
@@ -36,6 +58,7 @@ vi.mock('../infra/config/index.js', () => ({
   })),
   resolveNonWorkflowProviderModel: vi.fn(() => ({ runtimeManaged: false })),
   resolveNonWorkflowProviderOptions: vi.fn((_cwd: string, options?: unknown) => options),
+  takeSessionState: (...args: unknown[]) => mockTakeSessionState(...args),
 }));
 
 // exec resolves its provider/model default through the shared compiled provider environment
@@ -231,6 +254,52 @@ function mockSelectMultipleOptionsQueue(...values: Array<string[] | null>): void
   });
 }
 
+interface ExecMountedTree {
+  conversationProps(): ConversationViewProps;
+  readonly mounts: { readonly count: number };
+}
+
+function scriptExecRender(): ExecMountedTree {
+  const mounts = { count: 0 };
+  let rendered: ConversationViewProps | undefined;
+  let exitInk: (() => void) | undefined;
+
+  mockInkRender.mockImplementation((element: { props: ConversationViewProps }) => {
+    mounts.count += 1;
+    rendered = element.props;
+    let resolveExit!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    exitInk = resolveExit;
+    return {
+      clear: () => undefined,
+      unmount: () => exitInk?.(),
+      waitUntilExit: () => exited,
+    };
+  });
+
+  return {
+    mounts,
+    conversationProps(): ConversationViewProps {
+      if (rendered === undefined) {
+        throw new Error('Expected exec to mount an Ink conversation.');
+      }
+      return rendered;
+    },
+  };
+}
+
+async function waitForExecMount(tree: ExecMountedTree, expected: number): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (tree.mounts.count >= expected) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Exec never mounted Ink tree #${expected}`);
+}
+
 describe('exec command setup', () => {
   let projectDir: string;
   let globalConfigDir: string;
@@ -267,6 +336,11 @@ describe('exec command setup', () => {
     mockSelectAndExecuteTask.mockReset();
     mockLoadRunSessionContext.mockReset();
     mockFormatRunSessionForPrompt.mockReset();
+    mockInkRender.mockReset();
+    mockInkRenderToString.mockReset();
+    mockInkRenderToString.mockReturnValue('final transcript');
+    mockTakeSessionState.mockReset();
+    mockTakeSessionState.mockReturnValue(null);
     setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
@@ -321,6 +395,81 @@ describe('exec command setup', () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
     execAttachmentTempDirs.clear();
+  });
+
+  it.each([
+    {
+      status: 'success',
+      state: {
+        status: 'success',
+        workflowName: 'old-review-success',
+        timestamp: '2026-08-26T00:00:00.000Z',
+      } satisfies SessionState,
+    },
+    {
+      status: 'error',
+      state: {
+        status: 'error',
+        workflowName: 'old-review-error',
+        errorMessage: 'stale provider unavailable',
+        timestamp: '2026-08-26T01:00:00.000Z',
+      } satisfies SessionState,
+    },
+  ])('should silently consume a saved $status result on the TTY entry', async ({ state }) => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    const tree = scriptExecRender();
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    mockTakeSessionState
+      .mockReturnValueOnce(state)
+      .mockReturnValueOnce(null);
+
+    try {
+      for (let runNumber = 1; runNumber <= 2; runNumber += 1) {
+        const run = runExecCommand(projectDir, {});
+        await waitForExecMount(tree, runNumber);
+
+        const props = tree.conversationProps();
+        expect(props.initialEntries).toEqual([
+          {
+            role: 'system',
+            content: expect.stringContaining('Assistant agent: claude/opus'),
+          },
+          {
+            role: 'system',
+            content: '/setup to edit configuration, /go to execute, /cancel to exit',
+          },
+        ]);
+        const startupTranscript = props.initialEntries.map((entry) => entry.content).join('\n');
+        expect(startupTranscript).not.toContain(state.status);
+        expect(startupTranscript).not.toContain(state.workflowName);
+        expect(startupTranscript).not.toContain(state.timestamp);
+        if (state.status === 'error') {
+          expect(startupTranscript).not.toContain(state.errorMessage);
+        }
+
+        props.onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
+      }
+
+      expect(mockTakeSessionState).toHaveBeenCalledTimes(2);
+      expect(mockTakeSessionState).toHaveBeenNthCalledWith(1, projectDir);
+      expect(mockTakeSessionState).toHaveBeenNthCalledWith(2, projectDir);
+      const standardOutput = consoleLogSpy.mock.calls.flat().join('\n');
+      expect(standardOutput).toContain('Starting exec mode');
+      expect(standardOutput).not.toContain(state.workflowName);
+      expect(standardOutput).not.toContain(state.timestamp);
+      if (state.status === 'error') {
+        expect(standardOutput).not.toContain(state.errorMessage);
+      }
+    } finally {
+      consoleLogSpy.mockRestore();
+    }
   });
 
   it('should pass configured Codex Skill inheritance to the exec assistant session', () => {

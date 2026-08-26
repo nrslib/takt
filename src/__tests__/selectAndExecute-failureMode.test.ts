@@ -93,8 +93,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('exitOnFailure option in selectAndExecuteTask', () => {
-  it('should throw Error instead of calling process.exit(1) when exitOnFailure is false and task fails', async () => {
+describe('failureMode option in selectAndExecuteTask', () => {
+  it('should return without calling process.exit(1) when failureMode is return and task fails', async () => {
     mockExecuteTask.mockResolvedValue(false);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit:1');
@@ -104,7 +104,27 @@ describe('exitOnFailure option in selectAndExecuteTask', () => {
       await expect(
         selectAndExecuteTask('/project', 'test task', {
           workflow: 'default',
-          exitOnFailure: false,
+          failureMode: 'return',
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('should throw without calling process.exit(1) when failureMode is throw and task fails', async () => {
+    mockExecuteTask.mockResolvedValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      await expect(
+        selectAndExecuteTask('/project', 'test task', {
+          workflow: 'default',
+          failureMode: 'throw',
         }),
       ).rejects.toThrow('Task failed');
 
@@ -114,7 +134,27 @@ describe('exitOnFailure option in selectAndExecuteTask', () => {
     }
   });
 
-  it('should call process.exit(1) when exitOnFailure is not set (default) and task fails', async () => {
+  it('should call process.exit(1) when failureMode is exit and task fails', async () => {
+    mockExecuteTask.mockResolvedValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      await expect(
+        selectAndExecuteTask('/project', 'test task', {
+          workflow: 'default',
+          failureMode: 'exit',
+        }),
+      ).rejects.toThrow('process.exit:1');
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('should call process.exit(1) when failureMode is not set and task fails', async () => {
     mockExecuteTask.mockResolvedValue(false);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit:1');
@@ -133,34 +173,25 @@ describe('exitOnFailure option in selectAndExecuteTask', () => {
     }
   });
 
-  it('should call process.exit(1) when exitOnFailure is true and task fails', async () => {
-    mockExecuteTask.mockResolvedValue(false);
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
-      throw new Error('process.exit:1');
-    }) as never);
-
-    try {
-      await expect(
-        selectAndExecuteTask('/project', 'test task', {
-          workflow: 'default',
-          exitOnFailure: true,
-        }),
-      ).rejects.toThrow('process.exit:1');
-
-      expect(exitSpy).toHaveBeenCalledWith(1);
-    } finally {
-      exitSpy.mockRestore();
-    }
-  });
-
-  it('should complete normally when exitOnFailure is false and task succeeds', async () => {
+  it('should complete normally when the task succeeds', async () => {
     mockExecuteTask.mockResolvedValue(true);
 
     await expect(
       selectAndExecuteTask('/project', 'test task', {
         workflow: 'default',
-        exitOnFailure: false,
+        failureMode: 'return',
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it('should propagate unexpected execution errors in return mode', async () => {
+    mockExecuteTask.mockRejectedValue(new Error('provider unavailable'));
+
+    await expect(
+      selectAndExecuteTask('/project', 'test task', {
+        workflow: 'default',
+        failureMode: 'return',
+      }),
+    ).rejects.toThrow('provider unavailable');
   });
 });
