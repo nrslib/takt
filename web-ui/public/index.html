@@ -101,7 +101,10 @@
               ></textarea>
               <button id="chat-send-button" type="submit" aria-label="メッセージを送信" title="⌘ Enterで送信">↑</button>
             </div>
-            <p class="chat-shortcut-hint"><kbd>⌘ Enter</kbd> で送信 · <code>/go</code> で実行指示にまとめる</p>
+            <div class="chat-command-row">
+              <button id="chat-go-button" class="chat-command-button" type="button">/go</button>
+              <p class="chat-shortcut-hint">実行指示にまとめる · <kbd>⌘ Enter</kbd> で送信</p>
+            </div>
             <p id="chat-message-status" class="form-message" role="status"></p>
           </form>
         </section>
@@ -136,7 +139,10 @@
             <p>このPCで実行されたTAKTの状態とログです。</p>
             <p class="warning-message">同一canonical projectでのCLIとWeb UIの同時実行・mutationはサポート対象外です。</p>
           </div>
-          <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
+          <div class="runs-actions">
+            <button id="watch-button" class="secondary-button" type="button" aria-pressed="false">Watch</button>
+            <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
+          </div>
         </div>
 
         <div class="run-layout">

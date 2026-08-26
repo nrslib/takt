@@ -286,6 +286,9 @@ describe('Web UI HTTP boundary', () => {
     expect(html).toContain('<section id="chat-panel" class="chat-panel">');
     expect(html).toContain('rows="1"');
     expect(html).toContain('aria-keyshortcuts="Meta+Enter Control+Enter"');
+    expect(html).toContain('id="chat-go-button"');
+    expect(html).toContain('id="watch-button"');
+    expect(html).toContain('id="refresh-button"');
     expect(html).toContain('id="chat-new-button"');
     expect(html).toContain('>新しい会話</button>');
     expect(html).toContain('id="chat-thinking"');

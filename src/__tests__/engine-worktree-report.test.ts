@@ -256,6 +256,40 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     expect(phaseContext?.reportDir).toBe(join(centralRunsDirectory, 'test-report-dir', 'reports'));
   });
 
+  it('should write central context snapshots outside the worktree', async () => {
+    const config: WorkflowConfig = {
+      name: 'central-snapshot-test',
+      description: 'Test',
+      maxSteps: 10,
+      initialStep: 'review',
+      steps: [
+        makeStep('review', {
+          policyContents: [{ content: 'Policy content' }],
+          knowledgeContents: [{ content: 'Knowledge content' }],
+          rules: [makeRule('approved', 'COMPLETE')],
+        }),
+      ],
+    };
+    const centralRunsDirectory = join(baseDir, 'central-state', 'runs');
+    mockRunAgentSequence([
+      makeResponse({ persona: 'review', content: 'Review done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
+    ]);
+
+    const engine = new WorkflowEngine(config, cloneCwd, 'central task', {
+      projectCwd,
+      runPathsDirectory: centralRunsDirectory,
+    });
+    await engine.run();
+
+    const contextDirectory = join(centralRunsDirectory, 'test-report-dir', 'context');
+    expect(readdirSync(join(contextDirectory, 'policy'))).toHaveLength(1);
+    expect(readdirSync(join(contextDirectory, 'knowledge'))).toHaveLength(1);
+    expect(existsSync(join(cloneCwd, 'runs', 'test-report-dir', 'context'))).toBe(false);
+  });
+
   it('should reject invalid explicit reportDirName', () => {
     const normalDir = projectCwd;
     const config = buildSimpleConfig();

@@ -14,6 +14,10 @@ function responseErrorMessage(response, body) {
 
 async function requestJson(path, options) {
   const response = await fetch(path, options);
+  return readJsonResponse(response);
+}
+
+async function readJsonResponse(response) {
   const body = await readJsonOrNull(response);
   if (!response.ok) {
     throw new Error(responseErrorMessage(response, body));
@@ -22,8 +26,41 @@ async function requestJson(path, options) {
   return body;
 }
 
+let sessionToken;
+
+function requireSessionToken() {
+  if (sessionToken === undefined) throw new Error('Web session is not initialized');
+  return sessionToken;
+}
+
+async function refreshSession() {
+  const session = await requestJson('/api/session');
+  if (typeof session?.token !== 'string' || session.token === '') {
+    throw new Error('Web session token is missing');
+  }
+  sessionToken = session.token;
+  return session;
+}
+
+async function fetchMutation(path, body) {
+  const response = await fetch(path, mutationOptions(requireSessionToken(), body));
+  if (response.status !== 403) return response;
+
+  const errorBody = await readJsonOrNull(response);
+  if (errorBody?.error !== 'Session token is invalid') {
+    throw new Error(responseErrorMessage(response, errorBody));
+  }
+
+  await refreshSession();
+  return fetch(path, mutationOptions(requireSessionToken(), body));
+}
+
+async function requestMutation(path, body) {
+  return readJsonResponse(await fetchMutation(path, body));
+}
+
 export function getSession() {
-  return requestJson('/api/session');
+  return refreshSession();
 }
 
 export function getRuns() {
@@ -44,29 +81,20 @@ export function getRun(projectId, slug) {
   );
 }
 
-export function browseDirectories(token, path) {
-  return requestJson(
-    '/api/directories/browse',
-    mutationOptions(token, path === null ? {} : { path }),
-  );
+export function browseDirectories(path) {
+  return requestMutation('/api/directories/browse', path === null ? {} : { path });
 }
 
-export function pickNativeDirectory(token) {
-  return requestJson(
-    '/api/directories/native-picker',
-    mutationOptions(token, {}),
-  );
+export function pickNativeDirectory() {
+  return requestMutation('/api/directories/native-picker', {});
 }
 
-export function registerProject(token, projectDirectory) {
-  return requestJson(
-    '/api/projects',
-    mutationOptions(token, { projectDirectory }),
-  );
+export function registerProject(projectDirectory) {
+  return requestMutation('/api/projects', { projectDirectory });
 }
 
-export function startRun(token, request) {
-  return requestJson('/api/runs', mutationOptions(token, request));
+export function startRun(request) {
+  return requestMutation('/api/runs', request);
 }
 
 function mutationOptions(token, body) {
@@ -80,22 +108,19 @@ function mutationOptions(token, body) {
   };
 }
 
-export function createChatSession(token, request) {
-  return requestJson('/api/chat/sessions', mutationOptions(token, request));
+export function createChatSession(request) {
+  return requestMutation('/api/chat/sessions', request);
 }
 
-export function reconfigureChatSession(token, sessionId, request) {
-  return requestJson(
+export function reconfigureChatSession(sessionId, request) {
+  return requestMutation(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/settings`,
-    mutationOptions(token, request),
+    request,
   );
 }
 
-export function restartChatSession(token, sessionId) {
-  return requestJson(
-    `/api/chat/sessions/${encodeURIComponent(sessionId)}/restart`,
-    mutationOptions(token, {}),
-  );
+export function restartChatSession(sessionId) {
+  return requestMutation(`/api/chat/sessions/${encodeURIComponent(sessionId)}/restart`, {});
 }
 
 function parseChatStreamRecord(line) {
@@ -148,10 +173,10 @@ async function readChatStream(response, onThinking) {
   return reply;
 }
 
-export async function sendChatMessage(token, sessionId, text, onThinking) {
-  const response = await fetch(
+export async function sendChatMessage(sessionId, text, onThinking) {
+  const response = await fetchMutation(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
-    mutationOptions(token, { text }),
+    { text },
   );
   if (!response.ok) {
     throw new Error(responseErrorMessage(response, await readJsonOrNull(response)));

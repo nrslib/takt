@@ -7,7 +7,7 @@
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import type {
   AgentWorkflowStep,
   WorkflowStep,
@@ -862,14 +862,18 @@ export class StepExecutor {
 
   private writeSnapshot(
     content: string,
-    directoryRel: string,
+    directory: string,
     filename: string,
     transaction?: InstructionBuildTransaction,
   ): string {
-    const absPath = join(this.deps.getCwd(), directoryRel, filename);
+    const absPath = join(resolveReportDirectory(this.deps.getCwd(), directory), filename);
     transaction?.recordSnapshotWrite(absPath);
     writeFileSync(absPath, content, 'utf-8');
-    return `${directoryRel}/${filename}`;
+    return join(directory, filename);
+  }
+
+  private contextSnapshotDirectory(relativePath: string, absolutePath: string): string {
+    return isAbsolute(this.deps.getReportDir()) ? absolutePath : relativePath;
   }
 
   private writeFacetSnapshot(
@@ -884,12 +888,12 @@ export class StepExecutor {
     const merged = contentStrings.join('\n\n---\n\n');
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
-    const directoryRel = facet === 'knowledge'
-      ? runPaths.contextKnowledgeRel
-      : runPaths.contextPolicyRel;
+    const directory = facet === 'knowledge'
+      ? this.contextSnapshotDirectory(runPaths.contextKnowledgeRel, runPaths.contextKnowledgeAbs)
+      : this.contextSnapshotDirectory(runPaths.contextPolicyRel, runPaths.contextPolicyAbs);
     const sourcePath = this.writeSnapshot(
       merged,
-      directoryRel,
+      directory,
       StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp),
       transaction,
     );
@@ -905,16 +909,20 @@ export class StepExecutor {
     if (!state.lastOutput || state.previousResponseSourcePath) return;
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
+    const directory = this.contextSnapshotDirectory(
+      runPaths.contextPreviousResponsesRel,
+      runPaths.contextPreviousResponsesAbs,
+    );
     const fileName = StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp);
     const sourcePath = this.writeSnapshot(
       state.lastOutput.content,
-      runPaths.contextPreviousResponsesRel,
+      directory,
       fileName,
       transaction,
     );
     this.writeSnapshot(
       state.lastOutput.content,
-      runPaths.contextPreviousResponsesRel,
+      directory,
       'latest.md',
       transaction,
     );
@@ -929,9 +937,13 @@ export class StepExecutor {
   ): void {
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
+    const directory = this.contextSnapshotDirectory(
+      runPaths.contextPreviousResponsesRel,
+      runPaths.contextPreviousResponsesAbs,
+    );
     const fileName = StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp);
-    const sourcePath = this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, fileName);
-    this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, 'latest.md');
+    const sourcePath = this.writeSnapshot(content, directory, fileName);
+    this.writeSnapshot(content, directory, 'latest.md');
     state.previousResponseSourcePath = sourcePath;
   }
 

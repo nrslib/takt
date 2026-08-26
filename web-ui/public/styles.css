@@ -671,9 +671,44 @@ button {
 }
 
 .chat-shortcut-hint {
-  margin: 7px 0 0;
+  margin: 0;
   color: var(--muted);
   font-size: 10px;
+}
+
+.chat-command-row,
+.runs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-command-row { margin-top: 7px; }
+
+.chat-command-button {
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.chat-command-button:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chat-command-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+#watch-button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .chat-shortcut-hint code,

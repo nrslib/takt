@@ -29,11 +29,13 @@ import {
 
 const EMPTY_CHAT_MESSAGE = 'メッセージを入力してください。';
 const CHAT_RESIZE_STEP = 16;
+const RUN_WATCH_INTERVAL_MS = 2000;
 
 const elements = {
   connection: document.querySelector('#connection-status'),
   category: document.querySelector('#category'),
   chatForm: document.querySelector('#chat-form'),
+  chatGoButton: document.querySelector('#chat-go-button'),
   chatCollapseButton: document.querySelector('#chat-collapse-button'),
   chatResizer: document.querySelector('#chat-resizer'),
   chatMessage: document.querySelector('#chat-message'),
@@ -69,15 +71,16 @@ const elements = {
   runList: document.querySelector('#run-list'),
   runListEmpty: document.querySelector('#run-list-empty'),
   runWarning: document.querySelector('#run-warning'),
+  watch: document.querySelector('#watch-button'),
   workflow: document.querySelector('#workflow'),
   workspace: document.querySelector('.workspace'),
 };
 
 const directoryRequests = createDirectoryRequestTracker();
 
-let sessionToken = '';
 let selectedRun = null;
 let refreshing = false;
+let runWatchTimer = null;
 let workflowCatalog = [];
 let workflowCatalogProjectId = '';
 let workflowRequestId = 0;
@@ -157,6 +160,7 @@ function syncChatControls() {
   elements.chatMode.disabled = settingsDisabled;
   elements.chatMessage.disabled = !executionEnabled;
   elements.chatSendButton.disabled = !executionEnabled || chatOperationInProgress;
+  elements.chatGoButton.disabled = !executionEnabled || chatOperationInProgress;
   elements.chatNewButton.disabled = chatSession === null || settingsDisabled;
 }
 
@@ -278,7 +282,7 @@ async function loadDirectory(path) {
   elements.directoryMessage.textContent = 'ディレクトリを読み込んでいます…';
   syncDirectoryControls();
   try {
-    const directory = await browseDirectories(sessionToken, path);
+    const directory = await browseDirectories(path);
     if (!directoryRequests.isCurrent(directoryRequest)) return;
     renderBrowsedDirectory(directory);
     elements.directoryMessage.textContent = '';
@@ -296,7 +300,7 @@ async function openNativeDirectoryPicker() {
   syncDirectoryControls();
   elements.directoryMessage.textContent = 'Finderでディレクトリを選択してください。';
   try {
-    const result = await pickNativeDirectory(sessionToken);
+    const result = await pickNativeDirectory();
     if (!directoryRequests.isCurrent(directoryRequest)) return;
     if (result.cancelled) {
       elements.directoryMessage.textContent = 'ディレクトリ選択をキャンセルしました。';
@@ -356,10 +360,10 @@ async function selectBrowsedDirectory() {
   elements.directoryMessage.textContent = 'ディレクトリを登録しています…';
   let workflowRequest = null;
   try {
-    const directory = await browseDirectories(sessionToken, requestedPath);
+    const directory = await browseDirectories(requestedPath);
     if (!directoryRequests.isCurrent(directoryRequest)) return;
     renderBrowsedDirectory(directory);
-    const project = await registerProject(sessionToken, directory.path);
+    const project = await registerProject(directory.path);
     if (!directoryRequests.isCurrent(directoryRequest)) return;
     const snapshot = await getProjects();
     if (!directoryRequests.isCurrent(directoryRequest)) return;
@@ -527,7 +531,7 @@ async function launchTaskInstruction(task, button) {
   button.disabled = true;
   elements.chatStatus.textContent = 'runを開始しています…';
   try {
-    const result = await startRun(sessionToken, {
+    const result = await startRun({
       projectId: selectedProjectId(),
       prompt: task,
       workflow: elements.workflow.value,
@@ -569,6 +573,15 @@ function handleChatMessageInput() {
   if (elements.chatStatus.textContent === EMPTY_CHAT_MESSAGE) {
     elements.chatStatus.textContent = '';
   }
+}
+
+function submitGoCommand() {
+  if (elements.chatGoButton.disabled) return;
+  const draft = elements.chatMessage.value.trim();
+  elements.chatMessage.value = draft === '' ? '/go' : `${draft} /go`;
+  chatMessageRevision += 1;
+  resizeChatMessage();
+  elements.chatForm.requestSubmit();
 }
 
 function setChatPaneWidth(requestedWidth) {
@@ -657,7 +670,7 @@ function updateChatPaneWidthForLayout() {
 
 async function ensureChatSession() {
   if (chatSession !== null) return chatSession;
-  const session = await createChatSession(sessionToken, {
+  const session = await createChatSession({
     projectId: selectedProjectId(),
     workflow: elements.workflow.value,
     mode: elements.chatMode.value,
@@ -703,7 +716,7 @@ async function reconfigureActiveChatSession() {
   setChatOperationInProgress(true);
   elements.chatStatus.textContent = '会話を引き継いで設定を切り替えています…';
   try {
-    const next = await reconfigureChatSession(sessionToken, previous.id, request);
+    const next = await reconfigureChatSession(previous.id, request);
     chatSession = next;
     updateChatSessionDescription(next);
     appendChatEntry(
@@ -724,7 +737,7 @@ async function startNewConversation() {
   setChatOperationInProgress(true);
   elements.chatStatus.textContent = '新しい会話を準備しています…';
   try {
-    const session = await restartChatSession(sessionToken, chatSession.id);
+    const session = await restartChatSession(chatSession.id);
     chatSession = session;
     updateChatSessionDescription(session);
     clearChatThinking();
@@ -767,7 +780,6 @@ async function submitChat(event) {
       messageWasCleared = true;
     }
     const reply = await sendChatMessage(
-      sessionToken,
       session.id,
       text,
       appendChatThinking,
@@ -966,12 +978,24 @@ async function refreshRuns() {
   }
 }
 
+function setRunWatchEnabled(enabled) {
+  if (enabled === (runWatchTimer !== null)) return;
+  if (enabled) {
+    runWatchTimer = window.setInterval(() => void refreshRuns(), RUN_WATCH_INTERVAL_MS);
+    void refreshRuns();
+  } else {
+    window.clearInterval(runWatchTimer);
+    runWatchTimer = null;
+  }
+  elements.watch.setAttribute('aria-pressed', String(enabled));
+  elements.watch.textContent = enabled ? 'Watching' : 'Watch';
+}
+
 async function initialize() {
   initializeChatPane();
   resizeChatMessage();
   try {
     const session = await getSession();
-    sessionToken = session.token;
     elements.directoryNativePicker.hidden = !session.capabilities.nativeDirectoryPicker;
     elements.directoryPicker.disabled = false;
     await refreshProjects('');
@@ -1012,6 +1036,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 elements.chatForm.addEventListener('submit', (event) => void submitChat(event));
+elements.chatGoButton.addEventListener('click', submitGoCommand);
 elements.chatNewButton.addEventListener('click', () => void startNewConversation());
 elements.chatCollapseButton.addEventListener('click', () => {
   setChatPaneCollapsed(elements.workspace.dataset.chatCollapsed !== 'true');
@@ -1093,13 +1118,15 @@ elements.refresh.addEventListener('click', () => {
     elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
   });
 });
+elements.watch.addEventListener('click', () => {
+  setRunWatchEnabled(runWatchTimer === null);
+});
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') void refreshRuns();
+  if (document.visibilityState === 'visible' && runWatchTimer !== null) void refreshRuns();
 });
 window.addEventListener('resize', () => {
   if (window.innerWidth > 900) {
     updateChatPaneWidthForLayout();
   }
 });
-setInterval(() => void refreshRuns(), 2000);
 void initialize();

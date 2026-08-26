@@ -4,6 +4,15 @@ import { getSession, sendChatMessage, startRun } from '../../web-ui/public/api.j
 describe('Web UI public API response handling', () => {
   const fetchMock = vi.fn();
 
+  async function initializeSession(token = 'web-token'): Promise<void> {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ token, capabilities: { nativeDirectoryPicker: false } }),
+    });
+    await getSession();
+  }
+
   beforeEach(() => {
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -44,15 +53,16 @@ describe('Web UI public API response handling', () => {
   });
 
   it('uses the shared mutation options for starting a run', async () => {
-    fetchMock.mockResolvedValue({
+    await initializeSession();
+    fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({ started: true }),
     });
 
-    await expect(startRun('web-token', { projectId: 'project', workflow: 'default' }))
+    await expect(startRun({ projectId: 'project', workflow: 'default' }))
       .resolves.toEqual({ started: true });
-    expect(fetchMock).toHaveBeenCalledWith('/api/runs', {
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/runs', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -62,7 +72,38 @@ describe('Web UI public API response handling', () => {
     });
   });
 
+  it('refreshes an invalid session token and retries a mutation once', async () => {
+    await initializeSession('expired-token');
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        json: async () => ({ error: 'Session token is invalid' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ token: 'fresh-token', capabilities: { nativeDirectoryPicker: false } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ started: true }),
+      });
+
+    await expect(startRun({ projectId: 'project', workflow: 'default' }))
+      .resolves.toEqual({ started: true });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/runs', expect.objectContaining({
+      headers: expect.objectContaining({ 'X-TAKT-Web-Token': 'expired-token' }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/session', undefined);
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/runs', expect.objectContaining({
+      headers: expect.objectContaining({ 'X-TAKT-Web-Token': 'fresh-token' }),
+    }));
+  });
+
   it('streams thinking chunks before returning the final chat reply', async () => {
+    await initializeSession();
     const payload = [
       JSON.stringify({ type: 'thinking', content: '調査中' }),
       JSON.stringify({ type: 'thinking', content: 'です。' }),
@@ -82,13 +123,14 @@ describe('Web UI public API response handling', () => {
     }), { status: 200 }));
     const thinking: string[] = [];
 
-    await expect(sendChatMessage('web-token', 'session-1', '相談', (content) => {
+    await expect(sendChatMessage('session-1', '相談', (content) => {
       thinking.push(content);
     })).resolves.toEqual({ kind: 'assistant_response', content: '回答です。' });
     expect(thinking).toEqual(['調査中', 'です。']);
   });
 
   it('surfaces an error emitted after chat streaming starts', async () => {
+    await initializeSession();
     const payload = [
       JSON.stringify({ type: 'thinking', content: '確認中' }),
       JSON.stringify({ type: 'error', message: 'provider failed' }),
@@ -96,7 +138,7 @@ describe('Web UI public API response handling', () => {
     ].join('\n');
     fetchMock.mockResolvedValue(new Response(payload, { status: 200 }));
 
-    await expect(sendChatMessage('web-token', 'session-1', '相談', () => {}))
+    await expect(sendChatMessage('session-1', '相談', () => {}))
       .rejects.toThrow('provider failed');
   });
 });
