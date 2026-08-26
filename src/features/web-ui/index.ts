@@ -33,6 +33,9 @@ function closeWebUiServer(server: Server | undefined): Promise<void> {
       }
       resolvePromise();
     });
+    // EventSource keeps HTTP connections open indefinitely. Stop accepting new
+    // connections first, then close active UI streams so restart can complete.
+    server.closeAllConnections();
   });
 }
 
@@ -40,7 +43,9 @@ export async function startWebUi(options: StartWebUiOptions): Promise<StartedWeb
   const globalConfigDirectory = getGlobalConfigDir();
   const lock = await acquireWebUiInstanceLock(globalConfigDirectory, options.port);
   let server: Server | undefined;
-  const close = () => server?.close();
+  const close = () => {
+    void closeWebUiServer(server).catch(() => undefined);
+  };
   try {
     server = await createWebUiServer({
       globalConfigDirectory,

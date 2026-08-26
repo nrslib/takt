@@ -14,17 +14,17 @@ import {
   sendChatMessage,
   startTask,
 } from './api.js';
+import { createExecutionView } from './execution-view.js';
+import { subscribeRun, subscribeTasks } from './live-stream.js';
 import {
   buildExecutionSettingsRequest,
   clampChatPaneWidth,
-  captureRunDetailViewState,
   createDirectoryRequestTracker,
   getChatPaneWidthBounds,
   isCurrentWorkflowRequest as isCurrentWorkflowRequestState,
   isWorkflowCatalogReady,
   projectSelectionForRefresh,
   resolveChatPaneWidth,
-  restoreRunDetailViewState,
   sameRunSelection as sameRunSelectionState,
   snapshotExecutionSettings,
   shouldCloseExecutionContext,
@@ -32,7 +32,6 @@ import {
 
 const EMPTY_CHAT_MESSAGE = 'メッセージを入力してください。';
 const CHAT_RESIZE_STEP = 16;
-const RUN_WATCH_INTERVAL_MS = 2000;
 
 const elements = {
   connection: document.querySelector('#connection-status'),
@@ -84,7 +83,10 @@ const directoryRequests = createDirectoryRequestTracker();
 
 let selectedRun = null;
 let refreshing = false;
-let runWatchTimer = null;
+let stopTaskStream = null;
+let stopRunStream = null;
+let liveUpdatesEnabled = true;
+let taskCollection = { tasks: [], warnings: [] };
 let workflowCatalog = [];
 let workflowCatalogProjectId = '';
 let workflowRequestId = 0;
@@ -107,28 +109,23 @@ let executionSettings = {
   draftPr: true,
 };
 
+const executionView = createExecutionView({
+  runList: elements.runList,
+  runListEmpty: elements.runListEmpty,
+  runDetail: elements.runDetail,
+  onSelectRun: selectRun,
+  onRequeue: (task, button) => void requeueSelectedTask(task, button),
+  onStatusChange: (status) => {
+    const label = status.toUpperCase();
+    if (elements.runStatusLive.textContent !== label) elements.runStatusLive.textContent = label;
+  },
+});
+
 function createElement(tag, className, text) {
   const element = document.createElement(tag);
   if (className !== '') element.className = className;
   if (text !== undefined) element.textContent = text;
   return element;
-}
-
-function formatDate(value) {
-  if (value === undefined) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ja-JP');
-}
-
-function statusLabel(status) {
-  const labels = {
-    pending: 'PENDING',
-    running: 'RUNNING',
-    completed: 'COMPLETED',
-    aborted: 'ABORTED',
-    failed: 'FAILED',
-  };
-  return labels[status];
 }
 
 function selectedCategory() {
@@ -945,181 +942,71 @@ async function submitChat(event) {
   }
 }
 
-function renderTaskList(tasks) {
-  elements.runList.replaceChildren();
-  elements.runListEmpty.hidden = tasks.length !== 0;
-  for (const task of tasks) {
-    const card = createElement('article', 'task-card');
-    card.dataset.selected = String(task.taskId === selectedRun?.taskId);
-    const top = createElement('span', 'run-card-top');
-    top.append(
-      createElement('span', `status-badge status-${task.status}`, statusLabel(task.status)),
-      createElement('time', 'run-time', formatDate(task.updatedAt)),
-    );
-    const header = createElement('div', 'task-card-header');
-    header.append(
-      top,
-      createElement('strong', 'run-task', task.task),
-      createElement(
-        'span',
-        'run-meta',
-        `${task.projectName} · ${task.workflow} · ${task.runs.length} run`,
-      ),
-    );
-    if (task.actions.requeue) {
-      const requeue = createElement('button', 'task-requeue-button', 'Requeue');
-      requeue.type = 'button';
-      requeue.addEventListener('click', () => void requeueSelectedTask(task, requeue));
-      header.append(requeue);
-    }
-    const attempts = createElement('div', 'task-run-list');
-    for (const run of task.runs) {
-      const button = createElement('button', 'task-run-button');
-      button.type = 'button';
-      button.dataset.selected = String(
-        run.slug === selectedRun?.slug && task.projectId === selectedRun?.projectId,
-      );
-      button.addEventListener('click', () => {
-        selectedRun = { projectId: task.projectId, taskId: task.taskId, slug: run.slug };
-        void refreshRuns();
-      });
-      button.append(
-        createElement('span', '', `Run ${run.attempt}`),
-        createElement('span', `status-badge status-${run.status}`, statusLabel(run.status)),
-        createElement('time', 'run-time', formatDate(run.startTime)),
-      );
-      attempts.append(button);
-    }
-    if (task.runs.length === 0) {
-      attempts.append(createElement('p', 'task-run-empty', '実行待ち'));
-    }
-    card.append(header, attempts);
-    elements.runList.append(card);
+function stopLiveRunStream() {
+  if (stopRunStream === null) return;
+  stopRunStream();
+  stopRunStream = null;
+}
+
+function startLiveRunStream() {
+  stopLiveRunStream();
+  if (!liveUpdatesEnabled || selectedRun === null) return;
+  const expectedRun = { ...selectedRun };
+  executionView.setLiveState('connecting');
+  stopRunStream = subscribeRun(expectedRun.projectId, expectedRun.slug, {
+    onSnapshot(detail) {
+      if (sameRunSelectionState(selectedRun, expectedRun)) {
+        executionView.renderDetail(detail, expectedRun);
+      }
+    },
+    onConnectionChange(state) {
+      if (!sameRunSelectionState(selectedRun, expectedRun)) return;
+      executionView.setLiveState(state);
+      elements.connection.textContent = state === 'live' ? 'Live' : '再接続中';
+    },
+    onError(error) {
+      if (!sameRunSelectionState(selectedRun, expectedRun)) return;
+      elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
+    },
+  });
+}
+
+async function selectRun(nextRun) {
+  selectedRun = nextRun;
+  executionView.renderTaskList(taskCollection.tasks, selectedRun);
+  startLiveRunStream();
+  if (liveUpdatesEnabled) return;
+  try {
+    const detail = await getRun(nextRun.projectId, nextRun.slug);
+    executionView.renderDetail(detail, nextRun);
+  } catch (error) {
+    elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
   }
 }
 
-function detailRow(label, value) {
-  const row = createElement('div', 'detail-row');
-  row.append(createElement('dt', '', label), createElement('dd', '', value));
-  return row;
-}
-
-function renderReports(reports) {
-  const section = createElement('section', 'reports');
-  section.append(createElement('h3', '', `Reports (${reports.length})`));
-  if (reports.length === 0) {
-    section.append(createElement('p', 'empty-state', 'reportはまだありません。'));
-    return section;
-  }
-  for (const report of reports) {
-    const details = createElement('details', 'report');
-    details.dataset.reportFilename = report.filename;
-    details.append(createElement('summary', '', report.filename));
-    details.append(createElement(
-      'pre',
-      '',
-      report.omitted ? 'ファイルサイズが表示上限を超えています。' : report.content,
-    ));
-    section.append(details);
-  }
-  return section;
-}
-
-function eventTitle(event) {
-  const location = [event.step, event.phaseName].filter(Boolean).join(' / ');
-  return location === '' ? event.type : `${event.type} · ${location}`;
-}
-
-function renderLogEvents(events) {
-  const section = createElement('section', 'run-log');
-  section.append(createElement('h3', '', `Live log (${events.length})`));
-  if (events.length === 0) {
-    section.append(createElement('p', 'empty-state', '実行ログはまだありません。'));
-    return section;
-  }
-  const list = createElement('ol', 'log-events');
-  for (const event of events) {
-    const item = createElement('li', 'log-event');
-    const header = createElement('div', 'log-event-header');
-    header.append(
-      createElement('strong', '', eventTitle(event)),
-      createElement('time', '', formatDate(event.timestamp)),
-    );
-    item.append(header);
-    if (event.status !== undefined) {
-      item.append(createElement('span', 'log-event-status', event.status));
-    }
-    if (event.content !== undefined) {
-      item.append(createElement('pre', '', event.content));
-    }
-    list.append(item);
-  }
-  section.append(list);
-  return section;
-}
-
-function renderRunDetail(detail, expectedRun) {
-  const { meta, reports, events, project } = detail;
-  if (!sameRunSelectionState(
-    { projectId: project.id, slug: meta.runSlug },
-    expectedRun,
-  )) return false;
-  const viewState = elements.runDetail.dataset.projectId === expectedRun.projectId
-    && elements.runDetail.dataset.runSlug === expectedRun.slug
-    ? captureRunDetailViewState(elements.runDetail)
-    : null;
-  const header = createElement('header', 'detail-header');
-  const headerStatus = createElement('div', 'detail-header-status');
-  headerStatus.append(
-    createElement('span', `status-badge status-${meta.status}`, statusLabel(meta.status)),
+function applyTaskCollection(collection) {
+  taskCollection = collection;
+  const hasSelected = selectedRun !== null && collection.tasks.some(
+    (task) => task.projectId === selectedRun.projectId
+      && task.taskId === selectedRun.taskId
+      && task.runs.some((run) => run.slug === selectedRun.slug),
   );
-  header.append(
-    headerStatus,
-    createElement('h2', '', meta.workflow),
-    createElement('p', 'detail-slug', `${project.projectDirectory} · ${meta.runSlug}`),
-  );
-  if (detail.prUrl !== undefined) {
-    const prLink = createElement('a', 'detail-pr-link', 'Pull request');
-    prLink.href = detail.prUrl;
-    prLink.target = '_blank';
-    prLink.rel = 'noreferrer';
-    header.append(prLink);
+  const previous = selectedRun;
+  if (!hasSelected) {
+    const firstTask = collection.tasks.find((task) => task.runs.length > 0);
+    const latestRun = firstTask?.runs.at(-1);
+    selectedRun = firstTask === undefined || latestRun === undefined
+      ? null
+      : { projectId: firstTask.projectId, taskId: firstTask.taskId, slug: latestRun.slug };
   }
-
-  const progress = createElement('dl', 'detail-grid');
-  progress.append(
-    detailRow('Current step', meta.currentStep ?? '待機中'),
-    detailRow('Iteration', meta.currentIteration === undefined ? '—' : String(meta.currentIteration)),
-    detailRow('Phase', meta.phase === undefined ? '—' : String(meta.phase)),
-    detailRow('Updated', formatDate(meta.updatedAt)),
-  );
-
-  const task = createElement('section', 'task-detail');
-  task.append(createElement('h3', '', 'Task'), createElement('pre', '', meta.task));
-  elements.runDetail.dataset.projectId = expectedRun.projectId;
-  elements.runDetail.dataset.runSlug = expectedRun.slug;
-  elements.runDetail.replaceChildren(
-    header,
-    progress,
-    task,
-    renderLogEvents(events),
-    renderReports(reports),
-  );
-  if (viewState !== null) restoreRunDetailViewState(elements.runDetail, viewState);
-  const status = statusLabel(meta.status);
-  if (elements.runStatusLive.textContent !== status) elements.runStatusLive.textContent = status;
-  return true;
-}
-
-function renderRunPlaceholder() {
-  const placeholder = createElement('div', 'detail-placeholder');
-  placeholder.append(
-    createElement('p', '', 'Runを選択'),
-    createElement('span', '', 'task配下のrunを選択するとログを表示します。'),
-  );
-  delete elements.runDetail.dataset.projectId;
-  delete elements.runDetail.dataset.runSlug;
-  elements.runDetail.replaceChildren(placeholder);
+  executionView.renderTaskList(collection.tasks, selectedRun);
+  updateWarnings(collection.warnings);
+  if (selectedRun === null) {
+    stopLiveRunStream();
+    executionView.renderPlaceholder();
+    return;
+  }
+  if (!sameRunSelectionState(previous, selectedRun)) startLiveRunStream();
 }
 
 async function requeueSelectedTask(task, button) {
@@ -1142,34 +1029,19 @@ async function refreshRuns() {
   refreshing = true;
   try {
     const collection = await getTasks();
-    const hasSelected = selectedRun !== null && collection.tasks.some(
-      (task) => task.projectId === selectedRun.projectId
-        && task.taskId === selectedRun.taskId
-        && task.runs.some((run) => run.slug === selectedRun.slug),
-    );
-    if (!hasSelected) {
-      const firstTask = collection.tasks.find((task) => task.runs.length > 0);
-      const latestRun = firstTask?.runs.at(-1);
-      selectedRun = firstTask === undefined || latestRun === undefined
-        ? null
-        : { projectId: firstTask.projectId, taskId: firstTask.taskId, slug: latestRun.slug };
-    }
-    renderTaskList(collection.tasks);
-    updateWarnings(collection.warnings);
+    applyTaskCollection(collection);
     if (selectedRun !== null) {
       const requestedRun = { ...selectedRun };
       try {
         const detail = await getRun(requestedRun.projectId, requestedRun.slug);
         if (sameRunSelectionState(selectedRun, requestedRun)) {
-          renderRunDetail(detail, requestedRun);
+          executionView.renderDetail(detail, requestedRun);
         }
       } catch (error) {
         if (sameRunSelectionState(selectedRun, requestedRun)) throw error;
       }
-    } else {
-      renderRunPlaceholder();
     }
-    elements.connection.textContent = '接続済み';
+    elements.connection.textContent = liveUpdatesEnabled ? 'Live' : '接続済み';
   } catch (error) {
     elements.connection.textContent = '接続エラー';
     elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
@@ -1178,17 +1050,36 @@ async function refreshRuns() {
   }
 }
 
-function setRunWatchEnabled(enabled) {
-  if (enabled === (runWatchTimer !== null)) return;
+function startTaskStream() {
+  if (!liveUpdatesEnabled || stopTaskStream !== null) return;
+  stopTaskStream = subscribeTasks({
+    onSnapshot(collection) {
+      applyTaskCollection(collection);
+    },
+    onConnectionChange(state) {
+      elements.connection.textContent = state === 'live' ? 'Live' : '再接続中';
+    },
+    onError(error) {
+      elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
+    },
+  });
+}
+
+function setLiveUpdatesEnabled(enabled) {
+  if (enabled === liveUpdatesEnabled && (enabled ? stopTaskStream !== null : true)) return;
+  liveUpdatesEnabled = enabled;
   if (enabled) {
-    runWatchTimer = window.setInterval(() => void refreshRuns(), RUN_WATCH_INTERVAL_MS);
-    void refreshRuns();
+    startTaskStream();
+    startLiveRunStream();
   } else {
-    window.clearInterval(runWatchTimer);
-    runWatchTimer = null;
+    if (stopTaskStream !== null) stopTaskStream();
+    stopTaskStream = null;
+    stopLiveRunStream();
+    executionView.setLiveState('paused');
+    elements.connection.textContent = '手動更新';
   }
   elements.watch.setAttribute('aria-pressed', String(enabled));
-  elements.watch.textContent = enabled ? 'Watching' : 'Watch';
+  elements.watch.textContent = enabled ? 'Live on' : 'Live off';
 }
 
 async function initialize() {
@@ -1200,6 +1091,7 @@ async function initialize() {
     elements.directoryPicker.disabled = false;
     await refreshProjects('');
     await refreshRuns();
+    startTaskStream();
   } catch (error) {
     elements.connection.textContent = '初期化エラー';
     elements.runWarning.textContent = error instanceof Error ? error.message : String(error);
@@ -1261,6 +1153,9 @@ elements.directoryDialog.addEventListener('close', () => {
   directoryRequests.closeDialog();
   syncDirectoryControls();
 });
+elements.directoryDialog.addEventListener('click', (event) => {
+  if (event.target === elements.directoryDialog) closeDirectoryPicker();
+});
 elements.directoryNativePicker.addEventListener('click', () => void openNativeDirectoryPicker());
 elements.directoryGo.addEventListener('click', () => {
   void loadDirectory(elements.directoryCurrentPath.value.trim());
@@ -1320,10 +1215,14 @@ elements.refresh.addEventListener('click', () => {
   });
 });
 elements.watch.addEventListener('click', () => {
-  setRunWatchEnabled(runWatchTimer === null);
+  setLiveUpdatesEnabled(!liveUpdatesEnabled);
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && runWatchTimer !== null) void refreshRuns();
+  if (document.visibilityState === 'visible' && liveUpdatesEnabled) void refreshRuns();
+});
+window.addEventListener('beforeunload', () => {
+  if (stopTaskStream !== null) stopTaskStream();
+  stopLiveRunStream();
 });
 window.addEventListener('resize', () => {
   if (window.innerWidth > 900) {

@@ -10,14 +10,14 @@
   </head>
   <body>
     <header class="app-header">
-      <div class="brand">
+      <div class="brand" aria-label="TAKT Console">
         <img class="brand-logo" src="/takt-logo.svg" alt="TAKT">
         <span class="brand-product">Console</span>
       </div>
 
       <details id="execution-context" class="execution-context" open>
         <summary>
-          <span class="execution-context-label">Context</span>
+          <span class="execution-context-label">Workspace</span>
           <span id="execution-context-summary">ディレクトリとworkflowを選択</span>
         </summary>
         <div class="execution-context-body">
@@ -136,29 +136,34 @@
       <section class="runs-panel" aria-labelledby="runs-title">
         <div class="section-heading runs-heading">
           <div>
-            <h2 id="runs-title">Tasks</h2>
-            <p>タスクごとに指示と再実行を管理し、各runのログを確認できます。</p>
-            <p class="warning-message">同一canonical projectでのCLIとWeb UIの同時実行・mutationはサポート対象外です。</p>
+            <span class="section-kicker">Execution</span>
+            <h2 id="runs-title">Run workspace</h2>
+            <p>タスク、現在地、ログ、成果物を一つの画面で追跡します。</p>
           </div>
           <div class="runs-actions">
-            <button id="watch-button" class="secondary-button" type="button" aria-pressed="false">Watch</button>
+            <button id="watch-button" class="secondary-button live-toggle" type="button" aria-pressed="true">Live on</button>
             <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
           </div>
         </div>
 
         <div class="run-layout">
           <nav class="run-list-region" aria-label="task一覧">
+            <header class="task-navigator-header">
+              <span>Tasks</span>
+              <span>Newest first</span>
+            </header>
             <div id="run-list" class="run-list"></div>
             <p id="run-list-empty" class="empty-state" hidden>taskはまだありません。</p>
           </nav>
           <p id="run-status-live" class="visually-hidden" aria-live="polite"></p>
           <article id="run-detail" class="run-detail">
             <div class="detail-placeholder">
-              <p>Runを選択</p>
-              <span>runを選択すると詳細を表示します。</span>
+              <p>Run を選択</p>
+              <span>実行トレース、ログ、レポートをここに表示します。</span>
             </div>
           </article>
         </div>
+        <p class="execution-notice">同一 canonical project に対する CLI と Web UI の同時 mutation はサポート対象外です。</p>
         <p id="run-warning" class="warning-message" role="status"></p>
       </section>
     </main>

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readRunCollection, readRunDetail } from '../features/web-ui/run-store.js';
+import { startWebUi, stopWebUi } from '../features/web-ui/index.js';
 import { createWebUiServer, listenWebUiServer } from '../features/web-ui/server.js';
 import {
   acquireWebUiInstanceLock,
@@ -39,6 +40,30 @@ function requestStatus(url: string, headers: Record<string, string>): Promise<nu
     request.once('error', rejectPromise);
     request.end();
   });
+}
+
+async function readFirstSnapshot(response: Response): Promise<unknown> {
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toContain('text/event-stream');
+  if (response.body === null) throw new Error('SSE response body is missing');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  try {
+    while (!pending.includes('\n\n')) {
+      const chunk = await reader.read();
+      if (chunk.done) throw new Error('SSE stream ended before its first event');
+      pending += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    await reader.cancel();
+  }
+  const data = pending
+    .slice(0, pending.indexOf('\n\n'))
+    .split('\n')
+    .find((line) => line.startsWith('data: '));
+  if (data === undefined) throw new Error('SSE snapshot data is missing');
+  return JSON.parse(data.slice('data: '.length)) as unknown;
 }
 
 afterEach(async () => {
@@ -223,6 +248,38 @@ describe('Web UI run artifacts', () => {
 });
 
 describe('Web UI HTTP boundary', () => {
+  it('stops while an EventSource connection is active', async () => {
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
+    const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
+    let server: Server | undefined;
+    try {
+      const started = await startWebUi({ port: 0 });
+      server = started.server;
+      servers.push(server);
+      const response = await fetch(`${started.origin}/api/tasks/events`);
+      expect(response.status).toBe(200);
+      if (response.body === null) throw new Error('SSE response body is missing');
+      const reader = response.body.getReader();
+      await reader.read();
+
+      await expect(stopWebUi()).resolves.toMatchObject({ disposition: 'stopped' });
+      expect(server.listening).toBe(false);
+      await reader.cancel().catch(() => undefined);
+    } finally {
+      if (server?.listening) {
+        server.closeAllConnections();
+        await closeServer(server);
+      }
+      if (server !== undefined) {
+        const serverIndex = servers.indexOf(server);
+        if (serverIndex >= 0) servers.splice(serverIndex, 1);
+      }
+      if (previousConfigDirectory === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfigDirectory;
+    }
+  });
+
   it('gracefully stops the owned Web UI through its private control endpoint', async () => {
     const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const projectDirectory = await createProject();
@@ -329,6 +386,9 @@ describe('Web UI HTTP boundary', () => {
 
     const uiStateResponse = await fetch(`${origin}/ui-state.js`);
     expect(uiStateResponse.status).toBe(200);
+    const executionViewResponse = await fetch(`${origin}/execution-view.js`);
+    expect(executionViewResponse.status).toBe(200);
+    expect(await executionViewResponse.text()).toContain("from './execution-model.js'");
   });
 
   it('browses and registers an unregistered execution directory', async () => {
@@ -458,6 +518,16 @@ describe('Web UI HTTP boundary', () => {
       projectId: project.id,
       projectDirectory,
       runs: [{ slug: centralTask.runId, attempt: 1 }],
+    });
+
+    await expect(readFirstSnapshot(await fetch(`${origin}/api/tasks/events`))).resolves.toMatchObject({
+      tasks: [{ taskId: centralTask.task.taskId, projectId: project.id }],
+    });
+    await expect(readFirstSnapshot(await fetch(
+      `${origin}/api/runs/${centralTask.runId}/events?project=${project.id}`,
+    ))).resolves.toMatchObject({
+      project: { id: project.id },
+      meta: { runSlug: centralTask.runId, status: 'running' },
     });
 
     const projectsResponse = await fetch(`${origin}/api/projects`);

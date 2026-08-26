@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { isAbsolute } from 'node:path';
@@ -9,7 +9,11 @@ import {
   resolveRegisteredProject,
   type RegisteredProject,
 } from '../../infra/config/global/projectRegistry.js';
-import { readRunCollection, readRunDetail } from './run-store.js';
+import {
+  readRunCollection,
+  readRunDetail,
+  resolveRunWatchDirectories,
+} from './run-store.js';
 import { parseLaunchRequest, type LaunchRequest, type LaunchResult } from './launcher.js';
 import {
   createWebChatService,
@@ -35,6 +39,8 @@ import {
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const MAX_GLOBAL_TASKS = 100;
+const STREAM_RECONCILE_INTERVAL_MS = 2_000;
+const STREAM_HEARTBEAT_INTERVAL_MS = 15_000;
 
 interface StaticAsset {
   readonly content: Buffer;
@@ -67,6 +73,75 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
     'Content-Type': 'application/json; charset=utf-8',
   });
   response.end(JSON.stringify(value));
+}
+
+function writeSnapshotEvent(
+  response: ServerResponse,
+  id: number,
+  serialized: string,
+): void {
+  response.write(`id: ${id}\nevent: snapshot\ndata: ${serialized}\n\n`);
+}
+
+async function streamSnapshots(
+  response: ServerResponse,
+  readSnapshot: () => Promise<unknown>,
+  watchDirectories: readonly string[],
+): Promise<void> {
+  const initial = JSON.stringify(await readSnapshot());
+  setSecurityHeaders(response);
+  response.writeHead(200, {
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'Content-Type': 'text/event-stream; charset=utf-8',
+  });
+  let eventId = 1;
+  let lastSnapshot = initial;
+  let reading = false;
+  let closed = false;
+  writeSnapshotEvent(response, eventId, initial);
+
+  const publish = async (): Promise<void> => {
+    if (reading || closed) return;
+    reading = true;
+    try {
+      const next = JSON.stringify(await readSnapshot());
+      if (!closed && next !== lastSnapshot) {
+        lastSnapshot = next;
+        eventId += 1;
+        writeSnapshotEvent(response, eventId, next);
+      }
+    } catch (error) {
+      if (!closed) {
+        response.write(`event: snapshot-error\ndata: ${JSON.stringify({ error: errorMessage(error) })}\n\n`);
+      }
+    } finally {
+      reading = false;
+    }
+  };
+
+  const watchers: FSWatcher[] = [];
+  for (const directory of watchDirectories) {
+    try {
+      watchers.push(watch(directory, () => void publish()));
+    } catch {
+      // Periodic reconciliation below remains the source of correctness.
+    }
+  }
+  const reconcileTimer = setInterval(() => void publish(), STREAM_RECONCILE_INTERVAL_MS);
+  const heartbeatTimer = setInterval(() => {
+    if (!closed) response.write(': keep-alive\n\n');
+  }, STREAM_HEARTBEAT_INTERVAL_MS);
+
+  await new Promise<void>((resolvePromise) => {
+    response.once('close', () => {
+      closed = true;
+      clearInterval(reconcileTimer);
+      clearInterval(heartbeatTimer);
+      for (const watcher of watchers) watcher.close();
+      resolvePromise();
+    });
+  });
 }
 
 function writeChatStreamRecord(response: ServerResponse, value: unknown): void {
@@ -197,6 +272,10 @@ async function loadAssets() {
     ['/', '../../../web-ui/public/index.html', 'text/html; charset=utf-8'],
     ['/app.js', '../../../web-ui/public/app.js', 'text/javascript; charset=utf-8'],
     ['/api.js', '../../../web-ui/public/api.js', 'text/javascript; charset=utf-8'],
+    ['/execution-model.js', '../../../web-ui/public/execution-model.js', 'text/javascript; charset=utf-8'],
+    ['/execution-view.js', '../../../web-ui/public/execution-view.js', 'text/javascript; charset=utf-8'],
+    ['/live-stream.js', '../../../web-ui/public/live-stream.js', 'text/javascript; charset=utf-8'],
+    ['/task-navigator.js', '../../../web-ui/public/task-navigator.js', 'text/javascript; charset=utf-8'],
     ['/ui-state.js', '../../../web-ui/public/ui-state.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', '../../../web-ui/public/styles.css', 'text/css; charset=utf-8'],
     ['/takt-logo.svg', '../../../docs/assets/takt-logo-dark.svg', 'image/svg+xml'],
@@ -210,6 +289,11 @@ async function loadAssets() {
 
 function routeRunSlug(pathname: string): string | null {
   const match = pathname.match(/^\/api\/runs\/([A-Za-z0-9][A-Za-z0-9._-]*)$/);
+  return match?.[1] ?? null;
+}
+
+function routeRunStreamSlug(pathname: string): string | null {
+  const match = pathname.match(/^\/api\/runs\/([A-Za-z0-9][A-Za-z0-9._-]*)\/events$/);
   return match?.[1] ?? null;
 }
 
@@ -405,6 +489,39 @@ async function readGlobalTasks(globalConfigDirectory: string) {
   };
 }
 
+async function readRunView(
+  globalConfigDirectory: string,
+  project: RegisteredProject,
+  slug: string,
+) {
+  const repository = await CentralTaskRepository.openByState({
+    globalConfigDirectory,
+    stateId: project.stateId,
+  });
+  const detail = await readRunDetail(repository.paths, slug);
+  const task = (await repository.readTasks()).find((candidate) => candidate.runIds.includes(slug));
+  const isLatestTaskRun = task?.runIds.at(-1) === slug;
+  return {
+    project,
+    ...detail,
+    ...(task === undefined
+      ? {}
+      : {
+          taskId: task.taskId,
+          meta: {
+            ...detail.meta,
+            ...(isLatestTaskRun
+              ? { status: task.status === 'starting' ? 'running' : task.status }
+              : {}),
+            ...(isLatestTaskRun && task.failure !== undefined
+              ? { reason: task.failure.message }
+              : {}),
+          },
+          ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
+        }),
+  };
+}
+
 async function readProjectDiscovery(globalConfigDirectory: string) {
   const registry = await readProjectRegistry(globalConfigDirectory);
   const warnings = [...registry.warnings];
@@ -508,6 +625,14 @@ export async function createWebUiServer(options: {
         sendJson(response, 200, await readGlobalTasks(options.globalConfigDirectory));
         return;
       }
+      if (method === 'GET' && url.pathname === '/api/tasks/events') {
+        await streamSnapshots(
+          response,
+          () => readGlobalTasks(options.globalConfigDirectory),
+          [],
+        );
+        return;
+      }
       if (method === 'GET' && url.pathname === '/api/workflows') {
         const project = await resolveProject(
           options.globalConfigDirectory,
@@ -523,8 +648,8 @@ export async function createWebUiServer(options: {
         );
         return;
       }
-      const slug = method === 'GET' ? routeRunSlug(url.pathname) : null;
-      if (slug !== null) {
+      const streamSlug = method === 'GET' ? routeRunStreamSlug(url.pathname) : null;
+      if (streamSlug !== null) {
         const project = await resolveProject(
           options.globalConfigDirectory,
           projectIdFromQuery(url),
@@ -533,28 +658,24 @@ export async function createWebUiServer(options: {
           globalConfigDirectory: options.globalConfigDirectory,
           stateId: project.stateId,
         });
-        const detail = await readRunDetail(repository.paths, slug);
-        const task = (await repository.readTasks()).find((candidate) => candidate.runIds.includes(slug));
-        const isLatestTaskRun = task?.runIds.at(-1) === slug;
-        sendJson(response, 200, {
-          project,
-          ...detail,
-          ...(task === undefined
-            ? {}
-            : {
-                taskId: task.taskId,
-                meta: {
-                  ...detail.meta,
-                  ...(isLatestTaskRun
-                    ? { status: task.status === 'starting' ? 'running' : task.status }
-                    : {}),
-                  ...(isLatestTaskRun && task.failure !== undefined
-                    ? { reason: task.failure.message }
-                    : {}),
-                },
-                ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
-              }),
-        });
+        await streamSnapshots(
+          response,
+          () => readRunView(options.globalConfigDirectory, project, streamSlug),
+          await resolveRunWatchDirectories(repository.paths, streamSlug),
+        );
+        return;
+      }
+      const slug = method === 'GET' ? routeRunSlug(url.pathname) : null;
+      if (slug !== null) {
+        const project = await resolveProject(
+          options.globalConfigDirectory,
+          projectIdFromQuery(url),
+        );
+        sendJson(
+          response,
+          200,
+          await readRunView(options.globalConfigDirectory, project, slug),
+        );
         return;
       }
       const requeueTaskId = method === 'POST' ? routeTaskRequeueId(url.pathname) : null;

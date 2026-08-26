@@ -39,9 +39,18 @@ interface RunLogEvent {
   readonly type: string;
   readonly timestamp?: string;
   readonly step?: string;
+  readonly phase?: number;
   readonly phaseName?: string;
+  readonly phaseExecutionId?: string;
+  readonly iteration?: number;
+  readonly persona?: string;
+  readonly workflow?: string;
+  readonly childWorkflow?: string;
+  readonly callInstance?: string;
   readonly status?: string;
   readonly content?: string;
+  readonly error?: string;
+  readonly reason?: string;
 }
 
 function requireRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -369,11 +378,25 @@ function parseLogEvent(value: unknown): RunLogEvent | null {
   if (typeof raw.type !== 'string') return null;
   return {
     type: raw.type,
-    timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : undefined,
+    timestamp: [raw.timestamp, raw.endTime, raw.startTime]
+      .find((candidate) => typeof candidate === 'string') as string | undefined,
     step: typeof raw.step === 'string' ? raw.step : undefined,
+    phase: typeof raw.phase === 'number' ? raw.phase : undefined,
     phaseName: typeof raw.phaseName === 'string' ? raw.phaseName : undefined,
+    phaseExecutionId: typeof raw.phaseExecutionId === 'string'
+      ? raw.phaseExecutionId
+      : undefined,
+    iteration: typeof raw.iteration === 'number' ? raw.iteration : undefined,
+    persona: typeof raw.persona === 'string' ? raw.persona : undefined,
+    workflow: typeof raw.workflow === 'string'
+      ? raw.workflow
+      : typeof raw.workflowName === 'string' ? raw.workflowName : undefined,
+    childWorkflow: typeof raw.childWorkflow === 'string' ? raw.childWorkflow : undefined,
+    callInstance: typeof raw.callInstance === 'string' ? raw.callInstance : undefined,
     status: typeof raw.status === 'string' ? raw.status : undefined,
     content: typeof raw.content === 'string' ? raw.content.slice(0, 8_000) : undefined,
+    error: typeof raw.error === 'string' ? raw.error.slice(0, 8_000) : undefined,
+    reason: typeof raw.reason === 'string' ? raw.reason.slice(0, 8_000) : undefined,
   };
 }
 
@@ -465,4 +488,43 @@ export async function readRunDetail(location: RunStoreLocation, slug: string) {
   ]);
   await verifyRunsRootSnapshot(location, snapshot);
   return { meta, reports, events };
+}
+
+export async function resolveRunWatchDirectories(
+  location: RunStoreLocation,
+  slug: string,
+): Promise<readonly string[]> {
+  assertRunSlug(slug);
+  const snapshot = await captureRunsRoot(location);
+  const meta = await loadRunMeta(location, snapshot, slug);
+  const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
+  const runRoot = await resolveRegularPath(resolve(snapshot.directory, slug), 'Run root');
+  const candidates = await Promise.all([
+    resolveRunChildDirectory(
+      stateDirectory,
+      runsDirectory,
+      slug,
+      meta.logsDirectory,
+      'Logs directory',
+    ),
+    resolveRunChildDirectory(
+      stateDirectory,
+      runsDirectory,
+      slug,
+      meta.reportDirectory,
+      'Report directory',
+    ),
+  ]);
+  const existingDirectories: string[] = [];
+  for (const candidate of candidates) {
+    const stats = await lstat(candidate).catch((error: unknown) => {
+      if (isMissing(error)) return null;
+      throw error;
+    });
+    if (stats !== null && stats.isDirectory() && !stats.isSymbolicLink()) {
+      existingDirectories.push(candidate);
+    }
+  }
+  await verifyRunsRootSnapshot(location, snapshot);
+  return [runRoot, ...existingDirectories];
 }
