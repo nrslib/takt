@@ -4,16 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark">
-    <meta name="theme-color" content="#0e100f">
+    <meta name="theme-color" content="#0b0e0c">
     <title>TAKT Console</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
-  <body>
+  <body data-screen="viewer">
     <header class="app-header">
       <div class="brand" aria-label="TAKT Console">
         <img class="brand-logo" src="/takt-logo.svg" alt="TAKT">
         <span class="brand-product">Console</span>
       </div>
+
+      <nav class="global-nav" aria-label="メインナビゲーション">
+        <button id="viewer-nav" class="nav-button nav-button-active" type="button" aria-current="page">Viewer</button>
+        <button id="new-task-button" class="nav-button" type="button">タスクを作成</button>
+      </nav>
 
       <details id="execution-context" class="execution-context" open>
         <summary>
@@ -51,25 +56,89 @@
         </div>
       </details>
 
-      <div class="connection" aria-live="polite">
-        <span class="connection-dot" aria-hidden="true"></span>
-        <span id="connection-status">接続中</span>
+      <div class="header-actions">
+        <button id="ai-consult-button" class="header-action-button" type="button" aria-expanded="false" aria-controls="chat-surface">AIに相談</button>
+        <div class="connection" aria-live="polite">
+          <span class="connection-dot" aria-hidden="true"></span>
+          <span id="connection-status">接続中</span>
+        </div>
       </div>
     </header>
 
-    <main class="workspace">
-      <section id="chat-pane" class="composer-panel" aria-labelledby="chat-title">
+    <main id="app-main" class="app-main">
+      <section id="viewer-screen" class="viewer-screen" data-mobile-view="detail" aria-labelledby="viewer-title">
+        <aside class="task-sidebar" aria-label="Tasks">
+          <header class="task-sidebar-header">
+            <div>
+              <span class="section-kicker">Queue</span>
+              <h1>Tasks</h1>
+            </div>
+            <span id="task-count" class="task-count">0</span>
+          </header>
+          <div class="task-sidebar-caption">
+            <span>最新の実行</span>
+            <span class="task-sidebar-caption-key">Live</span>
+          </div>
+          <div id="run-list" class="run-list"></div>
+          <p id="run-list-empty" class="empty-state" hidden>taskはまだありません。</p>
+        </aside>
+
+        <section class="viewer-content">
+          <header class="viewer-toolbar">
+            <div class="viewer-heading">
+              <button id="mobile-task-list-button" class="mobile-back-button" type="button">← Tasks</button>
+              <span class="section-kicker">Execution viewer</span>
+              <h1 id="viewer-title">Run workspace</h1>
+              <p>タスクの現在地、実行マップ、ログ、成果物を一つの流れで確認します。</p>
+            </div>
+            <div class="viewer-actions">
+              <button id="watch-button" class="secondary-button live-toggle" type="button" aria-pressed="true">Live on</button>
+              <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
+            </div>
+          </header>
+
+          <p id="run-status-live" class="visually-hidden" aria-live="polite"></p>
+          <article id="run-detail" class="run-detail">
+            <div class="workspace-empty">
+              <strong>Run を選択</strong>
+              <span>Tasksからrunを選ぶと、実行マップと成果物を確認できます。</span>
+            </div>
+          </article>
+          <p class="execution-notice">同一 canonical project に対する CLI と Web UI の同時 mutation はサポート対象外です。</p>
+          <p id="run-warning" class="warning-message" role="status"></p>
+        </section>
+      </section>
+
+      <aside id="chat-surface" class="chat-surface" data-mode="drawer" data-open="false" aria-hidden="true" aria-labelledby="chat-title">
+        <div
+          id="chat-resizer"
+          class="chat-resizer"
+          role="separator"
+          tabindex="0"
+          aria-controls="chat-surface"
+          aria-label="Chatの横幅を調整"
+          aria-orientation="vertical"
+          aria-valuemin="360"
+        ></div>
         <section id="chat-panel" class="chat-panel">
           <header class="chat-panel-header">
-            <h2 id="chat-title">Chat</h2>
+            <div class="chat-panel-heading">
+              <span id="chat-surface-label" class="surface-label">New task</span>
+              <h2 id="chat-title">タスクを作成</h2>
+              <p id="chat-surface-description">AIと相談しながら、実行する内容を組み立てます。</p>
+            </div>
             <div class="chat-panel-actions">
               <div id="chat-session-meta" class="chat-session-meta">会話はまだ始まっていません。</div>
+              <button id="chat-new-button" class="chat-new-button" type="button" disabled>新しい会話</button>
               <button
-                id="chat-new-button"
-                class="chat-new-button"
+                id="chat-collapse-button"
+                class="chat-close-button"
                 type="button"
-                disabled
-              >新しい会話</button>
+                aria-controls="chat-surface"
+                aria-expanded="false"
+                aria-label="Chatを閉じる"
+                title="Chatを閉じる"
+              >閉じる</button>
             </div>
           </header>
           <details id="chat-thinking" class="chat-thinking" hidden>
@@ -95,7 +164,7 @@
                 id="chat-message"
                 name="chat-message"
                 rows="1"
-                placeholder="メッセージを入力"
+                placeholder="相談したい内容を入力"
                 aria-keyshortcuts="Meta+Enter Control+Enter"
                 required
               ></textarea>
@@ -104,68 +173,12 @@
             <div class="chat-command-row">
               <button id="chat-setup-button" class="chat-command-button" type="button">/setup</button>
               <button id="chat-go-button" class="chat-command-button" type="button">/go</button>
-              <p class="chat-shortcut-hint">実行指示にまとめる · <kbd>⌘ Enter</kbd> で送信</p>
+              <p class="chat-shortcut-hint"><kbd>⌘ Enter</kbd> で送信</p>
             </div>
             <p id="chat-message-status" class="form-message" role="status"></p>
           </form>
         </section>
-      </section>
-
-      <div class="chat-divider">
-        <button
-          id="chat-collapse-button"
-          class="chat-collapse-button"
-          type="button"
-          aria-controls="chat-pane"
-          aria-expanded="true"
-          aria-label="Chatを折りたたむ"
-          title="Chatを折りたたむ"
-        >‹</button>
-        <div
-          id="chat-resizer"
-          class="chat-resizer"
-          role="separator"
-          tabindex="0"
-          aria-controls="chat-pane"
-          aria-label="Chatの横幅を調整"
-          aria-orientation="vertical"
-          aria-valuemin="320"
-        ></div>
-      </div>
-
-      <section class="runs-panel" aria-labelledby="runs-title">
-        <div class="section-heading runs-heading">
-          <div>
-            <span class="section-kicker">Execution</span>
-            <h2 id="runs-title">Run workspace</h2>
-            <p>タスク、現在地、ログ、成果物を一つの画面で追跡します。</p>
-          </div>
-          <div class="runs-actions">
-            <button id="watch-button" class="secondary-button live-toggle" type="button" aria-pressed="true">Live on</button>
-            <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
-          </div>
-        </div>
-
-        <div class="run-layout">
-          <nav class="run-list-region" aria-label="task一覧">
-            <header class="task-navigator-header">
-              <span>Tasks</span>
-              <span>Newest first</span>
-            </header>
-            <div id="run-list" class="run-list"></div>
-            <p id="run-list-empty" class="empty-state" hidden>taskはまだありません。</p>
-          </nav>
-          <p id="run-status-live" class="visually-hidden" aria-live="polite"></p>
-          <article id="run-detail" class="run-detail">
-            <div class="detail-placeholder">
-              <p>Run を選択</p>
-              <span>実行トレース、ログ、レポートをここに表示します。</span>
-            </div>
-          </article>
-        </div>
-        <p class="execution-notice">同一 canonical project に対する CLI と Web UI の同時 mutation はサポート対象外です。</p>
-        <p id="run-warning" class="warning-message" role="status"></p>
-      </section>
+      </aside>
     </main>
 
     <dialog id="directory-dialog" class="directory-dialog" aria-labelledby="directory-dialog-title">
@@ -179,14 +192,7 @@
       <div class="directory-current">
         <label for="directory-current-path">Current directory</label>
         <div class="directory-path-control">
-          <input
-            id="directory-current-path"
-            type="text"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="/Users/example/project"
-            aria-describedby="directory-message"
-          >
+          <input id="directory-current-path" type="text" autocomplete="off" spellcheck="false" placeholder="/Users/example/project" aria-describedby="directory-message">
           <button id="directory-native-picker-button" class="secondary-button" type="button" hidden>Finderで選択</button>
           <button id="directory-go-button" class="secondary-button" type="button">移動</button>
         </div>

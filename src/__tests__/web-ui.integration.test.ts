@@ -1,9 +1,10 @@
-import { lstat, mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readRunCollection, readRunDetail } from '../features/web-ui/run-store.js';
+import { readRunLogArtifactsForDiagnostics } from '../features/web-ui/run-log-cache.js';
 import { startWebUi, stopWebUi } from '../features/web-ui/index.js';
 import { createWebUiServer, listenWebUiServer } from '../features/web-ui/server.js';
 import {
@@ -15,6 +16,7 @@ import type { WebChatService } from '../features/web-ui/chat.js';
 import { resolveStatePaths, type StatePaths } from '../core/execution/locations.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
+import { buildExecutionTrace } from '../../web-ui/public/execution-model.js';
 
 const servers: Server[] = [];
 const temporaryDirectories = new Set<string>();
@@ -186,6 +188,395 @@ describe('Web UI run artifacts', () => {
     ]);
   });
 
+  it('preserves numeric workflow call instances for the execution map', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'workflow-call');
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      JSON.stringify({
+        type: 'workflow_call_start',
+        workflow: 'default',
+        step: 'review',
+        childWorkflow: 'review-fix',
+        callInstance: 3,
+        timestamp: '2026-08-24T00:00:01.000Z',
+      }),
+      JSON.stringify({
+        type: 'workflow_call_complete',
+        workflow: 'default',
+        step: 'review',
+        childWorkflow: 'review-fix',
+        callInstance: 3,
+        status: 'completed',
+        timestamp: '2026-08-24T00:00:02.000Z',
+      }),
+      '',
+    ].join('\n'));
+
+    const detail = await readRunDetail(statePaths, 'workflow-call');
+
+    expect(detail.events.map((event) => event.callInstance)).toEqual(['3', '3']);
+  });
+
+  it('passes validated call paths through lifecycle history without collapsing child passes', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'workflow-call-paths');
+    const callStack = (occurrence: number) => [{
+      workflow: 'default',
+      workflow_ref: 'default',
+      step: 'delegate',
+      kind: 'workflow_call',
+      occurrence,
+    }];
+    const childStack = (occurrence: number) => [
+      ...callStack(occurrence),
+      {
+        workflow: 'child',
+        workflow_ref: 'child',
+        step: 'work',
+        kind: 'agent',
+        occurrence: 1,
+      },
+    ];
+    const records = [1, 2].flatMap((occurrence) => [
+      {
+        type: 'workflow_call_start',
+        workflow: 'default',
+        step: 'delegate',
+        childWorkflow: 'child',
+        callInstance: occurrence,
+        stack: callStack(occurrence),
+        timestamp: `2026-08-24T00:00:0${occurrence}.000Z`,
+      },
+      {
+        type: 'step_start',
+        workflow: 'child',
+        step: 'work',
+        iteration: 1,
+        stack: childStack(occurrence),
+        timestamp: `2026-08-24T00:00:1${occurrence}.000Z`,
+      },
+      {
+        type: 'step_complete',
+        workflow: 'child',
+        step: 'work',
+        iteration: 1,
+        status: 'done',
+        content: `child-${occurrence}`,
+        stack: childStack(occurrence),
+        timestamp: `2026-08-24T00:00:2${occurrence}.000Z`,
+      },
+      {
+        type: 'workflow_call_complete',
+        workflow: 'default',
+        step: 'delegate',
+        childWorkflow: 'child',
+        callInstance: occurrence,
+        status: 'completed',
+        stack: callStack(occurrence),
+        timestamp: `2026-08-24T00:00:3${occurrence}.000Z`,
+      },
+    ]);
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+
+    const detail = await readRunDetail(statePaths, 'workflow-call-paths');
+    const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary);
+    const child = trace.nodes.find((node) => node.workflow === 'child');
+
+    expect(detail.history.find((event) => (
+      event.type === 'step_complete'
+      && event.stack?.[0]?.occurrence === 1
+    ))?.stack).toEqual(childStack(1));
+    expect(child?.occurrences).toHaveLength(2);
+    expect(new Set(child?.occurrences.map((occurrence) => occurrence.id)).size).toBe(2);
+  });
+
+  it('keeps lifecycle history beyond the bounded live-log tail and omits content', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'long-history');
+    const records = Array.from({ length: 101 }, (_value, index) => [
+      {
+        type: 'step_start',
+        step: `step-${index + 1}`,
+        iteration: 1,
+        timestamp: `2026-08-24T00:00:${String(index).padStart(2, '0')}.000Z`,
+      },
+      {
+        type: 'step_complete',
+        step: `step-${index + 1}`,
+        iteration: 1,
+        status: 'done',
+        content: 'large result that belongs only in the live log',
+        timestamp: `2026-08-24T00:01:${String(index).padStart(2, '0')}.000Z`,
+      },
+    ]).flat();
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+
+    const detail = await readRunDetail(statePaths, 'long-history');
+
+    expect(detail.events).toHaveLength(100);
+    expect(detail.history).toHaveLength(202);
+    expect(detail.history.some((event) => event.step === 'step-1')).toBe(true);
+    expect(detail.history.every((event) => event.content === undefined)).toBe(true);
+    expect(detail.graphSummary).toMatchObject({
+      totalOccurrences: 101,
+      truncated: false,
+    });
+    expect(detail.graphSummary.occurrences).toHaveLength(101);
+    const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary);
+    expect(trace.nodes.find((node) => node.label === 'step-1')?.occurrences[0]).toMatchObject({
+      preview: 'large result that belongs only in the live log',
+      eventIndexes: [],
+    });
+  });
+
+  it('keeps graph summary newest-first while rebuilding chronological transitions', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'graph-order');
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      { type: 'step_start', step: 'plan', iteration: 1 },
+      { type: 'step_complete', step: 'plan', iteration: 1, status: 'done' },
+      { type: 'step_start', step: 'review', iteration: 1 },
+      { type: 'step_complete', step: 'review', iteration: 1, status: 'done' },
+      '',
+    ].map((record) => JSON.stringify(record)).join('\n'));
+
+    const detail = await readRunDetail(statePaths, 'graph-order');
+    const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary);
+    const plan = trace.nodes.find((node) => node.label === 'plan');
+    const review = trace.nodes.find((node) => node.label === 'review');
+
+    expect(detail.graphSummary.occurrences.map((event) => event.step)).toEqual(['review', 'plan']);
+    expect(trace.nodes.map((node) => node.label)).toEqual(['plan', 'review']);
+    expect(trace.transitions).toEqual([
+      expect.objectContaining({
+        source: plan?.occurrences[0]?.id,
+        target: review?.occurrences[0]?.id,
+        sourceLogicalId: plan?.id,
+        targetLogicalId: review?.id,
+        kind: 'transition',
+      }),
+    ]);
+  });
+
+  it('evicts old graph occurrences but retains the latest current occurrence and counts starts once', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'graph-cap');
+    const records: Array<Readonly<Record<string, unknown>>> = Array.from({ length: 10_001 }, (_value, index) => ({
+      type: 'step_start',
+      step: `step-${index + 1}`,
+      iteration: 1,
+    }));
+    records.splice(10_000, 1, {
+      type: 'workflow_call_start',
+      workflow: 'default',
+      step: 'delegate',
+      childWorkflow: 'child',
+      callInstance: '1',
+      stack: [{
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'delegate',
+        kind: 'workflow_call',
+        occurrence: 1,
+      }],
+    }, {
+      type: 'step_start',
+      workflow: 'child',
+      step: 'work',
+      iteration: 1,
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+        },
+        {
+          workflow: 'child',
+          workflow_ref: 'child',
+          step: 'work',
+          kind: 'agent',
+          occurrence: 1,
+        },
+      ],
+    }, {
+      type: 'step_complete',
+      workflow: 'child',
+      step: 'work',
+      iteration: 1,
+      status: 'blocked',
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+        },
+        {
+          workflow: 'child',
+          workflow_ref: 'child',
+          step: 'work',
+          kind: 'agent',
+          occurrence: 1,
+        },
+      ],
+    });
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+
+    const detail = await readRunDetail(statePaths, 'graph-cap');
+    const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary);
+
+    expect(detail.graphSummary.totalOccurrences).toBe(10_002);
+    expect(detail.graphSummary.occurrences).toHaveLength(10_000);
+    expect(detail.graphSummary.occurrences[0]?.step).toBe('work');
+    expect(trace.nodes.find((node) => node.label === 'work')?.occurrences[0]?.status).toBe('failed');
+    expect(trace.graphTruncated).toBe(true);
+    expect(trace.graphOccurrenceCount).toBe(10_002);
+  });
+
+  it('scans only appended session-log bytes and rebuilds after truncation', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'incremental');
+    const path = join(runRoot, 'logs', 'session.jsonl');
+    const readDiagnostics = () => readRunLogArtifactsForDiagnostics(
+      `${runRoot}:diagnostics`,
+      [path],
+      async () => undefined,
+    );
+    const firstRecord = `${JSON.stringify({ type: 'step_start', step: 'first', iteration: 1 })}\n`;
+    await writeFile(path, firstRecord);
+
+    const first = await readDiagnostics();
+    expect(first.scan.bytesRead).toBe(Buffer.byteLength(firstRecord));
+    expect(first.scan.totalBytesRead).toBe(first.scan.bytesRead);
+
+    const appendedRecord = `${JSON.stringify({ type: 'step_complete', step: 'second', iteration: 1, status: 'done' })}\n`;
+    await appendFile(path, appendedRecord);
+    const second = await readDiagnostics();
+    expect(second.scan.bytesRead).toBe(Buffer.byteLength(appendedRecord));
+    expect(second.scan.totalBytesRead).toBe(Buffer.byteLength(firstRecord + appendedRecord));
+    expect(second.events.map((event) => event.step)).toEqual(['second', 'first']);
+
+    const unchanged = await readDiagnostics();
+    expect(unchanged.scan.bytesRead).toBe(0);
+    expect(unchanged.scan.reusedBytes).toBeGreaterThanOrEqual(Buffer.byteLength(firstRecord + appendedRecord));
+
+    const replacement = `${JSON.stringify({ type: 'step_start', step: 'replacement', iteration: 1 })}\n`;
+    await writeFile(path, replacement);
+    const rebuilt = await readDiagnostics();
+    expect(rebuilt.scan.bytesRead).toBe(Buffer.byteLength(replacement));
+    expect(rebuilt.events.map((event) => event.step)).toEqual(['replacement']);
+  });
+
+  it('shares one incremental scan between concurrent run readers', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'shared-cache');
+    const record = `${JSON.stringify({ type: 'step_start', step: 'shared', iteration: 1 })}\n`;
+    const path = join(runRoot, 'logs', 'session.jsonl');
+    await writeFile(path, record);
+    const readDiagnostics = () => readRunLogArtifactsForDiagnostics(
+      `${runRoot}:diagnostics`,
+      [path],
+      async () => undefined,
+    );
+
+    const [first, second] = await Promise.all([
+      readDiagnostics(),
+      readDiagnostics(),
+    ]);
+    expect([first.scan.bytesRead, second.scan.bytesRead].sort((left, right) => left - right))
+      .toEqual([0, Buffer.byteLength(record)]);
+    expect(first.events).toEqual(second.events);
+  });
+
+  it('rebuilds a normal cache after a same-inode larger rewrite', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'same-inode-rewrite');
+    const path = join(runRoot, 'logs', 'session.jsonl');
+    const readDiagnostics = () => readRunLogArtifactsForDiagnostics(
+      `${runRoot}:diagnostics`,
+      [path],
+      async () => undefined,
+    );
+    const oldRecord = `${JSON.stringify({ type: 'step_start', step: 'old', iteration: 1 })}\n`;
+    await writeFile(path, oldRecord);
+    const before = await lstat(path);
+    const first = await readDiagnostics();
+    expect(first.events.map((event) => event.step)).toEqual(['old']);
+
+    const replacement = `${JSON.stringify({
+      type: 'step_start',
+      step: `replacement-${'x'.repeat(128)}`,
+      iteration: 1,
+    })}\n`;
+    expect(Buffer.byteLength(replacement)).toBeGreaterThan(Buffer.byteLength(oldRecord));
+    await writeFile(path, replacement);
+    const after = await lstat(path);
+    expect(after.ino).toBe(before.ino);
+
+    const rebuilt = await readDiagnostics();
+    expect(rebuilt.scan.bytesRead).toBe(Buffer.byteLength(replacement));
+    expect(rebuilt.events.map((event) => event.step)).toEqual([`replacement-${'x'.repeat(128)}`]);
+  });
+
+  it('keeps run detail available for completed and partial oversize records', async () => {
+    const statePaths = await createArtifactState();
+    const completedRoot = await writeRun(statePaths, 'oversize-complete');
+    await writeFile(join(completedRoot, 'logs', 'session.jsonl'), [
+      JSON.stringify({ type: 'step_start', step: 'before', iteration: 1 }),
+      JSON.stringify({ type: 'step_complete', step: 'oversize', content: 'x'.repeat(1_100_000) }),
+      JSON.stringify({ type: 'step_complete', step: 'after', iteration: 1, status: 'done' }),
+      '',
+    ].join('\n'));
+    const completed = await readRunDetail(statePaths, 'oversize-complete');
+    expect(completed.events.map((event) => event.step)).toEqual(['after', 'before']);
+    expect(completed.warnings.some((warning) => warning.includes('exceeds 1 MiB'))).toBe(true);
+
+    const partialRoot = await writeRun(statePaths, 'oversize-partial');
+    await writeFile(join(partialRoot, 'logs', 'session.jsonl'), [
+      JSON.stringify({ type: 'step_start', step: 'before', iteration: 1 }),
+      `{"type":"step_complete","step":"partial","content":"${'x'.repeat(1_100_000)}`,
+    ].join('\n'));
+    const partial = await readRunDetail(statePaths, 'oversize-partial');
+    expect(partial.events.map((event) => event.step)).toEqual(['before']);
+    expect(partial.warnings.some((warning) => warning.includes('exceeds 1 MiB'))).toBe(true);
+  });
+
+  it('rejects malformed workflow stacks at the session-log boundary', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'invalid-stack');
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), `${JSON.stringify({
+      type: 'step_start',
+      workflow: 'child',
+      step: 'work',
+      iteration: 1,
+      stack: [{ workflow: 'child' }],
+    })}\n`);
+
+    await expect(readRunDetail(statePaths, 'invalid-stack')).rejects.toThrow(
+      'Session log workflow stack[0].workflow_ref',
+    );
+    await expect(readRunDetail(statePaths, 'invalid-stack')).rejects.toThrow(
+      'Session log workflow stack[0].workflow_ref',
+    );
+    await appendFile(
+      join(runRoot, 'logs', 'session.jsonl'),
+      `${JSON.stringify({ type: 'step_start', step: 'after-invalid' })}\n`,
+    );
+    await expect(readRunDetail(statePaths, 'invalid-stack')).rejects.toThrow(
+      'Session log workflow stack[0].workflow_ref',
+    );
+    await writeFile(
+      join(runRoot, 'logs', 'session.jsonl'),
+      `${JSON.stringify({ type: 'step_start', step: `replacement-${'x'.repeat(128)}` })}\n`,
+    );
+    await expect(readRunDetail(statePaths, 'invalid-stack')).resolves.toMatchObject({
+      events: [{ step: `replacement-${'x'.repeat(128)}` }],
+    });
+  });
+
   it('rejects artifact directories outside the selected run', async () => {
     const statePaths = await createArtifactState();
     await writeRun(statePaths, 'unsafe', { logsDirectory: 'runs' });
@@ -353,7 +744,7 @@ describe('Web UI HTTP boundary', () => {
       .resolves.toMatchObject({ status: 403 });
   });
 
-  it('serves a chat-only composer with header execution context', async () => {
+  it('serves a viewer-first shell with a separate task surface', async () => {
     const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const server = await createWebUiServer({
       globalConfigDirectory,
@@ -367,6 +758,11 @@ describe('Web UI HTTP boundary', () => {
     const html = await response.text();
     expect(html).toContain('<details id="execution-context" class="execution-context" open>');
     expect(html.indexOf('id="execution-context"')).toBeLessThan(html.indexOf('<main'));
+    expect(html).toContain('id="viewer-screen"');
+    expect(html).toContain('id="new-task-button"');
+    expect(html).toContain('id="ai-consult-button"');
+    expect(html).toContain('id="chat-surface"');
+    expect(html).not.toContain('class="workspace"');
     expect(html).toContain('<section id="chat-panel" class="chat-panel">');
     expect(html).toContain('rows="1"');
     expect(html).toContain('aria-keyshortcuts="Meta+Enter Control+Enter"');
@@ -386,6 +782,9 @@ describe('Web UI HTTP boundary', () => {
 
     const uiStateResponse = await fetch(`${origin}/ui-state.js`);
     expect(uiStateResponse.status).toBe(200);
+    const executionMapResponse = await fetch(`${origin}/execution-map.js`);
+    expect(executionMapResponse.status).toBe(200);
+    expect(await executionMapResponse.text()).toContain('renderExecutionMap');
     const executionViewResponse = await fetch(`${origin}/execution-view.js`);
     expect(executionViewResponse.status).toBe(200);
     expect(await executionViewResponse.text()).toContain("from './execution-model.js'");
@@ -529,6 +928,14 @@ describe('Web UI HTTP boundary', () => {
       project: { id: project.id },
       meta: { runSlug: centralTask.runId, status: 'running' },
     });
+    const runUrl = `${origin}/api/runs/${centralTask.runId}?project=${project.id}`;
+    const firstRunResponse = await fetch(runUrl);
+    expect(firstRunResponse.status).toBe(200);
+    const firstRunPayload = await firstRunResponse.json() as Record<string, unknown>;
+    expect(firstRunPayload).not.toHaveProperty('scan');
+    const secondRunResponse = await fetch(runUrl);
+    expect(secondRunResponse.status).toBe(200);
+    expect(await secondRunResponse.text()).toBe(JSON.stringify(firstRunPayload));
 
     const projectsResponse = await fetch(`${origin}/api/projects`);
     expect(projectsResponse.status).toBe(200);

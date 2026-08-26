@@ -3,6 +3,11 @@ import {
   reportDirectory,
   reportDisplayName,
 } from './execution-model.js';
+import {
+  disposeExecutionMap,
+  renderExecutionMap,
+  updateExecutionMapSelection,
+} from './execution-map.js';
 import { renderTaskNavigator } from './task-navigator.js';
 
 const STATUS_LABELS = {
@@ -33,7 +38,7 @@ function formatDate(value) {
 }
 
 function statusBadge(status) {
-  return element('span', `status-badge status-${status}`, STATUS_LABELS[status]);
+  return element('span', `status-badge status-${status}`, STATUS_LABELS[status] ?? status);
 }
 
 function runKey(selection) {
@@ -41,7 +46,7 @@ function runKey(selection) {
 }
 
 function eventTitle(event) {
-  const location = [event.step, event.phaseName].filter(Boolean).join(' / ');
+  const location = [event.workflow, event.step, event.phaseName].filter(Boolean).join(' / ');
   return location === '' ? event.type : `${location} · ${event.type}`;
 }
 
@@ -51,13 +56,66 @@ function renderEmpty(title, body) {
   return empty;
 }
 
+function renderLogPreview(occurrence) {
+  const panel = element('article', 'log-preview');
+  const header = element('header', 'log-event-header');
+  header.append(
+    element('strong', '', '履歴プレビュー'),
+    element('span', 'log-preview-badge', 'live tail外'),
+  );
+  panel.append(header, element('pre', '', occurrence.preview));
+  if (occurrence.previewTruncated === true) {
+    panel.append(element('p', 'log-preview-note', '内容は安全上の上限で切り詰められています。'));
+  }
+  return panel;
+}
+
+function renderArtifactWarnings(detail, trace) {
+  const warnings = [
+    ...(Array.isArray(detail.warnings) ? detail.warnings : []),
+    ...(detail.historyTruncated === true ? ['履歴ログは上限件数まで保持しています。'] : []),
+    ...(trace.graphTruncated ? [`Graph summary is capped at ${trace.graphOccurrenceCount} occurrences.`] : []),
+  ];
+  if (warnings.length === 0) return null;
+  const panel = element('aside', 'run-artifact-warning');
+  panel.setAttribute('role', 'status');
+  panel.append(
+    element('strong', '', '一部の実行データを要約しています'),
+    element('p', '', warnings.join(' ')),
+  );
+  return panel;
+}
+
+function findOccurrence(trace, occurrenceId) {
+  for (const node of trace.nodes) {
+    const occurrence = node.occurrences.find((candidate) => candidate.id === occurrenceId);
+    if (occurrence !== undefined) return { node, occurrence };
+  }
+  return null;
+}
+
+function selectionText(trace, selectedOccurrenceId) {
+  if (selectedOccurrenceId === null) {
+    return 'All events · select a pass to focus the log';
+  }
+  const selected = findOccurrence(trace, selectedOccurrenceId);
+  if (selected === null) return 'All events · select a pass to focus the log';
+  const occurrenceIndex = selected.node.occurrences.findIndex(
+    (occurrence) => occurrence.id === selected.occurrence.id,
+  );
+  const pass = selected.occurrence.iteration === undefined
+    ? `pass ${occurrenceIndex + 1}`
+    : `#${selected.occurrence.iteration}`;
+  return `${selected.node.label} · ${pass} · ${STATUS_LABELS[selected.occurrence.status]}`;
+}
+
 export function createExecutionView(options) {
   let activeRunKey = '';
   let activeTab = 'live';
-  let activeNodeId = null;
+  let selectedOccurrenceId = null;
   let selectedReport = '';
   let currentDetail = null;
-  let currentSelection = null;
+  let currentTrace = null;
   let liveState = 'connecting';
   let followLog = true;
 
@@ -65,6 +123,7 @@ export function createExecutionView(options) {
     renderTaskNavigator({
       container: options.runList,
       empty: options.runListEmpty,
+      count: options.taskCount,
       tasks,
       selection,
       onSelectRun: options.onSelectRun,
@@ -72,98 +131,77 @@ export function createExecutionView(options) {
     });
   }
 
-  function renderTrace(trace, meta) {
-    const section = element('section', 'trace-section');
-    const heading = element('div', 'panel-heading');
-    const headingCopy = element('div', 'panel-heading-copy');
-    const liveIndicator = element('span', `live-state live-state-${liveState}`, LIVE_STATE_LABELS[liveState]);
-    heading.append(
-      headingCopy,
-      liveIndicator,
-    );
-    headingCopy.append(
-      element('h3', '', 'Execution trace'),
-      element('p', '', '実行イベントから構成した現在地'),
-    );
-    section.append(heading);
-    if (trace.nodes.length === 0) {
-      section.append(renderEmpty('実行開始を待っています', '最初の step が始まるとノードが表示されます。'));
-      return section;
-    }
+  function liveIndicator() {
+    return element('span', `live-state live-state-${liveState}`, LIVE_STATE_LABELS[liveState]);
+  }
 
-    const graph = element('div', 'trace-graph');
-    graph.setAttribute('role', 'group');
-    graph.setAttribute('aria-label', '実行トレース');
-    trace.nodes.forEach((node, index) => {
-      if (index > 0) {
-        const connector = element('span', 'trace-connector');
-        connector.setAttribute('aria-hidden', 'true');
-        graph.append(connector);
-      }
-      const button = element('button', `trace-node trace-node-${node.status}`);
-      button.type = 'button';
-      button.dataset.active = String(node.id === activeNodeId);
-      button.setAttribute('aria-pressed', String(node.id === activeNodeId));
-      button.addEventListener('click', () => {
-        activeNodeId = activeNodeId === node.id ? null : node.id;
-        activeTab = 'live';
-        renderDetail(currentDetail, currentSelection);
-      });
-      const metaLine = [node.eyebrow, node.iteration === undefined ? '' : `#${node.iteration}`]
-        .filter(Boolean)
-        .join(' · ');
-      button.append(
-        element('span', 'trace-node-index', String(index + 1).padStart(2, '0')),
-        element('strong', '', node.label),
-        element('span', 'trace-node-meta', metaLine),
-        element('span', 'trace-node-phase', node.phases.join(' / ')),
-      );
-      graph.append(button);
+  function renderSelectionSummary(trace) {
+    const summary = element('div', 'trace-selection');
+    summary.id = 'trace-selection';
+    summary.append(
+      element('span', 'trace-selection-label', 'Focus'),
+      element('strong', '', selectionText(trace, selectedOccurrenceId)),
+    );
+    if (selectedOccurrenceId !== null && findOccurrence(trace, selectedOccurrenceId) !== null) {
+      const clear = element('button', 'toolbar-button', 'Show all');
+      clear.type = 'button';
+      clear.addEventListener('click', () => selectOccurrence(null, null));
+      summary.append(clear);
+    }
+    return summary;
+  }
+
+  function renderTrace(trace, meta) {
+    const section = renderExecutionMap(trace, {
+      liveIndicator: liveIndicator(),
+      emptyState: renderEmpty('実行開始を待っています', '最初のstepが始まるとカードが表示されます。'),
+      selectedOccurrenceId,
+      onSelectOccurrence: selectOccurrence,
     });
-    section.append(graph);
+    if (trace.nodes.length > 0) section.append(renderSelectionSummary(trace));
     if (meta.reason !== undefined) section.append(element('p', 'run-reason', meta.reason));
     return section;
+  }
+
+  function visibleEvents(trace) {
+    if (selectedOccurrenceId === null) return trace.events;
+    const selected = findOccurrence(trace, selectedOccurrenceId);
+    if (selected === null) return trace.events;
+    const indexes = new Set(selected.occurrence.eventIndexes);
+    return trace.events.filter((_event, index) => indexes.has(index));
   }
 
   function renderLogPanel(trace) {
     const panel = element('section', 'detail-panel log-panel');
     const toolbar = element('div', 'detail-toolbar');
-    const filteredIndexes = activeNodeId === null
-      ? null
-      : new Set(trace.nodes.find((node) => node.id === activeNodeId)?.eventIndexes ?? []);
-    const visibleEvents = filteredIndexes === null
-      ? trace.events
-      : trace.events.filter((_event, index) => filteredIndexes.has(index));
+    const events = visibleEvents(trace);
     const summary = element(
       'span',
       'detail-toolbar-summary',
-      activeNodeId === null ? `${visibleEvents.length} events` : `${visibleEvents.length} matching events`,
+      selectedOccurrenceId === null ? `${events.length} events` : `${events.length} events · focused`,
     );
     const follow = element('button', 'toolbar-button', followLog ? 'Following' : 'Follow latest');
     follow.type = 'button';
     follow.setAttribute('aria-pressed', String(followLog));
     follow.addEventListener('click', () => {
       followLog = !followLog;
-      renderDetail(currentDetail, currentSelection);
+      renderDetailPanel();
     });
-    toolbar.append(summary);
-    if (activeNodeId !== null) {
-      const clear = element('button', 'toolbar-button', 'Show all');
-      clear.type = 'button';
-      clear.addEventListener('click', () => {
-        activeNodeId = null;
-        renderDetail(currentDetail, currentSelection);
-      });
-      toolbar.append(clear);
-    }
-    toolbar.append(follow);
+    toolbar.append(summary, follow);
     panel.append(toolbar);
-    if (visibleEvents.length === 0) {
+    if (events.length === 0) {
+      if (selectedOccurrenceId !== null) {
+        const selected = findOccurrence(trace, selectedOccurrenceId);
+        if (selected?.occurrence.preview !== undefined) {
+          panel.append(renderLogPreview(selected.occurrence));
+          return panel;
+        }
+      }
       panel.append(renderEmpty('ログはまだありません', 'イベントを受信するとここへ追加されます。'));
       return panel;
     }
     const list = element('ol', 'log-events');
-    for (const event of visibleEvents) {
+    for (const event of events) {
       const item = element('li', 'log-event');
       const header = element('header', 'log-event-header');
       header.append(
@@ -183,7 +221,7 @@ export function createExecutionView(options) {
   function renderReportsPanel(reports) {
     const panel = element('section', 'detail-panel reports-panel');
     if (reports.length === 0) {
-      panel.append(renderEmpty('レポートはまだありません', '生成された Markdown はここへ追加されます。'));
+      panel.append(renderEmpty('レポートはまだありません', '生成されたMarkdownはここへ追加されます。'));
       return panel;
     }
     const selected = reports.find((report) => report.filename === selectedReport) ?? reports[0];
@@ -196,7 +234,7 @@ export function createExecutionView(options) {
       button.dataset.selected = String(report.filename === selected.filename);
       button.addEventListener('click', () => {
         selectedReport = report.filename;
-        renderDetail(currentDetail, currentSelection);
+        renderDetailPanel();
       });
       button.append(
         element('strong', '', reportDisplayName(report.filename)),
@@ -243,7 +281,7 @@ export function createExecutionView(options) {
       button.tabIndex = activeTab === id ? 0 : -1;
       button.addEventListener('click', () => {
         activeTab = id;
-        renderDetail(currentDetail, currentSelection);
+        renderDetailPanel();
       });
       button.addEventListener('keydown', (event) => {
         const index = definitions.findIndex(([definitionId]) => definitionId === id);
@@ -255,7 +293,7 @@ export function createExecutionView(options) {
         else return;
         event.preventDefault();
         activeTab = definitions[nextIndex][0];
-        renderDetail(currentDetail, currentSelection);
+        renderDetailPanel();
         options.runDetail.querySelector('[role="tab"][aria-selected="true"]')?.focus();
       });
       tabs.append(button);
@@ -272,27 +310,73 @@ export function createExecutionView(options) {
     return container;
   }
 
+  function captureViewState() {
+    const map = options.runDetail.querySelector('.execution-map');
+    const logs = options.runDetail.querySelector('.log-events');
+    return {
+      detailScrollTop: options.runDetail.scrollTop,
+      mapScrollLeft: map?.scrollLeft ?? 0,
+      mapScrollTop: map?.scrollTop ?? 0,
+      logScrollTop: logs?.scrollTop ?? 0,
+    };
+  }
+
+  function restoreViewState(state) {
+    options.runDetail.scrollTop = state.detailScrollTop;
+    const map = options.runDetail.querySelector('.execution-map');
+    if (map !== null) {
+      map.scrollLeft = state.mapScrollLeft;
+      map.scrollTop = state.mapScrollTop;
+    }
+    const logs = options.runDetail.querySelector('.log-events');
+    if (logs !== null) logs.scrollTop = followLog ? logs.scrollHeight : state.logScrollTop;
+  }
+
+  function renderDetailPanel() {
+    if (currentDetail === null || currentTrace === null) return;
+    const tabs = options.runDetail.querySelector('.detail-tabs');
+    if (tabs === null) return;
+    const state = captureViewState();
+    tabs.replaceWith(renderTabs(currentDetail, currentTrace));
+    restoreViewState(state);
+  }
+
+  function selectOccurrence(_node, occurrence) {
+    selectedOccurrenceId = occurrence?.id ?? null;
+    activeTab = 'live';
+    const map = options.runDetail.querySelector('.execution-map');
+    if (map !== null) updateExecutionMapSelection(map, selectedOccurrenceId);
+    const summary = options.runDetail.querySelector('#trace-selection');
+    if (summary !== null && currentTrace !== null) {
+      summary.replaceWith(renderSelectionSummary(currentTrace));
+    }
+    renderDetailPanel();
+  }
+
   function renderDetail(detail, selection) {
     if (detail === null || selection === null) return false;
     if (detail.project.id !== selection.projectId || detail.meta.runSlug !== selection.slug) return false;
     const nextRunKey = runKey(selection);
     const sameRun = nextRunKey === activeRunKey;
-    const previousScrollTop = sameRun ? options.runDetail.scrollTop : 0;
+    const state = sameRun ? captureViewState() : null;
     if (!sameRun) {
       activeRunKey = nextRunKey;
       activeTab = detail.meta.status === 'completed' && detail.reports.length > 0 ? 'reports' : 'live';
-      activeNodeId = null;
+      selectedOccurrenceId = null;
       selectedReport = '';
     }
     currentDetail = detail;
-    currentSelection = selection;
-    const trace = buildExecutionTrace(detail.meta, detail.events);
-    const header = element('header', 'run-detail-header');
+    const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary);
+    if (sameRun && selectedOccurrenceId !== null && findOccurrence(trace, selectedOccurrenceId) === null) {
+      selectedOccurrenceId = null;
+    }
+    currentTrace = trace;
     const title = element('div', 'run-detail-title');
     title.append(
       statusBadge(detail.meta.status),
       element('h2', '', detail.meta.workflow),
       element('p', '', `${detail.project.displayName} / ${detail.meta.runSlug}`),
+      element('p', 'run-task-summary', detail.meta.task),
     );
     const facts = element('dl', 'run-facts');
     const entries = [
@@ -305,6 +389,7 @@ export function createExecutionView(options) {
       fact.append(element('dt', '', label), element('dd', '', value));
       facts.append(fact);
     }
+    const header = element('header', 'run-detail-header');
     header.append(title, facts);
     if (detail.prUrl !== undefined) {
       const link = element('a', 'pr-link', 'Open pull request');
@@ -313,10 +398,16 @@ export function createExecutionView(options) {
       link.rel = 'noreferrer';
       header.append(link);
     }
-    options.runDetail.replaceChildren(header, renderTrace(trace, detail.meta), renderTabs(detail, trace));
-    options.runDetail.scrollTop = previousScrollTop;
-    const logList = options.runDetail.querySelector('.log-events');
-    if (followLog && logList !== null) logList.scrollTop = logList.scrollHeight;
+    const warning = renderArtifactWarnings(detail, trace);
+    disposeExecutionMap(options.runDetail);
+    options.runDetail.replaceChildren(
+      header,
+      ...(warning === null ? [] : [warning]),
+      renderTrace(trace, detail.meta),
+      renderTabs(detail, trace),
+    );
+    if (state !== null) restoreViewState(state);
+    else restoreViewState({ detailScrollTop: 0, mapScrollLeft: 0, mapScrollTop: 0, logScrollTop: 0 });
     options.onStatusChange(detail.meta.status);
     return true;
   }
@@ -324,10 +415,12 @@ export function createExecutionView(options) {
   function renderPlaceholder() {
     activeRunKey = '';
     currentDetail = null;
-    currentSelection = null;
+    currentTrace = null;
+    selectedOccurrenceId = null;
+    disposeExecutionMap(options.runDetail);
     options.runDetail.replaceChildren(renderEmpty(
       'Run を選択',
-      '左のタスクから run を選ぶと、実行トレースと成果物を確認できます。',
+      'タスクからrunを選ぶと、実行マップと成果物を確認できます。',
     ));
   }
 
@@ -335,9 +428,16 @@ export function createExecutionView(options) {
     renderTaskList,
     renderDetail,
     renderPlaceholder,
+    dispose() {
+      disposeExecutionMap(options.runDetail);
+    },
     setLiveState(state) {
       liveState = state;
-      if (currentDetail !== null) renderDetail(currentDetail, currentSelection);
+      const indicator = options.runDetail.querySelector('.live-state');
+      if (indicator !== null) {
+        indicator.className = `live-state live-state-${liveState}`;
+        indicator.textContent = LIVE_STATE_LABELS[liveState];
+      }
     },
   };
 }

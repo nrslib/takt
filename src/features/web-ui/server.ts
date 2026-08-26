@@ -273,6 +273,7 @@ async function loadAssets() {
     ['/app.js', '../../../web-ui/public/app.js', 'text/javascript; charset=utf-8'],
     ['/api.js', '../../../web-ui/public/api.js', 'text/javascript; charset=utf-8'],
     ['/execution-model.js', '../../../web-ui/public/execution-model.js', 'text/javascript; charset=utf-8'],
+    ['/execution-map.js', '../../../web-ui/public/execution-map.js', 'text/javascript; charset=utf-8'],
     ['/execution-view.js', '../../../web-ui/public/execution-view.js', 'text/javascript; charset=utf-8'],
     ['/live-stream.js', '../../../web-ui/public/live-stream.js', 'text/javascript; charset=utf-8'],
     ['/task-navigator.js', '../../../web-ui/public/task-navigator.js', 'text/javascript; charset=utf-8'],

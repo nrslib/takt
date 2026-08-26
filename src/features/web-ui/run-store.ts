@@ -2,6 +2,11 @@ import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { StatePaths } from '../../core/execution/locations.js';
+import {
+  readRunLogArtifacts,
+  type RunLogArtifacts,
+} from './run-log-cache.js';
+const NOFOLLOW = (constants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
 
 const RUN_STATUSES = new Set(['running', 'completed', 'aborted', 'failed']);
 const SESSION_LOG_SIDECAR_SUFFIXES = [
@@ -14,9 +19,6 @@ const SESSION_LOG_SIDECAR_SUFFIXES = [
 const MAX_RUNS = 50;
 const MAX_REPORTS = 50;
 const MAX_REPORT_BYTES = 256 * 1024;
-const MAX_LOG_BYTES = 512 * 1024;
-const MAX_LOG_EVENTS = 100;
-const NOFOLLOW = (constants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
 
 interface RunMeta {
   readonly runSlug: string;
@@ -32,24 +34,6 @@ interface RunMeta {
   readonly phase?: number;
   readonly updatedAt?: string;
   readonly endTime?: string;
-  readonly reason?: string;
-}
-
-interface RunLogEvent {
-  readonly type: string;
-  readonly timestamp?: string;
-  readonly step?: string;
-  readonly phase?: number;
-  readonly phaseName?: string;
-  readonly phaseExecutionId?: string;
-  readonly iteration?: number;
-  readonly persona?: string;
-  readonly workflow?: string;
-  readonly childWorkflow?: string;
-  readonly callInstance?: string;
-  readonly status?: string;
-  readonly content?: string;
-  readonly error?: string;
   readonly reason?: string;
 }
 
@@ -373,82 +357,11 @@ function isSessionLog(filename: string): boolean {
     && !SESSION_LOG_SIDECAR_SUFFIXES.some((suffix) => filename.endsWith(suffix));
 }
 
-function parseLogEvent(value: unknown): RunLogEvent | null {
-  const raw = requireRecord(value, 'Session log record');
-  if (typeof raw.type !== 'string') return null;
-  return {
-    type: raw.type,
-    timestamp: [raw.timestamp, raw.endTime, raw.startTime]
-      .find((candidate) => typeof candidate === 'string') as string | undefined,
-    step: typeof raw.step === 'string' ? raw.step : undefined,
-    phase: typeof raw.phase === 'number' ? raw.phase : undefined,
-    phaseName: typeof raw.phaseName === 'string' ? raw.phaseName : undefined,
-    phaseExecutionId: typeof raw.phaseExecutionId === 'string'
-      ? raw.phaseExecutionId
-      : undefined,
-    iteration: typeof raw.iteration === 'number' ? raw.iteration : undefined,
-    persona: typeof raw.persona === 'string' ? raw.persona : undefined,
-    workflow: typeof raw.workflow === 'string'
-      ? raw.workflow
-      : typeof raw.workflowName === 'string' ? raw.workflowName : undefined,
-    childWorkflow: typeof raw.childWorkflow === 'string' ? raw.childWorkflow : undefined,
-    callInstance: typeof raw.callInstance === 'string' ? raw.callInstance : undefined,
-    status: typeof raw.status === 'string' ? raw.status : undefined,
-    content: typeof raw.content === 'string' ? raw.content.slice(0, 8_000) : undefined,
-    error: typeof raw.error === 'string' ? raw.error.slice(0, 8_000) : undefined,
-    reason: typeof raw.reason === 'string' ? raw.reason.slice(0, 8_000) : undefined,
-  };
-}
-
-async function readLogTail(
-  location: RunStoreLocation,
-  snapshot: RunsRootSnapshot,
-  path: string,
-): Promise<RunLogEvent[]> {
-  if (NOFOLLOW === undefined) throw new Error('Session log cannot be opened safely on this platform');
-  await verifyRunsRootSnapshot(location, snapshot);
-  const expected = resolve(path);
-  if (await realpath(expected) !== expected) throw new Error('Session log contains a symbolic link');
-  const handle = await open(expected, constants.O_RDONLY | NOFOLLOW);
-  try {
-    if (await realpath(expected) !== expected) throw new Error('Session log contains a symbolic link');
-    const stats = await handle.stat();
-    const start = Math.max(0, stats.size - MAX_LOG_BYTES);
-    const buffer = Buffer.alloc(stats.size - start);
-    let filled = 0;
-    while (filled < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, start + filled);
-      if (bytesRead === 0) break;
-      filled += bytesRead;
-    }
-    let text = buffer.subarray(0, filled).toString('utf8');
-    if (start > 0) {
-      const firstNewline = text.indexOf('\n');
-      text = firstNewline === -1 ? '' : text.slice(firstNewline + 1);
-    }
-    const lines = text.split('\n');
-    const events = lines.flatMap((line, index) => {
-      if (line.length === 0) return [];
-      try {
-        const event = parseLogEvent(JSON.parse(line) as unknown);
-        return event === null ? [] : [event];
-      } catch (error) {
-        if (index === lines.length - 1) return [];
-        throw error;
-      }
-    });
-    await verifyRunsRootSnapshot(location, snapshot);
-    return events;
-  } finally {
-    await handle.close();
-  }
-}
-
-async function loadLogEvents(
+async function resolveSessionLogPaths(
   location: RunStoreLocation,
   snapshot: RunsRootSnapshot,
   meta: RunMeta,
-): Promise<RunLogEvent[]> {
+): Promise<string[]> {
   const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
   await verifyRunsRootSnapshot(location, snapshot);
   const logsRoot = await resolveRunChildDirectory(
@@ -470,24 +383,35 @@ async function loadLogEvents(
     .filter((entry) => entry.isFile() && !entry.isSymbolicLink() && isSessionLog(entry.name))
     .map((entry) => resolve(logsRoot, entry.name))
     .sort();
-  const events = (await Promise.all(paths.map(async (path) => {
+  for (const path of paths) {
     await resolveContainedDirectory(resolve(runsDirectory, meta.runSlug), path, 'Session log');
-    return readLogTail(location, snapshot, path);
-  }))).flat();
-  await verifyRunsRootSnapshot(location, snapshot);
-  return events.slice(-MAX_LOG_EVENTS).reverse();
+  }
+  return paths;
+}
+
+async function loadLogArtifacts(
+  location: RunStoreLocation,
+  snapshot: RunsRootSnapshot,
+  meta: RunMeta,
+): Promise<RunLogArtifacts> {
+  const paths = await resolveSessionLogPaths(location, snapshot, meta);
+  return readRunLogArtifacts(
+    resolve(snapshot.directory, meta.runSlug),
+    paths,
+    () => verifyRunsRootSnapshot(location, snapshot),
+  );
 }
 
 export async function readRunDetail(location: RunStoreLocation, slug: string) {
   assertRunSlug(slug);
   const snapshot = await captureRunsRoot(location);
   const meta = await loadRunMeta(location, snapshot, slug);
-  const [reports, events] = await Promise.all([
+  const [reports, logArtifacts] = await Promise.all([
     loadReports(location, snapshot, meta),
-    loadLogEvents(location, snapshot, meta),
+    loadLogArtifacts(location, snapshot, meta),
   ]);
   await verifyRunsRootSnapshot(location, snapshot);
-  return { meta, reports, events };
+  return { meta, reports, ...logArtifacts };
 }
 
 export async function resolveRunWatchDirectories(

@@ -2,33 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   buildExecutionSettingsRequest,
   captureRunDetailViewState,
-  clampChatPaneWidth,
   createDirectoryRequestTracker,
-  getChatPaneWidthBounds,
   isCurrentWorkflowRequest,
   isWorkflowCatalogReady,
   projectSelectionForRefresh,
-  resolveChatPaneWidth,
   restoreRunDetailViewState,
   sameRunSelection,
   snapshotExecutionSettings,
   shouldCloseExecutionContext,
 } from '../../web-ui/public/ui-state.js';
 import type { DirectoryRequestToken } from '../../web-ui/public/ui-state.js';
-
-describe('Web UI chat pane state', () => {
-  it('keeps the chat and runs panes within their minimum widths', () => {
-    expect(getChatPaneWidthBounds(430)).toEqual({ min: 320, max: 320 });
-    expect(clampChatPaneWidth(100, 1200)).toBe(320);
-    expect(clampChatPaneWidth(1000, 1200)).toBe(760);
-  });
-
-  it('recomputes an unadjusted default and clamps a manually adjusted width', () => {
-    expect(resolveChatPaneWidth(1200, 320, false)).toBe(600);
-    expect(resolveChatPaneWidth(1200, 700, true)).toBe(700);
-    expect(resolveChatPaneWidth(900, 700, true)).toBe(460);
-  });
-});
 
 describe('Web UI execution settings', () => {
   it('keeps a task instruction snapshot independent from later setup changes', () => {

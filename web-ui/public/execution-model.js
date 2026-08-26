@@ -1,107 +1,506 @@
 const TERMINAL_EVENT_TYPES = new Set(['step_complete', 'workflow_call_complete']);
+const EVENT_STATUS_MAP = new Map([
+  ['done', 'completed'],
+  ['completed', 'completed'],
+  ['failed', 'failed'],
+  ['blocked', 'failed'],
+  ['error', 'failed'],
+  ['rate_limited', 'failed'],
+  ['aborted', 'aborted'],
+]);
+const MAX_GRAPH_OCCURRENCES = 10_000;
 
 function eventWorkflow(event, fallback) {
-  return event.workflow === undefined ? fallback : event.workflow;
+  if (typeof event.workflow === 'string') return event.workflow;
+  const stack = Array.isArray(event.stack) ? event.stack : [];
+  const current = stack.at(-1);
+  return typeof current?.workflow === 'string' ? current.workflow : fallback;
 }
 
 function eventIteration(event) {
-  return event.iteration === undefined ? 0 : event.iteration;
+  return event.iteration;
 }
 
-function stepNodeId(event, workflow) {
-  return `step:${workflow}:${event.step}:${eventIteration(event)}`;
+function isWorkflowCall(event) {
+  return event.type.startsWith('workflow_call_');
 }
 
-function callNodeId(event, workflow) {
-  const occurrence = event.callInstance === undefined ? eventIteration(event) : event.callInstance;
-  return `call:${workflow}:${event.step}:${occurrence}`;
+export function encodeIdPart(value) {
+  const bytes = new TextEncoder().encode(String(value));
+  return `x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-function eventNodeId(event, fallbackWorkflow) {
+function normalizedStack(stack) {
+  if (!Array.isArray(stack)) return null;
+  return stack.map((frame) => [
+    frame.workflow,
+    frame.workflow_ref,
+    frame.step,
+    frame.kind,
+    frame.occurrence,
+  ]);
+}
+
+function stackPathKey(stack) {
+  const normalized = normalizedStack(stack);
+  return normalized === null ? 'root' : JSON.stringify(normalized);
+}
+
+function statusFromEvent(event) {
+  const mapped = typeof event.status === 'string' ? EVENT_STATUS_MAP.get(event.status) : undefined;
+  if (mapped === 'completed' && !TERMINAL_EVENT_TYPES.has(event.type)) return 'running';
+  if (mapped !== undefined) return mapped;
+  if (event.status !== undefined) return 'running';
+  return TERMINAL_EVENT_TYPES.has(event.type) ? 'completed' : 'running';
+}
+
+function logicalStepId(workflow, step, kind, childWorkflow) {
+  const target = kind === 'workflow' ? childWorkflow ?? step : step;
+  return `step:${encodeIdPart(workflow)}:${kind}:${encodeIdPart(target)}`;
+}
+
+function occurrenceKey(event, kind, workflow) {
+  const scope = stackPathKey(event.stack);
+  if (kind === 'workflow') {
+    const call = event.callInstance ?? (
+      eventIteration(event) === undefined ? 'single' : `iteration:${eventIteration(event)}`
+    );
+    return `scope:${scope}:call:${call}`;
+  }
+  const iteration = eventIteration(event) === undefined
+    ? 'single'
+    : `iteration:${eventIteration(event)}`;
+  return `workflow:${workflow}:scope:${scope}:${iteration}`;
+}
+
+function eventDescriptor(event, meta) {
   if (event.step === undefined) return null;
-  const workflow = eventWorkflow(event, fallbackWorkflow);
-  return event.type.startsWith('workflow_call_')
-    ? callNodeId(event, workflow)
-    : stepNodeId(event, workflow);
-}
-
-function nodeStatus(event) {
-  if (!TERMINAL_EVENT_TYPES.has(event.type)) return 'running';
-  if (event.status === 'failed' || event.status === 'error') return 'failed';
-  if (event.status === 'aborted') return 'aborted';
-  return 'completed';
-}
-
-function createNode(event, id, workflow) {
-  const isCall = event.type.startsWith('workflow_call_');
+  const workflow = eventWorkflow(event, meta.workflow);
+  const kind = isWorkflowCall(event) ? 'workflow' : 'step';
+  const childWorkflow = kind === 'workflow' ? event.childWorkflow : undefined;
+  const logicalId = logicalStepId(workflow, event.step, kind, childWorkflow);
+  const key = occurrenceKey(event, kind, workflow);
   return {
-    id,
-    kind: isCall ? 'workflow' : 'step',
-    label: isCall && event.childWorkflow !== undefined ? event.childWorkflow : event.step,
-    eyebrow: isCall ? 'Nested workflow' : workflow,
-    status: nodeStatus(event),
-    iteration: event.iteration,
-    persona: event.persona,
-    phases: event.phaseName === undefined ? [] : [event.phaseName],
-    eventIndexes: [],
+    workflow,
+    kind,
+    childWorkflow,
+    logicalId,
+    occurrenceId: `${logicalId}:${encodeIdPart(key)}`,
   };
 }
 
-export function buildExecutionTrace(meta, newestFirstEvents) {
-  const events = [...newestFirstEvents].reverse();
-  const nodesById = new Map();
-  const orderedIds = [];
-  events.forEach((event, index) => {
-    const id = eventNodeId(event, meta.workflow);
-    if (id === null) return;
-    const workflow = eventWorkflow(event, meta.workflow);
-    const existing = nodesById.get(id);
-    const node = existing === undefined ? createNode(event, id, workflow) : existing;
-    if (existing === undefined) {
-      nodesById.set(id, node);
-      orderedIds.push(id);
-    }
-    const phases = event.phaseName !== undefined && !node.phases.includes(event.phaseName)
-      ? [...node.phases, event.phaseName]
-      : node.phases;
-    nodesById.set(id, {
-      ...node,
-      status: nodeStatus(event),
-      eventIndexes: [...node.eventIndexes, index],
-      phases,
-      ...(event.persona === undefined ? {} : { persona: event.persona }),
-    });
-  });
+function createOccurrence(event, descriptor, firstEventIndex, recordEventIndexes) {
+  const preview = event.preview ?? event.error ?? event.reason ?? event.content?.slice(0, 2_000);
+  return {
+    id: descriptor.occurrenceId,
+    logicalId: descriptor.logicalId,
+    workflow: descriptor.workflow,
+    kind: descriptor.kind,
+    childWorkflow: descriptor.childWorkflow,
+    iteration: eventIteration(event),
+    callInstance: event.callInstance,
+    stack: event.stack,
+    status: statusFromEvent(event),
+    phases: event.phaseName === undefined ? [] : [event.phaseName],
+    personas: event.persona === undefined ? [] : [event.persona],
+    ...(preview === undefined ? {} : {
+      preview,
+      previewTruncated: event.previewTruncated === true || event.content?.length > 2_000,
+    }),
+    eventIndexes: recordEventIndexes ? [firstEventIndex] : [],
+    firstEventIndex,
+    lastEventIndex: firstEventIndex,
+  };
+}
 
-  if (meta.currentStep !== undefined) {
-    const currentEvent = {
-      type: 'step_start',
-      step: meta.currentStep,
-      workflow: meta.workflow,
-      iteration: meta.currentIteration,
-    };
-    const id = eventNodeId(currentEvent, meta.workflow);
-    if (id !== null && !nodesById.has(id)) {
-      nodesById.set(id, createNode(currentEvent, id, meta.workflow));
-      orderedIds.push(id);
+function mergeStatus(previous, next) {
+  if (next === 'failed' || next === 'aborted') return next;
+  if (previous === 'failed' || previous === 'aborted') return previous;
+  if (next === 'completed') return next;
+  return previous;
+}
+
+function updateOccurrence(occurrence, event, eventIndex, recordEventIndexes) {
+  const phases = event.phaseName !== undefined && !occurrence.phases.includes(event.phaseName)
+    ? [...occurrence.phases, event.phaseName]
+    : occurrence.phases;
+  const personas = event.persona !== undefined && !occurrence.personas.includes(event.persona)
+    ? [...occurrence.personas, event.persona]
+    : occurrence.personas;
+  const preview = event.preview ?? event.error ?? event.reason ?? event.content?.slice(0, 2_000);
+  return {
+    ...occurrence,
+    status: mergeStatus(occurrence.status, statusFromEvent(event)),
+    phases,
+    personas,
+    stack: event.stack ?? occurrence.stack,
+    ...(preview === undefined ? {} : {
+      preview,
+      previewTruncated: event.previewTruncated === true || event.content?.length > 2_000,
+    }),
+    eventIndexes: recordEventIndexes
+      ? [...occurrence.eventIndexes, eventIndex]
+      : occurrence.eventIndexes,
+    lastEventIndex: eventIndex,
+  };
+}
+
+function replaceOccurrence(nodesByLogicalId, occurrence) {
+  const node = nodesByLogicalId.get(occurrence.logicalId);
+  if (node === undefined) return;
+  nodesByLogicalId.set(occurrence.logicalId, {
+    ...node,
+    occurrences: node.occurrences.some((candidate) => candidate.id === occurrence.id)
+      ? node.occurrences.map((candidate) => candidate.id === occurrence.id ? occurrence : candidate)
+      : [...node.occurrences, occurrence],
+  });
+}
+
+function addGraphEvent(event, index, meta, graph) {
+  const descriptor = eventDescriptor(event, meta);
+  if (descriptor === null) return;
+  const previous = graph.occurrencesById.get(descriptor.occurrenceId);
+  const occurrence = previous === undefined
+    ? createOccurrence(event, descriptor, index, graph.recordEventIndexes)
+    : updateOccurrence(previous, event, index, graph.recordEventIndexes);
+  graph.occurrencesById.set(occurrence.id, occurrence);
+  graph.occurrenceByEventIndex.set(index, occurrence);
+  replaceOccurrence(graph.nodesByLogicalId, occurrence);
+  if (graph.nodesByLogicalId.has(descriptor.logicalId) === false) {
+    graph.nodesByLogicalId.set(descriptor.logicalId, {
+      id: descriptor.logicalId,
+      workflow: descriptor.workflow,
+      kind: descriptor.kind,
+      label: descriptor.kind === 'workflow'
+        ? descriptor.childWorkflow ?? event.step
+        : event.step,
+      childWorkflow: descriptor.childWorkflow,
+      firstEventIndex: index,
+      occurrences: [occurrence],
+    });
+  }
+  if (descriptor.kind === 'workflow' && descriptor.childWorkflow !== undefined) {
+    graph.callsByOccurrenceId.set(occurrence.id, {
+      id: `call:${encodeIdPart(occurrence.id)}`,
+      occurrenceId: occurrence.id,
+      workflow: descriptor.workflow,
+      childWorkflow: descriptor.childWorkflow,
+      callInstance: event.callInstance,
+      stack: event.stack,
+    });
+  }
+}
+
+function laneDepths(lanes, calls) {
+  const knownWorkflows = new Set(lanes.map((lane) => lane.workflow));
+  const childWorkflows = new Set(calls
+    .map((call) => call.childWorkflow)
+    .filter((workflow) => knownWorkflows.has(workflow)));
+  const depths = new Map(lanes.map((lane) => [lane.workflow, 0]));
+  const queue = lanes
+    .filter((lane) => !childWorkflows.has(lane.workflow))
+    .map((lane) => lane.workflow);
+  const children = new Map();
+  for (const call of calls) {
+    if (!knownWorkflows.has(call.workflow) || !knownWorkflows.has(call.childWorkflow)) continue;
+    const current = children.get(call.workflow) ?? [];
+    children.set(call.workflow, [...current, call.childWorkflow]);
+  }
+  const visited = new Set(queue);
+  while (queue.length > 0) {
+    const workflow = queue.shift();
+    if (workflow === undefined) continue;
+    const parentDepth = depths.get(workflow);
+    if (parentDepth === undefined) continue;
+    for (const child of children.get(workflow) ?? []) {
+      if (visited.has(child)) continue;
+      depths.set(child, parentDepth + 1);
+      visited.add(child);
+      queue.push(child);
     }
   }
+  return depths;
+}
 
-  const terminalStatus = meta.status === 'completed'
-    || meta.status === 'failed'
-    || meta.status === 'aborted';
-  const nodes = orderedIds.map((id, index) => {
-    const node = nodesById.get(id);
-    return terminalStatus && index === orderedIds.length - 1 && node.status === 'running'
-      ? { ...node, status: meta.status }
-      : node;
+function createCurrentOccurrence(meta, graph, nextEventIndex) {
+  if (meta.currentStep === undefined) return;
+  const event = {
+    type: 'step_start',
+    step: meta.currentStep,
+    workflow: meta.workflow,
+    iteration: meta.currentIteration,
+  };
+  const descriptor = eventDescriptor(event, meta);
+  if (descriptor === null || graph.occurrencesById.has(descriptor.occurrenceId)) return;
+  const occurrence = createOccurrence(event, descriptor, nextEventIndex, graph.recordEventIndexes);
+  graph.occurrencesById.set(occurrence.id, occurrence);
+  graph.nodesByLogicalId.set(descriptor.logicalId, {
+    id: descriptor.logicalId,
+    workflow: descriptor.workflow,
+    kind: descriptor.kind,
+    label: meta.currentStep,
+    childWorkflow: undefined,
+    firstEventIndex: nextEventIndex,
+    occurrences: [occurrence],
   });
-  const edges = nodes.slice(1).map((node, index) => ({
-    id: `${nodes[index].id}->${node.id}`,
-    source: nodes[index].id,
-    target: node.id,
+}
+
+function createGraph(events, meta, recordEventIndexes) {
+  const graph = {
+    nodesByLogicalId: new Map(),
+    occurrencesById: new Map(),
+    occurrenceByEventIndex: new Map(),
+    callsByOccurrenceId: new Map(),
+    recordEventIndexes,
+  };
+  events.forEach((event, index) => addGraphEvent(event, index, meta, graph));
+  createCurrentOccurrence(meta, graph, events.length);
+  return graph;
+}
+
+function annotateLiveEventIndexes(nodes, liveEvents, meta) {
+  const indexesByOccurrenceId = new Map();
+  liveEvents.forEach((event, index) => {
+    const descriptor = eventDescriptor(event, meta);
+    if (descriptor === null) return;
+    const indexes = indexesByOccurrenceId.get(descriptor.occurrenceId) ?? [];
+    indexesByOccurrenceId.set(descriptor.occurrenceId, [...indexes, index]);
+  });
+  return nodes.map((node) => ({
+    ...node,
+    occurrences: node.occurrences.map((occurrence) => {
+      const eventIndexes = indexesByOccurrenceId.get(occurrence.id) ?? [];
+      const latestEvent = eventIndexes.length === 0
+        ? undefined
+        : liveEvents[eventIndexes[eventIndexes.length - 1]];
+      const preview = latestEvent === undefined
+        ? occurrence.preview
+        : latestEvent.preview
+          ?? latestEvent.error
+          ?? latestEvent.reason
+          ?? latestEvent.content?.slice(0, 2_000)
+          ?? occurrence.preview;
+      const updated = latestEvent === undefined
+        ? occurrence
+        : updateOccurrence(occurrence, latestEvent, eventIndexes.at(-1), true);
+      return {
+        ...updated,
+        eventIndexes,
+        lastEventIndex: eventIndexes.at(-1) ?? occurrence.lastEventIndex,
+        ...(preview === undefined ? {} : { preview }),
+      };
+    }),
   }));
-  return { events, nodes, edges };
+}
+
+function applyTerminalRunStatus(meta, nodes) {
+  const finalStatus = meta.status === 'completed' || meta.status === 'failed' || meta.status === 'aborted'
+    ? meta.status
+    : null;
+  if (finalStatus === null) return nodes;
+  const last = nodes.at(-1);
+  if (last === undefined) return nodes;
+  const occurrences = last.occurrences.map((occurrence, index) =>
+    index === last.occurrences.length - 1 && occurrence.status === 'running'
+      ? { ...occurrence, status: finalStatus }
+      : occurrence,
+  );
+  return [...nodes.slice(0, -1), { ...last, occurrences }];
+}
+
+function buildTransitions(events, occurrenceByEventIndex) {
+  const transitions = [];
+  let previous = null;
+  const previousByLogicalId = new Map();
+  for (let index = 0; index < events.length; index += 1) {
+    const current = occurrenceByEventIndex.get(index);
+    if (current === undefined || current.id === previous?.id) continue;
+    const previousLogicalOccurrence = previousByLogicalId.get(current.logicalId);
+    if (
+      previousLogicalOccurrence !== undefined
+      && previous?.id !== previousLogicalOccurrence.id
+      && isLoop(previousLogicalOccurrence, current)
+    ) {
+      transitions.push({
+        id: `${previousLogicalOccurrence.id}->${current.id}:loop`,
+        source: previousLogicalOccurrence.id,
+        target: current.id,
+        sourceLogicalId: previousLogicalOccurrence.logicalId,
+        targetLogicalId: current.logicalId,
+        kind: 'loop',
+      });
+    }
+    if (previous !== null) {
+      transitions.push({
+        id: `${previous.id}->${current.id}`,
+        source: previous.id,
+        target: current.id,
+        sourceLogicalId: previous.logicalId,
+        targetLogicalId: current.logicalId,
+        kind: isLoop(previous, current) ? 'loop' : 'transition',
+      });
+    }
+    previousByLogicalId.set(current.logicalId, current);
+    previous = current;
+  }
+  return transitions;
+}
+
+function isLoop(previous, current) {
+  return previous.logicalId === current.logicalId
+    && previous.kind === 'step'
+    && current.kind === 'step'
+    && previous.iteration !== undefined
+    && current.iteration !== undefined
+    && previous.iteration !== current.iteration;
+}
+
+function buildLoops(transitions, nodes) {
+  const occurrencesById = new Map(nodes.flatMap((node) => node.occurrences.map((occurrence) => [occurrence.id, occurrence])));
+  const seen = new Set();
+  return transitions
+    .filter((transition) => transition.kind === 'loop')
+    .filter((transition) => {
+      const key = `${transition.source}->${transition.target}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((transition, index) => ({
+      id: `loop:${encodeIdPart(transition.id)}:${index}`,
+      logicalId: transition.sourceLogicalId,
+      from: transition.source,
+      to: transition.target,
+      iteration: occurrencesById.get(transition.target)?.iteration,
+    }));
+}
+
+function buildLanes(nodes, calls) {
+  const laneMap = new Map();
+  for (const node of nodes) {
+    const lane = laneMap.get(node.workflow);
+    if (lane === undefined) {
+      laneMap.set(node.workflow, {
+        id: `lane:${encodeIdPart(node.workflow)}`,
+        workflow: node.workflow,
+        steps: [node],
+      });
+    } else {
+      laneMap.set(node.workflow, { ...lane, steps: [...lane.steps, node] });
+    }
+  }
+  const lanes = [...laneMap.values()];
+  const depths = laneDepths(lanes, calls);
+  return lanes.map((lane) => ({ ...lane, depth: depths.get(lane.workflow) ?? 0 }));
+}
+
+function sameStackFrame(left, right) {
+  return left.workflow === right.workflow
+    && left.workflow_ref === right.workflow_ref
+    && left.step === right.step
+    && left.kind === right.kind
+    && left.occurrence === right.occurrence;
+}
+
+function isStackPrefix(parent, child) {
+  if (!Array.isArray(parent) || !Array.isArray(child) || parent.length === 0) return false;
+  if (child.length < parent.length) return false;
+  return parent.every((frame, index) => sameStackFrame(frame, child[index]));
+}
+
+function findCallTarget(call, occurrences) {
+  const candidates = occurrences
+    .filter((occurrence) => occurrence.workflow === call.childWorkflow)
+    .filter((occurrence) => (
+      call.stack === undefined
+        ? true
+        : isStackPrefix(call.stack, occurrence.stack)
+    ))
+    .sort((left, right) => left.firstEventIndex - right.firstEventIndex);
+  if (candidates.length === 0) return undefined;
+  if (call.stack === undefined && candidates.length > 1) return undefined;
+  return candidates[0].id;
+}
+
+function attachCallTargets(calls, nodes) {
+  const occurrences = nodes.flatMap((node) => node.occurrences);
+  return calls.map((call) => {
+    const targetOccurrenceId = findCallTarget(call, occurrences);
+    return {
+      ...call,
+      ...(targetOccurrenceId === undefined ? {} : { targetOccurrenceId }),
+      targetObserved: targetOccurrenceId !== undefined,
+    };
+  });
+}
+
+function mergeGraphEvents(summaryEvents, history, liveEvents, meta) {
+  // Without a graph summary, preserve the raw event sequence so live event
+  // indexes and observed transitions retain their one-record granularity.
+  if (summaryEvents.length === 0) return history.length > 0 ? history : liveEvents;
+
+  const merged = [];
+  const indexesByOccurrenceId = new Map();
+
+  const merge = (event) => {
+    const descriptor = eventDescriptor(event, meta);
+    if (descriptor === null) return;
+    const existingIndex = indexesByOccurrenceId.get(descriptor.occurrenceId);
+    if (existingIndex === undefined) {
+      indexesByOccurrenceId.set(descriptor.occurrenceId, merged.length);
+      merged.push(event);
+      return;
+    }
+    // Summary entries are canonical topology records. Recent history/live
+    // records may only enrich their status and metadata, never duplicate the
+    // occurrence or alter its first-seen ordering.
+    merged[existingIndex] = { ...merged[existingIndex], ...event };
+  };
+
+  summaryEvents.forEach(merge);
+  [...history, ...liveEvents].forEach(merge);
+  return merged.length > MAX_GRAPH_OCCURRENCES
+    ? merged.slice(-MAX_GRAPH_OCCURRENCES)
+    : merged;
+}
+
+export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory, graphSummary) {
+  const events = [...newestFirstEvents].reverse();
+  const history = newestFirstHistory === undefined ? [] : [...newestFirstHistory].reverse();
+  const summaryEvents = graphSummary?.occurrences === undefined
+    ? []
+    : [...graphSummary.occurrences].reverse();
+  const graphEvents = mergeGraphEvents(summaryEvents, history, events, meta);
+  const graph = createGraph(graphEvents, meta, summaryEvents.length === 0 && history.length === 0);
+  let nodes = [...graph.nodesByLogicalId.values()]
+    .map((node) => ({
+      ...node,
+      occurrences: [...node.occurrences].sort((left, right) => left.firstEventIndex - right.firstEventIndex),
+    }))
+    .sort((left, right) => left.firstEventIndex - right.firstEventIndex);
+  if (summaryEvents.length > 0 || history.length > 0) {
+    nodes = annotateLiveEventIndexes(nodes, events, meta);
+  }
+  nodes = applyTerminalRunStatus(meta, nodes);
+  const calls = attachCallTargets([...graph.callsByOccurrenceId.values()], nodes);
+  const lanes = buildLanes(nodes, calls)
+    .sort((left, right) => left.depth - right.depth || left.steps[0].firstEventIndex - right.steps[0].firstEventIndex);
+  const transitions = buildTransitions(graphEvents, graph.occurrenceByEventIndex);
+  const loops = buildLoops(transitions, nodes);
+  return {
+    events,
+    lanes,
+    nodes,
+    transitions,
+    loops,
+    calls,
+    totalOccurrences: nodes.reduce((total, node) => total + node.occurrences.length, 0),
+    graphOccurrenceCount: graphSummary?.totalOccurrences ?? nodes.reduce(
+      (total, node) => total + node.occurrences.length,
+      0,
+    ),
+    graphTruncated: graphSummary?.truncated === true,
+  };
 }
 
 export function reportDisplayName(filename) {

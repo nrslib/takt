@@ -1,29 +1,3 @@
-export const CHAT_PANE_MIN_WIDTH = 320;
-export const RUNS_PANE_MIN_WIDTH = 430;
-export const CHAT_DIVIDER_WIDTH = 10;
-
-export function getChatPaneWidthBounds(workspaceWidth) {
-  return {
-    min: CHAT_PANE_MIN_WIDTH,
-    max: Math.max(
-      CHAT_PANE_MIN_WIDTH,
-      workspaceWidth - RUNS_PANE_MIN_WIDTH - CHAT_DIVIDER_WIDTH,
-    ),
-  };
-}
-
-export function clampChatPaneWidth(requestedWidth, workspaceWidth) {
-  const bounds = getChatPaneWidthBounds(workspaceWidth);
-  return Math.min(Math.max(requestedWidth, bounds.min), bounds.max);
-}
-
-export function resolveChatPaneWidth(workspaceWidth, currentWidth, manuallyAdjusted) {
-  return clampChatPaneWidth(
-    manuallyAdjusted ? currentWidth : workspaceWidth / 2,
-    workspaceWidth,
-  );
-}
-
 export function snapshotExecutionSettings(settings) {
   return { ...settings };
 }

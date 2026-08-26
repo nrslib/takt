@@ -18,13 +18,10 @@ import { createExecutionView } from './execution-view.js';
 import { subscribeRun, subscribeTasks } from './live-stream.js';
 import {
   buildExecutionSettingsRequest,
-  clampChatPaneWidth,
   createDirectoryRequestTracker,
-  getChatPaneWidthBounds,
   isCurrentWorkflowRequest as isCurrentWorkflowRequestState,
   isWorkflowCatalogReady,
   projectSelectionForRefresh,
-  resolveChatPaneWidth,
   sameRunSelection as sameRunSelectionState,
   snapshotExecutionSettings,
   shouldCloseExecutionContext,
@@ -32,6 +29,8 @@ import {
 
 const EMPTY_CHAT_MESSAGE = 'メッセージを入力してください。';
 const CHAT_RESIZE_STEP = 16;
+const CHAT_DRAWER_MIN_WIDTH = 360;
+const CHAT_DRAWER_MAX_WIDTH = 560;
 
 const elements = {
   connection: document.querySelector('#connection-status'),
@@ -41,6 +40,10 @@ const elements = {
   chatSetupButton: document.querySelector('#chat-setup-button'),
   chatCollapseButton: document.querySelector('#chat-collapse-button'),
   chatResizer: document.querySelector('#chat-resizer'),
+  chatSurface: document.querySelector('#chat-surface'),
+  chatSurfaceDescription: document.querySelector('#chat-surface-description'),
+  chatSurfaceLabel: document.querySelector('#chat-surface-label'),
+  chatTitle: document.querySelector('#chat-title'),
   chatMessage: document.querySelector('#chat-message'),
   chatMode: document.querySelector('#chat-mode'),
   chatNewButton: document.querySelector('#chat-new-button'),
@@ -66,6 +69,12 @@ const elements = {
   executionContext: document.querySelector('#execution-context'),
   executionContextToggle: document.querySelector('#execution-context > summary'),
   executionContextSummary: document.querySelector('#execution-context-summary'),
+  aiConsultButton: document.querySelector('#ai-consult-button'),
+  newTaskButton: document.querySelector('#new-task-button'),
+  viewerNav: document.querySelector('#viewer-nav'),
+  viewerScreen: document.querySelector('#viewer-screen'),
+  mobileTaskListButton: document.querySelector('#mobile-task-list-button'),
+  taskCount: document.querySelector('#task-count'),
   project: document.querySelector('#project'),
   projectHelp: document.querySelector('#project-help'),
   refresh: document.querySelector('#refresh-button'),
@@ -76,7 +85,6 @@ const elements = {
   runWarning: document.querySelector('#run-warning'),
   watch: document.querySelector('#watch-button'),
   workflow: document.querySelector('#workflow'),
-  workspace: document.querySelector('.workspace'),
 };
 
 const directoryRequests = createDirectoryRequestTracker();
@@ -95,8 +103,10 @@ let chatSession = null;
 let registryWarnings = [];
 let workflowWarnings = [];
 let browsedDirectory = null;
-let chatPaneWidth = null;
-let chatPaneWidthManuallyAdjusted = false;
+let chatDrawerWidth = null;
+let chatDrawerWidthManuallyAdjusted = false;
+let chatDrawerOpen = false;
+let screenMode = 'viewer';
 let executionEnabled = false;
 let chatOperationInProgress = false;
 let chatMessageRevision = 0;
@@ -112,6 +122,7 @@ let executionSettings = {
 const executionView = createExecutionView({
   runList: elements.runList,
   runListEmpty: elements.runListEmpty,
+  taskCount: elements.taskCount,
   runDetail: elements.runDetail,
   onSelectRun: selectRun,
   onRequeue: (task, button) => void requeueSelectedTask(task, button),
@@ -707,88 +718,131 @@ function submitSetupCommand() {
   elements.chatForm.requestSubmit();
 }
 
-function setChatPaneWidth(requestedWidth) {
-  const workspaceWidth = elements.workspace.getBoundingClientRect().width;
-  const bounds = getChatPaneWidthBounds(workspaceWidth);
-  chatPaneWidth = clampChatPaneWidth(requestedWidth, workspaceWidth);
-  elements.workspace.style.setProperty('--chat-pane-width', `${chatPaneWidth}px`);
+function chatDrawerWidthBounds() {
+  const max = Math.min(CHAT_DRAWER_MAX_WIDTH, Math.round(window.innerWidth * 0.48));
+  return {
+    min: CHAT_DRAWER_MIN_WIDTH,
+    max: Math.max(CHAT_DRAWER_MIN_WIDTH, max),
+  };
+}
+
+function setChatDrawerWidth(requestedWidth) {
+  const bounds = chatDrawerWidthBounds();
+  chatDrawerWidth = Math.min(Math.max(requestedWidth, bounds.min), bounds.max);
+  elements.chatSurface.style.setProperty('--chat-drawer-width', String(chatDrawerWidth) + 'px');
+  elements.chatResizer.setAttribute('aria-valuemin', String(Math.round(bounds.min)));
   elements.chatResizer.setAttribute('aria-valuemax', String(Math.round(bounds.max)));
-  elements.chatResizer.setAttribute('aria-valuenow', String(Math.round(chatPaneWidth)));
+  elements.chatResizer.setAttribute('aria-valuenow', String(Math.round(chatDrawerWidth)));
 }
 
-function setChatPaneWidthFromUser(requestedWidth) {
-  chatPaneWidthManuallyAdjusted = true;
-  setChatPaneWidth(requestedWidth);
+function setChatDrawerWidthFromUser(requestedWidth) {
+  chatDrawerWidthManuallyAdjusted = true;
+  setChatDrawerWidth(requestedWidth);
 }
 
-function setChatPaneCollapsed(collapsed) {
-  elements.workspace.dataset.chatCollapsed = String(collapsed);
-  elements.chatCollapseButton.setAttribute('aria-expanded', String(!collapsed));
-  elements.chatCollapseButton.setAttribute(
-    'aria-label',
-    collapsed ? 'Chatを展開' : 'Chatを折りたたむ',
-  );
-  elements.chatCollapseButton.title = collapsed ? 'Chatを展開' : 'Chatを折りたたむ';
-  elements.chatCollapseButton.textContent = collapsed ? '›' : '‹';
-  elements.chatResizer.tabIndex = collapsed ? -1 : 0;
+function setChatDrawerOpen(open) {
+  chatDrawerOpen = open;
+  elements.chatSurface.dataset.open = String(open);
+  elements.chatSurface.setAttribute('aria-hidden', String(!open));
+  elements.chatSurface.inert = !open;
+  elements.aiConsultButton.setAttribute('aria-expanded', String(open));
+  elements.chatCollapseButton.setAttribute('aria-expanded', String(open));
+  elements.chatResizer.tabIndex = open && screenMode === 'viewer' ? 0 : -1;
 }
 
-function resizeChatPaneFromPointer(event) {
-  const workspaceLeft = elements.workspace.getBoundingClientRect().left;
-  setChatPaneWidthFromUser(event.clientX - workspaceLeft);
+function setScreen(nextScreen) {
+  screenMode = nextScreen;
+  document.body.dataset.screen = nextScreen;
+  const isTaskScreen = nextScreen === 'task';
+  elements.viewerNav.classList.toggle('nav-button-active', !isTaskScreen);
+  elements.viewerNav.setAttribute('aria-current', isTaskScreen ? 'false' : 'page');
+  elements.newTaskButton.classList.toggle('nav-button-active', isTaskScreen);
+  elements.newTaskButton.setAttribute('aria-current', isTaskScreen ? 'page' : 'false');
+  elements.viewerScreen.setAttribute('aria-hidden', String(isTaskScreen));
+  elements.aiConsultButton.hidden = isTaskScreen;
+  elements.chatSurface.dataset.mode = isTaskScreen ? 'task' : 'drawer';
+  elements.chatCollapseButton.hidden = isTaskScreen;
+  elements.chatSurfaceLabel.textContent = isTaskScreen ? 'New task' : 'Assistant';
+  elements.chatTitle.textContent = isTaskScreen ? 'タスクを作成' : 'AIに相談';
+  elements.chatSurfaceDescription.textContent = isTaskScreen
+    ? 'AIと相談しながら、実行する内容を組み立てます。'
+    : 'Viewerを見ながら、TAKTに相談できます。';
+  if (isTaskScreen) {
+    setChatDrawerOpen(true);
+    requestAnimationFrame(() => elements.chatMessage.focus());
+  } else {
+    setChatDrawerOpen(false);
+  }
 }
 
-function startChatPaneResize(event) {
-  if (event.button !== 0 || elements.workspace.dataset.chatCollapsed === 'true') return;
+function openChatDrawer() {
+  if (screenMode !== 'viewer') return;
+  elements.chatSurface.dataset.mode = 'drawer';
+  elements.chatCollapseButton.hidden = false;
+  setChatDrawerOpen(true);
+  requestAnimationFrame(() => elements.chatMessage.focus());
+}
+
+function closeChatDrawer() {
+  if (screenMode !== 'viewer') return;
+  setChatDrawerOpen(false);
+  elements.aiConsultButton.focus();
+}
+
+function resizeChatDrawerFromPointer(event) {
+  setChatDrawerWidthFromUser(window.innerWidth - event.clientX);
+}
+
+function startChatDrawerResize(event) {
+  if (event.button !== 0 || screenMode !== 'viewer' || !chatDrawerOpen) return;
   event.preventDefault();
   elements.chatResizer.setPointerCapture(event.pointerId);
-  elements.workspace.dataset.resizingChat = 'true';
-  resizeChatPaneFromPointer(event);
+  elements.chatSurface.dataset.resizing = 'true';
+  resizeChatDrawerFromPointer(event);
 }
 
-function stopChatPaneResize(event) {
+function stopChatDrawerResize(event) {
   if (elements.chatResizer.hasPointerCapture(event.pointerId)) {
     elements.chatResizer.releasePointerCapture(event.pointerId);
   }
-  delete elements.workspace.dataset.resizingChat;
+  delete elements.chatSurface.dataset.resizing;
 }
 
-function resizeChatPaneWithKeyboard(event) {
-  if (elements.workspace.dataset.chatCollapsed === 'true') return;
-  const workspaceWidth = elements.workspace.getBoundingClientRect().width;
-  const bounds = getChatPaneWidthBounds(workspaceWidth);
-  if (chatPaneWidth === null) return;
-  const currentWidth = chatPaneWidth;
+function resizeChatDrawerWithKeyboard(event) {
+  if (!chatDrawerOpen || screenMode !== 'viewer' || chatDrawerWidth === null) return;
+  const bounds = chatDrawerWidthBounds();
   const widths = {
-    ArrowLeft: currentWidth - CHAT_RESIZE_STEP,
-    ArrowRight: currentWidth + CHAT_RESIZE_STEP,
+    ArrowLeft: chatDrawerWidth + CHAT_RESIZE_STEP,
+    ArrowRight: chatDrawerWidth - CHAT_RESIZE_STEP,
     Home: bounds.min,
     End: bounds.max,
   };
   const requestedWidth = widths[event.key];
   if (requestedWidth === undefined) return;
   event.preventDefault();
-  setChatPaneWidthFromUser(requestedWidth);
+  setChatDrawerWidthFromUser(requestedWidth);
 }
 
-function initializeChatPane() {
-  chatPaneWidthManuallyAdjusted = false;
-  const workspaceWidth = elements.workspace.getBoundingClientRect().width;
-  setChatPaneWidth(resolveChatPaneWidth(
-    workspaceWidth,
-    workspaceWidth / 2,
-    false,
+function initializeChatDrawer() {
+  chatDrawerWidthManuallyAdjusted = false;
+  const bounds = chatDrawerWidthBounds();
+  setChatDrawerWidth(Math.min(
+    bounds.max,
+    Math.max(bounds.min, Math.round(window.innerWidth * 0.38)),
   ));
-  setChatPaneCollapsed(false);
+  setScreen('viewer');
 }
 
-function updateChatPaneWidthForLayout() {
-  const workspaceWidth = elements.workspace.getBoundingClientRect().width;
-  if (chatPaneWidthManuallyAdjusted && chatPaneWidth !== null) {
-    setChatPaneWidth(resolveChatPaneWidth(workspaceWidth, chatPaneWidth, true));
+function updateChatDrawerWidthForLayout() {
+  const bounds = chatDrawerWidthBounds();
+  if (chatDrawerWidthManuallyAdjusted && chatDrawerWidth !== null) {
+    setChatDrawerWidth(chatDrawerWidth);
     return;
   }
-  setChatPaneWidth(resolveChatPaneWidth(workspaceWidth, workspaceWidth / 2, false));
+  setChatDrawerWidth(Math.min(
+    bounds.max,
+    Math.max(bounds.min, Math.round(window.innerWidth * 0.38)),
+  ));
 }
 
 async function ensureChatSession() {
@@ -973,6 +1027,7 @@ function startLiveRunStream() {
 
 async function selectRun(nextRun) {
   selectedRun = nextRun;
+  elements.viewerScreen.dataset.mobileView = 'detail';
   executionView.renderTaskList(taskCollection.tasks, selectedRun);
   startLiveRunStream();
   if (liveUpdatesEnabled) return;
@@ -1000,6 +1055,7 @@ function applyTaskCollection(collection) {
       : { projectId: firstTask.projectId, taskId: firstTask.taskId, slug: latestRun.slug };
   }
   executionView.renderTaskList(collection.tasks, selectedRun);
+  elements.viewerScreen.dataset.mobileView = selectedRun === null ? 'list' : 'detail';
   updateWarnings(collection.warnings);
   if (selectedRun === null) {
     stopLiveRunStream();
@@ -1083,7 +1139,7 @@ function setLiveUpdatesEnabled(enabled) {
 }
 
 async function initialize() {
-  initializeChatPane();
+  initializeChatDrawer();
   resizeChatMessage();
   try {
     const session = await getSession();
@@ -1118,7 +1174,13 @@ document.addEventListener('pointerdown', closeExecutionContextFromOutside);
 document.addEventListener('click', closeExecutionContextFromOutside);
 
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || !elements.executionContext.open) return;
+  if (event.key !== 'Escape') return;
+  if (screenMode === 'viewer' && chatDrawerOpen) {
+    event.preventDefault();
+    closeChatDrawer();
+    return;
+  }
+  if (!elements.executionContext.open) return;
   const eventPath = typeof event.composedPath === 'function'
     ? event.composedPath()
     : [event.target];
@@ -1131,19 +1193,23 @@ elements.chatForm.addEventListener('submit', (event) => void submitChat(event));
 elements.chatSetupButton.addEventListener('click', submitSetupCommand);
 elements.chatGoButton.addEventListener('click', submitGoCommand);
 elements.chatNewButton.addEventListener('click', () => void startNewConversation());
-elements.chatCollapseButton.addEventListener('click', () => {
-  setChatPaneCollapsed(elements.workspace.dataset.chatCollapsed !== 'true');
+elements.aiConsultButton.addEventListener('click', openChatDrawer);
+elements.viewerNav.addEventListener('click', () => setScreen('viewer'));
+elements.newTaskButton.addEventListener('click', () => setScreen('task'));
+elements.mobileTaskListButton.addEventListener('click', () => {
+  elements.viewerScreen.dataset.mobileView = 'list';
 });
-elements.chatResizer.addEventListener('pointerdown', startChatPaneResize);
+elements.chatCollapseButton.addEventListener('click', closeChatDrawer);
+elements.chatResizer.addEventListener('pointerdown', startChatDrawerResize);
 elements.chatResizer.addEventListener('pointermove', (event) => {
-  if (elements.chatResizer.hasPointerCapture(event.pointerId)) resizeChatPaneFromPointer(event);
+  if (elements.chatResizer.hasPointerCapture(event.pointerId)) resizeChatDrawerFromPointer(event);
 });
-elements.chatResizer.addEventListener('pointerup', stopChatPaneResize);
-elements.chatResizer.addEventListener('pointercancel', stopChatPaneResize);
+elements.chatResizer.addEventListener('pointerup', stopChatDrawerResize);
+elements.chatResizer.addEventListener('pointercancel', stopChatDrawerResize);
 elements.chatResizer.addEventListener('lostpointercapture', () => {
-  delete elements.workspace.dataset.resizingChat;
+  delete elements.chatSurface.dataset.resizing;
 });
-elements.chatResizer.addEventListener('keydown', resizeChatPaneWithKeyboard);
+elements.chatResizer.addEventListener('keydown', resizeChatDrawerWithKeyboard);
 elements.chatMessage.addEventListener('input', handleChatMessageInput);
 elements.chatMessage.addEventListener('keydown', submitChatWithShortcut);
 elements.directoryPicker.addEventListener('click', openDirectoryPicker);
@@ -1225,8 +1291,8 @@ window.addEventListener('beforeunload', () => {
   stopLiveRunStream();
 });
 window.addEventListener('resize', () => {
-  if (window.innerWidth > 900) {
-    updateChatPaneWidthForLayout();
+  if (window.innerWidth > 760) {
+    updateChatDrawerWidthForLayout();
   }
 });
 void initialize();

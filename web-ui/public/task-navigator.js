@@ -72,6 +72,7 @@ function renderTask(task, selection, onSelectRun, onRequeue) {
 export function renderTaskNavigator(options) {
   options.container.replaceChildren();
   options.empty.hidden = options.tasks.length !== 0;
+  if (options.count !== undefined) options.count.textContent = String(options.tasks.length);
   for (const task of options.tasks) {
     options.container.append(renderTask(
       task,
