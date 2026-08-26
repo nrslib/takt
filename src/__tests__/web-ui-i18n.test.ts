@@ -64,9 +64,13 @@ describe('Web UI i18n', () => {
     expect(storage.setItem).toHaveBeenCalledWith('takt.ui.locale', 'en');
   });
 
-  it('keeps the Japanese task-action labels natural before switching to English', () => {
+  it('keeps Japanese UI copy while preserving familiar command labels', () => {
     expect(t('task.action.retry')).toBe('リトライ');
-    expect(t('task.action.instruct')).toBe('追加指示');
+    expect(t('task.action.instruct')).toBe('Instruct');
+    expect(t('task.action.diff')).toBe('View diff');
+    expect(t('task.action.sync')).toBe('Merge from root');
+    expect(t('task.action.pull')).toBe('Pull from remote');
+    expect(t('task.action.merge')).toBe('Merge & cleanup');
     expect(t('app.existingTask')).toBe('既存タスク');
     setLocale('en');
     expect(t('app.existingTask')).toBe('Existing task');

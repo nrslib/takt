@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskCasError, CentralTaskRepository } from '../infra/task/centralStateRepository.js';
+import { saveCloneMeta } from '../infra/task/clone.js';
 import { launchTaktRun } from '../features/web-ui/launcher.js';
+import { getCentralTaskActions } from '../features/web-ui/task-actions.js';
 
 const temporaryDirectories = new Set<string>();
 
@@ -47,6 +49,59 @@ describe('central task CAS repository', () => {
     expect(stateDirectory.mode & 0o777).toBe(0o700);
     expect(stateFile.mode & 0o777).toBe(0o600);
     expect(tasksFile.mode & 0o777).toBe(0o600);
+  });
+
+  it('recovers legacy terminal worktree context from owned central metadata', async () => {
+    const { globalConfigDirectory, projectDirectory, project, repository } = await setup();
+    const worktreeRoot = join(globalConfigDirectory, 'worktrees', project.stateId);
+    const worktreePath = join(worktreeRoot, 'legacy-task');
+    await mkdir(worktreePath, { recursive: true });
+    const handle = await repository.enqueueAndClaim({
+      task: 'legacy terminal task',
+      workflow: 'default',
+      worktree: worktreeRoot,
+    });
+    const adopted = await repository.adopt({
+      taskId: handle.task.taskId,
+      generation: handle.task.generation,
+      executionId: handle.executionId,
+      ownerToken: handle.ownerToken,
+    });
+    await repository.terminal({
+      taskId: handle.task.taskId,
+      generation: adopted.generation,
+      executionId: handle.executionId,
+      ownerToken: handle.ownerToken,
+      status: 'completed',
+    });
+    const branch = `takt/20260827T0000-${handle.task.taskId.slice(0, 12)}`;
+    const metadataDirectory = join(
+      globalConfigDirectory,
+      'state',
+      'projects',
+      project.stateId,
+      'worktree-metadata',
+    );
+    saveCloneMeta(projectDirectory, branch, worktreePath, metadataDirectory);
+
+    const recovered = (await repository.recoverLegacyWorktreeContexts())
+      .find((task) => task.taskId === handle.task.taskId);
+
+    expect(recovered).toMatchObject({ branch, worktreePath, status: 'completed' });
+    expect(getCentralTaskActions(recovered!)).toEqual([
+      'diff',
+      'instruct',
+      'create_pr',
+      'sync',
+      'pull',
+      'try',
+      'merge',
+      'delete',
+    ]);
+    await expect(repository.readTask(handle.task.taskId)).resolves.toMatchObject({
+      branch,
+      worktreePath,
+    });
   });
 
   it('never exposes an incomplete state lock during publication', async () => {

@@ -96,9 +96,7 @@ function renderStep(node, position, selectedOccurrenceId, onSelectOccurrence, ha
   headerButton.type = 'button';
   headerButton.dataset.stepId = node.id;
   headerButton.setAttribute('aria-label', t('map.showStep', { step: nodeLabel(node) }));
-  const firstOrdinal = node.occurrences[0]?.ordinal ?? node.firstEventIndex + 1;
   headerButton.append(
-    element('span', 'execution-step-index', String(firstOrdinal).padStart(2, '0')),
     element('span', 'execution-step-title', nodeLabel(node)),
   );
   if (latest.status === 'running') {
@@ -580,13 +578,13 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
   const width = Math.max(
     Number.parseFloat(canvas.dataset.layoutWidth ?? '') || 0,
     Number.parseFloat(canvas.style.width) || 0,
-    (canvas.scrollWidth ?? 0) / readMapScale(canvas),
+    canvas.scrollWidth ?? 0,
     1,
   );
   const height = Math.max(
     Number.parseFloat(canvas.dataset.layoutHeight ?? '') || 0,
     Number.parseFloat(canvas.style.height) || 0,
-    (canvas.scrollHeight ?? 0) / readMapScale(canvas),
+    canvas.scrollHeight ?? 0,
     1,
   );
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);

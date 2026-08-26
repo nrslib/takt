@@ -16,6 +16,7 @@ import {
   disposeExecutionMap,
   renderExecutionMap,
 } from '../../web-ui/public/execution-map.js';
+import { resolveLogSelection } from '../../web-ui/public/execution-view.js';
 
 class FakeDomNode {
   className = '';
@@ -551,6 +552,34 @@ describe('Web UI execution model', () => {
     expect(trace.nodes[1]?.occurrences[0]?.eventIndexes).toEqual([0]);
   });
 
+  it('identifies a selected step outside the live tail as a history preview', () => {
+    const oldComplete: ExecutionEvent = {
+      type: 'step_complete',
+      step: 'old-step',
+      iteration: 1,
+      status: 'done',
+      content: 'historical output',
+    };
+    const liveStart: ExecutionEvent = {
+      type: 'step_start',
+      step: 'new-step',
+      iteration: 1,
+    };
+    const trace = buildExecutionTrace(
+      { workflow: 'default', status: 'running' },
+      [liveStart],
+      [liveStart, oldComplete],
+    );
+    const oldOccurrence = trace.nodes.find((node) => node.label === 'old-step')?.occurrences[0];
+
+    expect(oldOccurrence).toBeDefined();
+    expect(resolveLogSelection(trace, oldOccurrence!.id)).toMatchObject({
+      events: [],
+      occurrence: expect.objectContaining({ preview: 'historical output' }),
+      historyPreview: true,
+    });
+  });
+
   it('renders observed loop and workflow-call connectors in the map contract', () => {
     const runtime = globalThis as unknown as { document?: FakeDomDocument };
     const previousDocument = runtime.document;
@@ -597,6 +626,11 @@ describe('Web UI execution model', () => {
       expect(section.querySelectorAll('.execution-call-boundary')).toHaveLength(0);
       expect(section.querySelectorAll('.execution-map-relations')).toHaveLength(0);
       expect(section.querySelectorAll('.execution-step')).toHaveLength(4);
+      expect(section.querySelectorAll('.execution-step-index')).toHaveLength(0);
+      const chipLabels = section.querySelectorAll('.iteration-chip-label') as FakeDomNode[];
+      expect(chipLabels.every(
+        (chip) => /^STEP \d+/.test(chip.textContent),
+      )).toBe(true);
       expect(section.querySelectorAll('.execution-edge-transition')).toHaveLength(2);
       expect(section.querySelectorAll('.execution-edge-loop')).toHaveLength(1);
       expect(section.querySelectorAll('.execution-edge-call')).toHaveLength(1);
@@ -828,6 +862,8 @@ describe('Web UI execution model', () => {
       });
       expect(prevented).toBe(true);
       expect(Number(canvas.dataset.scale)).toBe(MAX_MAP_SCALE);
+      const overlay = section.querySelectorAll('.execution-edge-overlay')[0] as FakeDomNode;
+      expect(overlay.attributes.width).toBe('640');
       expect(map.scrollLeft).toBe(300);
       expect(map.scrollTop).toBe(200);
 
@@ -842,6 +878,7 @@ describe('Web UI execution model', () => {
       });
       expect(prevented).toBe(true);
       expect(Number(canvas.dataset.scale)).toBe(MIN_MAP_SCALE);
+      expect(overlay.attributes.width).toBe('640');
       expect(scales).toEqual([MAX_MAP_SCALE, MIN_MAP_SCALE]);
       expect(clampMapScale(Number.NaN)).toBe(1);
       expect(clampMapScale(-10)).toBe(MIN_MAP_SCALE);

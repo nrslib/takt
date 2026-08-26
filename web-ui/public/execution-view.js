@@ -94,6 +94,23 @@ function findOccurrence(trace, occurrenceId) {
   return null;
 }
 
+export function resolveLogSelection(trace, selectedOccurrenceId) {
+  if (selectedOccurrenceId === null) {
+    return { events: trace.events, occurrence: null, historyPreview: false };
+  }
+  const selected = findOccurrence(trace, selectedOccurrenceId);
+  if (selected === null) {
+    return { events: trace.events, occurrence: null, historyPreview: false };
+  }
+  const indexes = new Set(selected.occurrence.eventIndexes);
+  const events = trace.events.filter((_event, index) => indexes.has(index));
+  return {
+    events,
+    occurrence: selected.occurrence,
+    historyPreview: events.length === 0 && selected.occurrence.preview !== undefined,
+  };
+}
+
 export function createExecutionView(options) {
   let activeRunKey = '';
   let activeTab = 'live';
@@ -146,22 +163,17 @@ export function createExecutionView(options) {
     return section;
   }
 
-  function visibleEvents(trace) {
-    if (selectedOccurrenceId === null) return trace.events;
-    const selected = findOccurrence(trace, selectedOccurrenceId);
-    if (selected === null) return trace.events;
-    const indexes = new Set(selected.occurrence.eventIndexes);
-    return trace.events.filter((_event, index) => indexes.has(index));
-  }
-
   function renderLogPanel(trace) {
     const panel = element('section', 'detail-panel log-panel');
     const toolbar = element('div', 'detail-toolbar');
-    const events = visibleEvents(trace);
+    const selection = resolveLogSelection(trace, selectedOccurrenceId);
+    const { events } = selection;
     const summary = element(
       'span',
       'detail-toolbar-summary',
-      selectedOccurrenceId === null
+      selection.historyPreview
+        ? `${t('viewer.historyPreview')} · ${t('viewer.eventsFocused')}`
+        : selectedOccurrenceId === null
         ? t('viewer.events', { count: events.length })
         : `${t('viewer.events', { count: events.length })} · ${t('viewer.eventsFocused')}`,
     );
@@ -172,15 +184,13 @@ export function createExecutionView(options) {
       followLog = !followLog;
       renderDetailPanel();
     });
-    toolbar.append(summary, follow);
+    toolbar.append(summary);
+    if (!selection.historyPreview) toolbar.append(follow);
     panel.append(toolbar);
     if (events.length === 0) {
-      if (selectedOccurrenceId !== null) {
-        const selected = findOccurrence(trace, selectedOccurrenceId);
-        if (selected?.occurrence.preview !== undefined) {
-          panel.append(renderLogPreview(selected.occurrence));
-          return panel;
-        }
+      if (selection.historyPreview && selection.occurrence !== null) {
+        panel.append(renderLogPreview(selection.occurrence));
+        return panel;
       }
       panel.append(renderEmpty(t('viewer.logsEmpty'), t('viewer.logsEmptyDescription')));
       return panel;
@@ -251,13 +261,11 @@ export function createExecutionView(options) {
     const container = element('section', 'detail-tabs');
     const tabs = element('div', 'tab-list');
     tabs.setAttribute('role', 'tablist');
-    const definitions = selectedOccurrenceId === null
-      ? [
-          ['live', t('viewer.runLog')],
-          ['reports', t('viewer.runReports')],
-          ['task', t('viewer.runTask')],
-        ]
-      : [['live', t('viewer.runLog')]];
+    const definitions = [
+      ['live', t('viewer.runLog')],
+      ['reports', t('viewer.runReports')],
+      ['task', t('viewer.runTask')],
+    ];
     for (const [id, label] of definitions) {
       const button = element('button', 'tab-button', label);
       button.type = 'button';
@@ -268,7 +276,7 @@ export function createExecutionView(options) {
       button.tabIndex = activeTab === id ? 0 : -1;
       button.addEventListener('click', () => {
         activeTab = id;
-        renderDetailPanel();
+        renderInspectorPanel();
       });
       button.addEventListener('keydown', (event) => {
         const index = definitions.findIndex(([definitionId]) => definitionId === id);
@@ -280,7 +288,7 @@ export function createExecutionView(options) {
         else return;
         event.preventDefault();
         activeTab = definitions[nextIndex][0];
-        renderDetailPanel();
+        renderInspectorPanel();
         (options.inspector ?? options.runDetail).querySelector('[role="tab"][aria-selected="true"]')?.focus();
       });
       tabs.append(button);
@@ -332,6 +340,16 @@ export function createExecutionView(options) {
     restoreViewState(state);
   }
 
+  function renderInspectorPanel() {
+    if (currentDetail === null || currentTrace === null || options.inspector === undefined) {
+      renderDetailPanel();
+      return;
+    }
+    const state = captureViewState();
+    options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
+    restoreViewState(state);
+  }
+
   function renderRunSummary(detail) {
     const summary = element('section', 'inspector-run-summary');
     const heading = element('div', 'inspector-run-heading');
@@ -375,9 +393,7 @@ export function createExecutionView(options) {
       (candidate) => candidate.id === selected.occurrence.id,
     );
     const entries = [
-      [t('viewer.execution'), t('map.pass', {
-        number: selected.occurrence.ordinal ?? occurrenceIndex + 1,
-      })],
+      [t('viewer.execution'), String(selected.occurrence.ordinal ?? occurrenceIndex + 1)],
       [t('viewer.phase'), selected.occurrence.phases.join(' / ') || '—'],
       [t('viewer.persona'), selected.occurrence.personas.join(' / ') || '—'],
     ];
@@ -402,7 +418,7 @@ export function createExecutionView(options) {
       const screen = options.inspector?.closest?.('.viewer-screen');
       if (screen !== null && screen !== undefined) screen.dataset.mobileView = 'detail';
     });
-    const stepSummary = renderStepSummary(trace);
+    const stepSummary = activeTab === 'live' ? renderStepSummary(trace) : null;
     inspector.append(back, stepSummary ?? renderRunSummary(detail));
     inspector.append(renderTabs(detail, trace));
     return inspector;

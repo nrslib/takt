@@ -500,7 +500,8 @@ async function verifyTaskActionAvailability(
     stateId: project.stateId,
   });
   await repository.reconcile();
-  const task = await repository.readTask(taskId);
+  const task = (await repository.recoverLegacyWorktreeContexts())
+    .find((candidate) => candidate.taskId === taskId);
   if (task === undefined) {
     throw new CentralTaskActionError('Central task was not found', 404);
   }
@@ -568,7 +569,7 @@ async function readGlobalTasks(globalConfigDirectory: string) {
       });
       const collection = await readRunCollection(repository.paths);
       const runsBySlug = new Map(collection.runs.map((run) => [run.slug, run]));
-      const tasks = (await repository.readTasks()).map((task) => {
+      const tasks = (await repository.recoverLegacyWorktreeContexts()).map((task) => {
         const status = projectCentralTaskStatus(task);
         const actions = getCentralTaskActions(task);
         return {

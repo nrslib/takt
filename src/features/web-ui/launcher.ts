@@ -323,7 +323,8 @@ export async function executeCentralTaskActionWithNodeSpawn(options: {
     ...(options.registeredProject === undefined ? {} : { registeredProject: options.registeredProject }),
   });
   const repository = await openProjectRepository(globalConfigDirectory, project);
-  const task = await repository.readTask(options.taskId);
+  const task = (await repository.recoverLegacyWorktreeContexts())
+    .find((candidate) => candidate.taskId === options.taskId);
   if (task === undefined) {
     throw new CentralTaskActionError('Central task was not found', 404);
   }
@@ -363,7 +364,8 @@ export async function startCentralTaskActionConversation(options: {
     ...(options.registeredProject === undefined ? {} : { registeredProject: options.registeredProject }),
   });
   const repository = await openProjectRepository(globalConfigDirectory, project);
-  const task = await repository.readTask(options.taskId);
+  const task = (await repository.recoverLegacyWorktreeContexts())
+    .find((candidate) => candidate.taskId === options.taskId);
   if (task === undefined) throw new CentralTaskActionError('Central task was not found', 404);
   const enriched = await enrichTaskActionConversationContext(
     task,

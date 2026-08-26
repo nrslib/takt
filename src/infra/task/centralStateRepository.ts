@@ -27,6 +27,7 @@ import {
   resolveRegisteredProject,
   type DirectoryFingerprint,
 } from '../config/global/projectRegistry.js';
+import { recoverLegacyCentralWorktreeContext } from './centralWorktreeRecovery.js';
 
 const STATE_VERSION = 1;
 const TASKS_VERSION = 1;
@@ -1246,6 +1247,26 @@ export class CentralTaskRepository {
   async readTask(taskId: string): Promise<CentralTaskRecord | undefined> {
     assertTaskId(taskId);
     return (await this.readTasks()).find((task) => task.taskId === taskId);
+  }
+
+  /** Repair terminal tasks created before worktree context was persisted. */
+  async recoverLegacyWorktreeContexts(): Promise<readonly CentralTaskRecord[]> {
+    return withLock(this.paths, async () => {
+      const tasks = [...await this.readTasks()];
+      let changed = false;
+      const recovered = tasks.map((task) => {
+        const next = recoverLegacyCentralWorktreeContext(
+          this.locations.projectDirectory,
+          this.globalConfigDirectory,
+          this.state.stateId,
+          task,
+        );
+        if (next !== task) changed = true;
+        return next;
+      });
+      if (changed) await this.writeTasks(recovered);
+      return recovered;
+    });
   }
 
   private async writeTasks(tasks: readonly CentralTaskRecord[]): Promise<void> {

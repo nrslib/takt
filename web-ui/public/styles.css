@@ -1064,7 +1064,7 @@ body[data-screen="task"] .viewer-screen {
 
 .execution-step-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -1097,12 +1097,6 @@ body[data-screen="task"] .viewer-screen {
 
 .execution-step-header:hover .execution-step-title {
   color: var(--accent);
-}
-
-.execution-step-index {
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 11px;
 }
 
 .execution-step-title {
