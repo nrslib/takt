@@ -171,6 +171,16 @@ export function getProjectConfigPath(projectDir: string): string {
   return resolveProjectConfigPath(projectDir);
 }
 
+/** Return the resolved path when global and project configuration directories collide. */
+export function getConfigDirCollision(projectDir: string): string | undefined {
+  const resolvedGlobalConfigDir = resolvePathForComparison(getGlobalConfigDir());
+  const resolvedProjectConfigDir = resolvePathForComparison(getProjectConfigDir(projectDir));
+
+  return resolvedGlobalConfigDir === resolvedProjectConfigDir
+    ? resolvedGlobalConfigDir
+    : undefined;
+}
+
 /** Get project tasks directory */
 export function getProjectTasksDir(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'tasks');
@@ -248,10 +258,14 @@ export function getRepertoireFacetPoolsDir(owner: string, repo: string, repertoi
 
 /** Validate path is safe (no directory traversal) */
 export function isPathSafe(basePath: string, targetPath: string): boolean {
-  const resolvedBase = existsSync(basePath) ? realpathSync(basePath) : resolve(basePath);
-  const resolvedTarget = existsSync(targetPath) ? realpathSync(targetPath) : resolve(targetPath);
+  const resolvedBase = resolvePathForComparison(basePath);
+  const resolvedTarget = resolvePathForComparison(targetPath);
   const rel = relative(resolvedBase, resolvedTarget);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function resolvePathForComparison(path: string): string {
+  return existsSync(path) ? realpathSync(path) : resolve(path);
 }
 
 // Re-export project config functions

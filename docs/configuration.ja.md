@@ -9,6 +9,8 @@ phase 粒度の usage events と集計方法は [Observability Guide](./observab
 
 `~/.takt/config.yaml` で TAKT のデフォルト設定を行います。このファイルは初回実行時に自動作成されます。すべてのフィールドは省略可能です。
 
+グローバル設定ディレクトリと現在のプロジェクトの `.takt/` が同じ実体パスに解決される場合、TAKT は設定ディレクトリを初期化する前にエラー終了します。ホームディレクトリで実行する場合やシンボリックリンク経由で衝突する場合は、`TAKT_CONFIG_DIR` をプロジェクトの `.takt/` とは異なるディレクトリに設定してから再実行してください。`--help` と `--version` はこのチェックの対象外です。
+
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI 言語: 'en' または 'ja'

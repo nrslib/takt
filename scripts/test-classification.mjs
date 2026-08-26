@@ -190,6 +190,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/codex-client-retry.test.ts',
   'src/__tests__/codex-skill-config.test.ts',
   'src/__tests__/codex-spawn-guard.test.ts',
+  'src/__tests__/config-path-collision.test.ts',
   'src/__tests__/conversation-session-failure.test.ts',
   'src/__tests__/conversationLoop-resume.test.ts',
   'src/__tests__/conversationSession.test.ts',

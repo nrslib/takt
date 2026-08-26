@@ -9,6 +9,8 @@ For phase-level usage events and analysis, see the [Observability Guide](./obser
 
 Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatically on first run. All fields are optional.
 
+If the global configuration directory and the current project's `.takt/` resolve to the same real path, TAKT exits with an error before initializing either configuration directory. If you run from your home directory or the paths collide through a symbolic link, set `TAKT_CONFIG_DIR` to a directory different from the project's `.takt/` and run TAKT again. `--help` and `--version` are exempt from this check.
+
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI language: 'en' or 'ja'

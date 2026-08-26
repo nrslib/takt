@@ -17,6 +17,7 @@ vi.mock('../features/tasks/execute/runAllTasks.js', () => {
 });
 
 vi.mock('../app/cli/initialization.js', () => ({
+  assertConfigDirsDoNotCollide: vi.fn(),
   getCliExecutionContext: vi.fn(() => ({ cwd: '/project' })),
   initializeCliExecutionContext: vi.fn(),
 }));
