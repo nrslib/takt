@@ -1,5 +1,6 @@
 import { getLocale, t } from './i18n.js';
 import { workflowDisplayName } from './execution-model.js';
+import { markdownTitle } from './markdown-view.js';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -25,7 +26,7 @@ function renderTask(task, selection, onSelectRun, onRequeue) {
   statusLine.append(statusBadge(task.status), element('time', 'run-time', formatDate(task.updatedAt)));
   header.append(
     statusLine,
-    element('strong', 'task-card-title', task.task),
+    element('strong', 'task-card-title', markdownTitle(task.task)),
     (() => {
       const workflow = workflowDisplayName(task.workflow, getLocale());
       const context = element('span', 'task-card-context', t('task.context', {

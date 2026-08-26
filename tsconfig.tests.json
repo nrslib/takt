@@ -102,6 +102,7 @@
     "src/__tests__/web-ui-execution-model.test.ts",
     "src/__tests__/web-ui-i18n.test.ts",
     "src/__tests__/web-ui-launcher.test.ts",
+    "src/__tests__/web-ui-markdown-view.test.ts",
     "src/__tests__/web-ui-native-directory-picker.test.ts",
     "src/__tests__/web-ui-public-api.test.ts",
     "src/__tests__/web-ui-ui-state.test.ts",

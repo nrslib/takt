@@ -665,14 +665,26 @@ body[data-screen="task"] .viewer-screen {
   white-space: nowrap;
 }
 
-.run-task-summary {
-  max-width: 720px;
-  margin-top: 9px !important;
-  color: #c7d0ca !important;
-  font-family: var(--font-sans) !important;
-  font-size: 13px !important;
-  line-height: 1.55;
-  white-space: normal !important;
+.run-task-disclosure {
+  width: min(720px, 100%);
+  margin-top: 11px;
+  border-left: 1px solid var(--border-strong);
+}
+
+.run-task-disclosure > summary {
+  width: fit-content;
+  padding: 5px 9px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.run-task-disclosure > .markdown-view {
+  max-height: 260px;
+  margin-top: 5px;
+  padding: 12px 14px;
+  overflow: auto;
+  background: var(--surface);
 }
 
 .trace-section {
@@ -785,6 +797,25 @@ body[data-screen="task"] .viewer-screen {
   pointer-events: none;
 }
 
+.execution-parallel-group {
+  position: absolute;
+  z-index: 0;
+  min-width: 248px;
+  min-height: 175px;
+  border: 1px dashed rgb(216 171 103 / 42%);
+  background: rgb(216 171 103 / 3%);
+  pointer-events: none;
+}
+
+.execution-parallel-label {
+  position: absolute;
+  inset: 5px auto auto 10px;
+  color: var(--warning);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .05em;
+}
+
 .execution-edge {
   vector-effect: non-scaling-stroke;
   stroke-width: 1.5;
@@ -856,6 +887,17 @@ body[data-screen="task"] .viewer-screen {
   color: var(--text);
   text-align: left;
   background: transparent;
+  cursor: grab;
+  touch-action: none;
+}
+
+.execution-step[data-moving="true"] {
+  z-index: 4;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 34%);
+}
+
+.execution-step[data-moving="true"] .execution-step-header {
+  cursor: grabbing;
 }
 
 .execution-step-header:hover .execution-step-title {
@@ -1086,33 +1128,6 @@ body[data-screen="task"] .viewer-screen {
 
 .status-failed {
   color: var(--danger);
-}
-
-.trace-selection {
-  display: grid;
-  gap: 7px;
-  margin: 0;
-  padding: 11px 12px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  font-size: 12px;
-}
-
-.trace-selection-label {
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-}
-
-.trace-selection strong {
-  overflow-wrap: anywhere;
-  font-size: 12px;
-  font-weight: 560;
-}
-
-.trace-selection .toolbar-button {
-  justify-self: start;
 }
 
 .detail-tabs {
@@ -1351,13 +1366,94 @@ body[data-screen="task"] .viewer-screen {
   padding: 0;
 }
 
-.task-panel pre {
+.task-panel .markdown-view {
   max-height: 430px;
   margin: 0;
   padding: 16px;
+  overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg);
+}
+
+.markdown-view {
+  color: #c7d0ca;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.markdown-view > :first-child {
+  margin-top: 0;
+}
+
+.markdown-view > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-view h1,
+.markdown-view h2,
+.markdown-view h3,
+.markdown-view h4,
+.markdown-view h5,
+.markdown-view h6 {
+  margin: 1.25em 0 .55em;
+  color: var(--text);
+  font-size: 1em;
+  line-height: 1.4;
+}
+
+.markdown-view h1,
+.markdown-view h2 {
+  padding-bottom: .35em;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.15em;
+}
+
+.markdown-view p,
+.markdown-view ul,
+.markdown-view ol,
+.markdown-view pre {
+  margin: .7em 0;
+}
+
+.markdown-view ul,
+.markdown-view ol {
+  padding-left: 1.5em;
+}
+
+.markdown-view code {
+  padding: .12em .32em;
+  background: var(--surface-hover);
+  font-family: var(--font-mono);
+  font-size: .92em;
+}
+
+.markdown-view pre {
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  background: var(--chrome);
+  white-space: pre-wrap;
+}
+
+.markdown-view pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown-view a {
+  color: var(--accent);
+}
+
+.inspector-selection-title {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.inspector-clear-selection {
+  justify-self: start;
 }
 
 .chat-surface {

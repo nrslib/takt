@@ -11,6 +11,7 @@ import {
 } from './execution-map.js';
 import { renderTaskNavigator } from './task-navigator.js';
 import { getLocale, t } from './i18n.js';
+import { renderMarkdown } from './markdown-view.js';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -92,21 +93,6 @@ function findOccurrence(trace, occurrenceId) {
   return null;
 }
 
-function selectionText(trace, selectedOccurrenceId) {
-  if (selectedOccurrenceId === null) {
-    return t('map.allEvents');
-  }
-  const selected = findOccurrence(trace, selectedOccurrenceId);
-  if (selected === null) return t('map.allEvents');
-  const occurrenceIndex = selected.node.occurrences.findIndex(
-    (occurrence) => occurrence.id === selected.occurrence.id,
-  );
-  const pass = selected.occurrence.iteration === undefined
-    ? t('map.pass', { number: occurrenceIndex + 1 })
-    : t('map.iteration', { number: selected.occurrence.iteration });
-  return `${selected.node.displayLabel ?? selected.node.label} · ${pass} · ${t(`app.status.${selected.occurrence.status}`)}`;
-}
-
 export function createExecutionView(options) {
   let activeRunKey = '';
   let activeTab = 'live';
@@ -118,6 +104,7 @@ export function createExecutionView(options) {
   let followLog = true;
   let taskList = [];
   let taskSelection = null;
+  let customNodePositions = new Map();
 
   function renderTaskList(tasks, selection) {
     taskList = tasks;
@@ -137,28 +124,16 @@ export function createExecutionView(options) {
     return element('span', `live-state live-state-${liveState}`, liveStateLabel(liveState));
   }
 
-  function renderSelectionSummary(trace) {
-    const summary = element('div', 'trace-selection');
-    summary.id = 'trace-selection';
-    summary.append(
-      element('span', 'trace-selection-label', t('map.focus')),
-      element('strong', '', selectionText(trace, selectedOccurrenceId)),
-    );
-    if (selectedOccurrenceId !== null && findOccurrence(trace, selectedOccurrenceId) !== null) {
-      const clear = element('button', 'toolbar-button', t('map.showAll'));
-      clear.type = 'button';
-      clear.addEventListener('click', () => selectOccurrence(null, null));
-      summary.append(clear);
-    }
-    return summary;
-  }
-
   function renderTrace(trace, meta) {
     const section = renderExecutionMap(trace, {
       liveIndicator: liveIndicator(),
       emptyState: renderEmpty(t('viewer.waitingForExecution'), t('viewer.firstStepDescription')),
       selectedOccurrenceId,
       onSelectOccurrence: selectOccurrence,
+      customNodePositions,
+      onMoveNode(nodeId, position) {
+        customNodePositions = new Map(customNodePositions).set(nodeId, position);
+      },
     });
     if (meta.reason !== undefined) section.append(element('p', 'run-reason', meta.reason));
     return section;
@@ -261,7 +236,7 @@ export function createExecutionView(options) {
 
   function renderTaskPanel(meta) {
     const panel = element('section', 'detail-panel task-panel');
-    panel.append(element('pre', '', meta.task));
+    panel.append(renderMarkdown(meta.task));
     return panel;
   }
 
@@ -269,13 +244,15 @@ export function createExecutionView(options) {
     const container = element('section', 'detail-tabs');
     const tabs = element('div', 'tab-list');
     tabs.setAttribute('role', 'tablist');
-    const definitions = [
-      ['live', t('viewer.runLog'), trace.events.length],
-      ['reports', t('viewer.runReports'), detail.reports.length],
-      ['task', t('viewer.runTask'), null],
-    ];
-    for (const [id, label, count] of definitions) {
-      const button = element('button', 'tab-button', count === null ? label : `${label} ${count}`);
+    const definitions = selectedOccurrenceId === null
+      ? [
+          ['live', t('viewer.runLog')],
+          ['reports', t('viewer.runReports')],
+          ['task', t('viewer.runTask')],
+        ]
+      : [['live', t('viewer.runLog')]];
+    for (const [id, label] of definitions) {
+      const button = element('button', 'tab-button', label);
       button.type = 'button';
       button.id = `run-tab-${id}`;
       button.setAttribute('role', 'tab');
@@ -348,7 +325,7 @@ export function createExecutionView(options) {
     restoreViewState(state);
   }
 
-  function renderInspectorSummary(detail) {
+  function renderRunSummary(detail) {
     const summary = element('section', 'inspector-run-summary');
     const heading = element('div', 'inspector-run-heading');
     heading.append(
@@ -377,6 +354,39 @@ export function createExecutionView(options) {
     return summary;
   }
 
+  function renderStepSummary(trace) {
+    const selected = findOccurrence(trace, selectedOccurrenceId);
+    if (selected === null) return null;
+    const summary = element('section', 'inspector-run-summary inspector-step-summary');
+    const heading = element('div', 'inspector-run-heading');
+    heading.append(
+      element('span', 'section-kicker', t('viewer.stepInspector')),
+      element('strong', 'inspector-selection-title', selected.node.displayLabel ?? selected.node.label),
+      statusBadge(selected.occurrence.status),
+    );
+    const occurrenceIndex = selected.node.occurrences.findIndex(
+      (candidate) => candidate.id === selected.occurrence.id,
+    );
+    const entries = [
+      [t('viewer.execution'), selected.occurrence.iteration === undefined
+        ? t('map.pass', { number: occurrenceIndex + 1 })
+        : t('map.iteration', { number: selected.occurrence.iteration })],
+      [t('viewer.phase'), selected.occurrence.phases.join(' / ') || '—'],
+      [t('viewer.persona'), selected.occurrence.personas.join(' / ') || '—'],
+    ];
+    const facts = element('dl', 'run-facts');
+    for (const [label, value] of entries) {
+      const fact = element('div', 'run-fact');
+      fact.append(element('dt', '', label), element('dd', '', value));
+      facts.append(fact);
+    }
+    const clear = element('button', 'toolbar-button inspector-clear-selection', t('viewer.backToRun'));
+    clear.type = 'button';
+    clear.addEventListener('click', () => selectOccurrence(null, null));
+    summary.append(heading, facts, clear);
+    return summary;
+  }
+
   function renderInspector(detail, trace) {
     const inspector = element('section', 'inspector-content');
     const back = element('button', 'mobile-inspector-back', t('viewer.backToGraph'));
@@ -385,8 +395,8 @@ export function createExecutionView(options) {
       const screen = options.inspector?.closest?.('.viewer-screen');
       if (screen !== null && screen !== undefined) screen.dataset.mobileView = 'detail';
     });
-    inspector.append(back, renderInspectorSummary(detail));
-    inspector.append(renderSelectionSummary(trace));
+    const stepSummary = renderStepSummary(trace);
+    inspector.append(back, stepSummary ?? renderRunSummary(detail));
     inspector.append(renderTabs(detail, trace));
     return inspector;
   }
@@ -396,9 +406,13 @@ export function createExecutionView(options) {
     activeTab = 'live';
     const map = options.runDetail.querySelector('.execution-map');
     if (map !== null) updateExecutionMapSelection(map, selectedOccurrenceId);
-    const summary = (options.inspector ?? options.runDetail).querySelector('#trace-selection');
-    if (summary !== null && currentTrace !== null) summary.replaceWith(renderSelectionSummary(currentTrace));
-    renderDetailPanel();
+    if (currentDetail !== null && currentTrace !== null && options.inspector !== undefined) {
+      const state = captureViewState();
+      options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
+      restoreViewState({ ...state, inspectorScrollTop: 0 });
+    } else {
+      renderDetailPanel();
+    }
   }
 
   function renderDetail(detail, selection) {
@@ -412,6 +426,7 @@ export function createExecutionView(options) {
       activeTab = detail.meta.status === 'completed' && detail.reports.length > 0 ? 'reports' : 'live';
       selectedOccurrenceId = null;
       selectedReport = '';
+      customNodePositions = new Map();
     }
     currentDetail = detail;
     const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary, getLocale());
@@ -426,8 +441,13 @@ export function createExecutionView(options) {
     title.append(
       workflowHeading,
       element('p', '', `${detail.project.displayName} / ${detail.meta.runSlug}`),
-      element('p', 'run-task-summary', detail.meta.task),
     );
+    const taskDisclosure = element('details', 'run-task-disclosure');
+    taskDisclosure.append(
+      element('summary', '', t('viewer.taskInstruction')),
+      renderMarkdown(detail.meta.task),
+    );
+    title.append(taskDisclosure);
     const header = element('header', 'run-detail-header');
     header.append(title);
     const warning = renderArtifactWarnings(detail, trace);

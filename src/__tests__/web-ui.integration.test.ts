@@ -792,6 +792,9 @@ describe('Web UI HTTP boundary', () => {
     const executionViewResponse = await fetch(`${origin}/execution-view.js`);
     expect(executionViewResponse.status).toBe(200);
     expect(await executionViewResponse.text()).toContain("from './execution-model.js'");
+    const markdownViewResponse = await fetch(`${origin}/markdown-view.js`);
+    expect(markdownViewResponse.status).toBe(200);
+    expect(await markdownViewResponse.text()).toContain('renderMarkdown');
   });
 
   it('browses and registers an unregistered execution directory', async () => {

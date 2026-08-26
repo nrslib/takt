@@ -567,6 +567,52 @@ describe('Web UI execution model', () => {
     }
   });
 
+  it('groups sibling parallel steps without adding workflow lanes', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const parent: ExecutionStackFrame = {
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'review',
+        kind: 'parallel',
+        occurrence: 1,
+      };
+      const event = (step: string): ExecutionEvent => ({
+        type: 'step_start',
+        workflow: 'default',
+        step,
+        iteration: 1,
+        stack: [parent, {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step,
+          kind: 'agent',
+          occurrence: 1,
+        }],
+      });
+      const trace = buildExecutionTrace(
+        { workflow: 'default', status: 'running' },
+        [event('architecture-review'), event('coding-review')],
+      );
+      const section = renderExecutionMap(trace, {
+        liveIndicator: new FakeDomNode('span'),
+        emptyState: new FakeDomNode('div'),
+        selectedOccurrenceId: null,
+        onSelectOccurrence: () => undefined,
+      });
+      const groups = section.querySelectorAll('.execution-parallel-group') as FakeDomNode[];
+
+      expect(groups).toHaveLength(1);
+      expect(groups[0]?.textContent).toBe('');
+      expect(groups[0]?.children[0]?.textContent).toBe('PARALLEL · review');
+      expect(section.querySelectorAll('.workflow-lane')).toHaveLength(0);
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
   it('keeps a cyclic execution path within bounded layout columns', () => {
     const runtime = globalThis as unknown as { document?: FakeDomDocument };
     const previousDocument = runtime.document;

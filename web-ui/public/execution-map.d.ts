@@ -13,6 +13,11 @@ export interface ExecutionMapOptions {
   readonly emptyState: unknown;
   readonly selectedOccurrenceId: string | null;
   readonly onSelectOccurrence: (node: ExecutionNode, occurrence: ExecutionOccurrence) => void;
+  readonly customNodePositions?: ReadonlyMap<string, { readonly x: number; readonly y: number }>;
+  readonly onMoveNode?: (
+    nodeId: string,
+    position: { readonly x: number; readonly y: number },
+  ) => void;
 }
 
 export function renderExecutionMap(

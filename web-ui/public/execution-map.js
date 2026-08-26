@@ -2,6 +2,8 @@ import { t } from './i18n.js';
 
 const executionMapDisposers = new WeakMap();
 const PAN_THRESHOLD = 4;
+const NODE_MARGIN = 16;
+const PARALLEL_GROUP_PADDING = 14;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -107,7 +109,32 @@ function renderStep(node, position, selectedOccurrenceId, onSelectOccurrence) {
     latest.personas.join(' / '),
   ].filter(Boolean);
   step.append(headerButton, iterations, element('p', 'execution-step-meta', metadata.join(' · ')));
-  return step;
+  return { step, headerButton };
+}
+
+function parallelFrame(node) {
+  const frames = node.occurrences.flatMap((occurrence) => occurrence.stack ?? []);
+  return [...frames].reverse().find((frame) => frame.kind === 'parallel');
+}
+
+function parallelGroupId(frame) {
+  return frame === undefined
+    ? null
+    : JSON.stringify([frame.workflow_ref, frame.step, frame.occurrence]);
+}
+
+function parallelGroups(nodes) {
+  const groups = new Map();
+  for (const node of nodes) {
+    const frame = parallelFrame(node);
+    const id = parallelGroupId(frame);
+    if (id === null || frame === undefined) continue;
+    const previous = groups.get(id);
+    groups.set(id, previous === undefined
+      ? { id, label: frame.step, nodeIds: [node.id] }
+      : { ...previous, nodeIds: [...previous.nodeIds, node.id] });
+  }
+  return [...groups.values()].filter((group) => group.nodeIds.length > 1);
 }
 
 function findOccurrence(trace, occurrenceId) {
@@ -150,7 +177,7 @@ function parentContextMatches(candidateStack, callStack) {
     && parentStack.every((frame, index) => sameStackFrame(frame, candidateParent[index]));
 }
 
-function layoutSteps(trace) {
+function layoutSteps(trace, customNodePositions) {
   const nodes = stepNodes(trace).slice().sort((left, right) => (
     left.firstEventIndex - right.firstEventIndex || left.id.localeCompare(right.id)
   ));
@@ -196,11 +223,124 @@ function layoutSteps(trace) {
     column.push(y);
     columns.set(depth, column);
     const x = 28 + depth * 270;
-    positions.set(node.id, { x, y });
+    positions.set(node.id, customNodePositions.get(node.id) ?? { x, y });
     maxX = Math.max(maxX, x + 220);
     maxY = Math.max(maxY, y + 136);
   });
+  for (const group of parallelGroups(nodes)) {
+    const groupedNodes = group.nodeIds
+      .map((nodeId) => nodeByLogicalId.get(nodeId))
+      .filter(Boolean)
+      .sort((left, right) => left.firstEventIndex - right.firstEventIndex);
+    const groupedPositions = groupedNodes.map((node) => positions.get(node.id)).filter(Boolean);
+    const anchorX = Math.min(...groupedPositions.map((position) => position.x));
+    const anchorY = Math.min(...groupedPositions.map((position) => position.y));
+    groupedNodes.forEach((node, index) => {
+      if (customNodePositions.has(node.id)) return;
+      positions.set(node.id, {
+        x: anchorX + (index % 2) * 244,
+        y: anchorY + Math.floor(index / 2) * 170,
+      });
+    });
+  }
+  for (const position of positions.values()) {
+    maxX = Math.max(maxX, position.x + 220);
+    maxY = Math.max(maxY, position.y + 136);
+  }
   return { positions, width: Math.max(640, maxX + 36), height: Math.max(300, maxY + 36) };
+}
+
+function positionParallelGroup(group, canvas) {
+  const members = group.nodeIds
+    .map((nodeId) => [...canvas.querySelectorAll('.execution-step')]
+      .find((step) => step.dataset.stepId === nodeId))
+    .filter(Boolean);
+  const container = [...canvas.querySelectorAll('.execution-parallel-group')]
+    .find((candidate) => candidate.dataset.parallelGroupId === group.id);
+  if (container === undefined || members.length === 0) return;
+  const left = Math.min(...members.map((member) => Number.parseFloat(member.style.left))) - PARALLEL_GROUP_PADDING;
+  const top = Math.min(...members.map((member) => Number.parseFloat(member.style.top))) - PARALLEL_GROUP_PADDING - 19;
+  const right = Math.max(...members.map((member) => (
+    Number.parseFloat(member.style.left) + Math.max(member.offsetWidth, 220)
+  )));
+  const bottom = Math.max(...members.map((member) => (
+    Number.parseFloat(member.style.top) + Math.max(member.offsetHeight, 136)
+  )));
+  container.style.setProperty('left', `${left}px`);
+  container.style.setProperty('top', `${top}px`);
+  container.style.setProperty('width', `${right - left + PARALLEL_GROUP_PADDING}px`);
+  container.style.setProperty('height', `${bottom - top + PARALLEL_GROUP_PADDING}px`);
+}
+
+function updateParallelGroups(groups, canvas) {
+  groups.forEach((group) => positionParallelGroup(group, canvas));
+}
+
+function renderParallelGroup(group) {
+  const container = element('section', 'execution-parallel-group');
+  container.dataset.parallelGroupId = group.id;
+  container.setAttribute('aria-label', t('map.parallelGroup', { step: group.label }));
+  container.append(element('span', 'execution-parallel-label', t('map.parallel', { step: group.label })));
+  return container;
+}
+
+function attachNodeDrag(step, header, canvas, groups, onMoveNode) {
+  let dragState = null;
+  let suppressClick = false;
+  const clear = (event) => {
+    if (dragState === null || event?.pointerId !== dragState.pointerId) return;
+    const completed = dragState;
+    dragState = null;
+    delete step.dataset.moving;
+    if (header.hasPointerCapture?.(completed.pointerId)) header.releasePointerCapture?.(completed.pointerId);
+    if (completed.dragging) {
+      suppressClick = true;
+      onMoveNode(step.dataset.stepId, {
+        x: Number.parseFloat(step.style.left),
+        y: Number.parseFloat(step.style.top),
+      });
+    }
+  };
+  header.addEventListener('pointerdown', (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    dragState = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      x: Number.parseFloat(step.style.left),
+      y: Number.parseFloat(step.style.top),
+      dragging: false,
+    };
+    header.setPointerCapture?.(event.pointerId);
+  });
+  header.addEventListener('pointermove', (event) => {
+    if (dragState === null || event.pointerId !== dragState.pointerId) return;
+    const deltaX = event.clientX - dragState.clientX;
+    const deltaY = event.clientY - dragState.clientY;
+    if (!dragState.dragging && Math.hypot(deltaX, deltaY) < PAN_THRESHOLD) return;
+    dragState.dragging = true;
+    step.dataset.moving = 'true';
+    const x = Math.max(NODE_MARGIN, dragState.x + deltaX);
+    const y = Math.max(NODE_MARGIN, dragState.y + deltaY);
+    step.style.setProperty('left', `${x}px`);
+    step.style.setProperty('top', `${y}px`);
+    const width = Math.max(canvas.clientWidth, x + step.offsetWidth + NODE_MARGIN);
+    const height = Math.max(canvas.clientHeight, y + step.offsetHeight + NODE_MARGIN);
+    canvas.style.setProperty('width', `${width}px`);
+    canvas.style.setProperty('height', `${height}px`);
+    updateParallelGroups(groups, canvas);
+    canvas.dispatchEvent(new Event('execution-map-node-moved'));
+    event.preventDefault?.();
+  });
+  header.addEventListener('pointerup', clear);
+  header.addEventListener('pointercancel', clear);
+  header.addEventListener('lostpointercapture', clear);
+  header.addEventListener('click', (event) => {
+    if (!suppressClick) return;
+    suppressClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
 }
 
 function visibleTransitionRelations(trace) {
@@ -368,16 +508,20 @@ function isInteractiveTarget(target) {
     || target?.dataset?.interactive === 'true';
 }
 
-function renderRelationOverlay(section, map, canvas, trace) {
+function renderRelationOverlay(section, map, canvas, trace, groups) {
   const svg = svgElement('svg');
   svg.setAttribute('class', 'execution-edge-overlay');
   svg.setAttribute('aria-hidden', 'true');
   updateExecutionMapGeometry(svg, canvas, trace);
   let disposed = false;
   const update = () => {
-    if (!disposed) updateExecutionMapGeometry(svg, canvas, trace);
+    if (!disposed) {
+      updateParallelGroups(groups, canvas);
+      updateExecutionMapGeometry(svg, canvas, trace);
+    }
   };
   map.addEventListener('scroll', update);
+  canvas.addEventListener('execution-map-node-moved', update);
   let observer;
   let windowResize;
   if (typeof ResizeObserver === 'function') {
@@ -436,6 +580,7 @@ function renderRelationOverlay(section, map, canvas, trace) {
     if (disposed) return;
     disposed = true;
     map.removeEventListener('scroll', update);
+    canvas.removeEventListener('execution-map-node-moved', update);
     map.removeEventListener('pointerdown', pointerDown);
     map.removeEventListener('pointermove', pointerMove);
     map.removeEventListener('pointerup', clearPan);
@@ -464,7 +609,9 @@ export function renderExecutionMap(trace, options) {
     return section;
   }
 
-  const layout = layoutSteps(trace);
+  const customNodePositions = options.customNodePositions ?? new Map();
+  const layout = layoutSteps(trace, customNodePositions);
+  const groups = parallelGroups(nodes);
   const mapHeader = element('div', 'execution-map-header');
   mapHeader.append(
     element('span', 'execution-map-summary', t('map.summarySteps', {
@@ -485,20 +632,33 @@ export function renderExecutionMap(trace, options) {
   const canvas = element('div', 'execution-map-canvas');
   canvas.style.setProperty('width', `${layout.width}px`);
   canvas.style.setProperty('height', `${layout.height}px`);
+  for (const group of groups) canvas.append(renderParallelGroup(group));
   for (const node of nodes) {
-    const step = renderStep(
+    const renderedStep = renderStep(
       node,
       layout.positions.get(node.id) ?? { x: 28, y: 28 },
       options.selectedOccurrenceId,
       options.onSelectOccurrence,
     );
-    if (step !== null) canvas.append(step);
+    if (renderedStep !== null) {
+      canvas.append(renderedStep.step);
+      if (options.onMoveNode !== undefined) {
+        attachNodeDrag(
+          renderedStep.step,
+          renderedStep.headerButton,
+          canvas,
+          groups,
+          options.onMoveNode,
+        );
+      }
+    }
   }
+  updateParallelGroups(groups, canvas);
   map.append(canvas);
   section.append(map);
   // Measure anchors after the map is attached. Detached nodes have zero
   // geometry in browsers, which would leave the initial SVG paths at 0,0.
-  const overlay = renderRelationOverlay(section, map, canvas, trace);
+  const overlay = renderRelationOverlay(section, map, canvas, trace, groups);
   canvas.append(overlay);
   return section;
 }
