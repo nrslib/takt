@@ -141,10 +141,10 @@ program
   .command('ui')
   .description('Start, stop, or restart the local TAKT Web UI')
   .argument('[action]', 'UI action (start|stop|restart)', parseUiAction, 'start')
-  .option('--port <number>', 'Local HTTP port', parseUiPort, 4178)
+  .option('--port <number>', 'Local HTTP port', parseUiPort, 20525)
   .action(async (action: UiAction, opts: { port: number }) => {
     const { openWebUi, restartWebUi, stopWebUi } = await import('../../features/web-ui/index.js');
-    const { info } = await import('../../shared/ui/index.js');
+    const { info, warn } = await import('../../shared/ui/index.js');
     if (action === 'stop') {
       const result = await stopWebUi();
       info(result.disposition === 'stopped'
@@ -152,6 +152,7 @@ program
         : 'TAKT Web UI is not running');
       return;
     }
+    warn('TAKT Web UI は実験的機能です。予告なく仕様が変更されることがあります。');
     if (action === 'restart') {
       const { origin } = await restartWebUi({ port: opts.port });
       info(`TAKT Web UI restarted: ${origin}`);

@@ -55,6 +55,13 @@ describe('CLI command registration', () => {
     expect(() => parseUiAction(action)).toThrow(/UI action must be/);
   });
 
+  it('uses the reserved Web UI default port', () => {
+    const uiCommand = program.commands.find((command) => command.name() === 'ui');
+    const portOption = uiCommand?.options.find((option) => option.long === '--port');
+
+    expect(portOption?.defaultValue).toBe(20525);
+  });
+
   it.each([
     ['reset', ['config', 'categories']],
     ['workflow', ['init', 'doctor', 'inspect', 'bundle']],

@@ -31,7 +31,7 @@
 
 ## Web UI の実行境界
 
-`takt ui` はローカル Web UI を `http://127.0.0.1:4178` で起動し、`--port` でポートを変更できます。同じ `TAKT_CONFIG_DIR` のインスタンスがすでに動いている場合は二重起動せず、実際の URL と PID を表示します。グレースフルに停止するには `takt ui stop`、停止後に起動し直すには `takt ui restart [--port <number>]` を使用します。
+`takt ui` は実験的なローカル Web UI を `http://127.0.0.1:20525` で起動し、`--port` でポートを変更できます。起動時には、予告なく仕様が変更される可能性があることを表示します。同じ `TAKT_CONFIG_DIR` のインスタンスがすでに動いている場合は二重起動せず、実際の URL と PID を表示します。グレースフルに停止するには `takt ui stop`、停止後に起動し直すには `takt ui restart [--port <number>]` を使用します。
 
 Web UI がキューしたタスク、実行、セッションは `TAKT_CONFIG_DIR` 配下のチャネル非依存な中央 state に保存されます。CLI は従来どおりプロジェクトローカルの state を使用します。同一 canonical project に対する CLI と Web UI の同時実行・mutationはサポート対象外です。1つの実行先につき、利用するチャネルを1つにしてください。
 
