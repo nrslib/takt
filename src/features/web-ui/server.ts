@@ -290,6 +290,7 @@ async function loadAssets() {
     ['/execution-view.js', '../../../web-ui/public/execution-view.js', 'text/javascript; charset=utf-8'],
     ['/markdown-view.js', '../../../web-ui/public/markdown-view.js', 'text/javascript; charset=utf-8'],
     ['/live-stream.js', '../../../web-ui/public/live-stream.js', 'text/javascript; charset=utf-8'],
+    ['/task-action-ui.js', '../../../web-ui/public/task-action-ui.js', 'text/javascript; charset=utf-8'],
     ['/task-navigator.js', '../../../web-ui/public/task-navigator.js', 'text/javascript; charset=utf-8'],
     ['/ui-state.js', '../../../web-ui/public/ui-state.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', '../../../web-ui/public/styles.css', 'text/css; charset=utf-8'],

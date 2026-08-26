@@ -984,6 +984,9 @@ describe('Web UI HTTP boundary', () => {
     const executionViewResponse = await fetch(`${origin}/execution-view.js`);
     expect(executionViewResponse.status).toBe(200);
     expect(await executionViewResponse.text()).toContain("from './execution-model.js'");
+    const taskActionUiResponse = await fetch(`${origin}/task-action-ui.js`);
+    expect(taskActionUiResponse.status).toBe(200);
+    expect(taskActionUiResponse.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
     const markdownViewResponse = await fetch(`${origin}/markdown-view.js`);
     expect(markdownViewResponse.status).toBe(200);
     expect(await markdownViewResponse.text()).toContain('renderMarkdown');
