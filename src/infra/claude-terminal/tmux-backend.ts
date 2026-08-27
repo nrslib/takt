@@ -4,6 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { stripAnsi } from '../../shared/utils/text.js';
 import { createLogger, getErrorMessage, guardChildProcessStreams } from '../../shared/utils/index.js';
+import { buildChildProcessEnv, isCentralExecution } from '../../shared/utils/child-process-env.js';
 import {
   buildEnvWithNestedObservabilitySnapshot,
   pickNestedObservabilityEnv,
@@ -106,9 +107,11 @@ async function loadBuffer(bufferName: string, text: string): Promise<void> {
     throw new Error('node:child_process.spawn is required to run tmux.');
   }
   await new Promise<void>((resolve, reject) => {
-    const child = childProcess.spawn('tmux', ['load-buffer', '-b', bufferName, '-'], {
+    const spawnOptions: childProcess.SpawnOptions = {
       stdio: ['pipe', 'ignore', 'pipe'],
-    });
+    };
+    if (isCentralExecution()) spawnOptions.env = buildChildProcessEnv();
+    const child = childProcess.spawn('tmux', ['load-buffer', '-b', bufferName, '-'], spawnOptions);
     let stderr = '';
 
     child.stderr?.setEncoding('utf-8');
@@ -145,7 +148,7 @@ async function loadBuffer(bufferName: string, text: string): Promise<void> {
       }
       rejectOnce(new Error(`tmux load-buffer failed (${code}): ${stderr.trim()}`));
     });
-    child.stdin.end(text);
+    child.stdin!.end(text);
   });
 }
 

@@ -3,11 +3,29 @@
  */
 
 import { join } from 'node:path';
-import type { Command } from 'commander';
+import { InvalidArgumentError, type Command } from 'commander';
 import type { RoutingTelemetryStatus } from '../../infra/config/global/globalConfigAccessors.js';
 import { parseFacetType, VALID_FACET_TYPES } from '../../features/config/facetTypes.js';
 import { program } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
+
+export function parseUiPort(value: string): number {
+  if (!/^\d+$/u.test(value)) {
+    throw new InvalidArgumentError('Port must be a decimal integer between 0 and 65535');
+  }
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new InvalidArgumentError('Port must be an integer between 0 and 65535');
+  }
+  return port;
+}
+
+export type UiAction = 'start' | 'stop' | 'restart';
+
+export function parseUiAction(value: string): UiAction {
+  if (value === 'start' || value === 'stop' || value === 'restart') return value;
+  throw new InvalidArgumentError('UI action must be start, stop, or restart');
+}
 
 program
   .command('run')
@@ -128,6 +146,37 @@ program
     await runWorkflowMakerCommand(getCliExecutionContext().cwd, {
       agentOverrides: resolveAgentOverrides(program),
     });
+  });
+
+program
+  .command('ui')
+  .description('Start, stop, or restart the local TAKT Web UI')
+  .argument('[action]', 'UI action (start|stop|restart)', parseUiAction, 'start')
+  .option('--port <number>', 'Local HTTP port', parseUiPort, 20525)
+  .action(async (action: UiAction, opts: { port: number }) => {
+    const { openWebUi, restartWebUi, stopWebUi } = await import('../../features/web-ui/index.js');
+    const { info, warn } = await import('../../shared/ui/index.js');
+    if (action === 'stop') {
+      const result = await stopWebUi();
+      info(result.disposition === 'stopped'
+        ? `TAKT Web UI stopped: ${result.instance.origin}`
+        : 'TAKT Web UI is not running');
+      return;
+    }
+    warn('TAKT Web UI は実験的機能です。予告なく仕様が変更されることがあります。');
+    if (action === 'restart') {
+      const { origin } = await restartWebUi({ port: opts.port });
+      info(`TAKT Web UI restarted: ${origin}`);
+      return;
+    }
+    const result = await openWebUi({
+      port: opts.port,
+    });
+    if (result.disposition === 'existing') {
+      info(`TAKT Web UI is already running: ${result.instance.origin} (PID ${result.instance.pid})`);
+      return;
+    }
+    info(`TAKT Web UI: ${result.origin}`);
   });
 
 program

@@ -123,9 +123,27 @@ describe('interactive system prompt', () => {
 });
 
 describe('assistant conversation plan', () => {
+  it('should propagate the resolved formal specification comments setting to the prompt and strategy', () => {
+    const { strategy } = createAssistantConversationPlan('/repo', {
+      assistantMode: 'assistant',
+      formalSpec: true,
+      formalSpecComments: false,
+    });
+
+    expect(strategy.formalSpec).toBe(true);
+    expect(strategy.formalSpecComments).toBe(false);
+    expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
+      formalSpec: true,
+      formalSpecComments: false,
+      formalSpecCommentsEnabled: false,
+    });
+  });
+
   it('should resolve the assistant persona and keep Bash available', () => {
     const { strategy } = createAssistantConversationPlan('/repo', {
       assistantMode: 'assistant',
+      formalSpec: false,
+      formalSpecComments: true,
       workflowContext: WORKFLOW_CONTEXT,
     });
 
@@ -139,6 +157,8 @@ describe('assistant conversation plan', () => {
   it('should make Grill Me read-only and withhold Bash', () => {
     const { strategy } = createAssistantConversationPlan('/repo', {
       assistantMode: 'grill-me',
+      formalSpec: false,
+      formalSpecComments: true,
       workflowContext: WORKFLOW_CONTEXT,
     });
 
@@ -161,6 +181,8 @@ describe('assistant conversation plan', () => {
 
     const { ctx } = createAssistantConversationPlan('/repo', {
       assistantMode: 'assistant',
+      formalSpec: false,
+      formalSpecComments: true,
       provider: 'mock',
       model: 'other-model',
       sessionId: 'session-9',
@@ -176,6 +198,8 @@ describe('assistant conversation plan', () => {
   it('should attach interactive effort without translating it into provider options', () => {
     const { ctx } = createAssistantConversationPlan('/repo', {
       assistantMode: 'assistant',
+      formalSpec: false,
+      formalSpecComments: true,
       effort: 'custom-effort',
     });
 
@@ -193,6 +217,8 @@ describe('assistant conversation plan', () => {
     };
     const { ctx } = createAssistantConversationPlan('/repo', {
       assistantMode: 'grill-me',
+      formalSpec: false,
+      formalSpecComments: true,
       model: 'temporary-model',
       resolvedSessionContext: {
         provider,
@@ -222,7 +248,11 @@ describe('assistant conversation plan', () => {
   it('should use the assistant init context for both the first prompt and the summary', () => {
     mockLoadAssistantInitContext.mockReturnValue('init context');
 
-    const { strategy } = createAssistantConversationPlan('/repo', { assistantMode: 'assistant' });
+    const { strategy } = createAssistantConversationPlan('/repo', {
+      assistantMode: 'assistant',
+      formalSpec: false,
+      formalSpecComments: true,
+    });
 
     expect(strategy.initialPromptContext).toBe('init context');
     expect(strategy.summaryPromptContext).toBe('init context');

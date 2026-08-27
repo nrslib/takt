@@ -52,6 +52,7 @@ import type { TaskExecutionOptions } from '../execute/types.js';
 import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
 import {
   selectTaskRetryStart,
+  resolveTaskRetryStartOwnership,
   type TaskRetryStartSelection,
 } from './taskRetryStartSelection.js';
 
@@ -69,31 +70,6 @@ interface FailedTaskRetrySelection {
   selectedResumePoint: WorkflowResumePoint | undefined;
   selectedRestartPoint: WorkflowRestartPoint | undefined;
   selectedWorkflowOverride: string | undefined;
-}
-
-type RetryStartOwnership = Pick<
-  FailedTaskRetrySelection,
-  'startStep' | 'selectedResumePoint' | 'selectedRestartPoint'
->;
-
-function resolveRetryStartOwnership(
-  selectedStart: TaskRetryStartSelection,
-  workflowConfig: WorkflowConfig,
-): RetryStartOwnership {
-  if (selectedStart.kind === 'resume') {
-    const rootEntry = selectedStart.resumePoint.stack[0]!;
-    return {
-      startStep: rootEntry.step === workflowConfig.initialStep ? undefined : rootEntry.step,
-      selectedResumePoint: selectedStart.resumePoint,
-      selectedRestartPoint: undefined,
-    };
-  }
-
-  return {
-    startStep: undefined,
-    selectedResumePoint: undefined,
-    selectedRestartPoint: selectedStart.restartPoint,
-  };
 }
 
 function displayFailureInfo(task: TaskListItem, failure: TaskFailure): void {
@@ -338,7 +314,7 @@ async function prepareFailedTaskRetrySelection(
     warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
   }
 
-  const retryStartOwnership = resolveRetryStartOwnership(selectedStart, workflowConfig);
+  const retryStartOwnership = resolveTaskRetryStartOwnership(selectedStart, workflowConfig);
   const selectedWorkflowOverride = resolveSelectedWorkflowOverride(previousWorkflow, selectedWorkflow);
 
   return {
@@ -349,7 +325,9 @@ async function prepareFailedTaskRetrySelection(
     runMeta,
     selectedWorkflow,
     previousOrderContent,
-    ...retryStartOwnership,
+    startStep: retryStartOwnership.startStep,
+    selectedResumePoint: retryStartOwnership.resumePoint,
+    selectedRestartPoint: retryStartOwnership.restartPoint,
     selectedWorkflowOverride,
   };
 }

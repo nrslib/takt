@@ -13,6 +13,7 @@
  */
 
 import { z } from 'zod';
+import { buildChildProcessEnv } from '../../../shared/utils/child-process-env.js';
 import type {
   McpServerConfig,
   McpStdioServerConfig,
@@ -189,7 +190,7 @@ function interpolateArray(
  */
 export function interpolateMcpEnv(
   server: McpServerConfig,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = buildChildProcessEnv(),
 ): McpServerConfig {
   const existingSafeSource = getMcpServerSafeSource(server);
   const safeSource = existingSafeSource ?? buildMcpServerLogSafeSource(server);

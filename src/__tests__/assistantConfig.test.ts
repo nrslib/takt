@@ -44,11 +44,15 @@ const { invalidateAllResolvedConfigCache } = await import('../infra/config/resol
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
 
 type FormalSpecResolverModule = {
+  resolveFormalSpecConfiguration(projectDir: string): Promise<{ mode: boolean; comments: boolean }>;
+  resolveFormalSpecConfigurationWithoutPrompt(projectDir: string): { mode: boolean; comments: boolean };
   resolveFormalSpecMode(projectDir: string): Promise<boolean>;
   resolveFormalSpecModeWithoutPrompt(projectDir: string): boolean;
 };
 
 const {
+  resolveFormalSpecConfiguration,
+  resolveFormalSpecConfigurationWithoutPrompt,
   resolveFormalSpecMode,
   resolveFormalSpecModeWithoutPrompt,
 } = taskInstructionFormat as unknown as FormalSpecResolverModule;
@@ -159,6 +163,56 @@ describe('assistantConfig', () => {
       expect(mockConfirm).not.toHaveBeenCalled();
     },
   );
+
+  it('should resolve structured formal_spec mode and comments independently across project and global layers', () => {
+    writeFileSync(
+      globalConfigPath,
+      ['language: en', 'assistant:', '  formal_spec:', '    mode: true'].join('\n'),
+      'utf-8',
+    );
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['assistant:', '  formal_spec:', '    comments: false'].join('\n'),
+      'utf-8',
+    );
+
+    expect(resolveFormalSpecConfigurationWithoutPrompt(projectDir)).toEqual({
+      mode: true,
+      comments: false,
+    });
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it('should treat a scalar formal_spec as mode-only and inherit structured comments from the global layer', () => {
+    writeFileSync(
+      globalConfigPath,
+      ['language: en', 'assistant:', '  formal_spec:', '    comments: false'].join('\n'),
+      'utf-8',
+    );
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['assistant:', "  formal_spec: 'Y/n'"].join('\n'),
+      'utf-8',
+    );
+
+    expect(resolveFormalSpecConfigurationWithoutPrompt(projectDir)).toEqual({
+      mode: true,
+      comments: false,
+    });
+  });
+
+  it('should keep comments enabled by default when no layer specifies comments', async () => {
+    mockResolveTtyPolicy.mockReturnValue({ useTty: false, forceTouchTty: false });
+
+    await expect(resolveFormalSpecConfiguration(projectDir)).resolves.toEqual({
+      mode: false,
+      comments: true,
+    });
+  });
 
   it.each([
     ['Y/n', 'y/N', false],

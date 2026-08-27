@@ -35,6 +35,12 @@ export interface TaskResult {
 
 export interface WorktreeOptions {
   worktree: boolean | string;
+  /** Optional central worktree root used by channel-neutral adapters. */
+  worktreeBaseDirectory?: string;
+  /** Optional state-owned directory for clone metadata. */
+  cloneMetadataDirectory?: string;
+  /** Do not copy framework state into a central execution worktree. */
+  skipProjectLocalTaktSync?: boolean;
   branch?: string;
   baseBranch?: string;
   pullRequestBaseBranch?: string;

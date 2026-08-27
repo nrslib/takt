@@ -150,7 +150,9 @@
   "files": [
     "dist/",
     "bin/",
-    "builtins/"
+    "builtins/",
+    "docs/assets/takt-logo-dark.svg",
+    "web-ui/"
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",

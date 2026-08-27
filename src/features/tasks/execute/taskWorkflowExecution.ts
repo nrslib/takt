@@ -144,6 +144,9 @@ export async function executeTaskWorkflow(
     currentTaskIssueNumber,
     prContext,
     loopAnalysisPublication,
+    runPathsDirectory,
+    sessionStorageDirectory,
+    skipWorktreeRuntimeProtection,
   } = options;
   const traceTaskMetadata = resolveTraceTaskMetadata(options);
   const workflowConfig = loadWorkflowByIdentifier(
@@ -225,6 +228,9 @@ export async function executeTaskWorkflow(
     ...(loopAnalysisPublication === undefined
       ? {}
       : { loopAnalysisPublication }),
+    ...(runPathsDirectory === undefined ? {} : { runPathsDirectory }),
+    ...(sessionStorageDirectory === undefined ? {} : { sessionStorageDirectory }),
+    ...(skipWorktreeRuntimeProtection === undefined ? {} : { skipWorktreeRuntimeProtection }),
   });
 }
 

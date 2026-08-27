@@ -46,7 +46,7 @@ import './commands.js';
     }
 
     const rootArg = process.argv.slice(2)[0];
-    if (rootArg !== 'watch') {
+    if (rootArg !== 'watch' && rootArg !== 'ui') {
       process.exit();
     }
   } finally {

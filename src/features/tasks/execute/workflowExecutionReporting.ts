@@ -52,8 +52,9 @@ export function persistWorkflowSessionState(
   projectCwd: string,
   publicationId: string,
   sessionState: SessionState,
+  sessionStorageDirectory?: string,
 ): void {
-  saveSessionState(projectCwd, publicationId, sessionState);
+  saveSessionState(projectCwd, publicationId, sessionState, sessionStorageDirectory);
 }
 
 export function buildWorkflowAbortSessionFinalization(input: {

@@ -658,6 +658,10 @@ export interface WorkflowEngineOptions {
   reportDirName?: string;
   /** Namespace appended under the shared run directories for nested workflow execution. */
   runPathNamespace?: string[];
+  /** Absolute state-owned runs directory for channel-neutral adapters. */
+  runPathsDirectory?: string;
+  /** Central adapters must not materialize framework state in a worktree. */
+  skipWorktreeRuntimeProtection?: boolean;
   /** Task name prefix for parallel task execution output */
   taskPrefix?: string;
   /** Color index for task prefix (cycled across tasks) */
