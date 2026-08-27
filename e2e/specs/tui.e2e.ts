@@ -46,6 +46,8 @@ const QUEUE_HINT = 'to edit the queued line';
 /** Drawn in the box in place of the draft, so it means "nothing typed". */
 const PLACEHOLDER = 'Type a task, / for commands';
 const PLACEHOLDER_JA = 'タスクを入力、/ でコマンド';
+const PROMPT_PLACEHOLDERS = [PLACEHOLDER, PLACEHOLDER_JA] as const;
+const SPINNER_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 const ESC = '\x1b';
 const INTERRUPTED = 'Response interrupted.';
 /**
@@ -150,6 +152,23 @@ describe('E2E: Ink TUI', () => {
     throw new Error(`Timed out waiting for ${filename} under ${root}`);
   }
 
+  async function waitForFileContent(
+    path: string,
+    expected: string,
+    timeoutMs = 10_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        if (readFileSync(path, 'utf-8').includes(expected)) return;
+      } catch {
+        // The writer may not have finished creating or flushing the file yet.
+      }
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    }
+    throw new Error(`Timed out waiting for ${JSON.stringify(expected)} in ${path}`);
+  }
+
   async function waitForArtifactRoots(root: string, count: number, timeoutMs = 10_000): Promise<string[]> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -210,14 +229,18 @@ describe('E2E: Ink TUI', () => {
   }
 
   /**
-   * Ink turns one stdin chunk into one key event, so the text and the Enter key
-   * must arrive separately. Waiting for the echoed draft guarantees the terminal
-   * delivered them as two chunks without relying on a sleep.
+   * The status row is always two rows above the prompt border: the notice row
+   * is between them. Looking at that row avoids mistaking the word "Thinking"
+   * in an assistant reply for the live spinner.
    */
-  async function submitLine(tui: TaktPtySession, text: string): Promise<void> {
-    tui.write(text);
-    await tui.waitForOutput(`❯ ${text}`);
-    tui.write(ENTER);
+  function hasBusyStatus(screen: string): boolean {
+    const lines = screen.split('\n');
+    const promptTop = lines.findLastIndex((line) => line.includes('╭'));
+    const statusLine = promptTop >= 2 ? lines[promptTop - 2] : undefined;
+    const firstCharacter = statusLine?.trimStart().charAt(0);
+    return firstCharacter !== undefined
+      && firstCharacter !== ''
+      && SPINNER_FRAMES.includes(firstCharacter);
   }
 
   /**
@@ -227,17 +250,35 @@ describe('E2E: Ink TUI', () => {
    */
   async function waitForPromptReady(
     tui: TaktPtySession,
-    responseMarker: string,
-    placeholder: string,
-    thinkingMarker: string,
+    responseMarker?: string,
   ): Promise<void> {
     await tui.waitForScreen(
-      `the idle prompt after ${responseMarker}`,
-      (screen) => screen.includes(responseMarker)
-        && screen.includes(placeholder)
-        && !screen.includes(thinkingMarker),
+      responseMarker === undefined
+        ? 'the idle conversation prompt'
+        : `the idle prompt after ${responseMarker}`,
+      (screen) => (responseMarker === undefined || screen.includes(responseMarker))
+        && PROMPT_PLACEHOLDERS.some((placeholder) => screen.includes(placeholder))
+        && !hasBusyStatus(screen),
       10_000,
     );
+  }
+
+  /**
+   * Ink turns one stdin chunk into one key event, so the text and the Enter key
+   * must arrive separately. Wait for the current empty prompt before writing;
+   * this synchronizes every ordinary submission, including a response whose
+   * output was observed before its final render. Queue tests intentionally use
+   * raw writes below because they exercise input while the prompt is busy.
+   */
+  async function submitLine(
+    tui: TaktPtySession,
+    text: string,
+    responseMarker?: string,
+  ): Promise<void> {
+    await waitForPromptReady(tui, responseMarker);
+    tui.write(text);
+    await tui.waitForOutput(`❯ ${text}`);
+    tui.write(ENTER);
   }
 
   /**
@@ -464,7 +505,7 @@ steps:
     await tui.waitForOutput(TUI_HINT, 10_000);
     await submitLine(tui, 'execute with the project runtime configuration');
     await tui.waitForOutput('TUI-MAKER-REPLY-OK');
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-MAKER-REPLY-OK');
     await waitForSelector(tui, ACTION_PROMPT);
     tui.write(ENTER);
     await tui.waitForScreen(
@@ -507,8 +548,7 @@ steps:
 
     await submitLine(tui, 'continue after configuration verification');
     await tui.waitForOutput('TUI-MAKER-SECOND-REPLY-OK');
-    await waitForPromptReady(tui, 'TUI-MAKER-SECOND-REPLY-OK', PLACEHOLDER, THINKING_MARKER);
-    await submitLine(tui, '/cancel');
+    await submitLine(tui, '/cancel', 'TUI-MAKER-SECOND-REPLY-OK');
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 120_000);
 
@@ -524,7 +564,7 @@ steps:
 
     await submitLine(tui, 'create a two-step review workflow');
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-ASSISTANT-REPLY-OK');
     await waitForSelector(tui, ACTION_PROMPT);
 
     const approvalScreen = (await tui.visibleScreen()).join('\n');
@@ -566,7 +606,7 @@ steps:
     await tui.waitForOutput(TUI_HINT, 10_000);
     await submitLine(tui, 'prepare a terminal-safe approval');
     await tui.waitForOutput('TUI-MAKER-TERMINAL-SAFETY-REPLY');
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-MAKER-TERMINAL-SAFETY-REPLY');
     await waitForSelector(tui, ACTION_PROMPT);
 
     const approvalOutput = tui.output().slice(tui.output().lastIndexOf('Proposed Workflow Maker instruction:'));
@@ -600,7 +640,7 @@ steps:
     await tui.waitForOutput(TUI_HINT, 10_000);
     await submitLine(tui, 'prepare but do not execute this workflow');
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-ASSISTANT-REPLY-OK');
     await waitForSelector(tui, ACTION_PROMPT);
     tui.write(ARROW_UP);
     await tui.waitForScreen('Cancel to be highlighted', (screen) => screen.includes('❯ Cancel'));
@@ -623,7 +663,7 @@ steps:
     await tui.waitForOutput(TUI_HINT, 10_000);
     await submitLine(tui, 'prepare an artifact whose path becomes occupied');
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-ASSISTANT-REPLY-OK');
     await waitForSelector(tui, ACTION_PROMPT);
     const plannedMatch = /Planned artifact path: (.+?\.takt\/make\/\d{8}-\d{6}-\d{3})/.exec(tui.output());
     expect(plannedMatch?.[1]).toBeDefined();
@@ -672,7 +712,7 @@ steps:
       await tui.waitForOutput(TUI_HINT, 10_000);
       await submitLine(tui, `prepare a ${reportKind} Doctor report path`);
       await tui.waitForOutput('TUI-MAKER-REPORT-KIND-REPLY');
-      await submitLine(tui, '/go');
+      await submitLine(tui, '/go', 'TUI-MAKER-REPORT-KIND-REPLY');
       await waitForSelector(tui, ACTION_PROMPT);
       tui.write(ENTER);
       await tui.waitForScreen(
@@ -785,7 +825,6 @@ steps:
 
     await submitLine(tui, 'inspect the newly selected base');
     await tui.waitForOutput('TUI-MAKER-SECOND-BASE-REPLY');
-    await waitForPromptReady(tui, 'TUI-MAKER-SECOND-BASE-REPLY', PLACEHOLDER, THINKING_MARKER);
 
     expect((await tui.visibleTranscript()).join('\n')).toContain(
       'retain this request across the base handoff',
@@ -800,7 +839,7 @@ steps:
     expect(prompts[1]).toContain('SECOND_BASE_UNIQUE_CONTENT');
     expect(prompts[1]).not.toContain('FIRST_BASE_UNIQUE_CONTENT');
     expect(existsSync(join(testRepo.path, '.takt', 'make'))).toBe(false);
-    await submitLine(tui, '/cancel');
+    await submitLine(tui, '/cancel', 'TUI-MAKER-SECOND-BASE-REPLY');
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 60_000);
 
@@ -815,7 +854,7 @@ steps:
     await tui.waitForOutput('Shift+Enter: 改行', 10_000);
     await submitLine(tui, '日本語表示を確認する');
     await tui.waitForOutput('TUI-MAKER-REPLY-OK');
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-MAKER-REPLY-OK');
     await waitForSelector(tui, 'どうしますか？');
     const approvalScreen = (await tui.visibleScreen()).join('\n');
     expect(selectableRows(approvalScreen.slice(approvalScreen.lastIndexOf('どうしますか？'))))
@@ -835,13 +874,7 @@ steps:
 
     await submitLine(tui, '同じ成果物をもう一度実行する');
     await tui.waitForOutput('TUI-MAKER-SECOND-REPLY-OK');
-    await waitForPromptReady(
-      tui,
-      'TUI-MAKER-SECOND-REPLY-OK',
-      PLACEHOLDER_JA,
-      '考え中...',
-    );
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-MAKER-SECOND-REPLY-OK');
     await waitForSelector(tui, 'どうしますか？');
     tui.write(ENTER);
     await tui.waitForScreen(
@@ -860,8 +893,7 @@ steps:
 
     await submitLine(tui, '失敗時の日本語表示を確認する');
     await tui.waitForOutput('TUI-MAKER-THIRD-REPLY-OK');
-    await waitForPromptReady(tui, 'TUI-MAKER-THIRD-REPLY-OK', PLACEHOLDER_JA, '考え中...');
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-MAKER-THIRD-REPLY-OK');
     await waitForSelector(tui, 'どうしますか？');
     tui.write(ENTER);
     await tui.waitForScreen(
@@ -874,14 +906,14 @@ steps:
       '日本語の失敗表示',
       (screen) => screen.includes('Workflow Maker が失敗しました')
         && compactScreen(screen.split('\n')).includes(failedArtifactRoot)
-        && screen.includes('に保存されています')
+        && compactScreen(screen.split('\n')).includes('に保存されています')
         && screen.includes('Shift+Enter: 改行'),
       90_000,
     );
 
     await submitLine(tui, '失敗後も会話を続ける');
     await tui.waitForOutput('TUI-AFTER-FAILURE-REPLY');
-    await submitLine(tui, '/cancel');
+    await submitLine(tui, '/cancel', 'TUI-AFTER-FAILURE-REPLY');
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 120_000);
 
@@ -905,7 +937,7 @@ steps:
 
     await submitLine(tui, 'create and validate a review workflow');
     await tui.waitForOutput('TUI-MAKER-REPLY-OK');
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-MAKER-REPLY-OK');
     await waitForSelector(tui, ACTION_PROMPT);
     tui.write(ENTER);
 
@@ -953,8 +985,7 @@ steps:
 
     await submitLine(tui, 'run the same approved request again');
     await tui.waitForOutput('TUI-MAKER-SECOND-REPLY-OK');
-    await waitForPromptReady(tui, 'TUI-MAKER-SECOND-REPLY-OK', PLACEHOLDER, THINKING_MARKER);
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-MAKER-SECOND-REPLY-OK');
     await waitForSelector(tui, ACTION_PROMPT);
     tui.write(ENTER);
     await tui.waitForScreen(
@@ -977,8 +1008,7 @@ steps:
 
     await submitLine(tui, 'run a request that fails');
     await tui.waitForOutput('TUI-MAKER-THIRD-REPLY-OK');
-    await waitForPromptReady(tui, 'TUI-MAKER-THIRD-REPLY-OK', PLACEHOLDER, THINKING_MARKER);
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-MAKER-THIRD-REPLY-OK');
     await waitForSelector(tui, ACTION_PROMPT);
     tui.write(ENTER);
     await tui.waitForScreen(
@@ -1010,7 +1040,7 @@ steps:
 
     await submitLine(tui, 'continue after the failed workflow');
     await tui.waitForOutput('TUI-AFTER-FAILURE-REPLY');
-    await submitLine(tui, '/cancel');
+    await submitLine(tui, '/cancel', 'TUI-AFTER-FAILURE-REPLY');
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 120_000);
 
@@ -1024,7 +1054,7 @@ steps:
     await tui.waitForOutput(TUI_HINT, 10_000);
     await submitLine(tui, 'create a workflow that needs one review correction');
     await tui.waitForOutput('TUI-MAKER-FIX-LOOP-REPLY');
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-MAKER-FIX-LOOP-REPLY');
     await waitForSelector(tui, ACTION_PROMPT);
     tui.write(ENTER);
     await tui.waitForScreen(
@@ -1111,7 +1141,7 @@ steps:
       await tui.waitForOutput(TUI_HINT, 10_000);
       await submitLine(tui, `exercise the ${doctorState} Doctor report`);
       await tui.waitForOutput('TUI-MAKER-DOCTOR-REPLY');
-      await submitLine(tui, '/go');
+      await submitLine(tui, '/go', 'TUI-MAKER-DOCTOR-REPLY');
       await waitForSelector(tui, ACTION_PROMPT);
       tui.write(ENTER);
       await tui.waitForScreen(
@@ -1124,6 +1154,10 @@ steps:
         join(testRepo.path, '.takt', 'make'),
         'workflow-maker-doctor.md',
       );
+      // The path can appear before the workflow has finished writing it, so
+      // verify the generated content in the execution artifact before changing
+      // its availability for review.
+      await waitForFileContent(doctorReport, 'Result: PASS');
       if (doctorState === 'missing') {
         rmSync(doctorReport);
       } else {
@@ -1220,7 +1254,7 @@ steps:
     await submitLine(tui, 'create noop.txt');
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
 
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-ASSISTANT-REPLY-OK');
     await chooseHighlighted(tui, ACTION_PROMPT);
     await tui.waitForOutput('TUI-WORKFLOW-STEP-DONE', 180_000);
 
@@ -1245,7 +1279,7 @@ steps:
     await submitLine(tui, 'create noop.txt');
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
 
-    await submitLine(tui, '/go');
+    await submitLine(tui, '/go', 'TUI-ASSISTANT-REPLY-OK');
     await waitForSelector(tui, ACTION_PROMPT);
     // The selector owns the bare terminal: the Ink input box is gone by now.
     const duringSelector = await tui.visibleScreen();
@@ -1575,7 +1609,7 @@ steps:
     await tui.waitForOutput('EXEC-TUI-REPLY', 60_000);
 
     // `/setup` hands the terminal to the readline menu, with Ink gone.
-    await submitLine(tui, '/setup');
+    await submitLine(tui, '/setup', 'EXEC-TUI-REPLY');
     await waitForSelector(tui, '(↑↓ to move, Enter to select)');
     const duringMenu = (await tui.visibleScreen()).join('\n');
     expect(duringMenu).not.toContain('╰');
