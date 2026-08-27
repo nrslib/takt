@@ -18,6 +18,8 @@ export interface ExecutionSettingsRequest {
 export declare function snapshotExecutionSettings(settings: ExecutionSettings): ExecutionSettings;
 export declare function buildExecutionSettingsRequest(settings: ExecutionSettings): ExecutionSettingsRequest;
 
+export declare function clampInspectorWidth(value: number, min: number, max: number): number;
+
 export declare function isWorkflowCatalogReady(
   selectedProjectId: string,
   catalogProjectId: string,

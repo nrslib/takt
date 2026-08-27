@@ -964,6 +964,10 @@ describe('Web UI HTTP boundary', () => {
     expect(html).toContain('id="chat-setup-button"');
     expect(html).toContain('id="watch-button"');
     expect(html).toContain('id="refresh-button"');
+    expect(html).toContain('id="task-sidebar-toggle"');
+    expect(html).toContain('aria-controls="task-sidebar-content"');
+    expect(html).toContain('id="inspector-resizer"');
+    expect(html).toContain('role="separator"');
     expect(html).toContain('id="chat-new-button"');
     expect(html).toContain('>新しい会話</button>');
     expect(html).toContain('id="chat-thinking"');

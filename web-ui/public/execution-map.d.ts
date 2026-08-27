@@ -16,7 +16,9 @@ export function clampMapScale(value: number): number;
 export interface ExecutionMapOptions {
   readonly liveIndicator: unknown;
   readonly emptyState: unknown;
+  readonly selectedStepId?: string | null;
   readonly selectedOccurrenceId: string | null;
+  readonly onSelectStep?: (node: ExecutionNode) => void;
   readonly onSelectOccurrence: (node: ExecutionNode, occurrence: ExecutionOccurrence) => void;
   readonly customNodePositions?: ReadonlyMap<string, { readonly x: number; readonly y: number }>;
   readonly onMoveNode?: (
@@ -37,4 +39,5 @@ export function disposeExecutionMap(container: ExecutionMapElement): void;
 export function updateExecutionMapSelection(
   container: ExecutionMapElement,
   selectedOccurrenceId: string | null,
+  selectedStepId?: string | null,
 ): void;

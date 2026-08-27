@@ -29,6 +29,7 @@ import {
 } from './task-action-ui.js';
 import {
   buildExecutionSettingsRequest,
+  clampInspectorWidth,
   createDirectoryRequestTracker,
   isCurrentRunRequest as isCurrentRunRequestState,
   isCurrentWorkflowRequest as isCurrentWorkflowRequestState,
@@ -98,9 +99,12 @@ const elements = {
   refresh: document.querySelector('#refresh-button'),
   runDetail: document.querySelector('#run-detail'),
   runInspector: document.querySelector('#run-inspector'),
+  inspectorResizer: document.querySelector('#inspector-resizer'),
   runStatusLive: document.querySelector('#run-status-live'),
   runList: document.querySelector('#run-list'),
   runListEmpty: document.querySelector('#run-list-empty'),
+  taskSidebar: document.querySelector('.task-sidebar'),
+  taskSidebarToggle: document.querySelector('#task-sidebar-toggle'),
   runWarning: document.querySelector('#run-warning'),
   watch: document.querySelector('#watch-button'),
   workflow: document.querySelector('#workflow'),
@@ -126,6 +130,8 @@ let registryWarnings = [];
 let workflowWarnings = [];
 let browsedDirectory = null;
 let taskSurfaceOpen = false;
+let taskSidebarCollapsed = false;
+let inspectorWidthPreference = null;
 let taskActionSurface = null;
 let screenMode = 'viewer';
 let screenTransitionId = 0;
@@ -165,6 +171,135 @@ function createElement(tag, className, text) {
   if (className !== '') element.className = className;
   if (text !== undefined) element.textContent = text;
   return element;
+}
+
+const INSPECTOR_RESIZE_STEP = 16;
+const INSPECTOR_MIN_VIEWER_WIDTH = 360;
+
+function setTaskSidebarCollapsed(collapsed) {
+  taskSidebarCollapsed = collapsed;
+  elements.taskSidebar.dataset.collapsed = String(collapsed);
+  elements.viewerScreen.dataset.taskSidebarCollapsed = String(collapsed);
+  elements.taskSidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+  const labelKey = collapsed ? 'app.expandTasks' : 'app.collapseTasks';
+  const label = t(labelKey);
+  elements.taskSidebarToggle.setAttribute('aria-label', label);
+  elements.taskSidebarToggle.title = label;
+  const icon = elements.taskSidebarToggle.querySelector('.task-sidebar-toggle-icon');
+  if (icon !== null) icon.textContent = collapsed ? '›' : '‹';
+  refreshInspectorBounds();
+}
+
+function inspectorResizeBounds() {
+  const screenStyle = getComputedStyle(elements.viewerScreen);
+  const minimum = Number.parseFloat(screenStyle.getPropertyValue('--inspector-min-width'));
+  const screenRect = elements.viewerScreen.getBoundingClientRect();
+  const screenWidth = screenRect.width > 0
+    ? screenRect.width
+    : elements.viewerScreen.clientWidth > 0
+      ? elements.viewerScreen.clientWidth
+      : window.innerWidth;
+  const sidebarRect = elements.taskSidebar.getBoundingClientRect();
+  const sidebarWidth = sidebarRect.width > 0
+    ? sidebarRect.width
+    : Number.parseFloat(screenStyle.getPropertyValue('--sidebar-width'));
+  const handleWidth = Number.parseFloat(screenStyle.getPropertyValue('--inspector-resizer-width'));
+  const min = Number.isFinite(minimum) ? minimum : 280;
+  const availableSidebarWidth = Number.isFinite(sidebarWidth) ? sidebarWidth : 292;
+  const availableHandleWidth = Number.isFinite(handleWidth) ? handleWidth : 8;
+  const availableScreenWidth = Number.isFinite(screenWidth) && screenWidth > 0
+    ? screenWidth
+    : min + availableSidebarWidth + availableHandleWidth + INSPECTOR_MIN_VIEWER_WIDTH;
+  const max = Math.max(
+    min,
+    availableScreenWidth - availableSidebarWidth - availableHandleWidth - INSPECTOR_MIN_VIEWER_WIDTH,
+  );
+  return { min, max };
+}
+
+function currentInspectorWidth() {
+  if (Number.isFinite(inspectorWidthPreference)) return inspectorWidthPreference;
+  const screenStyle = getComputedStyle(elements.viewerScreen);
+  const configured = Number.parseFloat(screenStyle.getPropertyValue('--inspector-width'));
+  if (Number.isFinite(configured)) return configured;
+  const measured = elements.runInspector.getBoundingClientRect().width;
+  return Number.isFinite(measured) && measured > 0 ? measured : inspectorResizeBounds().min;
+}
+
+function setInspectorWidth(width, rememberPreference = true) {
+  const bounds = inspectorResizeBounds();
+  const nextWidth = clampInspectorWidth(width, bounds.min, bounds.max);
+  if (rememberPreference && Number.isFinite(width)) inspectorWidthPreference = nextWidth;
+  elements.viewerScreen.style.setProperty('--inspector-width', `${nextWidth}px`);
+  elements.inspectorResizer.setAttribute('aria-valuemin', String(Math.round(bounds.min)));
+  elements.inspectorResizer.setAttribute('aria-valuemax', String(Math.round(bounds.max)));
+  elements.inspectorResizer.setAttribute('aria-valuenow', String(Math.round(nextWidth)));
+}
+
+function refreshInspectorBounds() {
+  if (getComputedStyle(elements.inspectorResizer).display === 'none') return;
+  setInspectorWidth(currentInspectorWidth(), false);
+}
+
+function initializeTaskSidebar() {
+  elements.taskSidebar.addEventListener('click', (event) => {
+    if (event.target !== elements.taskSidebarToggle
+      && !elements.taskSidebarToggle.contains(event.target)) return;
+    setTaskSidebarCollapsed(!taskSidebarCollapsed);
+  });
+  setTaskSidebarCollapsed(false);
+}
+
+function initializeInspectorResize() {
+  let resizeState = null;
+  const clear = (event) => {
+    if (resizeState === null) return;
+    if (event?.pointerId !== undefined && event.pointerId !== resizeState.pointerId) return;
+    if (elements.inspectorResizer.hasPointerCapture?.(resizeState.pointerId)) {
+      elements.inspectorResizer.releasePointerCapture?.(resizeState.pointerId);
+    }
+    resizeState = null;
+    delete document.body.dataset.inspectorResizing;
+  };
+  const pointerDown = (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    resizeState = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      width: currentInspectorWidth(),
+    };
+    elements.inspectorResizer.setPointerCapture?.(event.pointerId);
+    document.body.dataset.inspectorResizing = 'true';
+    event.preventDefault?.();
+  };
+  const pointerMove = (event) => {
+    if (resizeState === null || event.pointerId !== resizeState.pointerId) return;
+    setInspectorWidth(resizeState.width + resizeState.clientX - event.clientX);
+    event.preventDefault?.();
+  };
+  const keydown = (event) => {
+    const bounds = inspectorResizeBounds();
+    const current = currentInspectorWidth();
+    let next = current;
+    if (event.key === 'ArrowLeft') next = current + INSPECTOR_RESIZE_STEP;
+    else if (event.key === 'ArrowRight') next = current - INSPECTOR_RESIZE_STEP;
+    else if (event.key === 'Home') next = bounds.min;
+    else if (event.key === 'End') next = bounds.max;
+    else return;
+    event.preventDefault();
+    setInspectorWidth(next);
+  };
+  elements.inspectorResizer.addEventListener('pointerdown', pointerDown);
+  elements.inspectorResizer.addEventListener('pointermove', pointerMove);
+  elements.inspectorResizer.addEventListener('pointerup', clear);
+  elements.inspectorResizer.addEventListener('pointercancel', clear);
+  elements.inspectorResizer.addEventListener('lostpointercapture', clear);
+  elements.inspectorResizer.addEventListener('keydown', keydown);
+  const resize = () => refreshInspectorBounds();
+  window.addEventListener('resize', resize);
+  elements.inspectorResizer.setAttribute('aria-label', t('viewer.resizeInspector'));
+  elements.inspectorResizer.title = t('viewer.resizeInspectorHint');
+  refreshInspectorBounds();
 }
 
 function selectedCategory() {
@@ -1650,6 +1785,8 @@ elements.chatGoButton.addEventListener('click', submitGoCommand);
 elements.chatNewButton.addEventListener('click', () => void startNewConversation());
 elements.viewerNav.addEventListener('click', () => setScreen('viewer'));
 elements.newTaskButton.addEventListener('click', openNewTaskSurface);
+initializeTaskSidebar();
+initializeInspectorResize();
 elements.mobileTaskListButton.addEventListener('click', () => {
   elements.viewerScreen.dataset.mobileView = 'list';
 });
@@ -1785,6 +1922,9 @@ subscribeLocaleChange(() => {
   updateLanguageToggle();
   updateExecutionContextSummary();
   updateChatSurfaceHeader();
+  setTaskSidebarCollapsed(taskSidebarCollapsed);
+  elements.inspectorResizer.setAttribute('aria-label', t('viewer.resizeInspector'));
+  elements.inspectorResizer.title = t('viewer.resizeInspectorHint');
   renderTaskActionContext();
   refreshChatLocale();
   executionView.refreshLocale();

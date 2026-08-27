@@ -43,7 +43,12 @@ describe('Web UI i18n', () => {
   it('uses Japanese as the canonical default and supports interpolation/fallback', () => {
     expect(DEFAULT_LOCALE).toBe('ja');
     expect(getLocale()).toBe('ja');
-    expect(t('map.summarySteps', { steps: 2, passes: 3 })).toBe('2 処理 · 3 回');
+    expect(t('map.summarySteps', { steps: 2, passes: 3 })).toBe('2 処理 · 3 ITER');
+    expect(t('map.iter', { number: 2 })).toBe('ITER 2');
+    expect(t('map.edgeIncoming')).toBe('このITERへ');
+    expect(t('map.edgeOutgoing')).toBe('次のITERへ');
+    expect(t('viewer.stepIterations')).toBe('ITER一覧');
+    expect(t('viewer.backToStep')).toBe('STEP概要に戻る');
     expect(t('missing.translation.key')).toBe('missing.translation.key');
   });
 
@@ -58,7 +63,12 @@ describe('Web UI i18n', () => {
     expect(setLocale('en')).toBe('en');
     expect(getLocale()).toBe('en');
     expect(t('app.createTask')).toBe('New task');
-    expect(t('map.summarySteps', { steps: 2, passes: 3 })).toBe('2 steps · 3 passes');
+    expect(t('map.summarySteps', { steps: 2, passes: 3 })).toBe('2 steps · 3 ITER');
+    expect(t('map.iter', { number: 2 })).toBe('ITER 2');
+    expect(t('map.edgeIncoming')).toBe('Into this ITER');
+    expect(t('map.edgeOutgoing')).toBe('Next ITER');
+    expect(t('viewer.stepIterations')).toBe('ITER list');
+    expect(t('viewer.backToStep')).toBe('Back to step');
     expect(t('task.action.retry')).toBe('Retry');
     expect(t('task.action.instruct')).toBe('Instruct');
     expect(storage.setItem).toHaveBeenCalledWith('takt.ui.locale', 'en');

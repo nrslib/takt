@@ -65,21 +65,34 @@
     </header>
 
     <main id="app-main" class="app-main">
-      <section id="viewer-screen" class="viewer-screen" data-mobile-view="detail" aria-labelledby="viewer-title">
+      <section id="viewer-screen" class="viewer-screen" data-mobile-view="detail" data-task-sidebar-collapsed="false" aria-labelledby="viewer-title">
         <aside class="task-sidebar" aria-label="TASKS" data-i18n-aria-label="app.tasks">
           <header class="task-sidebar-header">
-            <div>
+            <div class="task-sidebar-heading">
               <span class="section-kicker" data-i18n="app.queue">QUEUE</span>
               <h1 data-i18n="app.tasks">TASKS</h1>
             </div>
             <span id="task-count" class="task-count">0</span>
+            <button
+              id="task-sidebar-toggle"
+              class="task-sidebar-toggle"
+              type="button"
+              aria-controls="task-sidebar-content"
+              aria-expanded="true"
+              aria-label="TASKSを折りたたむ"
+              title="TASKSを折りたたむ"
+              data-i18n-aria-label="app.collapseTasks"
+              data-i18n-title="app.collapseTasks"
+            ><span class="task-sidebar-toggle-icon" aria-hidden="true">‹</span></button>
           </header>
-          <div class="task-sidebar-caption">
-            <span data-i18n="app.latestRuns">RUNS</span>
-            <span class="task-sidebar-caption-key" data-i18n="app.live">LIVE</span>
+          <div id="task-sidebar-content" class="task-sidebar-content">
+            <div class="task-sidebar-caption">
+              <span data-i18n="app.latestRuns">RUNS</span>
+              <span class="task-sidebar-caption-key" data-i18n="app.live">LIVE</span>
+            </div>
+            <div id="run-list" class="run-list"></div>
+            <p id="run-list-empty" class="empty-state" hidden data-i18n="app.noTasks">タスクはまだありません。</p>
           </div>
-          <div id="run-list" class="run-list"></div>
-          <p id="run-list-empty" class="empty-state" hidden data-i18n="app.noTasks">タスクはまだありません。</p>
         </aside>
 
         <section class="viewer-content">
@@ -108,6 +121,21 @@
           <p id="run-warning" class="warning-message" role="status"></p>
         </section>
 
+        <div
+          id="inspector-resizer"
+          class="inspector-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-controls="run-inspector"
+          aria-valuemin="280"
+          aria-valuemax="640"
+          aria-valuenow="344"
+          aria-label="詳細ペインの幅を変更"
+          title="左右キーで幅を変更、HomeとEndで最小幅と最大幅に移動"
+          data-i18n-aria-label="viewer.resizeInspector"
+          data-i18n-title="viewer.resizeInspectorHint"
+          tabindex="0"
+        ></div>
         <aside id="run-inspector" class="run-inspector" aria-label="実行の詳細" data-i18n-aria-label="viewer.inspector">
           <div class="inspector-placeholder">
             <strong data-i18n="viewer.noRun">Run を選択</strong>

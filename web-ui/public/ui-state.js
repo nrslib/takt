@@ -36,6 +36,14 @@ export function sameRunSelection(left, right) {
     && left.slug === right.slug;
 }
 
+export function clampInspectorWidth(value, min, max) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) {
+    throw new Error('Inspector width bounds are invalid');
+  }
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
 export function isCurrentRunRequest(request, currentGeneration, currentSelection, currentSnapshotRevision) {
   return request.generation === currentGeneration
     && request.snapshotRevision === currentSnapshotRevision

@@ -1,6 +1,7 @@
 import { t } from './i18n.js';
 
 const executionMapDisposers = new WeakMap();
+const executionMapHeaders = new WeakMap();
 const PAN_THRESHOLD = 4;
 const NODE_MARGIN = 16;
 const PARALLEL_GROUP_PADDING = 14;
@@ -42,32 +43,40 @@ function workflowLabel(value, nodeOrCall) {
   return nodeOrCall?.displayWorkflow ?? value;
 }
 
-function occurrenceLabel(occurrence, index) {
+function occurrenceCallValue(occurrence) {
   const callFrame = Array.isArray(occurrence.stack)
     ? [...occurrence.stack].reverse().find((frame) => frame.kind === 'workflow_call')
     : undefined;
-  const callValue = occurrence.callInstance ?? callFrame?.occurrence;
-  const callLabel = callValue === undefined ? '' : ` · ${t('map.call', { value: callValue })}`;
-  return `${t('map.pass', { number: occurrence.ordinal ?? index + 1 })}${callLabel}`;
+  return occurrence.callInstance ?? callFrame?.occurrence;
 }
 
-function occurrenceDescription(occurrence, index) {
-  return [
-    occurrenceLabel(occurrence, index),
-    occurrence.phases.join(' / '),
-    occurrence.personas.join(' / '),
-  ].filter(Boolean).join(' · ');
+function occurrenceLabel(occurrence, index) {
+  const callValue = occurrenceCallValue(occurrence);
+  const callLabel = callValue === undefined ? '' : ` · ${t('map.call', { value: callValue })}`;
+  return `${t('map.iter', { number: occurrence.ordinal ?? index + 1 })}${callLabel}`;
 }
 
 function renderIterationChip(node, occurrence, index, selectedOccurrenceId, onSelectOccurrence) {
   const button = element('button', 'iteration-chip');
   button.type = 'button';
   button.dataset.occurrenceId = occurrence.id;
+  button.dataset.kind = 'iteration';
   button.dataset.selected = String(occurrence.id === selectedOccurrenceId);
   button.setAttribute('aria-pressed', String(occurrence.id === selectedOccurrenceId));
-  const label = `${nodeLabel(node)} ${occurrenceDescription(occurrence, index)}`;
-  button.setAttribute('aria-label', label);
-  button.title = label;
+  const ordinal = occurrence.ordinal ?? index + 1;
+  const callValue = occurrenceCallValue(occurrence);
+  const accessibleLabel = [
+    nodeLabel(node),
+    t('map.iteration', { number: ordinal }),
+    occurrence.iteration === undefined
+      ? ''
+      : t('map.workflowIteration', { number: occurrence.iteration }),
+    callValue === undefined ? '' : t('map.call', { value: callValue }),
+    occurrence.phases.join(' / '),
+    occurrence.personas.join(' / '),
+  ].filter(Boolean).join(' · ');
+  button.setAttribute('aria-label', accessibleLabel);
+  button.title = accessibleLabel;
   button.append(
     element('span', 'iteration-chip-label', occurrenceLabel(occurrence, index)),
     element('span', 'iteration-chip-status', statusLabel(occurrence.status)),
@@ -76,16 +85,19 @@ function renderIterationChip(node, occurrence, index, selectedOccurrenceId, onSe
   return button;
 }
 
-function renderStep(node, position, selectedOccurrenceId, onSelectOccurrence, hasIteration) {
+function renderStep(node, position, selectedStepId, selectedOccurrenceId, onSelectStep, onSelectOccurrence, hasIteration) {
   const latest = node.occurrences.at(-1);
   if (latest === undefined) return null;
+  const selectedStep = selectedOccurrenceId === null && node.id === selectedStepId;
+  const activeOccurrence = selectedOccurrenceId !== null && node.occurrences.some(
+    (occurrence) => occurrence.id === selectedOccurrenceId,
+  );
   const step = element('article', `execution-step execution-step-${latest.status}`);
   step.dataset.stepId = node.id;
   step.dataset.kind = 'step';
   step.dataset.repeated = String(node.occurrences.length > 1);
-  step.dataset.active = String(node.occurrences.some(
-    (occurrence) => occurrence.id === selectedOccurrenceId,
-  ));
+  step.dataset.selected = String(selectedStep);
+  step.dataset.active = String(activeOccurrence);
   step.dataset.layoutX = String(position.x);
   step.dataset.layoutY = String(position.y);
   step.style.setProperty('left', `${position.x}px`);
@@ -95,6 +107,7 @@ function renderStep(node, position, selectedOccurrenceId, onSelectOccurrence, ha
   const headerButton = element('button', 'execution-step-header');
   headerButton.type = 'button';
   headerButton.dataset.stepId = node.id;
+  headerButton.setAttribute('aria-pressed', String(selectedStep));
   headerButton.setAttribute('aria-label', t('map.showStep', { step: nodeLabel(node) }));
   headerButton.append(
     element('span', 'execution-step-title', nodeLabel(node)),
@@ -109,7 +122,9 @@ function renderStep(node, position, selectedOccurrenceId, onSelectOccurrence, ha
     step.dataset.current = 'false';
   }
   headerButton.append(statusBadge(latest.status));
-  headerButton.addEventListener('click', () => onSelectOccurrence(node, latest));
+  headerButton.addEventListener('click', () => {
+    if (typeof onSelectStep === 'function') onSelectStep(node);
+  });
   const iterations = element('div', 'execution-iterations');
   const iterationHeader = element('div', 'execution-iterations-header');
   const repeated = node.occurrences.length > 1;
@@ -505,6 +520,118 @@ function visibleCallRelations(trace) {
   }).filter((call) => call.sourceOccurrenceId !== undefined && call.targetObserved);
 }
 
+function visibleEdgeRelations(trace) {
+  const transitions = visibleTransitionRelations(trace);
+  const calls = visibleCallRelations(trace)
+    .filter((call) => call.targetOccurrenceId !== undefined)
+    .map((call) => ({
+      id: call.id,
+      kind: 'call',
+      source: call.sourceOccurrenceId,
+      target: call.targetOccurrenceId,
+      targetWorkflow: call.childWorkflow,
+    }));
+  return [...transitions, ...calls];
+}
+
+function edgeRole(source, target, selectedOccurrenceId) {
+  if (selectedOccurrenceId === null) return 'none';
+  const incoming = target === selectedOccurrenceId;
+  const outgoing = source === selectedOccurrenceId;
+  if (incoming && outgoing) return 'incoming-outgoing';
+  if (incoming) return 'incoming';
+  if (outgoing) return 'outgoing';
+  return 'none';
+}
+
+function edgeRoleParts(role) {
+  return role === 'incoming-outgoing' ? ['incoming', 'outgoing'] : role === 'none' ? [] : [role];
+}
+
+function markerForEdgeRole(role) {
+  if (role === 'incoming' || role === 'incoming-outgoing') return 'url(#execution-edge-arrow-incoming)';
+  if (role === 'outgoing') return 'url(#execution-edge-arrow-outgoing)';
+  return 'url(#execution-edge-arrow)';
+}
+
+function applyEdgeSelection(svg, selectedOccurrenceId) {
+  for (const path of svg.querySelectorAll('[data-edge]')) {
+    const role = edgeRole(
+      path.getAttribute('data-source-occurrence-id'),
+      path.getAttribute('data-target-occurrence-id'),
+      selectedOccurrenceId,
+    );
+    const baseClass = path.getAttribute('data-edge-base-class') ?? path.getAttribute('class') ?? '';
+    const roleClasses = edgeRoleParts(role).map((part) => `execution-edge-emphasis-${part}`);
+    path.setAttribute('data-edge-role', role);
+    path.setAttribute('class', [baseClass, ...roleClasses].filter(Boolean).join(' '));
+    path.setAttribute('marker-end', markerForEdgeRole(role));
+  }
+}
+
+function renderSelectionLegend(selectedOccurrenceId, roles) {
+  if (selectedOccurrenceId === null || roles.size === 0) return null;
+  const legend = element('div', 'execution-map-legend execution-map-selection-legend');
+  legend.setAttribute('aria-label', t('map.edgeLegend'));
+  for (const [role, labelKey] of [
+    ['incoming', 'map.edgeIncoming'],
+    ['outgoing', 'map.edgeOutgoing'],
+  ]) {
+    if (!roles.has(role)) continue;
+    const item = element('span', `execution-map-legend-item execution-map-legend-${role}`);
+    item.append(element('span', 'execution-map-legend-mark', ''), element('span', '', t(labelKey)));
+    item.title = t(labelKey);
+    legend.append(item);
+  }
+  return legend;
+}
+
+function selectionRolesFromRelations(relations, selectedOccurrenceId) {
+  const roles = new Set();
+  if (selectedOccurrenceId === null) return roles;
+  for (const relation of relations) {
+    const role = edgeRole(relation.source, relation.target, selectedOccurrenceId);
+    for (const part of edgeRoleParts(role)) roles.add(part);
+  }
+  return roles;
+}
+
+function selectionRolesFromEdges(edges, selectedOccurrenceId) {
+  const roles = new Set();
+  if (selectedOccurrenceId === null) return roles;
+  for (const edge of edges) {
+    const role = edgeRole(
+      edge.getAttribute('data-source-occurrence-id'),
+      edge.getAttribute('data-target-occurrence-id'),
+      selectedOccurrenceId,
+    );
+    for (const part of edgeRoleParts(role)) roles.add(part);
+  }
+  return roles;
+}
+
+function replaceSelectionLegend(header, selectedOccurrenceId, roles) {
+  const existing = header.querySelectorAll('.execution-map-selection-legend')[0];
+  const children = [...header.children].filter((child) => child !== existing);
+  const legend = renderSelectionLegend(selectedOccurrenceId, roles);
+  header.replaceChildren(...children, ...(legend === null ? [] : [legend]));
+}
+
+function appendArrowMarker(defs, id, fill) {
+  const marker = svgElement('marker');
+  marker.setAttribute('id', id);
+  marker.setAttribute('markerWidth', '7');
+  marker.setAttribute('markerHeight', '7');
+  marker.setAttribute('refX', '6');
+  marker.setAttribute('refY', '3.5');
+  marker.setAttribute('orient', 'auto');
+  const arrow = svgElement('path');
+  arrow.setAttribute('d', 'M 0 0 L 7 3.5 L 0 7 z');
+  arrow.setAttribute('fill', fill);
+  marker.append(arrow);
+  defs.append(marker);
+}
+
 function svgElement(tag) {
   return document.createElementNS('http://www.w3.org/2000/svg', tag);
 }
@@ -558,9 +685,11 @@ function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas
       : 'map.edgeTransition';
   const label = t(labelKey);
   path.setAttribute('class', className);
+  path.setAttribute('data-edge-base-class', className);
   path.setAttribute('d', curvePath(source, target, relation.kind));
   path.setAttribute('fill', 'none');
   path.setAttribute('data-edge', 'true');
+  path.setAttribute('data-edge-key', `${relation.kind}:${relation.id}`);
   path.setAttribute('data-edge-kind', relation.kind);
   path.setAttribute('aria-label', label);
   path.setAttribute('data-relation-id', relation.id);
@@ -592,18 +721,9 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
   svg.setAttribute('height', String(height));
   svg.replaceChildren();
   const defs = svgElement('defs');
-  const marker = svgElement('marker');
-  marker.setAttribute('id', 'execution-edge-arrow');
-  marker.setAttribute('markerWidth', '7');
-  marker.setAttribute('markerHeight', '7');
-  marker.setAttribute('refX', '6');
-  marker.setAttribute('refY', '3.5');
-  marker.setAttribute('orient', 'auto');
-  const arrow = svgElement('path');
-  arrow.setAttribute('d', 'M 0 0 L 7 3.5 L 0 7 z');
-  arrow.setAttribute('fill', 'currentColor');
-  marker.append(arrow);
-  defs.append(marker);
+  appendArrowMarker(defs, 'execution-edge-arrow', 'currentColor');
+  appendArrowMarker(defs, 'execution-edge-arrow-incoming', 'var(--accent)');
+  appendArrowMarker(defs, 'execution-edge-arrow-outgoing', 'var(--warning)');
   svg.append(defs);
 
   for (const transition of visibleTransitionRelations(trace)) {
@@ -635,6 +755,7 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
       canvas,
     );
   }
+  applyEdgeSelection(svg, canvas.dataset.selectedOccurrenceId || null);
 }
 
 function isInteractiveTarget(target) {
@@ -650,7 +771,12 @@ function renderRelationOverlay(section, map, canvas, trace, groups, onMoveNode, 
   const svg = svgElement('svg');
   svg.setAttribute('class', 'execution-edge-overlay');
   svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', t('map.edgeLegend'));
+  svg.setAttribute(
+    'aria-label',
+    canvas.dataset.selectedOccurrenceId === undefined || canvas.dataset.selectedOccurrenceId === ''
+      ? t('map.observedPath')
+      : t('map.edgeLegend'),
+  );
   updateExecutionMapGeometry(svg, canvas, trace);
   let disposed = false;
   const update = () => {
@@ -797,19 +923,11 @@ export function renderExecutionMap(trace, options) {
     })),
     element('span', 'execution-map-key', t('map.selectPass')),
   );
-  const legend = element('div', 'execution-map-legend');
-  legend.setAttribute('aria-label', t('map.edgeLegend'));
-  for (const [kind, labelKey] of [
-    ['transition', 'map.edgeTransition'],
-    ['loop', 'map.edgeIteration'],
-    ['call', 'map.edgeCall'],
-  ]) {
-    const item = element('span', `execution-map-legend-item execution-map-legend-${kind}`);
-    item.append(element('span', 'execution-map-legend-mark', ''), element('span', '', t(labelKey)));
-    item.title = t(labelKey);
-    legend.append(item);
-  }
-  mapHeader.append(legend);
+  const selectionLegend = renderSelectionLegend(
+    options.selectedOccurrenceId ?? null,
+    selectionRolesFromRelations(visibleEdgeRelations(trace), options.selectedOccurrenceId ?? null),
+  );
+  if (selectionLegend !== null) mapHeader.append(selectionLegend);
   section.append(mapHeader);
 
   const map = element('div', 'execution-map');
@@ -818,11 +936,14 @@ export function renderExecutionMap(trace, options) {
   map.setAttribute('aria-label', t('map.ariaLabel'));
   map.setAttribute('aria-description', t('map.panHint'));
   map.dataset.panHint = t('map.panHint');
+  map.dataset.iterationSelected = String(options.selectedOccurrenceId !== null);
+  executionMapHeaders.set(map, mapHeader);
   const canvas = element('div', 'execution-map-canvas');
   const scale = clampMapScale(options.scale === undefined ? DEFAULT_MAP_SCALE : options.scale);
   canvas.dataset.layoutWidth = String(layout.width);
   canvas.dataset.layoutHeight = String(layout.height);
   canvas.dataset.scale = String(scale);
+  canvas.dataset.selectedOccurrenceId = options.selectedOccurrenceId ?? '';
   canvas.style.setProperty('width', `${layout.width}px`);
   canvas.style.setProperty('height', `${layout.height}px`);
   canvas.style.setProperty('transform', `scale(${scale})`);
@@ -832,7 +953,9 @@ export function renderExecutionMap(trace, options) {
     const renderedStep = renderStep(
       node,
       layout.positions.get(node.id) ?? { x: 28, y: 28 },
+      options.selectedStepId,
       options.selectedOccurrenceId,
+      options.onSelectStep,
       options.onSelectOccurrence,
       iterationTargets.has(node.id),
     );
@@ -877,18 +1000,42 @@ export function disposeExecutionMap(container) {
     if (dispose === undefined) continue;
     dispose();
     executionMapDisposers.delete(section);
+    const map = section.querySelectorAll('.execution-map')[0];
+    if (map !== undefined) executionMapHeaders.delete(map);
   }
 }
 
-export function updateExecutionMapSelection(container, selectedOccurrenceId) {
+export function updateExecutionMapSelection(container, selectedOccurrenceId, selectedStepId = null) {
+  container.dataset.iterationSelected = String(selectedOccurrenceId !== null);
+  const canvas = container.querySelectorAll('.execution-map-canvas')[0];
+  if (canvas !== undefined) canvas.dataset.selectedOccurrenceId = selectedOccurrenceId ?? '';
   for (const step of container.querySelectorAll('.execution-step')) {
-    const selected = [...step.querySelectorAll('[data-occurrence-id]')]
+    const selectedStep = selectedStepId !== null
+      && selectedOccurrenceId === null
+      && step.dataset.stepId === selectedStepId;
+    const selectedOccurrence = [...step.querySelectorAll('[data-occurrence-id]')]
       .some((button) => button.dataset.occurrenceId === selectedOccurrenceId);
-    step.dataset.active = String(selected);
+    step.dataset.selected = String(selectedStep);
+    step.dataset.active = String(selectedOccurrence);
+    const header = step.querySelectorAll('.execution-step-header')[0];
+    if (header !== undefined) header.setAttribute('aria-pressed', String(selectedStep));
   }
   for (const chip of container.querySelectorAll('[data-occurrence-id]')) {
     const selected = chip.dataset.occurrenceId === selectedOccurrenceId;
     chip.dataset.selected = String(selected);
     chip.setAttribute('aria-pressed', String(selected));
+  }
+  const overlay = container.querySelectorAll('.execution-edge-overlay')[0];
+  if (overlay !== undefined) {
+    applyEdgeSelection(overlay, selectedOccurrenceId);
+    overlay.setAttribute(
+      'aria-label',
+      selectedOccurrenceId === null ? t('map.observedPath') : t('map.edgeLegend'),
+    );
+  }
+  const header = executionMapHeaders.get(container) ?? container.querySelectorAll('.execution-map-header')[0];
+  if (header !== undefined) {
+    const roles = selectionRolesFromEdges(container.querySelectorAll('[data-edge]'), selectedOccurrenceId);
+    replaceSelectionLegend(header, selectedOccurrenceId, roles);
   }
 }

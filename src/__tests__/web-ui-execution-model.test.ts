@@ -15,8 +15,12 @@ import {
   clampMapScale,
   disposeExecutionMap,
   renderExecutionMap,
+  updateExecutionMapSelection,
 } from '../../web-ui/public/execution-map.js';
-import { resolveLogSelection } from '../../web-ui/public/execution-view.js';
+import {
+  createExecutionView,
+  resolveLogSelection,
+} from '../../web-ui/public/execution-view.js';
 
 class FakeDomNode {
   className = '';
@@ -56,7 +60,7 @@ class FakeDomNode {
   scrollWidth = 640;
   scrollHeight = 320;
   rect = { left: 0, top: 0, right: 80, width: 80, height: 24 };
-  listeners = new Map<string, (event?: Record<string, unknown>) => void>();
+  listeners = new Map<string, Array<(event?: Record<string, unknown>) => void>>();
   pointerCaptures = new Set<number>();
 
   constructor(readonly tagName: string) {}
@@ -67,16 +71,21 @@ class FakeDomNode {
 
   addEventListener(type: string, listener: unknown) {
     if (typeof listener === 'function') {
-      this.listeners.set(type, listener as (event?: Record<string, unknown>) => void);
+      const listeners = this.listeners.get(type) ?? [];
+      this.listeners.set(type, [...listeners, listener as (event?: Record<string, unknown>) => void]);
     }
   }
 
   removeEventListener(type: string, listener: unknown) {
-    if (this.listeners.get(type) === listener) this.listeners.delete(type);
+    const listeners = this.listeners.get(type);
+    if (listeners === undefined) return;
+    const next = listeners.filter((candidate) => candidate !== listener);
+    if (next.length === 0) this.listeners.delete(type);
+    else this.listeners.set(type, next);
   }
 
   dispatchEvent(type: string, event: Record<string, unknown> = {}) {
-    this.listeners.get(type)?.(event);
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 
   setPointerCapture(pointerId: number) {
@@ -102,7 +111,14 @@ class FakeDomNode {
   setAttribute(name: string, value: string) {
     this.attributes[name] = value;
     if (name === 'class') this.className = value;
-    if (name.startsWith('data-')) this.dataset[name.slice(5).replaceAll('-', '')] = value;
+    if (name.startsWith('data-')) {
+      const datasetName = name.slice(5).replace(/-([a-z])/gu, (_match, character: string) => character.toUpperCase());
+      this.dataset[datasetName] = value;
+    }
+  }
+
+  getAttribute(name: string) {
+    return this.attributes[name] ?? null;
   }
 
   matches(selector: string) {
@@ -110,7 +126,9 @@ class FakeDomNode {
     if (selector.startsWith('[')) {
       const [, name, value] = selector.match(/^\[([^=\]]+)(?:="([^"]*)")?\]$/) ?? [];
       if (name === undefined) return false;
-      const dataName = name.startsWith('data-') ? name.slice(5).replaceAll('-', '') : undefined;
+      const dataName = name.startsWith('data-')
+        ? name.slice(5).replace(/-([a-z])/gu, (_match, character: string) => character.toUpperCase())
+        : undefined;
       const actual = dataName === undefined ? this.attributes[name] : this.dataset[dataName];
       return value === undefined ? actual !== undefined : actual === value;
     }
@@ -123,6 +141,14 @@ class FakeDomNode {
       ...(child.querySelectorAll?.(selector) ?? []),
     ]);
   }
+
+  querySelector(selector: string) {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+
+  contains(target: unknown): boolean {
+    return target === this || this.children.some((child) => child.contains(target));
+  }
 }
 
 class FakeDomDocument {
@@ -132,6 +158,12 @@ class FakeDomDocument {
 
   createElementNS(_namespace: string, tagName: string) {
     return new FakeDomNode(tagName);
+  }
+
+  createTextNode(text: string) {
+    const node = new FakeDomNode('#text');
+    node.textContent = text;
+    return node;
   }
 }
 
@@ -629,7 +661,7 @@ describe('Web UI execution model', () => {
       expect(section.querySelectorAll('.execution-step-index')).toHaveLength(0);
       const chipLabels = section.querySelectorAll('.iteration-chip-label') as FakeDomNode[];
       expect(chipLabels.every(
-        (chip) => /^STEP \d+/.test(chip.textContent),
+        (chip) => /^ITER \d+/.test(chip.textContent),
       )).toBe(true);
       expect(section.querySelectorAll('.execution-edge-transition')).toHaveLength(2);
       expect(section.querySelectorAll('.execution-edge-loop')).toHaveLength(1);
@@ -653,6 +685,273 @@ describe('Web UI execution model', () => {
       }
       const updatedLoopPath = section.querySelectorAll('.execution-edge-loop')[0] as FakeDomNode | undefined;
       expect(updatedLoopPath?.attributes.d).not.toBe(beforeScroll);
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('highlights only the chronological ITER incoming and outgoing edges', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const chronologicalEvents: ExecutionEvent[] = [
+        { type: 'step_start', step: 'plan', iteration: 1 },
+        { type: 'step_complete', step: 'plan', iteration: 1, status: 'done' },
+        { type: 'step_start', step: 'review', iteration: 1 },
+        { type: 'step_complete', step: 'review', iteration: 1, status: 'done' },
+        { type: 'step_start', step: 'plan', iteration: 2 },
+        { type: 'step_complete', step: 'plan', iteration: 2, status: 'done' },
+        { type: 'step_start', step: 'ship', iteration: 1 },
+      ];
+      const trace = buildExecutionTrace(
+        { workflow: 'default', status: 'running' },
+        chronologicalEvents.slice().reverse(),
+      );
+      const plan = trace.nodes.find((node) => node.label === 'plan');
+      expect(plan).toBeDefined();
+      if (plan === undefined) throw new Error('expected plan node');
+      const selectedOccurrence = plan.occurrences[1];
+      expect(selectedOccurrence).toBeDefined();
+      if (selectedOccurrence === undefined) throw new Error('expected second plan ITER');
+
+      const section = renderExecutionMap(trace, {
+        liveIndicator: new FakeDomNode('span'),
+        emptyState: new FakeDomNode('div'),
+        selectedOccurrenceId: null,
+        onSelectOccurrence: () => undefined,
+      });
+      const map = section.querySelectorAll('.execution-map')[0] as FakeDomNode;
+      const paths = () => section.querySelectorAll('[data-edge]') as FakeDomNode[];
+      const overlay = section.querySelectorAll('.execution-edge-overlay')[0] as FakeDomNode;
+      const defs = overlay.children[0];
+      expect(defs?.children.map((marker) => marker.attributes.id)).toEqual([
+        'execution-edge-arrow',
+        'execution-edge-arrow-incoming',
+        'execution-edge-arrow-outgoing',
+      ]);
+      expect(defs?.children[1]?.children[0]?.attributes.fill).toBe('var(--accent)');
+      expect(defs?.children[2]?.children[0]?.attributes.fill).toBe('var(--warning)');
+      expect(section.querySelectorAll('.execution-map-selection-legend')).toHaveLength(0);
+      expect(paths().every((path) => path.attributes['data-edge-role'] === 'none')).toBe(true);
+      expect(new Set(paths().map((path) => path.attributes['data-edge-key'])))
+        .toEqual(new Set(trace.transitions.map((transition) => `${transition.kind}:${transition.id}`)));
+
+      updateExecutionMapSelection(map, selectedOccurrence.id, plan.id);
+      const incoming = paths().filter((path) => path.attributes['data-edge-role'] === 'incoming');
+      const outgoing = paths().filter((path) => path.attributes['data-edge-role'] === 'outgoing');
+      const unrelated = paths().filter((path) => path.attributes['data-edge-role'] === 'none');
+      expect(incoming).toHaveLength(1);
+      expect(outgoing).toHaveLength(1);
+      expect(unrelated).toHaveLength(1);
+      expect(incoming[0]?.attributes['data-target-occurrence-id']).toBe(selectedOccurrence.id);
+      expect(outgoing[0]?.attributes['data-source-occurrence-id']).toBe(selectedOccurrence.id);
+      expect(incoming[0]?.className).toContain('execution-edge-emphasis-incoming');
+      expect(outgoing[0]?.className).toContain('execution-edge-emphasis-outgoing');
+      expect(incoming[0]?.attributes['marker-end']).toBe('url(#execution-edge-arrow-incoming)');
+      expect(outgoing[0]?.attributes['marker-end']).toBe('url(#execution-edge-arrow-outgoing)');
+      const legend = section.querySelectorAll('.execution-map-selection-legend')[0] as FakeDomNode;
+      expect(legend.children.map((item) => item.children[1]?.textContent)).toEqual(['このITERへ', '次のITERへ']);
+
+      const canvas = section.querySelectorAll('.execution-map-canvas')[0] as FakeDomNode;
+      canvas.dispatchEvent('execution-map-node-moved');
+      expect(paths().filter((path) => path.attributes['data-edge-role'] === 'incoming')).toHaveLength(1);
+      expect(paths().filter((path) => path.attributes['data-edge-role'] === 'outgoing')).toHaveLength(1);
+
+      updateExecutionMapSelection(map, plan.occurrences[0]!.id, plan.id);
+      expect(paths().filter((path) => path.attributes['data-edge-role'] === 'incoming')).toHaveLength(0);
+      expect(paths().filter((path) => path.attributes['data-edge-role'] === 'outgoing')).toHaveLength(1);
+      expect(section.querySelectorAll('.execution-map-legend-incoming')).toHaveLength(0);
+      expect(section.querySelectorAll('.execution-map-legend-outgoing')).toHaveLength(1);
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('keeps STEP header selection separate from individual ITER selection', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const chronologicalEvents: ExecutionEvent[] = [
+        { type: 'step_start', step: 'plan', iteration: 1, persona: 'Planner' },
+        { type: 'step_complete', step: 'plan', iteration: 1, status: 'done', content: 'first' },
+        { type: 'step_start', step: 'review', iteration: 1, persona: 'Reviewer' },
+        { type: 'step_complete', step: 'review', iteration: 1, status: 'done', content: 'review' },
+        { type: 'step_start', step: 'plan', iteration: 2, persona: 'Planner' },
+        { type: 'step_complete', step: 'plan', iteration: 2, status: 'done', content: 'second' },
+      ];
+      const trace = buildExecutionTrace(
+        { workflow: 'default', status: 'running' },
+        chronologicalEvents.slice().reverse(),
+      );
+      const plan = trace.nodes.find((node) => node.label === 'plan');
+      expect(plan).toBeDefined();
+      if (plan === undefined) throw new Error('expected plan node');
+      const selectedSteps: string[] = [];
+      const selectedOccurrences: string[] = [];
+      const section = renderExecutionMap(trace, {
+        liveIndicator: new FakeDomNode('span'),
+        emptyState: new FakeDomNode('div'),
+        selectedStepId: null,
+        selectedOccurrenceId: null,
+        onSelectStep: (node) => selectedSteps.push(node.id),
+        onSelectOccurrence: (_node, occurrence) => selectedOccurrences.push(occurrence.id),
+      });
+      const step = (section.querySelectorAll('.execution-step') as FakeDomNode[])
+        .find((candidate) => candidate.dataset.stepId === plan.id);
+      expect(step).toBeDefined();
+      if (step === undefined) throw new Error('expected rendered plan step');
+      const header = step.querySelectorAll('.execution-step-header')[0];
+      const chips = step.querySelectorAll('.iteration-chip') as FakeDomNode[];
+      expect(header).toBeDefined();
+      expect(chips).toHaveLength(2);
+      expect(chips.map((chip) => chip.attributes['aria-label'])).toEqual([
+        expect.stringContaining('ITERATION 1'),
+        expect.stringContaining('ITERATION 3'),
+      ]);
+      expect(chips.map((chip) => chip.children[0]?.textContent)).toEqual(['ITER 1', 'ITER 3']);
+
+      header?.dispatchEvent('click');
+      expect(selectedSteps).toEqual([plan.id]);
+      expect(selectedOccurrences).toEqual([]);
+
+      chips[0]?.dispatchEvent('click');
+      expect(selectedSteps).toEqual([plan.id]);
+      expect(selectedOccurrences).toEqual([plan.occurrences[0]!.id]);
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('keeps the selected STEP and ITER detail distinct across the inspector back actions', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const events: ExecutionEvent[] = [
+        { type: 'step_start', step: 'plan', iteration: 1 },
+        { type: 'step_complete', step: 'plan', iteration: 1, status: 'done' },
+        { type: 'step_start', step: 'plan', iteration: 2 },
+      ];
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+      });
+      const selection = { projectId: 'project-a', slug: 'run-1' };
+      executionView.renderDetail({
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: {
+          runSlug: 'run-1',
+          workflow: 'default',
+          status: 'running',
+          task: 'Inspect this run',
+        },
+        events: events.slice().reverse(),
+        history: [],
+        reports: [],
+      }, selection);
+
+      const plan = buildExecutionTrace(
+        { workflow: 'default', status: 'running' },
+        events.slice().reverse(),
+      ).nodes.find((node) => node.label === 'plan');
+      expect(plan).toBeDefined();
+      if (plan === undefined) throw new Error('expected plan node');
+      const header = runDetail.querySelector('.execution-step-header');
+      expect(header).toBeDefined();
+      header?.dispatchEvent('click');
+      expect(inspector.querySelector('.inspector-step-summary')).not.toBeNull();
+      expect(inspector.querySelector('.inspector-iteration-facts')).toBeNull();
+      expect(inspector.querySelector('.detail-tabs')).toBeNull();
+      expect(inspector.querySelectorAll('.inspector-iteration-item')).toHaveLength(2);
+      expect(inspector.querySelector('.log-panel')).toBeNull();
+      expect(inspector.querySelector('.logs-empty')).toBeNull();
+      let renderedPlan = runDetail.querySelector('.execution-step');
+      expect(renderedPlan?.dataset.selected).toBe('true');
+      expect(renderedPlan?.dataset.active).toBe('false');
+
+      inspector.querySelectorAll('.inspector-iteration-item')[0]?.dispatchEvent('click');
+      expect(inspector.querySelector('.inspector-iteration-summary')).not.toBeNull();
+      expect(inspector.querySelector('.detail-tabs')).not.toBeNull();
+      inspector.querySelector('.inspector-clear-selection')?.dispatchEvent('click');
+      expect(inspector.querySelector('.inspector-step-summary')).not.toBeNull();
+
+      const firstLiveUpdate = [
+        ...events,
+        { type: 'step_complete', step: 'plan', iteration: 2, status: 'done' },
+        { type: 'step_start', step: 'review', iteration: 1 },
+        { type: 'step_start', step: 'plan', iteration: 3 },
+      ] satisfies ExecutionEvent[];
+      executionView.renderDetail({
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: {
+          runSlug: 'run-1',
+          workflow: 'default',
+          status: 'running',
+          task: 'Inspect this run',
+        },
+        events: firstLiveUpdate.slice().reverse(),
+        history: [],
+        reports: [],
+      }, selection);
+      expect(inspector.querySelector('.inspector-step-summary')).not.toBeNull();
+      expect(inspector.querySelector('.inspector-iteration-facts')).toBeNull();
+
+      renderedPlan = runDetail.querySelector('.execution-step');
+      let chips = renderedPlan?.querySelectorAll('.iteration-chip') ?? [];
+      expect(chips).toHaveLength(3);
+      chips[0]?.dispatchEvent('click');
+      const iterationBack = inspector.querySelector('.inspector-clear-selection');
+      expect(iterationBack?.textContent).toBe('STEP概要に戻る');
+      expect(inspector.querySelector('.inspector-step-summary')).toBeNull();
+      expect(inspector.querySelector('.inspector-iteration-summary')).not.toBeNull();
+      expect(inspector.querySelector('.inspector-iteration-facts')).not.toBeNull();
+
+      const secondLiveUpdate = [
+        ...firstLiveUpdate,
+        { type: 'step_complete', step: 'plan', iteration: 3, status: 'done' },
+        { type: 'step_start', step: 'plan', iteration: 4 },
+      ] satisfies ExecutionEvent[];
+      executionView.renderDetail({
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: {
+          runSlug: 'run-1',
+          workflow: 'default',
+          status: 'running',
+          task: 'Inspect this run',
+        },
+        events: secondLiveUpdate.slice().reverse(),
+        history: [],
+        reports: [],
+      }, selection);
+      expect(inspector.querySelector('.inspector-step-summary')).toBeNull();
+      expect(inspector.querySelector('.inspector-iteration-facts')).not.toBeNull();
+      renderedPlan = runDetail.querySelector('.execution-step');
+      chips = renderedPlan?.querySelectorAll('.iteration-chip') ?? [];
+      expect(chips).toHaveLength(4);
+      expect(chips[0]?.dataset.selected).toBe('true');
+      expect(runDetail.querySelector('.execution-step')?.dataset.selected).toBe('false');
+      expect(runDetail.querySelector('.execution-step')?.dataset.active).toBe('true');
+
+      inspector.querySelector('.inspector-clear-selection')?.dispatchEvent('click');
+      expect(inspector.querySelector('.inspector-step-summary')).not.toBeNull();
+      expect(runDetail.querySelector('.execution-step')?.dataset.selected).toBe('true');
+      expect(chips[0]?.dataset.selected).toBe('false');
+      expect(inspector.querySelector('.inspector-clear-selection')?.textContent)
+        .toBe('Run 全体に戻る');
+
+      inspector.querySelector('.inspector-clear-selection')?.dispatchEvent('click');
+      expect(runDetail.querySelector('.execution-step')?.dataset.selected).toBe('false');
+      expect(inspector.querySelector('.inspector-step-summary')).toBeNull();
+      expect(inspector.querySelector('.inspector-run-summary')).not.toBeNull();
     } finally {
       runtime.document = previousDocument;
     }

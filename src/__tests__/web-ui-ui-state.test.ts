@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildExecutionSettingsRequest,
   captureRunDetailViewState,
+  clampInspectorWidth,
   createDirectoryRequestTracker,
   isCurrentRunRequest,
   isCurrentWorkflowRequest,
@@ -15,6 +16,17 @@ import {
 import type { DirectoryRequestToken } from '../../web-ui/public/ui-state.js';
 
 describe('Web UI execution settings', () => {
+  it('clamps inspector width to its accessible layout bounds', () => {
+    expect(clampInspectorWidth(420, 280, 640)).toBe(420);
+    expect(clampInspectorWidth(120, 280, 640)).toBe(280);
+    expect(clampInspectorWidth(900, 280, 640)).toBe(640);
+    expect(clampInspectorWidth(Number.NaN, 280, 640)).toBe(280);
+    expect(() => clampInspectorWidth(420, 640, 280)).toThrow('Inspector width bounds are invalid');
+
+    const widthAfterOutOfRangeDrag = clampInspectorWidth(900, 280, 640);
+    expect(clampInspectorWidth(widthAfterOutOfRangeDrag - 24, 280, 640)).toBe(616);
+  });
+
   it('keeps a task instruction snapshot independent from later setup changes', () => {
     const current = {
       worktreeMode: 'auto' as const,
