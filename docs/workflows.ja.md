@@ -1102,9 +1102,10 @@ step や Companion 定義単位の上書きはできません。
 
 レビューで指摘を採用した後の修正方式は、`runtime.yaml` の
 `companion.fix_policy` で選択します。既定値の `single` は advisory な修正 follow-up を
-最大1回だけ実行し、その follow-up を再レビューしません。`loop` を明示すると、指摘が
-なくなるまでレビューと修正を繰り返す従来動作になります。`review_mode` と同様に global
-または project 単位の設定であり、step や Companion 定義単位では上書きできません。
+最大1回だけ実行し、その follow-up を再レビューしません。`loop` を明示すると、現在の累積
+diff に対する完了処理で新たに採用される指摘がなくなるまでレビューと修正を繰り返す従来
+動作になります。既にレビュー済みの digest は重複レビューしません。`review_mode` と同様に
+global または project 単位の設定であり、step や Companion 定義単位では上書きできません。
 
 ```yaml
 - name: implement
@@ -1130,9 +1131,10 @@ aggregated response の確定前に別の Team 完了レビューを行います
 1回だけ渡し、修正 batch を最大1回実行します。各 correction part は通常の part 実行経路を
 使うため、その part 自身の part-level Companion review は行いますが、batch が settle した
 後に親 Team の完了レビューは再実行しません。`loop` を明示した場合は、correction part の
-完了後に親 Team の完了レビューを再実行し、指摘がなくなるまで上限なしでレビューと修正を
-繰り返します。part 専用 worktree、patch、changed-path 所有権、Companion 専用 scheduler は
-作成しません。
+完了後に親 Team の完了レビューを再実行し、上限なしでレビューと修正を繰り返します。現在の
+累積 diff に対する完了処理で新たに採用される Team finding がなくなれば終了します。既に
+レビュー済みの digest は重複レビューしません。part 専用 worktree、patch、changed-path
+所有権、Companion 専用 scheduler は作成しません。
 
 定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。
 
@@ -1146,9 +1148,10 @@ aggregated response の確定前に別の Team 完了レビューを行います
 follow-up を再レビューせず、2回目の修正ターンも実行しません。
 
 `loop` を明示した場合は、採用された指摘を follow-up prompt へ配達し、修正後に完了処理を
-繰り返します。未配達の指摘がなく、最後に指摘を配達した時点から digest が変わっていない
-場合にだけ step を終了します。このループにラウンド上限はなく、workflow または step の
-AbortSignal による中断が終了手段です。どちらの policy でも、follow-up が `error`、
+繰り返します。現在の累積 diff に対する完了処理で新たに採用される指摘がなくなれば step を
+終了します。現在の digest が既にレビュー済みなら重複レビューを省略します。このループに
+ラウンド上限はありません。workflow または step の AbortSignal でも中断できます。どちらの
+policy でも、follow-up が `error`、
 `rate_limited`、`blocked` を返すか例外を送出した場合、その follow-up を Companion 処理内で
 再試行せず、最後に成功した実装エージェント応答と session ID で step を続行します。
 Companion の診断値には `completionSettled: false`、実際に試行した `followUpRounds`、

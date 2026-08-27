@@ -1121,9 +1121,11 @@ project-wide; it is not a step or Companion definition override.
 Set `companion.fix_policy` in `runtime.yaml` to choose what happens after a
 review accepts findings. It defaults to `single`, which allows at most one
 advisory fix follow-up and does not review that follow-up again. Set it to
-`loop` to preserve repeated review-and-fix processing until no findings remain.
-Like `review_mode`, this setting is global or project-wide and cannot be
-overridden by a step or Companion definition.
+`loop` to preserve repeated review-and-fix processing until completion
+processing for the current cumulative diff produces no newly accepted
+findings. A digest that has already been reviewed is not reviewed again. Like
+`review_mode`, this setting is global or project-wide and cannot be overridden
+by a step or Companion definition.
 
 ```yaml
 - name: implement
@@ -1152,12 +1154,13 @@ decides which findings warrant a fix; minor, trivial, or unnecessary findings
 may be left unaddressed with an explanation. TAKT does not review that follow-up
 or run another fix turn.
 
-With explicit `loop`, accepted findings are delivered in the follow-up prompt
-and completion processing repeats after each fix. The step finishes only when
-no findings remain undelivered and the digest has not changed since the latest
-finding delivery. This loop has no round limit; cancellation through the
-workflow or step abort signal is its termination mechanism. Under either
-policy, a follow-up that returns `error`, `rate_limited`, or `blocked`, or throws
+With explicit `loop`, accepted findings are delivered in the follow-up prompt,
+and completion processing repeats after each fix. The step finishes when
+completion processing for the current cumulative diff produces no newly
+accepted findings. If the current digest has already been reviewed, TAKT skips
+the duplicate review. This loop has no round limit. The workflow or step abort
+signal can also terminate it. Under either policy, a follow-up that returns
+`error`, `rate_limited`, or `blocked`, or throws
 an error, is not retried by Companion processing. TAKT continues the step with
 the latest successful implementer response and session ID, while diagnostics
 record `completionSettled: false`, the attempted `followUpRounds`, and a
@@ -1176,9 +1179,11 @@ correction batch runs. Each correction part uses the ordinary part execution
 path and therefore still receives its own part-level Companion review, but TAKT
 does not run the parent Team completion review again after that batch settles.
 With explicit `loop`, correction parts are followed by another parent Team
-completion review, and review and correction repeat without a round limit until
-no findings remain. Team execution does not create part-specific worktrees,
-patches, changed-path ownership, or a separate Companion scheduler.
+completion review, and review and correction repeat without a round limit. They
+stop when completion processing for the current cumulative diff produces no
+newly accepted Team findings. If the current digest has already been reviewed,
+TAKT skips the duplicate review. Team execution does not create part-specific
+worktrees, patches, changed-path ownership, or a separate Companion scheduler.
 
 ## Best Practices
 

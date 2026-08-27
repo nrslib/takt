@@ -929,8 +929,9 @@ project 层级，不支持 step 或 Companion 定义级覆盖。
 
 在 `runtime.yaml` 中使用 `companion.fix_policy` 选择 reviewer 接受 finding 后的修复方式。
 默认值 `single` 最多执行一次 advisory 修复 follow-up，且不会再次审查该 follow-up。显式设置
-`loop` 后会保留原有行为，持续审查和修复直到没有 finding。与 `review_mode` 相同，该设置只支持
-global 或 project 层级，不支持 step 或 Companion 定义级覆盖。
+`loop` 后会保留原有行为，持续审查和修复，直到针对当前累计 diff 的完成处理不再产生新的已接受
+finding。已经审查过的 digest 不会重复审查。与 `review_mode` 相同，该设置只支持 global 或
+project 层级，不支持 step 或 Companion 定义级覆盖。
 
 ```yaml
 - name: implement
@@ -955,8 +956,9 @@ Team Leader 判断无需新增工作后，TAKT 会在确定 aggregated response 
 规划，最多执行一个 correction batch。每个 correction part 仍走普通 part 执行路径，因此会
 执行该 part 自身的 part-level Companion review；但 batch settle 后不会再次执行父 Team 完成审查。
 显式使用 `loop` 时，correction part 完成后会再次执行父 Team 完成审查，并且不设轮数上限，
-持续审查和修复直到没有 finding。该流程不会创建 part 专用 worktree、patch、changed-path
-所有权或 Companion 专用 scheduler。
+持续审查和修复，直到针对当前累计 diff 的完成处理不再产生新的已接受 Team finding。已经审查
+过的 digest 不会重复审查。该流程不会创建 part 专用 worktree、patch、changed-path 所有权或
+Companion 专用 scheduler。
 
 在 `live` mode，TAKT 观察 mutating tool event，并在 quiet period、强制间隔或 commit 触发后审查
 当前累计 diff。在 `completion` mode，TAKT 等待 implementer 响应边界再审查。每个 round 使用新的
@@ -969,10 +971,11 @@ finding 只会作为 advisory reference information 传给一次修复 follow-up
 哪些 finding 值得修复；轻微、琐碎或不必要的 finding 可以不处理，但应说明原因。TAKT 不会再次
 审查该 follow-up，也不会执行第二次修复。
 
-显式 `loop` 下，采纳的 finding 会传入 follow-up prompt，并在每次修复后重复完成处理，直到没有
-待传递 finding 且最新 finding 传递后 diff digest 未再变化。该循环没有轮数上限，由 workflow 或
-step abort signal 终止。两种 policy 下，follow-up 的错误、限流、blocked 或异常都不会由
-Companion 处理再次重试；step 会继续使用最近一次成功的 implementer response 和 session ID，
+显式 `loop` 下，采纳的 finding 会传入 follow-up prompt，并在每次修复后重复完成处理。针对当前
+累计 diff 的完成处理不再产生新的已接受 finding 时结束；如果当前 digest 已经审查过，则跳过
+重复审查。该循环没有轮数上限；workflow 或 step abort signal 也可以将其中止。两种 policy 下，
+follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再次重试；step 会继续使用最近
+一次成功的 implementer response 和 session ID，
 同时记录 `completionSettled: false`、已尝试的 `followUpRounds` 和清理后的失败原因。AbortSignal
 取消仍会向上传播，Companion 调用在 fail-soft 前仍保留 provider 的有限重试策略。
 
