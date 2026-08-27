@@ -17,9 +17,11 @@ function renderInteractivePrompt(
   lang: 'en' | 'ja',
   formalSpec: boolean,
   grillMe = false,
+  formalSpecComments = true,
 ): string {
   return buildInteractiveSystemPrompt(lang, {
     formalSpec,
+    formalSpecComments,
     grillMe,
   });
 }
@@ -34,7 +36,7 @@ function parseInvestigationPolicy(prompt: string): unknown {
   return JSON.parse(match[1]) as unknown;
 }
 
-function renderJapaneseSummaryPrompt(formalSpec: boolean): string {
+function renderJapaneseSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
   return buildSummaryPrompt(
     [{ role: 'user', content: '状態を更新する機能を追加する' }],
     false,
@@ -45,6 +47,24 @@ function renderJapaneseSummaryPrompt(formalSpec: boolean): string {
     undefined,
     undefined,
     formalSpec,
+    false,
+    formalSpecComments,
+  );
+}
+
+function renderEnglishSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
+  return buildSummaryPrompt(
+    [{ role: 'user', content: 'Add a stateful feature' }],
+    false,
+    'en',
+    'No transcript',
+    'Conversation:',
+    undefined,
+    undefined,
+    undefined,
+    formalSpec,
+    false,
+    formalSpecComments,
   );
 }
 
@@ -64,74 +84,43 @@ describe('interactive investigation policy template wiring', () => {
   );
 });
 
-describe('interactive formal specification prompt templates', () => {
-  it('selects English conditional Gherkin guidance without formal notation guidance when disabled', () => {
-    const prompt = renderInteractivePrompt('en', false);
+describe('interactive formal specification prompt template wiring', () => {
+  it.each(['en', 'ja'] as const)(
+    'applies formal specification and comment switches independently for %s',
+    (lang) => {
+      const withoutFormalSpec = renderInteractivePrompt(lang, false, false, false);
+      const withoutFormalSpecButCommentsEnabled = renderInteractivePrompt(lang, false, false, true);
+      const withoutComments = renderInteractivePrompt(lang, true, false, false);
+      const withComments = renderInteractivePrompt(lang, true, false, true);
+      const withDefaultComments = renderInteractivePrompt(lang, true);
 
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('whose deliverable is not an implementation, do not use Gherkin');
-    expect(prompt).toContain('where a misunderstanding would materially change the implementation result');
-    expect(prompt).toContain('do not duplicate the same acceptance clause in Markdown and Gherkin');
-    expect(prompt).toContain('keywords in English');
-    expect(prompt).toContain('do not use a localized `# language` directive');
-    expect(prompt).not.toContain('Quint');
-    expect(prompt).not.toContain('Alloy');
-  });
-
-  it('selects Japanese conditional Gherkin guidance without formal notation guidance when disabled', () => {
-    const prompt = renderInteractivePrompt('ja', false);
-
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('実装を成果物としないタスクでは Gherkin を使用しない');
-    expect(prompt).toContain('解釈の誤りが実装結果を実質的に変える');
-    expect(prompt).toContain('同じ受け入れ条件を Markdown と Gherkin に重複して記述しない');
-    expect(prompt).toContain('会話や指示書が日本語でも常に英語で記述');
-    expect(prompt).toContain('`# language: ja` は使用しない');
-    expect(prompt).not.toContain('Quint');
-    expect(prompt).not.toContain('Alloy');
-  });
-
-  it('selects English formal notation guidance when enabled', () => {
-    const prompt = renderInteractivePrompt('en', true);
-
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('Quint');
-    expect(prompt).toContain('Alloy');
-    expect(prompt).toContain('ASCII');
-    expect(prompt).toContain('keep the prohibition on duplicating acceptance clauses between Markdown and Gherkin');
-  });
-
-  it('selects Japanese formal notation guidance when enabled', () => {
-    const prompt = renderInteractivePrompt('ja', true);
-
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('Quint');
-    expect(prompt).toContain('Alloy');
-    expect(prompt).toContain('ASCII');
-    expect(prompt).toContain('Markdown と Gherkin の重複禁止は維持する');
-  });
+      expect(withoutFormalSpecButCommentsEnabled).toBe(withoutFormalSpec);
+      expect(withoutComments).not.toBe(withoutFormalSpec);
+      expect(withComments).not.toBe(withoutComments);
+      expect(withComments.length).toBeGreaterThan(withoutComments.length);
+      expect(withDefaultComments).toBe(withComments);
+    },
+  );
 });
 
-describe('Japanese task instruction formal specification prompt', () => {
-  it('selects Gherkin guidance without formal notation guidance when disabled', () => {
-    const prompt = renderJapaneseSummaryPrompt(false);
+describe('task instruction formal specification prompt template wiring', () => {
+  it.each([
+    ['en', renderEnglishSummaryPrompt],
+    ['ja', renderJapaneseSummaryPrompt],
+  ] as const)(
+    'applies formal specification and comment switches independently for %s',
+    (_lang, renderPrompt) => {
+      const withoutFormalSpec = renderPrompt(false, false);
+      const withoutFormalSpecButCommentsEnabled = renderPrompt(false, true);
+      const withoutComments = renderPrompt(true, false);
+      const withComments = renderPrompt(true, true);
+      const withDefaultComments = renderPrompt(true);
 
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).not.toContain('Quint');
-    expect(prompt).not.toContain('Alloy');
-    expect(prompt).toContain('ASCII');
-    expect(prompt).toContain('指示書が日本語でも常に英語で記述');
-    expect(prompt).toContain('`# language: ja` は使用しない');
-  });
-
-  it('selects formal notation guidance when enabled', () => {
-    const prompt = renderJapaneseSummaryPrompt(true);
-
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('Quint');
-    expect(prompt).toContain('Alloy');
-    expect(prompt).toContain('ASCII');
-    expect(prompt).toContain('非開発タスクには Gherkin を追加しない');
-    expect(prompt).toContain('Markdown と Gherkin の重複禁止は維持する');
-  });
+      expect(withoutFormalSpecButCommentsEnabled).toBe(withoutFormalSpec);
+      expect(withoutComments).not.toBe(withoutFormalSpec);
+      expect(withComments).not.toBe(withoutComments);
+      expect(withComments.length).toBeGreaterThan(withoutComments.length);
+      expect(withDefaultComments).toBe(withComments);
+    },
+  );
 });

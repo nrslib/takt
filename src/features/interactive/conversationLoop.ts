@@ -110,6 +110,7 @@ export interface SummaryPromptOptions {
   readonly sourceContext?: string;
   readonly promptContext?: string;
   readonly formalSpec: boolean;
+  readonly formalSpecComments?: boolean;
   readonly userNote: string;
 }
 
@@ -128,6 +129,7 @@ export type SummaryTaskNormalizer = (
 export interface ConversationPromptConfiguration {
   readonly systemPrompt: string;
   readonly formalSpec: boolean;
+  readonly formalSpecComments?: boolean;
 }
 
 /** Strategy for customizing conversation loop behavior */
@@ -136,6 +138,8 @@ export interface ConversationStrategy {
   systemPrompt: string;
   /** Resolved formal specification mode for this conversation session. */
   formalSpec: boolean;
+  /** Whether formal notation blocks must include natural-language meaning comments. */
+  formalSpecComments?: boolean;
   /** Resolve prompt configuration after the user selects another session. */
   resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
   /** Allowed tools for AI calls */
@@ -194,6 +198,7 @@ export async function runConversationLoop(
   let activePromptConfiguration: ConversationPromptConfiguration = {
     systemPrompt: strategy.systemPrompt,
     formalSpec: strategy.formalSpec,
+    formalSpecComments: strategy.formalSpecComments ?? true,
   };
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
@@ -383,6 +388,7 @@ export async function runConversationLoop(
               sourceContext,
               promptContext: strategy.summaryPromptContext,
               formalSpec: activePromptConfiguration.formalSpec,
+              formalSpecComments: activePromptConfiguration.formalSpecComments ?? true,
               userNote,
             })
             : buildSummaryPrompt(
@@ -395,6 +401,7 @@ export async function runConversationLoop(
               sourceContext,
               strategy.summaryPromptContext,
               activePromptConfiguration.formalSpec,
+              activePromptConfiguration.formalSpecComments ?? true,
             );
           if (!summaryPrompt) {
             info(ui.noConversation);

@@ -14,7 +14,6 @@ import type {
   WorkflowMaxSteps,
   WorkflowWideRule,
 } from '../../models/types.js';
-import { join } from 'node:path';
 import type { ArpeggioStepConfig, BatchResult, DataBatch } from '../arpeggio/types.js';
 import { createDataSource } from '../arpeggio/data-source-factory.js';
 import { loadTemplate, expandTemplate } from '../arpeggio/template.js';
@@ -33,6 +32,7 @@ import { preparePreviousResponseContent } from '../instruction/InstructionBuilde
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { renderWorkflowWideRules } from '../instruction/workflow-wide-rules.js';
 import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
+import { resolveReportDirectory } from '../run/run-paths.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
 import { sumRetryCounts } from '../../models/response.js';
@@ -359,7 +359,7 @@ export class ArpeggioRunner {
       previousOutput,
       previousResponseSourcePath: state.previousResponseSourcePath,
       previousResponseText,
-      reportDir: join(this.deps.getCwd(), this.deps.getReportDir()),
+      reportDir: resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir()),
       reportsRootDir: this.deps.getReportsRootDir(),
       resumeReportConsumerKey: buildResumeReportConsumerKeyFromStack(
         this.deps.getCurrentWorkflowStack?.() ?? [],

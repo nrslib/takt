@@ -46,6 +46,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { createLoopAnalysisScheduler } from '../features/tasks/execute/loopAnalysis.js';
+import { enterCentralExecution } from '../shared/utils/child-process-env.js';
 import {
   readLoopAnalysisJob,
   readLoopAnalysisPublicationMarker,
@@ -143,6 +144,33 @@ describe('createLoopAnalysisScheduler', () => {
       globalConfigDir: '/global/.takt',
       projectConfigDir: `${projectCwd}/.takt`,
     });
+  });
+
+  it('Given central execution, When the detached worker is spawned, Then ownership environment is sanitized', () => {
+    const { projectCwd, sourceRunDirectory } = createRunDirectories();
+    mockResolveRuntimeProviderFile.mockReturnValue({
+      version: 1,
+      loop_analysis: { enabled: true, output: 'file' },
+    });
+    const previousConfig = process.env.TAKT_CONFIG_DIR;
+    const previousOwnerToken = process.env.TAKT_CENTRAL_OWNER_TOKEN;
+    process.env.TAKT_CONFIG_DIR = '/private/central-config';
+    process.env.TAKT_CENTRAL_OWNER_TOKEN = 'secret-owner-token';
+    const leaveCentralExecution = enterCentralExecution();
+    try {
+      createLoopAnalysisScheduler({ projectCwd })?.(sourceRunDirectory);
+    } finally {
+      leaveCentralExecution();
+      if (previousConfig === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfig;
+      if (previousOwnerToken === undefined) delete process.env.TAKT_CENTRAL_OWNER_TOKEN;
+      else process.env.TAKT_CENTRAL_OWNER_TOKEN = previousOwnerToken;
+    }
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const spawnOptions = mockSpawn.mock.calls[0]![2] as { env: NodeJS.ProcessEnv };
+    expect(spawnOptions.env.TAKT_CONFIG_DIR).toBeUndefined();
+    expect(spawnOptions.env.TAKT_CENTRAL_OWNER_TOKEN).toBeUndefined();
   });
 
   it('Given terminal dispatch is requested more than once, When schedulers target the same source run, Then only one job and worker are created', () => {

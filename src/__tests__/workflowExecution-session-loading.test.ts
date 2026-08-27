@@ -511,6 +511,22 @@ describe('executeWorkflow session loading', () => {
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
   });
 
+  it('should pass the central session storage directory for persona retries', async () => {
+    const centralSessionDirectory = join(projectCwd, 'central-sessions');
+
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
+      startStep: 'implement',
+      sessionStorageDirectory: centralSessionDirectory,
+    });
+
+    expect(mockLoadPersonaSessions).toHaveBeenCalledWith(
+      projectCwd,
+      'claude',
+      centralSessionDirectory,
+    );
+  });
+
   it('should load persisted sessions when retryNote is set (retry)', async () => {
     // Given: retry execution with retryNote
     await executeWorkflow(makeConfig(), 'task', projectCwd, {
@@ -556,6 +572,26 @@ describe('executeWorkflow session loading', () => {
 
     // Then: loadWorktreeSessions is called instead of loadPersonaSessions
     expect(mockLoadWorktreeSessions).toHaveBeenCalledWith(projectDir, worktreeDir, 'claude');
+    expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
+  });
+
+  it('should pass the central session storage directory for worktree retries', async () => {
+    const projectDir = createTempDir('takt-session-central-project-');
+    const worktreeDir = createTempDir('takt-session-central-worktree-');
+    const centralSessionDirectory = join(projectDir, 'central-sessions');
+
+    await executeWorkflow(makeConfig(), 'task', worktreeDir, {
+      projectCwd: projectDir,
+      startStep: 'implement',
+      sessionStorageDirectory: centralSessionDirectory,
+    });
+
+    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith(
+      projectDir,
+      worktreeDir,
+      'claude',
+      centralSessionDirectory,
+    );
     expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
   });
 

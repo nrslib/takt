@@ -277,6 +277,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt add` | AI と会話してタスク要件を精緻化し、タスクを積みます（GitHub Issue からも可） |
 | `takt run` | 積まれたタスクをまとめて実行します |
 | `takt watch` | タスクキューを監視し、pending タスクを自動実行します（常駐プロセス） |
+| `takt ui` | 実験的な Viewer 中心の Web UI を `http://127.0.0.1:20525` で起動します |
 | `takt list` | タスクブランチを管理します（マージ、リトライ、リキュー、強制失敗、追加指示、削除） |
 | `takt #N` | GitHub Issue を初期入力としてタスク化します |
 | `takt eject` | ビルトインの workflow/facet をコピーしてカスタマイズできます |

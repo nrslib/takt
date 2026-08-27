@@ -619,6 +619,7 @@ export class WorkflowCallExecutor {
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,
       runPathNamespace: this.buildWorkflowCallNamespace(invocation),
+      ...(options.runPathsDirectory === undefined ? {} : { runPathsDirectory: options.runPathsDirectory }),
       workflowCallSiteIdentity: workflowCallSite.runPathSegment,
       workflowCallVars: {
         ...options.workflowCallVars,

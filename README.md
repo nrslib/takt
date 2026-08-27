@@ -275,6 +275,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt add` | Refine a task through AI conversation and queue it (also from GitHub Issues) |
 | `takt run` | Execute all pending tasks |
 | `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |
+| `takt ui` | Open the experimental Viewer-first Web UI on `http://127.0.0.1:20525` |
 | `takt list` | Manage task branches (merge, retry, requeue, force-fail, instruct, delete) |
 | `takt #N` | Use a GitHub Issue as the initial input for a task |
 | `takt eject` | Copy builtin workflows/facets for customization |
@@ -284,6 +285,12 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt repertoire add` | Install a repertoire package from GitHub |
 
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
+
+The Web UI defaults to Japanese. Use the language control in the header to switch
+between Japanese and English; the selection is saved in the browser for the next
+visit. Viewer focuses on execution status, the observed execution path, live logs,
+and reports. Create a task opens the dedicated conversation surface for `/setup`
+and `/go`.
 
 TAKT also ships two client-integration entrypoints: `takt-acp` runs TAKT as an [Agent Client Protocol](./docs/cli-reference.md#acp-agent) agent over stdio JSON-RPC, and `takt-mcp` runs it as a stdio [MCP server](./docs/cli-reference.md#mcp-server) so an MCP client (Codex, Claude Code, …) can enqueue tasks with an optional existing or newly created issue. Use `takt run` or `takt watch` to execute pending tasks.
 

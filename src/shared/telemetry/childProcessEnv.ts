@@ -5,6 +5,7 @@ import {
   OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
 } from './otlp.js';
+import { buildChildProcessEnv } from '../utils/child-process-env.js';
 
 const NESTED_OBSERVABILITY_ENV_KEYS = [
   'TAKT_OBSERVABILITY',
@@ -147,12 +148,13 @@ export function buildEnvWithNestedObservabilitySnapshot(
   source: NodeJS.ProcessEnv,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): NodeJS.ProcessEnv {
+  const safeSource = buildChildProcessEnv(source);
   if (!childProcessEnv) {
-    return { ...source };
+    return safeSource;
   }
 
   const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(source)) {
+  for (const [key, value] of Object.entries(safeSource)) {
     if (value !== undefined && !isNestedObservabilityCleanupEnvKey(key)) {
       env[key] = value;
     }

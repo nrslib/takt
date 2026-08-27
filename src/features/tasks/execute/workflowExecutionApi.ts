@@ -58,6 +58,12 @@ async function runWorkflowExecutionInternal(
     if (isLoopAnalysisWorkflow) {
       return options;
     }
+    // Central Web UI runs own all runtime artifacts under the state locator.
+    // The legacy background loop-analysis worker still assumes project-local
+    // session/config storage, so do not silently launch that fallback here.
+    if (options.runPathsDirectory !== undefined) {
+      return options;
+    }
     const loopAnalysisScheduler = createLoopAnalysisScheduler({
       projectCwd: request.projectCwd,
       ...(options.loopAnalysisPublication === undefined

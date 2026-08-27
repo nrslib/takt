@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { vi } from 'vitest';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
+import type { FormalSpecSetting } from '../core/models/config-types.js';
 
 // Mock the home directory to use a temp directory
 const testHomeDir = mkdtempSync(join(tmpdir(), 'takt-gc-test-'));
@@ -35,7 +36,6 @@ type ObservabilityConfigForTest = {
   usageEventsPhase?: boolean;
 };
 
-type FormalSpecSetting = boolean | 'Y/n' | 'y/N';
 type GlobalConfigWithFormalSpec = ReturnType<typeof loadGlobalConfig> & {
   assistant?: { formalSpec?: FormalSpecSetting };
 };
@@ -89,6 +89,18 @@ describe('loadGlobalConfig', () => {
       expect(loadGlobalConfig().assistant).toEqual({ formalSpec });
     },
   );
+
+  it('should load structured assistant.formal_spec from global config.yaml', () => {
+    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+    const formalSpec: FormalSpecSetting = { mode: 'y/N', comments: false };
+    writeFileSync(
+      getGlobalConfigPath(),
+      ['assistant:', '  formal_spec:', `    mode: '${formalSpec.mode}'`, `    comments: ${formalSpec.comments}`].join('\n'),
+      'utf-8',
+    );
+
+    expect(loadGlobalConfig().assistant).toEqual({ formalSpec });
+  });
 
   it('should warn and ignore assistant.gherkin without changing the global config file', () => {
     mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
@@ -445,6 +457,22 @@ describe('loadGlobalConfig', () => {
       expect(readFileSync(getGlobalConfigPath(), 'utf-8')).toContain('formal_spec:');
     },
   );
+
+  it('should preserve structured assistant.formal_spec when saving global config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+    const formalSpec: FormalSpecSetting = { mode: true, comments: false };
+
+    saveGlobalConfig({
+      ...loadGlobalConfig(),
+      assistant: { formalSpec },
+    });
+    invalidateGlobalConfigCache();
+
+    expect(loadGlobalConfig().assistant).toEqual({ formalSpec });
+    expect(readFileSync(getGlobalConfigPath(), 'utf-8')).toContain('formal_spec:');
+  });
 
   it('should persist selector provider options when saving global config', () => {
     const taktDir = join(testHomeDir, '.takt');

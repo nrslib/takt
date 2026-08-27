@@ -325,6 +325,35 @@ describe('runWorkflowExecution', () => {
     );
   });
 
+  it('Given a central run, When execution is configured, Then it preserves central options without a project-local scheduler', async () => {
+    const centralOptions = {
+      projectCwd: '/repo',
+      runPathsDirectory: '/central/state/runs/run-1',
+    };
+    mockExecuteTaskWorkflow.mockImplementationOnce(async (request, executor) => executor(
+      { name: 'default', steps: [], maxSteps: 3 },
+      request.task,
+      request.cwd,
+      centralOptions,
+    ));
+
+    await runWorkflowExecution({
+      task: 'Run centrally',
+      cwd: '/repo',
+      projectCwd: '/repo',
+      workflowIdentifier: 'default',
+      outputMode: 'silent',
+    });
+
+    expect(mockCreateLoopAnalysisScheduler).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'default' }),
+      'Run centrally',
+      '/repo',
+      centralOptions,
+    );
+  });
+
   it.each([
     ['the builtin name', 'loop-analysis'],
     ['an absolute path', '/repo/.takt/workflows/loop-analysis.yaml'],

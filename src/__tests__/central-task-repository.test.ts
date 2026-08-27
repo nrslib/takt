@@ -1,0 +1,697 @@
+import { EventEmitter } from 'node:events';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { CentralTaskCasError, CentralTaskRepository } from '../infra/task/centralStateRepository.js';
+import { saveCloneMeta } from '../infra/task/clone.js';
+import { launchTaktRun } from '../features/web-ui/launcher.js';
+import { getCentralTaskActions } from '../features/web-ui/task-actions.js';
+
+const temporaryDirectories = new Set<string>();
+
+async function createTemporaryDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  temporaryDirectories.add(directory);
+  return directory;
+}
+
+afterEach(async () => {
+  const directories = [...temporaryDirectories];
+  temporaryDirectories.clear();
+  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+async function setup() {
+  const globalConfigDirectory = await createTemporaryDirectory('takt-central-global-');
+  const projectDirectory = await createTemporaryDirectory('takt-central-project-');
+  const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+  const repository = await CentralTaskRepository.open({
+    globalConfigDirectory,
+    stateId: project.stateId,
+    locationId: project.locationId,
+    canonicalDirectory: project.canonicalDirectory,
+    displayName: project.displayName,
+    fingerprint: project.fingerprint,
+  });
+  return { globalConfigDirectory, projectDirectory, project, repository };
+}
+
+describe('central task CAS repository', () => {
+  it('keeps central directories private and state files owner-only', async () => {
+    const { repository } = await setup();
+    const [stateDirectory, stateFile, tasksFile] = await Promise.all([
+      stat(repository.paths.stateDirectory),
+      stat(repository.paths.stateFile),
+      stat(repository.paths.tasksFile),
+    ]);
+    expect(stateDirectory.mode & 0o777).toBe(0o700);
+    expect(stateFile.mode & 0o777).toBe(0o600);
+    expect(tasksFile.mode & 0o777).toBe(0o600);
+  });
+
+  it('recovers legacy terminal worktree context from owned central metadata', async () => {
+    const { globalConfigDirectory, projectDirectory, project, repository } = await setup();
+    const worktreeRoot = join(globalConfigDirectory, 'worktrees', project.stateId);
+    const worktreePath = join(worktreeRoot, 'legacy-task');
+    await mkdir(worktreePath, { recursive: true });
+    const handle = await repository.enqueueAndClaim({
+      task: 'legacy terminal task',
+      workflow: 'default',
+      worktree: worktreeRoot,
+    });
+    const adopted = await repository.adopt({
+      taskId: handle.task.taskId,
+      generation: handle.task.generation,
+      executionId: handle.executionId,
+      ownerToken: handle.ownerToken,
+    });
+    await repository.terminal({
+      taskId: handle.task.taskId,
+      generation: adopted.generation,
+      executionId: handle.executionId,
+      ownerToken: handle.ownerToken,
+      status: 'completed',
+    });
+    const branch = `takt/20260827T0000-${handle.task.taskId.slice(0, 12)}`;
+    const metadataDirectory = join(
+      globalConfigDirectory,
+      'state',
+      'projects',
+      project.stateId,
+      'worktree-metadata',
+    );
+    saveCloneMeta(projectDirectory, branch, worktreePath, metadataDirectory);
+
+    const recovered = (await repository.recoverLegacyWorktreeContexts())
+      .find((task) => task.taskId === handle.task.taskId);
+
+    expect(recovered).toMatchObject({ branch, worktreePath, status: 'completed' });
+    expect(getCentralTaskActions(recovered!)).toEqual([
+      'diff',
+      'instruct',
+      'create_pr',
+      'sync',
+      'pull',
+      'try',
+      'merge',
+      'delete',
+    ]);
+    await expect(repository.readTask(handle.task.taskId)).resolves.toMatchObject({
+      branch,
+      worktreePath,
+    });
+  });
+
+  it('never exposes an incomplete state lock during publication', async () => {
+    const { repository } = await setup();
+    const lockPath = join(repository.paths.locksDirectory, 'state.lock');
+    let stop = false;
+    let malformed = false;
+    const poll = (async () => {
+      while (!stop) {
+        try {
+          const raw = await readFile(lockPath, 'utf8');
+          const owner = JSON.parse(raw) as { version?: number };
+          if (owner.version !== 1) malformed = true;
+        } catch (error) {
+          if (!(error !== null && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) {
+            malformed = true;
+          }
+        }
+        await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+      }
+    })();
+    try {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await repository.claimNextPending();
+      }
+    } finally {
+      stop = true;
+      await poll;
+    }
+    expect(malformed).toBe(false);
+  });
+
+  it('allows one UI start and reuses the active execution without a second claim', async () => {
+    const { repository } = await setup();
+    const [first, second] = await Promise.all([
+      repository.enqueueOrReuse({ task: 'first', workflow: 'default', worktree: false }),
+      repository.enqueueOrReuse({ task: 'second', workflow: 'default', worktree: false }),
+    ]);
+    expect([first.kind, second.kind].sort()).toEqual(['reused', 'started']);
+    const started = first.kind === 'started' ? first : second;
+    const reused = first.kind === 'reused' ? first : second;
+    expect(reused.active?.executionId).toBe(started.executionId);
+    expect(started.ownerToken).toBeTruthy();
+    const raw = await readFile(repository.paths.tasksFile, 'utf8');
+    expect(raw).not.toContain(started.ownerToken!);
+    await expect(repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId!,
+      ownerToken: started.ownerToken!,
+    })).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId!,
+      ownerToken: started.ownerToken!,
+    })).rejects.toBeInstanceOf(CentralTaskCasError);
+  });
+
+  it('starts another run for a failed task with the same execution settings', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({
+      task: 'retry me',
+      workflow: 'default',
+      worktree: '/tmp/takt-worktrees',
+      branch: 'feature/retry-me',
+      baseBranch: 'main',
+      autoPr: true,
+      draftPr: true,
+    });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    await repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'failed',
+      failure: { code: 'workflow_failed', message: 'failed' },
+    });
+
+    const requeued = await repository.requeueFailedTask(started.task.taskId);
+
+    expect(requeued.kind).toBe('started');
+    expect(requeued.runId).not.toBe(started.runId);
+    expect(requeued.task).toMatchObject({
+      taskId: started.task.taskId,
+      status: 'starting',
+      attempt: 2,
+      runIds: [started.runId, requeued.runId],
+      worktree: '/tmp/takt-worktrees',
+      branch: 'feature/retry-me',
+      baseBranch: 'main',
+      autoPr: true,
+      draftPr: true,
+    });
+    expect(requeued.task.failure).toBeUndefined();
+    await expect(readFile(repository.paths.tasksFile, 'utf8').then((value) => JSON.parse(value)))
+      .resolves.toMatchObject({
+        version: 1,
+        tasks: [{ runId: requeued.runId, runIds: [started.runId, requeued.runId] }],
+      });
+    await expect(repository.requeueFailedTask(started.task.taskId)).rejects.toThrow(
+      'Only failed tasks can be requeued',
+    );
+  });
+
+  it('persists the server-resolved execution request on the same task lineage', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'retry me', workflow: 'default', worktree: false });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    await repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'failed',
+      failure: { code: 'workflow_failed', message: 'failed' },
+    });
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'plan',
+        kind: 'agent' as const,
+        occurrence: 1,
+      }],
+      iteration: 1,
+      elapsed_ms: 10,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    const executionRequest = {
+      resumeMode: 'retry' as const,
+      sourceRunSlug: started.runId,
+      startStep: 'plan',
+      resumePoint,
+      retryNote: 'retry with additional context',
+    };
+    const requeued = await repository.requeueTask(started.task.taskId, {
+      task: 'retry with additional context',
+      executionRequest,
+    });
+    expect(requeued.task).toMatchObject({
+      taskId: started.task.taskId,
+      runIds: [started.runId, requeued.runId],
+      executionRequest,
+    });
+  });
+
+  it('reads the previous single-run ledger as task run history', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({
+      task: 'existing task',
+      workflow: 'default',
+      worktree: false,
+    });
+    const stored = JSON.parse(await readFile(repository.paths.tasksFile, 'utf8')) as {
+      version: number;
+      tasks: Array<Record<string, unknown>>;
+    };
+    const legacyTasks = stored.tasks.map(({ runIds: _runIds, ...task }) => ({
+      ...task,
+      runId: started.runId,
+    }));
+    await writeFile(repository.paths.tasksFile, `${JSON.stringify({ version: 1, tasks: legacyTasks })}\n`);
+
+    await expect(repository.readTask(started.task.taskId)).resolves.toMatchObject({
+      attempt: 1,
+      runIds: [started.runId],
+    });
+  });
+
+  it('keeps separate TAKT_CONFIG_DIR namespaces independent', async () => {
+    const { projectDirectory, globalConfigDirectory, project, repository } = await setup();
+    const otherGlobal = await createTemporaryDirectory('takt-central-other-global-');
+    const otherProject = await registerProject({ globalConfigDirectory: otherGlobal, projectDirectory, command: 'ui' });
+    const otherRepository = await CentralTaskRepository.open({
+      globalConfigDirectory: otherGlobal,
+      stateId: otherProject.stateId,
+      locationId: otherProject.locationId,
+      canonicalDirectory: otherProject.canonicalDirectory,
+      displayName: otherProject.displayName,
+      fingerprint: otherProject.fingerprint,
+    });
+    expect(otherProject.stateId).not.toBe(project.stateId);
+    await expect(repository.enqueueAndClaim({ task: 'namespace-a', workflow: 'default', worktree: false })).resolves.toBeDefined();
+    await expect(otherRepository.enqueueAndClaim({ task: 'namespace-b', workflow: 'default', worktree: false })).resolves.toBeDefined();
+    await expect(repository.readTasks()).resolves.toEqual([expect.objectContaining({ task: 'namespace-a' })]);
+    await expect(otherRepository.readTasks()).resolves.toEqual([expect.objectContaining({ task: 'namespace-b' })]);
+  });
+
+  it('keeps the resolved state handle usable after the project directory disappears', async () => {
+    const { projectDirectory, repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'move-safe', workflow: 'default', worktree: false });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    await rm(projectDirectory, { recursive: true, force: true });
+    await expect(repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'completed',
+    })).resolves.toMatchObject({ status: 'completed' });
+  });
+
+  it('revalidates the project fingerprint before a worker attaches to state', async () => {
+    const { globalConfigDirectory, projectDirectory, project } = await setup();
+    const replacementPath = join(projectDirectory, '..', 'project-replacement');
+    await mkdir(replacementPath);
+    await rm(projectDirectory, { recursive: true, force: true });
+    await rename(replacementPath, projectDirectory);
+
+    await expect(CentralTaskRepository.openByState({
+      globalConfigDirectory,
+      stateId: project.stateId,
+    })).rejects.toThrow(/fingerprint|identity|canonical/i);
+  });
+
+  it('linearizes a project swap with adopt under the state lock', async () => {
+    const { projectDirectory, repository } = await setup();
+    const reserved = await repository.enqueueAndClaim({
+      task: 'swap during adopt verification',
+      workflow: 'default',
+      worktree: false,
+    });
+    const replacementPath = join(projectDirectory, '..', 'project-replacement');
+    await mkdir(replacementPath);
+
+    await expect(repository.adoptVerified({
+      taskId: reserved.task.taskId,
+      generation: reserved.task.generation,
+      executionId: reserved.executionId,
+      ownerToken: reserved.ownerToken,
+    }, async () => {
+      await rm(projectDirectory, { recursive: true, force: true });
+      await rename(replacementPath, projectDirectory);
+    })).rejects.toThrow(/identity|fingerprint|registered/i);
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'starting' });
+  });
+
+  it('rejects an atomic state replacement before adopting the starting task', async () => {
+    const { repository } = await setup();
+    const reserved = await repository.enqueueAndClaim({
+      task: 'state replacement during adopt',
+      workflow: 'default',
+      worktree: false,
+    });
+    const persisted = JSON.parse(await readFile(repository.paths.stateFile, 'utf8')) as Record<string, unknown>;
+    const replacementPath = join(repository.paths.stateDirectory, '.state-replacement.json');
+    await expect(repository.adoptVerified({
+      taskId: reserved.task.taskId,
+      generation: reserved.task.generation,
+      executionId: reserved.executionId,
+      ownerToken: reserved.ownerToken,
+    }, async () => {
+      await writeFile(replacementPath, `${JSON.stringify({
+        ...persisted,
+        stateId: '00000000-0000-4000-8000-000000000000',
+      })}\n`, { flag: 'wx', mode: 0o600 });
+      await rename(replacementPath, repository.paths.stateFile);
+    })).rejects.toThrow(/persisted state|identity|registry/i);
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'starting' });
+  });
+
+  it('compares the persisted state fingerprint with the open options', async () => {
+    const { globalConfigDirectory, project, repository } = await setup();
+    const persisted = JSON.parse(await readFile(repository.paths.stateFile, 'utf8')) as Record<string, unknown>;
+    const fingerprint = persisted.fingerprint as { dev: number; ino: number };
+    await writeFile(repository.paths.stateFile, JSON.stringify({
+      ...persisted,
+      fingerprint: { dev: fingerprint.dev + 1, ino: fingerprint.ino },
+    }));
+
+    await expect(CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    })).rejects.toThrow(/identity|fingerprint/i);
+  });
+
+  it('claims one queued task for the next detached worker after the active one terminates', async () => {
+    const { repository } = await setup();
+    const first = await repository.enqueueOrReuse({ task: 'first', workflow: 'default', worktree: false });
+    expect(first.kind).toBe('started');
+    const queued = await repository.enqueueOrReuse({ task: 'second', workflow: 'default', worktree: false });
+    expect(queued.kind).toBe('reused');
+    const adopted = await repository.adopt({
+      taskId: first.task.taskId,
+      generation: first.task.generation,
+      executionId: first.executionId!,
+      ownerToken: first.ownerToken!,
+    });
+    await repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: first.executionId!,
+      ownerToken: first.ownerToken!,
+      status: 'completed',
+    });
+
+    const claimResults = await Promise.all([
+      repository.claimNextPending(),
+      repository.claimNextPending(),
+    ]);
+    const claimed = claimResults.find((result) => result !== undefined);
+    const duplicate = claimResults.find((result) => result === undefined);
+    expect(claimed).toBeDefined();
+    expect(duplicate).toBeUndefined();
+    expect(claimed?.task.taskId).toBe(queued.task.taskId);
+    expect(claimed?.task.status).toBe('starting');
+    expect(claimed?.task.generation).toBe(queued.task.generation + 1);
+    expect(claimed?.ownerToken).not.toBe(first.ownerToken);
+    expect(claimed?.executionId).not.toBe(first.executionId);
+  });
+
+  it('rejects stale terminal generations and records a terminal outcome by token', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'first', workflow: 'default', worktree: false });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    await expect(repository.terminal({
+      taskId: adopted.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'completed',
+    })).rejects.toBeInstanceOf(CentralTaskCasError);
+    await expect(repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'failed',
+      failure: { code: 'test', message: 'failed' },
+    })).resolves.toMatchObject({ status: 'failed', failure: { code: 'test' } });
+  });
+
+  it('reconciles a dead worker without auto-requeue', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'first', workflow: 'default', worktree: false });
+    await repository.setStartingPid({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      pid: 999_999,
+    });
+    const reconciled = await repository.reconcile();
+    expect(reconciled.find((task) => task.taskId === started.task.taskId)).toMatchObject({
+      status: 'failed',
+      failure: { code: 'worker_crashed' },
+    });
+    expect((await repository.readTasks()).filter((task) => task.status === 'pending')).toHaveLength(0);
+  });
+
+  it('keeps a force-failed worker lease until its terminal acknowledgement', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'force fail', workflow: 'default', worktree: false });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    const queued = await repository.enqueueOrReuse({ task: 'queued', workflow: 'default', worktree: false });
+    expect(queued.kind).toBe('reused');
+
+    const failed = await repository.forceFailTask(started.task.taskId, 'stopped');
+    expect(failed).toMatchObject({
+      status: 'failed',
+      failure: { code: 'force_failed' },
+      drainingExecution: {
+        executionId: started.executionId,
+        generation: adopted.generation,
+      },
+    });
+    await expect(repository.enqueueAndClaim({ task: 'must wait', workflow: 'default', worktree: false }))
+      .rejects.toThrow('already starting or running');
+    await expect(repository.claimNextPending()).resolves.toBeUndefined();
+    await expect(repository.requeueTask(started.task.taskId)).resolves.toMatchObject({
+      kind: 'reused',
+      task: {
+        status: 'failed',
+        taskId: started.task.taskId,
+        requeueAfterDrain: { task: 'force fail' },
+      },
+      active: { executionId: started.executionId },
+    });
+    await expect(repository.requeueTask(started.task.taskId)).resolves.toMatchObject({
+      kind: 'reused',
+      task: { requeueAfterDrain: { task: 'force fail' } },
+    });
+    await expect(repository.requeueTask(started.task.taskId, { task: 'different task' }))
+      .rejects.toThrow('already scheduled');
+
+    await expect(repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: 'wrong-owner-token',
+      status: 'completed',
+    })).rejects.toBeInstanceOf(CentralTaskCasError);
+    await expect(repository.readTask(started.task.taskId)).resolves.toMatchObject({
+      status: 'failed',
+      failure: { code: 'force_failed' },
+      drainingExecution: { executionId: started.executionId },
+    });
+
+    await expect(repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'completed',
+    })).resolves.toMatchObject({
+      status: 'pending',
+      task: 'force fail',
+    });
+    const acknowledged = await repository.readTask(started.task.taskId);
+    expect(acknowledged).toMatchObject({ status: 'pending', task: 'force fail' });
+    expect(acknowledged).not.toHaveProperty('drainingExecution');
+    expect(acknowledged).not.toHaveProperty('requeueAfterDrain');
+    const next = await repository.claimNextPending();
+    expect(next?.task.taskId).toBe(started.task.taskId);
+    expect(next?.task.runIds).toHaveLength(2);
+    expect(next?.task.runIds[0]).toBe(started.runId);
+    const nextAdopted = await repository.adopt({
+      taskId: next!.task.taskId,
+      generation: next!.task.generation,
+      executionId: next!.executionId,
+      ownerToken: next!.ownerToken,
+    });
+    await repository.terminal({
+      taskId: nextAdopted.taskId,
+      generation: nextAdopted.generation,
+      executionId: next!.executionId,
+      ownerToken: next!.ownerToken,
+      status: 'completed',
+    });
+    const queuedNext = await repository.claimNextPending();
+    expect(queuedNext?.task.taskId).toBe(queued.task.taskId);
+  });
+
+  it('clears a stale force-failed worker lease during reconciliation', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'stale force fail', workflow: 'default', worktree: false });
+    await repository.setStartingPid({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      pid: 999_999,
+    });
+    await repository.forceFailTask(started.task.taskId, 'stopped');
+
+    const reconciled = await repository.reconcile();
+    expect(reconciled[0]).toMatchObject({
+      taskId: started.task.taskId,
+      status: 'failed',
+      failure: { code: 'force_failed', message: 'stopped' },
+    });
+    expect(reconciled[0]).not.toHaveProperty('drainingExecution');
+    await expect(repository.claimNextPending()).resolves.toBeUndefined();
+  });
+
+  it('expires only an unadopted startup reservation at its fixed deadline', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'startup', workflow: 'default', worktree: false });
+    const stored = JSON.parse(await readFile(repository.paths.tasksFile, 'utf8')) as {
+      version: number;
+      tasks: Array<Record<string, unknown>>;
+    };
+    stored.tasks = stored.tasks.map((task) => task.taskId === started.task.taskId
+      ? {
+          ...task,
+          activeExecution: {
+            ...(task.activeExecution as Record<string, unknown>),
+            startedAt: '2000-01-01T00:00:00.000Z',
+          },
+        }
+      : task);
+    await writeFile(repository.paths.tasksFile, `${JSON.stringify(stored)}\n`);
+
+    const reconciled = await repository.reconcile();
+    expect(reconciled.find((task) => task.taskId === started.task.taskId)).toMatchObject({
+      status: 'failed',
+      failure: { code: 'startup_timeout' },
+    });
+  });
+
+  it('keeps the project .takt snapshot unchanged and passes only the private token through env', async () => {
+    const { globalConfigDirectory, projectDirectory, project } = await setup();
+    const before = await readFile(join(projectDirectory, '.takt-snapshot'), 'utf8').catch(() => 'absent');
+    await writeFile(join(projectDirectory, '.takt-snapshot'), 'sentinel');
+    const child = Object.assign(new EventEmitter(), { pid: 1234, unref: () => undefined });
+    let args: readonly string[] = [];
+    let env: NodeJS.ProcessEnv = {};
+    const result = await launchTaktRun({
+      projectDirectory,
+      globalConfigDirectory,
+      registeredProject: project,
+      request: { prompt: 'central', workflow: 'default', worktree: false },
+      spawnProcess: ((_command: string, childArgs: readonly string[], options: { readonly env?: NodeJS.ProcessEnv }) => {
+        args = childArgs;
+        env = options.env ?? {};
+        queueMicrotask(() => child.emit('spawn'));
+        return child;
+      }) as never,
+    });
+    expect(result).toMatchObject({ pid: 1234, disposition: 'started', mode: 'run' });
+    expect(args).not.toContain('run');
+    expect(args).not.toContain(env.TAKT_CENTRAL_OWNER_TOKEN ?? 'missing');
+    expect(env.TAKT_CONFIG_DIR).toBe(globalConfigDirectory);
+    expect(await readFile(join(projectDirectory, '.takt-snapshot'), 'utf8')).toBe('sentinel');
+    expect(before).toBe('absent');
+  });
+
+  it('marks a spawn failure terminal and retains the failed task for inspection', async () => {
+    const { repository, globalConfigDirectory, projectDirectory, project } = await setup();
+    await expect(launchTaktRun({
+      projectDirectory,
+      globalConfigDirectory,
+      registeredProject: project,
+      request: { prompt: 'central', workflow: 'default', worktree: false },
+      spawnProcess: () => { throw new Error('spawn failed'); },
+    })).rejects.toThrow('spawn failed');
+    await expect(repository.readTasks()).resolves.toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        failure: expect.objectContaining({ code: 'spawn_failed', message: 'spawn failed' }),
+      }),
+    ]);
+  });
+
+  it('fails closed for unsupported or incomplete central state', async () => {
+    const { globalConfigDirectory, project, repository } = await setup();
+    await writeFile(repository.paths.stateFile, JSON.stringify({ ...repository.state, version: 999 }));
+    await expect(CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    })).rejects.toThrow(/unsupported/i);
+
+    await writeFile(repository.paths.stateFile, JSON.stringify(repository.state));
+    await unlink(repository.paths.tasksFile);
+    await expect(CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    })).rejects.toThrow(/incomplete/i);
+  });
+
+  it('fails closed when an attached repository loses its task ledger', async () => {
+    const { repository } = await setup();
+    await unlink(repository.paths.tasksFile);
+
+    await expect(repository.readTasks()).rejects.toBeInstanceOf(CentralTaskCasError);
+    await expect(repository.enqueueAndClaim({
+      task: 'must not recreate ledger',
+      workflow: 'default',
+      worktree: false,
+    })).rejects.toBeInstanceOf(CentralTaskCasError);
+  });
+});

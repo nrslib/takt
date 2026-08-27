@@ -9,6 +9,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { WorkflowConfig } from '../core/models/workflow-types.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import {
   createWorkflowRunLifecycle,
@@ -18,6 +19,7 @@ import {
   createSessionLog,
   initNdjsonLog,
 } from '../infra/fs/index.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import {
   createWorkflowTerminalPayloadFactory,
 } from '../features/tasks/execute/workflowTerminalPayload.js';
@@ -37,17 +39,20 @@ function createRoot(): string {
   return root;
 }
 
-const workflow = {
+const workflow: WorkflowConfig = {
   name: 'boundary-workflow',
   initialStep: 'done',
   maxSteps: 1,
   steps: [{
+    kind: 'agent',
     name: 'done',
     persona: 'coder',
+    personaDisplayName: 'Coder',
+    session: 'refresh',
     instruction: 'done',
-    rules: [{ condition: 'done', next: 'COMPLETE' }],
+    rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
   }],
-} as const;
+};
 
 async function failRun(
   handle: WorkflowRunHandle,
@@ -142,6 +147,31 @@ describe('workflow run lifecycle boundary', () => {
       expect(existsSync(activeRun.runPaths.metaAbs)).toBe(true);
     },
   );
+
+  it('local runs keep the legacy .takt relative metadata while central runs use state-relative paths', async () => {
+    const cwd = createRoot();
+    const local = createWorkflowRunLifecycle({ cwd });
+    const localRun = await local.lifecycle.beginRun({
+      workflowConfig: workflow,
+      task: 'local task',
+      requestedRunSlug: 'local-run',
+    });
+    expect(localRun.runPaths.runRootRel).toBe('.takt/runs/local-run');
+    expect(localRun.runPaths.reportsRel).toBe('.takt/runs/local-run/reports');
+
+    const centralRunsDirectory = join(cwd, 'central-state', 'runs');
+    const central = createWorkflowRunLifecycle({
+      cwd,
+      runPathsDirectory: centralRunsDirectory,
+    });
+    const centralRun = await central.lifecycle.beginRun({
+      workflowConfig: workflow,
+      task: 'central task',
+      requestedRunSlug: 'central-run',
+    });
+    expect(centralRun.runPaths.runRootRel).toBe('runs/central-run');
+    expect(centralRun.runPaths.reportsRel).toBe('runs/central-run/reports');
+  });
 
   it(
     'File同一秒の2開始を原子的に別slugへ予約する',

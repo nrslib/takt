@@ -11,7 +11,7 @@ import type {
 } from '../../../core/models/config-types.js';
 import type { RateLimitFallbackConfig } from '../../../core/models/workflow-types.js';
 import type { PermissionMode } from '../../../core/models/types.js';
-import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
 import {
   OperationLineageUnavailableError,
@@ -224,6 +224,7 @@ function resolveMaxStepsForRestoredIteration(
 function resolveOperationJournalSourceClaims(
   cwd: string,
   immediateSourceRunSlug: string,
+  runsDirectory?: string,
 ): {
   readonly journalRunSlug: string;
   readonly claimTokens: ReadonlySet<string>;
@@ -244,7 +245,7 @@ function resolveOperationJournalSourceClaims(
       );
     }
     visited.add(sourceRunSlug);
-    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug);
+    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug, undefined, runsDirectory);
     if (sourceMeta === null) {
       throw new OperationLineageUnavailableError(
         `Resume source run "${sourceRunSlug}" is missing`,
@@ -290,6 +291,7 @@ export function resolveWorkflowExecutionResumeLineage(
   cwd: string,
   runSlug: string,
   resumeSource: WorkflowExecutionOptions['resumeSource'],
+  runsDirectory?: string,
 ): WorkflowExecutionResumeLineage {
   const sourceRunSlug = resumeSource?.sourceRunSlug;
   if (resumeSource === undefined || sourceRunSlug === undefined) {
@@ -304,7 +306,7 @@ export function resolveWorkflowExecutionResumeLineage(
   }
 
   try {
-    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource, runsDirectory);
   } catch (error) {
     if (!(error instanceof OperationLineageUnavailableError)) {
       throw error;
@@ -329,6 +331,7 @@ export function resolveWorkflowExecutionResumeLineage(
 export function resolveWorkflowExecutionResumeSourceLineage(
   cwd: string,
   resumeSource: NonNullable<WorkflowExecutionOptions['resumeSource']>,
+  runsDirectory?: string,
 ): WorkflowExecutionResumeLineage {
   const sourceRunSlug = resumeSource.sourceRunSlug;
   if (sourceRunSlug === undefined) {
@@ -337,7 +340,7 @@ export function resolveWorkflowExecutionResumeSourceLineage(
     );
   }
 
-  const sourceClaims = resolveOperationJournalSourceClaims(cwd, sourceRunSlug);
+  const sourceClaims = resolveOperationJournalSourceClaims(cwd, sourceRunSlug, runsDirectory);
   return {
     sourceRunSlug,
     artifactResumeSource: resumeSource,
@@ -405,7 +408,7 @@ export async function createWorkflowExecutionBootstrap(
   log.debug('Session mode', { isRetry, isWorktree });
 
   const { runSlug, runPaths } = runBootstrap;
-  if (isWorktree) {
+  if (isWorktree && options.skipWorktreeRuntimeProtection !== true) {
     ensureWorktreeTaktRuntimeProtection(cwd);
   }
 
@@ -423,7 +426,9 @@ export async function createWorkflowExecutionBootstrap(
     operationJournalRunSlug,
     sourceOperationClaimTokens,
   } = resumeLineage;
-  const operationJournalPaths = buildRunPaths(cwd, operationJournalRunSlug);
+  const operationJournalPaths = options.runPathsDirectory === undefined
+    ? buildRunPaths(cwd, operationJournalRunSlug)
+    : buildRunPathsFromRunsDirectory(options.runPathsDirectory, operationJournalRunSlug);
   const operationJournal: WorkflowOperationJournalContext = {
     store: createOperationJournalStore(operationJournalPaths.operationJournalAbs),
     journalRunSlug: operationJournalRunSlug,
@@ -439,6 +444,7 @@ export async function createWorkflowExecutionBootstrap(
         ? undefined
         : buildResumeReportSnapshotConsumerEntry({
           cwd,
+          ...(options.runPathsDirectory === undefined ? {} : { runsDirectory: options.runPathsDirectory }),
           projectCwd,
           sourceRunSlug,
           workflow: workflowConfig,
@@ -447,6 +453,7 @@ export async function createWorkflowExecutionBootstrap(
         });
       resumeArtifactsManifest = inheritResumeReportSnapshot({
         cwd,
+        ...(options.runPathsDirectory === undefined ? {} : { runsDirectory: options.runPathsDirectory }),
         sourceRunSlug,
         targetRunSlug: runSlug,
         ...(resumeReportConsumer === undefined
@@ -690,7 +697,9 @@ export async function createWorkflowExecutionBootstrap(
   });
 
   const analyticsWriterOptions = globalConfig.telemetry?.routingDecisions === true
-    ? { routingEventsDir: join(projectCwd, '.takt', 'events') }
+    ? { routingEventsDir: options.runPathsDirectory === undefined
+      ? join(projectCwd, '.takt', 'events')
+      : join(options.runPathsDirectory, '..', 'events') }
     : undefined;
   initAnalyticsWriter(
     globalConfig.analytics?.enabled === true,
@@ -709,14 +718,31 @@ export async function createWorkflowExecutionBootstrap(
   const structuredCaller = new ProviderNeutralStructuredCaller();
   const savedSessions = shouldLoadSavedSessions
     ? (isWorktree
-      ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
-      : loadPersonaSessions(projectCwd, currentProvider))
+      ? options.sessionStorageDirectory === undefined
+        ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
+        : loadWorktreeSessions(projectCwd, cwd, currentProvider, options.sessionStorageDirectory)
+      : options.sessionStorageDirectory === undefined
+        ? loadPersonaSessions(projectCwd, currentProvider)
+        : loadPersonaSessions(projectCwd, currentProvider, options.sessionStorageDirectory))
     : {};
   const sessionUpdateHandler = isWorktree
     ? (personaName: string, personaSessionId: string | undefined) =>
-        updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
+        updateWorktreeSession(
+          projectCwd,
+          cwd,
+          personaName,
+          personaSessionId,
+          currentProvider,
+          options.sessionStorageDirectory,
+        )
     : (persona: string, personaSessionId: string | undefined) =>
-        updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
+        updatePersonaSession(
+          projectCwd,
+          persona,
+          personaSessionId,
+          currentProvider,
+          options.sessionStorageDirectory,
+        );
   const observabilityOptions = globalConfig.observability.enabled
     && (
       globalConfig.observability.sessionLogExporter

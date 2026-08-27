@@ -30,7 +30,9 @@ interactive_preview_steps: 3  # 交互模式中的 step 预览数（0-10，默�
 auto_requeue_max_attempts: 0  # takt run 期间失败 workflow task 的自动 requeue 次数（非负整数，默认 0 = 禁用）
 ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exceed（默认 false）
 assistant:
-  formal_spec: 'y/N'          # Alloy/Quint 模式：true、false、Y/n 或 y/N（默认 y/N）
+  formal_spec:
+    mode: 'y/N'                # Alloy/Quint 模式：true、false、Y/n 或 y/N（默认 y/N）
+    comments: true             # 为每个形式结构添加自然语言含义注释（默认 true）
 # auto_fetch: false           # 创建 clone 前 fetch remote（默认 false）
 # base_branch: main           # 创建 clone 的基分支（默认使用 remote 默认分支）
 
@@ -189,7 +191,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` 并行任务数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | 交互模式中的 step 预览数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` | 添加 Alloy/Quint 指导，要求同时用两种记法表达；不避免跨记法重复，仅当任务确实无法用某种记法表达时才省略该记法。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。项目显式值优先于全局值。Gherkin 指导仅适用于开发和实现任务。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode` 和 `comments`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
@@ -256,7 +258,9 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 
 # 项目专属的 assistant 设置
 # assistant:
-#   formal_spec: 'Y/n'         # 覆盖全局 Alloy/Quint 模式；TTY 下以 Yes 为默认值提问
+#   formal_spec:
+#     mode: 'Y/n'               # 仅覆盖全局 Alloy/Quint 模式
+#     comments: false           # 保留形式规格，仅移除含义注释的强制指令
 #   init_files:
 #     # 仅项目配置支持；交互 assistant 的初始上下文文件
 #     - docs/assistant-context.md
@@ -362,7 +366,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` 的迭代限制绕过 |
 | `base_branch` | string | - | 创建 clone 的基分支 |
 | `assistant.init_files` | string[] | - | 仅项目级的 assistant 初始上下文文件。路径必须相对于项目根；绝对路径、解析到项目根之外的路径，以及 `.env*`、`.npmrc`、`.pypirc`、`.netrc`、`*.pem`、`*.key` 和 `.git/**` 等敏感文件模式会被拒绝。路径不存在、指向目录或文件不可读时会明确报错。最多 16 个文件，每个最多 256 KiB，合计最多 1 MiB。未设置或为空时，TAKT 不会自动发现 `CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` 或其他文件。 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"`（来自全局/默认值） | 项目级覆盖，添加 Alloy/Quint 指导并要求同时用两种记法表达；不避免跨记法重复，仅当任务确实无法用某种记法表达时才省略该记法。项目值优先于全局值。提示回答仅在当前会话中生效，恢复会话时重新解析。ACP 和非 TTY 不提问，使用配置的默认答案。Gherkin 指导仅适用于开发和实现任务。已弃用的 `assistant.gherkin` 会警告后忽略，不转换、不持久化，也不修改配置文件。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true`（来自全局/默认值） | 项目级覆盖，添加 Alloy/Quint 指导并要求同时用两种记法表达。object 格式可独立设置 `mode` 和 `comments`，未设置的字段回退到全局或默认值。`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。项目值优先于全局值。提示回答仅在当前会话中生效，恢复会话时重新解析。ACP 和非 TTY 不提问，使用配置的默认答案。Gherkin 指导仅适用于开发和实现任务。已弃用的 `assistant.gherkin` 会警告后忽略，不转换、不持久化，也不修改配置文件。 |
 | `provider_options` | object | - | provider 专属选项 |
 | `provider_profiles` | object | - | provider 专属权限 profile |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自动检测 | 覆盖全局 VCS provider |

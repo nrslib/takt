@@ -23,6 +23,7 @@ type TerminalSessionRecord = Extract<
 export interface WorkflowTerminalPublicationContext {
   readonly runSlug: string;
   readonly projectCwd: string;
+  readonly sessionStorageDirectory?: string;
   readonly task: string;
   readonly workflowName: string;
   readonly sessionLog: SessionLog;
@@ -36,6 +37,7 @@ export interface WorkflowTerminalPublicationContext {
 export interface WorkflowTerminalPublicationPayload {
   readonly runSlug: string;
   readonly projectCwd: string;
+  readonly sessionStorageDirectory?: string;
   readonly task: string;
   readonly workflowName: string;
   readonly status: 'completed' | 'aborted' | 'failed';
@@ -148,6 +150,9 @@ function assembleWorkflowTerminalPublicationPayload(
   return {
     runSlug: input.runSlug,
     projectCwd: input.projectCwd,
+    ...(input.sessionStorageDirectory === undefined
+      ? {}
+      : { sessionStorageDirectory: input.sessionStorageDirectory }),
     task: input.task,
     workflowName: input.workflowName,
     status: input.status,
@@ -188,6 +193,7 @@ function assertWorkflowTerminalPublicationPayload(
   assertAllowedKeys(payload, [
     'runSlug',
     'projectCwd',
+    'sessionStorageDirectory',
     'task',
     'workflowName',
     'status',
@@ -205,6 +211,9 @@ function assertWorkflowTerminalPublicationPayload(
   ], '$');
   requireNonEmptyString(payload.runSlug, '$.runSlug');
   requireNonEmptyString(payload.projectCwd, '$.projectCwd');
+  if (payload.sessionStorageDirectory !== undefined) {
+    requireNonEmptyString(payload.sessionStorageDirectory, '$.sessionStorageDirectory');
+  }
   requireString(payload.task, '$.task');
   requireNonEmptyString(payload.workflowName, '$.workflowName');
   if (

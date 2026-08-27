@@ -296,6 +296,11 @@ export interface WorkflowExecutionOptions {
   prContext?: PullRequestContext;
   /** Coordinates optional loop-analysis publication with source-run PR handling. */
   loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
+  /** Absolute state-owned runs directory for central Web UI execution. */
+  runPathsDirectory?: string;
+  /** Absolute state-owned session directory for central Web UI execution. */
+  sessionStorageDirectory?: string;
+  skipWorktreeRuntimeProtection?: boolean;
   /** Sanitizes report content before it crosses the report-file persistence boundary. */
   reportContentSanitizer?: (content: string) => string;
   /** Non-blocking hook invoked after terminal artifacts and observability are finalized. */
@@ -390,6 +395,11 @@ export interface ExecuteTaskOptions {
   prContext?: PullRequestContext;
   /** Coordinates optional loop-analysis publication with source-run PR handling. */
   loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
+  /** Absolute state-owned runs directory for central Web UI execution. */
+  runPathsDirectory?: string;
+  /** Absolute state-owned session directory for central Web UI execution. */
+  sessionStorageDirectory?: string;
+  skipWorktreeRuntimeProtection?: boolean;
 }
 
 export interface PipelineExecutionOptions {

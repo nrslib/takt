@@ -32,7 +32,7 @@ import {
 import { buildConversationSummaryPrompt } from './interactiveApplication.js';
 import type { RunSessionContext } from './runSessionReader.js';
 import type { ImageAttachmentCleanupOwner, InteractiveImageAttachment } from './imageAttachments.js';
-import { resolveFormalSpecMode } from './taskInstructionFormat.js';
+import { resolveFormalSpecConfiguration } from './taskInstructionFormat.js';
 
 /** Shape of interactive UI text */
 export interface InteractiveUIText {
@@ -116,6 +116,7 @@ export function buildSummaryPrompt(
   lang: 'en' | 'ja',
   promptContext?: string,
   formalSpec?: boolean,
+  formalSpecComments?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -127,6 +128,7 @@ export function buildSummaryPrompt(
   sourceContext?: string,
   promptContext?: string,
   formalSpec?: boolean,
+  formalSpecComments?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -134,10 +136,11 @@ export function buildSummaryPrompt(
   lang: 'en' | 'ja',
   promptContextOrNoTranscript?: string,
   conversationLabelOrFormalSpec?: string | boolean,
-  workflowContext?: WorkflowContext,
+  workflowContext?: WorkflowContext | boolean,
   sourceContext?: string,
   promptContext?: string,
   formalSpec?: boolean,
+  formalSpecComments?: boolean,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -146,10 +149,12 @@ export function buildSummaryPrompt(
       lang,
       promptContextOrNoTranscript ?? '',
       typeof conversationLabelOrFormalSpec === 'string' ? conversationLabelOrFormalSpec : '',
-      workflowContext,
+      typeof workflowContext === 'object' ? workflowContext : undefined,
       sourceContext,
       promptContext,
       formalSpec,
+      false,
+      formalSpecComments,
     );
   }
 
@@ -159,6 +164,8 @@ export function buildSummaryPrompt(
     lang,
     promptContextOrNoTranscript,
     typeof conversationLabelOrFormalSpec === 'boolean' ? conversationLabelOrFormalSpec : false,
+    undefined,
+    typeof workflowContext === 'boolean' ? workflowContext : formalSpecComments,
   );
 }
 
@@ -201,10 +208,12 @@ export async function interactiveMode(
   options?: InteractiveModeOptions,
 ): Promise<InteractiveModeResult> {
   const assistantMode = options?.assistantMode ?? 'assistant';
-  const initialFormalSpec = await resolveFormalSpecMode(cwd);
+  const initialFormalSpec = await resolveFormalSpecConfiguration(cwd);
   const { ctx, strategy } = createAssistantConversationPlan(cwd, {
     assistantMode,
-    formalSpec: initialFormalSpec,
+    formalSpec: initialFormalSpec.mode,
+    formalSpecComments: initialFormalSpec.comments,
+    resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd),
     ...(workflowContext ? { workflowContext } : {}),
     ...(runSessionContext ? { runSessionContext } : {}),
     ...(options?.provider ? { provider: options.provider } : {}),

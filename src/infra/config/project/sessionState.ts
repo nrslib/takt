@@ -28,14 +28,15 @@ interface SessionStateEnvelope {
   readonly consumedAt?: string;
 }
 
-export function getSessionStatePath(projectDir: string): string {
-  return join(getProjectConfigDir(projectDir), 'session-state.json');
+export function getSessionStatePath(projectDir: string, storageDirectory?: string): string {
+  return join(storageDirectory ?? getProjectConfigDir(projectDir), 'session-state.json');
 }
 
 export function saveSessionState(
   projectDir: string,
   publicationId: string,
   state: SessionState,
+  storageDirectory?: string,
 ): void {
   assertPublicationId(publicationId);
   assertSessionState(state);
@@ -60,13 +61,13 @@ export function saveSessionState(
       return undefined;
     }
     return pendingEnvelope(publicationId, state);
-  });
+  }, storageDirectory);
 }
 
-export function takeSessionState(projectDir: string): SessionState | null {
-  const directory = getProjectConfigDir(projectDir);
+export function takeSessionState(projectDir: string, storageDirectory?: string): SessionState | null {
+  const directory = storageDirectory ?? getProjectConfigDir(projectDir);
   ensureDir(directory);
-  const path = getSessionStatePath(projectDir);
+  const path = getSessionStatePath(projectDir, storageDirectory);
   while (true) {
     const snapshot = readPrivateFileState(path);
     if (!snapshot.state.exists) {
@@ -108,10 +109,11 @@ function mutateSessionState(
       readonly state: Extract<PrivateFileState, { exists: true }>;
     } | undefined,
   ) => SessionStateEnvelope | undefined,
+  storageDirectory?: string,
 ): void {
-  const directory = getProjectConfigDir(projectDir);
+  const directory = storageDirectory ?? getProjectConfigDir(projectDir);
   ensureDir(directory);
-  const path = getSessionStatePath(projectDir);
+  const path = getSessionStatePath(projectDir, storageDirectory);
   while (true) {
     const snapshot = readPrivateFileState(path);
     const current = snapshot.state.exists
