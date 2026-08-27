@@ -4,7 +4,7 @@
  * each of them, and the conversation result reaches the caller.
  */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,12 @@ import type { TaskHistorySummaryItem } from '../features/interactive/interactive
 import type { ConversationViewProps } from '../features/tui/ConversationView.js';
 import type { RunTuiOptions } from '../features/tui/runTui.js';
 import type { TuiConversation } from '../features/tui/tuiConversation.js';
-import type { SessionState } from '../infra/config/project/sessionState.js';
+import {
+  getSessionStatePath,
+  saveSessionState,
+  takeSessionState as takeStoredSessionState,
+  type SessionState,
+} from '../infra/config/project/sessionState.js';
 import type { ImageAttachmentStore } from '../features/interactive/imageAttachments.js';
 
 const {
@@ -1855,6 +1860,70 @@ describe('runTui', () => {
 
       expect(mockWatchProcessExit).toHaveBeenCalledTimes(1);
       expect(mockReleaseProcessExit).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('startup session state', () => {
+    it('should consume a saved result without adding it to either Ink startup transcript', async () => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-tui-stale-state-'));
+      const staleState = {
+        status: 'success',
+        workflowName: 'stale-workflow',
+        taskResult: 'stale result that must not be rendered',
+        timestamp: '2026-08-26T00:00:00.000Z',
+      } satisfies SessionState;
+
+      try {
+        saveSessionState(projectDir, 'stale-publication', staleState);
+        mockTakeSessionState.mockImplementation(
+          (cwd: string) => takeStoredSessionState(cwd),
+        );
+
+        const firstTree = scriptRender();
+        const firstRun = startRun({ cwd: projectDir });
+        await waitForMount(firstTree, 1);
+
+        const firstTranscript = firstTree.conversationProps().initialEntries
+          .map((entry) => entry.content)
+          .join('\n');
+        expect(firstTranscript).not.toContain(staleState.workflowName);
+        expect(firstTranscript).not.toContain(staleState.taskResult);
+        expect(firstTranscript).not.toContain(staleState.timestamp);
+        const consumedEnvelope = JSON.parse(
+          readFileSync(getSessionStatePath(projectDir), 'utf8'),
+        ) as { readonly status: unknown };
+        expect(consumedEnvelope.status).toBe('consumed');
+
+        firstTree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await firstRun;
+
+        const secondTree = scriptRender();
+        const secondRun = startRun({ cwd: projectDir });
+        await waitForMount(secondTree, 1);
+
+        const secondTranscript = secondTree.conversationProps().initialEntries
+          .map((entry) => entry.content)
+          .join('\n');
+        expect(secondTranscript).not.toContain(staleState.workflowName);
+        expect(secondTranscript).not.toContain(staleState.taskResult);
+        expect(secondTranscript).not.toContain(staleState.timestamp);
+        expect(mockTakeSessionState).toHaveBeenCalledTimes(2);
+        expect(mockTakeSessionState).toHaveBeenNthCalledWith(1, projectDir);
+        expect(mockTakeSessionState).toHaveBeenNthCalledWith(2, projectDir);
+        expect(mockTakeSessionState.mock.results.map((result) => result.value))
+          .toEqual([staleState, null]);
+
+        secondTree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await secondRun;
+      } finally {
+        rmSync(projectDir, { recursive: true, force: true });
+      }
     });
   });
 
