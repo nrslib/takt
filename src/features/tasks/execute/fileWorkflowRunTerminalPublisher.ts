@@ -56,6 +56,7 @@ export function createFileWorkflowRunTerminalPublisher(input: {
         payload.projectCwd,
         publicationId,
         payload.sessionState,
+        payload.sessionStorageDirectory,
       );
       const ndjsonLogPath = join(
         input.runPaths.logsAbs,

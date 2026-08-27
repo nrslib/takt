@@ -15,6 +15,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { TmuxTerminalBackend } from '../infra/claude-terminal/tmux-backend.js';
+import { enterCentralExecution } from '../shared/utils/child-process-env.js';
 
 function mockExecFileSuccess(): void {
   let captureCount = 0;
@@ -193,6 +194,28 @@ describe('TmuxTerminalBackend', () => {
       ['send-keys', '-t', 'takt-session', 'Enter'],
       ['delete-buffer', '-b', 'takt-session-prompt'],
     ]);
+  });
+
+  it('Given central execution, When the tmux buffer child starts, Then ownership environment is stripped', async () => {
+    const backend = new TmuxTerminalBackend();
+    const previousConfig = process.env.TAKT_CONFIG_DIR;
+    const previousOwnerToken = process.env.TAKT_CENTRAL_OWNER_TOKEN;
+    process.env.TAKT_CONFIG_DIR = '/private/central-config';
+    process.env.TAKT_CENTRAL_OWNER_TOKEN = 'secret-owner-token';
+    const leaveCentralExecution = enterCentralExecution();
+    try {
+      await backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'implement task');
+    } finally {
+      leaveCentralExecution();
+      if (previousConfig === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfig;
+      if (previousOwnerToken === undefined) delete process.env.TAKT_CENTRAL_OWNER_TOKEN;
+      else process.env.TAKT_CENTRAL_OWNER_TOKEN = previousOwnerToken;
+    }
+
+    const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(spawnOptions?.env?.TAKT_CONFIG_DIR).toBeUndefined();
+    expect(spawnOptions?.env?.TAKT_CENTRAL_OWNER_TOKEN).toBeUndefined();
   });
 
   it('Given a tmux stdio error, When pasteText is called, Then the stream failure is returned and the child is terminated', async () => {

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { devNull } from 'node:os';
+import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 
 interface SafeGitEnvironmentOptions {
   readonly allowGitHooks?: boolean;
@@ -11,7 +12,7 @@ export async function buildSafeGitEnvironment(
   options: SafeGitEnvironmentOptions,
 ): Promise<NodeJS.ProcessEnv> {
   const environment: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...buildChildProcessEnv(),
     GIT_LITERAL_PATHSPECS: '1',
   };
   removeInheritedGitCommandConfig(environment);

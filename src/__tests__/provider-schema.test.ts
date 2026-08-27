@@ -344,6 +344,17 @@ describe('Schemas accept opencode provider', () => {
     },
   );
 
+  it.each([
+    { mode: true },
+    { mode: 'Y/n', comments: false },
+    { comments: true },
+  ] as const)('should accept structured assistant.formal_spec=%j in global and project schemas', (formalSpec) => {
+    const raw = { assistant: { formal_spec: formalSpec } };
+
+    expect(GlobalConfigSchema.parse(raw).assistant).toEqual({ formal_spec: formalSpec });
+    expect(ProjectConfigSchema.parse(raw).assistant).toEqual({ formal_spec: formalSpec });
+  });
+
   it.each(['yes', 'Y/N', 1, null])(
     'should reject unsupported assistant.formal_spec value %j',
     (formalSpec) => {

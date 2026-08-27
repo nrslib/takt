@@ -57,10 +57,18 @@ export const WorkflowMcpServersConfigSchema = z.object({
   http: z.boolean().optional(),
 }).strict();
 
-export const FormalSpecSettingSchema = z.union([
+export const FormalSpecModeSchema = z.union([
   z.boolean(),
   z.literal('Y/n'),
   z.literal('y/N'),
+]);
+
+export const FormalSpecSettingSchema = z.union([
+  FormalSpecModeSchema,
+  z.object({
+    mode: FormalSpecModeSchema.optional(),
+    comments: z.boolean().optional(),
+  }).strict(),
 ]);
 
 export const AssistantConfigSchema = z.object({

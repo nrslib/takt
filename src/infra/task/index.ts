@@ -58,6 +58,8 @@ export {
   saveCloneMeta,
   removeCloneMeta,
   cleanupOrphanedClone,
+  type CloneCleanupArgument,
+  type CloneCleanupOptions,
   createBaseBranchIfMissing,
   resolveBaseBranch,
   resolveBaseBranchName,
@@ -95,3 +97,8 @@ export {
 export { summarizeTaskName } from './summarize.js';
 export { TaskWatcher, type TaskWatcherOptions } from './watcher.js';
 export { isStaleRunningTask } from './process.js';
+export {
+  assertCentralWorktreeOwnership,
+  CentralWorktreeOwnershipError,
+  type CentralWorktreeOwnership,
+} from './centralWorktreeOwnership.js';

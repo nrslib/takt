@@ -7,7 +7,7 @@
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import type {
   AgentWorkflowStep,
   WorkflowStep,
@@ -62,6 +62,7 @@ import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/in
 import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
+import { resolveReportDirectory } from '../run/run-paths.js';
 import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { waitForStepDelay } from './step-delay.js';
 import { parseStructuredOutputObject } from '../../../agents/structured-caller/shared.js';
@@ -782,6 +783,7 @@ export class StepExecutor {
         cwd: this.deps.getCwd(),
         projectCwd: this.deps.getProjectCwd(),
         failureDir: this.deps.getFailureDir(),
+        runRootDirectory: this.deps.getRunPaths().runRootAbs,
         runSlug: this.deps.getRunId(),
         runPathNamespace: this.deps.getRunPathNamespace(),
         language: this.deps.getLanguage() ?? 'en',
@@ -860,14 +862,18 @@ export class StepExecutor {
 
   private writeSnapshot(
     content: string,
-    directoryRel: string,
+    directory: string,
     filename: string,
     transaction?: InstructionBuildTransaction,
   ): string {
-    const absPath = join(this.deps.getCwd(), directoryRel, filename);
+    const absPath = join(resolveReportDirectory(this.deps.getCwd(), directory), filename);
     transaction?.recordSnapshotWrite(absPath);
     writeFileSync(absPath, content, 'utf-8');
-    return `${directoryRel}/${filename}`;
+    return join(directory, filename);
+  }
+
+  private contextSnapshotDirectory(relativePath: string, absolutePath: string): string {
+    return isAbsolute(this.deps.getReportDir()) ? absolutePath : relativePath;
   }
 
   private writeFacetSnapshot(
@@ -882,12 +888,12 @@ export class StepExecutor {
     const merged = contentStrings.join('\n\n---\n\n');
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
-    const directoryRel = facet === 'knowledge'
-      ? runPaths.contextKnowledgeRel
-      : runPaths.contextPolicyRel;
+    const directory = facet === 'knowledge'
+      ? this.contextSnapshotDirectory(runPaths.contextKnowledgeRel, runPaths.contextKnowledgeAbs)
+      : this.contextSnapshotDirectory(runPaths.contextPolicyRel, runPaths.contextPolicyAbs);
     const sourcePath = this.writeSnapshot(
       merged,
-      directoryRel,
+      directory,
       StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp),
       transaction,
     );
@@ -903,16 +909,20 @@ export class StepExecutor {
     if (!state.lastOutput || state.previousResponseSourcePath) return;
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
+    const directory = this.contextSnapshotDirectory(
+      runPaths.contextPreviousResponsesRel,
+      runPaths.contextPreviousResponsesAbs,
+    );
     const fileName = StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp);
     const sourcePath = this.writeSnapshot(
       state.lastOutput.content,
-      runPaths.contextPreviousResponsesRel,
+      directory,
       fileName,
       transaction,
     );
     this.writeSnapshot(
       state.lastOutput.content,
-      runPaths.contextPreviousResponsesRel,
+      directory,
       'latest.md',
       transaction,
     );
@@ -927,9 +937,13 @@ export class StepExecutor {
   ): void {
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
+    const directory = this.contextSnapshotDirectory(
+      runPaths.contextPreviousResponsesRel,
+      runPaths.contextPreviousResponsesAbs,
+    );
     const fileName = StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp);
-    const sourcePath = this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, fileName);
-    this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, 'latest.md');
+    const sourcePath = this.writeSnapshot(content, directory, fileName);
+    this.writeSnapshot(content, directory, 'latest.md');
     state.previousResponseSourcePath = sourcePath;
   }
 
@@ -1205,7 +1219,7 @@ export class StepExecutor {
       transaction,
     );
     const workflowSteps = this.deps.getWorkflowSteps();
-    const reportDir = join(this.deps.getCwd(), this.deps.getReportDir());
+    const reportDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
     // workflow_call の子（subworkflows 名前空間）の {report:X} が親成果物へ
     // read-only フォールバックするための reports ルート。engine の runPaths から
     // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
@@ -1253,6 +1267,7 @@ export class StepExecutor {
         companionEnabled: this.deps.companionEnabled,
         companionReviewMode: this.deps.companionReviewMode,
         cwd: this.deps.getCwd(),
+        getRunRootDirectory: () => this.deps.getRunPaths().runRootAbs,
         step,
         getRunSlug: () => this.deps.getRunId(),
         getRunPathNamespace: () => this.deps.getRunPathNamespace(),
@@ -1921,7 +1936,7 @@ export class StepExecutor {
   ): void {
     if (!step.outputContracts || step.outputContracts.length === 0) return;
     const context = this.createReportExecutionContext(execution);
-    const baseDir = join(this.deps.getCwd(), this.deps.getReportDir());
+    const baseDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
 
     for (const entry of step.outputContracts) {
       const fileName = entry.name;

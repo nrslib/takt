@@ -33,9 +33,44 @@ export type TaskRetryStartOptionSelector = (
   defaultValue: string,
 ) => Promise<string | null>;
 
-interface SelectTaskRetryStartOptions extends TaskRetryStartPathContext {
+export interface SelectTaskRetryStartOptions extends TaskRetryStartPathContext {
   resumePoint?: WorkflowResumePoint;
   preferredRootStep?: string;
+}
+
+/** Public, opaque choices shared by CLI and Web UI. */
+export interface TaskRetryStartOption {
+  readonly id: string;
+  readonly label: string;
+  readonly selectable: boolean;
+  readonly description?: string;
+}
+
+export interface TaskRetryStartOptionsModel {
+  readonly options: readonly TaskRetryStartOption[];
+  readonly defaultId: string;
+}
+
+/** Engine-owned retry fields derived from one opaque start selection. */
+export interface TaskRetryStartOwnership {
+  readonly startStep?: string;
+  readonly resumePoint?: WorkflowResumePoint;
+  readonly restartPoint?: WorkflowRestartPoint;
+}
+
+/** Resolve retry start ownership consistently for CLI and central Web UI runs. */
+export function resolveTaskRetryStartOwnership(
+  selectedStart: TaskRetryStartSelection,
+  workflowConfig: Pick<WorkflowConfig, 'initialStep'>,
+): TaskRetryStartOwnership {
+  if (selectedStart.kind === 'resume') {
+    const rootEntry = selectedStart.resumePoint.stack[0]!;
+    return {
+      ...(rootEntry.step === workflowConfig.initialStep ? {} : { startStep: rootEntry.step }),
+      resumePoint: selectedStart.resumePoint,
+    };
+  }
+  return { restartPoint: selectedStart.restartPoint };
 }
 
 interface ResumeOption {
@@ -74,6 +109,11 @@ interface FlattenedTree {
   resultLabels: Map<string, string>;
   firstLeafValue: string | undefined;
   preferredLeafValue: string | undefined;
+}
+
+interface TaskRetryStartCatalog extends TaskRetryStartOptionsModel {
+  readonly selections: ReadonlyMap<string, TaskRetryStartSelection>;
+  readonly resultLabels: ReadonlyMap<string, string>;
 }
 
 function flattenRestartTree(
@@ -127,19 +167,17 @@ function flattenRestartTree(
   return { promptOptions, selections, resultLabels, firstLeafValue, preferredLeafValue };
 }
 
-export async function selectTaskRetryStart(
+function buildTaskRetryStartCatalog(
   rootWorkflow: WorkflowConfig,
   options: SelectTaskRetryStartOptions,
-  selectOption: TaskRetryStartOptionSelector,
-): Promise<TaskRetryStartSelectionResult | null> {
+): TaskRetryStartCatalog {
   const tree = buildTaskRetryRestartTree(rootWorkflow, options);
   const flattened = flattenRestartTree(tree, options.preferredRootStep);
   const resumeOption = createResumeOption(rootWorkflow, options);
-
-  const defaultValue = resumeOption?.value
+  const defaultId = resumeOption?.value
     ?? flattened.preferredLeafValue
     ?? flattened.firstLeafValue;
-  if (defaultValue === undefined) {
+  if (defaultId === undefined) {
     throw new Error(`Workflow "${rootWorkflow.name}" has no authored steps to restart from`);
   }
 
@@ -152,18 +190,65 @@ export async function selectTaskRetryStart(
     resultLabels.set(resumeOption.value, resumeOption.label);
   }
   promptOptions.push(...flattened.promptOptions);
+  return {
+    options: promptOptions.map((option) => ({
+      id: option.value,
+      label: option.label,
+      selectable: option.selectable !== false,
+      ...(option.description === undefined ? {} : { description: option.description }),
+    })),
+    defaultId,
+    selections,
+    resultLabels,
+  };
+}
+
+/** Build choices without performing terminal I/O. */
+export function buildTaskRetryStartOptions(
+  rootWorkflow: WorkflowConfig,
+  options: SelectTaskRetryStartOptions,
+): TaskRetryStartOptionsModel {
+  const catalog = buildTaskRetryStartCatalog(rootWorkflow, options);
+  return { options: catalog.options, defaultId: catalog.defaultId };
+}
+
+/** Resolve an opaque choice against the current workflow snapshot. */
+export function resolveTaskRetryStartOption(
+  rootWorkflow: WorkflowConfig,
+  options: SelectTaskRetryStartOptions,
+  selectedId: string,
+): TaskRetryStartSelectionResult {
+  const catalog = buildTaskRetryStartCatalog(rootWorkflow, options);
+  const selection = catalog.selections.get(selectedId);
+  if (selection === undefined) {
+    throw new Error(`Unknown task retry start selection: ${selectedId}`);
+  }
+  return {
+    label: catalog.resultLabels.get(selectedId) ?? selectedId,
+    selection,
+  };
+}
+
+export async function selectTaskRetryStart(
+  rootWorkflow: WorkflowConfig,
+  options: SelectTaskRetryStartOptions,
+  selectOption: TaskRetryStartOptionSelector,
+): Promise<TaskRetryStartSelectionResult | null> {
+  const catalog = buildTaskRetryStartCatalog(rootWorkflow, options);
+  const promptOptions: SelectOptionItem<string>[] = catalog.options.map((option) => ({
+    label: option.label,
+    value: option.id,
+    ...(option.selectable ? {} : { selectable: false }),
+    ...(option.description === undefined ? {} : { description: option.description }),
+  }));
 
   const selectedValue = await selectOption(
     `Start position — ${formatTaskRetryPath([rootWorkflow.name])}:`,
     promptOptions,
-    defaultValue,
+    catalog.defaultId,
   );
   if (selectedValue === null) {
     return null;
   }
-  const selection = selections.get(selectedValue);
-  if (selection === undefined) {
-    throw new Error(`Unknown task retry start selection: ${selectedValue}`);
-  }
-  return { label: resultLabels.get(selectedValue) ?? selectedValue, selection };
+  return resolveTaskRetryStartOption(rootWorkflow, options, selectedValue);
 }

@@ -58,7 +58,7 @@ vi.mock('../shared/ui/index.js', () => ({
 }));
 
 vi.mock('../app/cli/immediateSigintExit.js', () => ({
-  installImmediateSigintExit: mockInstallImmediateSigintExit,
+  installImmediateSigintExit: () => mockInstallImmediateSigintExit(),
 }));
 
 describe('CLI entrypoint lazy loading', () => {

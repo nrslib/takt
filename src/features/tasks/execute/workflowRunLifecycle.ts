@@ -3,7 +3,10 @@ import { mkdirSync } from 'node:fs';
 import { generateSessionId } from '../../../infra/fs/index.js';
 import { join } from 'node:path';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
-import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
+import {
+  buildRunPaths,
+  buildRunPathsFromRunsDirectory,
+} from '../../../core/workflow/run/run-paths.js';
 import type {
   RunResumeSource,
 } from '../../../core/workflow/run/run-meta.js';
@@ -36,6 +39,7 @@ export interface WorkflowRunExecutionContext {
 
 export interface WorkflowRunLifecycleCompositionInput {
   readonly cwd: string;
+  readonly runPathsDirectory?: string;
 }
 
 export interface WorkflowRunBootstrap {
@@ -101,9 +105,11 @@ export function createWorkflowRunLifecycle(
 
 class WorkflowRunLifecycleAdapter {
   readonly #cwd: string;
+  readonly #runPathsDirectory: string | undefined;
 
   constructor(input: WorkflowRunLifecycleCompositionInput) {
     this.#cwd = input.cwd;
+    this.#runPathsDirectory = input.runPathsDirectory;
   }
 
   async beginRun(input: {
@@ -249,10 +255,13 @@ class WorkflowRunLifecycleAdapter {
     readonly task: string;
     readonly requestedRunSlug?: string;
   }): RunPaths {
-    mkdirSync(join(this.#cwd, '.takt', 'runs'), { recursive: true });
+    const runPathsDirectory = this.#runPathsDirectory ?? join(this.#cwd, '.takt', 'runs');
+    mkdirSync(runPathsDirectory, { recursive: true });
     let runSlug = input.initialRunSlug;
     while (true) {
-      const runPaths = buildRunPaths(this.#cwd, runSlug);
+      const runPaths = this.#runPathsDirectory === undefined
+        ? buildRunPaths(this.#cwd, runSlug)
+        : buildRunPathsFromRunsDirectory(this.#runPathsDirectory, runSlug);
       try {
         mkdirSync(runPaths.runRootAbs);
         return runPaths;

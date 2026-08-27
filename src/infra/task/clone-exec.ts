@@ -10,6 +10,7 @@ import {
 } from '../../shared/utils/gitBranchValidation.js';
 import { loadProjectConfig } from '../config/index.js';
 import { isTaskAbortError, TASK_EXECUTION_ABORTED_MESSAGE } from './clone-errors.js';
+import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 
 const log = createLogger('clone');
 const CLONE_FAILED_MESSAGE = 'Git clone failed';
@@ -79,7 +80,7 @@ function cloneFailedError(): Error {
 }
 
 function isolatedGitEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, ...ISOLATED_GIT_ENV };
+  return { ...buildChildProcessEnv(), ...ISOLATED_GIT_ENV };
 }
 
 function runIsolatedGitCommandSync(gitCwd: string, args: string[]): Buffer {

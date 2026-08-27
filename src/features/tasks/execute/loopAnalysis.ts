@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+import { spawn, type SpawnOptions } from 'node:child_process';
+import { buildChildProcessEnv, isCentralExecution } from '../../../shared/utils/child-process-env.js';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { resolveRuntimeProviderFile } from '../../../infra/config/runtime-provider/loader.js';
@@ -81,11 +82,13 @@ function startLoopAnalysisWorker(
   sourceRunDirectory: string,
 ): void {
   const launch = resolveWorkerLaunch(jobPath);
-  const worker = spawn(process.execPath, launch.arguments, {
+  const spawnOptions: SpawnOptions = {
     cwd: projectCwd,
     detached: true,
     stdio: 'ignore',
-  });
+  };
+  if (isCentralExecution()) spawnOptions.env = buildChildProcessEnv();
+  const worker = spawn(process.execPath, launch.arguments, spawnOptions);
   worker.once('error', (error) => {
     log.error('Loop analysis worker failed to start', {
       sourceRunDirectory,

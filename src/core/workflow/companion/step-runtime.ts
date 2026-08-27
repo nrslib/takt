@@ -56,6 +56,7 @@ interface CompanionStepRuntimeDeps {
   readonly cwd: string;
   readonly projectCwd: string;
   readonly failureDir: string;
+  readonly runRootDirectory?: string;
   readonly runSlug: string;
   readonly runPathNamespace: readonly string[];
   readonly language: 'en' | 'ja';
@@ -508,6 +509,7 @@ export class CompanionStepRuntime {
   private mailboxPath(name: string): string {
     return buildCompanionMailboxPath({
       cwd: this.deps.cwd,
+      ...(this.deps.runRootDirectory === undefined ? {} : { runRootDirectory: this.deps.runRootDirectory }),
       runSlug: this.deps.runSlug,
       runPathNamespace: this.deps.runPathNamespace,
       stepName: this.deps.step.name,

@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { TaskReviewScope } from '../review-scope.js';
@@ -50,6 +49,7 @@ import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
+import { resolveReportDirectory } from '../run/run-paths.js';
 import {
   captureWorkflowStepProviderActivity,
   recordWorkflowStepProviderActivity,
@@ -854,7 +854,7 @@ export class OptionsBuilder {
       cwd: this.getCwd(),
       task: this.getTask?.(),
       reviewScope: this.getReviewScope?.(),
-      reportDir: join(this.getCwd(), this.getReportDir()),
+      reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
       ...(this.getReportsRootDir === undefined ? {} : { reportsRootDir: this.getReportsRootDir() }),
       ...(resumeReportConsumerKey === undefined ? {} : { resumeReportConsumerKey }),
       language: this.getLanguage(),
