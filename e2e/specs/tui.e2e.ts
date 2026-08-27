@@ -71,6 +71,11 @@ interface MakerCallRecord {
   readonly allowedTools?: string[];
 }
 
+interface MockCallLogRecord {
+  readonly event: 'start' | 'complete';
+  readonly personaName: string;
+}
+
 interface MakerStepStartRecord {
   readonly type: 'step_start';
   readonly step: string;
@@ -167,6 +172,25 @@ describe('E2E: Ink TUI', () => {
       await new Promise((resolveWait) => setTimeout(resolveWait, 50));
     }
     throw new Error(`Timed out waiting for ${JSON.stringify(expected)} in ${path}`);
+  }
+
+  async function waitForMockCallStart(
+    path: string,
+    personaName: string,
+    timeoutMs = 10_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const starts = readJsonLines<MockCallLogRecord>(path)
+          .filter((record) => record.event === 'start' && record.personaName === personaName);
+        if (starts.length > 0) return;
+      } catch {
+        // The mock call log is created by the child process after the call starts.
+      }
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    }
+    throw new Error(`Timed out waiting for mock ${personaName} call in ${path}`);
   }
 
   async function waitForArtifactRoots(root: string, count: number, timeoutMs = 10_000): Promise<string[]> {
@@ -1141,7 +1165,8 @@ steps:
         },
         { status: 'error', content: `FIX-REACHED-AFTER-${doctorState.toUpperCase()}-DOCTOR` },
       ]), 'utf-8');
-      const tui = start(scenarioPath, ['make']);
+      const callLog = join(testRepo.path, `workflow-maker-doctor-${doctorState}-calls.jsonl`);
+      const tui = start(scenarioPath, ['make'], { TAKT_MOCK_CALL_LOG: callLog });
 
       await chooseHighlighted(tui, 'Select a Workflow Maker base:');
       await tui.waitForOutput('Workflow name', 5_000);
@@ -1164,9 +1189,12 @@ steps:
         'workflow-maker-doctor.md',
       );
       // The path can appear before the workflow has finished writing it, so
-      // verify the generated content in the execution artifact before changing
-      // its availability for review.
+      // verify the generated content in the execution artifact. The reviewer
+      // call starts only after create has finished constructing its prompt;
+      // its scenario delay then gives us a deterministic boundary before the
+      // file condition is evaluated.
       await waitForFileContent(doctorReport, 'Result: PASS');
+      await waitForMockCallStart(callLog, 'architecture-reviewer');
       if (doctorState === 'missing') {
         rmSync(doctorReport);
       } else {
