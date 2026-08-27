@@ -4,7 +4,11 @@ import { request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { readRunCollection, readRunDetail } from '../features/web-ui/run-store.js';
+import {
+  readRunCollection,
+  readRunDetail,
+  readRunOccurrenceArtifacts,
+} from '../features/web-ui/run-store.js';
 import { readRunLogArtifactsForDiagnostics } from '../features/web-ui/run-log-cache.js';
 import { startWebUi, stopWebUi } from '../features/web-ui/index.js';
 import { startCentralTaskActionConversation } from '../features/web-ui/launcher.js';
@@ -25,6 +29,9 @@ import {
   executeCentralTaskAction,
 } from '../features/web-ui/task-actions.js';
 import { resolveStatePaths, type StatePaths } from '../core/execution/locations.js';
+import type { WorkflowConfig } from '../core/models/index.js';
+import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
+import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { createSharedClone } from '../infra/task/index.js';
@@ -291,6 +298,569 @@ describe('Web UI run artifacts', () => {
     expect(detail.events[0]?.occurrenceId).toBe(detail.events[1]?.occurrenceId);
   });
 
+  it('reads canonical workflow-call site namespaces from persisted run metadata', async () => {
+    const statePaths = await createArtifactState();
+    const namespace = 'iteration-1--step-delegate--workflow-child--site-' + 'a'.repeat(64);
+    const runRoot = await writeRun(statePaths, 'canonical-resume-metadata', {
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'root',
+          workflow_ref: 'root-ref',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+          call_instance: 1,
+        }],
+        iteration: 1,
+        elapsed_ms: 0,
+        workflow_call_invocations: {
+          '{"workflow":"root-ref","step":"delegate","calls":[]}': {
+            call_instance: 1,
+            report_namespace_segment: namespace,
+          },
+        },
+        workflow_step_participations: {},
+      },
+    });
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), '');
+
+    const detail = await readRunDetail(statePaths, 'canonical-resume-metadata');
+
+    expect(detail.meta.resumePoint?.workflow_call_invocations).toMatchObject({
+      '{"workflow":"root-ref","step":"delegate","calls":[]}': {
+        report_namespace_segment: namespace,
+      },
+    });
+  });
+
+  it('accepts equal resume aliases and rejects conflicting aliases', async () => {
+    const statePaths = await createArtifactState();
+    const resumePoint = {
+      version: 2,
+      stack: [{
+        workflow: 'root',
+        workflow_ref: 'root-ref',
+        step: 'review',
+        kind: 'agent' as const,
+        occurrence: 1,
+      }],
+      iteration: 1,
+      elapsed_ms: 0,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    await writeRun(statePaths, 'equal-resume-aliases', {
+      resumePoint,
+      resume_point: { ...resumePoint },
+    });
+    await expect(readRunDetail(statePaths, 'equal-resume-aliases')).resolves.toMatchObject({
+      meta: { resumePoint },
+    });
+
+    await writeRun(statePaths, 'conflicting-resume-aliases', {
+      resumePoint,
+      resume_point: { ...resumePoint, iteration: 2 },
+    });
+    await expect(readRunDetail(statePaths, 'conflicting-resume-aliases')).rejects.toThrow(
+      'resumePoint and resume_point must contain the same value',
+    );
+  });
+
+  it('scopes occurrence reports and prompts to the selected canonical stack', async () => {
+    const statePaths = await createArtifactState();
+    const firstStack = [
+      {
+        workflow: 'root',
+        workflow_ref: 'root-ref',
+        step: 'delegate',
+        kind: 'workflow_call',
+        occurrence: 1,
+      },
+      {
+        workflow: 'child',
+        workflow_ref: 'child-ref',
+        step: 'review',
+        kind: 'agent',
+        occurrence: 1,
+      },
+    ];
+    const secondStack = firstStack.map((frame) => ({ ...frame, occurrence: 2 }));
+    const childWorkflow = {
+      name: 'child',
+      [Symbol.for('takt.workflowOpaqueRef')]: 'child-ref',
+    } as unknown as WorkflowConfig;
+    const namespaceFor = (occurrence: number) => buildWorkflowCallSiteIdentity({
+      stack: [{ ...firstStack[0]!, kind: 'workflow_call' as const, occurrence }],
+      childWorkflow,
+    }).runPathSegment;
+    const firstNamespace = namespaceFor(1);
+    const secondNamespace = namespaceFor(2);
+    const wrongSiteNamespace = 'iteration-1--step-delegate--workflow-child--site-0000000000000000000000000000000000000000000000000000000000000000';
+    const participationIdentity = (instance: number) => JSON.stringify({
+      workflow: 'child-ref',
+      step: 'review',
+      calls: [{ workflow: 'root-ref', step: 'delegate', kind: 'workflow_call', instance }],
+    });
+    const runRoot = await writeRun(statePaths, 'occurrence-artifacts', {
+      resume_point: {
+        version: 2,
+        stack: [{ ...secondStack[0]!, call_instance: 2 }, secondStack[1]!],
+        iteration: 2,
+        elapsed_ms: 0,
+        workflow_call_invocations: {
+          '{"workflow":"root-ref","step":"delegate","calls":[]}': {
+            call_instance: 2,
+            report_namespace_segment: secondNamespace,
+          },
+        },
+        workflow_step_participations: {
+          [participationIdentity(1)]: { report_names: ['first.md'] },
+          [participationIdentity(2)]: { report_names: ['second.md'] },
+        },
+      },
+    });
+    await mkdir(join(runRoot, 'reports', 'subworkflows', firstNamespace), { recursive: true });
+    await mkdir(join(runRoot, 'reports', 'subworkflows', secondNamespace), { recursive: true });
+    await mkdir(join(runRoot, 'reports', 'subworkflows', wrongSiteNamespace), { recursive: true });
+    await mkdir(join(runRoot, 'reports', 'subworkflows', 'iteration-9--step-other--workflow-other'), { recursive: true });
+    await writeFile(join(runRoot, 'reports', 'subworkflows', firstNamespace, 'first.md'), 'first report');
+    await writeFile(join(runRoot, 'reports', 'subworkflows', firstNamespace, 'stale.md'), 'stale report');
+    await writeFile(join(runRoot, 'reports', 'subworkflows', secondNamespace, 'second.md'), 'second report');
+    await writeFile(join(runRoot, 'reports', 'subworkflows', wrongSiteNamespace, 'wrong-site.md'), 'wrong site report');
+    await writeFile(
+      join(runRoot, 'reports', 'subworkflows', 'iteration-9--step-other--workflow-other', 'outside.md'),
+      'outside report',
+    );
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'child',
+        iteration: 1,
+        stack: firstStack,
+      },
+      {
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'child',
+        phase: 1,
+        phaseName: 'execute',
+        phaseExecutionId: 'review:1:1:1',
+        iteration: 1,
+        stack: firstStack,
+        systemPrompt: 'system prompt 1',
+        userInstruction: 'user instruction 1',
+        instruction: 'phase instruction 1',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'child',
+        iteration: 1,
+        status: 'done',
+        stack: firstStack,
+      },
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'child',
+        iteration: 2,
+        stack: secondStack,
+      },
+      {
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'child',
+        phase: 1,
+        phaseName: 'execute',
+        phaseExecutionId: 'review:2:1:1',
+        iteration: 2,
+        stack: secondStack,
+        systemPrompt: 'system prompt 2',
+        userInstruction: 'user instruction 2',
+      },
+      {
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'child',
+        phase: 2,
+        phaseName: 'judge',
+        phaseExecutionId: 'review:ambiguous:2:1',
+        stack: secondStack,
+        systemPrompt: 'ambiguous prompt without ITER identity',
+        userInstruction: 'ambiguous instruction without ITER identity',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'child',
+        iteration: 2,
+        status: 'done',
+        stack: secondStack,
+      },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+    const detail = await readRunDetail(statePaths, 'occurrence-artifacts');
+    const firstOccurrence = detail.graphSummary.occurrences.find((event) => event.iteration === 1);
+    const secondOccurrence = detail.graphSummary.occurrences.find((event) => event.iteration === 2);
+    expect(firstOccurrence?.occurrenceId).toBeDefined();
+    expect(secondOccurrence?.occurrenceId).toBeDefined();
+    if (firstOccurrence?.occurrenceId === undefined || secondOccurrence?.occurrenceId === undefined) {
+      throw new Error('Occurrence fixture was not indexed');
+    }
+
+    const first = await readRunOccurrenceArtifacts(statePaths, 'occurrence-artifacts', firstOccurrence.occurrenceId);
+    const second = await readRunOccurrenceArtifacts(statePaths, 'occurrence-artifacts', secondOccurrence.occurrenceId);
+
+    expect(first.reports.map((report) => report.filename)).toEqual([
+      `subworkflows/${firstNamespace}/first.md`,
+    ]);
+    expect(first.prompts).toHaveLength(1);
+    expect(first.prompts).toMatchObject([{
+      phase: 1,
+      systemPrompt: 'system prompt 1',
+      userInstruction: 'user instruction 1',
+      instruction: 'phase instruction 1',
+    }]);
+    expect(second.reports.map((report) => report.filename)).toEqual([
+      `subworkflows/${secondNamespace}/second.md`,
+    ]);
+    expect(second.prompts).toHaveLength(2);
+    expect(second.prompts).toMatchObject([
+      {
+        phase: 1,
+        systemPrompt: 'system prompt 2',
+        userInstruction: 'user instruction 2',
+      },
+      {
+        phase: 2,
+        systemPrompt: 'ambiguous prompt without ITER identity',
+        userInstruction: 'ambiguous instruction without ITER identity',
+      },
+    ]);
+  });
+
+  it('restores parallel child report ownership from the canonical stack', async () => {
+    const statePaths = await createArtifactState();
+    const childWorkflow = {
+      name: 'child',
+      [Symbol.for('takt.workflowOpaqueRef')]: 'child-ref',
+    } as unknown as WorkflowConfig;
+    const callFrame = (occurrence: number) => ({
+      workflow: 'root',
+      workflow_ref: 'root-ref',
+      step: 'delegate',
+      kind: 'workflow_call' as const,
+      occurrence,
+      call_instance: occurrence,
+    });
+    const parallelFrame = {
+      workflow: 'child',
+      workflow_ref: 'child-ref',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    };
+    const childStack = (callOccurrence: number, step: string) => [
+      {
+        ...callFrame(callOccurrence),
+      },
+      parallelFrame,
+      {
+        workflow: 'child',
+        workflow_ref: 'child-ref',
+        step,
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
+    ];
+    const namespaceFor = (occurrence: number) => buildWorkflowCallSiteIdentity({
+      stack: [callFrame(occurrence)],
+      childWorkflow,
+    }).runPathSegment;
+    const firstNamespace = namespaceFor(1);
+    const secondNamespace = namespaceFor(2);
+    const participationIdentity = (callOccurrence: number, step: string) => (
+      buildWorkflowStepParticipationIdentity(
+        'child-ref',
+        step,
+        [callFrame(callOccurrence)],
+        'reviewers',
+      )
+    );
+    const runRoot = await writeRun(statePaths, 'parallel-child-artifacts', {
+      resume_point: {
+        version: 2,
+        stack: [callFrame(2), parallelFrame, {
+          workflow: 'child',
+          workflow_ref: 'child-ref',
+          step: 'architecture',
+          kind: 'agent',
+          occurrence: 1,
+        }],
+        iteration: 2,
+        elapsed_ms: 0,
+        workflow_call_invocations: {
+          '{"workflow":"root-ref","step":"delegate","calls":[]}': {
+            call_instance: 2,
+            report_namespace_segment: secondNamespace,
+          },
+        },
+        workflow_step_participations: {
+          [participationIdentity(1, 'architecture')]: { report_names: ['architecture-1.md'] },
+          [participationIdentity(1, 'security')]: { report_names: ['security-1.md'] },
+          [participationIdentity(2, 'architecture')]: { report_names: ['architecture-2.md'] },
+        },
+      },
+    });
+    await mkdir(join(runRoot, 'reports', 'subworkflows', firstNamespace), { recursive: true });
+    await mkdir(join(runRoot, 'reports', 'subworkflows', secondNamespace), { recursive: true });
+    await writeFile(join(runRoot, 'reports', 'subworkflows', firstNamespace, 'architecture-1.md'), 'architecture 1');
+    await writeFile(join(runRoot, 'reports', 'subworkflows', firstNamespace, 'security-1.md'), 'security 1');
+    await writeFile(join(runRoot, 'reports', 'subworkflows', secondNamespace, 'architecture-2.md'), 'architecture 2');
+    const records = [
+      [1, 'architecture', 'architecture 1'],
+      [1, 'security', 'security 1'],
+      [2, 'architecture', 'architecture 2'],
+    ].flatMap(([callOccurrence, step]) => {
+      const numericCallOccurrence = callOccurrence as number;
+      const stepName = step as string;
+      const stack = childStack(numericCallOccurrence, stepName);
+      return [
+        {
+          type: 'step_start',
+          workflow: 'child',
+          step: stepName,
+          iteration: numericCallOccurrence,
+          stack,
+        },
+        {
+          type: 'step_complete',
+          workflow: 'child',
+          step: stepName,
+          iteration: numericCallOccurrence,
+          status: 'done',
+          stack,
+        },
+      ];
+    });
+    await writeFile(
+      join(runRoot, 'logs', 'session.jsonl'),
+      `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
+    );
+
+    const detail = await readRunDetail(statePaths, 'parallel-child-artifacts');
+    const architectureOccurrences = detail.graphSummary.occurrences.filter(
+      (event) => event.step === 'architecture',
+    );
+    expect(architectureOccurrences).toHaveLength(2);
+    const firstOccurrence = architectureOccurrences.find((event) => event.stack?.[0]?.occurrence === 1);
+    const secondOccurrence = architectureOccurrences.find((event) => event.stack?.[0]?.occurrence === 2);
+    expect(firstOccurrence?.occurrenceId).toBeDefined();
+    expect(secondOccurrence?.occurrenceId).toBeDefined();
+    if (firstOccurrence?.occurrenceId === undefined || secondOccurrence?.occurrenceId === undefined) {
+      throw new Error('Parallel child occurrences were not indexed');
+    }
+
+    const first = await readRunOccurrenceArtifacts(
+      statePaths,
+      'parallel-child-artifacts',
+      firstOccurrence.occurrenceId,
+    );
+    const second = await readRunOccurrenceArtifacts(
+      statePaths,
+      'parallel-child-artifacts',
+      secondOccurrence.occurrenceId,
+    );
+    expect(first.reports.map((report) => report.filename)).toEqual([
+      `subworkflows/${firstNamespace}/architecture-1.md`,
+    ]);
+    expect(second.reports.map((report) => report.filename)).toEqual([
+      `subworkflows/${secondNamespace}/architecture-2.md`,
+    ]);
+  });
+
+  it('scopes prompts to the source log and lifecycle boundary, including incomplete phase identity', async () => {
+    const statePaths = await createArtifactState();
+    const stack = [
+      {
+        workflow: 'root',
+        workflow_ref: 'root-ref',
+        step: 'review',
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
+    ];
+    const lifecycle = (prompt: string, includeInvalidLine = false) => [
+      JSON.stringify({
+        type: 'step_start',
+        step: 'review',
+        workflow: 'root',
+        iteration: 1,
+        stack,
+      }),
+      ...(includeInvalidLine ? ['{"type":"phase_start"'] : []),
+      JSON.stringify({
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'root',
+        phase: 1,
+        phaseName: 'execute',
+        stack,
+        systemPrompt: prompt,
+        userInstruction: `instruction-${prompt}`,
+      }),
+      JSON.stringify({
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'root',
+        iteration: 1,
+        status: 'done',
+        stack,
+      }),
+    ];
+    const runRoot = await writeRun(statePaths, 'prompt-lifecycle-scope');
+    await writeFile(join(runRoot, 'logs', 'a.jsonl'), `${[
+      ...lifecycle('a-first', true),
+      ...lifecycle('a-second'),
+    ].join('\n')}\n`);
+    await writeFile(join(runRoot, 'logs', 'b.jsonl'), `${lifecycle('b-only').join('\n')}\n`);
+
+    const detail = await readRunDetail(statePaths, 'prompt-lifecycle-scope');
+    expect(detail.warnings.some((warning) => warning.includes('not valid JSON'))).toBe(true);
+    expect(detail.graphSummary.occurrences).toHaveLength(3);
+    const newest = detail.graphSummary.occurrences[0];
+    const middle = detail.graphSummary.occurrences[1];
+    const oldest = detail.graphSummary.occurrences[2];
+    expect(newest?.occurrenceId).toBeDefined();
+    expect(middle?.occurrenceId).toBeDefined();
+    expect(oldest?.occurrenceId).toBeDefined();
+    if (newest?.occurrenceId === undefined || middle?.occurrenceId === undefined || oldest?.occurrenceId === undefined) {
+      throw new Error('Prompt lifecycle fixture was not indexed');
+    }
+
+    await expect(
+      readRunOccurrenceArtifacts(statePaths, 'prompt-lifecycle-scope', newest.occurrenceId),
+    ).resolves.toMatchObject({ prompts: [{ systemPrompt: 'b-only' }] });
+    await expect(
+      readRunOccurrenceArtifacts(statePaths, 'prompt-lifecycle-scope', middle.occurrenceId),
+    ).resolves.toMatchObject({ prompts: [{ systemPrompt: 'a-second' }] });
+    await expect(
+      readRunOccurrenceArtifacts(statePaths, 'prompt-lifecycle-scope', oldest.occurrenceId),
+    ).resolves.toMatchObject({ prompts: [{ systemPrompt: 'a-first' }] });
+  });
+
+  it('accepts a legacy report namespace when the selected call site is unambiguous', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'legacy-occurrence-artifacts');
+    const namespace = 'iteration-1--step-delegate--workflow-child';
+    const stack = [
+      {
+        workflow: 'root',
+        workflow_ref: 'root-ref',
+        step: 'delegate',
+        kind: 'workflow_call',
+        occurrence: 1,
+      },
+      {
+        workflow: 'child',
+        workflow_ref: 'child-ref',
+        step: 'review',
+        kind: 'agent',
+        occurrence: 1,
+      },
+    ];
+    await mkdir(join(runRoot, 'reports', 'subworkflows', namespace), { recursive: true });
+    await writeFile(join(runRoot, 'reports', 'subworkflows', namespace, 'legacy.md'), 'legacy report');
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'child',
+        iteration: 1,
+        stack,
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'child',
+        iteration: 1,
+        status: 'done',
+        stack,
+      },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+    const detail = await readRunDetail(statePaths, 'legacy-occurrence-artifacts');
+    const occurrenceId = detail.graphSummary.occurrences[0]?.occurrenceId;
+    expect(occurrenceId).toBeDefined();
+    if (occurrenceId === undefined) throw new Error('Occurrence fixture was not indexed');
+
+    await expect(
+      readRunOccurrenceArtifacts(statePaths, 'legacy-occurrence-artifacts', occurrenceId),
+    ).resolves.toMatchObject({
+      reports: [{ filename: `subworkflows/${namespace}/legacy.md`, content: 'legacy report' }],
+    });
+  });
+
+  it('does not guess a legacy report namespace when two call sites collide', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'ambiguous-legacy-occurrence-artifacts');
+    const namespace = 'iteration-1--step-delegate--workflow-child';
+    const stack = (workflowRef: string) => [
+      {
+        workflow: 'root',
+        workflow_ref: workflowRef,
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      },
+      {
+        workflow: 'child',
+        workflow_ref: 'child-ref',
+        step: 'review',
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
+    ];
+    const firstStack = stack('root-ref-a');
+    const secondStack = stack('root-ref-b');
+    await mkdir(join(runRoot, 'reports', 'subworkflows', namespace), { recursive: true });
+    await writeFile(join(runRoot, 'reports', 'subworkflows', namespace, 'legacy.md'), 'ambiguous report');
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      1,
+      2,
+    ].flatMap((iteration) => {
+      const currentStack = iteration === 1 ? firstStack : secondStack;
+      return [
+        {
+          type: 'step_start',
+          step: 'review',
+          workflow: 'child',
+          iteration: 1,
+          stack: currentStack,
+        },
+        {
+          type: 'step_complete',
+          step: 'review',
+          workflow: 'child',
+          iteration: 1,
+          status: 'done',
+          stack: currentStack,
+        },
+      ];
+    }).map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+    const detail = await readRunDetail(statePaths, 'ambiguous-legacy-occurrence-artifacts');
+    const occurrenceId = detail.graphSummary.occurrences.at(-1)?.occurrenceId;
+    expect(occurrenceId).toBeDefined();
+    if (occurrenceId === undefined) throw new Error('Occurrence fixture was not indexed');
+
+    await expect(
+      readRunOccurrenceArtifacts(statePaths, 'ambiguous-legacy-occurrence-artifacts', occurrenceId),
+    ).resolves.toMatchObject({ reports: [] });
+  });
+
   it('assigns lifecycle occurrence IDs without closing on phase completion or merging orphan completions', async () => {
     const statePaths = await createArtifactState();
     const runRoot = await writeRun(statePaths, 'occurrence-boundaries');
@@ -335,6 +905,209 @@ describe('Web UI run artifacts', () => {
       .every((event) => lifecycleIds.includes(event.occurrenceId))).toBe(true);
     expect(detail.graphSummary.occurrences.every((event) => lifecycleIds.includes(event.occurrenceId))).toBe(true);
     expect(detail.graphSummary.totalOccurrences).toBe(3);
+  });
+
+  it('fails closed for prompts when a lifecycle identity is reopened before it terminates', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'reopened-prompt-lifecycle');
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'default',
+        iteration: 1,
+      },
+      {
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'default',
+        phase: 2,
+        phaseName: 'old-phase',
+        iteration: 1,
+        systemPrompt: 'must not be attributed to the old lifecycle',
+      },
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'default',
+        iteration: 2,
+      },
+      {
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'default',
+        phase: 4,
+        phaseName: 'new-phase',
+        iteration: 2,
+        systemPrompt: 'new lifecycle prompt',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'default',
+        iteration: 2,
+        status: 'done',
+      },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+    const detail = await readRunDetail(statePaths, 'reopened-prompt-lifecycle');
+    const oldOccurrence = detail.graphSummary.occurrences.find((event) => event.phase === 2);
+    const newOccurrence = detail.graphSummary.occurrences.find((event) => event.phase === 4);
+    expect(oldOccurrence?.occurrenceId).toBeDefined();
+    expect(newOccurrence?.occurrenceId).toBeDefined();
+    if (oldOccurrence?.occurrenceId === undefined || newOccurrence?.occurrenceId === undefined) {
+      throw new Error('Reopened lifecycle fixture was not indexed');
+    }
+
+    await expect(
+      readRunOccurrenceArtifacts(statePaths, 'reopened-prompt-lifecycle', oldOccurrence.occurrenceId),
+    ).resolves.toMatchObject({ prompts: [] });
+    await expect(
+      readRunOccurrenceArtifacts(statePaths, 'reopened-prompt-lifecycle', newOccurrence.occurrenceId),
+    ).resolves.toMatchObject({ prompts: [{ phase: 4, systemPrompt: 'new lifecycle prompt' }] });
+  });
+
+  it('attaches canonical prompts with missing optional scope to a unique active lifecycle', async () => {
+    const statePaths = await createArtifactState();
+    const stack = [{
+      workflow: 'default',
+      workflow_ref: 'default-ref',
+      step: 'review',
+      kind: 'agent' as const,
+      occurrence: 1,
+    }];
+    const runRoot = await writeRun(statePaths, 'optional-prompt-scope');
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'default',
+        childWorkflow: 'child',
+        callInstance: 7,
+        iteration: 3,
+        stack,
+      },
+      {
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'default',
+        phase: 1,
+        phaseName: 'execute',
+        systemPrompt: 'canonical prompt with omitted optional scope',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'default',
+        childWorkflow: 'child',
+        callInstance: 7,
+        iteration: 3,
+        stack,
+        status: 'done',
+      },
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'default',
+        childWorkflow: 'child',
+        callInstance: 7,
+        iteration: 4,
+        stack,
+      },
+      {
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'default',
+        phase: 1,
+        phaseName: 'execute',
+        systemPrompt: 'next occurrence prompt',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'default',
+        childWorkflow: 'child',
+        callInstance: 7,
+        iteration: 4,
+        stack,
+        status: 'done',
+      },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+    const detail = await readRunDetail(statePaths, 'optional-prompt-scope');
+    expect(detail.graphSummary.occurrences).toHaveLength(2);
+    const occurrenceId = detail.graphSummary.occurrences
+      .find((occurrence) => occurrence.iteration === 3)?.occurrenceId;
+    const nextOccurrenceId = detail.graphSummary.occurrences
+      .find((occurrence) => occurrence.iteration === 4)?.occurrenceId;
+    expect(occurrenceId).toBeDefined();
+    expect(nextOccurrenceId).toBeDefined();
+    if (occurrenceId === undefined || nextOccurrenceId === undefined) {
+      throw new Error('Optional scope fixture was not indexed');
+    }
+
+    await expect(
+      readRunOccurrenceArtifacts(statePaths, 'optional-prompt-scope', occurrenceId),
+    ).resolves.toMatchObject({
+      prompts: [{
+        phase: 1,
+        systemPrompt: 'canonical prompt with omitted optional scope',
+      }],
+    });
+    await expect(
+      readRunOccurrenceArtifacts(statePaths, 'optional-prompt-scope', nextOccurrenceId),
+    ).resolves.toMatchObject({
+      prompts: [{
+        phase: 1,
+        systemPrompt: 'next occurrence prompt',
+      }],
+    });
+  });
+
+  it('does not create a phantom occurrence when an optional scope is ambiguous', async () => {
+    const statePaths = await createArtifactState();
+    const runRoot = await writeRun(statePaths, 'ambiguous-optional-prompt-scope');
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'default',
+        callInstance: 1,
+      },
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'default',
+        callInstance: 2,
+      },
+      {
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'default',
+        phase: 1,
+        systemPrompt: 'ambiguous and must be omitted',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'default',
+        callInstance: 1,
+        status: 'done',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'default',
+        callInstance: 2,
+        status: 'done',
+      },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+    const detail = await readRunDetail(statePaths, 'ambiguous-optional-prompt-scope');
+    expect(detail.graphSummary.occurrences).toHaveLength(2);
+    expect(detail.graphSummary.occurrences.some((event) => event.phase === 1)).toBe(false);
+    expect(detail.history.filter((event) => event.phase === 1)).toHaveLength(1);
+    expect(detail.history.find((event) => event.phase === 1)?.occurrenceId).toBeUndefined();
   });
 
   it('keeps occurrence IDs unique across session logs and shared across workflow call boundaries', async () => {
@@ -831,6 +1604,95 @@ describe('Web UI run artifacts', () => {
 });
 
 describe('Web UI HTTP boundary', () => {
+  it('serves occurrence-scoped prompts while six SSE connections are active', async () => {
+    const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-occurrence-api-global-');
+    const projectDirectory = await createProject();
+    const project = await registerProject({ globalConfigDirectory, projectDirectory, command: 'ui' });
+    const repository = await CentralTaskRepository.open({
+      globalConfigDirectory,
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+      displayName: project.displayName,
+      fingerprint: project.fingerprint,
+    });
+    const slug = 'occurrence-api';
+    const runRoot = await writeRun(repository.paths, slug);
+    await writeFile(join(runRoot, 'logs', 'session.jsonl'), [
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'default',
+        iteration: 1,
+      },
+      {
+        type: 'phase_start',
+        step: 'review',
+        workflow: 'default',
+        phase: 1,
+        phaseName: 'execute',
+        phaseExecutionId: 'review:1:1:1',
+        iteration: 1,
+        systemPrompt: 'system prompt from API',
+        userInstruction: 'user instruction from API',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'default',
+        iteration: 1,
+        status: 'done',
+      },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+    const detail = await readRunDetail(repository.paths, slug);
+    const occurrenceId = detail.graphSummary.occurrences[0]?.occurrenceId;
+    expect(occurrenceId).toBeDefined();
+    if (occurrenceId === undefined) throw new Error('Occurrence fixture was not indexed');
+
+    const server = await createWebUiServer({
+      globalConfigDirectory,
+      launch: async () => ({ pid: 9001, disposition: 'started' as const, mode: 'run' as const }),
+    });
+    servers.push(server);
+    const origin = await listenWebUiServer(server, 0);
+
+    const streamPaths = [
+      ...Array.from({ length: 3 }, () => `/api/tasks/events`),
+      ...Array.from({ length: 3 }, () => (
+        `/api/runs/${slug}/events?project=${encodeURIComponent(project.id)}`
+      )),
+    ];
+    const streamResponses = await Promise.all(streamPaths.map((path) => fetch(`${origin}${path}`)));
+    const streamReaders: ReadableStreamDefaultReader<Uint8Array>[] = [];
+    try {
+      for (const response of streamResponses) {
+        expect(response.status).toBe(200);
+        if (response.body === null) throw new Error('SSE response body is missing');
+        streamReaders.push(response.body.getReader());
+      }
+      await Promise.all(streamReaders.map((reader) => reader.read()));
+
+      const response = await fetch(
+        `${origin}/api/runs/${slug}/occurrence-artifacts?project=${project.id}&occurrence=${encodeURIComponent(occurrenceId)}`,
+      );
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        reports: [],
+        prompts: [{
+          systemPrompt: 'system prompt from API',
+          userInstruction: 'user instruction from API',
+        }],
+      });
+    } finally {
+      await Promise.all(streamReaders.map((reader) => reader.cancel().catch(() => undefined)));
+    }
+    await expect(fetch(`${origin}/api/runs/${slug}/occurrence-artifacts?project=${project.id}`))
+      .resolves.toMatchObject({ status: 400 });
+    await expect(fetch(
+      `${origin}/api/runs/${slug}/occurrence-artifacts?project=${project.id}&occurrence=missing`,
+    )).resolves.toMatchObject({ status: 404 });
+  });
+
   it('stops while an EventSource connection is active', async () => {
     const globalConfigDirectory = await createTemporaryDirectory('takt-web-ui-global-');
     const previousConfigDirectory = process.env.TAKT_CONFIG_DIR;

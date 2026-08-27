@@ -2,6 +2,7 @@ import {
   browseDirectories,
   createChatSession,
   getRun,
+  getRunOccurrenceArtifacts,
   getTasks,
   getProjects,
   getSession,
@@ -120,6 +121,7 @@ let stopTaskStream = null;
 let stopRunStream = null;
 let liveStreamGeneration = 0;
 let liveUpdatesEnabled = true;
+let occurrenceArtifactStreamPauseCount = 0;
 let taskCollection = { tasks: [], warnings: [] };
 let workflowCatalog = [];
 let workflowCatalogProjectId = '';
@@ -158,6 +160,8 @@ const executionView = createExecutionView({
   runDetail: elements.runDetail,
   inspector: elements.runInspector,
   onSelectRun: selectRun,
+  getOccurrenceArtifacts: getRunOccurrenceArtifacts,
+  onOccurrenceArtifactsStart: pauseRunStreamForOccurrenceArtifacts,
   onRequeue: (task, button) => void requeueSelectedTask(task, button),
   onAction: (task, action, button) => void runSelectedTaskAction(task, action, button),
   onStatusChange: (status) => {
@@ -1445,6 +1449,30 @@ function stopLiveRunStream() {
   stopRunStream = null;
 }
 
+function pauseRunStreamForOccurrenceArtifacts(projectId, slug) {
+  const expectedRun = { projectId, slug };
+  occurrenceArtifactStreamPauseCount += 1;
+  // EventSource uses long-lived HTTP/1.1 connections. Release the selected
+  // run stream while an on-demand read is in flight so another tab's SSE
+  // connections cannot leave the artifact request queued behind the origin's
+  // connection budget.
+  if (occurrenceArtifactStreamPauseCount === 1
+    && sameRunSelectionState(selectedRun, expectedRun)) {
+    stopLiveRunStream();
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    occurrenceArtifactStreamPauseCount = Math.max(0, occurrenceArtifactStreamPauseCount - 1);
+    if (occurrenceArtifactStreamPauseCount !== 0
+      || !liveUpdatesEnabled
+      || !sameRunSelectionState(selectedRun, expectedRun)
+      || stopRunStream !== null) return;
+    startLiveRunStream(runSelectionGeneration);
+  };
+}
+
 function isCurrentRunSelection(expectedRun, generation) {
   return generation === runSelectionGeneration
     && sameRunSelectionState(selectedRun, expectedRun);
@@ -1458,7 +1486,7 @@ function beginRunSelection(nextRun) {
 
 function startLiveRunStream(generation = runSelectionGeneration) {
   stopLiveRunStream();
-  if (!liveUpdatesEnabled || selectedRun === null) return;
+  if (!liveUpdatesEnabled || selectedRun === null || occurrenceArtifactStreamPauseCount > 0) return;
   const expectedRun = { ...selectedRun };
   const streamGeneration = liveStreamGeneration;
   executionView.setLiveState('connecting');
@@ -1484,7 +1512,11 @@ function startLiveRunStream(generation = runSelectionGeneration) {
 }
 
 async function selectRun(nextRun) {
+  const previousRun = selectedRun;
   const generation = beginRunSelection(nextRun);
+  if (!sameRunSelectionState(previousRun, nextRun)) {
+    executionView.prepareRunSelection(nextRun);
+  }
   elements.viewerScreen.dataset.mobileView = 'detail';
   executionView.renderTaskList(taskCollection.tasks, selectedRun);
   startLiveRunStream(generation);
@@ -1529,8 +1561,10 @@ function applyTaskCollection(collection) {
     const nextRun = firstTask === undefined || latestRun === undefined
       ? null
       : { projectId: firstTask.projectId, taskId: firstTask.taskId, slug: latestRun.slug };
-    if (!sameRunSelectionState(previous, nextRun)) beginRunSelection(nextRun);
-    else selectedRun = nextRun;
+    if (!sameRunSelectionState(previous, nextRun)) {
+      beginRunSelection(nextRun);
+      if (nextRun !== null) executionView.prepareRunSelection(nextRun);
+    } else selectedRun = nextRun;
   }
   executionView.renderTaskList(collection.tasks, selectedRun);
   syncTaskActionButtons();

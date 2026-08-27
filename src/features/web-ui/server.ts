@@ -12,6 +12,8 @@ import {
 import {
   readRunCollection,
   readRunDetail,
+  readRunOccurrenceArtifacts,
+  RunOccurrenceNotFoundError,
   resolveRunWatchDirectories,
 } from './run-store.js';
 import { parseLaunchRequest, type LaunchRequest, type LaunchResult } from './launcher.js';
@@ -313,6 +315,11 @@ function routeRunStreamSlug(pathname: string): string | null {
   return match?.[1] ?? null;
 }
 
+function routeRunOccurrenceArtifactsSlug(pathname: string): string | null {
+  const match = pathname.match(/^\/api\/runs\/([A-Za-z0-9][A-Za-z0-9._-]*)\/occurrence-artifacts$/);
+  return match?.[1] ?? null;
+}
+
 function routeTaskRequeueId(pathname: string): string | null {
   const match = pathname.match(/^\/api\/tasks\/([0-9a-f-]{36})\/requeue$/u);
   return match?.[1] ?? null;
@@ -354,6 +361,9 @@ function asHttpError(error: unknown): HttpError {
   }
   if (error instanceof CentralTaskCasError) {
     return new HttpError(409, error.message);
+  }
+  if (error instanceof RunOccurrenceNotFoundError) {
+    return new HttpError(404, error.message);
   }
   if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
     return new HttpError(404, 'Run not found');
@@ -949,6 +959,29 @@ export async function createWebUiServer(options: {
           response,
           () => readRunView(options.globalConfigDirectory, project, streamSlug),
           await resolveRunWatchDirectories(repository.paths, streamSlug),
+        );
+        return;
+      }
+      const occurrenceArtifactsSlug = method === 'GET'
+        ? routeRunOccurrenceArtifactsSlug(url.pathname)
+        : null;
+      if (occurrenceArtifactsSlug !== null) {
+        const occurrenceId = url.searchParams.get('occurrence');
+        if (occurrenceId === null || occurrenceId.length === 0) {
+          throw new HttpError(400, 'occurrence is required');
+        }
+        const project = await resolveProject(
+          options.globalConfigDirectory,
+          projectIdFromQuery(url),
+        );
+        const repository = await CentralTaskRepository.openByState({
+          globalConfigDirectory: options.globalConfigDirectory,
+          stateId: project.stateId,
+        });
+        sendJson(
+          response,
+          200,
+          await readRunOccurrenceArtifacts(repository.paths, occurrenceArtifactsSlug, occurrenceId),
         );
         return;
       }

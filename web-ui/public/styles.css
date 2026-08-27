@@ -956,9 +956,27 @@ body[data-screen="task"] .viewer-screen {
 }
 
 .execution-map-legend-mark {
-  display: inline-block;
-  width: 17px;
-  border-top: 2px solid currentcolor;
+  display: inline-flex;
+  width: 22px;
+  height: 8px;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(currentcolor, currentcolor) center / 100% 1px no-repeat;
+}
+
+.execution-map-legend-from,
+.execution-map-legend-to {
+  display: block;
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  border: 1.5px solid currentcolor;
+  border-radius: 50%;
+  background: var(--chrome);
+}
+
+.execution-map-legend-to {
+  background: currentcolor;
 }
 
 .execution-map-legend-incoming {
@@ -1704,6 +1722,78 @@ body[data-inspector-resizing="true"] * {
   max-height: 350px;
   margin-top: 12px;
   padding: 0;
+}
+
+.prompts-panel {
+  display: grid;
+  min-height: 260px;
+}
+
+.prompt-list {
+  display: grid;
+  gap: 12px;
+}
+
+.prompt-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.prompt-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.prompt-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--border);
+}
+
+.prompt-card-header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.prompt-card-header time,
+.prompt-phase-id {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.prompt-section {
+  min-width: 0;
+  margin-top: 12px;
+}
+
+.prompt-section h4 {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+
+.prompt-section pre {
+  max-height: 360px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .task-panel .markdown-view {

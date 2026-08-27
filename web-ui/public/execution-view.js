@@ -135,6 +135,178 @@ export function createExecutionView(options) {
   let taskSelection = null;
   let customNodePositions = new Map();
   let mapScale = DEFAULT_MAP_SCALE;
+  let occurrenceArtifactGeneration = 0;
+  let occurrenceArtifactAbortController = null;
+  let occurrenceArtifactReleaseLiveRun = null;
+  let focusRevision = 0;
+  let occurrenceArtifacts = {
+    key: null,
+    status: 'idle',
+    reports: [],
+    prompts: [],
+    error: null,
+  };
+
+  const focusRoot = options.inspector ?? options.runDetail;
+  const focusObserver = () => {
+    focusRevision += 1;
+  };
+  const focusObserverTarget = typeof document !== 'undefined'
+    && typeof document.addEventListener === 'function'
+    ? document
+    : focusRoot;
+  focusObserverTarget?.addEventListener?.('focusin', focusObserver);
+
+  function documentActiveElement() {
+    return typeof document === 'undefined' ? null : document.activeElement ?? null;
+  }
+
+  function focusKey(node) {
+    if (node === null || node === undefined) return null;
+    const role = typeof node.getAttribute === 'function' ? node.getAttribute('role') : null;
+    const id = node.id ?? (typeof node.getAttribute === 'function' ? node.getAttribute('id') : null);
+    if (role === 'tab' && typeof id === 'string' && id !== '') {
+      return { kind: 'tab', value: id };
+    }
+    const reportFilename = node.dataset?.reportFilename;
+    if (typeof reportFilename === 'string' && reportFilename !== '') {
+      return { kind: 'report', value: reportFilename };
+    }
+    const promptIndex = node.dataset?.promptIndex;
+    if (typeof promptIndex === 'string' && promptIndex !== '') {
+      return { kind: 'prompt', value: promptIndex };
+    }
+    if (typeof id === 'string' && id !== '') return { kind: 'id', value: id };
+    return null;
+  }
+
+  function captureFocusState() {
+    const active = documentActiveElement();
+    if (active === null || !focusRoot?.contains?.(active)) return null;
+    const key = focusKey(active);
+    return key === null ? null : { element: active, key, revision: focusRevision };
+  }
+
+  function focusTargetForKey(key) {
+    if (key.kind === 'tab') {
+      return [...focusRoot?.querySelectorAll?.('[role="tab"]') ?? []]
+        .find((node) => (node.id ?? node.getAttribute?.('id')) === key.value) ?? null;
+    }
+    if (key.kind === 'report') {
+      return [...focusRoot?.querySelectorAll?.('[data-report-filename]') ?? []]
+        .find((node) => node.dataset?.reportFilename === key.value) ?? null;
+    }
+    if (key.kind === 'prompt') {
+      return [...focusRoot?.querySelectorAll?.('[data-prompt-index]') ?? []]
+        .find((node) => node.dataset?.promptIndex === key.value) ?? null;
+    }
+    return null;
+  }
+
+  function restoreFocusState(state) {
+    if (state === null || focusRevision !== state.revision) return;
+    const active = documentActiveElement();
+    // Replacing the Inspector subtree normally moves focus to the document
+    // body.  That is not a user navigation event; the focusin revision above
+    // lets us distinguish it from a user moving focus elsewhere while the
+    // subtree was being rebuilt.
+    if (active !== null
+      && active !== state.element
+      && focusRoot?.contains?.(active)) return;
+    const target = focusTargetForKey(state.key);
+    if (target !== null && typeof target.focus === 'function') target.focus();
+  }
+
+  function resetOccurrenceArtifacts() {
+    occurrenceArtifactAbortController?.abort();
+    occurrenceArtifactAbortController = null;
+    if (typeof occurrenceArtifactReleaseLiveRun === 'function') occurrenceArtifactReleaseLiveRun();
+    occurrenceArtifactReleaseLiveRun = null;
+    occurrenceArtifactGeneration += 1;
+    occurrenceArtifacts = {
+      key: null,
+      status: 'idle',
+      reports: [],
+      prompts: [],
+      error: null,
+    };
+    selectedReport = '';
+  }
+
+  function currentOccurrenceArtifactKey() {
+    return selectedOccurrenceId === null || activeRunKey === ''
+      ? null
+      : `${activeRunKey}:${selectedOccurrenceId}`;
+  }
+
+  function occurrenceArtifactState() {
+    const key = currentOccurrenceArtifactKey();
+    return key !== null && occurrenceArtifacts.key === key
+      ? occurrenceArtifacts
+      : { key, status: 'idle', reports: [], prompts: [], error: null };
+  }
+
+  function requestOccurrenceArtifacts() {
+    const key = currentOccurrenceArtifactKey();
+    const occurrenceId = selectedOccurrenceId;
+    const detail = currentDetail;
+    if (key === null || occurrenceId === null || detail === null) return;
+    if (typeof options.getOccurrenceArtifacts !== 'function') return;
+    if (occurrenceArtifacts.key === key && occurrenceArtifacts.status !== 'idle') return;
+    const generation = ++occurrenceArtifactGeneration;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    occurrenceArtifactAbortController = controller;
+    occurrenceArtifacts = {
+      key,
+      status: 'loading',
+      reports: [],
+      prompts: [],
+      error: null,
+    };
+    renderInspectorPanel();
+    const releaseLiveRun = options.onOccurrenceArtifactsStart?.(
+      detail.project.id,
+      detail.meta.runSlug,
+    );
+    occurrenceArtifactReleaseLiveRun = releaseLiveRun;
+    Promise.resolve()
+      .then(() => options.getOccurrenceArtifacts(
+        detail.project.id,
+        detail.meta.runSlug,
+        occurrenceId,
+        controller?.signal,
+      ))
+      .then((result) => {
+        if (generation !== occurrenceArtifactGeneration || currentOccurrenceArtifactKey() !== key) return;
+        const reports = Array.isArray(result?.reports)
+          ? result.reports.filter((report) => report !== null && typeof report === 'object'
+            && typeof report.filename === 'string')
+          : [];
+        const prompts = Array.isArray(result?.prompts)
+          ? result.prompts.filter((prompt) => prompt !== null && typeof prompt === 'object')
+          : [];
+        occurrenceArtifacts = { key, status: 'ready', reports, prompts, error: null };
+        renderInspectorPanel();
+      })
+      .catch((error) => {
+        if (generation !== occurrenceArtifactGeneration || currentOccurrenceArtifactKey() !== key) return;
+        occurrenceArtifacts = {
+          key,
+          status: 'error',
+          reports: [],
+          prompts: [],
+          error: error instanceof Error ? error.message : String(error),
+        };
+        renderInspectorPanel();
+      })
+      .finally(() => {
+        if (occurrenceArtifactAbortController === controller) {
+          occurrenceArtifactAbortController = null;
+          occurrenceArtifactReleaseLiveRun = null;
+        }
+        if (typeof releaseLiveRun === 'function') releaseLiveRun();
+      });
+  }
 
   function renderTaskList(tasks, selection) {
     taskList = tasks;
@@ -240,6 +412,7 @@ export function createExecutionView(options) {
       const button = element('button', 'report-list-item');
       button.type = 'button';
       button.dataset.selected = String(report.filename === selected.filename);
+      button.dataset.reportFilename = report.filename;
       button.addEventListener('click', () => {
         selectedReport = report.filename;
         renderDetailPanel();
@@ -264,6 +437,63 @@ export function createExecutionView(options) {
     return panel;
   }
 
+  function renderOccurrenceArtifactState(kind) {
+    const panel = element('section', `detail-panel ${kind === 'reports' ? 'reports-panel' : 'prompts-panel'}`);
+    const state = occurrenceArtifactState();
+    if (state.status === 'loading') {
+      panel.append(renderEmpty(t('viewer.artifactsLoading'), t('viewer.artifactsLoadingDescription')));
+      return panel;
+    }
+    if (state.status === 'error') {
+      panel.append(renderEmpty(t('viewer.artifactsError'), state.error ?? t('viewer.artifactsErrorDescription')));
+      return panel;
+    }
+    if (kind === 'reports') {
+      if (state.reports.length === 0) {
+        panel.append(renderEmpty(t('viewer.iterationReportsEmpty'), t('viewer.iterationReportsEmptyDescription')));
+        return panel;
+      }
+      return renderReportsPanel(state.reports);
+    }
+    if (state.prompts.length === 0) {
+      panel.append(renderEmpty(t('viewer.iterationPromptsEmpty'), t('viewer.iterationPromptsEmptyDescription')));
+      return panel;
+    }
+    const list = element('div', 'prompt-list');
+    for (const [index, prompt] of state.prompts.entries()) {
+      const card = element('article', 'prompt-card');
+      card.tabIndex = 0;
+      const heading = element('header', 'prompt-card-header');
+      const phase = prompt.phaseName
+        ?? (prompt.phase === undefined ? t('viewer.promptPhaseUnknown') : t('viewer.promptPhase', { number: prompt.phase }));
+      heading.append(element('h3', '', phase));
+      if (prompt.timestamp !== undefined) heading.append(element('time', '', formatDate(prompt.timestamp)));
+      if (prompt.phaseExecutionId !== undefined) {
+        heading.append(element('span', 'prompt-phase-id', prompt.phaseExecutionId));
+      }
+      card.append(heading);
+      if (prompt.systemPrompt !== undefined) {
+        const system = element('section', 'prompt-section');
+        system.append(element('h4', '', t('viewer.systemPrompt')), element('pre', '', prompt.systemPrompt));
+        card.append(system);
+      }
+      if (prompt.userInstruction !== undefined) {
+        const user = element('section', 'prompt-section');
+        user.append(element('h4', '', t('viewer.userInstruction')), element('pre', '', prompt.userInstruction));
+        card.append(user);
+      }
+      if (prompt.instruction !== undefined) {
+        const instruction = element('section', 'prompt-section');
+        instruction.append(element('h4', '', t('viewer.phaseInstruction')), element('pre', '', prompt.instruction));
+        card.append(instruction);
+      }
+      card.dataset.promptIndex = String(index);
+      list.append(card);
+    }
+    panel.append(list);
+    return panel;
+  }
+
   function renderTaskPanel(meta) {
     const panel = element('section', 'detail-panel task-panel');
     panel.append(renderMarkdown(meta.task));
@@ -277,12 +507,18 @@ export function createExecutionView(options) {
     const logLabel = selectedOccurrenceId !== null
       ? t('viewer.iterationLog')
       : t('viewer.runLog');
-    const definitions = [
-      ['live', logLabel],
-      ...(selectedStepId === null
-        ? [['reports', t('viewer.runReports')], ['task', t('viewer.runTask')]]
-        : []),
-    ];
+    const definitions = selectedOccurrenceId !== null
+      ? [
+          ['live', logLabel],
+          ['reports', t('viewer.iterationReports')],
+          ['prompts', t('viewer.prompts')],
+        ]
+      : [
+          ['live', logLabel],
+          ...(selectedStepId === null
+            ? [['reports', t('viewer.runReports')], ['task', t('viewer.runTask')]]
+            : []),
+        ];
     if (!definitions.some(([id]) => id === activeTab)) activeTab = 'live';
     for (const [id, label] of definitions) {
       const button = element('button', 'tab-button', label);
@@ -313,7 +549,12 @@ export function createExecutionView(options) {
     }
     container.append(tabs);
     let panel;
-    if (activeTab === 'reports') panel = renderReportsPanel(detail.reports);
+    if (activeTab === 'reports') {
+      panel = selectedOccurrenceId === null
+        ? renderReportsPanel(detail.reports)
+        : renderOccurrenceArtifactState('reports');
+    }
+    else if (activeTab === 'prompts') panel = renderOccurrenceArtifactState('prompts');
     else if (activeTab === 'task') panel = renderTaskPanel(detail.meta);
     else panel = renderLogPanel(trace);
     panel.id = 'run-tab-panel';
@@ -354,8 +595,10 @@ export function createExecutionView(options) {
     const tabs = (options.inspector ?? options.runDetail).querySelector('.detail-tabs');
     if (tabs === null) return;
     const state = captureViewState();
+    const focus = captureFocusState();
     tabs.replaceWith(renderTabs(currentDetail, currentTrace));
     restoreViewState(state);
+    restoreFocusState(focus);
   }
 
   function renderInspectorPanel() {
@@ -364,8 +607,10 @@ export function createExecutionView(options) {
       return;
     }
     const state = captureViewState();
+    const focus = captureFocusState();
     options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
     restoreViewState(state);
+    restoreFocusState(focus);
   }
 
   function renderRunSummary(detail) {
@@ -514,13 +759,16 @@ export function createExecutionView(options) {
   function selectStep(node) {
     selectedStepId = node.id;
     selectedOccurrenceId = null;
+    resetOccurrenceArtifacts();
     activeTab = 'live';
     const map = options.runDetail.querySelector('.execution-map');
     if (map !== null) updateExecutionMapSelection(map, null, selectedStepId);
     if (currentDetail !== null && currentTrace !== null && options.inspector !== undefined) {
       const state = captureViewState();
+      const focus = captureFocusState();
       options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
       restoreViewState({ ...state, inspectorScrollTop: 0 });
+      restoreFocusState(focus);
     } else {
       renderDetailPanel();
     }
@@ -528,31 +776,40 @@ export function createExecutionView(options) {
 
   function clearIterationSelection() {
     selectedOccurrenceId = null;
+    resetOccurrenceArtifacts();
     activeTab = 'live';
     const map = options.runDetail.querySelector('.execution-map');
     if (map !== null) updateExecutionMapSelection(map, null, selectedStepId);
     if (currentDetail !== null && currentTrace !== null && options.inspector !== undefined) {
       const state = captureViewState();
+      const focus = captureFocusState();
       options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
       restoreViewState({ ...state, inspectorScrollTop: 0 });
+      restoreFocusState(focus);
     } else {
       renderDetailPanel();
     }
   }
 
   function selectOccurrence(node, occurrence) {
+    const nextOccurrenceId = occurrence?.id ?? null;
+    const changed = selectedOccurrenceId !== nextOccurrenceId || selectedStepId !== (node?.id ?? null);
     selectedStepId = node?.id ?? null;
-    selectedOccurrenceId = occurrence?.id ?? null;
+    selectedOccurrenceId = nextOccurrenceId;
+    if (changed) resetOccurrenceArtifacts();
     activeTab = 'live';
     const map = options.runDetail.querySelector('.execution-map');
     if (map !== null) updateExecutionMapSelection(map, selectedOccurrenceId, selectedStepId);
     if (currentDetail !== null && currentTrace !== null && options.inspector !== undefined) {
       const state = captureViewState();
+      const focus = captureFocusState();
       options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
       restoreViewState({ ...state, inspectorScrollTop: 0 });
+      restoreFocusState(focus);
     } else {
       renderDetailPanel();
     }
+    if (selectedOccurrenceId !== null) requestOccurrenceArtifacts();
   }
 
   function renderDetail(detail, selection) {
@@ -560,7 +817,9 @@ export function createExecutionView(options) {
     if (detail.project.id !== selection.projectId || detail.meta.runSlug !== selection.slug) return false;
     const nextRunKey = runKey(selection);
     const sameRun = nextRunKey === activeRunKey;
+    const detailChanged = currentDetail !== detail;
     const state = sameRun ? captureViewState() : null;
+    const focus = sameRun ? captureFocusState() : null;
     if (!sameRun) {
       activeRunKey = nextRunKey;
       activeTab = detail.meta.status === 'completed' && detail.reports.length > 0 ? 'reports' : 'live';
@@ -569,15 +828,18 @@ export function createExecutionView(options) {
       selectedReport = '';
       customNodePositions = new Map();
       mapScale = DEFAULT_MAP_SCALE;
+      resetOccurrenceArtifacts();
     }
     currentDetail = detail;
     const trace = buildExecutionTrace(detail.meta, detail.events, detail.history, detail.graphSummary, getLocale());
     if (selectedStepId !== null && findStep(trace, selectedStepId) === null) {
       selectedStepId = null;
       selectedOccurrenceId = null;
+      resetOccurrenceArtifacts();
     }
     if (sameRun && selectedOccurrenceId !== null && findOccurrence(trace, selectedOccurrenceId) === null) {
       selectedOccurrenceId = null;
+      resetOccurrenceArtifacts();
     }
     if (selectedOccurrenceId !== null && selectedStepId === null) {
       selectedStepId = findOccurrence(trace, selectedOccurrenceId)?.node.id ?? null;
@@ -619,7 +881,9 @@ export function createExecutionView(options) {
     }
     if (state !== null) restoreViewState(state);
     else restoreViewState({ detailScrollTop: 0, mapScrollLeft: 0, mapScrollTop: 0, logScrollTop: 0, inspectorScrollTop: 0 });
+    restoreFocusState(focus);
     options.onStatusChange(detail.meta.status);
+    if (detailChanged && selectedOccurrenceId !== null) requestOccurrenceArtifacts();
     return true;
   }
 
@@ -629,6 +893,7 @@ export function createExecutionView(options) {
     currentTrace = null;
     selectedStepId = null;
     selectedOccurrenceId = null;
+    resetOccurrenceArtifacts();
     mapScale = DEFAULT_MAP_SCALE;
     disposeExecutionMap(options.runDetail);
     options.runDetail.replaceChildren(renderEmpty(
@@ -638,10 +903,19 @@ export function createExecutionView(options) {
     options.inspector?.replaceChildren(renderEmpty(t('viewer.noRun'), t('viewer.noRunDescription')));
   }
 
+  function prepareRunSelection(selection) {
+    if (runKey(selection) === activeRunKey) return;
+    // Invalidate the old occurrence request before the new run's detail or
+    // SSE snapshot arrives. This prevents a delayed response for the old run
+    // from keeping its reports visible while the new run is loading.
+    renderPlaceholder();
+  }
+
   return {
     renderTaskList,
     renderDetail,
     renderPlaceholder,
+    prepareRunSelection,
     refreshLocale() {
       renderTaskList(taskList, taskSelection);
       if (currentDetail === null) return;
@@ -653,6 +927,7 @@ export function createExecutionView(options) {
     },
     dispose() {
       disposeExecutionMap(options.runDetail);
+      focusObserverTarget?.removeEventListener?.('focusin', focusObserver);
     },
     setLiveState(state) {
       liveState = state;

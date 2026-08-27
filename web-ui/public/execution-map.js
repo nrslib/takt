@@ -524,20 +524,36 @@ function visibleEdgeRelations(trace) {
   const transitions = visibleTransitionRelations(trace);
   const calls = visibleCallRelations(trace)
     .filter((call) => call.targetOccurrenceId !== undefined)
-    .map((call) => ({
-      id: call.id,
-      kind: 'call',
-      source: call.sourceOccurrenceId,
-      target: call.targetOccurrenceId,
-      targetWorkflow: call.childWorkflow,
-    }));
+    .map((call) => {
+      const source = findOccurrence(trace, call.sourceOccurrenceId);
+      const target = findOccurrence(trace, call.targetOccurrenceId);
+      return {
+        id: call.id,
+        kind: 'call',
+        source: call.sourceOccurrenceId,
+        target: call.targetOccurrenceId,
+        sourceStepId: source?.node.id,
+        targetStepId: target?.node.id,
+        targetWorkflow: call.childWorkflow,
+      };
+    });
   return [...transitions, ...calls];
 }
 
-function edgeRole(source, target, selectedOccurrenceId) {
-  if (selectedOccurrenceId === null) return 'none';
-  const incoming = target === selectedOccurrenceId;
-  const outgoing = source === selectedOccurrenceId;
+function edgeRole(
+  source,
+  target,
+  selectedOccurrenceId,
+  sourceStepId,
+  targetStepId,
+  selectedStepId,
+) {
+  const incoming = selectedOccurrenceId !== null
+    ? target === selectedOccurrenceId
+    : selectedStepId !== null && targetStepId === selectedStepId;
+  const outgoing = selectedOccurrenceId !== null
+    ? source === selectedOccurrenceId
+    : selectedStepId !== null && sourceStepId === selectedStepId;
   if (incoming && outgoing) return 'incoming-outgoing';
   if (incoming) return 'incoming';
   if (outgoing) return 'outgoing';
@@ -548,87 +564,152 @@ function edgeRoleParts(role) {
   return role === 'incoming-outgoing' ? ['incoming', 'outgoing'] : role === 'none' ? [] : [role];
 }
 
-function markerForEdgeRole(role) {
-  if (role === 'incoming' || role === 'incoming-outgoing') return 'url(#execution-edge-arrow-incoming)';
-  if (role === 'outgoing') return 'url(#execution-edge-arrow-outgoing)';
-  return 'url(#execution-edge-arrow)';
+function edgeDirectionLabelKey(selectedOccurrenceId, selectedStepId, role) {
+  if (role === 'incoming') {
+    return selectedOccurrenceId === null && selectedStepId !== null
+      ? 'map.stepEdgeIncoming'
+      : 'map.edgeIncoming';
+  }
+  if (role === 'outgoing') {
+    return selectedOccurrenceId === null && selectedStepId !== null
+      ? 'map.stepEdgeOutgoing'
+      : 'map.edgeOutgoing';
+  }
+  return null;
 }
 
-function applyEdgeSelection(svg, selectedOccurrenceId) {
+function markersForEdgeRole(role) {
+  const variant = role === 'incoming' || role === 'incoming-outgoing'
+    ? '-incoming'
+    : role === 'outgoing' ? '-outgoing' : '';
+  return {
+    start: `url(#execution-edge-from${variant})`,
+    end: `url(#execution-edge-to${variant})`,
+  };
+}
+
+function applyEdgeSelection(svg, selectedOccurrenceId, selectedStepId = null) {
   for (const path of svg.querySelectorAll('[data-edge]')) {
     const role = edgeRole(
       path.getAttribute('data-source-occurrence-id'),
       path.getAttribute('data-target-occurrence-id'),
       selectedOccurrenceId,
+      path.getAttribute('data-source-step-id'),
+      path.getAttribute('data-target-step-id'),
+      selectedStepId,
     );
     const baseClass = path.getAttribute('data-edge-base-class') ?? path.getAttribute('class') ?? '';
     const roleClasses = edgeRoleParts(role).map((part) => `execution-edge-emphasis-${part}`);
     path.setAttribute('data-edge-role', role);
     path.setAttribute('class', [baseClass, ...roleClasses].filter(Boolean).join(' '));
-    path.setAttribute('marker-end', markerForEdgeRole(role));
+    const markers = markersForEdgeRole(role);
+    path.setAttribute('marker-start', markers.start);
+    path.setAttribute('marker-end', markers.end);
+    const baseLabel = path.getAttribute('data-edge-base-label') ?? path.getAttribute('aria-label') ?? '';
+    const directionLabels = edgeRoleParts(role)
+      .map((part) => edgeDirectionLabelKey(selectedOccurrenceId, selectedStepId, part))
+      .filter((key) => key !== null)
+      .map((key) => t(key));
+    const accessibleLabel = directionLabels.length === 0
+      ? baseLabel
+      : `${baseLabel} · ${directionLabels.join(' / ')}`;
+    path.setAttribute('aria-label', accessibleLabel);
+    const title = path.querySelectorAll('title')[0];
+    if (title !== undefined) title.textContent = accessibleLabel;
   }
 }
 
-function renderSelectionLegend(selectedOccurrenceId, roles) {
-  if (selectedOccurrenceId === null || roles.size === 0) return null;
+function renderSelectionLegend(selectedOccurrenceId, selectedStepId, roles) {
+  if ((selectedOccurrenceId === null && selectedStepId === null) || roles.size === 0) return null;
   const legend = element('div', 'execution-map-legend execution-map-selection-legend');
-  legend.setAttribute('aria-label', t('map.edgeLegend'));
+  legend.setAttribute(
+    'aria-label',
+    t(selectedOccurrenceId === null ? 'map.stepEdgeLegend' : 'map.edgeLegend'),
+  );
+  const incomingLabel = selectedOccurrenceId === null
+    ? 'map.stepEdgeIncoming'
+    : 'map.edgeIncoming';
+  const outgoingLabel = selectedOccurrenceId === null
+    ? 'map.stepEdgeOutgoing'
+    : 'map.edgeOutgoing';
   for (const [role, labelKey] of [
-    ['incoming', 'map.edgeIncoming'],
-    ['outgoing', 'map.edgeOutgoing'],
+    ['incoming', incomingLabel],
+    ['outgoing', outgoingLabel],
   ]) {
     if (!roles.has(role)) continue;
     const item = element('span', `execution-map-legend-item execution-map-legend-${role}`);
-    item.append(element('span', 'execution-map-legend-mark', ''), element('span', '', t(labelKey)));
+    const mark = element('span', 'execution-map-legend-mark');
+    mark.setAttribute('aria-hidden', 'true');
+    mark.append(
+      element('span', 'execution-map-legend-from'),
+      element('span', 'execution-map-legend-to'),
+    );
+    item.append(mark, element('span', '', t(labelKey)));
     item.title = t(labelKey);
     legend.append(item);
   }
   return legend;
 }
 
-function selectionRolesFromRelations(relations, selectedOccurrenceId) {
+function selectionRolesFromRelations(relations, selectedOccurrenceId, selectedStepId = null) {
   const roles = new Set();
-  if (selectedOccurrenceId === null) return roles;
+  if (selectedOccurrenceId === null && selectedStepId === null) return roles;
   for (const relation of relations) {
-    const role = edgeRole(relation.source, relation.target, selectedOccurrenceId);
-    for (const part of edgeRoleParts(role)) roles.add(part);
-  }
-  return roles;
-}
-
-function selectionRolesFromEdges(edges, selectedOccurrenceId) {
-  const roles = new Set();
-  if (selectedOccurrenceId === null) return roles;
-  for (const edge of edges) {
     const role = edgeRole(
-      edge.getAttribute('data-source-occurrence-id'),
-      edge.getAttribute('data-target-occurrence-id'),
+      relation.source,
+      relation.target,
       selectedOccurrenceId,
+      relation.sourceStepId ?? relation.sourceLogicalId,
+      relation.targetStepId ?? relation.targetLogicalId,
+      selectedStepId,
     );
     for (const part of edgeRoleParts(role)) roles.add(part);
   }
   return roles;
 }
 
-function replaceSelectionLegend(header, selectedOccurrenceId, roles) {
+function selectionRolesFromEdges(edges, selectedOccurrenceId, selectedStepId = null) {
+  const roles = new Set();
+  if (selectedOccurrenceId === null && selectedStepId === null) return roles;
+  for (const edge of edges) {
+    const role = edgeRole(
+      edge.getAttribute('data-source-occurrence-id'),
+      edge.getAttribute('data-target-occurrence-id'),
+      selectedOccurrenceId,
+      edge.getAttribute('data-source-step-id'),
+      edge.getAttribute('data-target-step-id'),
+      selectedStepId,
+    );
+    for (const part of edgeRoleParts(role)) roles.add(part);
+  }
+  return roles;
+}
+
+function replaceSelectionLegend(header, selectedOccurrenceId, selectedStepId, roles) {
   const existing = header.querySelectorAll('.execution-map-selection-legend')[0];
   const children = [...header.children].filter((child) => child !== existing);
-  const legend = renderSelectionLegend(selectedOccurrenceId, roles);
+  const legend = renderSelectionLegend(selectedOccurrenceId, selectedStepId, roles);
   header.replaceChildren(...children, ...(legend === null ? [] : [legend]));
 }
 
-function appendArrowMarker(defs, id, fill) {
+function appendCircleMarker(defs, id, color, filled) {
   const marker = svgElement('marker');
   marker.setAttribute('id', id);
-  marker.setAttribute('markerWidth', '7');
-  marker.setAttribute('markerHeight', '7');
-  marker.setAttribute('refX', '6');
-  marker.setAttribute('refY', '3.5');
+  marker.setAttribute('viewBox', '0 0 8 8');
+  marker.setAttribute('markerWidth', '8');
+  marker.setAttribute('markerHeight', '8');
+  marker.setAttribute('markerUnits', 'userSpaceOnUse');
+  marker.setAttribute('refX', '4');
+  marker.setAttribute('refY', '4');
   marker.setAttribute('orient', 'auto');
-  const arrow = svgElement('path');
-  arrow.setAttribute('d', 'M 0 0 L 7 3.5 L 0 7 z');
-  arrow.setAttribute('fill', fill);
-  marker.append(arrow);
+  const circle = svgElement('circle');
+  circle.setAttribute('cx', '4');
+  circle.setAttribute('cy', '4');
+  circle.setAttribute('r', '3');
+  circle.setAttribute('fill', filled ? color : 'none');
+  circle.setAttribute('stroke', color);
+  circle.setAttribute('stroke-width', '1.5');
+  marker.append(circle);
   defs.append(marker);
 }
 
@@ -638,9 +719,17 @@ function svgElement(tag) {
 
 function rectFor(node) {
   if (typeof node?.getBoundingClientRect !== 'function') {
-    return { left: 0, top: 0, right: 0, width: 0, height: 0 };
+    return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
   }
-  return node.getBoundingClientRect();
+  const rect = node.getBoundingClientRect();
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: Number.isFinite(rect.right) ? rect.right : rect.left + rect.width,
+    bottom: Number.isFinite(rect.bottom) ? rect.bottom : rect.top + rect.height,
+    width: rect.width,
+    height: rect.height,
+  };
 }
 
 function findOccurrenceAnchor(container, occurrenceId) {
@@ -649,54 +738,133 @@ function findOccurrenceAnchor(container, occurrenceId) {
     .find((candidate) => candidate.dataset.occurrenceId === occurrenceId) ?? null;
 }
 
-function anchorPoint(anchor, canvas, side) {
-  const anchorRect = rectFor(anchor);
-  const canvasRect = rectFor(canvas);
-  const scale = readMapScale(canvas);
-  const x = side === 'right' ? anchorRect.right : anchorRect.left;
+function directionForSide(side) {
   return {
-    x: (x - canvasRect.left) / scale + (canvas.scrollLeft ?? 0),
-    y: (anchorRect.top - canvasRect.top) / scale + (canvas.scrollTop ?? 0) + anchorRect.height / scale / 2,
+    left: { x: -1, y: 0 },
+    right: { x: 1, y: 0 },
+    top: { x: 0, y: -1 },
+    bottom: { x: 0, y: 1 },
+  }[side] ?? { x: 1, y: 0 };
+}
+
+function sideForRelativePosition(anchorRect, otherRect, fallback) {
+  const anchorCenterX = (anchorRect.left + anchorRect.right) / 2;
+  const anchorCenterY = (anchorRect.top + anchorRect.bottom) / 2;
+  const otherCenterX = (otherRect.left + otherRect.right) / 2;
+  const otherCenterY = (otherRect.top + otherRect.bottom) / 2;
+  const deltaX = otherCenterX - anchorCenterX;
+  const deltaY = otherCenterY - anchorCenterY;
+  if (deltaX === 0 && deltaY === 0) return fallback;
+  if (Math.abs(deltaX) >= Math.abs(deltaY)) return deltaX >= 0 ? 'right' : 'left';
+  return deltaY >= 0 ? 'bottom' : 'top';
+}
+
+function pointOnSide(anchorRect, canvasRect, scale, side, scrollLeft = 0, scrollTop = 0) {
+  const x = side === 'right'
+    ? anchorRect.right
+    : side === 'left'
+      ? anchorRect.left
+      : (anchorRect.left + anchorRect.right) / 2;
+  const y = side === 'bottom'
+    ? anchorRect.bottom
+    : side === 'top'
+      ? anchorRect.top
+      : (anchorRect.top + anchorRect.bottom) / 2;
+  return {
+    x: (x - canvasRect.left) / scale + scrollLeft,
+    y: (y - canvasRect.top) / scale + scrollTop,
+    side,
   };
 }
 
-function curvePath(source, target, kind) {
-  if (kind === 'loop') {
-    const direction = target.x < source.x ? -1 : 1;
-    const distance = Math.max(48, Math.abs(source.x - target.x) * 0.25);
-    const height = Math.max(48, Math.abs(source.x - target.x) * 0.22);
-    const top = Math.min(source.y, target.y) - height;
-    return `M ${source.x} ${source.y} C ${source.x - direction * distance} ${top}, ${target.x + direction * distance} ${top}, ${target.x} ${target.y}`;
+export function edgeAnchorGeometry(sourceRect, targetRect, canvasRect, scale = 1, forceLoopPorts = false) {
+  const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const sourceSide = forceLoopPorts
+    ? 'right'
+    : sideForRelativePosition(sourceRect, targetRect, 'right');
+  const targetSide = forceLoopPorts
+    ? 'right'
+    : sideForRelativePosition(targetRect, sourceRect, 'left');
+  return {
+    source: pointOnSide(sourceRect, canvasRect, safeScale, sourceSide),
+    target: pointOnSide(targetRect, canvasRect, safeScale, targetSide),
+  };
+}
+
+function anchorPoints(sourceAnchor, targetAnchor, canvas, kind) {
+  const sourceRect = rectFor(sourceAnchor);
+  const targetRect = rectFor(targetAnchor);
+  const canvasRect = rectFor(canvas);
+  const sameStep = typeof sourceAnchor?.closest === 'function'
+    && sourceAnchor.closest('.execution-step') !== null
+    && sourceAnchor.closest('.execution-step') === targetAnchor?.closest?.('.execution-step');
+  return edgeAnchorGeometry(
+    sourceRect,
+    targetRect,
+    canvasRect,
+    readMapScale(canvas),
+    kind === 'loop' && sameStep,
+  );
+}
+
+export function curvePath(source, target, kind) {
+  const sourceDirection = directionForSide(source.side);
+  const targetDirection = directionForSide(target.side);
+  const distance = Math.max(42, Math.min(220, Math.hypot(target.x - source.x, target.y - source.y) * 0.42));
+  const sourceControl = {
+    x: source.x + sourceDirection.x * distance,
+    y: source.y + sourceDirection.y * distance,
+  };
+  const targetControl = {
+    x: target.x + targetDirection.x * distance,
+    y: target.y + targetDirection.y * distance,
+  };
+  if (kind === 'loop' && source.side === target.side) {
+    const perpendicular = source.side === 'left' || source.side === 'right' ? distance : 0;
+    const vertical = source.side === 'top' || source.side === 'bottom' ? distance : 0;
+    const sign = source.side === 'left' || source.side === 'top' ? -1 : 1;
+    sourceControl.x += source.side === 'left' || source.side === 'right' ? 0 : sign * perpendicular;
+    sourceControl.y += source.side === 'top' || source.side === 'bottom' ? 0 : sign * vertical;
+    targetControl.x += source.side === 'left' || source.side === 'right' ? 0 : sign * perpendicular;
+    targetControl.y += source.side === 'top' || source.side === 'bottom' ? 0 : sign * vertical;
   }
-  const distance = Math.max(42, Math.abs(target.x - source.x) * 0.42);
-  const vertical = kind === 'call' ? Math.sign(target.y - source.y) * 20 : 0;
-  return `M ${source.x} ${source.y} C ${source.x + distance} ${source.y + vertical}, ${target.x - distance} ${target.y - vertical}, ${target.x} ${target.y}`;
+  return `M ${source.x} ${source.y} C ${sourceControl.x} ${sourceControl.y}, ${targetControl.x} ${targetControl.y}, ${target.x} ${target.y}`;
 }
 
 function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas) {
   if (sourceAnchor === null || targetAnchor === null) return;
-  const source = anchorPoint(sourceAnchor, canvas, 'right');
-  const target = anchorPoint(targetAnchor, canvas, 'left');
+  const { source, target } = anchorPoints(sourceAnchor, targetAnchor, canvas, relation.kind);
+  const sourceStepId = relation.sourceStepId
+    ?? relation.sourceLogicalId
+    ?? sourceAnchor.closest?.('.execution-step')?.dataset?.stepId;
+  const targetStepId = relation.targetStepId
+    ?? relation.targetLogicalId
+    ?? targetAnchor.closest?.('.execution-step')?.dataset?.stepId;
   const path = svgElement('path');
   const labelKey = relation.kind === 'loop'
     ? 'map.edgeIteration'
     : relation.kind === 'call'
       ? 'map.edgeCall'
       : 'map.edgeTransition';
-  const label = t(labelKey);
+  const label = `${t(labelKey)} · ${t('map.edgeDirection')}`;
   path.setAttribute('class', className);
   path.setAttribute('data-edge-base-class', className);
   path.setAttribute('d', curvePath(source, target, relation.kind));
   path.setAttribute('fill', 'none');
   path.setAttribute('data-edge', 'true');
   path.setAttribute('data-edge-key', `${relation.kind}:${relation.id}`);
+  path.setAttribute('data-edge-base-label', label);
   path.setAttribute('data-edge-kind', relation.kind);
   path.setAttribute('aria-label', label);
   path.setAttribute('data-relation-id', relation.id);
   path.setAttribute('data-source-occurrence-id', relation.source);
   path.setAttribute('data-target-occurrence-id', relation.target);
+  if (sourceStepId !== undefined) path.setAttribute('data-source-step-id', sourceStepId);
+  if (targetStepId !== undefined) path.setAttribute('data-target-step-id', targetStepId);
   if (relation.targetWorkflow !== undefined) path.setAttribute('data-target-workflow', relation.targetWorkflow);
-  path.setAttribute('marker-end', 'url(#execution-edge-arrow)');
+  const markers = markersForEdgeRole('none');
+  path.setAttribute('marker-start', markers.start);
+  path.setAttribute('marker-end', markers.end);
   const title = svgElement('title');
   title.textContent = label;
   path.append(title);
@@ -721,9 +889,14 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
   svg.setAttribute('height', String(height));
   svg.replaceChildren();
   const defs = svgElement('defs');
-  appendArrowMarker(defs, 'execution-edge-arrow', 'currentColor');
-  appendArrowMarker(defs, 'execution-edge-arrow-incoming', 'var(--accent)');
-  appendArrowMarker(defs, 'execution-edge-arrow-outgoing', 'var(--warning)');
+  for (const [suffix, color] of [
+    ['', 'currentColor'],
+    ['-incoming', 'var(--accent)'],
+    ['-outgoing', 'var(--warning)'],
+  ]) {
+    appendCircleMarker(defs, `execution-edge-from${suffix}`, color, false);
+    appendCircleMarker(defs, `execution-edge-to${suffix}`, color, true);
+  }
   svg.append(defs);
 
   for (const transition of visibleTransitionRelations(trace)) {
@@ -740,6 +913,8 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
   }
   for (const call of visibleCallRelations(trace)) {
     if (!call.targetObserved || call.targetOccurrenceId === undefined) continue;
+    const source = findOccurrence(trace, call.sourceOccurrenceId);
+    const target = findOccurrence(trace, call.targetOccurrenceId);
     appendEdge(
       svg,
       'execution-edge execution-edge-call',
@@ -748,6 +923,8 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
         kind: 'call',
         source: call.sourceOccurrenceId,
         target: call.targetOccurrenceId,
+        sourceStepId: source?.node.id,
+        targetStepId: target?.node.id,
         targetWorkflow: call.childWorkflow,
       },
       findOccurrenceAnchor(canvas, call.sourceOccurrenceId),
@@ -755,7 +932,11 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
       canvas,
     );
   }
-  applyEdgeSelection(svg, canvas.dataset.selectedOccurrenceId || null);
+  applyEdgeSelection(
+    svg,
+    canvas.dataset.selectedOccurrenceId || null,
+    canvas.dataset.selectedStepId || null,
+  );
 }
 
 function isInteractiveTarget(target) {
@@ -773,11 +954,12 @@ function renderRelationOverlay(section, map, canvas, trace, groups, onMoveNode, 
   svg.setAttribute('role', 'img');
   svg.setAttribute(
     'aria-label',
-    canvas.dataset.selectedOccurrenceId === undefined || canvas.dataset.selectedOccurrenceId === ''
-      ? t('map.observedPath')
-      : t('map.edgeLegend'),
+    canvas.dataset.selectedOccurrenceId !== undefined && canvas.dataset.selectedOccurrenceId !== ''
+      ? t('map.edgeLegend')
+      : canvas.dataset.selectedStepId !== undefined && canvas.dataset.selectedStepId !== ''
+        ? t('map.stepEdgeLegend')
+        : t('map.observedPath'),
   );
-  updateExecutionMapGeometry(svg, canvas, trace);
   let disposed = false;
   const update = () => {
     if (!disposed) {
@@ -785,6 +967,14 @@ function renderRelationOverlay(section, map, canvas, trace, groups, onMoveNode, 
       updateExecutionMapGeometry(svg, canvas, trace);
     }
   };
+  // renderExecutionMap returns a detached section and the caller attaches it
+  // afterwards. Re-measure on the next frame so the first visible paths use
+  // the browser's transformed DOM rectangles, not the detached zero rects.
+  update();
+  if (typeof window !== 'undefined') {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(update);
+    else queueMicrotask(update);
+  }
   map.addEventListener('scroll', update);
   canvas.addEventListener('execution-map-node-moved', update);
   const groupDisposers = [];
@@ -925,7 +1115,12 @@ export function renderExecutionMap(trace, options) {
   );
   const selectionLegend = renderSelectionLegend(
     options.selectedOccurrenceId ?? null,
-    selectionRolesFromRelations(visibleEdgeRelations(trace), options.selectedOccurrenceId ?? null),
+    options.selectedStepId ?? null,
+    selectionRolesFromRelations(
+      visibleEdgeRelations(trace),
+      options.selectedOccurrenceId ?? null,
+      options.selectedStepId ?? null,
+    ),
   );
   if (selectionLegend !== null) mapHeader.append(selectionLegend);
   section.append(mapHeader);
@@ -944,6 +1139,7 @@ export function renderExecutionMap(trace, options) {
   canvas.dataset.layoutHeight = String(layout.height);
   canvas.dataset.scale = String(scale);
   canvas.dataset.selectedOccurrenceId = options.selectedOccurrenceId ?? '';
+  canvas.dataset.selectedStepId = options.selectedStepId ?? '';
   canvas.style.setProperty('width', `${layout.width}px`);
   canvas.style.setProperty('height', `${layout.height}px`);
   canvas.style.setProperty('transform', `scale(${scale})`);
@@ -988,6 +1184,11 @@ export function renderExecutionMap(trace, options) {
     options.onScaleChange,
   );
   canvas.append(overlay);
+  updateExecutionMapSelection(
+    map,
+    options.selectedOccurrenceId ?? null,
+    options.selectedStepId ?? null,
+  );
   return section;
 }
 
@@ -1008,7 +1209,10 @@ export function disposeExecutionMap(container) {
 export function updateExecutionMapSelection(container, selectedOccurrenceId, selectedStepId = null) {
   container.dataset.iterationSelected = String(selectedOccurrenceId !== null);
   const canvas = container.querySelectorAll('.execution-map-canvas')[0];
-  if (canvas !== undefined) canvas.dataset.selectedOccurrenceId = selectedOccurrenceId ?? '';
+  if (canvas !== undefined) {
+    canvas.dataset.selectedOccurrenceId = selectedOccurrenceId ?? '';
+    canvas.dataset.selectedStepId = selectedStepId ?? '';
+  }
   for (const step of container.querySelectorAll('.execution-step')) {
     const selectedStep = selectedStepId !== null
       && selectedOccurrenceId === null
@@ -1027,15 +1231,21 @@ export function updateExecutionMapSelection(container, selectedOccurrenceId, sel
   }
   const overlay = container.querySelectorAll('.execution-edge-overlay')[0];
   if (overlay !== undefined) {
-    applyEdgeSelection(overlay, selectedOccurrenceId);
+    applyEdgeSelection(overlay, selectedOccurrenceId, selectedStepId);
     overlay.setAttribute(
       'aria-label',
-      selectedOccurrenceId === null ? t('map.observedPath') : t('map.edgeLegend'),
+      selectedOccurrenceId === null
+        ? selectedStepId === null ? t('map.observedPath') : t('map.stepEdgeLegend')
+        : t('map.edgeLegend'),
     );
   }
   const header = executionMapHeaders.get(container) ?? container.querySelectorAll('.execution-map-header')[0];
   if (header !== undefined) {
-    const roles = selectionRolesFromEdges(container.querySelectorAll('[data-edge]'), selectedOccurrenceId);
-    replaceSelectionLegend(header, selectedOccurrenceId, roles);
+    const roles = selectionRolesFromEdges(
+      container.querySelectorAll('[data-edge]'),
+      selectedOccurrenceId,
+      selectedStepId,
+    );
+    replaceSelectionLegend(header, selectedOccurrenceId, selectedStepId, roles);
   }
 }

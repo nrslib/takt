@@ -13,7 +13,9 @@ import {
   MAX_MAP_SCALE,
   MIN_MAP_SCALE,
   clampMapScale,
+  curvePath,
   disposeExecutionMap,
+  edgeAnchorGeometry,
   renderExecutionMap,
   updateExecutionMapSelection,
 } from '../../web-ui/public/execution-map.js';
@@ -59,7 +61,14 @@ class FakeDomNode {
   scrollTop = 0;
   scrollWidth = 640;
   scrollHeight = 320;
-  rect = { left: 0, top: 0, right: 80, width: 80, height: 24 };
+  rect: {
+    left: number;
+    top: number;
+    right: number;
+    bottom?: number;
+    width: number;
+    height: number;
+  } = { left: 0, top: 0, right: 80, width: 80, height: 24 };
   listeners = new Map<string, Array<(event?: Record<string, unknown>) => void>>();
   pointerCaptures = new Set<number>();
 
@@ -88,6 +97,18 @@ class FakeDomNode {
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 
+  focus() {
+    const document = (globalThis as unknown as {
+      document?: {
+        activeElement: FakeDomNode | null;
+        dispatchEvent?: (type: string, event?: Record<string, unknown>) => void;
+      };
+    }).document;
+    if (document === undefined) return;
+    document.activeElement = this;
+    document.dispatchEvent?.('focusin', { target: this });
+  }
+
   setPointerCapture(pointerId: number) {
     this.pointerCaptures.add(pointerId);
   }
@@ -101,6 +122,17 @@ class FakeDomNode {
   }
 
   replaceChildren(...children: FakeDomNode[]) {
+    const document = (globalThis as unknown as {
+      document?: { activeElement: FakeDomNode | null };
+    }).document;
+    if (document !== undefined
+      && document.activeElement !== null
+      && this.contains(document.activeElement)) {
+      // Browsers move focus to the document body when a focused subtree is
+      // replaced. Keep the fake DOM aligned with that behavior so focus
+      // restoration is tested against the real replacement boundary.
+      document.activeElement = null;
+    }
     this.children = children;
   }
 
@@ -152,6 +184,27 @@ class FakeDomNode {
 }
 
 class FakeDomDocument {
+  activeElement: FakeDomNode | null = null;
+  listeners = new Map<string, Array<(event?: Record<string, unknown>) => void>>();
+
+  addEventListener(type: string, listener: unknown) {
+    if (typeof listener !== 'function') return;
+    const listeners = this.listeners.get(type) ?? [];
+    this.listeners.set(type, [...listeners, listener as (event?: Record<string, unknown>) => void]);
+  }
+
+  removeEventListener(type: string, listener: unknown) {
+    const listeners = this.listeners.get(type);
+    if (listeners === undefined) return;
+    const next = listeners.filter((candidate) => candidate !== listener);
+    if (next.length === 0) this.listeners.delete(type);
+    else this.listeners.set(type, next);
+  }
+
+  dispatchEvent(type: string, event: Record<string, unknown> = {}) {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+
   createElement(tagName: string) {
     return new FakeDomNode(tagName);
   }
@@ -726,14 +779,24 @@ describe('Web UI execution model', () => {
       const overlay = section.querySelectorAll('.execution-edge-overlay')[0] as FakeDomNode;
       const defs = overlay.children[0];
       expect(defs?.children.map((marker) => marker.attributes.id)).toEqual([
-        'execution-edge-arrow',
-        'execution-edge-arrow-incoming',
-        'execution-edge-arrow-outgoing',
+        'execution-edge-from',
+        'execution-edge-to',
+        'execution-edge-from-incoming',
+        'execution-edge-to-incoming',
+        'execution-edge-from-outgoing',
+        'execution-edge-to-outgoing',
       ]);
-      expect(defs?.children[1]?.children[0]?.attributes.fill).toBe('var(--accent)');
-      expect(defs?.children[2]?.children[0]?.attributes.fill).toBe('var(--warning)');
+      expect(defs?.children.every((marker) => marker.attributes.markerUnits === 'userSpaceOnUse')).toBe(true);
+      expect(defs?.children.every((marker) => marker.children[0]?.tagName === 'circle')).toBe(true);
+      expect(defs?.children[0]?.children[0]?.attributes.fill).toBe('none');
+      expect(defs?.children[1]?.children[0]?.attributes.fill).toBe('currentColor');
+      expect(defs?.children[2]?.children[0]?.attributes.fill).toBe('none');
+      expect(defs?.children[3]?.children[0]?.attributes.fill).toBe('var(--accent)');
+      expect(defs?.children[4]?.children[0]?.attributes.fill).toBe('none');
+      expect(defs?.children[5]?.children[0]?.attributes.fill).toBe('var(--warning)');
       expect(section.querySelectorAll('.execution-map-selection-legend')).toHaveLength(0);
       expect(paths().every((path) => path.attributes['data-edge-role'] === 'none')).toBe(true);
+      expect(paths().every((path) => !/FROM|TO/.test(path.attributes['aria-label'] ?? ''))).toBe(true);
       expect(new Set(paths().map((path) => path.attributes['data-edge-key'])))
         .toEqual(new Set(trace.transitions.map((transition) => `${transition.kind}:${transition.id}`)));
 
@@ -748,10 +811,20 @@ describe('Web UI execution model', () => {
       expect(outgoing[0]?.attributes['data-source-occurrence-id']).toBe(selectedOccurrence.id);
       expect(incoming[0]?.className).toContain('execution-edge-emphasis-incoming');
       expect(outgoing[0]?.className).toContain('execution-edge-emphasis-outgoing');
-      expect(incoming[0]?.attributes['marker-end']).toBe('url(#execution-edge-arrow-incoming)');
-      expect(outgoing[0]?.attributes['marker-end']).toBe('url(#execution-edge-arrow-outgoing)');
+      expect(incoming[0]?.attributes['marker-start']).toBe('url(#execution-edge-from-incoming)');
+      expect(incoming[0]?.attributes['marker-end']).toBe('url(#execution-edge-to-incoming)');
+      expect(outgoing[0]?.attributes['marker-start']).toBe('url(#execution-edge-from-outgoing)');
+      expect(outgoing[0]?.attributes['marker-end']).toBe('url(#execution-edge-to-outgoing)');
+      expect(incoming[0]?.attributes['aria-label']).toContain('PREV: 前のITERからこのITERへ');
+      expect(outgoing[0]?.attributes['aria-label']).toContain('NEXT: このITERから次のITERへ');
+      expect(incoming[0]?.attributes['aria-label']).not.toMatch(/FROM|TO/);
+      expect(outgoing[0]?.attributes['aria-label']).not.toMatch(/FROM|TO/);
       const legend = section.querySelectorAll('.execution-map-selection-legend')[0] as FakeDomNode;
-      expect(legend.children.map((item) => item.children[1]?.textContent)).toEqual(['このITERへ', '次のITERへ']);
+      expect(legend.children.map((item) => item.children[1]?.textContent)).toEqual([
+        'PREV: 前のITERからこのITERへ',
+        'NEXT: このITERから次のITERへ',
+      ]);
+      expect(legend.attributes['aria-label']).toBe('選択中ITERの前後関係');
 
       const canvas = section.querySelectorAll('.execution-map-canvas')[0] as FakeDomNode;
       canvas.dispatchEvent('execution-map-node-moved');
@@ -798,6 +871,7 @@ describe('Web UI execution model', () => {
         onSelectStep: (node) => selectedSteps.push(node.id),
         onSelectOccurrence: (_node, occurrence) => selectedOccurrences.push(occurrence.id),
       });
+      const map = section.querySelectorAll('.execution-map')[0] as FakeDomNode;
       const step = (section.querySelectorAll('.execution-step') as FakeDomNode[])
         .find((candidate) => candidate.dataset.stepId === plan.id);
       expect(step).toBeDefined();
@@ -815,6 +889,19 @@ describe('Web UI execution model', () => {
       header?.dispatchEvent('click');
       expect(selectedSteps).toEqual([plan.id]);
       expect(selectedOccurrences).toEqual([]);
+      updateExecutionMapSelection(map, null, plan.id);
+      const incoming = section.querySelectorAll('[data-edge-role="incoming"]') as FakeDomNode[];
+      const outgoing = section.querySelectorAll('[data-edge-role="outgoing"]') as FakeDomNode[];
+      const incomingLegend = section.querySelectorAll('.execution-map-legend-incoming') as FakeDomNode[];
+      const outgoingLegend = section.querySelectorAll('.execution-map-legend-outgoing') as FakeDomNode[];
+      expect(incoming).toHaveLength(1);
+      expect(outgoing).toHaveLength(1);
+      expect(incoming[0]?.attributes['aria-label']).toContain('PREV: 前のSTEPからこのSTEPへ');
+      expect(outgoing[0]?.attributes['aria-label']).toContain('NEXT: このSTEPから次のSTEPへ');
+      expect(incomingLegend[0]?.children[1]?.textContent)
+        .toBe('PREV: 前のSTEPからこのSTEPへ');
+      expect(outgoingLegend[0]?.children[1]?.textContent)
+        .toBe('NEXT: このSTEPから次のSTEPへ');
 
       chips[0]?.dispatchEvent('click');
       expect(selectedSteps).toEqual([plan.id]);
@@ -881,6 +968,11 @@ describe('Web UI execution model', () => {
       inspector.querySelectorAll('.inspector-iteration-item')[0]?.dispatchEvent('click');
       expect(inspector.querySelector('.inspector-iteration-summary')).not.toBeNull();
       expect(inspector.querySelector('.detail-tabs')).not.toBeNull();
+      expect(inspector.querySelectorAll('.tab-button').map((button) => button.textContent)).toEqual([
+        'ITER LOG',
+        'REPORTS',
+        'PROMPTS',
+      ]);
       inspector.querySelector('.inspector-clear-selection')?.dispatchEvent('click');
       expect(inspector.querySelector('.inspector-step-summary')).not.toBeNull();
 
@@ -952,6 +1044,338 @@ describe('Web UI execution model', () => {
       expect(runDetail.querySelector('.execution-step')?.dataset.selected).toBe('false');
       expect(inspector.querySelector('.inspector-step-summary')).toBeNull();
       expect(inspector.querySelector('.inspector-run-summary')).not.toBeNull();
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('does not apply a stale occurrence artifact response after selecting another ITER', async () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const events: ExecutionEvent[] = [
+        { type: 'step_start', step: 'review', iteration: 1 },
+        { type: 'step_complete', step: 'review', iteration: 1, status: 'done' },
+        { type: 'step_start', step: 'review', iteration: 2 },
+        { type: 'step_complete', step: 'review', iteration: 2, status: 'done' },
+      ];
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const pending: Array<{ id: string; signal?: AbortSignal; resolve: (value: unknown) => void }> = [];
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+        getOccurrenceArtifacts: (
+          _projectId: string,
+          _slug: string,
+          id: string,
+          signal?: AbortSignal,
+        ) => new Promise((resolve) => {
+          pending.push({ id, signal, resolve });
+        }),
+      });
+      const selection = { projectId: 'project-a', slug: 'run-1' };
+      executionView.renderDetail({
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { runSlug: 'run-1', workflow: 'default', status: 'running', task: 'Inspect this run' },
+        events: events.slice().reverse(),
+        history: [],
+        reports: [],
+      }, selection);
+      const plan = buildExecutionTrace(
+        { workflow: 'default', status: 'running' },
+        events.slice().reverse(),
+      ).nodes.find((node) => node.label === 'review');
+      expect(plan).toBeDefined();
+      if (plan === undefined) throw new Error('expected review node');
+
+      runDetail.querySelector('.execution-step-header')?.dispatchEvent('click');
+      const items = inspector.querySelectorAll('.inspector-iteration-item');
+      items[0]?.dispatchEvent('click');
+      items[1]?.dispatchEvent('click');
+      inspector.querySelectorAll('.tab-button')
+        .find((button) => button.textContent === 'REPORTS')
+        ?.dispatchEvent('click');
+      await Promise.resolve();
+      expect(pending.map(({ id }) => id)).toEqual([
+        plan.occurrences[0]!.id,
+        plan.occurrences[1]!.id,
+      ]);
+      expect(pending[0]?.signal?.aborted).toBe(true);
+      expect(pending[1]?.signal?.aborted).toBe(false);
+
+      pending[1]!.resolve({
+        reports: [{ filename: 'second.md', content: 'second', omitted: false }],
+        prompts: [],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(inspector.querySelectorAll('.report-list-item')[0]?.children[0]?.textContent).toBe('second.md');
+
+      pending[0]!.resolve({
+        reports: [{ filename: 'first.md', content: 'first', omitted: false }],
+        prompts: [],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(inspector.querySelectorAll('.report-list-item')[0]?.children[0]?.textContent).toBe('second.md');
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('keeps selected ITER artifacts, in-flight fetch, and scroll on same-run snapshot refresh', async () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const events: ExecutionEvent[] = [
+        { type: 'step_start', step: 'review', iteration: 1 },
+        { type: 'step_complete', step: 'review', iteration: 1, status: 'done' },
+      ];
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const pending: Array<{ resolve: (value: unknown) => void }> = [];
+      let artifactFetchStarted = 0;
+      let artifactFetchReleased = 0;
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+        getOccurrenceArtifacts: () => new Promise((resolve) => {
+          pending.push({ resolve });
+        }),
+        onOccurrenceArtifactsStart: () => {
+          artifactFetchStarted += 1;
+          return () => {
+            artifactFetchReleased += 1;
+          };
+        },
+      });
+      const selection = { projectId: 'project-a', slug: 'run-1' };
+      const detail = {
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { runSlug: 'run-1', workflow: 'default', status: 'running', task: 'Inspect this run' },
+        events: events.slice().reverse(),
+        history: [],
+        reports: [],
+      };
+      executionView.renderDetail(detail, selection);
+      runDetail.querySelector('.execution-step-header')?.dispatchEvent('click');
+      inspector.querySelector('.inspector-iteration-item')?.dispatchEvent('click');
+      await Promise.resolve();
+      expect(pending).toHaveLength(1);
+      expect(artifactFetchStarted).toBe(1);
+      expect(artifactFetchReleased).toBe(0);
+      runDetail.scrollTop = 41;
+      inspector.scrollTop = 23;
+
+      executionView.renderDetail({
+        ...detail,
+        meta: { ...detail.meta, updatedAt: '2026-08-27T00:00:00.000Z' },
+      }, selection);
+
+      expect(pending).toHaveLength(1);
+      expect(runDetail.scrollTop).toBe(41);
+      expect(inspector.scrollTop).toBe(23);
+      pending[0]!.resolve({
+        reports: [{ filename: 'selected.md', content: 'selected', omitted: false }],
+        prompts: [],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(artifactFetchReleased).toBe(1);
+      inspector.querySelector('.tab-button')?.dispatchEvent('click');
+      inspector.querySelectorAll('.tab-button')
+        .find((button) => button.textContent === 'REPORTS')
+        ?.dispatchEvent('click');
+      expect(inspector.querySelector('.report-list-item')?.children[0]?.textContent).toBe('selected.md');
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('aborts and hides stale ITER artifacts when preparing another run selection', async () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const events: ExecutionEvent[] = [
+        { type: 'step_start', step: 'review', iteration: 1 },
+        { type: 'step_complete', step: 'review', iteration: 1, status: 'done' },
+      ];
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const pending: Array<{
+        id: string;
+        signal?: AbortSignal;
+        resolve: (value: unknown) => void;
+      }> = [];
+      let artifactFetchReleased = 0;
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+        getOccurrenceArtifacts: (
+          _projectId: string,
+          _slug: string,
+          id: string,
+          signal?: AbortSignal,
+        ) => new Promise((resolve) => {
+          pending.push({ id, signal, resolve });
+        }),
+        onOccurrenceArtifactsStart: () => () => {
+          artifactFetchReleased += 1;
+        },
+      });
+      const runA = { projectId: 'project-a', slug: 'run-a' };
+      const detailA = {
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { runSlug: 'run-a', workflow: 'default', status: 'running', task: 'Run A' },
+        events: events.slice().reverse(),
+        history: [],
+        reports: [],
+      };
+      executionView.renderDetail(detailA, runA);
+      runDetail.querySelector('.execution-step-header')?.dispatchEvent('click');
+      inspector.querySelector('.inspector-iteration-item')?.dispatchEvent('click');
+      inspector.querySelectorAll('.tab-button')
+        .find((button) => button.textContent === 'REPORTS')
+        ?.dispatchEvent('click');
+      await Promise.resolve();
+      expect(pending).toHaveLength(1);
+      const oldArtifactRequest = pending[0]!;
+      expect(inspector.querySelector('.workspace-empty')).not.toBeNull();
+
+      const runB = { projectId: 'project-b', slug: 'run-b' };
+      executionView.prepareRunSelection(runB);
+      expect(oldArtifactRequest.signal?.aborted).toBe(true);
+      expect(artifactFetchReleased).toBe(1);
+      expect(inspector.querySelector('.detail-tabs')).toBeNull();
+      expect(inspector.querySelector('.report-list-item')).toBeNull();
+
+      oldArtifactRequest.resolve({
+        reports: [{ filename: 'old.md', content: 'old report', omitted: false }],
+        prompts: [],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(inspector.querySelector('.report-list-item')).toBeNull();
+
+      const detailB = {
+        project: { id: 'project-b', displayName: 'Project B' },
+        meta: { runSlug: 'run-b', workflow: 'default', status: 'running', task: 'Run B' },
+        events: events.slice().reverse(),
+        history: [],
+        reports: [],
+      };
+      expect(executionView.renderDetail(detailB, runB)).toBe(true);
+      expect(runDetail.querySelector('.run-detail-title')).not.toBeNull();
+      expect(inspector.querySelector('.detail-tabs')).not.toBeNull();
+      expect(inspector.querySelector('.report-list-item')).toBeNull();
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('restores logical Inspector focus across snapshots and delayed artifact responses', async () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    const document = new FakeDomDocument();
+    runtime.document = document;
+    try {
+      const events: ExecutionEvent[] = [
+        { type: 'step_start', step: 'review', iteration: 1 },
+        { type: 'step_complete', step: 'review', iteration: 1, status: 'done' },
+      ];
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const pending: Array<{ resolve: (value: unknown) => void }> = [];
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+        getOccurrenceArtifacts: () => new Promise((resolve) => {
+          pending.push({ resolve });
+        }),
+      });
+      const selection = { projectId: 'project-a', slug: 'run-1' };
+      const detail = {
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { runSlug: 'run-1', workflow: 'default', status: 'running', task: 'Inspect this run' },
+        events: events.slice().reverse(),
+        history: [],
+        reports: [],
+      };
+      executionView.renderDetail(detail, selection);
+      runDetail.querySelector('.execution-step-header')?.dispatchEvent('click');
+      inspector.querySelector('.inspector-iteration-item')?.dispatchEvent('click');
+      await Promise.resolve();
+      expect(pending).toHaveLength(1);
+
+      const reportsTab = inspector.querySelectorAll('.tab-button')
+        .find((button) => button.textContent === 'REPORTS');
+      reportsTab?.dispatchEvent('click');
+      const focusedReportTab = inspector.querySelectorAll('.tab-button')
+        .find((button) => button.textContent === 'REPORTS');
+      focusedReportTab?.focus();
+      executionView.renderDetail({
+        ...detail,
+        meta: { ...detail.meta, updatedAt: '2026-08-27T00:00:00.000Z' },
+      }, selection);
+      expect(document.activeElement).not.toBe(focusedReportTab);
+      expect(document.activeElement?.textContent).toBe('REPORTS');
+      expect(document.activeElement?.getAttribute('role')).toBe('tab');
+
+      pending[0]!.resolve({
+        reports: [{ filename: 'selected.md', content: 'selected', omitted: false }],
+        prompts: [{ phase: 1, systemPrompt: 'prompt' }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      inspector.querySelectorAll('.tab-button')
+        .find((button) => button.textContent === 'REPORTS')
+        ?.dispatchEvent('click');
+      const reportButton = inspector.querySelector('.report-list-item');
+      reportButton?.focus();
+      executionView.renderDetail({
+        ...detail,
+        meta: { ...detail.meta, updatedAt: '2026-08-27T00:00:01.000Z' },
+      }, selection);
+      expect(document.activeElement?.dataset.reportFilename).toBe('selected.md');
+
+      inspector.querySelectorAll('.tab-button')
+        .find((button) => button.textContent === 'PROMPTS')
+        ?.dispatchEvent('click');
+      const promptCard = inspector.querySelector('.prompt-card');
+      promptCard?.focus();
+      executionView.renderDetail({
+        ...detail,
+        meta: { ...detail.meta, updatedAt: '2026-08-27T00:00:02.000Z' },
+      }, selection);
+      expect(document.activeElement?.dataset.promptIndex).toBe('0');
+
+      const outside = new FakeDomNode('button');
+      outside.textContent = 'outside';
+      outside.focus();
+      executionView.renderDetail({
+        ...detail,
+        meta: { ...detail.meta, updatedAt: '2026-08-27T00:00:03.000Z' },
+      }, selection);
+      expect(document.activeElement).toBe(outside);
     } finally {
       runtime.document = previousDocument;
     }
@@ -1182,6 +1606,84 @@ describe('Web UI execution model', () => {
       expect(clampMapScale(Number.NaN)).toBe(1);
       expect(clampMapScale(-10)).toBe(MIN_MAP_SCALE);
       expect(clampMapScale(10)).toBe(MAX_MAP_SCALE);
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('recomputes boundary ports and terminal tangents from the current relative position', () => {
+    const canvas = { left: 0, top: 0 };
+    const source = { left: 10, top: 10, right: 110, bottom: 110 };
+    const rightTarget = { left: 300, top: 20, right: 400, bottom: 120 };
+    const rightGeometry = edgeAnchorGeometry(source, rightTarget, canvas);
+    expect(rightGeometry.source.side).toBe('right');
+    expect(rightGeometry.target.side).toBe('left');
+    const zoomedGeometry = edgeAnchorGeometry(source, rightTarget, canvas, 2);
+    expect(zoomedGeometry.source.x).toBe(rightGeometry.source.x / 2);
+    expect(zoomedGeometry.source.y).toBe(rightGeometry.source.y / 2);
+    expect(zoomedGeometry.target.x).toBe(rightGeometry.target.x / 2);
+    expect(zoomedGeometry.target.y).toBe(rightGeometry.target.y / 2);
+    const rightPath = curvePath(rightGeometry.source, rightGeometry.target, 'transition');
+    expect(rightPath).toContain(` ${rightGeometry.target.x} ${rightGeometry.target.y}`);
+    const rightPathNumbers = rightPath.match(/-?\d+(?:\.\d+)?/gu)?.map(Number) ?? [];
+    expect(rightPathNumbers[6]! - rightPathNumbers[4]!).toBeGreaterThan(0);
+
+    const lowerTarget = { left: 20, top: 300, right: 120, bottom: 400 };
+    const lowerGeometry = edgeAnchorGeometry(source, lowerTarget, canvas);
+    expect(lowerGeometry.source.side).toBe('bottom');
+    expect(lowerGeometry.target.side).toBe('top');
+    const lowerPath = curvePath(lowerGeometry.source, lowerGeometry.target, 'transition');
+    expect(lowerPath).toContain(` ${lowerGeometry.target.x} ${lowerGeometry.target.y}`);
+    const lowerPathNumbers = lowerPath.match(/-?\d+(?:\.\d+)?/gu)?.map(Number) ?? [];
+    expect(lowerPathNumbers[7]! - lowerPathNumbers[5]!).toBeGreaterThan(0);
+    expect(lowerPath).not.toBe(curvePath(rightGeometry.source, rightGeometry.target, 'transition'));
+
+    const movedTarget = { left: -320, top: 20, right: -220, bottom: 120 };
+    const movedGeometry = edgeAnchorGeometry(source, movedTarget, canvas);
+    expect(movedGeometry.source.side).toBe('left');
+    expect(movedGeometry.target.side).toBe('right');
+    expect(curvePath(movedGeometry.source, movedGeometry.target, 'transition')).not.toBe(lowerPath);
+  });
+
+  it('uses measured DOM rectangles when refreshing rendered edge geometry', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const trace = buildExecutionTrace(
+        { workflow: 'default', status: 'running' },
+        [
+          { type: 'step_start', step: 'plan', iteration: 1 },
+          { type: 'step_complete', step: 'plan', iteration: 1, status: 'done' },
+          { type: 'step_start', step: 'review', iteration: 1 },
+          { type: 'step_complete', step: 'review', iteration: 1, status: 'done' },
+        ].reverse(),
+      );
+      const section = renderExecutionMap(trace, {
+        liveIndicator: new FakeDomNode('span'),
+        emptyState: new FakeDomNode('div'),
+        selectedOccurrenceId: null,
+        onSelectOccurrence: () => undefined,
+      });
+      const map = section.querySelectorAll('.execution-map')[0] as FakeDomNode;
+      const canvas = section.querySelectorAll('.execution-map-canvas')[0] as FakeDomNode;
+      const chips = section.querySelectorAll('.iteration-chip') as FakeDomNode[];
+      expect(chips).toHaveLength(2);
+      const sourceRect = { left: 110, top: 120, right: 190, bottom: 144, width: 80, height: 24 };
+      const targetRect = { left: 330, top: 130, right: 410, bottom: 154, width: 80, height: 24 };
+      const canvasRect = { left: 10, top: 20 };
+      chips[0]!.rect = sourceRect;
+      chips[1]!.rect = targetRect;
+      canvas.rect = { ...canvasRect, right: 650, bottom: 500, width: 640, height: 480 };
+      map.dispatchEvent('scroll');
+
+      const geometry = edgeAnchorGeometry(sourceRect, targetRect, canvasRect);
+      const path = section.querySelectorAll('.execution-edge-transition')[0] as FakeDomNode;
+      expect(path.attributes.d).toBe(curvePath(geometry.source, geometry.target, 'transition'));
+      expect(geometry.source.side).toBe('right');
+      expect(geometry.target.side).toBe('left');
+      expect(geometry.target.x).toBe((targetRect.left - canvasRect.left));
+      expect(geometry.target.y).toBe((targetRect.top + targetRect.bottom) / 2 - canvasRect.top);
     } finally {
       runtime.document = previousDocument;
     }

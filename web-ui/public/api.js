@@ -89,6 +89,13 @@ export function getRun(projectId, slug) {
   );
 }
 
+export function getRunOccurrenceArtifacts(projectId, slug, occurrenceId, signal) {
+  return requestJson(
+    `/api/runs/${encodeURIComponent(slug)}/occurrence-artifacts?project=${encodeURIComponent(projectId)}&occurrence=${encodeURIComponent(occurrenceId)}`,
+    signal === undefined ? undefined : { signal },
+  );
+}
+
 export function browseDirectories(path) {
   return requestMutation('/api/directories/browse', path === null ? {} : { path });
 }

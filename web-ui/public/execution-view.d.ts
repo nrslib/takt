@@ -20,6 +20,7 @@ export interface ExecutionViewController {
   renderTaskList(tasks: readonly unknown[], selection: unknown): void;
   renderDetail(detail: unknown, selection: { readonly projectId: string; readonly slug: string }): boolean;
   renderPlaceholder(): void;
+  prepareRunSelection(selection: { readonly projectId: string; readonly slug: string }): void;
   refreshLocale(): void;
   dispose(): void;
   setLiveState(state: string): void;

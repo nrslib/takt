@@ -45,8 +45,10 @@ describe('Web UI i18n', () => {
     expect(getLocale()).toBe('ja');
     expect(t('map.summarySteps', { steps: 2, passes: 3 })).toBe('2 処理 · 3 ITER');
     expect(t('map.iter', { number: 2 })).toBe('ITER 2');
-    expect(t('map.edgeIncoming')).toBe('このITERへ');
-    expect(t('map.edgeOutgoing')).toBe('次のITERへ');
+    expect(t('map.edgeIncoming')).toBe('PREV: 前のITERからこのITERへ');
+    expect(t('map.edgeOutgoing')).toBe('NEXT: このITERから次のITERへ');
+    expect(t('map.edgeDirection')).toBe('中空円=始点 / 塗り円=終点');
+    expect(t('map.edgeLegend')).toBe('選択中ITERの前後関係');
     expect(t('viewer.stepIterations')).toBe('ITER一覧');
     expect(t('viewer.backToStep')).toBe('STEP概要に戻る');
     expect(t('missing.translation.key')).toBe('missing.translation.key');
@@ -65,8 +67,10 @@ describe('Web UI i18n', () => {
     expect(t('app.createTask')).toBe('New task');
     expect(t('map.summarySteps', { steps: 2, passes: 3 })).toBe('2 steps · 3 ITER');
     expect(t('map.iter', { number: 2 })).toBe('ITER 2');
-    expect(t('map.edgeIncoming')).toBe('Into this ITER');
-    expect(t('map.edgeOutgoing')).toBe('Next ITER');
+    expect(t('map.edgeIncoming')).toBe('PREV: Previous ITER to this one');
+    expect(t('map.edgeOutgoing')).toBe('NEXT: This ITER to the next');
+    expect(t('map.edgeDirection')).toBe('Hollow circle = start / filled circle = end');
+    expect(t('map.edgeLegend')).toBe('Selected ITER context');
     expect(t('viewer.stepIterations')).toBe('ITER list');
     expect(t('viewer.backToStep')).toBe('Back to step');
     expect(t('task.action.retry')).toBe('Retry');

@@ -3,6 +3,12 @@ export function getTasks(): Promise<unknown>;
 export function getProjects(): Promise<unknown>;
 export function getWorkflows(projectId: string): Promise<unknown>;
 export function getRun(projectId: string, slug: string): Promise<unknown>;
+export function getRunOccurrenceArtifacts(
+  projectId: string,
+  slug: string,
+  occurrenceId: string,
+  signal?: AbortSignal,
+): Promise<unknown>;
 export function browseDirectories(path: string | null): Promise<unknown>;
 export function pickNativeDirectory(): Promise<unknown>;
 export function registerProject(projectDirectory: string): Promise<unknown>;

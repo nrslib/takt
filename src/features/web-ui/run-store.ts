@@ -1,13 +1,22 @@
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { StatePaths } from '../../core/execution/locations.js';
 import {
   readRunLogArtifacts,
+  readRunOccurrencePrompts,
+  getRunOccurrenceLifecycle,
   type RunLogArtifacts,
+  type RunLogEvent,
+  type RunPromptArtifact,
 } from './run-log-cache.js';
-import type { WorkflowResumePoint } from '../../core/models/index.js';
+import type { WorkflowResumePoint, WorkflowResumePointEntry } from '../../core/models/index.js';
 import { parseWorkflowResumePoint } from '../../core/workflow/resume-point-codec.js';
+import { parseWorkflowCallNamespaceSegment } from '../../core/workflow/workflow-call-namespace.js';
+import { buildWorkflowCallInvocationIdentity } from '../../core/workflow/workflow-call-invocation-index.js';
+import { buildWorkflowStepParticipationIdentity } from '../../core/workflow/workflow-step-participation-index.js';
+import { buildWorkflowCallSiteRunPathSegment } from '../../core/workflow/workflow-call-site-identity.js';
 const NOFOLLOW = (constants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
 
 const RUN_STATUSES = new Set(['running', 'completed', 'aborted', 'failed']);
@@ -21,6 +30,12 @@ const SESSION_LOG_SIDECAR_SUFFIXES = [
 const MAX_RUNS = 50;
 const MAX_REPORTS = 50;
 const MAX_REPORT_BYTES = 256 * 1024;
+
+export class RunOccurrenceNotFoundError extends Error {
+  constructor() {
+    super('Occurrence was not found in this run');
+  }
+}
 
 interface RunMeta {
   readonly runSlug: string;
@@ -89,9 +104,21 @@ function parseRunMeta(value: unknown, expectedSlug: string): RunMeta {
         error: (rawFailure as Readonly<Record<string, unknown>>).error as string,
       }
     : undefined;
-  const resumePoint = raw.resumePoint === undefined
-    ? undefined
-    : parseWorkflowResumePoint(raw.resumePoint);
+  const hasCamelResumePoint = Object.prototype.hasOwnProperty.call(raw, 'resumePoint');
+  const hasSnakeResumePoint = Object.prototype.hasOwnProperty.call(raw, 'resume_point');
+  let resumePoint: WorkflowResumePoint | undefined;
+  if (hasCamelResumePoint && hasSnakeResumePoint) {
+    const camelResumePoint = parseWorkflowResumePoint(raw.resumePoint);
+    const snakeResumePoint = parseWorkflowResumePoint(raw.resume_point);
+    if (!isDeepStrictEqual(camelResumePoint, snakeResumePoint)) {
+      throw new Error('resumePoint and resume_point must contain the same value');
+    }
+    resumePoint = camelResumePoint;
+  } else if (hasCamelResumePoint) {
+    resumePoint = parseWorkflowResumePoint(raw.resumePoint);
+  } else if (hasSnakeResumePoint) {
+    resumePoint = parseWorkflowResumePoint(raw.resume_point);
+  }
   return {
     runSlug,
     task: requireString(raw.task, 'task'),
@@ -307,21 +334,263 @@ async function resolveRunChildDirectory(
   }
 }
 
-async function collectReportPaths(root: string, directory = root): Promise<string[]> {
+async function collectReportPaths(
+  root: string,
+  directory = root,
+  include: (path: string) => boolean = () => true,
+  limit = MAX_REPORTS,
+): Promise<string[]> {
   if (directory === root) await resolveRegularPath(directory, 'Report directory');
   else await resolveContainedDirectory(root, directory, 'Report directory');
-  const entries = await readDirectory(directory);
-  const nested = await Promise.all(entries.map(async (entry) => {
+  const entries = (await readDirectory(directory)).sort((left, right) => left.name.localeCompare(right.name));
+  const paths: string[] = [];
+  for (const entry of entries) {
+    if (paths.length >= limit) break;
     const path = resolve(directory, entry.name);
-    if (entry.isSymbolicLink()) return [];
+    if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {
       await resolveContainedDirectory(root, path, 'Report directory');
-      return collectReportPaths(root, path);
+      paths.push(...await collectReportPaths(root, path, include, limit - paths.length));
+      continue;
     }
-    if (!entry.isFile() || !entry.name.endsWith('.md')) return [];
-    return [path];
-  }));
-  return nested.flat().slice(0, MAX_REPORTS);
+    if (entry.isFile() && entry.name.endsWith('.md') && include(path)) paths.push(path);
+  }
+  return paths;
+}
+
+type WorkflowStackFrame = NonNullable<RunLogEvent['stack']>[number];
+
+function stackFramesMatch(
+  left: readonly WorkflowStackFrame[],
+  right: readonly WorkflowStackFrame[],
+): boolean {
+  return left.length <= right.length && left.every((frame, index) => {
+    const candidate = right[index];
+    return candidate !== undefined
+      && frame.workflow === candidate.workflow
+      && frame.workflow_ref === candidate.workflow_ref
+      && frame.step === candidate.step
+      && frame.kind === candidate.kind
+      && frame.occurrence === candidate.occurrence;
+  });
+}
+
+function canonicalReportNamespaceSegments(
+  stack: readonly WorkflowStackFrame[] | undefined,
+  occurrences: readonly RunLogEvent[] = [],
+  childWorkflow: string | undefined = undefined,
+): readonly string[] | undefined {
+  if (stack === undefined) return undefined;
+  const segments: string[] = [];
+  for (let index = 0; index < stack.length; index += 1) {
+    const frame = stack[index]!;
+    if (frame.kind !== 'workflow_call') continue;
+    const directChild = stack[index + 1];
+    const candidateChildren = directChild === undefined
+      ? occurrences
+        .map((occurrence) => {
+          const candidateStack = occurrence.stack;
+          return candidateStack !== undefined
+            && stackFramesMatch(stack.slice(0, index + 1), candidateStack)
+            ? candidateStack[index + 1]
+            : undefined;
+        })
+        .filter((candidate): candidate is WorkflowStackFrame => candidate !== undefined)
+        .filter((candidate) => childWorkflow === undefined
+          || candidate.workflow === childWorkflow
+          || candidate.workflow_ref === childWorkflow)
+      : [directChild];
+    const childIdentities = [...new Map(
+      candidateChildren.map((candidate) => [
+        JSON.stringify([candidate.workflow, candidate.workflow_ref]),
+        candidate,
+      ]),
+    ).values()];
+    const child = childIdentities.length === 1 ? childIdentities[0] : undefined;
+    if (child === undefined || child.workflow.length === 0 || child.workflow_ref.length === 0) {
+      return undefined;
+    }
+    segments.push(buildWorkflowCallSiteRunPathSegment({
+      stack: stack.slice(0, index + 1),
+      childWorkflowName: child.workflow,
+      childWorkflowRef: child.workflow_ref,
+    }));
+  }
+  return segments;
+}
+
+function portableRelativePath(root: string, path: string): string {
+  return relative(root, path).split(sep).join('/');
+}
+
+function reportNamespaceSegments(filename: string): readonly string[] | undefined {
+  const parts = filename.split('/');
+  const segments: string[] = [];
+  let index = 0;
+  while (parts[index] === 'subworkflows') {
+    const segment = parts[index + 1];
+    if (segment === undefined || parseWorkflowCallNamespaceSegment(segment) === undefined) {
+      return undefined;
+    }
+    segments.push(segment);
+    index += 2;
+  }
+  if (segments.length === 0 || index >= parts.length || parts.slice(index).some((part) => part === '')) {
+    return undefined;
+  }
+  return segments;
+}
+
+function namespaceSegmentsMatch(actual: string, expected: string): boolean {
+  if (actual === expected) return true;
+  const actualNamespace = parseWorkflowCallNamespaceSegment(actual);
+  const expectedNamespace = parseWorkflowCallNamespaceSegment(expected);
+  return actualNamespace !== undefined
+    && expectedNamespace !== undefined
+    && actualNamespace.siteDigest === undefined
+    && expectedNamespace.siteDigest !== undefined
+    && actualNamespace.iteration === expectedNamespace.iteration
+    && actualNamespace.stepName === expectedNamespace.stepName
+    && actualNamespace.workflowName === expectedNamespace.workflowName;
+}
+
+function namespacePathsMatch(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length
+    && actual.every((segment, index) => namespaceSegmentsMatch(segment, expected[index]!));
+}
+
+function reportOwnerStack(
+  occurrence: RunLogEvent,
+): readonly WorkflowStackFrame[] | undefined {
+  const stack = occurrence.stack;
+  if (stack === undefined || stack.length === 0) return undefined;
+  const current = stack.at(-1);
+  return current?.kind === 'workflow_call' || current?.kind === 'parallel'
+    ? stack.slice(0, -1)
+    : stack;
+}
+
+function participationStack(
+  stack: readonly WorkflowStackFrame[],
+  resumePoint: WorkflowResumePoint | undefined,
+): readonly WorkflowResumePointEntry[] {
+  const enriched: WorkflowResumePointEntry[] = [];
+  for (const frame of stack) {
+    const invocationIdentity = frame.kind === 'workflow_call'
+      ? (() => {
+          try {
+            return buildWorkflowCallInvocationIdentity(
+              frame.workflow_ref,
+              frame.step,
+              enriched,
+            );
+          } catch {
+            return undefined;
+          }
+        })()
+      : undefined;
+    const callInstance = frame.kind !== 'workflow_call'
+      ? undefined
+      : resumePoint?.workflow_call_invocations[invocationIdentity ?? '']?.call_instance;
+    enriched.push({
+      ...frame,
+      ...(frame.kind === 'workflow_call'
+        ? { call_instance: callInstance === frame.occurrence ? callInstance : frame.occurrence }
+        : {}),
+    });
+  }
+  return enriched;
+}
+
+function selectedParticipationReportPaths(
+  meta: RunMeta,
+  selectedOccurrence: RunLogEvent,
+  occurrences: readonly RunLogEvent[],
+): ReadonlySet<string> | undefined {
+  const stack = selectedOccurrence.stack;
+  const current = stack?.at(-1);
+  const step = selectedOccurrence.step ?? current?.step;
+  if (stack === undefined || current === undefined || step === undefined) return undefined;
+  const enrichedStack = participationStack(stack, meta.resumePoint);
+  const directParent = current.kind === 'parallel' ? undefined : stack.at(-2);
+  const parallelParent = directParent?.kind === 'parallel'
+    && directParent.workflow_ref === current.workflow_ref
+    ? directParent
+    : undefined;
+  // Parallel child reports are indexed with the active workflow-call prefix
+  // plus a separate parallel_parent field.  The parallel frame in a child
+  // event stack is therefore excluded from calls when reconstructing that
+  // producer identity.
+  const workflowCallPath = parallelParent === undefined
+    ? enrichedStack.slice(0, -1)
+    : enrichedStack.slice(0, -2);
+  const parallelParentStepName = parallelParent?.step;
+  let identity: string;
+  try {
+    identity = buildWorkflowStepParticipationIdentity(
+      current.workflow_ref,
+      step,
+      workflowCallPath,
+      parallelParentStepName,
+    );
+  } catch {
+    return undefined;
+  }
+  const record = meta.resumePoint?.workflow_step_participations[identity];
+  if (record === undefined) return undefined;
+  const ownerStack = reportOwnerStack(selectedOccurrence);
+  if (ownerStack === undefined) return new Set();
+  const namespace = canonicalReportNamespaceSegments(
+    ownerStack,
+    occurrences,
+    selectedOccurrence.childWorkflow,
+  );
+  if (namespace === undefined) return new Set();
+  const prefix = namespace.length === 0
+    ? ''
+    : `${namespace.map((segment) => `subworkflows/${segment}`).join('/')}/`;
+  const paths = record.report_names.flatMap((reportName) => (
+    reportName.length === 0 || reportName.includes('\\') || reportName.startsWith('/')
+      ? []
+      : [`${prefix}${reportName}`]
+  ));
+  return new Set(paths);
+}
+
+function reportBelongsToOccurrence(
+  filename: string,
+  meta: RunMeta,
+  selectedOccurrence: RunLogEvent,
+  occurrences: readonly RunLogEvent[],
+  graphTruncated: boolean,
+): boolean {
+  const exactPaths = selectedParticipationReportPaths(meta, selectedOccurrence, occurrences);
+  if (exactPaths !== undefined) return exactPaths.has(filename);
+  if (meta.resumePoint !== undefined) return false;
+  const actual = reportNamespaceSegments(filename);
+  const selected = canonicalReportNamespaceSegments(
+    reportOwnerStack(selectedOccurrence),
+    occurrences,
+    selectedOccurrence.childWorkflow,
+  );
+  if (actual === undefined || selected === undefined || selected.length === 0) return false;
+  if (actual.length !== selected.length) return false;
+  const candidatePaths = [...new Map(
+    occurrences
+      .map((occurrence) => canonicalReportNamespaceSegments(
+        reportOwnerStack(occurrence),
+        occurrences,
+        occurrence.childWorkflow,
+      ))
+      .filter((candidate): candidate is readonly string[] => candidate !== undefined && candidate.length > 0)
+      .map((candidate) => [JSON.stringify(candidate), candidate]),
+  ).values()];
+  const matchingPaths = candidatePaths.filter((candidate) => namespacePathsMatch(actual, candidate));
+  if (!matchingPaths.some((candidate) => namespacePathsMatch(candidate, selected))) return false;
+  const usesLegacyNamespace = actual.some((segment) => (
+    parseWorkflowCallNamespaceSegment(segment)?.siteDigest === undefined
+  ));
+  return !usesLegacyNamespace || (!graphTruncated && matchingPaths.length === 1);
 }
 
 async function readReport(
@@ -333,7 +602,7 @@ async function readReport(
   await verifyRunsRootSnapshot(location, snapshot);
   const safePath = await resolveContainedDirectory(root, path, 'Report file');
   const stats = await lstat(safePath);
-  const filename = relative(root, path);
+  const filename = portableRelativePath(root, path);
   if (stats.size > MAX_REPORT_BYTES) {
     await verifyRunsRootSnapshot(location, snapshot);
     return { filename, content: '', omitted: true };
@@ -347,6 +616,7 @@ async function loadReports(
   location: RunStoreLocation,
   snapshot: RunsRootSnapshot,
   meta: RunMeta,
+  include: (filename: string) => boolean = () => true,
 ) {
   const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
   await verifyRunsRootSnapshot(location, snapshot);
@@ -365,9 +635,13 @@ async function loadReports(
   if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
     throw new Error('Report directory must be a regular directory');
   }
-  const paths = await collectReportPaths(root);
+  const paths = (await collectReportPaths(
+    root,
+    root,
+    (path) => include(portableRelativePath(root, path)),
+  )).sort((left, right) => portableRelativePath(root, left).localeCompare(portableRelativePath(root, right)));
   await verifyRunsRootSnapshot(location, snapshot);
-  const reports = await Promise.all(paths.sort().map((path) => readReport(location, snapshot, root, path)));
+  const reports = await Promise.all(paths.map((path) => readReport(location, snapshot, root, path)));
   await verifyRunsRootSnapshot(location, snapshot);
   return reports;
 }
@@ -432,6 +706,53 @@ export async function readRunDetail(location: RunStoreLocation, slug: string) {
   ]);
   await verifyRunsRootSnapshot(location, snapshot);
   return { meta, reports, ...logArtifacts };
+}
+
+export async function readRunOccurrenceArtifacts(
+  location: RunStoreLocation,
+  slug: string,
+  occurrenceId: string,
+): Promise<{
+  readonly reports: readonly Awaited<ReturnType<typeof readReport>>[];
+  readonly prompts: readonly RunPromptArtifact[];
+}> {
+  assertRunSlug(slug);
+  if (occurrenceId.length === 0) throw new Error('Occurrence id is required');
+  const snapshot = await captureRunsRoot(location);
+  const meta = await loadRunMeta(location, snapshot, slug);
+  const logArtifacts = await loadLogArtifacts(location, snapshot, meta);
+  const selectedOccurrence = logArtifacts.graphSummary.occurrences.find(
+    (occurrence) => occurrence.occurrenceId === occurrenceId,
+  );
+  if (selectedOccurrence === undefined) {
+    throw new RunOccurrenceNotFoundError();
+  }
+  const cacheKey = resolve(snapshot.directory, meta.runSlug);
+  const lifecycle = getRunOccurrenceLifecycle(cacheKey, occurrenceId);
+  if (lifecycle === undefined) {
+    throw new RunOccurrenceNotFoundError();
+  }
+  const paths = await resolveSessionLogPaths(location, snapshot, meta);
+  const prompts = await readRunOccurrencePrompts(
+    paths,
+    selectedOccurrence,
+    () => verifyRunsRootSnapshot(location, snapshot),
+    lifecycle,
+  );
+  const reports = await loadReports(
+    location,
+    snapshot,
+    meta,
+    (filename) => reportBelongsToOccurrence(
+      filename,
+      meta,
+      selectedOccurrence,
+      logArtifacts.graphSummary.occurrences,
+      logArtifacts.graphSummary.truncated,
+    ),
+  );
+  await verifyRunsRootSnapshot(location, snapshot);
+  return { reports, prompts };
 }
 
 export async function resolveRunWatchDirectories(
