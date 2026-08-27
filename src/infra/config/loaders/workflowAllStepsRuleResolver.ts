@@ -149,9 +149,7 @@ export function resolveWorkflowWideRules(
       getGlobalWorkflowsDir(),
       getBuiltinWorkflowsDir(language),
     ]
-    : workflowDir === undefined
-      ? [join(resourceRoot, 'workflows')]
-      : [workflowDir];
+    : [join(resourceRoot, 'workflows')];
   const uniqueRoots = roots.filter((root, index, all) => all.indexOf(root) === index);
 
   return entries.map((entry, index) => {

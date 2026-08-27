@@ -1104,6 +1104,7 @@ steps:
         }
         if (readable) {
           chmodSync(doctorReport, 0o644);
+          await tui.dispose();
           context.skip();
           return;
         }
