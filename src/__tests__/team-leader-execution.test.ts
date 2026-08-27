@@ -596,6 +596,39 @@ describe('runTeamLeaderExecution', () => {
     expect(onExecutionTerminal).toHaveBeenCalledOnce();
   });
 
+  it('Given execution terminal callback is interrupted, When it returns no continuation, Then execution rejects with the abort reason', async () => {
+    const controller = new AbortController();
+    const abortReason = new Error('execution aborted');
+    let releaseCallback: (() => void) | undefined;
+    const callbackGate = new Promise<void>((resolve) => {
+      releaseCallback = resolve;
+    });
+    const onExecutionTerminal = vi.fn(async () => {
+      await callbackGate;
+      return undefined;
+    });
+
+    const execution = runTeamLeaderExecution({
+      initialParts: [makePart('p1')],
+      maxConcurrency: 1,
+      abortSignal: controller.signal,
+      runPart: vi.fn(async (part: PartDefinition) => makeResult(part)),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'initial planning complete',
+        cancelPartIds: [],
+        parts: [],
+      }),
+      onExecutionTerminal,
+    });
+
+    await vi.waitFor(() => expect(onExecutionTerminal).toHaveBeenCalledOnce());
+    controller.abort(abortReason);
+    releaseCallback?.();
+
+    await expect(execution).rejects.toBe(abortReason);
+  });
+
   it('latches a terminal part failure, aborts siblings, and waits for their settlement', async () => {
     const controller = new AbortController();
     const started: string[] = [];

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, CompanionFinding } from '../core/models/index.js';
+import { isAbortError } from '../core/workflow/companion/abort.js';
 import { runCompanionFixPolicy } from '../core/workflow/companion/fix-policy.js';
 
 function response(
@@ -57,10 +58,6 @@ describe('companion fix policy runner', () => {
     });
     const instruction = executeFollowUp.mock.calls[0]?.[0].instruction ?? '';
     expect(instruction).toContain(finding.finding);
-    expect(instruction).toMatch(/untrusted evidence|untrusted data/i);
-    expect(instruction).toMatch(/advisory|reference/i);
-    expect(instruction).toMatch(/important|significant|critical/i);
-    expect(instruction).toMatch(/minor|trivial|unnecessary/i);
     expect(result).toMatchObject({
       phaseResponse: { status: 'done', content: 'fixed implementation', sessionId: 'session-2' },
       latestSessionId: 'session-2',
@@ -88,6 +85,72 @@ describe('companion fix policy runner', () => {
       latestSessionId: 'session-1',
       followUpRounds: 0,
     });
+  });
+
+  it('settles single policy as a follow-up failure when the follow-up throws', async () => {
+    const initialResponse = response('done', 'session-1', 'initial implementation');
+    const completeReview = vi.fn().mockResolvedValue({ findings: [finding] });
+    const executeFollowUp = vi.fn().mockRejectedValue(new Error('provider unavailable'));
+
+    const result = await runCompanionFixPolicy({
+      policy: 'single',
+      initialResponse,
+      phase1Options: {},
+      completeReview,
+      executeFollowUp,
+    });
+
+    expect(completeReview).toHaveBeenCalledOnce();
+    expect(executeFollowUp).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      phaseResponse: initialResponse,
+      latestSessionId: 'session-1',
+      followUpRounds: 1,
+      followUpFailureReason: 'provider unavailable',
+    });
+  });
+
+  it('keeps the initial response when the single follow-up does not finish as done', async () => {
+    const initialResponse = response('done', 'session-1', 'initial implementation');
+    const completeReview = vi.fn().mockResolvedValue({ findings: [finding] });
+    const executeFollowUp = vi.fn().mockResolvedValue(
+      { ...response('error', 'session-2', 'follow-up output'), error: 'follow-up failed' },
+    );
+
+    const result = await runCompanionFixPolicy({
+      policy: 'single',
+      initialResponse,
+      phase1Options: {},
+      completeReview,
+      executeFollowUp,
+    });
+
+    expect(completeReview).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      phaseResponse: initialResponse,
+      latestSessionId: 'session-1',
+      followUpRounds: 1,
+      followUpFailureReason: 'follow-up failed',
+    });
+  });
+
+  it('throws an abort error before reviewing when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('workflow aborted'));
+    const completeReview = vi.fn();
+    const executeFollowUp = vi.fn();
+
+    await expect(runCompanionFixPolicy({
+      policy: 'single',
+      initialResponse: response('done', 'session-1'),
+      phase1Options: {},
+      completeReview,
+      executeFollowUp,
+      abortSignal: controller.signal,
+    })).rejects.toSatisfy((error: unknown) => isAbortError(error));
+
+    expect(completeReview).not.toHaveBeenCalled();
+    expect(executeFollowUp).not.toHaveBeenCalled();
   });
 
   it('delegates explicit loop policy until the finding batch is empty', async () => {

@@ -452,8 +452,11 @@ export async function runTeamLeaderExecution(
           plannedParts: structuredClone(plannedParts),
           scheduledIds: [...scheduledIds],
         });
+        // The callback awaited a provider: an abort or a latched terminal error
+        // raised meanwhile must end the run even when nothing is continued.
+        options.abortSignal?.throwIfAborted();
+        terminalGate.assertRunning('feedback.execution_terminal');
         if (continuation !== undefined) {
-          options.abortSignal?.throwIfAborted();
           applyTerminalContinuation(continuation);
         }
         if (queue.length > 0 || running.size > 0 || !leaderDone) {

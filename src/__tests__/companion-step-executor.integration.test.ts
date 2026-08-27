@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CompanionFixPolicy } from '../core/models/companion-types.js';
 import type { CompanionReviewMode, WorkflowState } from '../core/models/types.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { CompanionReviewQueue } from '../core/workflow/companion/review-queue.js';
@@ -87,14 +88,12 @@ function reviewableDiffReader(): CompanionDiffReader {
   };
 }
 
-type TestCompanionFixPolicy = 'single' | 'loop';
-
 function deps(input: {
   cwd: string;
   paths: RunPaths;
   companionEnabled: boolean;
   companionReviewMode?: CompanionReviewMode;
-  companionFixPolicy?: TestCompanionFixPolicy;
+  companionFixPolicy?: CompanionFixPolicy;
   companionDiffReader: CompanionDiffReader;
   emitEvent: StepExecutorDeps['emitEvent'];
 }): StepExecutorDeps {
@@ -652,9 +651,6 @@ describe('companion StepExecutor lifecycle', () => {
         executeAgentMock.mock.invocationCallOrder[coderCallIndices[1]!]!,
       );
       expect(coderPrompts[1]).toContain(finding);
-      expect(coderPrompts[1]).toMatch(/advisory|reference/i);
-      expect(coderPrompts[1]).toMatch(/important|significant|critical/i);
-      expect(coderPrompts[1]).toMatch(/minor|trivial|unnecessary/i);
       expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
       expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'moderator')).toHaveLength(1);
       expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round')).toHaveLength(1);

@@ -98,7 +98,7 @@ describe('resolveAuxiliaryProviderEnvironment', () => {
     expect((env as unknown as { companionFixPolicy?: string }).companionFixPolicy).toBe('loop');
   });
 
-  it('resolves single as the effective default companion fix policy through the auxiliary runtime environment', () => {
+  it('Given companion.fix_policy is omitted, When resolving auxiliary runtime environment, Then it defaults to single', () => {
     writeGlobalConfig(['language: en']);
     writeGlobalRuntimeFile({
       ...activeRuntimeSection(),
