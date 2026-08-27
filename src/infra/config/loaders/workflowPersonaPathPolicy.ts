@@ -24,6 +24,8 @@ function getWorkflowPersonaBases(context: FacetResolutionContext): string[] {
   }
   const bases = [
     getBuiltinFacetDir(context.lang, 'personas'),
+    // Discovery may load the shipped workflow for the other language as well.
+    getBuiltinFacetDir(context.lang === 'en' ? 'ja' : 'en', 'personas'),
     getGlobalFacetDir('personas'),
     join(getGlobalConfigDir(), 'personas'),
     join(getGlobalConfigDir(), 'agents'),

@@ -45,6 +45,7 @@ const THINKING_MARKER = 'Thinking';
 const QUEUE_HINT = 'to edit the queued line';
 /** Drawn in the box in place of the draft, so it means "nothing typed". */
 const PLACEHOLDER = 'Type a task, / for commands';
+const PLACEHOLDER_JA = 'タスクを入力、/ でコマンド';
 const ESC = '\x1b';
 const INTERRUPTED = 'Response interrupted.';
 /**
@@ -217,6 +218,26 @@ describe('E2E: Ink TUI', () => {
     tui.write(text);
     await tui.waitForOutput(`❯ ${text}`);
     tui.write(ENTER);
+  }
+
+  /**
+   * Provider output can arrive before the response is committed and the prompt
+   * returns to its idle state. The empty-input placeholder plus the absence of
+   * the thinking status proves that the next Enter will be handled by Ink.
+   */
+  async function waitForPromptReady(
+    tui: TaktPtySession,
+    responseMarker: string,
+    placeholder: string,
+    thinkingMarker: string,
+  ): Promise<void> {
+    await tui.waitForScreen(
+      `the idle prompt after ${responseMarker}`,
+      (screen) => screen.includes(responseMarker)
+        && screen.includes(placeholder)
+        && !screen.includes(thinkingMarker),
+      10_000,
+    );
   }
 
   /**
@@ -486,6 +507,7 @@ steps:
 
     await submitLine(tui, 'continue after configuration verification');
     await tui.waitForOutput('TUI-MAKER-SECOND-REPLY-OK');
+    await waitForPromptReady(tui, 'TUI-MAKER-SECOND-REPLY-OK', PLACEHOLDER, THINKING_MARKER);
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 120_000);
@@ -763,6 +785,7 @@ steps:
 
     await submitLine(tui, 'inspect the newly selected base');
     await tui.waitForOutput('TUI-MAKER-SECOND-BASE-REPLY');
+    await waitForPromptReady(tui, 'TUI-MAKER-SECOND-BASE-REPLY', PLACEHOLDER, THINKING_MARKER);
 
     expect((await tui.visibleTranscript()).join('\n')).toContain(
       'retain this request across the base handoff',
@@ -812,6 +835,12 @@ steps:
 
     await submitLine(tui, '同じ成果物をもう一度実行する');
     await tui.waitForOutput('TUI-MAKER-SECOND-REPLY-OK');
+    await waitForPromptReady(
+      tui,
+      'TUI-MAKER-SECOND-REPLY-OK',
+      PLACEHOLDER_JA,
+      '考え中...',
+    );
     await submitLine(tui, '/go');
     await waitForSelector(tui, 'どうしますか？');
     tui.write(ENTER);
@@ -831,6 +860,7 @@ steps:
 
     await submitLine(tui, '失敗時の日本語表示を確認する');
     await tui.waitForOutput('TUI-MAKER-THIRD-REPLY-OK');
+    await waitForPromptReady(tui, 'TUI-MAKER-THIRD-REPLY-OK', PLACEHOLDER_JA, '考え中...');
     await submitLine(tui, '/go');
     await waitForSelector(tui, 'どうしますか？');
     tui.write(ENTER);
@@ -923,6 +953,7 @@ steps:
 
     await submitLine(tui, 'run the same approved request again');
     await tui.waitForOutput('TUI-MAKER-SECOND-REPLY-OK');
+    await waitForPromptReady(tui, 'TUI-MAKER-SECOND-REPLY-OK', PLACEHOLDER, THINKING_MARKER);
     await submitLine(tui, '/go');
     await waitForSelector(tui, ACTION_PROMPT);
     tui.write(ENTER);
@@ -946,6 +977,7 @@ steps:
 
     await submitLine(tui, 'run a request that fails');
     await tui.waitForOutput('TUI-MAKER-THIRD-REPLY-OK');
+    await waitForPromptReady(tui, 'TUI-MAKER-THIRD-REPLY-OK', PLACEHOLDER, THINKING_MARKER);
     await submitLine(tui, '/go');
     await waitForSelector(tui, ACTION_PROMPT);
     tui.write(ENTER);
