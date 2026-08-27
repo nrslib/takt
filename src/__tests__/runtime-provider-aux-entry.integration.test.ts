@@ -87,7 +87,7 @@ describe('resolveAuxiliaryProviderEnvironment', () => {
     writeGlobalConfig(['language: en']);
     writeGlobalRuntimeFile({
       ...activeRuntimeSection(),
-      companion: { enabled: true, review_mode: 'live', fix_policy: 'loop' },
+      companion: { enabled: true, review_mode: 'live' },
     } as unknown as RuntimeProviderFile);
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
@@ -95,6 +95,19 @@ describe('resolveAuxiliaryProviderEnvironment', () => {
     const env = resolveAuxiliaryRuntimeEnvironment(projectCwd, WORKFLOW);
 
     expect((env as unknown as { companionReviewMode?: string }).companionReviewMode).toBe('live');
+  });
+
+  it('Given companion.fix_policy is loop, When resolving auxiliary runtime environment, Then it resolves to loop', () => {
+    writeGlobalConfig(['language: en']);
+    writeGlobalRuntimeFile({
+      ...activeRuntimeSection(),
+      companion: { enabled: true, fix_policy: 'loop' },
+    } as unknown as RuntimeProviderFile);
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    const env = resolveAuxiliaryRuntimeEnvironment(projectCwd, WORKFLOW);
+
     expect((env as unknown as { companionFixPolicy?: string }).companionFixPolicy).toBe('loop');
   });
 
