@@ -120,6 +120,8 @@ steps:
       - coding
       - coding-leader
     uses: peer-review-fix
+    companion:
+      $param: fix_companions
     with:
       fix_policy:
         $param: fix_policy
@@ -165,6 +167,8 @@ steps:
       - coding
       - coding-leader
     uses: peer-review-fix
+    companion:
+      $param: fix_companions
     with:
       fix_policy:
         $param: fix_policy

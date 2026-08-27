@@ -31,7 +31,9 @@ interactive_preview_steps: 3  # インタラクティブモードでの step プ
 auto_requeue_max_attempts: 0  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、デフォルト: 0 = 無効）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用（デフォルト: false）
 assistant:
-  formal_spec: 'y/N'          # Alloy／Quint モード: true, false, Y/n, y/N（デフォルト: y/N）
+  formal_spec:
+    mode: 'y/N'                # Alloy／Quint モード: true, false, Y/n, y/N（デフォルト: y/N）
+    comments: true             # 各形式構造への自然言語の意味コメント（デフォルト: true）
 # auto_fetch: false           # クローン作成前にリモートを fetch（デフォルト: false）
 # base_branch: main           # クローン作成のベースブランチ（デフォルト: リモートのデフォルトブランチ）
 
@@ -190,7 +192,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` の並列タスク数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。記法間の重複は避けず、タスクがその記法でどうしても表現できない場合にだけ省略します。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。プロジェクトの明示値がグローバル値より優先されます。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode` と `comments` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
 | `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
@@ -257,7 +259,9 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 # プロジェクト固有の assistant 設定
 # assistant:
-#   formal_spec: 'Y/n'         # global の Alloy／Quint モードを上書き。TTY では Yes を既定に質問
+#   formal_spec:
+#     mode: 'Y/n'               # global の Alloy／Quint モードだけを上書き
+#     comments: false           # 形式仕様は維持し、意味コメントの強制指示だけを外す
 #   init_files:
 #     # project config 専用。インタラクティブ assistant モードの初期コンテキストファイル
 #     - docs/assistant-context.md
@@ -398,7 +402,7 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` | `"y/N"`（global 設定またはデフォルト由来） | 要件を Alloy／Quint の両方の記法でも表現するガイダンスを追加するプロジェクト上書きです。記法間の重複は避けず、タスクがその記法でどうしても表現できない場合にだけ省略します。プロジェクト値がグローバル値より優先されます。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true`（global 設定またはデフォルト由来） | 要件を Alloy／Quint の両方の記法でも表現するガイダンスを追加するプロジェクト上書きです。object 形式では `mode` と `comments` を独立して指定でき、未指定フィールドは global またはデフォルトへフォールバックします。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |
@@ -583,14 +587,16 @@ version: 1
 companion:
   enabled: true
   review_mode: completion # completion | live
+  fix_policy: single      # single | loop
 ```
 
-`companion` ポリシーには `enabled` または `review_mode` の少なくとも一方を
-指定します。`companion: { review_mode: live }` のような mode 単独指定は受理され、
+`companion` ポリシーには `enabled`、`review_mode`、`fix_policy` の少なくとも一方を
+指定します。`companion: { review_mode: live }` や
+`companion: { fix_policy: loop }` のような mode または fix policy 単独指定は受理され、
 `enabled: false` として解決されます。空の `companion: {}` は拒否されます。
 
-global と project の両方にポリシーがある場合、その値は論理積で合成されるため、global
-側で無効化した companion を project 側の `true` で再有効化することはできません。
+global と project の両方にポリシーがある場合、`enabled` の値は論理積で合成されるため、
+global 側で無効化した companion を project 側の `true` で再有効化することはできません。
 レイヤー合成時に未指定のポリシーは中立として扱い、両方とも未指定なら companion は
 無効のままです。
 
@@ -599,7 +605,13 @@ global と project の両方にポリシーがある場合、その値は論理�
 エージェントの成功応答後に累積差分をレビューし、`live` は応答中の quiet、forced、
 commit 発火を維持します。指定できる値は `completion` と `live` だけで、無効な値は
 `runtime.yaml` の読み込み時にエラーになります。`companion.enabled` が `false` でも
-mode の構造は検証されますが、Companion provider の解決と実行は行われません。
+mode と fix policy の構造は検証されますが、Companion provider の解決と実行は行われません。
+
+`companion.fix_policy` の既定値は `single` です。project に指定した値は global を
+上書きし、project で省略した場合は global の値を継承します。`single` は初回レビュー後に
+advisory な修正 follow-up を最大 1 回だけ実行し、その follow-up の再レビューは行いません。
+`loop` は従来のレビューと修正の反復動作を維持します。指定できる値は `single` と `loop`
+だけで、無効な値は `runtime.yaml` の読み込み時にエラーになります。
 
 companion の provider target（`targets.companions`）とプロバイダ能力要件が適用されるのは
 companion が有効な間だけです。無効時も companion 宣言と `targets.companions` の構造検証は
@@ -635,8 +647,19 @@ force-fail しても、この状態を自動復旧できる保証はありませ
 対応済みまたは根拠付きの対応不能に分類し、対応不能な案を撤回した上で再び reviewer が判定します。
 最終 report は常に分析 run の `reports/loop-analysis.md` へ保存されます。
 
+サニタイズと公開の前に、worker は完全版 report を global config dir（`TAKT_CONFIG_DIR` を設定した場合はその値）の
+`loop-analysis/<source-run-slug>-<hash>/loop-analysis.md` へ保存します。`<hash>` は source run directory のパスを
+SHA-256 でハッシュ化した先頭8桁の16進数です。同じ場所に private な `source.json` も作成し、
+version 1、`sourceRunDirectory`、`projectCwd`、任意の `branch`、`analysisReportPath`、`archivedAt`（ISO 文字列）を
+記録します。`pullRequest.number` と `pullRequest.url` は PR コメントの投稿に成功した場合だけ記録されます。
+この archive は `output: file` と `output: pr-comment` の両方で保存され、同じ source run directory を再解析した場合は
+上書きされます。分析 run の report と、存在する場合の PR コメントの末尾には
+`source run: <source-run-slug>` の行を1行だけ付けます。この行には slug だけを記載します。
+archive の保存後、worker は分析 run の report をサニタイズして公開用の内容で上書きします。
+そのため archive には完全版が残り、ファイルと PR コメントはサニタイズ後の同一内容になります。
+
 `output: pr-comment` の場合、元 run で auto-PR が有効で、その branch の PR が既に存在するときだけ、
-保存済み report と同一内容をコメントします。PR が存在しない場合は report ファイルだけを残します。
+保存済み report と同一内容をコメントします。PR が存在しない場合はコメントを投稿せず、分析 report と private archive を残します。
 `loop_analysis` 内に provider、model、provider options は指定できません。通常の runtime provider
 target で分析 step を割り当ててください。global と project の両方が `loop_analysis` を定義した場合、
 project のセクションが global のセクション全体を置き換えます。

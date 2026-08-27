@@ -30,6 +30,8 @@ export function appendCompanionMailboxFindings(input: {
 
 export function buildCompanionMailboxPath(input: {
   cwd: string;
+  /** Absolute run root supplied by the execution locator (central or local). */
+  runRootDirectory?: string;
   runSlug: string;
   runPathNamespace: readonly string[];
   stepName: string;
@@ -44,6 +46,8 @@ export function buildCompanionMailboxPath(input: {
 
 export function buildCompanionMailboxDirectory(input: {
   cwd: string;
+  /** Absolute run root supplied by the execution locator (central or local). */
+  runRootDirectory?: string;
   runSlug: string;
   runPathNamespace: readonly string[];
   stepName: string;
@@ -51,7 +55,10 @@ export function buildCompanionMailboxDirectory(input: {
   assertSafeSegment(input.runSlug, 'run slug');
   assertSafeSegment(input.stepName, 'step name');
   for (const segment of input.runPathNamespace) assertSafeSegment(segment, 'run path namespace');
-  const root = resolve(input.cwd, '.takt', 'runs', input.runSlug, COMPANION_MAILBOX_DIRECTORY);
+  const runRoot = input.runRootDirectory === undefined
+    ? resolve(input.cwd, '.takt', 'runs', input.runSlug)
+    : resolve(input.runRootDirectory);
+  const root = resolve(runRoot, COMPANION_MAILBOX_DIRECTORY);
   const directory = resolve(root, ...input.runPathNamespace, input.stepName);
   const fromRoot = relative(root, directory);
   if (fromRoot.startsWith(`..${sep}`) || fromRoot === '..' || isAbsolute(fromRoot)) {

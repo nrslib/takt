@@ -13,6 +13,7 @@ import {
   requestMoreParts as requestMorePartsImpl,
   type DecomposeTaskOptions,
 } from '../agents/agent-usecases.js';
+import type { AgentResponse, CompanionFinding } from '../core/models/index.js';
 import { runTagJudgeStage as runTagJudgeStageImpl } from '../agents/judge-status-usecase.js';
 import { requestDecompositionRawResponse as requestDecompositionRawResponseImpl } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
@@ -22,6 +23,7 @@ import {
   recordWorkflowStepProviderActivity,
   recordWorkflowStepProviderEventActivity,
 } from '../core/workflow/engine/step-deadline.js';
+import type { ProviderActivityCallback } from '../shared/types/provider.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -59,7 +61,7 @@ vi.mock('../agents/judge-utils.js', async (importOriginal) => {
   };
 });
 
-function doneResponse(content: string, structuredOutput?: Record<string, unknown>) {
+function doneResponse(content: string, structuredOutput?: Record<string, unknown>): AgentResponse {
   return {
     persona: 'tester',
     status: 'done' as const,
@@ -602,7 +604,7 @@ describe('agent-usecases', () => {
           'review',
           event,
         ),
-        onActivity: (activity) => recordWorkflowStepProviderActivity(
+        onActivity: (activity?: Parameters<ProviderActivityCallback>[0]) => recordWorkflowStepProviderActivity(
           deadline.recordActivity,
           'review',
           activity,
@@ -1319,6 +1321,44 @@ describe('agent-usecases', () => {
     expect(callOptions).not.toHaveProperty('permissionMode');
   });
 
+  it('requestMoreParts は Team の Companion finding を typed evidence として prompt に渡す', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: true,
+      reasoning: 'No additional part is needed',
+      cancelPartIds: [],
+      parts: [],
+    }));
+    const finding: CompanionFinding = {
+      companion: 'reviewer',
+      reviewedAt: '2026-08-23T00:00:00.000Z',
+      reviewedDigest: 'digest-1',
+      severity: 'must_fix',
+      file: 'src/value.ts',
+      line: 12,
+      finding: 'The value must be validated before it is stored.',
+    };
+    const options = {
+      cwd: '/repo',
+      persona: 'team-leader',
+      cancellablePartIds: [],
+      companionFindings: [finding],
+    } satisfies Parameters<typeof requestMorePartsImpl>[3];
+
+    await requestMoreParts(
+      'original instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
+      ['p1'],
+      options,
+    );
+
+    const [, prompt] = vi.mocked(runAgent).mock.calls[0] ?? [];
+    expect(prompt).toContain(finding.companion);
+    expect(prompt).toContain(finding.severity);
+    expect(prompt).toContain(finding.file);
+    expect(prompt).toContain(String(finding.line));
+    expect(prompt).toContain(finding.finding);
+  });
+
   it('requestMoreParts は inspect tools を feedback planning call に渡す', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
@@ -1465,7 +1505,7 @@ describe('agent-usecases', () => {
         persona: 'team-leader',
         cancellablePartIds: [],
         workflowMeta,
-      } as DecomposeTaskOptions & { workflowMeta: typeof workflowMeta },
+      } as Parameters<typeof requestMorePartsImpl>[3],
     );
 
     expect(runAgent).toHaveBeenCalledWith(

@@ -3,6 +3,7 @@ import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { crossSpawn } from '../../shared/utils/spawn.js';
+import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 
 const OPENCODE_SERVER_HOSTNAME = '127.0.0.1';
 const CHILD_TERMINATION_GRACE_MS = 500;
@@ -58,7 +59,7 @@ export async function startOpenCodeServer(
     ['serve', `--hostname=${OPENCODE_SERVER_HOSTNAME}`, `--port=${options.port}`],
     {
       env: {
-        ...process.env,
+        ...buildChildProcessEnv(),
         OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config),
       },
     },

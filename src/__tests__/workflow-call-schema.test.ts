@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../core/models/index.js';
+import type { WorkflowCallArgValue } from '../core/models/workflow-types.js';
 import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
 import { hasCompanionReference, parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { prepareCallableSubworkflowDiscoveryArgs } from '../infra/config/loaders/workflowCallableDiscoveryArgs.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { findAgentWorkflowStep } from './test-helpers.js';
 
 function createWorkflowCallStep(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -100,6 +102,28 @@ function createCallableCompanionWorkflow(): Record<string, unknown> {
     }, {
       name: 'fix',
       instruction: 'Fix',
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
+  };
+}
+
+function createCallableTeamLeaderCompanionWorkflow(): Record<string, unknown> {
+  return {
+    name: 'callable-team-leader-companion',
+    subworkflow: {
+      callable: true,
+      params: {
+        implementation_companions: {
+          type: 'companion_ref[]',
+          default: [],
+        },
+      },
+    },
+    steps: [{
+      name: 'implement',
+      instruction: 'Implement',
+      team_leader: { max_concurrency: 2 },
+      companion: { $param: 'implementation_companions' },
       rules: [{ condition: 'done', next: 'COMPLETE' }],
     }],
   };
@@ -427,7 +451,7 @@ describe('workflow_call schema', () => {
 
   it('should omit an empty companion_ref[] while preserving ordinary rules', () => {
     const workflow = normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp');
-    const implement = workflow.steps.find((step) => step.name === 'implement');
+    const implement = findAgentWorkflowStep(workflow, 'implement');
 
     expect(implement).toBeDefined();
     expect(implement?.companion).toBeUndefined();
@@ -441,7 +465,7 @@ describe('workflow_call schema', () => {
         implementation_companions: ['first-reviewer', 'second-reviewer'],
       },
     });
-    const implement = workflow.steps.find((step) => step.name === 'implement');
+    const implement = findAgentWorkflowStep(workflow, 'implement');
 
     expect(implement?.companion).toEqual({
       fixed: ['first-reviewer', 'second-reviewer'],
@@ -449,6 +473,31 @@ describe('workflow_call schema', () => {
     });
     expect(implement?.rules).toHaveLength(1);
     expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
+  });
+
+  it('should expand companion_ref[] on a callable team leader step', () => {
+    const workflow = normalizeWorkflowConfig(
+      createCallableTeamLeaderCompanionWorkflow(),
+      '/tmp',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        callableArgs: {
+          implementation_companions: ['first-reviewer', 'second-reviewer'],
+        },
+      },
+    );
+    const implement = findAgentWorkflowStep(workflow, 'implement');
+
+    expect(implement?.teamLeader).toEqual(expect.objectContaining({ maxConcurrency: 2 }));
+    expect(implement?.companion).toEqual({
+      fixed: ['first-reviewer', 'second-reviewer'],
+      pool: [],
+    });
   });
 
   it('should preserve a companion selection object through callable arg expansion', () => {
@@ -461,7 +510,7 @@ describe('workflow_call schema', () => {
         },
       },
     });
-    const implement = workflow.steps.find((step) => step.name === 'implement');
+    const implement = findAgentWorkflowStep(workflow, 'implement');
 
     expect(implement?.companion).toEqual({
       fixed: ['reviewer'],
@@ -488,13 +537,13 @@ describe('workflow_call schema', () => {
     },
   ])('should reject a malformed companion selection object: $label', ({ value, message }) => {
     expect(() => normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
-      callableArgs: { implementation_companions: value },
+      callableArgs: { implementation_companions: value as unknown as WorkflowCallArgValue },
     })).toThrow(message);
   });
 
   it('should preserve scalar facet params while expanding callable steps', () => {
     const workflow = normalizeWorkflowConfig(createCallableScalarFacetWorkflow(), '/tmp');
-    const review = workflow.steps[0];
+    const review = findAgentWorkflowStep(workflow, 'review');
 
     expect(review.persona).toContain('Reviewer persona content');
     expect(review.policyContents?.map((facet) => facet.content)).toEqual(['Strict review policy content']);
@@ -512,7 +561,7 @@ describe('workflow_call schema', () => {
     ];
 
     const normalized = normalizeWorkflowConfig(workflow, '/tmp');
-    const implement = normalized.steps.find((step) => step.name === 'implement');
+    const implement = findAgentWorkflowStep(normalized, 'implement');
 
     expect(implement?.companion).toBeUndefined();
     expect(implement?.rules?.map((rule) => rule.next)).toEqual(['fix', 'COMPLETE']);
@@ -531,7 +580,7 @@ describe('workflow_call schema', () => {
       ];
 
       const normalized = normalizeWorkflowConfig(workflow, '/tmp');
-      const implement = normalized.steps.find((step) => step.name === 'implement');
+      const implement = findAgentWorkflowStep(normalized, 'implement');
 
       expect(implement?.companion).toBeUndefined();
       expect(implement?.rules?.[0]?.condition).toEqual({ kind: 'semantic', label: condition });
@@ -588,7 +637,7 @@ describe('workflow_call schema', () => {
     ];
 
     const normalized = normalizeWorkflowConfig(workflow, '/tmp');
-    const implement = normalized.steps.find((step) => step.name === 'implement');
+    const implement = findAgentWorkflowStep(normalized, 'implement');
 
     expect(implement?.companion).toBeUndefined();
     expect(implement?.rules).toHaveLength(3);
@@ -752,10 +801,14 @@ describe('workflow_call schema', () => {
       const prepared = prepareCallableSubworkflowDiscoveryArgs(raw);
       expect(prepared.callableArgs).toEqual({ implementation_pool: poolName });
       expect(Object.hasOwn(prepared.raw.facet_pools ?? {}, poolName)).toBe(true);
-      expect(prepared.raw.facet_pools?.[poolName]?.candidates).toHaveLength(1);
+      const preparedPool = prepared.raw.facet_pools?.[poolName];
+      if (preparedPool === undefined || !('candidates' in preparedPool)) {
+        throw new Error(`Expected discovered facet pool "${poolName}" to contain candidates`);
+      }
+      expect(preparedPool.candidates).toHaveLength(1);
     } finally {
       if (previousDescriptor === undefined) {
-        delete Object.prototype[poolName];
+        delete (Object.prototype as Record<string, unknown>)[poolName];
       } else {
         Object.defineProperty(Object.prototype, poolName, previousDescriptor);
       }
@@ -1187,7 +1240,7 @@ describe('workflow_call schema', () => {
       kind: 'workflow_call',
       call: 'takt/review-loop',
     });
-    expect('overrides' in steps[0]).toBe(false);
+    expect('overrides' in steps[0]!).toBe(false);
   });
 
   it.each(['COMPLETE', 'ABORT'])('subworkflow.returns で予約語 %s を reject する', (reservedResult) => {
@@ -1753,7 +1806,7 @@ describe('workflow_call schema', () => {
       process.cwd(),
     );
 
-    const delegate = normalized.steps[0] as Record<string, unknown>;
+    const delegate = normalized.steps[0] as unknown as Record<string, unknown>;
 
     expect('delayBeforeMs' in delegate).toBe(false);
     expect('passPreviousResponse' in delegate).toBe(false);
@@ -1876,9 +1929,9 @@ describe('workflow_call schema', () => {
       process.cwd(),
     );
 
-    const plan = normalized.steps[0] as Record<string, unknown>;
-    const delegate = normalized.steps[1] as Record<string, unknown>;
-    const routeContext = normalized.steps[2] as Record<string, unknown>;
+    const plan = normalized.steps[0] as unknown as Record<string, unknown>;
+    const delegate = normalized.steps[1] as unknown as Record<string, unknown>;
+    const routeContext = normalized.steps[2] as unknown as Record<string, unknown>;
 
     expect(plan.kind).toBe('agent');
     expect(delegate.kind).toBe('workflow_call');

@@ -18,6 +18,7 @@ import {
   loadAllStandaloneWorkflows,
   loadAllStandaloneWorkflowsWithSources,
   loadWorkflow,
+  loadWorkflowFromFile,
   loadWorkflowByIdentifier,
   resolveWorkflowCallTarget,
   listStandaloneWorkflowEntries,
@@ -27,6 +28,7 @@ import {
   loadAllWorkflowsWithSources,
 } from '../infra/config/loaders/workflowLoader.js';
 import { getWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
+import { findAgentWorkflowStep, findWorkflowStep } from './test-helpers.js';
 
 function setBuiltinWorkflowsEnabledForTest(enabled: boolean): void {
   const configDir = process.env.TAKT_CONFIG_DIR;
@@ -64,14 +66,6 @@ steps:
     allowed_tools: [Read]
     instruction: "{task}"
 `;
-
-function findWorkflowStep(workflow: WorkflowConfig, name: string): WorkflowStep {
-  const step = workflow.steps.find((candidate) => candidate.name === name);
-  if (!step) {
-    throw new Error(`Workflow step "${name}" was not found in "${workflow.name}"`);
-  }
-  return step;
-}
 
 function semanticTransitionMap(step: WorkflowStep): Record<string, string | undefined> {
   return Object.fromEntries((step.rules ?? []).map((rule) => {
@@ -263,6 +257,51 @@ describe('loadWorkflowByIdentifier', () => {
         need_replan: 'ABORT',
         ABORT: 'ABORT',
       });
+    }
+  });
+
+  it('loads Team Leader Companion selections through the English and Japanese builtin wiring', () => {
+    const expectedSelection = {
+      fixed: ['ai-antipattern-review-companion', 'testing-review-companion'],
+      pool: [],
+      moderator: 'review-companion-moderator',
+    };
+
+    for (const language of ['en', 'ja'] as const) {
+      const projectDir = join(tempDir, language);
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
+
+      const implementation = loadWorkflowFromFile(
+        join(process.cwd(), 'builtins', language, 'workflows', 'development-implement-team.yaml'),
+        projectDir,
+        { callableArgs: { implementation_companions: ['ai-antipattern-review-companion'] } },
+      );
+      const remediation = loadWorkflowFromFile(
+        join(process.cwd(), 'builtins', language, 'workflows', 'development-remediation-team.yaml'),
+        projectDir,
+        { callableArgs: { fix_companions: ['testing-review-companion'] } },
+      );
+      const defaultTeam = loadWorkflowByIdentifier('takt-default-team', projectDir);
+
+      const implementationStep = findAgentWorkflowStep(implementation, 'implement');
+      const fixStep = findAgentWorkflowStep(remediation, 'fix');
+      const retryStep = findAgentWorkflowStep(remediation, 'fix-retry');
+      const developStep = findWorkflowStep(defaultTeam!, 'develop');
+
+      expect(implementationStep.companion).toEqual({
+        fixed: ['ai-antipattern-review-companion'],
+        pool: [],
+      });
+      expect(fixStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
+      expect(retryStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
+      if (developStep.kind !== 'workflow_call') {
+        throw new Error('Expected default team develop to be a workflow_call step');
+      }
+      expect(developStep.args).toEqual(expect.objectContaining({
+        implementation_companions: expectedSelection,
+      }));
+      expect(developStep.args).not.toHaveProperty('fix_companions');
     }
   });
 

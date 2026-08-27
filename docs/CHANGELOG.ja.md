@@ -6,6 +6,30 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.62.0] - 2026-08-25
+
+### Added
+
+- 対話モードの会話設定コマンド (#1471)。`/workflow`、`/interaction`、`/provider` は起動時と同じ選択 UI を開き直し、`/model <value>` と `/effort <value>` は会話中だけ有効な自由入力の上書きを設定します。選択は一時的で保存されません。workflow・モード・provider・model の変更は次の通常メッセージか `/go` の時点で新しいアシスタントセッションを開始し、それまでの会話履歴を参考情報として一度だけ引き継ぎます。effort だけの変更は次の呼び出しから適用され、provider を変更すると一時的な model・effort の上書きは解除されます。次の入力前に複数回実行した場合は設定ごとに最後の値だけが適用されます。これらの上書きは workflow 実行には影響しません。
+- rule フィールド `command_gates` (#1127)。rule の condition と遷移先を確定してから command quality gate を実行するようになりました。`required`（省略時の既定値）は rule 確定後に step の gate を実行し、成功した場合だけ遷移を適用します。失敗時は従来どおり同じ step へ失敗情報を渡して再実行します。`skip` は gate を実行せずに選択された遷移を適用するため、gate が失敗する状況でも readonly のレビュー step から `needs_fix` や `ABORT` で抜けられます。不正な値はロード時に失敗し、parallel のサブ step も同じポリシーに従います。
+- Team Leader step の Companion レビュー (#1435)。Team Leader step でも通常 agent step と同じ `companion` を宣言できます。各 part は専用の Companion runtime を持ち、part が応答した直後にその時点の累積 diff をレビューし、採用された finding を同じ part セッションへ届け、そのループが収束してから part の結果を公開します。ほかの part は並行して実行を続けます。全 part が完了し Team Leader が追加作業なしと判断すると、集約前に Team 全体の完了レビューを実行します。その finding は既存の追加 part 計画へ渡され、修正 part の後には再び完了レビューが行われます。`takt-default-team`、`development-implement-team`、`development-remediation-team` は Companion を Team Leader step に接続しました。
+
+### Changed
+
+- **BREAKING:** 対話モードの `quiet` と `passthrough`、および workflow の `interactive_mode` フィールドを削除しました (#1471)。対話モードは `assistant`、`grill-me`、`persona` の 3 種類です。`interactive_mode` を含む workflow YAML はロードに失敗するため、フィールドを削除してください。`passthrough` の代わりにはタスクをコマンドライン引数で渡してください。
+- Gherkin ガイダンスを開発・実装タスクに限定し、Gherkin の予約語を常に英語にしました (#1471, #1497)。アシスタントはまずタスクがコード・設定・インフラ・テストを作成または変更するかを判断し、調査・分析・レビュー・企画・文書作成などの実装以外のタスクは Markdown だけで記述します。`Feature`、`Scenario`、`Given`、`When`、`Then` などの構造予約語は日本語の指示書でも英語で書き、`# language` ディレクティブは使用しません。予約語に続く説明は指示書の言語で記述できます。
+- 会話 TUI で送信済みのユーザー発言を強調表示します (#1490)。送信済みの発言は表示幅いっぱいの背景帯に上下 1 行の余白と `❯ ` マーカー付きで描画されます。端末が背景色を報告する場合はその色に合わせ、報告しない場合は暗いグレーと白にフォールバックします。送信前の入力は通常の入力欄の表示のままです。
+- `requeue` の開始位置選択で完全な再開経路を表示します (#1494)。既定の再開候補はルート workflow、各 `workflow_call` step、呼び出し先 workflow、最終 step を引用符付きで ` > ` 区切りに並べて表示し、`Selected start position` のログにも同じ経路を出力します。
+- ループ分析（experimental）が完全版レポートの非公開コピーを保存します (#1495)。worker はサニタイズ前に完全版レポートと source run を記述する `source.json` をグローバル設定ディレクトリの `loop-analysis/<source-run-slug>-<hash>/` へ保存し、サニタイズ後のレポートと PR コメントの末尾に `source run: <slug>` 行を付けます。
+
+### Fixed
+
+- ループ分析レポートで相対パスがマスクされなくなりました (#1495)。`reports/subworkflows/**/plan.md` のようなパスは `**` 直後の `/` が絶対パスとして扱われ `[path]` に化けていました。共通のパス sanitizer はパス境界で判定するようになり、相対パス・glob・`//` コメント・HTML 閉じタグ・URL を保持したまま、レポートと外部向けエラーメッセージ内の POSIX・Windows・UNC・`file://`・`~/` のパスをマスクします。
+
+### Internal
+
+- プロンプト eval スイートを `eval/agents/<step>/` と `eval/scenarios/<flow>/` に整理し、再帰的なスイート検出と重複スイート ID の拒否を追加しました (#1482)。
+
 ## [0.61.0] - 2026-08-23
 
 ### Added

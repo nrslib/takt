@@ -7,7 +7,7 @@
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import type {
   AgentWorkflowStep,
   WorkflowStep,
@@ -62,6 +62,7 @@ import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/in
 import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
+import { resolveReportDirectory } from '../run/run-paths.js';
 import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { waitForStepDelay } from './step-delay.js';
 import { parseStructuredOutputObject } from '../../../agents/structured-caller/shared.js';
@@ -101,7 +102,10 @@ import {
 } from './phase1-empty-recovery.js';
 import { buildCompanionInstructionContext } from '../companion/instruction-context.js';
 import { runCompanionFixPolicy } from '../companion/fix-policy.js';
-import { CompanionStepRuntime } from '../companion/step-runtime.js';
+import {
+  CompanionStepRuntime,
+  type CompanionDiffBaseline,
+} from '../companion/step-runtime.js';
 import type { CompanionAgentPurpose } from '../companion/review-runner.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import { isAbortError } from '../companion/abort.js';
@@ -519,7 +523,7 @@ export class StepExecutor {
     return normalized;
   }
 
-  private async completeReviewerCompanion(input: {
+  async completeCompanionReview(input: {
     readonly eventStep: WorkflowStep;
     readonly executableStep: AgentWorkflowStep;
     readonly state: WorkflowState;
@@ -530,10 +534,23 @@ export class StepExecutor {
     readonly providerInfo: StepProviderInfo;
     readonly nextSequence: () => number;
     readonly onSingleFixSettled?: () => void;
+    readonly abortSignal: AbortSignal | undefined;
+    readonly recordUsage?: (
+      success: boolean,
+      usage: AgentResponse['providerUsage'],
+    ) => void;
   }): Promise<AgentResponse> {
     if (input.companionRuntime === undefined) return input.initialResponse;
-    input.companionRuntime.beginReviewAttempt();
     const fixPolicy = this.deps.companionFixPolicy ?? DEFAULT_COMPANION_FIX_POLICY;
+    const recordUsage = input.recordUsage
+      ?? ((success: boolean, usage: AgentResponse['providerUsage']) => {
+        this.deps.recordSynthesizedAgentUsage(
+          input.eventStep.name,
+          input.providerInfo,
+          success,
+          usage,
+        );
+      });
     const fixResult = await runCompanionFixPolicy({
       policy: fixPolicy,
       initialResponse: input.initialResponse,
@@ -603,12 +620,7 @@ export class StepExecutor {
                   onPhaseComplete: this.deps.onPhaseComplete,
                 });
               }
-              this.deps.recordSynthesizedAgentUsage(
-                input.eventStep.name,
-                input.providerInfo,
-                false,
-                undefined,
-              );
+              recordUsage(false, undefined);
               throw error;
             }
           },
@@ -624,12 +636,7 @@ export class StepExecutor {
                 onPhaseComplete: this.deps.onPhaseComplete,
               });
             }
-            this.deps.recordSynthesizedAgentUsage(
-              input.eventStep.name,
-              input.providerInfo,
-              response.status === 'done',
-              response.providerUsage,
-            );
+            recordUsage(response.status === 'done', response.providerUsage);
           },
         });
         const finalAttempt = resolvePhaseAttempt(recovery.finalAttempt);
@@ -646,12 +653,7 @@ export class StepExecutor {
             attempt: finalAttempt,
             response: recovery.response,
             runtime: input.runtime,
-            recordUsage: (success, usage) => this.deps.recordSynthesizedAgentUsage(
-              input.eventStep.name,
-              input.providerInfo,
-              success,
-              usage,
-            ),
+            recordUsage,
           });
         }
         const normalized = this.normalizeStructuredOutputWithDiagnostics(
@@ -670,12 +672,7 @@ export class StepExecutor {
             response: { ...recovery.response, status: 'error', error: error.message },
             onPhaseComplete: this.deps.onPhaseComplete,
           });
-          this.deps.recordSynthesizedAgentUsage(
-            input.eventStep.name,
-            input.providerInfo,
-            false,
-            recovery.response.providerUsage,
-          );
+          recordUsage(false, recovery.response.providerUsage);
           throw error;
         }
         completeObservedPhase1Attempt({
@@ -685,15 +682,10 @@ export class StepExecutor {
           response: normalized.response,
           onPhaseComplete: this.deps.onPhaseComplete,
         });
-        this.deps.recordSynthesizedAgentUsage(
-          input.eventStep.name,
-          input.providerInfo,
-          normalized.response.status === 'done',
-          normalized.response.providerUsage,
-        );
+        recordUsage(normalized.response.status === 'done', normalized.response.providerUsage);
         return normalized.response;
       },
-      abortSignal: this.resolveAbortSignal(),
+      abortSignal: input.abortSignal,
     });
     if (fixResult.followUpFailureReason === undefined) {
       const companionState = requireActiveCompanionState(input.state, input.eventStep.name);
@@ -761,9 +753,12 @@ export class StepExecutor {
     task: string,
     state: WorkflowState,
     abortSignal?: AbortSignal,
+    options?: {
+      readonly diffBaseline?: CompanionDiffBaseline;
+    },
   ): Promise<CompanionStepRuntime | undefined> {
     if (!this.deps.companionEnabled) {
-      if (step.companion !== undefined) {
+      if (step.companion !== undefined && step.engineSynthesized !== true) {
         emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
           step: step.name,
           phase: 'initial',
@@ -803,6 +798,7 @@ export class StepExecutor {
         cwd: this.deps.getCwd(),
         projectCwd: this.deps.getProjectCwd(),
         failureDir: this.deps.getFailureDir(),
+        runRootDirectory: this.deps.getRunPaths().runRootAbs,
         runSlug: this.deps.getRunId(),
         runPathNamespace: this.deps.getRunPathNamespace(),
         language: this.deps.getLanguage() ?? 'en',
@@ -812,6 +808,7 @@ export class StepExecutor {
         providers: companionProviders,
         selectorProvider: this.deps.companionSelectorProvider,
         diffReader: companionDiffReader,
+        diffBaseline: options?.diffBaseline,
         reviewMode: this.deps.companionReviewMode,
         fixPolicy: this.deps.companionFixPolicy ?? DEFAULT_COMPANION_FIX_POLICY,
         abortSignal: runtimeAbortSignal,
@@ -866,16 +863,33 @@ export class StepExecutor {
     }
   }
 
+  createCompanionDiffBaseline(abortSignal?: AbortSignal): CompanionDiffBaseline | undefined {
+    const diffReader = this.deps.companionDiffReader;
+    if (!this.deps.companionEnabled || diffReader === undefined) return undefined;
+    const cwd = this.deps.getCwd();
+    let baselinePromise: Promise<string> | undefined;
+    return {
+      resolve: () => {
+        baselinePromise ??= diffReader.readBaselineSha(cwd, abortSignal);
+        return baselinePromise;
+      },
+    };
+  }
+
   private writeSnapshot(
     content: string,
-    directoryRel: string,
+    directory: string,
     filename: string,
     transaction?: InstructionBuildTransaction,
   ): string {
-    const absPath = join(this.deps.getCwd(), directoryRel, filename);
+    const absPath = join(resolveReportDirectory(this.deps.getCwd(), directory), filename);
     transaction?.recordSnapshotWrite(absPath);
     writeFileSync(absPath, content, 'utf-8');
-    return `${directoryRel}/${filename}`;
+    return join(directory, filename);
+  }
+
+  private contextSnapshotDirectory(relativePath: string, absolutePath: string): string {
+    return isAbsolute(this.deps.getReportDir()) ? absolutePath : relativePath;
   }
 
   private writeFacetSnapshot(
@@ -890,12 +904,12 @@ export class StepExecutor {
     const merged = contentStrings.join('\n\n---\n\n');
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
-    const directoryRel = facet === 'knowledge'
-      ? runPaths.contextKnowledgeRel
-      : runPaths.contextPolicyRel;
+    const directory = facet === 'knowledge'
+      ? this.contextSnapshotDirectory(runPaths.contextKnowledgeRel, runPaths.contextKnowledgeAbs)
+      : this.contextSnapshotDirectory(runPaths.contextPolicyRel, runPaths.contextPolicyAbs);
     const sourcePath = this.writeSnapshot(
       merged,
-      directoryRel,
+      directory,
       StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp),
       transaction,
     );
@@ -911,16 +925,20 @@ export class StepExecutor {
     if (!state.lastOutput || state.previousResponseSourcePath) return;
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
+    const directory = this.contextSnapshotDirectory(
+      runPaths.contextPreviousResponsesRel,
+      runPaths.contextPreviousResponsesAbs,
+    );
     const fileName = StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp);
     const sourcePath = this.writeSnapshot(
       state.lastOutput.content,
-      runPaths.contextPreviousResponsesRel,
+      directory,
       fileName,
       transaction,
     );
     this.writeSnapshot(
       state.lastOutput.content,
-      runPaths.contextPreviousResponsesRel,
+      directory,
       'latest.md',
       transaction,
     );
@@ -935,9 +953,13 @@ export class StepExecutor {
   ): void {
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
+    const directory = this.contextSnapshotDirectory(
+      runPaths.contextPreviousResponsesRel,
+      runPaths.contextPreviousResponsesAbs,
+    );
     const fileName = StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp);
-    const sourcePath = this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, fileName);
-    this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, 'latest.md');
+    const sourcePath = this.writeSnapshot(content, directory, fileName);
+    this.writeSnapshot(content, directory, 'latest.md');
     state.previousResponseSourcePath = sourcePath;
   }
 
@@ -1213,7 +1235,7 @@ export class StepExecutor {
       transaction,
     );
     const workflowSteps = this.deps.getWorkflowSteps();
-    const reportDir = join(this.deps.getCwd(), this.deps.getReportDir());
+    const reportDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
     // workflow_call の子（subworkflows 名前空間）の {report:X} が親成果物へ
     // read-only フォールバックするための reports ルート。engine の runPaths から
     // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
@@ -1261,6 +1283,7 @@ export class StepExecutor {
         companionEnabled: this.deps.companionEnabled,
         companionReviewMode: this.deps.companionReviewMode,
         cwd: this.deps.getCwd(),
+        getRunRootDirectory: () => this.deps.getRunPaths().runRootAbs,
         step,
         getRunSlug: () => this.deps.getRunId(),
         getRunPathNamespace: () => this.deps.getRunPathNamespace(),
@@ -1504,6 +1527,7 @@ export class StepExecutor {
       ...baseAgentOptions,
       ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
     };
+    activeCompanionRuntime?.beginReviewAttempt();
     const promptResolvedAttempts = new Set<number>();
     const phase1Result = await runPhase1WithEmptyRecovery({
       instruction: phase1Instruction,
@@ -1691,7 +1715,7 @@ export class StepExecutor {
 
     let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
     let companionSingleFixSettled = false;
-    response = await this.completeReviewerCompanion({
+    response = await this.completeCompanionReview({
       eventStep: step,
       executableStep,
       state,
@@ -1704,6 +1728,7 @@ export class StepExecutor {
       onSingleFixSettled: () => {
         companionSingleFixSettled = true;
       },
+      abortSignal: this.resolveAbortSignal(),
     });
     if (response.sessionId !== undefined) {
       updatePersonaSession(sessionKey, response.sessionId);
@@ -1726,6 +1751,9 @@ export class StepExecutor {
         originalInstruction: phase1Instruction,
         initialResponse: response,
         executeRetry: async (retryInstruction, retrySessionId) => {
+          if (!companionSingleFixSettled) {
+            activeCompanionRuntime?.beginReviewAttempt();
+          }
           const observedAttempts = new Map<number, Phase1Attempt>();
           const resolveObservedAttempt = (attempt: Phase1Attempt): Phase1Attempt => {
             const existing = observedAttempts.get(attempt.sequence);
@@ -1802,7 +1830,7 @@ export class StepExecutor {
           if (companionSingleFixSettled) {
             return normalized;
           }
-          return this.completeReviewerCompanion({
+          return this.completeCompanionReview({
             eventStep: step,
             executableStep,
             state,
@@ -1815,6 +1843,7 @@ export class StepExecutor {
             onSingleFixSettled: () => {
               companionSingleFixSettled = true;
             },
+            abortSignal: this.resolveAbortSignal(),
           });
         },
       });
@@ -1935,7 +1964,7 @@ export class StepExecutor {
   ): void {
     if (!step.outputContracts || step.outputContracts.length === 0) return;
     const context = this.createReportExecutionContext(execution);
-    const baseDir = join(this.deps.getCwd(), this.deps.getReportDir());
+    const baseDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
 
     for (const entry of step.outputContracts) {
       const fileName = entry.name;

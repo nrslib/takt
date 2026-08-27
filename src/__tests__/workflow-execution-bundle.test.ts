@@ -3,13 +3,18 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { WorkflowConfig } from '../core/models/index.js';
+import type { McpServerConfig, WorkflowConfig } from '../core/models/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 import {
   loadWorkflowExecutionBundle,
+  loadWorkflowExecutionBundleMetadata,
+  MAX_WORKFLOW_BUNDLE_MANIFEST_BYTES,
+  MAX_WORKFLOW_BUNDLE_OBJECT_BYTES,
+  MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES,
+  MAX_WORKFLOW_BUNDLE_RESOURCES_BYTES,
   prepareWorkflowExecutionBundle,
   publishWorkflowExecutionBundle,
 } from '../features/tasks/execute/workflowExecutionBundle.js';
@@ -32,6 +37,43 @@ function workflow(name: string, steps: WorkflowConfig['steps']): WorkflowConfig 
     maxSteps: 5,
     steps,
   }, `project:sha256:${name.padEnd(64, '0').slice(0, 64)}`);
+}
+
+function mcpAgentWorkflow(
+  name: string,
+  mcpServers: Record<string, McpServerConfig>,
+): WorkflowConfig {
+  return workflow(name, [{
+    name: 'work',
+    kind: 'agent',
+    persona: 'prompt',
+    personaDisplayName: 'work',
+    instruction: '{task}',
+    mcpServers,
+  }]);
+}
+
+function withMcpServers(
+  config: WorkflowConfig,
+  mcpServers: Record<string, McpServerConfig>,
+): WorkflowConfig {
+  const copy = structuredClone(config);
+  const step = copy.steps[0];
+  if (step === undefined || step.kind === 'system' || step.kind === 'workflow_call') {
+    throw new Error('Expected an agent step');
+  }
+  step.mcpServers = mcpServers;
+  return copy;
+}
+
+function prepareCentralBundle(root: string, rootWorkflow: WorkflowConfig) {
+  return prepareWorkflowExecutionBundle({
+    rootWorkflow,
+    workflowCallResolver: () => null,
+    projectCwd: root,
+    lookupCwd: root,
+    centralExecution: true,
+  });
 }
 
 describe('workflow execution bundle', () => {
@@ -130,12 +172,14 @@ steps:
     publishWorkflowExecutionBundle(paths, prepared);
     const loaded = loadWorkflowExecutionBundle(paths);
     const [first, second] = loaded.rootWorkflow.steps;
-    expect(first?.args).toEqual({
+    const firstCall = first as { readonly args?: unknown } | undefined;
+    const secondCall = second as { readonly args?: unknown } | undefined;
+    expect(firstCall?.args).toEqual({
       mode: 'first',
       personaPath: 'ordinary-persona-argument',
       partPersonaPath: 'ordinary-part-persona-argument',
     });
-    expect(second?.args).toEqual({
+    expect(secondCall?.args).toEqual({
       mode: 'second',
       companions: {
         fixed: ['reviewer'],
@@ -220,6 +264,178 @@ steps:
     expect(() => loadWorkflowExecutionBundle(paths)).toThrow('argument "companions" is invalid');
   });
 
+  it('requires references only for credential-bearing MCP env and headers', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-mcp-env-'));
+    roots.push(root);
+    const centralWorkflow = mcpAgentWorkflow('central-mcp', {
+      stdio: {
+        command: 'mcp-server',
+        env: {
+          LOG_LEVEL: 'debug',
+          NODE_ENV: 'test',
+          ENDPOINT: 'https://example.test/mcp',
+          API_KEY: '${MCP_API_KEY}',
+        },
+      },
+      http: {
+        type: 'http',
+        url: 'https://example.test/mcp?version=2',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Request-Id': 'request-id',
+          Authorization: '${MCP_TOKEN}',
+        },
+      },
+    });
+
+    const prepared = prepareCentralBundle(root, centralWorkflow);
+    const serialized = [...prepared.objects.values()].join('\n');
+    expect(serialized).toContain('${MCP_API_KEY}');
+    expect(serialized).toContain('debug');
+    expect(serialized).toContain('application/json');
+    expect(serialized).not.toContain('literal-secret');
+
+    const literalEnvWorkflow = withMcpServers(centralWorkflow, {
+      stdio: {
+        command: 'mcp-server',
+        env: { API_KEY: 'literal-secret' },
+      },
+    });
+    expect(() => prepareCentralBundle(root, literalEnvWorkflow)).toThrow(/unsafe MCP value/i);
+
+    const mixedHeaderWorkflow = withMcpServers(centralWorkflow, {
+      http: {
+        type: 'http',
+        url: 'https://example.test/mcp',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ${MCP_TOKEN}',
+        },
+      },
+    });
+    expect(() => prepareCentralBundle(root, mixedHeaderWorkflow)).toThrow(/unsafe MCP value/i);
+
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: literalEnvWorkflow,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    })).not.toThrow();
+  });
+
+  it('allows ordinary MCP arguments while protecting credential flags', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-mcp-args-'));
+    roots.push(root);
+    const baseWorkflow = mcpAgentWorkflow('central-mcp-args', {
+      safe: { command: 'npx', args: [] },
+    });
+    const withArgs = (args: string[]): WorkflowConfig => withMcpServers(baseWorkflow, {
+      safe: { command: 'npx', args },
+    });
+
+    expect(() => prepareCentralBundle(root, withArgs([
+      '-y',
+      '-h',
+      '-k',
+      '-p',
+      '-t',
+      '-A',
+      '@modelcontextprotocol/server-filesystem',
+      'serve',
+      '--transport=stdio',
+      '--API_KEY=${MCP_TOKEN}',
+      '--authorization:${MCP_AUTHORIZATION}',
+      '--headerish=ordinary-value',
+    ]))).not.toThrow();
+
+    for (const args of [
+      ['--API_KEY=literal-secret'],
+      ['--api_key=Bearer ${MCP_TOKEN}'],
+      ['-Hliteral-secret'],
+      ['-HAuthorization:literal-secret'],
+      ['-H=literal-secret'],
+      ['-H:literal-secret'],
+      ['-H', 'literal-secret'],
+      ['-uliteral-secret'],
+      ['-u=literal-secret'],
+      ['-u:literal-secret'],
+      ['-u', 'literal-secret'],
+      ['-Uliteral-secret'],
+      ['-UBearer ${MCP_PROXY_USER}'],
+      ['-U=literal-secret'],
+      ['-U:literal-secret'],
+      ['-U', 'literal-secret'],
+      ['-url'],
+      ['--user=literal-secret'],
+      ['--proxy-user:literal-secret'],
+      ['--user', 'literal-secret'],
+      ['--proxy-user', 'literal-secret'],
+      ['--auth-header=literal-secret'],
+      ['--custom-header:literal-secret'],
+      ['--authorization-header', 'literal-secret'],
+    ]) {
+      expect(() => prepareCentralBundle(root, withArgs(args))).toThrow(/unsafe MCP value/i);
+    }
+
+    for (const args of [
+      ['-H${MCP_HEADER}'],
+      ['-H=${MCP_HEADER}'],
+      ['-H:${MCP_HEADER}'],
+      ['-H', '${MCP_HEADER}'],
+      ['-u${MCP_USER}'],
+      ['-u=${MCP_USER}'],
+      ['-u:${MCP_USER}'],
+      ['-u', '${MCP_USER}'],
+      ['-U${MCP_PROXY_USER}'],
+      ['-U=${MCP_PROXY_USER}'],
+      ['-U:${MCP_PROXY_USER}'],
+      ['-U', '${MCP_PROXY_USER}'],
+      ['--auth-header=${MCP_AUTH_HEADER}'],
+      ['--custom-header:${MCP_CUSTOM_HEADER}'],
+      ['--authorization-header', '${MCP_AUTHORIZATION_HEADER}'],
+      ['--user=${MCP_USER}'],
+      ['--proxy-user:${MCP_PROXY_USER}'],
+      ['--user', '${MCP_USER}'],
+      ['--proxy-user', '${MCP_PROXY_USER}'],
+    ]) {
+      expect(() => prepareCentralBundle(root, withArgs(args))).not.toThrow();
+    }
+
+    expect(() => prepareCentralBundle(root, withArgs(['-h=help']))).not.toThrow();
+  });
+
+  it('rejects only credential-bearing MCP URL parts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-mcp-url-'));
+    roots.push(root);
+    const withUrl = (url: string): WorkflowConfig => mcpAgentWorkflow('central-mcp-url', {
+      safe: { type: 'http', url },
+    });
+
+    for (const url of [
+      'https://example.test/mcp?version=2&format=json#section',
+      'https://example.test/mcp#section',
+      'https://${MCP_HOST}/mcp?version=${MCP_VERSION}',
+    ]) {
+      expect(() => prepareCentralBundle(root, withUrl(url))).not.toThrow();
+    }
+
+    for (const url of [
+      'https://user:password@example.test/mcp',
+      'https://example.test/mcp?token=literal-secret',
+      'https://example.test/mcp?version=2#session_id=literal-secret',
+      'https://example.test/mcp#section?token=literal-secret',
+    ]) {
+      expect(() => prepareCentralBundle(root, withUrl(url))).toThrow(/unsafe MCP URL|MCP URL credentials/i);
+    }
+
+    expect(() => prepareWorkflowExecutionBundle({
+      rootWorkflow: withUrl('https://example.test/mcp?token=literal-secret'),
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    })).not.toThrow();
+  });
+
   it('fails loudly when an object is tampered', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-tamper-'));
     roots.push(root);
@@ -238,6 +454,143 @@ steps:
     const objectFile = join(paths.workflowBundleObjectsAbs, `${objectHash}.json`);
     writeFileSync(objectFile, readFileSync(objectFile, 'utf-8').replace('"name":"root"', '"name":"evil"'));
     expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/integrity|hash/i);
+    expect(() => loadWorkflowExecutionBundleMetadata(paths)).toThrow(/integrity|hash/i);
+  });
+
+  it('validates UI bundle metadata without reading resource contents', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-metadata-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'work',
+      kind: 'agent',
+      persona: 'prompt',
+      personaDisplayName: 'work',
+      instruction: '{task}',
+    }]);
+    const paths = buildRunPaths(root, 'metadata-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+
+    const manifest = JSON.parse(readFileSync(paths.workflowBundleManifestAbs, 'utf-8')) as {
+      resources: Record<string, { size: number }>;
+    };
+    const [resourceHash, descriptor] = Object.entries(manifest.resources)[0]!;
+    const resourcePath = join(paths.workflowBundleResourcesAbs, resourceHash);
+    writeFileSync(resourcePath, Buffer.alloc(descriptor.size, 0x78));
+
+    expect(loadWorkflowExecutionBundleMetadata(paths).rootWorkflow.name).toBe('root');
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/integrity|hash/i);
+  });
+
+  it('bounds persisted manifest and object reads before JSON parsing', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-size-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'work', kind: 'agent', persona: 'prompt', personaDisplayName: 'work', instruction: '{task}',
+    }]);
+    const paths = buildRunPaths(root, 'size-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+    writeFileSync(paths.workflowBundleManifestAbs, 'x'.repeat(MAX_WORKFLOW_BUNDLE_MANIFEST_BYTES + 1));
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/limit/);
+
+    const secondRoot = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-object-size-'));
+    roots.push(secondRoot);
+    const secondPaths = buildRunPaths(secondRoot, 'object-size-run');
+    publishWorkflowExecutionBundle(secondPaths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: secondRoot,
+      lookupCwd: secondRoot,
+    }));
+    const manifest = JSON.parse(readFileSync(secondPaths.workflowBundleManifestAbs, 'utf-8')) as {
+      nodes: Record<string, string>;
+    };
+    const objectHash = Object.values(manifest.nodes)[0]!;
+    writeFileSync(
+      join(secondPaths.workflowBundleObjectsAbs, `${objectHash}.json`),
+      'x'.repeat(MAX_WORKFLOW_BUNDLE_OBJECT_BYTES + 1),
+    );
+    expect(() => loadWorkflowExecutionBundle(secondPaths)).toThrow(/limit/);
+  });
+
+  it('bounds resource descriptors before a full loader reads their bytes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-resource-size-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'work',
+      kind: 'agent',
+      persona: 'prompt',
+      personaDisplayName: 'work',
+      instruction: '{task}',
+    }]);
+    const paths = buildRunPaths(root, 'resource-size-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+    const manifest = JSON.parse(readFileSync(paths.workflowBundleManifestAbs, 'utf-8')) as {
+      resources: Record<string, { kind: string; size: number }>;
+    };
+    const [resourceHash, descriptor] = Object.entries(manifest.resources)[0]!;
+    descriptor.size = MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES + 1;
+    const manifestText = canonicalJson(manifest);
+    writeFileSync(paths.workflowBundleManifestAbs, `${manifestText}\n`);
+    writeFileSync(
+      paths.workflowBundleManifestHashAbs,
+      `${createHash('sha256').update(manifestText).digest('hex')}\n`,
+    );
+    expect(() => loadWorkflowExecutionBundleMetadata(paths)).toThrow(/limit/);
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/limit/);
+    expect(resourceHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(MAX_WORKFLOW_BUNDLE_RESOURCES_BYTES).toBeGreaterThan(MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES);
+  });
+
+  it('rejects an oversized resource from its actual file size before reading it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-resource-actual-size-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'work',
+      kind: 'agent',
+      persona: 'prompt',
+      personaDisplayName: 'work',
+      instruction: '{task}',
+    }]);
+    const paths = buildRunPaths(root, 'resource-actual-size-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+    const manifest = JSON.parse(readFileSync(paths.workflowBundleManifestAbs, 'utf-8')) as {
+      resources: Record<string, { kind: string; size: number }>;
+    };
+    const [resourceHash, descriptor] = Object.entries(manifest.resources)[0]!;
+    descriptor.size = 0;
+    const resourcePath = join(paths.workflowBundleResourcesAbs, resourceHash);
+    // The forged zero descriptor must not make the loader allocate/read this
+    // file before enforcing the actual per-resource bound.
+    writeFileSync(resourcePath, Buffer.alloc(MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES + 1));
+    const manifestText = canonicalJson(manifest);
+    writeFileSync(paths.workflowBundleManifestAbs, `${manifestText}\n`);
+    writeFileSync(
+      paths.workflowBundleManifestHashAbs,
+      `${createHash('sha256').update(manifestText).digest('hex')}\n`,
+    );
+
+    expect(() => loadWorkflowExecutionBundleMetadata(paths)).toThrow(/limit|size/i);
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/limit|size/i);
   });
 
   it('rebinds a team leader part persona to the verified bundle resource', () => {
@@ -253,6 +606,8 @@ steps:
       teamLeader: {
         persona: 'planning prompt',
         partPersona: partPersonaContent,
+        maxConcurrency: 1,
+        timeoutMs: 1_000,
       },
     }]);
     const paths = buildRunPaths(root, 'team-leader-run');
@@ -340,7 +695,8 @@ steps:
       ],
     }, workflowDir, { projectDir: root, workflowDir, lang: 'en' }), `project:sha256:${'r'.repeat(64)}`);
 
-    expect(config.steps[0]?.dynamicFacets?.selector?.personaPath).toBe(facetSelectorPersonaPath);
+    const configuredFacetStep = config.steps[0] as Extract<WorkflowConfig['steps'][number], { dynamicFacets?: unknown }>;
+    expect(configuredFacetStep.dynamicFacets?.selector?.personaPath).toBe(facetSelectorPersonaPath);
     const normalizedParallel = config.steps[1]?.parallel;
     if (normalizedParallel === undefined || Array.isArray(normalizedParallel)) {
       throw new Error('Expected a dynamic parallel step');
@@ -356,7 +712,8 @@ steps:
     }));
 
     const loaded = loadWorkflowExecutionBundle(paths);
-    const facetSelector = loaded.rootWorkflow.steps[0]?.dynamicFacets?.selector;
+    const loadedFacetStep = loaded.rootWorkflow.steps[0] as Extract<WorkflowConfig['steps'][number], { dynamicFacets?: unknown }>;
+    const facetSelector = loadedFacetStep.dynamicFacets?.selector;
     const parallel = loaded.rootWorkflow.steps[1]?.parallel;
     if (parallel === undefined || Array.isArray(parallel)) {
       throw new Error('Expected a dynamic parallel step');

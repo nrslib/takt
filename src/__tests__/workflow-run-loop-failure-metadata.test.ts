@@ -48,7 +48,7 @@ function makeDeps(
     applyRuntimeEnvironment: vi.fn(),
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
-    resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE' })),
+    resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE', commandGates: 'required' as const })),
     runLoopMonitorJudge: vi.fn(),
     runStep: vi.fn(async (_step: WorkflowStep, instruction: string) => ({ response, instruction })),
     runQualityGates: vi.fn(async () => ({ ok: true as const })),
@@ -305,7 +305,7 @@ describe('WorkflowRunLoop failure metadata', () => {
         content: reason,
       });
       const deps = makeDeps(state, step, response);
-      vi.mocked(deps.resolveDoneTransition).mockReturnValue({ nextStep: 'ABORT' });
+      vi.mocked(deps.resolveDoneTransition).mockReturnValue({ nextStep: 'ABORT', commandGates: 'required' });
       vi.mocked(deps.runStep).mockResolvedValue({
         response,
         instruction: '',
@@ -351,7 +351,7 @@ describe('WorkflowRunLoop failure metadata', () => {
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'review', status: 'done', content: 'stop' });
     const deps = makeDeps(state, step, response);
-    vi.mocked(deps.resolveDoneTransition).mockReturnValue({ nextStep: 'ABORT' });
+    vi.mocked(deps.resolveDoneTransition).mockReturnValue({ nextStep: 'ABORT', commandGates: 'required' });
 
     const result = await runWorkflowToCompletion(deps);
 

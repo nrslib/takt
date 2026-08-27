@@ -7,6 +7,7 @@ import type {
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
   AgentWorkflowStep,
+  CompanionFinding,
 } from '../../models/types.js';
 import { sumRetryCounts } from '../../models/response.js';
 import { ParallelLogger } from './parallel-logger.js';
@@ -49,7 +50,7 @@ import type {
 } from '../types.js';
 import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
 import type { CompanionFixPolicy } from '../../models/companion-types.js';
-import { runCompanionFixPolicy } from '../companion/fix-policy.js';
+import { buildCompanionSingleFixInstruction } from '../companion/evidence.js';
 import {
   buildTeamLeaderErrorPartResult,
   runTeamLeaderPart,
@@ -75,6 +76,7 @@ import type {
   WorkflowStepInactivityDeadline,
   WorkflowStepExecutionDeadlineContext,
 } from './step-deadline.js';
+import type { CompanionDiffBaseline } from '../companion/step-runtime.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -106,33 +108,6 @@ interface SingleCompanionCompletionContext {
     instruction: string,
     abortSignal: AbortSignal | undefined,
   ) => Promise<MorePartsResponse>;
-}
-
-function mergeSingleCompanionFeedback(
-  normalResponse: MorePartsResponse,
-  followUpResponse: MorePartsResponse,
-  scheduledIds: readonly string[],
-): MorePartsResponse {
-  const scheduledIdSet = new Set(scheduledIds);
-  const seenPartIds = new Set<string>();
-  const parts = [...normalResponse.parts, ...followUpResponse.parts]
-    .filter((part) => {
-      if (scheduledIdSet.has(part.id) || seenPartIds.has(part.id)) {
-        return false;
-      }
-      seenPartIds.add(part.id);
-      return true;
-    })
-    .map((part) => structuredClone(part));
-  const providerUsage = normalResponse.providerUsage ?? followUpResponse.providerUsage;
-
-  return {
-    done: normalResponse.done,
-    reasoning: normalResponse.reasoning,
-    cancelPartIds: [...normalResponse.cancelPartIds],
-    parts,
-    ...(providerUsage === undefined ? {} : { providerUsage }),
-  };
 }
 
 function truncateTeamLeaderFailureContent(text: string): string {
@@ -167,6 +142,27 @@ function selectPrimaryTeamLeaderFailure(failedResults: readonly PartResult[]): P
     throw new Error('Team leader failure aggregation requires at least one failed part');
   }
   return primaryFailure;
+}
+
+function classifyTeamLeaderPartFailures(
+  partResults: readonly PartResult[],
+  failOnPartError: boolean,
+): {
+  readonly failedResults: PartResult[];
+  readonly allFailed: boolean;
+  readonly timeoutContinuationFailed: boolean;
+  readonly terminal: boolean;
+} {
+  const failedResults = partResults.filter((result) => result.response.status === 'error');
+  const allFailed = failedResults.length === partResults.length;
+  const timeoutContinuationFailed = hasFailedTimeoutContinuationResult([...partResults]);
+  const failClosedPartError = failOnPartError && failedResults.length > 0;
+  return {
+    failedResults,
+    allFailed,
+    timeoutContinuationFailed,
+    terminal: allFailed || timeoutContinuationFailed || failClosedPartError,
+  };
 }
 
 export interface TeamLeaderRunnerDeps {
@@ -289,6 +285,7 @@ export class TeamLeaderRunner {
       undefined,
       leaderRuntime,
     );
+    const parentAbortSignal = leaderBaseOptions.abortSignal;
     const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
       leaderBaseOptions.workflowMeta,
     );
@@ -296,51 +293,46 @@ export class TeamLeaderRunner {
       leaderBaseOptions.abortSignal,
       leaderDeadline?.signal,
     ]);
-    const companionRuntime = executableStep.companion === undefined
+    const teamCompanionDiffBaseline = executableStep.companion === undefined
+      ? undefined
+      : this.deps.stepExecutor.createCompanionDiffBaseline(leaderAbortSignal);
+    const teamCompanionRuntime = executableStep.companion === undefined
       ? undefined
       : await runWithExecutionDeadline(
         executionDeadlineContext,
         leaderDeadline,
-        () => this.deps.stepExecutor.createCompanionRuntime(
-          executableStep,
-          task,
-          state,
-          leaderAbortSignal,
-        ),
+        async () => {
+          // Capture the Team start baseline before selection or part execution. A selected
+          // runtime still owns reporting a rejected read through the existing fail-soft path.
+          await teamCompanionDiffBaseline?.resolve().catch(() => undefined);
+          return this.deps.stepExecutor.createCompanionRuntime(
+            executableStep,
+            task,
+            state,
+            leaderAbortSignal,
+            {
+              diffBaseline: teamCompanionDiffBaseline,
+            },
+          );
+        },
       );
-    using activeCompanionRuntime = companionRuntime;
-    activeCompanionRuntime?.beginReviewAttempt();
-    let companionFollowUpRound = 0;
-    let companionFindingCountForNextRound = 0;
-    let companionReviewCompleted = false;
-    let companionSinglePolicyExecuted = false;
-    let feedbackRequestCount = 0;
-    const completeCompanionReview = async (implementerResponse: string): Promise<void> => {
-      if (activeCompanionRuntime === undefined) return;
-      if (companionFindingCountForNextRound > 0) {
-        const sequence = companionFollowUpRound + 2;
-        activeCompanionRuntime.beginFollowUpRound(
-          sequence,
-          companionFindingCountForNextRound,
-        );
-        companionFollowUpRound += 1;
-        companionFindingCountForNextRound = 0;
-      }
-      const review = await activeCompanionRuntime.complete(
+    using activeTeamCompanionRuntime = teamCompanionRuntime;
+    const composedLeaderOptions = activeTeamCompanionRuntime?.composeOptions(leaderBaseOptions)
+      ?? leaderBaseOptions;
+    activeTeamCompanionRuntime?.beginReviewAttempt();
+    let teamCompanionFollowUpRound = 0;
+    let singleCorrectionPartIds: readonly string[] | undefined;
+    const completeTeamCompanionReview = async (
+      implementerResponse: string,
+    ): Promise<readonly CompanionFinding[]> => {
+      if (activeTeamCompanionRuntime === undefined) return [];
+      const review = await activeTeamCompanionRuntime.complete(
         state,
         implementerResponse,
-        { followUpRound: companionFollowUpRound },
+        { followUpRound: teamCompanionFollowUpRound },
       );
-      companionReviewCompleted = true;
-      companionFindingCountForNextRound = review.findings.length;
+      return review.findings;
     };
-    const createCompanionResponse = (content: string, providerUsage: AgentResponse['providerUsage']): AgentResponse => ({
-      persona: leaderStep.name,
-      status: 'done',
-      content,
-      timestamp: new Date(),
-      ...(providerUsage === undefined ? {} : { providerUsage }),
-    });
     const buildFeedbackResults = (results: PartResult[]): TeamLeaderPartFeedbackResult[] => results.map((result) => {
       const fullContent = result.response.status === 'error'
         ? `[ERROR] ${resolvePartErrorDetail(result)}`
@@ -362,51 +354,75 @@ export class TeamLeaderRunner {
       implementerResponse: string,
       context: SingleCompanionCompletionContext,
     ): Promise<MorePartsResponse | undefined> => {
-      let followUpResponse: MorePartsResponse | undefined;
-      const fixResult = await runCompanionFixPolicy({
-        policy: 'single',
-        initialResponse: createCompanionResponse(implementerResponse, undefined),
-        phase1Options: {},
-        completeReview: async ({ implementerResponse: response, followUpRound }) => {
-          const review = await activeCompanionRuntime!.complete(
-            state,
-            response,
-            { followUpRound },
-          );
-          companionReviewCompleted = true;
-          return review;
-        },
-        executeFollowUp: async (attempt) => {
-          activeCompanionRuntime!.beginFollowUpRound(attempt.sequence, attempt.findingCount);
-          followUpResponse = await context.requestFollowUp(
-            attempt.instruction,
-            context.abortSignal,
-          );
-          feedbackRequestCount += 1;
-          return createCompanionResponse(
-            JSON.stringify(followUpResponse),
-            followUpResponse.providerUsage,
-          );
-        },
-        abortSignal: context.abortSignal,
-      });
+      context.abortSignal?.throwIfAborted();
+      const review = await activeTeamCompanionRuntime!.complete(
+        state,
+        implementerResponse,
+        { followUpRound: 0 },
+      );
+      context.abortSignal?.throwIfAborted();
+      if (review.findings.length === 0) {
+        return undefined;
+      }
 
-      companionSinglePolicyExecuted = true;
-      if (fixResult.followUpFailureReason !== undefined) {
-        activeCompanionRuntime!.completeFollowUpFailure(
+      activeTeamCompanionRuntime!.beginFollowUpRound(2, review.findings.length);
+      try {
+        const followUpResponse = await context.requestFollowUp(
+          buildCompanionSingleFixInstruction(review.findings),
+          context.abortSignal,
+        );
+        context.abortSignal?.throwIfAborted();
+        return followUpResponse;
+      } catch (error) {
+        context.abortSignal?.throwIfAborted();
+        activeTeamCompanionRuntime!.completeFollowUpFailure(
           state,
-          fixResult.followUpRounds,
-          fixResult.followUpFailureReason,
+          1,
+          getErrorMessage(error),
         );
         return undefined;
       }
-      if (fixResult.followUpRounds > 0) {
-        activeCompanionRuntime!.completeSingleFix(state, fixResult.followUpRounds);
-      }
-      return followUpResponse;
     };
-    const leaderStream = activeCompanionRuntime?.composeOptions(leaderBaseOptions).onStream
-      ?? leaderBaseOptions.onStream;
+    const settleSingleCompanionCorrection = (
+      results: readonly PartResult[],
+    ): ReadonlySet<string> | undefined => {
+      if (singleCorrectionPartIds === undefined) {
+        return undefined;
+      }
+
+      const resultsByPartId = new Map(results.map((result) => [result.part.id, result]));
+      const missingPartIds = singleCorrectionPartIds.filter((partId) => !resultsByPartId.has(partId));
+      const correctionResults = singleCorrectionPartIds
+        .map((partId) => resultsByPartId.get(partId))
+        .filter((result): result is PartResult => result !== undefined);
+      const failedResults = correctionResults.filter((result) => result.response.status !== 'done');
+      if (missingPartIds.length > 0 || failedResults.length > 0) {
+        const failedDetails = failedResults.map((result) => {
+          const detail = (result.response.error ?? result.response.content).trim();
+          const status = result.response.status;
+          return detail.length === 0
+            ? `${result.part.id} (${status})`
+            : `${result.part.id} (${status}): ${detail}`;
+        });
+        const reason = missingPartIds.length > 0
+          ? `Team leader correction did not settle: missing results for ${missingPartIds.join(', ')}`
+            + (failedDetails.length > 0 ? `; failed: ${failedDetails.join('; ')}` : '')
+          : `Team leader correction failed: ${failedDetails.join('; ')}`;
+        activeTeamCompanionRuntime!.completeFollowUpFailure(
+          state,
+          1,
+          reason,
+        );
+        return new Set([
+          ...missingPartIds,
+          ...failedResults.map((result) => result.part.id),
+        ]);
+      }
+
+      activeTeamCompanionRuntime!.completeSingleFix(state, 1);
+      return undefined;
+    };
+    const leaderStream = composedLeaderOptions.onStream;
     const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
     const inspectGuidance = isTeamLeaderInspectGuidanceApplicable(teamLeaderConfig.inspectTools);
     const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
@@ -427,6 +443,8 @@ export class TeamLeaderRunner {
     const buildFeedbackOptions = (
       abortSignal: AbortSignal | undefined,
       cancellablePartIds: readonly string[],
+      companionFindings?: readonly CompanionFinding[],
+      ignoredCancelPartIds?: readonly string[],
     ) => ({
       cwd: this.deps.getCwd(),
       persona: leaderStep.persona,
@@ -447,6 +465,12 @@ export class TeamLeaderRunner {
       childProcessEnv: this.deps.engineOptions.childProcessEnv,
       failureDir: leaderBaseOptions.failureDir,
       cancellablePartIds,
+      ...(ignoredCancelPartIds === undefined
+        ? {}
+        : { ignoredCancelPartIds }),
+      ...(companionFindings === undefined
+        ? {}
+        : { companionFindings: structuredClone(companionFindings) }),
       inspectTools,
       inspectGuidance,
       abortSignal,
@@ -612,7 +636,7 @@ export class TeamLeaderRunner {
       plannedParts: terminalPlannedParts,
       scheduledIds,
     }) => {
-      if (activeCompanionRuntime === undefined || companionReviewCompleted) {
+      if (activeTeamCompanionRuntime === undefined) {
         return undefined;
       }
       const currentPartResults = structuredClone(terminalPartResults) as PartResult[];
@@ -634,12 +658,41 @@ export class TeamLeaderRunner {
       );
       const finalCompletionContext: SingleCompanionCompletionContext = {
         abortSignal: leaderAbortSignal,
-        requestFollowUp: (followUpInstruction, abortSignal) => structuredCaller.requestMoreParts(
-          followUpInstruction,
-          buildFeedbackResults(currentPartResults),
-          [...scheduledIds],
-          buildFeedbackOptions(abortSignal, []),
-        ),
+        requestFollowUp: async (followUpInstruction, abortSignal) => {
+          const response = await structuredCaller.requestMoreParts(
+            followUpInstruction,
+            buildFeedbackResults(currentPartResults),
+            [...scheduledIds],
+            buildFeedbackOptions(
+              abortSignal,
+              [],
+              undefined,
+              currentPartResults.map((result) => result.part.id),
+            ),
+          );
+          const knownPartIds = new Set(scheduledIds);
+          const correctionParts = response.parts.filter((part) => {
+            if (knownPartIds.has(part.id)) {
+              return false;
+            }
+            knownPartIds.add(part.id);
+            return true;
+          });
+          if (response.done || correctionParts.length === 0) {
+            throw new Error('Team Companion correction planning did not schedule a correction part');
+          }
+          await this.addPartAutoRouting(
+            routedProviderInfoByPart,
+            executableStep,
+            correctionParts,
+            runtime,
+          );
+          return {
+            ...response,
+            cancelPartIds: [],
+            parts: correctionParts,
+          };
+        },
       };
       const followUpResponse = await runWithExecutionDeadline(
         executionDeadlineContext,
@@ -647,12 +700,7 @@ export class TeamLeaderRunner {
         () => runSingleCompanionCompletion(aggregatedContent, finalCompletionContext),
       );
       if (followUpResponse !== undefined) {
-        await this.addPartAutoRouting(
-          routedProviderInfoByPart,
-          executableStep,
-          followUpResponse.parts,
-          runtime,
-        );
+        singleCorrectionPartIds = followUpResponse.parts.map((part) => part.id);
       }
       return followUpResponse;
     };
@@ -671,7 +719,7 @@ export class TeamLeaderRunner {
           executionAbortScope.abort(error);
         },
         onExecutionTerminal: this.deps.companionFixPolicy === 'single'
-          && activeCompanionRuntime !== undefined
+          && activeTeamCompanionRuntime !== undefined
           ? requestSingleCompanionCompletionAtExecutionTerminal
           : undefined,
       onPartQueued: (part) => {
@@ -717,6 +765,29 @@ export class TeamLeaderRunner {
           detail: getErrorMessage(error),
         });
       },
+      onCompletionPlanningFailure: (error) => {
+        activeTeamCompanionRuntime?.completeFollowUpFailure(
+          state,
+          teamCompanionFollowUpRound,
+          getErrorMessage(error),
+        );
+      },
+      reviewCompletion: this.deps.companionFixPolicy !== 'loop'
+        || activeTeamCompanionRuntime === undefined
+        ? undefined
+        : ({ partResults: currentResults, plannedParts: currentPlannedParts }) => {
+            const currentResultsCopy = structuredClone(currentResults) as PartResult[];
+            if (classifyTeamLeaderPartFailures(
+              currentResultsCopy,
+              teamLeaderConfig.failOnPartError === true,
+            ).terminal) {
+              return Promise.resolve([]);
+            }
+            return completeTeamCompanionReview(buildTeamLeaderAggregatedContent(
+              structuredClone(currentPlannedParts) as PartDefinition[],
+              currentResultsCopy,
+            ));
+          },
       requestMoreParts: async ({
         partResults: currentResults,
         latestBatchResults: _latestBatchResults,
@@ -725,6 +796,7 @@ export class TeamLeaderRunner {
         scheduledIds,
         cancellablePartIds,
         abortSignal: feedbackAbortSignal,
+        companionFindings,
       }) => {
         const currentResultsCopy = structuredClone(currentResults) as PartResult[];
         const scheduledIdsCopy = [...scheduledIds];
@@ -736,75 +808,22 @@ export class TeamLeaderRunner {
           : AbortSignal.any([feedbackAbortSignal, leaderDeadline.signal]);
         try {
           const feedbackInstruction = instruction;
-          const requestFeedback = async (abortSignal: AbortSignal): Promise<MorePartsResponse> => {
-            const response = await structuredCaller.requestMoreParts(
-              feedbackInstruction,
-              feedbackResults,
-              scheduledIdsCopy,
-              buildFeedbackOptions(abortSignal, cancellablePartIdsCopy),
+          if (companionFindings !== undefined && companionFindings.length > 0) {
+            if (activeTeamCompanionRuntime === undefined) {
+              throw new Error('Team Companion findings require an active Companion runtime');
+            }
+            activeTeamCompanionRuntime.beginFollowUpRound(
+              teamCompanionFollowUpRound + 2,
+              companionFindings.length,
             );
-            return response.done ? { ...response, parts: [] } : response;
-          };
-          let moreParts: MorePartsResponse;
-          if (this.deps.companionFixPolicy === 'single' && activeCompanionRuntime !== undefined) {
-            const singleCompletionContext: SingleCompanionCompletionContext = {
-              abortSignal: feedbackSignal,
-              requestFollowUp: (followUpInstruction, abortSignal) => structuredCaller.requestMoreParts(
-                followUpInstruction,
-                feedbackResults,
-                scheduledIdsCopy,
-                buildFeedbackOptions(abortSignal, cancellablePartIdsCopy),
-              ),
-            };
-
-            if (companionSinglePolicyExecuted) {
-              moreParts = await requestFeedback(feedbackSignal);
-              feedbackRequestCount += 1;
-            } else if (feedbackRequestCount === 0) {
-              moreParts = await requestFeedback(feedbackSignal);
-              feedbackRequestCount += 1;
-              const followUp = await runSingleCompanionCompletion(
-                JSON.stringify(feedbackResults),
-                singleCompletionContext,
-              );
-              if (followUp !== undefined) {
-                moreParts = mergeSingleCompanionFeedback(
-                  moreParts,
-                  followUp,
-                  scheduledIdsCopy,
-                );
-              }
-            } else {
-              const followUp = await runSingleCompanionCompletion(
-                JSON.stringify(feedbackResults),
-                singleCompletionContext,
-              );
-              if (followUp !== undefined) {
-                moreParts = followUp;
-              } else {
-                moreParts = await requestFeedback(feedbackSignal);
-                feedbackRequestCount += 1;
-              }
-            }
-          } else {
-            const reviewedBeforeFeedback = feedbackRequestCount > 0;
-            if (reviewedBeforeFeedback) {
-              await completeCompanionReview(JSON.stringify(feedbackResults));
-            }
-            moreParts = await requestFeedback(feedbackSignal);
-            feedbackRequestCount += 1;
-            if (!reviewedBeforeFeedback) {
-              await completeCompanionReview(JSON.stringify(feedbackResults));
-            }
-            if (
-              moreParts.done
-              && activeCompanionRuntime !== undefined
-              && companionFindingCountForNextRound > 0
-            ) {
-              moreParts = await requestFeedback(feedbackSignal);
-              feedbackRequestCount += 1;
-            }
+            teamCompanionFollowUpRound += 1;
           }
+          const moreParts = await structuredCaller.requestMoreParts(
+            feedbackInstruction,
+            feedbackResults,
+            scheduledIdsCopy,
+            buildFeedbackOptions(feedbackSignal, cancellablePartIdsCopy, companionFindings),
+          );
           await this.addPartAutoRouting(
             routedProviderInfoByPart,
             executableStep,
@@ -817,6 +836,9 @@ export class TeamLeaderRunner {
             throw error;
           }
           if (isProviderStreamParseError(error)) {
+            throw error;
+          }
+          if (companionFindings !== undefined && companionFindings.length > 0) {
             throw error;
           }
           const timeoutFallback = createTimeoutContinuationFeedback({
@@ -864,9 +886,10 @@ export class TeamLeaderRunner {
               parallelLogger,
               partRuntime,
               partProviderInfo,
-              activeCompanionRuntime === undefined
+              teamCompanionDiffBaseline,
+              activeTeamCompanionRuntime === undefined
                 ? undefined
-                : (options) => activeCompanionRuntime.composeOptions(options),
+                : (options) => activeTeamCompanionRuntime.composeOptions(options),
               instructionTransaction,
               partAbortSignal,
               publicationFence,
@@ -880,15 +903,37 @@ export class TeamLeaderRunner {
         },
         }),
       );
+    } catch (error) {
+      if (singleCorrectionPartIds !== undefined) {
+        parentAbortSignal?.throwIfAborted();
+        activeTeamCompanionRuntime!.completeFollowUpFailure(
+          state,
+          1,
+          `Team leader correction execution failed: ${getErrorMessage(error)}`,
+        );
+      }
+      throw error;
     } finally {
       executionAbortScope.dispose();
     }
     const { plannedParts, partResults } = executionResult;
-    const retryCount = sumRetryCounts(partResults.map((result) => result.response));
+    if (singleCorrectionPartIds !== undefined) {
+      parentAbortSignal?.throwIfAborted();
+    }
+    const failedCorrectionPartIds = settleSingleCompanionCorrection(partResults);
+    const teamOutcomePartResults = failedCorrectionPartIds === undefined
+      ? partResults
+      : partResults.filter((result) => !failedCorrectionPartIds.has(result.part.id));
+    const teamOutcomePlannedParts = failedCorrectionPartIds === undefined
+      ? plannedParts
+      : plannedParts.filter((part) => !failedCorrectionPartIds.has(part.id));
+    const retryCount = sumRetryCounts(teamOutcomePartResults.map((result) => result.response));
     this.recordPartRoutingResults(executableStep, partResults, routedProviderInfoByPart);
     this.emitPartRoutingDecisionEvents(executableStep, partResults, routedProviderInfoByPart, parentIteration);
 
-    const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
+    const rateLimitedResult = teamOutcomePartResults.find(
+      (result) => result.response.status === 'rate_limited',
+    );
     if (rateLimitedResult) {
       const rateLimitedResponse: AgentResponse = {
         ...rateLimitedResult.response,
@@ -904,11 +949,16 @@ export class TeamLeaderRunner {
       };
     }
 
-    const failedResults = partResults.filter((result) => result.response.status === 'error');
-    const allFailed = failedResults.length === partResults.length;
-    const timeoutContinuationFailed = hasFailedTimeoutContinuationResult(partResults);
-    const failClosedPartError = teamLeaderConfig.failOnPartError === true && failedResults.length > 0;
-    if (allFailed || timeoutContinuationFailed || failClosedPartError) {
+    const failureClassification = classifyTeamLeaderPartFailures(
+      teamOutcomePartResults,
+      teamLeaderConfig.failOnPartError === true,
+    );
+    if (failureClassification.terminal) {
+      const {
+        failedResults,
+        allFailed,
+        timeoutContinuationFailed,
+      } = failureClassification;
       const errors = failedResults.map((result) => `${result.part.id}: ${resolvePartErrorDetail(result)}`).join('; ');
       const errorMessage = allFailed
         ? `All team leader parts failed: ${errors}`
@@ -941,18 +991,10 @@ export class TeamLeaderRunner {
       };
     }
 
-    const aggregatedContent = buildTeamLeaderAggregatedContent(plannedParts, partResults);
-    if (
-      activeCompanionRuntime !== undefined
-      && !companionReviewCompleted
-      && this.deps.companionFixPolicy !== 'single'
-    ) {
-      await runWithExecutionDeadline(
-        executionDeadlineContext,
-        leaderDeadline,
-        () => completeCompanionReview(aggregatedContent),
-      );
-    }
+    const aggregatedContent = buildTeamLeaderAggregatedContent(
+      teamOutcomePlannedParts,
+      teamOutcomePartResults,
+    );
 
     if (parallelLogger) {
       parallelLogger.printSummary(
@@ -1106,7 +1148,8 @@ export class TeamLeaderRunner {
     parallelLogger: ParallelLogger | undefined,
     runtime: RuntimeStepResolution | undefined,
     providerInfo: StepProviderInfo,
-    composeOptions?: (options: RunAgentOptions) => RunAgentOptions,
+    companionDiffBaseline: CompanionDiffBaseline | undefined,
+    composeTeamCompanionOptions: ((options: RunAgentOptions) => RunAgentOptions) | undefined,
     instructionTransaction?: InstructionBuildTransaction,
     executionAbortSignal?: AbortSignal,
     publicationFence?: TeamLeaderExecutionPublicationFence,
@@ -1114,6 +1157,9 @@ export class TeamLeaderRunner {
   ): Promise<PartResult> {
     publicationFence?.assertRunning('part.worker_start');
     const startedAt = Date.now();
+    const partCompanionState: WorkflowState = { ...state };
+    let initialResponseRecorded = false;
+    let companionPhaseSequence = 2;
     const result = await runTeamLeaderPart(
       this.deps.optionsBuilder,
       step,
@@ -1147,13 +1193,56 @@ export class TeamLeaderRunner {
       executionAbortSignal,
       {
         forceNewSession: false,
-        composeOptions,
+        composeOptions: composeTeamCompanionOptions,
         deadlineSignal,
         providerInfo,
+        createCompanionRuntime: async (partStep, abortSignal) => {
+          if (partStep.companion === undefined) return undefined;
+          return this.deps.stepExecutor.createCompanionRuntime(
+            partStep,
+            task,
+            partCompanionState,
+            abortSignal,
+            { diffBaseline: companionDiffBaseline },
+          );
+        },
+        completeCompanionReview: async ({
+          partStep,
+          initialResponse,
+          agentOptions,
+          companionRuntime,
+          abortSignal,
+        }) => {
+          initialResponseRecorded = true;
+          this.recordUsage(
+            partStep.name,
+            providerInfo,
+            true,
+            initialResponse.providerUsage,
+          );
+          return this.deps.stepExecutor.completeCompanionReview({
+            eventStep: partStep,
+            executableStep: partStep,
+            state: partCompanionState,
+            initialResponse,
+            agentOptions,
+            runtime,
+            companionRuntime,
+            providerInfo,
+            nextSequence: () => companionPhaseSequence++,
+            abortSignal,
+            recordUsage: (success, usage) => this.recordUsage(
+              partStep.name,
+              providerInfo,
+              success,
+              usage,
+            ),
+          });
+        },
       },
     );
     publicationFence?.assertRunning('part.completed');
-    if (result.providerInfo !== undefined) {
+    if (!initialResponseRecorded && result.providerInfo !== undefined) {
       this.recordUsage(
         `${step.name}.${part.id}`,
         result.providerInfo,

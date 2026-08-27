@@ -163,6 +163,7 @@ Team Leader はタスクを独立 part に分解する。`initial_max_parts` を
 rules:
   - condition: 条件テキスト      # マッチ条件（必須）
     next: next-step             # 遷移先 step 名（必須、parallel 子では任意）
+    command_gates: required     # command gate policy（required / skip、省略時 required）
     requires_user_input: true   # ユーザー入力が必要（任意）
     interactive_only: true      # インタラクティブモードのみ（任意）
     appendix: |                 # 追加情報（任意）
@@ -229,7 +230,7 @@ output_contracts:
 
 ## Quality Gates 定義
 
-Step 完了時の品質 gate を定義する。文字列は AI への指示としてプロンプトに含まれる。`type: command` の object gate は step 完了後に worktree 内で機械実行され、exit code `0` の場合のみ成功する。workflow YAML の command gate は config 側の `workflow_command_gates.custom_scripts: true` が必要。失敗時は command metadata / cwd / exit code または timeout・output limit 情報 / 非公開 output log path が同じ step の差し戻し入力に含まれる。サニタイズ済み stdout / stderr はローカルの非公開ログだけに保存され、step への差し戻し入力には含まれない。
+Step 完了時の品質 gate を定義する。文字列は AI への指示としてプロンプトに含まれる。`type: command` の object gate は rule condition と transition の解決後、選択された rule の `command_gates` が `required` の場合に transition 適用前に worktree 内で機械実行され、exit code `0` の場合のみ成功する。`command_gates: skip` では実行せず、省略時は `required`。workflow YAML の command gate は config 側の `workflow_command_gates.custom_scripts: true` が必要。失敗時は command metadata / cwd / exit code または timeout・output limit 情報 / 非公開 output log path が同じ step の差し戻し入力に含まれる。サニタイズ済み stdout / stderr はローカルの非公開ログだけに保存され、step への差し戻し入力には含まれない。
 
 ```yaml
 quality_gates:

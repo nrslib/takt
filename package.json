@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.61.0",
+  "version": "0.62.0",
   "description": "Workflow control for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -37,6 +37,10 @@
     "eval:prompts:review-impact-path-coverage": "node --test eval/providers/cli-review.test.mjs eval/asserts/prepare-dynamic-facet-composition.test.mjs && node eval/scripts/prepare.mjs review-impact-path-coverage && node eval/scripts/run-evals.mjs review-impact-path-coverage --no-cache",
     "eval:prompts:initial-review-contract-discovery": "node eval/scripts/prepare.mjs initial-review-contract-discovery && node eval/scripts/run-evals.mjs initial-review-contract-discovery",
     "eval:prompts:testing-review-observable-evidence": "node eval/scripts/prepare.mjs testing-review-observable-evidence && node eval/scripts/run-evals.mjs testing-review-observable-evidence",
+    "eval:prompts:state-after-event-plan": "node eval/scripts/prepare.mjs state-after-event-plan && node eval/scripts/run-evals.mjs state-after-event-plan",
+    "eval:prompts:state-after-event-plan-config": "node eval/scripts/prepare.mjs state-after-event-plan-config && node eval/scripts/run-evals.mjs state-after-event-plan-config",
+    "eval:prompts:state-after-event-write-tests": "node eval/scripts/prepare.mjs state-after-event-write-tests && node eval/scripts/run-evals.mjs state-after-event-write-tests",
+    "eval:prompts:state-after-event-testing-review": "node eval/scripts/prepare.mjs state-after-event-testing-review && node eval/scripts/run-evals.mjs state-after-event-testing-review",
     "eval:prompts:initial-plan-contract-closure": "node eval/scripts/prepare.mjs initial-plan-contract-closure && node eval/scripts/run-evals.mjs initial-plan-contract-closure",
     "eval:prompts:replan-contract-closure": "node eval/scripts/prepare.mjs replan-contract-closure && node eval/scripts/run-evals.mjs replan-contract-closure",
     "eval:prompts:issue-plan-samples": "node eval/scripts/prepare.mjs issue-plan-samples && node eval/scripts/run-evals.mjs issue-plan-samples",
@@ -146,7 +150,9 @@
   "files": [
     "dist/",
     "bin/",
-    "builtins/"
+    "builtins/",
+    "docs/assets/takt-logo-dark.svg",
+    "web-ui/"
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",

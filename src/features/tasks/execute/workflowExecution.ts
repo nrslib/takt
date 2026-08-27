@@ -75,6 +75,7 @@ import {
   publishWorkflowExecutionBundle,
 } from './workflowExecutionBundle.js';
 import { scheduleLoopAnalysis } from './loopAnalysis.js';
+import { buildChildProcessEnv } from '../../../shared/utils/child-process-env.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -212,13 +213,16 @@ async function executeWorkflowInternal(
     workflowCallResolver: liveWorkflowCallResolver,
     projectCwd: options.projectCwd,
     lookupCwd: cwd,
+    centralExecution: options.runPathsDirectory !== undefined,
   });
   const runLifecycle = createWorkflowRunLifecycle({
     cwd,
+    ...(options.runPathsDirectory === undefined ? {} : { runPathsDirectory: options.runPathsDirectory }),
   });
   const availableSourceLineage = resolveAvailableSourceLineage(
     cwd,
     options.resumeSource,
+    options.runPathsDirectory,
   );
   const activeRun = await runLifecycle.lifecycle.beginRun({
     workflowConfig,
@@ -235,6 +239,7 @@ async function executeWorkflowInternal(
       cwd,
       activeRun.runSlug,
       options.resumeSource,
+      options.runPathsDirectory,
     );
   const artifactResumeSource = resumeLineage.artifactResumeSource;
   const publishedResumeSource = resumeLineage.publishedResumeSource;
@@ -264,6 +269,9 @@ async function executeWorkflowInternal(
       workflowConfig,
       task,
       projectCwd: options.projectCwd,
+      ...(options.sessionStorageDirectory === undefined
+        ? {}
+        : { sessionStorageDirectory: options.sessionStorageDirectory }),
       primaryError: bootstrapError,
       resumeLineage,
       loopAnalysisScheduler: options.loopAnalysisScheduler,
@@ -274,6 +282,9 @@ async function executeWorkflowInternal(
   const terminalPublicationContext = {
     runSlug: bootstrap.runSlug,
     projectCwd: options.projectCwd,
+    ...(options.sessionStorageDirectory === undefined
+      ? {}
+      : { sessionStorageDirectory: options.sessionStorageDirectory }),
     task,
     workflowName: bootstrap.effectiveWorkflowConfig.name,
     sessionLog: bootstrap.sessionLog,
@@ -367,7 +378,7 @@ async function executeWorkflowInternal(
       });
       const childProcessEnv = resolveNestedChildProcessEnv(
         bootstrap.observability,
-        process.env,
+        buildChildProcessEnv(),
       );
       engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
         abortSignal: executionControl.signal,
@@ -437,6 +448,7 @@ async function executeWorkflowInternal(
         resumeSource: artifactResumeSource,
         operationJournal: bootstrap.operationJournal,
         reportDirName: bootstrap.runSlug,
+        ...(options.runPathsDirectory === undefined ? {} : { runPathsDirectory: options.runPathsDirectory }),
         taskPrefix: options.taskPrefix,
         taskColorIndex: options.taskColorIndex,
         initialIteration: options.initialIterationOverride,
@@ -621,12 +633,13 @@ async function executeWorkflowInternal(
 function resolveAvailableSourceLineage(
   cwd: string,
   resumeSource: WorkflowExecutionOptions['resumeSource'],
+  runsDirectory?: string,
 ): WorkflowExecutionResumeLineage | undefined {
   if (resumeSource?.sourceRunSlug === undefined) {
     return undefined;
   }
   try {
-    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource, runsDirectory);
   } catch (error) {
     if (error instanceof OperationLineageUnavailableError) {
       return undefined;
@@ -640,6 +653,7 @@ async function terminalizeBootstrapFailure(input: {
   readonly workflowConfig: WorkflowConfig;
   readonly task: string;
   readonly projectCwd: string;
+  readonly sessionStorageDirectory?: string;
   readonly primaryError: unknown;
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
   readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
@@ -694,6 +708,9 @@ async function terminalizeBootstrapFailure(input: {
   const terminalPayloads = createWorkflowTerminalPayloadFactory({
     runSlug: input.activeRun.runSlug,
     projectCwd: input.projectCwd,
+    ...(input.sessionStorageDirectory === undefined
+      ? {}
+      : { sessionStorageDirectory: input.sessionStorageDirectory }),
     task: input.task,
     workflowName: input.workflowConfig.name,
     sessionLog,

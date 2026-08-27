@@ -7,7 +7,13 @@ import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { makeStep, makeRule, makeResponse, createTestTmpDir, applyDefaultMocks } from './engine-test-helpers.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import type { StructuredCaller } from '../agents/structured-caller.js';
-import type { AgentResponse, TeamLeaderWorkflowStep, WorkflowConfig } from '../core/models/index.js';
+import type {
+  AgentResponse,
+  CompanionFinding,
+  TeamLeaderWorkflowStep,
+  WorkflowConfig,
+} from '../core/models/index.js';
+import type { CompanionDiff } from '../core/workflow/companion/diff-reader.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { DelegatedAgentUsageContext, DelegatedAgentUsageResult } from '../core/workflow/types.js';
 import { initNdjsonLog } from '../infra/fs/session.js';
@@ -21,8 +27,10 @@ import type { ProviderEventLogRecord } from '../core/logging/providerEvent.js';
 import type { UsageEventLogRecord } from '../core/logging/usageEvent.js';
 import { DebugLogger } from '../shared/utils/debug.js';
 import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
+import { PROVIDER_CALL_TIMEOUT_MIN_MS } from '../shared/types/provider-deadline.js';
 import { COMPANION_CHANGE_DEBOUNCE_MS } from '../core/workflow/companion/change-detector.js';
-import type { CompanionDiff } from '../core/workflow/companion/diff-reader.js';
+import { buildCompanionMailboxPath } from '../core/workflow/companion/mailbox.js';
+import { createTeamLeaderPartCancellation } from '../core/workflow/engine/team-leader-part-cancellation.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -163,6 +171,56 @@ function mockRunAgentWithPrompt(...responses: ReturnType<typeof makeResponse>[])
       return response;
     });
   }
+}
+
+function reviewsCompanionStep(instruction: string, stepName: string): boolean {
+  return instruction.includes(`"label":"step_name","value":"${stepName}"`);
+}
+
+function mockTeamLeaderPersonaResponses(input: {
+  readonly teamLeader: readonly AgentResponse[];
+  readonly coder: readonly AgentResponse[];
+  readonly companions: Readonly<Record<string, readonly AgentResponse[]>>;
+}): void {
+  const teamLeaderResponses = [...input.teamLeader];
+  const coderResponses = [...input.coder];
+  const companionResponses = new Map(
+    Object.entries(input.companions).map(([name, responses]) => [name, [...responses]]),
+  );
+
+  vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+    const personaName = typeof persona === 'string' ? persona : '';
+    options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+
+    const configuredCompanionResponses = companionResponses.get(personaName);
+    if (configuredCompanionResponses !== undefined) {
+      if (!reviewsCompanionStep(instruction, 'implement')) {
+        return makeResponse({
+          persona: personaName,
+          structuredOutput: { findings: [], notes: null },
+        });
+      }
+      const response = configuredCompanionResponses.shift();
+      if (response === undefined) {
+        throw new Error(`No response configured for Team Leader test persona: ${personaName}`);
+      }
+      return response;
+    }
+
+    const responses = personaName.includes('team-leader')
+      ? teamLeaderResponses
+      : personaName.includes('coder')
+        ? coderResponses
+        : undefined;
+    if (responses === undefined) {
+      throw new Error(`Unexpected Team Leader test persona: ${personaName}`);
+    }
+    const response = responses.shift();
+    if (response === undefined) {
+      throw new Error(`No response configured for Team Leader test persona: ${personaName}`);
+    }
+    return response;
+  });
 }
 
 function mockRunAgentRejectingOnAbort(onWaitingForAbort?: () => void): void {
@@ -365,10 +423,498 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     ]);
   });
 
-  it('Team Leader は一つの companion runtime で全 worker part の完了レビューを行う', async () => {
+  it('Team Leader は part ごとの完了レビューと Team 終端レビューを分離する', async () => {
     const config = buildTeamLeaderConfig();
     updateTeamLeaderStep(config, (step) => ({
       ...step,
+      teamLeader: { ...step.teamLeader, maxConcurrency: 1 },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const expectedReviewRounds = [
+      { step: 'implement.part-1', digest: 'part-1-initial-digest' },
+      { step: 'implement.part-1', digest: 'part-1-fixed-digest' },
+      { step: 'implement.part-2', digest: 'part-2-cumulative-digest' },
+      { step: 'implement', digest: 'part-2-cumulative-digest' },
+      { step: 'implement.part-3', digest: 'part-3-cumulative-digest' },
+      { step: 'implement', digest: 'part-3-cumulative-digest' },
+      { step: 'implement.part-4', digest: 'part-4-cumulative-digest' },
+      { step: 'implement', digest: 'part-4-cumulative-digest' },
+    ];
+    const worktreeFile = join(tmpDir, 'src', 'a.ts');
+    mkdirSync(join(tmpDir, 'src'), { recursive: true });
+    const digestByWorktreeContent = new Map([
+      ['part-1-initial\n', 'part-1-initial-digest'],
+      ['part-1-fixed\n', 'part-1-fixed-digest'],
+      ['part-2-cumulative\n', 'part-2-cumulative-digest'],
+      ['part-3-cumulative\n', 'part-3-cumulative-digest'],
+      ['part-4-cumulative\n', 'part-4-cumulative-digest'],
+    ]);
+    const companionDiffReader = {
+      readBaselineSha: vi.fn()
+        .mockResolvedValueOnce('team-baseline')
+        .mockResolvedValue('later-head'),
+      readDiff: vi.fn().mockImplementation(async (cwd: string, baseline: string) => {
+        expect(cwd).toBe(tmpDir);
+        expect(baseline).toBe('team-baseline');
+        const worktreeContent = readFileSync(join(cwd, 'src', 'a.ts'), 'utf-8');
+        const digest = digestByWorktreeContent.get(worktreeContent);
+        if (digest === undefined) {
+          throw new Error(`Unexpected worktree content: ${worktreeContent}`);
+        }
+        return {
+          status: 'ok' as const,
+          snapshot: {
+            digest,
+            changedLines: 1,
+            content: `+${worktreeContent}`,
+            changedFiles: ['src/a.ts'],
+            fileFingerprints: { 'src/a.ts': digest },
+            hunkFingerprints: { 'src/a.ts:1-1': digest },
+            omittedBytes: 0,
+            truncated: false,
+          },
+        };
+      }),
+    };
+    const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
+    const usageLogger = createUsageEventLogger({
+      logsDir,
+      sessionId: 'team-companion',
+      runId: 'team-companion-run',
+      enabled: true,
+    } satisfies UsageEventLoggerConfig);
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionFixPolicy: 'loop',
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+      onDelegatedAgentUsage: (context, result) => usageLogger.logUsageFor(context, {
+        success: result.success,
+        usage: result.usage ?? {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      }),
+    });
+    const companionStarts = vi.fn();
+    const companionRounds = vi.fn();
+    const companionFindings = vi.fn();
+    const companionFixRounds = vi.fn();
+    const companionCompletes = vi.fn();
+    engine.on('companion:start', companionStarts);
+    engine.on('companion:review_round', companionRounds);
+    engine.on('companion:finding', companionFindings);
+    engine.on('companion:fix_round', companionFixRounds);
+    engine.on('companion:complete', companionCompletes);
+
+    const partOneFinding = {
+      severity: 'must_fix' as const,
+      file: 'src/a.ts',
+      line: 1,
+      finding: 'Remove the unsafe part assignment.',
+    };
+    const teamFinding = {
+      severity: 'must_fix' as const,
+      file: 'src/a.ts',
+      line: 2,
+      finding: 'Remove the unsafe Team assignment.',
+    };
+    const secondTeamFinding = {
+      severity: 'must_fix' as const,
+      file: 'src/a.ts',
+      line: 3,
+      finding: 'Remove the second unsafe Team assignment.',
+    };
+    let partOneFindingReturned = false;
+    let teamFindingIndex = 0;
+    let teamCorrectionCount = 0;
+    const partOneSessionIds: Array<string | undefined> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const personaName = typeof persona === 'string' ? persona : '';
+      options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+      if (personaName === 'reviewer') {
+        const reviewsPartOne = instruction.includes(
+          '"label":"step_name","value":"implement.part-1"',
+        );
+        const reviewsTeam = instruction.includes('"label":"step_name","value":"implement"');
+        const finding = reviewsPartOne && !partOneFindingReturned
+          ? partOneFinding
+          : reviewsTeam && teamFindingIndex < 2
+            ? [teamFinding, secondTeamFinding][teamFindingIndex]
+            : undefined;
+        if (finding === partOneFinding) partOneFindingReturned = true;
+        if (reviewsTeam && finding !== undefined) teamFindingIndex += 1;
+        return makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: finding === undefined ? [] : [finding],
+            notes: null,
+          },
+        });
+      }
+      if (personaName.includes('team-leader')) {
+        const required = options?.outputSchema?.required;
+        if (!Array.isArray(required) || !required.includes('done')) {
+          return makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [
+                  { id: 'part-1', title: 'API', instruction: 'Implement API' },
+                  { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+                ],
+              },
+            });
+        }
+        if (instruction.includes('"label":"team_companion_findings"')) {
+          teamCorrectionCount += 1;
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              done: false,
+              reasoning: teamCorrectionCount === 1
+                ? 'apply the Team finding'
+                : 'apply the second Team finding',
+              cancelPartIds: [],
+              parts: [teamCorrectionCount === 1
+                ? { id: 'part-3', title: 'Correction', instruction: 'Fix Team finding' }
+                : { id: 'part-4', title: 'Second correction', instruction: 'Fix second Team finding' }],
+            },
+          });
+        }
+        return makeResponse({
+          persona: 'team-leader',
+          structuredOutput: { done: true, reasoning: 'enough', cancelPartIds: [], parts: [] },
+        });
+      }
+      if (personaName.includes('coder')) {
+        const worktreeContent = instruction.includes('New companion findings')
+          ? 'part-1-fixed\n'
+          : instruction.includes('Implement API')
+            ? 'part-1-initial\n'
+            : instruction.includes('Add tests')
+              ? 'part-2-cumulative\n'
+              : instruction.includes('Fix second Team finding')
+                ? 'part-4-cumulative\n'
+                : instruction.includes('Fix Team finding')
+                  ? 'part-3-cumulative\n'
+                  : undefined;
+        if (worktreeContent === undefined) {
+          throw new Error(`Unexpected coder instruction: ${instruction}`);
+        }
+        if (worktreeContent.startsWith('part-1-')) {
+          partOneSessionIds.push(options?.sessionId);
+        }
+        writeFileSync(worktreeFile, worktreeContent);
+        return makeResponse({
+          persona: 'coder',
+          content: instruction.includes('New companion findings')
+            ? 'Companion finding fixed'
+            : `${personaName} done`,
+          sessionId: personaName,
+          providerUsage: {
+            inputTokens: 5,
+            outputTokens: 3,
+            totalTokens: 8,
+            usageMissing: false,
+          },
+        });
+      }
+      throw new Error(`Unexpected mock persona: ${personaName}`);
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(companionStarts).toHaveBeenCalledTimes(5);
+    expect(companionStarts.mock.calls.map(([payload]) => payload.step)).toEqual(expect.arrayContaining([
+      'implement.part-1',
+      'implement.part-2',
+      'implement.part-3',
+      'implement.part-4',
+      'implement',
+    ]));
+    expect(companionStarts.mock.calls.every(([payload]) => payload.companion === 'reviewer')).toBe(true);
+    expect(companionRounds.mock.calls.map(([payload]) => ({
+      step: payload.step,
+      digest: payload.digest,
+    }))).toEqual(expectedReviewRounds);
+    expect(companionFindings.mock.calls.map(([payload]) => payload.step)).toEqual([
+      'implement.part-1',
+      'implement',
+      'implement',
+    ]);
+    expect(companionFixRounds.mock.calls.map(([payload]) => payload.step)).toEqual([
+      'implement.part-1',
+      'implement',
+      'implement',
+    ]);
+    expect(companionFixRounds.mock.calls.map(([payload]) => ({
+      step: payload.step,
+      sequence: payload.sequence,
+    }))).toEqual([
+      { step: 'implement.part-1', sequence: 2 },
+      { step: 'implement', sequence: 2 },
+      { step: 'implement', sequence: 3 },
+    ]);
+    expect(companionCompletes.mock.calls).toEqual(expect.arrayContaining([
+      [expect.objectContaining({
+        step: 'implement.part-1',
+        completionSettled: true,
+        completionFailure: false,
+        followUpRounds: 1,
+      })],
+      [expect.objectContaining({
+        step: 'implement.part-2',
+        completionSettled: true,
+        completionFailure: false,
+        followUpRounds: 0,
+      })],
+      [expect.objectContaining({
+        step: 'implement.part-3',
+        completionSettled: true,
+        completionFailure: false,
+        followUpRounds: 0,
+      })],
+      [expect.objectContaining({
+        step: 'implement.part-4',
+        completionSettled: true,
+        completionFailure: false,
+        followUpRounds: 0,
+      })],
+      [expect.objectContaining({
+        step: 'implement',
+        completionSettled: true,
+        completionFailure: false,
+        followUpRounds: 2,
+      })],
+    ]));
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(8);
+    const teamLeaderInstructions = vi.mocked(runAgent).mock.calls
+      .filter(([persona]) => persona?.includes('team-leader'))
+      .map(([, instruction]) => instruction);
+    expect(teamLeaderInstructions).toHaveLength(6);
+    for (const instruction of teamLeaderInstructions) {
+      expect(instruction).toContain('Inbox:');
+      expect(instruction).toContain('/companion/implement');
+    }
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(5);
+    const partOneOutput = state.stepOutputs.get('implement.part-1');
+    expect(partOneSessionIds).toEqual([undefined, partOneOutput?.sessionId]);
+    expect(state.stepOutputs.get('implement.part-1')).toMatchObject({
+      content: 'Companion finding fixed',
+    });
+    expect(state.stepOutputs.has('implement.part-3')).toBe(true);
+    expect(state.stepOutputs.has('implement.part-4')).toBe(true);
+
+    expect(companionDiffReader.readBaselineSha).toHaveBeenCalledOnce();
+    expect(companionDiffReader.readDiff).toHaveBeenCalledTimes(expectedReviewRounds.length);
+    expect(companionDiffReader.readDiff.mock.calls.every(([, baseline]) => (
+      baseline === 'team-baseline'
+    ))).toBe(true);
+
+    const partMailboxPath = buildCompanionMailboxPath({
+      cwd: tmpDir,
+      runSlug: 'test-report-dir',
+      runPathNamespace: [],
+      stepName: 'implement.part-1',
+      companionName: 'reviewer',
+    });
+    const teamMailboxPath = buildCompanionMailboxPath({
+      cwd: tmpDir,
+      runSlug: 'test-report-dir',
+      runPathNamespace: [],
+      stepName: 'implement',
+      companionName: 'reviewer',
+    });
+    const partMailboxFindings = readFileSync(partMailboxPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as CompanionFinding);
+    const teamMailboxFindings = readFileSync(teamMailboxPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as CompanionFinding);
+    expect(partMailboxFindings).toEqual([{
+      companion: 'reviewer',
+      reviewedAt: expect.any(String),
+      reviewedDigest: 'part-1-initial-digest',
+      ...partOneFinding,
+    }]);
+    expect(teamMailboxFindings).toEqual([{
+      companion: 'reviewer',
+      reviewedAt: expect.any(String),
+      reviewedDigest: 'part-2-cumulative-digest',
+      ...teamFinding,
+    }, {
+      companion: 'reviewer',
+      reviewedAt: expect.any(String),
+      reviewedDigest: 'part-3-cumulative-digest',
+      ...secondTeamFinding,
+    }]);
+
+    const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as UsageEventLogRecord);
+    const partUsageRecords = usageRecords.filter((record) => record.step.startsWith('implement.part-'));
+    expect(partUsageRecords).toHaveLength(5);
+    expect(partUsageRecords.map((record) => record.step)).toEqual([
+      'implement.part-1',
+      'implement.part-1',
+      'implement.part-2',
+      'implement.part-3',
+      'implement.part-4',
+    ]);
+    expect(partUsageRecords.every((record) => record.step_type === 'team_leader')).toBe(true);
+    expect(usageRecords.filter((record) => record.step === 'companion:reviewer')).toHaveLength(8);
+  });
+
+  it('Team selector が空でも part selector のレビューは Team 開始時の baseline を共有する', async () => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: { ...step.teamLeader, maxConcurrency: 1 },
+      companion: { fixed: [], pool: ['reviewer'] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const callOrder: string[] = [];
+    const worktreeFile = join(tmpDir, 'src', 'a.ts');
+    mkdirSync(join(tmpDir, 'src'), { recursive: true });
+    const digestByWorktreeContent = new Map([
+      ['part-1\n', 'part-1-digest'],
+      ['part-2-cumulative\n', 'part-2-digest'],
+    ]);
+    const companionDiffReader = {
+      readBaselineSha: vi.fn(async () => {
+        callOrder.push('baseline');
+        return 'team-start-baseline';
+      }),
+      readDiff: vi.fn(async (cwd: string, baseline: string) => {
+        expect(cwd).toBe(tmpDir);
+        expect(baseline).toBe('team-start-baseline');
+        const worktreeContent = readFileSync(join(cwd, 'src', 'a.ts'), 'utf-8');
+        const digest = digestByWorktreeContent.get(worktreeContent);
+        if (digest === undefined) {
+          throw new Error(`Unexpected worktree content: ${worktreeContent}`);
+        }
+        return {
+          status: 'ok' as const,
+          snapshot: {
+            digest,
+            changedLines: 1,
+            content: `+${worktreeContent}`,
+            changedFiles: ['src/a.ts'],
+            fileFingerprints: { 'src/a.ts': digest },
+            hunkFingerprints: { 'src/a.ts:1-1': digest },
+            omittedBytes: 0,
+            truncated: false,
+          },
+        };
+      }),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: { provider: 'mock', model: 'selector-model' },
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock', model: 'reviewer-model' } },
+      companionDiffReader,
+    });
+    const selectedReviewSteps: string[] = [];
+    let selectorCallCount = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const personaName = typeof persona === 'string' ? persona : '';
+      options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+      if (personaName === 'companion-selector') {
+        selectorCallCount += 1;
+        callOrder.push(`selector:${selectorCallCount}`);
+        return makeResponse({
+          persona: 'companion-selector',
+          structuredOutput: {
+            selected_ids: selectorCallCount === 1 ? [] : ['reviewer'],
+            rationale: selectorCallCount === 1 ? 'No Team reviewer applies.' : 'Review the part.',
+          },
+        });
+      }
+      if (personaName === 'reviewer') {
+        const reviewedStep = instruction.includes('"label":"step_name","value":"implement.part-1"')
+          ? 'implement.part-1'
+          : instruction.includes('"label":"step_name","value":"implement.part-2"')
+            ? 'implement.part-2'
+            : 'unexpected';
+        selectedReviewSteps.push(reviewedStep);
+        return makeResponse({
+          persona: 'reviewer',
+          structuredOutput: { findings: [], notes: null },
+        });
+      }
+      if (personaName.includes('team-leader')) {
+        const required = options?.outputSchema?.required;
+        return Array.isArray(required) && required.includes('done')
+          ? makeResponse({
+              persona: 'team-leader',
+              structuredOutput: { done: true, reasoning: 'complete', cancelPartIds: [], parts: [] },
+            })
+          : makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [
+                  { id: 'part-1', title: 'First', instruction: 'Implement first part' },
+                  { id: 'part-2', title: 'Second', instruction: 'Implement second part' },
+                ],
+              },
+            });
+      }
+      if (personaName.includes('coder')) {
+        writeFileSync(
+          worktreeFile,
+          instruction.includes('Implement first part') ? 'part-1\n' : 'part-2-cumulative\n',
+        );
+        return makeResponse({ persona: 'coder', content: `${personaName} complete` });
+      }
+      throw new Error(`Unexpected mock persona: ${personaName}`);
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(callOrder[0]).toBe('baseline');
+    expect(callOrder.indexOf('baseline')).toBeLessThan(callOrder.indexOf('selector:1'));
+    expect(selectorCallCount).toBe(3);
+    expect(selectedReviewSteps).toEqual(['implement.part-1', 'implement.part-2']);
+    expect(companionDiffReader.readBaselineSha).toHaveBeenCalledOnce();
+    expect(companionDiffReader.readDiff).toHaveBeenCalledTimes(2);
+    expect(companionDiffReader.readDiff.mock.calls.every(([, baseline]) => (
+      baseline === 'team-start-baseline'
+    ))).toBe(true);
+  });
+
+  it('Team part の Companion follow-up 失敗を fail-soft で確定し初回応答を公開する', async () => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: { ...step.teamLeader, maxConcurrency: 1 },
       companion: { fixed: ['reviewer'], pool: [] },
     }));
     config.companions = {
@@ -385,9 +931,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       readDiff: vi.fn().mockResolvedValue({
         status: 'ok',
         snapshot: {
-          digest: 'team-leader-digest',
+          digest: 'follow-up-failure-digest',
           changedLines: 1,
-          content: '+team leader change\n',
+          content: '+change\n',
           changedFiles: ['src/a.ts'],
           fileFingerprints: { 'src/a.ts': 'file-1' },
           hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
@@ -403,28 +949,691 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       companionProviders: { reviewer: { provider: 'mock' } },
       companionDiffReader,
     });
+    const companionCompletes = vi.fn();
+    const companionRounds = vi.fn();
+    const stepCompletes = vi.fn();
+    const lifecycle: string[] = [];
+    engine.on('companion:complete', (event) => {
+      companionCompletes(event);
+      if (event.step === 'implement.part-1' && event.completionFailure) {
+        lifecycle.push('part-fail-soft');
+      }
+      if (event.step === 'implement') {
+        lifecycle.push('team-complete');
+      }
+    });
+    engine.on('companion:review_round', (event) => {
+      companionRounds(event);
+      if (event.step === 'implement') {
+        lifecycle.push('team-review');
+      }
+    });
+    engine.on('step:complete', (step, response, instruction, resumeStepName, workflowStack) => {
+      stepCompletes(step, response, instruction, resumeStepName, workflowStack);
+      if (step.name === 'implement') {
+        lifecycle.push('parent-step-complete');
+      }
+    });
+
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const personaName = typeof persona === 'string' ? persona : '';
+      options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+      if (personaName === 'reviewer') {
+        const reviewsPartOne = instruction.includes(
+          '"label":"step_name","value":"implement.part-1"',
+        );
+        return makeResponse({
+          persona: 'reviewer',
+          structuredOutput: reviewsPartOne
+            ? {
+                findings: [{
+                  severity: 'must_fix',
+                  file: 'src/a.ts',
+                  line: 1,
+                  finding: 'Fix the value.',
+                }],
+                notes: null,
+              }
+            : { findings: [], notes: null },
+        });
+      }
+      if (personaName.includes('team-leader')) {
+        const required = options?.outputSchema?.required;
+        return Array.isArray(required) && required.includes('done')
+          ? makeResponse({
+              persona: 'team-leader',
+              structuredOutput: { done: true, reasoning: 'enough', cancelPartIds: [], parts: [] },
+            })
+          : makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+              },
+            });
+      }
+      if (personaName.includes('coder')) {
+        if (instruction.includes('New companion findings')) {
+          expect(options?.sessionId).toBe('part-session');
+          throw new Error('follow-up provider failed');
+        }
+        return makeResponse({
+          persona: 'coder',
+          content: 'initial part response',
+          sessionId: 'part-session',
+        });
+      }
+      throw new Error(`Unexpected mock persona: ${personaName}`);
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.stepOutputs.get('implement.part-1')).toMatchObject({
+      content: 'initial part response',
+      sessionId: 'part-session',
+    });
+    expect(state.stepOutputs.get('implement')?.content).toContain('initial part response');
+    expect(companionCompletes).toHaveBeenCalledWith(expect.objectContaining({
+      step: 'implement.part-1',
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds: 1,
+      reason: 'follow-up provider failed',
+    }));
+    expect(companionRounds).toHaveBeenCalledWith(expect.objectContaining({
+      step: 'implement',
+      trigger: 'completion',
+      findingCount: 0,
+    }));
+    expect(companionCompletes).toHaveBeenCalledWith(expect.objectContaining({
+      step: 'implement',
+      completionSettled: true,
+      completionFailure: false,
+      followUpRounds: 0,
+    }));
+    expect(stepCompletes).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'implement' }),
+      expect.objectContaining({
+        status: 'done',
+        content: expect.stringContaining('initial part response'),
+      }),
+      expect.any(String),
+      expect.any(String),
+      expect.any(Array),
+    );
+    expect(lifecycle).toEqual([
+      'part-fail-soft',
+      'team-review',
+      'team-complete',
+      'parent-step-complete',
+    ]);
+  });
+
+  it('Team 終端の Companion provider 失敗を fail-soft で確定する', async () => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: { ...step.teamLeader, maxConcurrency: 1 },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'ok',
+        snapshot: {
+          digest: 'provider-failure-digest',
+          changedLines: 1,
+          content: '+change\n',
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: { 'src/a.ts': 'file-1' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+          omittedBytes: 0,
+          truncated: false,
+        },
+      }),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
+    const companionCompletes = vi.fn();
+    engine.on('companion:complete', companionCompletes);
+
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const personaName = typeof persona === 'string' ? persona : '';
+      options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+      if (personaName === 'reviewer') {
+        if (instruction.includes('"label":"step_name","value":"implement"')) {
+          throw new Error('Team reviewer failed');
+        }
+        return makeResponse({
+          persona: 'reviewer',
+          structuredOutput: { findings: [], notes: null },
+        });
+      }
+      if (personaName.includes('team-leader')) {
+        const required = options?.outputSchema?.required;
+        return Array.isArray(required) && required.includes('done')
+          ? makeResponse({
+              persona: 'team-leader',
+              structuredOutput: { done: true, reasoning: 'enough', cancelPartIds: [], parts: [] },
+            })
+          : makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+              },
+            });
+      }
+      if (personaName.includes('coder')) {
+        return makeResponse({ persona: 'coder', content: 'part response' });
+      }
+      throw new Error(`Unexpected mock persona: ${personaName}`);
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.stepOutputs.get('implement.part-1')).toMatchObject({ content: 'part response' });
+    expect(companionCompletes).toHaveBeenCalledWith(expect.objectContaining({
+      step: 'implement',
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds: 0,
+      reason: 'Team reviewer failed',
+    }));
+  });
+
+  it('Team 終端の Companion review 中に親 AbortSignal が伝播し、補正 part と集約を停止する', async () => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: { ...step.teamLeader, maxConcurrency: 1 },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'ok',
+        snapshot: {
+          digest: 'team-abort-digest',
+          changedLines: 1,
+          content: '+change\n',
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: { 'src/a.ts': 'file-1' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+          omittedBytes: 0,
+          truncated: false,
+        },
+      }),
+    };
+    const abortController = new AbortController();
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+      abortSignal: abortController.signal,
+    });
+    const reviewerSteps: string[] = [];
+    let teamLeaderCalls = 0;
+    let coderCalls = 0;
+    const abortReason = new Error('Team completion review aborted');
+
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const personaName = typeof persona === 'string' ? persona : '';
+      options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+      if (personaName === 'reviewer') {
+        if (instruction.includes('"label":"step_name","value":"implement"')) {
+          reviewerSteps.push('implement');
+          const signal = options?.abortSignal;
+          if (signal === undefined) {
+            throw new Error('Team completion review abortSignal is required');
+          }
+          abortController.abort(abortReason);
+          expect(signal.aborted).toBe(true);
+          throw abortReason;
+        }
+        reviewerSteps.push('implement.part-1');
+        return makeResponse({
+          persona: 'reviewer',
+          structuredOutput: { findings: [], notes: null },
+        });
+      }
+      if (personaName.includes('team-leader')) {
+        teamLeaderCalls += 1;
+        const required = options?.outputSchema?.required;
+        return Array.isArray(required) && required.includes('done')
+          ? makeResponse({
+              persona: 'team-leader',
+              structuredOutput: { done: true, reasoning: 'enough', cancelPartIds: [], parts: [] },
+            })
+          : makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+              },
+            });
+      }
+      if (personaName.includes('coder')) {
+        coderCalls += 1;
+        return makeResponse({ persona: 'coder', content: 'part response' });
+      }
+      throw new Error(`Unexpected mock persona: ${personaName}`);
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(reviewerSteps).toEqual(['implement.part-1', 'implement']);
+    expect(teamLeaderCalls).toBe(2);
+    expect(coderCalls).toBe(1);
+    expect(state.stepOutputs.has('implement.part-1')).toBe(true);
+    expect(state.stepOutputs.get('implement')).toBeUndefined();
+    expect(state.stepOutputs.has('implement.part-2')).toBe(false);
+  });
+
+  it('Team part の Companion follow-up 中断時は初回応答を公開しない', async () => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: { ...step.teamLeader, maxConcurrency: 2 },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'ok',
+        snapshot: {
+          digest: 'abort-digest',
+          changedLines: 1,
+          content: '+change\n',
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: { 'src/a.ts': 'file-1' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+          omittedBytes: 0,
+          truncated: false,
+        },
+      }),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
+    const companionCompletes = vi.fn();
+    engine.on('companion:complete', companionCompletes);
+
+    let markFollowUpStarted: (() => void) | undefined;
+    const followUpStarted = new Promise<void>((resolve) => {
+      markFollowUpStarted = resolve;
+    });
+    let followUpSessionId: string | undefined;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const personaName = typeof persona === 'string' ? persona : '';
+      options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+      if (personaName === 'reviewer') {
+        const reviewsPartOne = instruction.includes(
+          '"label":"step_name","value":"implement.part-1"',
+        );
+        return makeResponse({
+          persona: 'reviewer',
+          structuredOutput: reviewsPartOne
+            ? {
+                findings: [{
+                  severity: 'must_fix',
+                  file: 'src/a.ts',
+                  line: 1,
+                  finding: 'Fix the value.',
+                }],
+                notes: null,
+              }
+            : { findings: [], notes: null },
+        });
+      }
+      if (personaName.includes('team-leader')) {
+        const required = options?.outputSchema?.required;
+        return Array.isArray(required) && required.includes('done')
+          ? makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                done: true,
+                reasoning: 'part-2 is sufficient',
+                cancelPartIds: ['part-1'],
+                parts: [],
+              },
+            })
+          : makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [
+                  { id: 'part-1', title: 'API', instruction: 'Implement API' },
+                  { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+                ],
+              },
+            });
+      }
+      if (personaName.includes('coder')) {
+        if (instruction.includes('New companion findings')) {
+          followUpSessionId = options?.sessionId;
+          markFollowUpStarted?.();
+          const signal = options?.abortSignal;
+          if (signal === undefined) throw new Error('part abortSignal is required');
+          return new Promise<AgentResponse>((_resolve, reject) => {
+            const rejectWithReason = (): void => reject(signal.reason);
+            if (signal.aborted) {
+              rejectWithReason();
+              return;
+            }
+            signal.addEventListener('abort', rejectWithReason, { once: true });
+          });
+        }
+        if (instruction.includes('Add tests')) {
+          await followUpStarted;
+          return makeResponse({ persona: 'coder', content: 'part-2 response' });
+        }
+        return makeResponse({
+          persona: 'coder',
+          content: 'part-1 initial response',
+          sessionId: 'part-1-session',
+        });
+      }
+      throw new Error(`Unexpected mock persona: ${personaName}`);
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(followUpSessionId).toBe('part-1-session');
+    expect(state.stepOutputs.has('implement.part-1')).toBe(false);
+    expect(state.stepOutputs.get('implement.part-2')).toMatchObject({ content: 'part-2 response' });
+    expect(companionCompletes.mock.calls.some(([payload]) => payload.step === 'implement.part-1')).toBe(false);
+  });
+
+  it('WorkflowEngineのTeam Leader worker streamでcompletion前にlive reviewを開始する', async () => {
+    vi.useFakeTimers();
+    let releaseWorker: (() => void) | undefined;
+    const workerGate = new Promise<void>((resolve) => {
+      releaseWorker = resolve;
+    });
+    let workerStreamed = false;
+    let liveLeaderCallCount = 0;
+    const reviewOrder: string[] = [];
+    const reviewedRounds: Array<{
+      step: string;
+      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+      digest: string;
+    }> = [];
+    const companionStarts: Array<{ step: string; reviewMode: 'completion' | 'live' }> = [];
+    const initialSnapshot: CompanionDiff = {
+      digest: 'baseline-digest',
+      changedLines: 0,
+      content: '',
+      changedFiles: [],
+      fileFingerprints: {},
+      hunkFingerprints: {},
+      omittedBytes: 0,
+      truncated: false,
+    };
+    let currentSnapshot = initialSnapshot;
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockImplementation(async () => ({
+        status: 'ok' as const,
+        snapshot: currentSnapshot,
+      })),
+    };
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: {
+        ...step.teamLeader,
+        maxConcurrency: 1,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionReviewMode: 'live',
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
+    engine.on('companion:start', (event) => companionStarts.push({
+      step: event.step,
+      reviewMode: event.reviewMode,
+    }));
+    engine.on('companion:review_round', (event) => reviewedRounds.push({
+      step: event.step,
+      trigger: event.trigger,
+      digest: event.digest,
+    }));
+    let runPromise: ReturnType<WorkflowEngine['run']> | undefined;
+
+    try {
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        const personaName = typeof persona === 'string' ? persona : '';
+        options?.onPromptResolved?.({
+          systemPrompt: personaName,
+          userInstruction: instruction,
+        });
+
+        if (personaName.includes('team-leader')) {
+          liveLeaderCallCount += 1;
+          if (liveLeaderCallCount === 1) {
+            currentSnapshot = {
+              ...initialSnapshot,
+              digest: 'live-digest',
+              changedLines: 12,
+              content: '+live change\n',
+              changedFiles: ['src/live.ts'],
+              fileFingerprints: { 'src/live.ts': 'live-file' },
+              hunkFingerprints: { 'src/live.ts:1-12': 'live-hunk' },
+            };
+            if (options?.onStream === undefined) {
+              throw new Error('Team Leader did not receive onStream');
+            }
+            options.onStream({
+              type: 'tool_use',
+              data: { tool: 'Edit', id: 'leader-edit-1', input: { file_path: 'src/live.ts' } },
+            });
+          }
+          return liveLeaderCallCount === 1
+            ? makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+              },
+            })
+            : makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                done: true,
+                reasoning: 'enough',
+                cancelPartIds: [],
+                parts: [],
+              },
+            });
+        }
+
+        if (personaName.includes('coder')) {
+          currentSnapshot = {
+            ...initialSnapshot,
+            digest: 'live-digest',
+            changedLines: 12,
+            content: '+live change\n',
+            changedFiles: ['src/live.ts'],
+            fileFingerprints: { 'src/live.ts': 'live-file' },
+            hunkFingerprints: { 'src/live.ts:1-12': 'live-hunk' },
+          };
+          if (options?.onStream === undefined) {
+            throw new Error('Team Leader worker did not receive onStream');
+          }
+          options.onStream({
+            type: 'tool_use',
+            data: { tool: 'Edit', id: 'edit-1', input: { file_path: 'src/live.ts' } },
+          });
+          workerStreamed = true;
+          await workerGate;
+          reviewOrder.push('worker-complete');
+          return makeResponse({ persona: 'coder', content: 'worker complete' });
+        }
+
+        if (personaName === 'reviewer') {
+          reviewOrder.push('review-start');
+          return makeResponse({
+            persona: 'reviewer',
+            structuredOutput: { findings: [], notes: null },
+          });
+        }
+
+        throw new Error(`Unexpected agent persona: ${personaName}`);
+      });
+      vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+      const workflowPromise = engine.run();
+      runPromise = workflowPromise;
+      await vi.waitFor(() => expect(workerStreamed).toBe(true), { timeout: 1_000 });
+      await vi.advanceTimersByTimeAsync(COMPANION_CHANGE_DEBOUNCE_MS);
+      await vi.waitFor(() => expect(reviewOrder).toContain('review-start'), { timeout: 1_000 });
+      await vi.waitFor(() => expect(reviewedRounds).toContainEqual({
+        step: 'implement.part-1',
+        trigger: 'quiet',
+        digest: 'live-digest',
+      }), { timeout: 1_000 });
+      await vi.waitFor(() => expect(reviewedRounds).toContainEqual({
+        step: 'implement',
+        trigger: 'quiet',
+        digest: 'live-digest',
+      }), { timeout: 1_000 });
+      expect(reviewedRounds.filter(({ step }) => step === 'implement')).toHaveLength(1);
+      expect(companionStarts).toContainEqual({ step: 'implement', reviewMode: 'live' });
+      currentSnapshot = {
+        ...initialSnapshot,
+        digest: 'completion-digest',
+        changedLines: 18,
+        content: '+live change\n+completion change\n',
+        changedFiles: ['src/live.ts'],
+        fileFingerprints: { 'src/live.ts': 'completion-file' },
+        hunkFingerprints: { 'src/live.ts:1-18': 'completion-hunk' },
+      };
+      releaseWorker?.();
+
+      const state = await workflowPromise;
+      expect(reviewOrder.indexOf('worker-complete'))
+        .toBeGreaterThan(reviewOrder.indexOf('review-start'));
+      expect(reviewedRounds).toEqual(expect.arrayContaining([
+        { step: 'implement.part-1', trigger: 'quiet', digest: 'live-digest' },
+        { step: 'implement.part-1', trigger: 'completion', digest: 'completion-digest' },
+        { step: 'implement', trigger: 'quiet', digest: 'live-digest' },
+        { step: 'implement', trigger: 'completion', digest: 'completion-digest' },
+      ]));
+      expect(reviewedRounds.filter(({ step }) => step === 'implement')).toHaveLength(2);
+      expect(state.status).toBe('completed');
+    } finally {
+      releaseWorker?.();
+      await runPromise?.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['明示的な無効化', false],
+    ['既定の無効化', undefined],
+  ] as const)('%sでは Team Leader の通常実行と親 skip event を維持する', async (
+    _caseName,
+    companionEnabled,
+  ) => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn(),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
     const companionStarts = vi.fn();
+    const companionReviewSkips: Array<{ step: string; reason: string }> = [];
     engine.on('companion:start', companionStarts);
+    engine.on('companion:review_skipped', (payload) => {
+      companionReviewSkips.push({ step: payload.step, reason: payload.reason });
+    });
 
     mockRunAgentWithPrompt(
       makeResponse({
         persona: 'team-leader',
         structuredOutput: {
-          parts: [
-            { id: 'part-1', title: 'API', instruction: 'Implement API' },
-            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
-          ],
+          parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
         },
       }),
       makeResponse({ persona: 'coder', content: 'API done' }),
-      makeResponse({ persona: 'coder', content: 'Tests done' }),
       makeResponse({
         persona: 'team-leader',
         structuredOutput: { done: true, reasoning: 'enough', cancelPartIds: [], parts: [] },
-      }),
-      makeResponse({
-        persona: 'reviewer',
-        structuredOutput: { findings: [], notes: null },
       }),
     );
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
@@ -432,25 +1641,218 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(companionStarts).toHaveBeenCalledOnce();
-    expect(companionStarts).toHaveBeenCalledWith(expect.objectContaining({ companion: 'reviewer' }));
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(5);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
-    const teamLeaderInstructions = vi.mocked(runAgent).mock.calls
-      .filter(([persona]) => persona?.includes('team-leader'))
-      .map(([, instruction]) => instruction);
-    expect(teamLeaderInstructions).toHaveLength(2);
-    for (const instruction of teamLeaderInstructions) {
-      expect(instruction).toContain('Inbox:');
-      expect(instruction).toContain('/companion/implement');
-    }
-    const workerInstructions = vi.mocked(runAgent).mock.calls
-      .filter(([persona]) => persona?.includes('coder'))
-      .map(([, instruction]) => instruction);
-    expect(workerInstructions).toHaveLength(2);
-    for (const instruction of workerInstructions) {
-      expect(instruction).not.toContain('Companion inbox');
-      expect(instruction).not.toContain('Inbox:');
+    expect(companionStarts).not.toHaveBeenCalled();
+    expect(companionDiffReader.readBaselineSha).not.toHaveBeenCalled();
+    expect(companionDiffReader.readDiff).not.toHaveBeenCalled();
+    expect(vi.mocked(runAgent).mock.calls.some(([persona]) => persona === 'reviewer')).toBe(false);
+    expect(companionReviewSkips).toEqual([
+      { step: 'implement', reason: 'companion_disabled' },
+    ]);
+  });
+
+  it('Companion未宣言のTeam LeaderはCompanion infrastructureを使用せず通常実行する', async () => {
+    const config = buildTeamLeaderConfig();
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn(),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
+    const companionStarts = vi.fn();
+    const companionRounds = vi.fn();
+    const companionFindings = vi.fn();
+    const companionFixRounds = vi.fn();
+    const companionCompletes = vi.fn();
+    engine.on('companion:start', companionStarts);
+    engine.on('companion:review_round', companionRounds);
+    engine.on('companion:finding', companionFindings);
+    engine.on('companion:fix_round', companionFixRounds);
+    engine.on('companion:complete', companionCompletes);
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.stepOutputs.get('implement')?.content).toContain('API done');
+    expect(companionDiffReader.readBaselineSha).not.toHaveBeenCalled();
+    expect(companionDiffReader.readDiff).not.toHaveBeenCalled();
+    expect(companionStarts).not.toHaveBeenCalled();
+    expect(companionRounds).not.toHaveBeenCalled();
+    expect(companionFindings).not.toHaveBeenCalled();
+    expect(companionFixRounds).not.toHaveBeenCalled();
+    expect(companionCompletes).not.toHaveBeenCalled();
+    expect(vi.mocked(runAgent).mock.calls.some(([persona]) => persona === 'reviewer')).toBe(false);
+  });
+
+  it('WorkflowEngineのTeam Leaderはcompletion modeでworker応答中のlive triggerを保留する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let releaseWorker: (() => void) | undefined;
+    const workerGate = new Promise<void>((resolve) => {
+      releaseWorker = resolve;
+    });
+    let workerStreamed = false;
+    let leaderCallCount = 0;
+    const reviewedRounds: Array<{ step: string; trigger: string }> = [];
+    const initialSnapshot: CompanionDiff = {
+      digest: 'baseline-digest',
+      changedLines: 0,
+      content: '',
+      changedFiles: [],
+      fileFingerprints: {},
+      hunkFingerprints: {},
+      omittedBytes: 0,
+      truncated: false,
+    };
+    let currentSnapshot = initialSnapshot;
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockImplementation(async () => ({
+        status: 'ok' as const,
+        snapshot: currentSnapshot,
+      })),
+    };
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      allowGitCommit: true,
+      teamLeader: { ...step.teamLeader, maxConcurrency: 1 },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 250,
+      },
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionReviewMode: 'completion',
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
+    engine.on('companion:review_round', (event) => reviewedRounds.push({
+      step: event.step,
+      trigger: event.trigger,
+    }));
+    let runPromise: ReturnType<WorkflowEngine['run']> | undefined;
+
+    try {
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        const personaName = typeof persona === 'string' ? persona : '';
+        options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+
+        if (personaName.includes('team-leader')) {
+          leaderCallCount += 1;
+          return leaderCallCount === 1
+            ? makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+              },
+            })
+            : makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                done: true,
+                reasoning: 'enough',
+                cancelPartIds: [],
+                parts: [],
+              },
+            });
+        }
+
+        if (personaName.includes('coder')) {
+          currentSnapshot = {
+            ...initialSnapshot,
+            digest: 'completion-digest',
+            changedLines: 12,
+            content: '+completion change\n',
+            changedFiles: ['src/completion.ts'],
+            fileFingerprints: { 'src/completion.ts': 'completion-file' },
+            hunkFingerprints: { 'src/completion.ts:1-12': 'completion-hunk' },
+          };
+          if (options?.onStream === undefined) {
+            throw new Error('Team Leader worker did not receive onStream');
+          }
+          options.onStream({
+            type: 'tool_use',
+            data: { tool: 'Edit', id: 'edit-1', input: { file_path: 'src/completion.ts' } },
+          });
+          options.onStream({
+            type: 'tool_use',
+            data: { tool: 'Bash', id: 'commit-1', input: { command: 'git commit -am "change"' } },
+          });
+          workerStreamed = true;
+          await workerGate;
+          return makeResponse({ persona: 'coder', content: 'worker complete' });
+        }
+
+        if (personaName === 'reviewer') {
+          return makeResponse({
+            persona: 'reviewer',
+            structuredOutput: { findings: [], notes: null },
+          });
+        }
+
+        throw new Error(`Unexpected agent persona: ${personaName}`);
+      });
+      vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+      const workflowPromise = engine.run();
+      runPromise = workflowPromise;
+      await vi.waitFor(() => expect(workerStreamed).toBe(true), { timeout: 1_000 });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(0);
+      expect(reviewedRounds).toEqual([]);
+
+      releaseWorker?.();
+      const state = await workflowPromise;
+
+      expect(state.status).toBe('completed');
+      expect(reviewedRounds).toEqual([
+        { step: 'implement.part-1', trigger: 'completion' },
+        { step: 'implement', trigger: 'completion' },
+      ]);
+      expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(2);
+    } finally {
+      releaseWorker?.();
+      await runPromise?.catch(() => undefined);
+      vi.useRealTimers();
     }
   });
 
@@ -515,74 +1917,79 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
     const completeEvents: unknown[] = [];
     const fixRoundEvents: unknown[] = [];
-    engine.on('companion:complete', (event) => completeEvents.push(event));
-    engine.on('companion:fix_round', (event) => fixRoundEvents.push(event));
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    engine.on('companion:fix_round', (event) => {
+      if (event.step === 'implement') fixRoundEvents.push(event);
+    });
 
-    mockRunAgentWithPrompt(
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          parts: [
-            { id: 'part-1', title: 'API', instruction: 'Implement API' },
-            { id: 'part-old', title: 'Obsolete', instruction: 'Do obsolete work' },
-          ],
-        },
-      }),
-      makeResponse({ persona: 'coder', content: 'API done' }),
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          done: false,
-          reasoning: 'replace obsolete work',
-          cancelPartIds: normalCancelPartIds,
-          parts: [{ id: 'part-A', title: 'Fix', instruction: 'Apply the accepted fix' }],
-        },
-      }),
-      makeResponse({
-        persona: 'reviewer',
-        structuredOutput: {
-          findings: [{
-            severity: 'must_fix',
-            file: 'src/a.ts',
-            line: 1,
-            finding: 'Fix the accepted defect.',
-          }],
-          notes: null,
-        },
-      }),
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          done: true,
-          reasoning: 'advisory follow-up complete',
-          cancelPartIds: followUpCancelPartIds,
-          parts: [],
-        },
-      }),
-      ...(obsoletePartRuns
-        ? [makeResponse({ persona: 'coder', content: 'Obsolete part kept' })]
-        : []),
-      ...(obsoletePartRuns
-        ? [makeResponse({
-            persona: 'team-leader',
-            structuredOutput: {
-              done: false,
-              cancelPartIds: [],
-              parts: [],
-            },
-          })]
-        : []),
-      makeResponse({ persona: 'coder', content: 'Fix applied' }),
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          done: true,
-          reasoning: 'all work completed',
-          cancelPartIds: [],
-          parts: [],
-        },
-      }),
-    );
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            parts: [
+              { id: 'part-1', title: 'API', instruction: 'Implement API' },
+              { id: 'part-old', title: 'Obsolete', instruction: 'Do obsolete work' },
+            ],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: false,
+            reasoning: 'replace obsolete work',
+            cancelPartIds: normalCancelPartIds,
+            parts: [{ id: 'part-A', title: 'Fix', instruction: 'Apply the accepted fix' }],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: true,
+            reasoning: 'all work completed',
+            cancelPartIds: [],
+            parts: [],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: false,
+            reasoning: 'advisory follow-up complete',
+            cancelPartIds: followUpCancelPartIds,
+            parts: [{
+              id: 'part-companion-fix',
+              title: 'Companion fix',
+              instruction: 'Apply the accepted Companion finding',
+            }],
+          },
+        }),
+      ],
+      coder: [
+        makeResponse({ persona: 'coder', content: 'API done' }),
+        ...(obsoletePartRuns
+          ? [makeResponse({ persona: 'coder', content: 'Obsolete part kept' })]
+          : []),
+        makeResponse({ persona: 'coder', content: 'Fix applied' }),
+        makeResponse({ persona: 'coder', content: 'Companion fix applied' }),
+      ],
+      companions: {
+        reviewer: [makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Fix the accepted defect.',
+            }],
+            notes: null,
+          },
+        })],
+      },
+    });
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
@@ -598,9 +2005,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       sequence: 2,
       findingCount: 1,
     }]);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+      persona === 'reviewer' && reviewsCompanionStep(prompt, 'implement')
+    ))).toHaveLength(1);
     expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder')))
-      .toHaveLength(obsoletePartRuns ? 3 : 2);
+      .toHaveLength(obsoletePartRuns ? 4 : 3);
     const teamLeaderInstructions = vi.mocked(runAgent).mock.calls
       .filter(([persona]) => persona?.includes('team-leader'))
       .map(([, prompt]) => prompt);
@@ -611,10 +2020,1235 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(advisoryFollowUpInstruction).toContain('BEGIN COMPANION EVIDENCE');
     const output = state.stepOutputs.get('implement');
     expect(output?.content).toContain('Fix applied');
+    expect(output?.content).toContain('Companion fix applied');
     if (obsoletePartRuns) {
       expect(output?.content).toContain('Obsolete part kept');
     } else {
       expect(output?.content).not.toContain('Obsolete part kept');
+    }
+  });
+
+  it.each([
+    {
+      label: 'done=true で correction part がない',
+      followUp: {
+        done: true,
+        reasoning: 'no correction required',
+        cancelPartIds: [],
+        parts: [],
+      },
+    },
+    {
+      label: 'done=false で correction part がない',
+      followUp: {
+        done: false,
+        reasoning: 'no correction planned',
+        cancelPartIds: [],
+        parts: [],
+      },
+    },
+    {
+      label: '既存 part ID だけを返す',
+      followUp: {
+        done: false,
+        reasoning: 'repeat the completed part',
+        cancelPartIds: [],
+        parts: [{ id: 'part-1', title: 'Duplicate', instruction: 'Repeat completed work' }],
+      },
+    },
+  ])('Team Leader の single policy は $label follow-up を failure に確定する', async ({ followUp }) => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'ok' as const,
+        snapshot: {
+          digest: 'team-leader-no-op-correction-digest',
+          changedLines: 1,
+          content: '+team leader change\n',
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: { 'src/a.ts': 'file-1' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+          omittedBytes: 0,
+          truncated: false,
+        },
+      }),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
+    const completeEvents: unknown[] = [];
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: true,
+            reasoning: 'initial work completed',
+            cancelPartIds: [],
+            parts: [],
+          },
+        }),
+        makeResponse({ persona: 'team-leader', structuredOutput: followUp }),
+      ],
+      coder: [makeResponse({ persona: 'coder', content: 'API done' })],
+      companions: {
+        reviewer: [makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Fix the accepted defect.',
+            }],
+            notes: null,
+          },
+        })],
+      },
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.companion).toEqual(expect.objectContaining({
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds: 1,
+      reason: 'Team Companion correction planning did not schedule a correction part',
+    }));
+    expect(completeEvents).toEqual([expect.objectContaining({
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds: 1,
+      reason: 'Team Companion correction planning did not schedule a correction part',
+    })]);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('team-leader'))).toHaveLength(3);
+  });
+
+  it.each([
+    {
+      label: '成功後だけ成功',
+      correctionResponse: makeResponse({ persona: 'coder', content: 'Correction applied' }),
+      expectedCompletion: {
+        completionSettled: true,
+        followUpRounds: 1,
+      },
+    },
+    {
+      label: '失敗時は failure',
+      correctionResponse: makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'correction worker failed',
+      }),
+      expectedCompletion: {
+        completionSettled: false,
+        completionFailure: true,
+        followUpRounds: 1,
+        reason: 'Team leader correction failed: part-fix (error): correction worker failed',
+      },
+    },
+  ])('Team Leader の single policy は correction worker の settle 前に complete せず $label を確定する', async ({
+    correctionResponse,
+    expectedCompletion,
+  }) => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: {
+        ...step.teamLeader,
+        maxConcurrency: 1,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'ok' as const,
+        snapshot: {
+          digest: 'team-leader-gated-correction-digest',
+          changedLines: 1,
+          content: '+team leader change\n',
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: { 'src/a.ts': 'file-1' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+          omittedBytes: 0,
+          truncated: false,
+        },
+      }),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
+    const completeEvents: unknown[] = [];
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    let markCorrectionStarted: (() => void) | undefined;
+    const correctionStarted = new Promise<void>((resolve) => {
+      markCorrectionStarted = resolve;
+    });
+    let releaseCorrection: (() => void) | undefined;
+    const correctionGate = new Promise<void>((resolve) => {
+      releaseCorrection = resolve;
+    });
+    let teamLeaderCallCount = 0;
+    let coderCallCount = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const personaName = typeof persona === 'string' ? persona : '';
+      options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+
+      if (personaName.includes('team-leader')) {
+        teamLeaderCallCount += 1;
+        if (teamLeaderCallCount === 1) {
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+            },
+          });
+        }
+        if (teamLeaderCallCount === 2) {
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              done: true,
+              reasoning: 'initial work completed',
+              cancelPartIds: [],
+              parts: [],
+            },
+          });
+        }
+        if (teamLeaderCallCount === 3) {
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              done: false,
+              reasoning: 'run one correction batch',
+              cancelPartIds: [],
+              parts: [{ id: 'part-fix', title: 'Fix', instruction: 'Apply the accepted fix' }],
+            },
+          });
+        }
+        throw new Error('Single correction unexpectedly resumed Team Leader planning');
+      }
+
+      if (personaName.includes('coder')) {
+        coderCallCount += 1;
+        if (coderCallCount === 2) {
+          markCorrectionStarted?.();
+          await correctionGate;
+          return correctionResponse;
+        }
+        return makeResponse({ persona: 'coder', content: 'API done' });
+      }
+
+      if (personaName === 'reviewer') {
+        if (!reviewsCompanionStep(instruction, 'implement')) {
+          return makeResponse({
+            persona: 'reviewer',
+            structuredOutput: { findings: [], notes: null },
+          });
+        }
+        return makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Fix the accepted defect.',
+            }],
+            notes: null,
+          },
+        });
+      }
+
+      throw new Error(`Unexpected Team Leader test persona: ${personaName}`);
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+    let runPromise: ReturnType<WorkflowEngine['run']> | undefined;
+
+    try {
+      runPromise = engine.run();
+      await correctionStarted;
+
+      expect(completeEvents).toHaveLength(0);
+      expect(teamLeaderCallCount).toBe(3);
+
+      releaseCorrection?.();
+      const state = await runPromise;
+
+      expect(state.status).toBe('completed');
+      expect(state.companion).toEqual(expect.objectContaining(expectedCompletion));
+      expect(completeEvents).toEqual([expect.objectContaining(expectedCompletion)]);
+      expect(teamLeaderCallCount).toBe(3);
+      expect(coderCallCount).toBe(2);
+    } finally {
+      releaseCorrection?.();
+      await runPromise?.catch(() => undefined);
+    }
+  });
+
+  it('Team Leader の single policy は correction の done + rate_limited で成功 part を残し Team fallback に流さない', async () => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: {
+        ...step.teamLeader,
+        maxConcurrency: 1,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'ok' as const,
+        snapshot: {
+          digest: 'team-leader-correction-rate-limit-digest',
+          changedLines: 1,
+          content: '+team leader change\n',
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: { 'src/a.ts': 'file-1' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+          omittedBytes: 0,
+          truncated: false,
+        },
+      }),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'fallback-model' }],
+      },
+    });
+    const completeEvents: unknown[] = [];
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: true,
+            reasoning: 'initial work completed',
+            cancelPartIds: [],
+            parts: [],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: false,
+            reasoning: 'run one correction batch',
+            cancelPartIds: [],
+            parts: [
+              { id: 'part-fix-done', title: 'Successful fix', instruction: 'Apply the first accepted fix' },
+              { id: 'part-fix-rate-limited', title: 'Rate-limited fix', instruction: 'Apply the second accepted fix' },
+            ],
+          },
+        }),
+      ],
+      coder: [
+        makeResponse({ persona: 'coder', content: 'API done' }),
+        makeResponse({ persona: 'coder', content: 'Successful correction retained' }),
+        makeResponse({
+          persona: 'coder',
+          status: 'rate_limited',
+          content: '',
+          error: 'Correction provider rate limited',
+          errorKind: 'rate_limit',
+          rateLimitInfo: {
+            provider: 'mock',
+            detectedAt: new Date('2026-08-27T00:00:00.000Z'),
+            source: 'stream_marker',
+          },
+        }),
+      ],
+      companions: {
+        reviewer: [makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Fix the accepted defect.',
+            }],
+            notes: null,
+          },
+        })],
+      },
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    const expectedCompletion = {
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds: 1,
+      reason: 'Team leader correction failed: part-fix-rate-limited (rate_limited): Correction provider rate limited',
+    };
+    expect(state.status).toBe('completed');
+    expect(state.companion).toEqual(expect.objectContaining(expectedCompletion));
+    expect(completeEvents).toEqual([expect.objectContaining(expectedCompletion)]);
+    expect(state.pendingFallback).toBeUndefined();
+    expect(state.rateLimitFallbackState).toBeUndefined();
+    expect(state.stepOutputs.get('implement')?.content).toContain('API done');
+    expect(state.stepOutputs.get('implement')?.content).toContain('Successful correction retained');
+    expect(state.stepOutputs.get('implement')?.content).not.toContain('Correction provider rate limited');
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+      persona === 'reviewer' && reviewsCompanionStep(prompt, 'implement')
+    ))).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('team-leader'))).toHaveLength(3);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(3);
+    expect(vi.mocked(runAgent).mock.calls.some(([, , options]) => (
+      options?.resolvedProvider === 'codex'
+    ))).toBe(false);
+  });
+
+  it('Team Leader の single policy は correction の done + cancellation で成功 part だけを集約に残す', async () => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: {
+        ...step.teamLeader,
+        maxConcurrency: 1,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'ok' as const,
+        snapshot: {
+          digest: 'team-leader-correction-cancellation-digest',
+          changedLines: 1,
+          content: '+team leader change\n',
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: { 'src/a.ts': 'file-1' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+          omittedBytes: 0,
+          truncated: false,
+        },
+      }),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
+    const completeEvents: unknown[] = [];
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    let teamLeaderCalls = 0;
+    let coderCalls = 0;
+    let teamReviewCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const personaName = typeof persona === 'string' ? persona : '';
+      options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+
+      if (personaName === 'reviewer') {
+        if (!reviewsCompanionStep(instruction, 'implement')) {
+          return makeResponse({
+            persona: 'reviewer',
+            structuredOutput: { findings: [], notes: null },
+          });
+        }
+        teamReviewCalls += 1;
+        return makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Apply both independent corrections.',
+            }],
+            notes: null,
+          },
+        });
+      }
+
+      if (personaName.includes('team-leader')) {
+        teamLeaderCalls += 1;
+        if (teamLeaderCalls === 1) {
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+            },
+          });
+        }
+        if (teamLeaderCalls === 2) {
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              done: true,
+              reasoning: 'initial work completed',
+              cancelPartIds: [],
+              parts: [],
+            },
+          });
+        }
+        if (teamLeaderCalls === 3) {
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              done: false,
+              reasoning: 'run one correction batch',
+              cancelPartIds: [],
+              parts: [
+                { id: 'part-fix-done', title: 'Successful fix', instruction: 'Apply the first accepted fix' },
+                { id: 'part-fix-cancelled', title: 'Cancelled fix', instruction: 'Apply the second accepted fix' },
+              ],
+            },
+          });
+        }
+        throw new Error('Single correction unexpectedly resumed Team Leader planning');
+      }
+
+      if (personaName.includes('coder')) {
+        coderCalls += 1;
+        if (coderCalls === 1) {
+          return makeResponse({ persona: 'coder', content: 'API done' });
+        }
+        if (coderCalls === 2) {
+          return makeResponse({ persona: 'coder', content: 'Successful correction retained' });
+        }
+        if (coderCalls === 3) {
+          throw createTeamLeaderPartCancellation('part-fix-cancelled');
+        }
+        throw new Error(`Unexpected coder call ${coderCalls}`);
+      }
+
+      throw new Error(`Unexpected Team Leader test persona: ${personaName}`);
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    const expectedCompletion = {
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds: 1,
+      reason: 'Team leader correction did not settle: missing results for part-fix-cancelled',
+    };
+    expect(state.status).toBe('completed');
+    expect(state.companion).toEqual(expect.objectContaining(expectedCompletion));
+    expect(completeEvents).toEqual([expect.objectContaining(expectedCompletion)]);
+    expect(state.stepOutputs.get('implement')?.content).toContain('API done');
+    expect(state.stepOutputs.get('implement')?.content).toContain('Successful correction retained');
+    expect(state.stepOutputs.get('implement')?.content).not.toContain('part-fix-cancelled');
+    expect(teamReviewCalls).toBe(1);
+    expect(teamLeaderCalls).toBe(3);
+    expect(coderCalls).toBe(3);
+  });
+
+  it('Team Leader の single policy は correction part の routing failure を failure に確定する', async () => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: {
+        ...step.teamLeader,
+        partTags: ['implementation'],
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const autoRouting: AutoRoutingConfig = {
+      strategy: 'balanced',
+      router: {
+        provider: 'claude-sdk',
+        model: 'claude-haiku-4-5-20251001',
+      },
+      candidates: [
+        {
+          name: 'leader',
+          description: 'Team leader planning',
+          provider: 'mock',
+          model: 'leader-model',
+          routingTier: 'medium',
+        },
+        {
+          name: 'coding',
+          description: 'Implementation',
+          provider: 'mock',
+          model: 'coding-model',
+          routingTier: 'low',
+        },
+        {
+          name: 'invalid-correction',
+          description: 'Invalid correction route',
+          provider: 'codex',
+          model: 'sonnet',
+          routingTier: 'high',
+        },
+      ],
+      defaultPool: 'general',
+      candidatePools: {
+        general: {
+          candidates: ['coding', 'invalid-correction'],
+          fallback: 'coding',
+        },
+      },
+      poolRules: {
+        tags: { implementation: 'general' },
+        steps: { implement: 'general' },
+      },
+      rules: {
+        steps: { implement: 'leader' },
+      },
+    };
+    const estimate = vi.fn().mockImplementation(async (snapshot) => ({
+      requiredTier: snapshot.step.instruction.includes('Apply the accepted fix') ? 'high' : 'low',
+      reasonCodes: ['focused-change'],
+    }));
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'ok' as const,
+        snapshot: {
+          digest: 'team-leader-correction-routing-failure-digest',
+          changedLines: 1,
+          content: '+team leader change\n',
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: { 'src/a.ts': 'file-1' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+          omittedBytes: 0,
+          truncated: false,
+        },
+      }),
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+      autoRouting,
+      autoRoutingEstimator: { estimate },
+    });
+    const completeEvents: unknown[] = [];
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: true,
+            reasoning: 'initial work completed',
+            cancelPartIds: [],
+            parts: [],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: false,
+            reasoning: 'run one correction batch',
+            cancelPartIds: [],
+            parts: [{ id: 'part-fix', title: 'Fix', instruction: 'Apply the accepted fix' }],
+          },
+        }),
+      ],
+      coder: [makeResponse({ persona: 'coder', content: 'API done' })],
+      companions: {
+        reviewer: [makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Fix the accepted defect.',
+            }],
+            notes: null,
+          },
+        })],
+      },
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    const expectedCompletion = {
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds: 1,
+      reason: "Configuration error: auto_routing resolved model 'sonnet' is a Claude model alias but provider is 'codex'.",
+    };
+    expect(state.status).toBe('completed');
+    expect(state.companion).toEqual(expect.objectContaining(expectedCompletion));
+    expect(completeEvents).toEqual([expect.objectContaining(expectedCompletion)]);
+    expect(estimate).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('team-leader'))).toHaveLength(3);
+  });
+
+  it.each([
+    {
+      label: 'correction planner',
+      abortStage: 'planner' as const,
+      expectedCoderCalls: 1,
+    },
+    {
+      label: 'correction worker',
+      abortStage: 'worker' as const,
+      expectedCoderCalls: 2,
+    },
+  ])('Team Leader の single policy は親 abort 中の $label を complete に変換しない', async ({
+    abortStage,
+    expectedCoderCalls,
+  }) => {
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: {
+        ...step.teamLeader,
+        maxConcurrency: 1,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockResolvedValue({
+        status: 'ok' as const,
+        snapshot: {
+          digest: `team-leader-${abortStage}-abort-digest`,
+          changedLines: 1,
+          content: '+team leader change\n',
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: { 'src/a.ts': 'file-1' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+          omittedBytes: 0,
+          truncated: false,
+        },
+      }),
+    };
+    const abortController = new AbortController();
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+      abortSignal: abortController.signal,
+    });
+    const completeEvents: unknown[] = [];
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    const abortReason = new Error(`${abortStage} parent abort`);
+    let teamLeaderCalls = 0;
+    let coderCalls = 0;
+    let teamReviewCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const personaName = typeof persona === 'string' ? persona : '';
+      options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+
+      if (personaName === 'reviewer') {
+        if (!reviewsCompanionStep(instruction, 'implement')) {
+          return makeResponse({
+            persona: 'reviewer',
+            structuredOutput: { findings: [], notes: null },
+          });
+        }
+        teamReviewCalls += 1;
+        return makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Fix the accepted defect.',
+            }],
+            notes: null,
+          },
+        });
+      }
+
+      if (personaName.includes('team-leader')) {
+        teamLeaderCalls += 1;
+        if (teamLeaderCalls === 1) {
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+            },
+          });
+        }
+        if (teamLeaderCalls === 2) {
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              done: true,
+              reasoning: 'initial work completed',
+              cancelPartIds: [],
+              parts: [],
+            },
+          });
+        }
+        if (teamLeaderCalls === 3 && abortStage === 'planner') {
+          abortController.abort(abortReason);
+          expect(options?.abortSignal?.aborted).toBe(true);
+          throw abortReason;
+        }
+        if (teamLeaderCalls === 3) {
+          return makeResponse({
+            persona: 'team-leader',
+            structuredOutput: {
+              done: false,
+              reasoning: 'run one correction batch',
+              cancelPartIds: [],
+              parts: [{ id: 'part-fix', title: 'Fix', instruction: 'Apply the accepted fix' }],
+            },
+          });
+        }
+        throw new Error('Single correction unexpectedly resumed Team Leader planning');
+      }
+
+      if (personaName.includes('coder')) {
+        coderCalls += 1;
+        if (coderCalls === 1) {
+          return makeResponse({ persona: 'coder', content: 'API done' });
+        }
+        if (coderCalls === 2 && abortStage === 'worker') {
+          abortController.abort(abortReason);
+          expect(options?.abortSignal?.aborted).toBe(true);
+          throw abortReason;
+        }
+        throw new Error(`Unexpected coder call ${coderCalls} during ${abortStage} abort`);
+      }
+
+      throw new Error(`Unexpected Team Leader test persona: ${personaName}`);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.companion).toEqual(expect.objectContaining({
+      completionSettled: false,
+      followUpRounds: 0,
+    }));
+    expect(state.companion?.completionFailure).not.toBe(true);
+    expect(completeEvents).toHaveLength(0);
+    expect(teamReviewCalls).toBe(1);
+    expect(teamLeaderCalls).toBe(3);
+    expect(coderCalls).toBe(expectedCoderCalls);
+  });
+
+  it('Team Leader の single policy は correction planning deadline を complete に変換しない', async () => {
+    vi.useFakeTimers();
+    try {
+      const config = buildTeamLeaderConfig();
+      updateTeamLeaderStep(config, (step) => ({
+        ...step,
+        teamLeader: {
+          ...step.teamLeader,
+          maxConcurrency: 1,
+        },
+        companion: { fixed: ['reviewer'], pool: [] },
+      }));
+      config.companions = {
+        reviewer: {
+          name: 'reviewer',
+          description: 'Review the complete Team Leader change',
+          instruction: 'Review the complete change.',
+          instructionRef: 'reviewer',
+          intervalMs: 60_000,
+        },
+      };
+      const companionDiffReader = {
+        readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+        readDiff: vi.fn().mockResolvedValue({
+          status: 'ok' as const,
+          snapshot: {
+            digest: 'team-leader-planning-deadline-digest',
+            changedLines: 1,
+            content: '+team leader change\n',
+            changedFiles: ['src/a.ts'],
+            fileFingerprints: { 'src/a.ts': 'file-1' },
+            hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+            omittedBytes: 0,
+            truncated: false,
+          },
+        }),
+      };
+      const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+        projectCwd: tmpDir,
+        provider: 'codex',
+        model: 'gpt-5',
+        providerOptions: {
+          codex: {
+            guards: { callTimeoutMs: PROVIDER_CALL_TIMEOUT_MIN_MS },
+          },
+        },
+        companionEnabled: true,
+        companionProviders: { reviewer: { provider: 'mock' } },
+        companionDiffReader,
+      });
+      const completeEvents: unknown[] = [];
+      engine.on('companion:complete', (event) => {
+        if (event.step === 'implement') completeEvents.push(event);
+      });
+      let teamLeaderCalls = 0;
+      let coderCalls = 0;
+      let teamReviewCalls = 0;
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        const personaName = typeof persona === 'string' ? persona : '';
+        options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+
+        if (personaName === 'reviewer') {
+          if (!reviewsCompanionStep(instruction, 'implement')) {
+            return makeResponse({
+              persona: 'reviewer',
+              structuredOutput: { findings: [], notes: null },
+            });
+          }
+          teamReviewCalls += 1;
+          return makeResponse({
+            persona: 'reviewer',
+            structuredOutput: {
+              findings: [{
+                severity: 'must_fix',
+                file: 'src/a.ts',
+                line: 1,
+                finding: 'Fix the accepted defect.',
+              }],
+              notes: null,
+            },
+          });
+        }
+
+        if (personaName.includes('team-leader')) {
+          teamLeaderCalls += 1;
+          if (teamLeaderCalls === 1) {
+            return makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+              },
+            });
+          }
+          if (teamLeaderCalls === 2) {
+            return makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                done: true,
+                reasoning: 'initial work completed',
+                cancelPartIds: [],
+                parts: [],
+              },
+            });
+          }
+          if (teamLeaderCalls === 3) {
+            const abortSignal = options?.abortSignal;
+            if (abortSignal === undefined) {
+              throw new Error('Correction planning deadline signal is required');
+            }
+            vi.advanceTimersByTime(PROVIDER_CALL_TIMEOUT_MIN_MS);
+            expect(abortSignal.aborted).toBe(true);
+            abortSignal.throwIfAborted();
+          }
+          throw new Error('Single correction unexpectedly resumed Team Leader planning');
+        }
+
+        if (personaName.includes('coder')) {
+          coderCalls += 1;
+          return makeResponse({ persona: 'coder', content: 'API done' });
+        }
+
+        throw new Error(`Unexpected Team Leader test persona: ${personaName}`);
+      });
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(state.companion).toEqual(expect.objectContaining({
+        completionSettled: false,
+        followUpRounds: 0,
+      }));
+      expect(state.companion?.completionFailure).not.toBe(true);
+      expect(completeEvents).toHaveLength(0);
+      expect(teamReviewCalls).toBe(1);
+      expect(teamLeaderCalls).toBe(3);
+      expect(coderCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Team Leader の single policy は correction worker の stream が続く間は完了済み planner の deadline で中断しない', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const config = buildTeamLeaderConfig();
+      updateTeamLeaderStep(config, (step) => ({
+        ...step,
+        teamLeader: {
+          ...step.teamLeader,
+          maxConcurrency: 1,
+        },
+        companion: { fixed: ['reviewer'], pool: [] },
+      }));
+      config.companions = {
+        reviewer: {
+          name: 'reviewer',
+          description: 'Review the complete Team Leader change',
+          instruction: 'Review the complete change.',
+          instructionRef: 'reviewer',
+          intervalMs: 60_000,
+        },
+      };
+      const companionDiffReader = {
+        readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+        readDiff: vi.fn().mockResolvedValue({
+          status: 'ok' as const,
+          snapshot: {
+            digest: 'team-leader-long-correction-worker-digest',
+            changedLines: 1,
+            content: '+team leader change\n',
+            changedFiles: ['src/a.ts'],
+            fileFingerprints: { 'src/a.ts': 'file-1' },
+            hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+            omittedBytes: 0,
+            truncated: false,
+          },
+        }),
+      };
+      const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+        projectCwd: tmpDir,
+        provider: 'codex',
+        model: 'gpt-5',
+        providerOptions: {
+          codex: {
+            guards: { callTimeoutMs: PROVIDER_CALL_TIMEOUT_MIN_MS },
+          },
+        },
+        companionEnabled: true,
+        companionProviders: { reviewer: { provider: 'mock' } },
+        companionDiffReader,
+      });
+      const completeEvents: unknown[] = [];
+      engine.on('companion:complete', (event) => {
+        if (event.step === 'implement') completeEvents.push(event);
+      });
+      let teamLeaderCalls = 0;
+      let coderCalls = 0;
+      let teamReviewCalls = 0;
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        const personaName = typeof persona === 'string' ? persona : '';
+        options?.onPromptResolved?.({ systemPrompt: personaName, userInstruction: instruction });
+
+        if (personaName === 'reviewer') {
+          if (!reviewsCompanionStep(instruction, 'implement')) {
+            return makeResponse({
+              persona: 'reviewer',
+              structuredOutput: { findings: [], notes: null },
+            });
+          }
+          teamReviewCalls += 1;
+          return makeResponse({
+            persona: 'reviewer',
+            structuredOutput: {
+              findings: [{
+                severity: 'must_fix',
+                file: 'src/a.ts',
+                line: 1,
+                finding: 'Fix the accepted defect.',
+              }],
+              notes: null,
+            },
+          });
+        }
+
+        if (personaName.includes('team-leader')) {
+          teamLeaderCalls += 1;
+          if (teamLeaderCalls === 1) {
+            return makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+              },
+            });
+          }
+          if (teamLeaderCalls === 2) {
+            return makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                done: true,
+                reasoning: 'initial work completed',
+                cancelPartIds: [],
+                parts: [],
+              },
+            });
+          }
+          if (teamLeaderCalls === 3) {
+            return makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                done: false,
+                reasoning: 'run one correction batch',
+                cancelPartIds: [],
+                parts: [{ id: 'part-fix', title: 'Fix', instruction: 'Apply the accepted fix' }],
+              },
+            });
+          }
+          throw new Error('Single correction unexpectedly resumed Team Leader planning');
+        }
+
+        if (personaName.includes('coder')) {
+          coderCalls += 1;
+          if (coderCalls === 1) {
+            return makeResponse({ persona: 'coder', content: 'API done' });
+          }
+          if (coderCalls === 2) {
+            const stream = options?.onStream;
+            const workerSignal = options?.abortSignal;
+            if (stream === undefined || workerSignal === undefined) {
+              throw new Error('Correction worker stream and abort signal are required');
+            }
+            const activityInterval = PROVIDER_CALL_TIMEOUT_MIN_MS - 1;
+            vi.advanceTimersByTime(activityInterval);
+            stream({ type: 'text', data: { text: 'correction still running 1' } });
+            vi.advanceTimersByTime(activityInterval);
+            stream({ type: 'text', data: { text: 'correction still running 2' } });
+            expect(workerSignal.aborted).toBe(false);
+            return makeResponse({
+              persona: 'coder',
+              content: 'Long-running correction retained',
+            });
+          }
+          throw new Error(`Unexpected coder call ${coderCalls}`);
+        }
+
+        throw new Error(`Unexpected Team Leader test persona: ${personaName}`);
+      });
+      vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(state.companion).toEqual(expect.objectContaining({
+        completionSettled: true,
+        followUpRounds: 1,
+      }));
+      expect(completeEvents).toEqual([expect.objectContaining({
+        completionSettled: true,
+        followUpRounds: 1,
+      })]);
+      expect(state.stepOutputs.get('implement')?.content).toContain('Long-running correction retained');
+      expect(teamReviewCalls).toBe(1);
+      expect(teamLeaderCalls).toBe(3);
+      expect(coderCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -658,11 +3292,15 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
     const completeEvents: unknown[] = [];
     const fixRoundEvents: unknown[] = [];
-    engine.on('companion:complete', (event) => completeEvents.push(event));
-    engine.on('companion:fix_round', (event) => fixRoundEvents.push(event));
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    engine.on('companion:fix_round', (event) => {
+      if (event.step === 'implement') fixRoundEvents.push(event);
+    });
 
-    const responseQueues: Record<'team-leader' | 'coder' | 'reviewer', AgentResponse[]> = {
-      'team-leader': [
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
         makeResponse({
           persona: 'team-leader',
           structuredOutput: {
@@ -697,35 +3335,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         makeResponse({ persona: 'coder', content: 'Tests done' }),
         makeResponse({ persona: 'coder', content: 'Normal terminal part ran' }),
       ],
-      reviewer: [
-        makeResponse({
+      companions: {
+        reviewer: [makeResponse({
           persona: 'reviewer',
           structuredOutput: { findings: [], notes: null },
-        }),
-      ],
-    };
-    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: instruction,
-      });
-      const queueName = typeof persona !== 'string'
-        ? undefined
-        : persona === 'reviewer'
-          ? 'reviewer'
-          : persona.includes('team-leader')
-            ? 'team-leader'
-            : persona.includes('coder')
-              ? 'coder'
-              : undefined;
-      if (queueName === undefined) {
-        throw new Error(`Unexpected Team Leader test persona: ${String(persona)}`);
-      }
-      const response = responseQueues[queueName].shift();
-      if (response === undefined) {
-        throw new Error(`No response configured for Team Leader test persona: ${queueName}`);
-      }
-      return response;
+        })],
+      },
     });
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
@@ -738,7 +3353,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     }));
     expect(completeEvents).toHaveLength(1);
     expect(fixRoundEvents).toHaveLength(0);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+      persona === 'reviewer' && reviewsCompanionStep(prompt, 'implement')
+    ))).toHaveLength(1);
     expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(2);
     expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('team-leader'))).toHaveLength(3);
     expect(state.stepOutputs.get('implement')?.content).not.toContain('Normal terminal part ran');
@@ -784,41 +3401,51 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
     const completeEvents: unknown[] = [];
     const fixRoundEvents: unknown[] = [];
-    engine.on('companion:complete', (event) => completeEvents.push(event));
-    engine.on('companion:fix_round', (event) => fixRoundEvents.push(event));
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    engine.on('companion:fix_round', (event) => {
+      if (event.step === 'implement') fixRoundEvents.push(event);
+    });
 
-    mockRunAgentWithPrompt(
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
-        },
-      }),
-      makeResponse({ persona: 'coder', content: 'API done' }),
-      makeResponse({ persona: 'team-leader', status: 'error', error: 'feedback failed' }),
-      makeResponse({
-        persona: 'reviewer',
-        structuredOutput: {
-          findings: [{
-            severity: 'must_fix',
-            file: 'src/a.ts',
-            line: 1,
-            finding: 'Fix the accepted defect.',
-          }],
-          notes: null,
-        },
-      }),
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          done: true,
-          reasoning: 'advisory follow-up complete',
-          cancelPartIds: [],
-          parts: [{ id: 'part-fix', title: 'Fix', instruction: 'Apply the accepted fix' }],
-        },
-      }),
-      makeResponse({ persona: 'coder', content: 'Final fix applied' }),
-    );
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+          },
+        }),
+        makeResponse({ persona: 'team-leader', status: 'error', error: 'feedback failed' }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: false,
+            reasoning: 'advisory follow-up complete',
+            cancelPartIds: [],
+            parts: [{ id: 'part-fix', title: 'Fix', instruction: 'Apply the accepted fix' }],
+          },
+        }),
+      ],
+      coder: [
+        makeResponse({ persona: 'coder', content: 'API done' }),
+        makeResponse({ persona: 'coder', content: 'Final fix applied' }),
+      ],
+      companions: {
+        reviewer: [makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Fix the accepted defect.',
+            }],
+            notes: null,
+          },
+        })],
+      },
+    });
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
@@ -834,7 +3461,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       sequence: 2,
       findingCount: 1,
     }]);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+      persona === 'reviewer' && reviewsCompanionStep(prompt, 'implement')
+    ))).toHaveLength(1);
     expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(2);
     expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('team-leader'))).toHaveLength(3);
     expect(state.stepOutputs.get('implement')?.content).toContain('Final fix applied');
@@ -860,7 +3489,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       readBaselineSha: vi.fn().mockResolvedValue('baseline'),
       readDiff: vi.fn().mockImplementation(async () => {
         diffReadCount += 1;
-        const isFollowUp = diffReadCount > 1;
+        const isFollowUp = diffReadCount > 2;
         return {
           status: 'ok' as const,
           snapshot: {
@@ -886,54 +3515,75 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
     const completeEvents: unknown[] = [];
     const fixRoundEvents: unknown[] = [];
-    engine.on('companion:complete', (event) => completeEvents.push(event));
-    engine.on('companion:fix_round', (event) => fixRoundEvents.push(event));
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    engine.on('companion:fix_round', (event) => {
+      if (event.step === 'implement') fixRoundEvents.push(event);
+    });
 
-    mockRunAgentWithPrompt(
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
-        },
-      }),
-      makeResponse({ persona: 'coder', content: 'API done' }),
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          done: false,
-          reasoning: 'Add the fix part',
-          cancelPartIds: [],
-          parts: [{ id: 'part-2', title: 'Fix', instruction: 'Apply the accepted fix' }],
-        },
-      }),
-      makeResponse({
-        persona: 'reviewer',
-        structuredOutput: {
-          findings: [{
-            severity: 'must_fix',
-            file: 'src/a.ts',
-            line: 1,
-            finding: 'Fix the accepted defect.',
-          }],
-          notes: null,
-        },
-      }),
-      makeResponse({ persona: 'coder', content: 'Fix applied' }),
-      makeResponse({
-        persona: 'reviewer',
-        structuredOutput: { findings: [], notes: null },
-      }),
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          done: true,
-          reasoning: 'No more parts',
-          cancelPartIds: [],
-          parts: [{ id: 'part-ignored', title: 'Ignored', instruction: 'Do not run this part' }],
-        },
-      }),
-      makeResponse({ persona: 'coder', content: 'Ignored part ran' }),
-    );
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: true,
+            reasoning: 'Initial parts are complete',
+            cancelPartIds: [],
+            parts: [],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: false,
+            reasoning: 'Add the fix part',
+            cancelPartIds: [],
+            parts: [{ id: 'part-2', title: 'Fix', instruction: 'Apply the accepted fix' }],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            done: true,
+            reasoning: 'No more parts',
+            cancelPartIds: [],
+            parts: [{ id: 'part-ignored', title: 'Ignored', instruction: 'Do not run this part' }],
+          },
+        }),
+      ],
+      coder: [
+        makeResponse({ persona: 'coder', content: 'API done' }),
+        makeResponse({ persona: 'coder', content: 'Fix applied' }),
+        makeResponse({ persona: 'coder', content: 'Ignored part ran' }),
+      ],
+      companions: {
+        reviewer: [
+          makeResponse({
+            persona: 'reviewer',
+            structuredOutput: {
+              findings: [{
+                severity: 'must_fix',
+                file: 'src/a.ts',
+                line: 1,
+                finding: 'Fix the accepted defect.',
+              }],
+              notes: null,
+            },
+          }),
+          makeResponse({
+            persona: 'reviewer',
+            structuredOutput: { findings: [], notes: null },
+          }),
+        ],
+      },
+    });
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
@@ -949,9 +3599,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       sequence: 2,
       findingCount: 1,
     }]);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(2);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+      persona === 'reviewer' && reviewsCompanionStep(prompt, 'implement')
+    ))).toHaveLength(2);
     expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(2);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('team-leader'))).toHaveLength(3);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('team-leader'))).toHaveLength(4);
     expect(state.stepOutputs.get('implement')?.content).not.toContain('Ignored part ran');
   });
 
@@ -995,35 +3647,43 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
     const completeEvents: unknown[] = [];
     const fixRoundEvents: unknown[] = [];
-    engine.on('companion:complete', (event) => completeEvents.push(event));
-    engine.on('companion:fix_round', (event) => fixRoundEvents.push(event));
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    engine.on('companion:fix_round', (event) => {
+      if (event.step === 'implement') fixRoundEvents.push(event);
+    });
 
-    mockRunAgentWithPrompt(
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
-        },
-      }),
-      makeResponse({ persona: 'coder', content: 'API done' }),
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: { done: true, reasoning: 'No more parts', cancelPartIds: [], parts: [] },
-      }),
-      makeResponse({
-        persona: 'reviewer',
-        structuredOutput: {
-          findings: [{
-            severity: 'must_fix',
-            file: 'src/a.ts',
-            line: 1,
-            finding: 'Fix the accepted defect.',
-          }],
-          notes: null,
-        },
-      }),
-      makeResponse({ persona: 'team-leader', status: 'error', error: 'advisory feedback failed' }),
-    );
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: {
+            parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+          },
+        }),
+        makeResponse({
+          persona: 'team-leader',
+          structuredOutput: { done: true, reasoning: 'No more parts', cancelPartIds: [], parts: [] },
+        }),
+        makeResponse({ persona: 'team-leader', status: 'error', error: 'advisory feedback failed' }),
+      ],
+      coder: [makeResponse({ persona: 'coder', content: 'API done' })],
+      companions: {
+        reviewer: [makeResponse({
+          persona: 'reviewer',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Fix the accepted defect.',
+            }],
+            notes: null,
+          },
+        })],
+      },
+    });
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
@@ -1046,7 +3706,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       sequence: 2,
       findingCount: 1,
     }]);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+      persona === 'reviewer' && reviewsCompanionStep(prompt, 'implement')
+    ))).toHaveLength(1);
   });
 
   it('Team Leader の single policy は part_timeout の timeout continuation 後も共有 policy の failure state に到達する', async () => {
@@ -1089,11 +3751,15 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
     const completeEvents: unknown[] = [];
     const fixRoundEvents: unknown[] = [];
-    engine.on('companion:complete', (event) => completeEvents.push(event));
-    engine.on('companion:fix_round', (event) => fixRoundEvents.push(event));
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    engine.on('companion:fix_round', (event) => {
+      if (event.step === 'implement') fixRoundEvents.push(event);
+    });
 
-    const responseQueues: Record<'team-leader' | 'coder' | 'reviewer', AgentResponse[]> = {
-      'team-leader': [
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
         makeResponse({
           persona: 'team-leader',
           structuredOutput: {
@@ -1117,8 +3783,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         }),
         makeResponse({ persona: 'coder', content: 'Timeout continuation complete' }),
       ],
-      reviewer: [
-        makeResponse({
+      companions: {
+        reviewer: [makeResponse({
           persona: 'reviewer',
           structuredOutput: {
             findings: [{
@@ -1129,31 +3795,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
             }],
             notes: null,
           },
-        }),
-      ],
-    };
-    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: instruction,
-      });
-      const queueName = typeof persona !== 'string'
-        ? undefined
-        : persona === 'reviewer'
-          ? 'reviewer'
-          : persona.includes('team-leader')
-            ? 'team-leader'
-            : persona.includes('coder')
-              ? 'coder'
-              : undefined;
-      if (queueName === undefined) {
-        throw new Error(`Unexpected Team Leader test persona: ${String(persona)}`);
-      }
-      const response = responseQueues[queueName].shift();
-      if (response === undefined) {
-        throw new Error(`No response configured for Team Leader test persona: ${queueName}`);
-      }
-      return response;
+        })],
+      },
     });
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
@@ -1177,7 +3820,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       sequence: 2,
       findingCount: 1,
     }]);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+      persona === 'reviewer' && reviewsCompanionStep(prompt, 'implement')
+    ))).toHaveLength(1);
     const coderInstructions = vi.mocked(runAgent).mock.calls
       .filter(([persona]) => persona?.includes('coder'))
       .map(([, prompt]) => prompt);
@@ -1236,14 +3881,15 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
     const completeEvents: unknown[] = [];
     const fixRoundEvents: unknown[] = [];
-    engine.on('companion:complete', (event) => completeEvents.push(event));
-    engine.on('companion:fix_round', (event) => fixRoundEvents.push(event));
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
+    engine.on('companion:fix_round', (event) => {
+      if (event.step === 'implement') fixRoundEvents.push(event);
+    });
 
-    const responseQueues: Record<
-      'team-leader' | 'coder' | 'reviewer-failure' | 'reviewer-finding',
-      AgentResponse[]
-    > = {
-      'team-leader': [
+    mockTeamLeaderPersonaResponses({
+      teamLeader: [
         makeResponse({
           persona: 'team-leader',
           structuredOutput: {
@@ -1263,33 +3909,29 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
             parts: [{ id: 'part-2', title: 'Fix', instruction: 'Apply the accepted fix' }],
           },
         }),
-        makeResponse({
-          persona: 'team-leader',
-          structuredOutput: { done: true, reasoning: 'No more parts', cancelPartIds: [], parts: [] },
-        }),
       ],
       coder: [
         makeResponse({ persona: 'coder', content: 'API done' }),
         makeResponse({ persona: 'coder', content: 'Fix applied' }),
       ],
-      'reviewer-failure': [
-        makeResponse({
-          persona: 'reviewer-failure',
-          status: 'error',
-          content: '',
-          error: 'reviewer completion failed',
-          failureCategory: 'provider_stream_parse_error',
-        }),
-        makeResponse({
-          persona: 'reviewer-failure',
-          status: 'error',
-          content: '',
-          error: 'reviewer completion failed',
-          failureCategory: 'provider_stream_parse_error',
-        }),
-      ],
-      'reviewer-finding': [
-        makeResponse({
+      companions: {
+        'reviewer-failure': [
+          makeResponse({
+            persona: 'reviewer-failure',
+            status: 'error',
+            content: '',
+            error: 'reviewer completion failed',
+            failureCategory: 'provider_stream_parse_error',
+          }),
+          makeResponse({
+            persona: 'reviewer-failure',
+            status: 'error',
+            content: '',
+            error: 'reviewer completion failed',
+            failureCategory: 'provider_stream_parse_error',
+          }),
+        ],
+        'reviewer-finding': [makeResponse({
           persona: 'reviewer-finding',
           structuredOutput: {
             findings: [{
@@ -1300,33 +3942,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
             }],
             notes: null,
           },
-        }),
-      ],
-    };
-    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: instruction,
-      });
-      const queueName = typeof persona !== 'string'
-        ? undefined
-        : persona === 'reviewer-failure'
-          ? 'reviewer-failure'
-          : persona === 'reviewer-finding'
-            ? 'reviewer-finding'
-            : persona.includes('team-leader')
-              ? 'team-leader'
-              : persona.includes('coder')
-                ? 'coder'
-                : undefined;
-      if (queueName === undefined) {
-        throw new Error(`Unexpected Team Leader test persona: ${String(persona)}`);
-      }
-      const response = responseQueues[queueName].shift();
-      if (response === undefined) {
-        throw new Error(`No response configured for Team Leader test persona: ${queueName}`);
-      }
-      return response;
+        })],
+      },
     });
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
@@ -1350,8 +3967,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       sequence: 2,
       findingCount: 1,
     }]);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer-failure')).toHaveLength(2);
-    expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer-finding')).toHaveLength(1);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+      persona === 'reviewer-failure' && reviewsCompanionStep(prompt, 'implement')
+    ))).toHaveLength(2);
+    expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+      persona === 'reviewer-finding' && reviewsCompanionStep(prompt, 'implement')
+    ))).toHaveLength(1);
     const coderInstructions = vi.mocked(runAgent).mock.calls
       .filter(([persona]) => persona?.includes('coder'))
       .map(([, prompt]) => prompt);
@@ -1427,9 +4048,15 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       },
       companionDiffReader,
     });
-    engine.on('companion:review_round', (event) => reviewRoundEvents.push(event));
-    engine.on('companion:fix_round', (event) => fixRoundEvents.push(event));
-    engine.on('companion:complete', (event) => completeEvents.push(event));
+    engine.on('companion:review_round', (event) => {
+      if (event.step === 'implement') reviewRoundEvents.push(event);
+    });
+    engine.on('companion:fix_round', (event) => {
+      if (event.step === 'implement') fixRoundEvents.push(event);
+    });
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') completeEvents.push(event);
+    });
     let runPromise: ReturnType<WorkflowEngine['run']> | undefined;
 
     try {
@@ -1464,7 +4091,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           return makeResponse({
             persona: 'team-leader',
             structuredOutput: {
-              done: true,
+              done: false,
               reasoning: 'advisory follow-up complete',
               cancelPartIds: [],
               parts: [{ id: 'part-fix', title: 'Fix', instruction: 'Apply the accepted fix' }],
@@ -1500,6 +4127,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         }
 
         if (personaName === 'reviewer') {
+          if (!reviewsCompanionStep(instruction, 'implement')) {
+            return makeResponse({
+              persona: 'reviewer',
+              structuredOutput: { findings: [], notes: null },
+            });
+          }
           reviewOrder.push('review-start');
           return makeResponse({
             persona: 'reviewer',
@@ -1565,7 +4198,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         completionSettled: true,
         followUpRounds: 1,
       }));
-      expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
+      expect(vi.mocked(runAgent).mock.calls.filter(([persona, prompt]) => (
+        persona === 'reviewer' && reviewsCompanionStep(prompt, 'implement')
+      ))).toHaveLength(1);
       expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'moderator')).toHaveLength(1);
       expect(vi.mocked(runAgent).mock.calls.filter(([persona]) => persona?.includes('coder'))).toHaveLength(2);
       const coderInstructions = vi.mocked(runAgent).mock.calls
@@ -1581,6 +4216,203 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       );
       expect(state.stepOutputs.get('implement')?.content).toContain('Fix applied');
       expect(state.stepOutputs.get('implement')?.content).not.toContain('Normal terminal part ran');
+    } finally {
+      releaseWorker?.();
+      await runPromise?.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it('WorkflowEngineのTeam Leader parentは同一digestのcompletion reviewを抑止する', async () => {
+    vi.useFakeTimers();
+    let releaseWorker: (() => void) | undefined;
+    const workerGate = new Promise<void>((resolve) => {
+      releaseWorker = resolve;
+    });
+    let workerStreamed = false;
+    let leaderCallCount = 0;
+    const reviewedRounds: Array<{
+      step: string;
+      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+      digest: string;
+    }> = [];
+    const companionStarts: Array<{ step: string; reviewMode: 'completion' | 'live' }> = [];
+    const companionReviewSkips: Array<{ step: string; phase: string; reason: string }> = [];
+    const companionCompletions: Array<{ step: string; completionSettled: boolean }> = [];
+    const initialSnapshot: CompanionDiff = {
+      digest: 'baseline-digest',
+      changedLines: 0,
+      content: '',
+      changedFiles: [],
+      fileFingerprints: {},
+      hunkFingerprints: {},
+      omittedBytes: 0,
+      truncated: false,
+    };
+    let currentSnapshot = initialSnapshot;
+    const companionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockImplementation(async () => ({
+        status: 'ok' as const,
+        snapshot: currentSnapshot,
+      })),
+    };
+    const config = buildTeamLeaderConfig();
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
+      teamLeader: {
+        ...step.teamLeader,
+        maxConcurrency: 1,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    }));
+    config.companions = {
+      reviewer: {
+        name: 'reviewer',
+        description: 'Review the complete Team Leader change',
+        instruction: 'Review the complete change.',
+        instructionRef: 'reviewer',
+        intervalMs: 60_000,
+      },
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      companionEnabled: true,
+      companionReviewMode: 'live',
+      companionProviders: { reviewer: { provider: 'mock' } },
+      companionDiffReader,
+    });
+    engine.on('companion:start', (event) => companionStarts.push({
+      step: event.step,
+      reviewMode: event.reviewMode,
+    }));
+    engine.on('companion:review_round', (event) => reviewedRounds.push({
+      step: event.step,
+      trigger: event.trigger,
+      digest: event.digest,
+    }));
+    engine.on('companion:review_skipped', (event) => {
+      if (event.step === 'implement') {
+        companionReviewSkips.push({
+          step: event.step,
+          phase: event.phase,
+          reason: event.reason,
+        });
+      }
+    });
+    engine.on('companion:complete', (event) => {
+      if (event.step === 'implement') {
+        companionCompletions.push({
+          step: event.step,
+          completionSettled: event.completionSettled,
+        });
+      }
+    });
+    let runPromise: ReturnType<WorkflowEngine['run']> | undefined;
+
+    try {
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        const personaName = typeof persona === 'string' ? persona : '';
+        options?.onPromptResolved?.({
+          systemPrompt: personaName,
+          userInstruction: instruction,
+        });
+
+        if (personaName.includes('team-leader')) {
+          leaderCallCount += 1;
+          if (leaderCallCount === 1) {
+            currentSnapshot = {
+              ...initialSnapshot,
+              digest: 'live-digest',
+              changedLines: 12,
+              content: '+live change\n',
+              changedFiles: ['src/live.ts'],
+              fileFingerprints: { 'src/live.ts': 'live-file' },
+              hunkFingerprints: { 'src/live.ts:1-12': 'live-hunk' },
+            };
+            if (options?.onStream === undefined) {
+              throw new Error('Team Leader did not receive onStream');
+            }
+            options.onStream({
+              type: 'tool_use',
+              data: { tool: 'Edit', id: 'leader-edit-1', input: { file_path: 'src/live.ts' } },
+            });
+          }
+          return leaderCallCount === 1
+            ? makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+              },
+            })
+            : makeResponse({
+              persona: 'team-leader',
+              structuredOutput: {
+                done: true,
+                reasoning: 'enough',
+                cancelPartIds: [],
+                parts: [],
+              },
+            });
+        }
+
+        if (personaName.includes('coder')) {
+          if (options?.onStream === undefined) {
+            throw new Error('Team Leader worker did not receive onStream');
+          }
+          options.onStream({
+            type: 'tool_use',
+            data: { tool: 'Edit', id: 'edit-1', input: { file_path: 'src/live.ts' } },
+          });
+          workerStreamed = true;
+          await workerGate;
+          return makeResponse({ persona: 'coder', content: 'worker complete' });
+        }
+
+        if (personaName === 'reviewer') {
+          return makeResponse({
+            persona: 'reviewer',
+            structuredOutput: { findings: [], notes: null },
+          });
+        }
+
+        throw new Error(`Unexpected agent persona: ${personaName}`);
+      });
+      vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+      const workflowPromise = engine.run();
+      runPromise = workflowPromise;
+      await vi.waitFor(() => expect(workerStreamed).toBe(true), { timeout: 1_000 });
+      await vi.advanceTimersByTimeAsync(COMPANION_CHANGE_DEBOUNCE_MS);
+      await vi.waitFor(() => expect(reviewedRounds).toContainEqual({
+        step: 'implement',
+        trigger: 'quiet',
+        digest: 'live-digest',
+      }), { timeout: 1_000 });
+
+      expect(reviewedRounds.filter(({ step }) => step === 'implement')).toHaveLength(1);
+      expect(companionStarts).toContainEqual({ step: 'implement', reviewMode: 'live' });
+      const reviewerCallsBeforeCompletion = vi.mocked(runAgent).mock.calls
+        .filter(([persona]) => persona === 'reviewer').length;
+
+      releaseWorker?.();
+      const state = await workflowPromise;
+
+      expect(state.status).toBe('completed');
+      expect(reviewedRounds.filter(({ step }) => step === 'implement')).toHaveLength(1);
+      expect(vi.mocked(runAgent).mock.calls
+        .filter(([persona]) => persona === 'reviewer'))
+        .toHaveLength(reviewerCallsBeforeCompletion);
+      expect(companionReviewSkips).toContainEqual({
+        step: 'implement',
+        phase: 'completion',
+        reason: 'unchanged_digest',
+      });
+      expect(companionCompletions).toEqual([{
+        step: 'implement',
+        completionSettled: true,
+      }]);
     } finally {
       releaseWorker?.();
       await runPromise?.catch(() => undefined);
@@ -1631,6 +4463,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
     const abortReasons: string[] = [];
     engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    const poolSelections: Array<{ step: string; selected: string[] }> = [];
+    engine.on('companion:pool_selected', (event) => poolSelections.push({
+      step: event.step,
+      selected: event.selected,
+    }));
     const selectorCalls: Array<{ provider?: string; model?: string }> = [];
     const reviewerCalls: Array<{ provider?: string; model?: string }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -1680,14 +4517,18 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
     expect(state.status, [...abortReasons, state.lastOutput?.content, state.companion?.reason]
       .filter((value): value is string => value !== undefined).join('\n')).toBe('completed');
-    expect(selectorCalls).toEqual([
-      { provider: 'mock', model: 'selector-model' },
-      { provider: 'mock', model: 'selector-model' },
+    expect(poolSelections).toEqual([
+      { step: 'implement', selected: ['reviewer'] },
+      { step: 'implement.part', selected: ['reviewer'] },
+      { step: 'implement', selected: ['reviewer'] },
+      { step: 'implement.part', selected: ['reviewer'] },
     ]);
-    expect(reviewerCalls).toEqual([
-      { provider: 'mock', model: 'reviewer-model' },
-      { provider: 'mock', model: 'reviewer-model' },
-    ]);
+    expect(selectorCalls).toEqual(Array.from({ length: 4 }, () => ({
+      provider: 'mock',
+      model: 'selector-model',
+    })));
+    expect(reviewerCalls).toHaveLength(4);
+    expect(reviewerCalls.every((call) => call.provider === 'mock' && call.model === 'reviewer-model')).toBe(true);
   });
 
   it('親 AbortSignal を decomposition call に渡し、cancel 後に再試行しない', async () => {

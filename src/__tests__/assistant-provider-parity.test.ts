@@ -51,7 +51,11 @@ describe('assistant provider resolution', () => {
     for (const assistantMode of ['assistant', 'grill-me'] as const) {
       // Each mode is its own case; the counts below are per iteration.
       mockResolveAssistant.mockClear();
-      const plan = createAssistantConversationPlan('/repo', { assistantMode });
+      const plan = createAssistantConversationPlan('/repo', {
+        assistantMode,
+        formalSpec: false,
+        formalSpecComments: true,
+      });
 
       expect(plan.ctx.providerType).toBe('codex');
       expect(plan.ctx.model).toBe('gpt-5.6-luna');
@@ -66,6 +70,8 @@ describe('assistant provider resolution', () => {
 
     createAssistantConversationPlan('/repo', {
       assistantMode: 'assistant',
+      formalSpec: false,
+      formalSpecComments: true,
       provider: 'claude-sdk',
       model: 'opus',
     });
@@ -76,7 +82,11 @@ describe('assistant provider resolution', () => {
   it('should ask the ladder for the plain configuration when no override was given', () => {
     mockResolveAssistant.mockReturnValue({ runtimeManaged: false, provider: 'codex' });
 
-    createAssistantConversationPlan('/repo', { assistantMode: 'assistant' });
+    createAssistantConversationPlan('/repo', {
+      assistantMode: 'assistant',
+      formalSpec: false,
+      formalSpecComments: true,
+    });
 
     // No overrides to fold in, so the ladder resolves the configuration as it stands.
     expect(mockResolveAssistant).toHaveBeenCalledWith('/repo', undefined);

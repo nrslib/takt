@@ -338,6 +338,14 @@ describe('E2E: companion review', () => {
       },
       {
         persona: 'security-reviewer',
+        content: 'No findings remain for the initial part.',
+        structured_output: {
+          findings: [],
+          notes: 'The initial part is ready for Team review.',
+        },
+      },
+      {
+        persona: 'security-reviewer',
         content: 'Found an invalid value.',
         structured_output: {
           findings: [{
@@ -354,6 +362,14 @@ describe('E2E: companion review', () => {
         content: 'Accepted the finding.',
         structured_output: {
           findings: [{ action: 'accept', sourceIndex: 0 }],
+        },
+      },
+      {
+        persona: 'security-reviewer',
+        content: 'No findings remain for the fix part.',
+        structured_output: {
+          findings: [],
+          notes: 'The fix part is valid.',
         },
       },
       {
@@ -412,7 +428,7 @@ describe('E2E: companion review', () => {
     ))).toHaveLength(2);
     expect(calls.filter(({ event, personaName }) => (
       event === 'start' && personaName === 'security-reviewer'
-    ))).toHaveLength(2);
+    ))).toHaveLength(4);
     expect(calls.filter(({ event, personaName }) => (
       event === 'start' && personaName === 'adjudicator'
     ))).toHaveLength(1);

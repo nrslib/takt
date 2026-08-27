@@ -185,6 +185,10 @@ remain excluded.
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking problems and checks the complete affected scope of each |
 | `initial-review-external-identity-wiring` | takt-development-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
 | `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
+| `state-after-event-plan` | default / plan | state-after-event-plan | paired applicable and non-applicable cases: whether the plan applies same-entity before -> change -> after evidence only when the request names a change and asks behavior to continue following the state, including artifacts created before the change |
+| `state-after-event-plan-config` | default / plan | state-after-event-plan-config | paired applicable and non-applicable cases for a configuration change: whether the plan applies same-entity evidence to a named running configuration update, including artifacts created before the change, while keeping process-restart persistence separate |
+| `state-after-event-write-tests` | default / write_tests | state-after-event-write-tests (work copy) | whether mutable tests observe one connection before and after a named state change, including the pre-change status, and the test report records applicable continuous-execution and ownership evidence |
+| `state-after-event-testing-review` | peer-review / initial testing-review | state-after-event-testing-review | whether testing review rejects observations from recreated entities for a named change that must continue following state, requires same-entity before/change/after evidence including pre-change artifacts, and avoids unrelated persistence or concurrency expansion |
 | `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan discovers same-responsibility paths even under different names, closes real multi-boundary impact paths, and keeps local changes local |
 | `replan-contract-closure` | default / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries and rejecting unrelated reviewer proposals |
 | `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
@@ -202,7 +206,7 @@ remain excluded.
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from the current remediation scope, keeps required same-cause paths and diff-induced regressions in scope, and excludes even severe horizontal improvements from the fix plan |
 | `review-adjudication-binding` | peer-review / follow-up security-review | review-adjudication-binding | whether Opus 5, Luna Max, and Sol High keep three out-of-scope findings non-blocking, reopen only with an allowed basis, and distinguish bare ESC or unconstrained repository-owned rules from a reproduced OSC terminal effect |
 | `security-review-method` | peer-review / initial security-review | security-review-method | whether Opus 5, Luna Max, and Sol High approve unchanged boundaries and bound SQL, reject verified SQL injection, authorization bypass, credential exposure, and helper-mediated command injection, and keep repository-author-controlled size alone non-blocking |
-| `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
+| `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior, and whether formal-spec mode keeps complete Quint and Alloy requirements independently understandable through adjacent meaning comments in each notation |
 | `final-readiness-supervision` | final-gate / supervise Phase 1 | final-readiness-supervision | whether the supervisor identifies a newly discovered required consumer from the unmet acceptance criteria and avoids unrelated exploration |
 | `final-readiness-preservation` | final-gate / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the unresolved finding and does not reopen a previously excluded documentation request |
 | `final-readiness-precision` | final-gate / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
@@ -218,6 +222,15 @@ Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
 (recreated by prepare on every run) and are scored by Node assertion scripts
 in `eval/asserts/` that inspect the files the agent actually wrote.
+
+The `state-after-event-plan`, `state-after-event-plan-config`, and
+`state-after-event-testing-review` suites run an isolated Codex CLI provider
+(`gpt-5.6-sol`, reasoning effort `low`) plus Claude Opus 5 and Codex Luna Max
+under the production-condition CLI configuration. The mutable
+`state-after-event-write-tests` suite keeps the Codex SDK provider with
+`workspace-write` so its artifact assertion can inspect the tests and report
+written in the harness work copy; that mutable path is not replaced with a
+temporary isolated copy.
 
 The `issue-plan-samples` and `plan-report-source-authority` suites are the
 exceptions to the reviewer fixture rule: `eval/scripts/prepare.mjs` uses

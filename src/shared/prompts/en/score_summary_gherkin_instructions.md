@@ -29,7 +29,8 @@ For Gherkin:
 - Give the behavior a concise `Feature` name, group related invariants with `Rule`, and use the minimum number of `Scenario` examples needed for understanding
 - Include only behavior explicitly present in the conversation; do not derive adjacent cases from implementation choices or test permutations
 - Do not split one stated outcome into separate Scenarios for different internal failure points or mechanisms
-- Use concise natural language matching the instruction language
+- Always write the `Feature`, `Rule`, `Background`, `Scenario`, `Scenario Outline`, `Examples`, `Given`, `When`, `Then`, `And`, and `But` keywords in English, even when the instruction language is not English; do not use a localized `# language` directive
+- Use concise natural language matching the instruction language for Feature names, Scenario names, and step descriptions after those English keywords
 - Describe outcomes a human can verify; never use vague results such as "Then it is processed correctly"
 - Do not mention files, functions, internal algorithms, abstraction techniques, or other implementation mechanisms; keep those details in Markdown
 - Do not duplicate the same requirement in Markdown and Gherkin

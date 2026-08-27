@@ -1,5 +1,5 @@
 import type { MorePartsResponse } from '../../../agents/agent-usecases.js';
-import type { PartDefinition, PartResult } from '../../models/types.js';
+import type { CompanionFinding, PartDefinition, PartResult } from '../../models/types.js';
 import { createAbortScope, type AbortScope } from './abort-signal.js';
 import {
   createTeamLeaderPartCancellation,
@@ -23,6 +23,7 @@ interface TeamLeaderFeedbackArgs {
   readonly scheduledIds: readonly string[];
   readonly cancellablePartIds: readonly string[];
   readonly abortSignal: AbortSignal;
+  readonly companionFindings?: readonly DeepReadonly<CompanionFinding>[];
 }
 
 interface TeamLeaderExecutionTerminalArgs {
@@ -42,6 +43,9 @@ export interface TeamLeaderExecutionOptions {
     abortSignal: AbortSignal,
   ) => Promise<PartResult>;
   requestMoreParts: (args: TeamLeaderFeedbackArgs) => Promise<MorePartsResponse>;
+  reviewCompletion?: (
+    args: Omit<TeamLeaderFeedbackArgs, 'companionFindings'>,
+  ) => Promise<readonly CompanionFinding[]>;
   onPartQueued?: (part: DeepReadonly<PartDefinition>, partIndex: number) => void;
   onPartCompleted?: (result: DeepReadonly<PartResult>) => void;
   onPlanningDone?: (feedback: { reason: string; plannedParts: number; completedParts: number }) => void;
@@ -52,6 +56,7 @@ export interface TeamLeaderExecutionOptions {
     totalPlanned: number;
   }) => void;
   onPlanningError?: (error: unknown) => void;
+  onCompletionPlanningFailure?: (error: unknown) => void;
   onTerminalError?: (error: unknown) => void;
   onExecutionTerminal?: (
     args: TeamLeaderExecutionTerminalArgs,
@@ -96,8 +101,11 @@ export async function runTeamLeaderExecution(
 
   let nextPartIndex = 0;
   let leaderDone = false;
+  let completionReviewAfterPlanningFailure = false;
+  let planningFailure: unknown;
   let latestBatchStart = 0;
   let executionTerminalRequested = false;
+  let pendingTerminalFeedback: MorePartsResponse | undefined;
 
   const cancellablePartIds = (): string[] => [
     ...queue.map((part) => part.id),
@@ -159,54 +167,39 @@ export async function runTeamLeaderExecution(
     }
   };
 
-  const applyFeedback = (feedback: MorePartsResponse): void => {
+  const applyTerminalContinuation = (feedback: MorePartsResponse): void => {
     terminalGate.assertRunning('feedback.provider_result');
-    applyCancellations(feedback.cancelPartIds);
+    if (feedback.done) {
+      throw new Error('Team leader terminal continuation must schedule a correction part');
+    }
 
+    const knownPartIds = new Set(scheduledIds);
     const newParts: PartDefinition[] = [];
     for (const newPart of feedback.parts) {
-      if (scheduledIds.has(newPart.id)) {
+      if (knownPartIds.has(newPart.id)) {
         continue;
       }
-      scheduledIds.add(newPart.id);
+      knownPartIds.add(newPart.id);
       newParts.push(structuredClone(newPart));
     }
 
-    if (newParts.length > 0) {
-      terminalGate.assertRunning('feedback.parts_added');
-      plannedParts.push(...newParts);
-      queue.push(...newParts);
-      options.onPartsAdded?.({
-        parts: structuredClone(newParts),
-        reason: feedback.reasoning,
-        totalPlanned: plannedParts.length,
-      });
-      latestBatchStart = partResults.length;
+    if (newParts.length === 0) {
+      throw new Error('Team leader terminal continuation did not schedule a new correction part');
     }
 
-    if (feedback.done) {
-      terminalGate.assertRunning('feedback.planning_done');
-      options.onPlanningDone?.({
-        reason: feedback.reasoning,
-        plannedParts: plannedParts.length,
-        completedParts: partResults.length,
-      });
-      leaderDone = true;
-      return;
+    applyCancellations(feedback.cancelPartIds);
+    for (const newPart of newParts) {
+      scheduledIds.add(newPart.id);
     }
-
-    leaderDone = false;
-    if (newParts.length > 0) {
-      return;
-    }
-    if (queue.length > 0 || running.size > 0) {
-      return;
-    }
-    options.onPlanningNoNewParts?.({
+    terminalGate.assertRunning('feedback.parts_added');
+    plannedParts.push(...newParts);
+    queue.push(...newParts);
+    options.onPartsAdded?.({
+      parts: structuredClone(newParts),
       reason: feedback.reasoning,
-      plannedParts: plannedParts.length,
-      completedParts: partResults.length,
+      totalPlanned: plannedParts.length,
     });
+    latestBatchStart = partResults.length;
     leaderDone = true;
   };
 
@@ -224,7 +217,9 @@ export async function runTeamLeaderExecution(
     }
 
     const feedbackAbortScope = createAbortScope(options.abortSignal);
-    const feedbackPromise = options.requestMoreParts({
+    const buildFeedbackArgs = (
+      companionFindings?: readonly CompanionFinding[],
+    ): TeamLeaderFeedbackArgs => ({
       partResults: structuredClone(partResults),
       latestBatchResults: structuredClone(latestBatchResults),
       completedPartResults: structuredClone(partResults.slice(0, latestBatchStart)),
@@ -232,30 +227,144 @@ export async function runTeamLeaderExecution(
       scheduledIds: [...scheduledIds],
       cancellablePartIds: cancellablePartIds(),
       abortSignal: feedbackAbortScope.signal,
+      ...(companionFindings === undefined
+        ? {}
+        : { companionFindings: structuredClone(companionFindings) }),
     });
-    const terminalSettlement = Promise.race(
-      [...running.values()].map((part) => (
-        part.promise.then(() => new Promise<never>(() => {}))
-      )),
-    );
+    const deferTerminalFeedback = (feedback: MorePartsResponse): boolean => {
+      if (
+        !feedback.done
+        || options.reviewCompletion === undefined
+        || (queue.length === 0 && running.size === 0)
+      ) {
+        return false;
+      }
+      pendingTerminalFeedback = structuredClone(feedback);
+      return true;
+    };
+    let feedbackPromise: Promise<MorePartsResponse> | undefined;
+    let planningCorrectionForCompanionFindings = false;
+    let reviewCompletionFailed = false;
 
     try {
-      const feedback = await Promise.race([feedbackPromise, terminalSettlement]);
+      let feedback: MorePartsResponse;
+      if (pendingTerminalFeedback === undefined) {
+        feedbackPromise = options.requestMoreParts(buildFeedbackArgs());
+        const terminalSettlement = Promise.race(
+          [...running.values()].map((part) => (
+            part.promise.then(() => new Promise<never>(() => {}))
+          )),
+        );
+        feedback = await Promise.race([feedbackPromise, terminalSettlement]);
+      } else {
+        feedback = pendingTerminalFeedback;
+        pendingTerminalFeedback = undefined;
+      }
       terminalGate.assertRunning('feedback.provider_result');
       options.abortSignal?.throwIfAborted();
 
       publishSettledParts();
-      applyFeedback(feedback);
+      applyCancellations(feedback.cancelPartIds);
+
+      if (deferTerminalFeedback(feedback)) {
+        return;
+      }
+
+      const hasUnscheduledPart = (candidate: MorePartsResponse): boolean => (
+        candidate.parts.some((part) => !scheduledIds.has(part.id))
+      );
+      const isTerminalFeedback = (candidate: MorePartsResponse): boolean => (
+        candidate.done || !hasUnscheduledPart(candidate)
+      );
+      while (
+        queue.length === 0
+        && running.size === 0
+        && isTerminalFeedback(feedback)
+        && options.reviewCompletion !== undefined
+      ) {
+        let findings: readonly CompanionFinding[];
+        try {
+          findings = await options.reviewCompletion(buildFeedbackArgs());
+        } catch (error) {
+          reviewCompletionFailed = true;
+          throw error;
+        }
+        if (findings.length === 0) {
+          break;
+        }
+        planningCorrectionForCompanionFindings = true;
+        feedback = await options.requestMoreParts(buildFeedbackArgs(findings));
+        terminalGate.assertRunning('feedback.companion_provider_result');
+        options.abortSignal?.throwIfAborted();
+        publishSettledParts();
+        applyCancellations(feedback.cancelPartIds);
+        if (feedback.done || !hasUnscheduledPart(feedback)) {
+          throw new Error('Team Companion correction planning did not schedule a correction part');
+        }
+        planningCorrectionForCompanionFindings = false;
+      }
+
+      if (feedback.done) {
+        terminalGate.assertRunning('feedback.planning_done');
+        options.onPlanningDone?.({
+          reason: feedback.reasoning,
+          plannedParts: plannedParts.length,
+          completedParts: partResults.length,
+        });
+        leaderDone = true;
+        return;
+      }
+
+      const newParts: PartDefinition[] = [];
+      for (const newPart of feedback.parts) {
+        if (scheduledIds.has(newPart.id)) {
+          continue;
+        }
+        scheduledIds.add(newPart.id);
+        newParts.push(structuredClone(newPart));
+      }
+
+      if (newParts.length === 0) {
+        if (queue.length > 0 || running.size > 0) {
+          return;
+        }
+        options.onPlanningNoNewParts?.({
+          reason: feedback.reasoning,
+          plannedParts: plannedParts.length,
+          completedParts: partResults.length,
+        });
+        leaderDone = true;
+        return;
+      }
+
+      terminalGate.assertRunning('feedback.parts_added');
+      plannedParts.push(...newParts);
+      queue.push(...newParts);
+      options.onPartsAdded?.({
+        parts: structuredClone(newParts),
+        reason: feedback.reasoning,
+        totalPlanned: plannedParts.length,
+      });
+      latestBatchStart = partResults.length;
     } catch (error) {
       feedbackAbortScope.abort(error);
-      void feedbackPromise.catch(() => undefined);
+      void feedbackPromise?.catch(() => undefined);
       if (options.abortSignal?.aborted) {
         throw error;
       }
       if (isProviderStreamParseError(error)) {
         throw error;
       }
+      if (reviewCompletionFailed) {
+        throw error;
+      }
       options.onPlanningError?.(error);
+      if (planningCorrectionForCompanionFindings) {
+        options.onCompletionPlanningFailure?.(error);
+      } else {
+        completionReviewAfterPlanningFailure = true;
+        planningFailure = error;
+      }
       leaderDone = true;
     } finally {
       feedbackAbortScope.dispose();
@@ -345,7 +454,7 @@ export async function runTeamLeaderExecution(
         });
         if (continuation !== undefined) {
           options.abortSignal?.throwIfAborted();
-          applyFeedback(continuation);
+          applyTerminalContinuation(continuation);
         }
         if (queue.length > 0 || running.size > 0 || !leaderDone) {
           continue;
@@ -362,6 +471,26 @@ export async function runTeamLeaderExecution(
       runningPart.abortScope.dispose();
     }
     throw terminalError;
+  }
+
+  if (completionReviewAfterPlanningFailure && options.reviewCompletion !== undefined) {
+    const reviewAbortScope = createAbortScope(options.abortSignal);
+    try {
+      const findings = await options.reviewCompletion({
+        partResults: structuredClone(partResults),
+        latestBatchResults: structuredClone(partResults.slice(latestBatchStart)),
+        completedPartResults: structuredClone(partResults.slice(0, latestBatchStart)),
+        plannedParts: structuredClone(plannedParts),
+        scheduledIds: [...scheduledIds],
+        cancellablePartIds: cancellablePartIds(),
+        abortSignal: reviewAbortScope.signal,
+      });
+      if (findings.length > 0) {
+        options.onCompletionPlanningFailure?.(planningFailure);
+      }
+    } finally {
+      reviewAbortScope.dispose();
+    }
   }
 
   return {

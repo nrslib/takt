@@ -79,6 +79,7 @@ export interface WorkflowRule {
   appendix?: string;
   requiresUserInput?: boolean;
   interactiveOnly?: boolean;
+  commandGates?: 'required' | 'skip';
 }
 
 export interface WorkflowWideRule {

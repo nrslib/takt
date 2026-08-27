@@ -850,6 +850,7 @@ describe('requeueFailedTask', () => {
   });
 
   it('should pass resume_point when selected step matches root workflow_call step', async () => {
+    const expectedResumeLabel = 'Resume failed position: "default" > "delegate" > "coding" > "review"';
     const resumePoint = {
       version: 2 as const,
       stack: [
@@ -862,8 +863,8 @@ describe('requeueFailedTask', () => {
           call_instance: 1,
         },
         {
-          workflow: 'takt/coding',
-          workflow_ref: 'takt/coding',
+          workflow: 'coding',
+          workflow_ref: 'coding',
           step: 'review',
           kind: 'agent' as const,
           occurrence: 1,
@@ -878,11 +879,22 @@ describe('requeueFailedTask', () => {
       ...defaultWorkflowConfig,
       initialStep: 'delegate',
       steps: [
-        { name: 'delegate', kind: 'workflow_call', instruction: '', call: 'takt/coding', personaDisplayName: 'delegate', passPreviousResponse: true },
+        { name: 'delegate', kind: 'workflow_call', instruction: '', call: 'coding', personaDisplayName: 'delegate', passPreviousResponse: true },
         { name: 'final_review', persona: 'supervisor', instruction: '', personaDisplayName: 'supervisor', passPreviousResponse: true },
       ],
     });
-    selectStartCandidate('Resume failed position: default > delegate > takt/coding > review [default]');
+    mockSelectOptionWithDefault.mockImplementationOnce(
+      (
+        _message: string,
+        options: Array<{ label: string; value: string }>,
+        defaultValue: string,
+      ) => {
+        const resumeOption = options.find((option) => option.label === expectedResumeLabel);
+        expect(resumeOption).toBeDefined();
+        expect(defaultValue).toBe(resumeOption?.value);
+        return defaultValue;
+      },
+    );
     const task = makeFailedTask({
       data: {
         task: 'Do something',
@@ -905,6 +917,9 @@ describe('requeueFailedTask', () => {
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
+    );
+    expect(mockInfo).toHaveBeenCalledWith(
+      `Selected start position: ${expectedResumeLabel}`,
     );
   });
 

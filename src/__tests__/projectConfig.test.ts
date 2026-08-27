@@ -13,6 +13,7 @@ import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/pr
 import { ProjectConfigSchema } from '../core/models/index.js';
 import type { ProjectLocalConfig } from '../infra/config/types.js';
 import type { QualityGate } from '../core/models/workflow-types.js';
+import type { FormalSpecSetting } from '../core/models/config-types.js';
 import { MAX_ASSISTANT_INIT_FILES } from '../core/models/assistant-config.js';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
@@ -26,7 +27,7 @@ type ObservabilityConfigForTest = {
 type ProjectConfigWithAssistant = ProjectLocalConfig & {
   assistant?: {
     initFiles?: string[];
-    formalSpec?: boolean | 'Y/n' | 'y/N';
+    formalSpec?: FormalSpecSetting;
   };
 };
 
@@ -198,6 +199,29 @@ describe('projectConfig', () => {
       },
     );
 
+    it.each([
+      { mode: true },
+      { mode: 'Y/n', comments: false },
+      { comments: true },
+    ] as const)('should load structured assistant.formal_spec=%j from project config', (formalSpec) => {
+      const lines = ['assistant:', '  formal_spec:'];
+      if ('mode' in formalSpec) {
+        lines.push(`    mode: ${typeof formalSpec.mode === 'string' ? `'${formalSpec.mode}'` : formalSpec.mode}`);
+      }
+      if ('comments' in formalSpec) {
+        lines.push(`    comments: ${formalSpec.comments}`);
+      }
+      writeFileSync(
+        join(testDir, '.takt', 'config.yaml'),
+        lines.join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+      expect(loaded.assistant).toEqual({ formalSpec });
+    });
+
     it.each([true, false, 'Y/n', 'y/N'] as const)(
       'should preserve assistant.formal_spec=%s in save/load cycle',
       (formalSpec) => {
@@ -213,6 +237,18 @@ describe('projectConfig', () => {
         expect(reloaded.assistant?.formalSpec).toBe(formalSpec);
       },
     );
+
+    it('should preserve structured assistant.formal_spec in a save/load cycle', () => {
+      const formalSpec: FormalSpecSetting = { mode: 'y/N', comments: false };
+      const config: ProjectConfigWithAssistant = { assistant: { formalSpec } };
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      const reloaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+      expect(raw).toContain('formal_spec:');
+      expect(reloaded.assistant?.formalSpec).toEqual(formalSpec);
+    });
 
     it('should warn and ignore assistant.gherkin without changing the project config file', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');

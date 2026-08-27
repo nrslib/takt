@@ -75,7 +75,11 @@ export function buildOrderRevisionPrompt(
     stepDetails: hasWorkflowPreview
       ? formatStepPreviews(options.workflowContext!.stepPreviews!, options.lang)
       : '',
-    taskInstructionFormat: buildTaskInstructionFormat(options.lang, options.formalSpec),
+    taskInstructionFormat: buildTaskInstructionFormat(
+      options.lang,
+      options.formalSpec,
+      options.formalSpecComments ?? true,
+    ),
   });
   return prependInitialPromptContext(prompt, options.promptContext);
 }

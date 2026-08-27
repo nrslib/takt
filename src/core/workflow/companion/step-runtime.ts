@@ -49,10 +49,15 @@ const MINIMUM_CHANGED_LINES = 10;
 const ROUND_CONTEXT_MAX_BYTES = 4 * 1024;
 const log = createLogger('companion-step-runtime');
 
+export interface CompanionDiffBaseline {
+  readonly resolve: () => Promise<string>;
+}
+
 interface CompanionStepRuntimeDeps {
   readonly cwd: string;
   readonly projectCwd: string;
   readonly failureDir: string;
+  readonly runRootDirectory?: string;
   readonly runSlug: string;
   readonly runPathNamespace: readonly string[];
   readonly language: 'en' | 'ja';
@@ -64,6 +69,7 @@ interface CompanionStepRuntimeDeps {
   readonly providers: Readonly<Record<string, ProviderRoutingEntry>>;
   readonly selectorProvider?: SelectorProviderInfo;
   readonly diffReader: CompanionDiffReader;
+  readonly diffBaseline?: CompanionDiffBaseline;
   readonly abortSignal?: AbortSignal;
   readonly buildProviderCallCallbacks: CompanionProviderCallCallbacksBuilder;
   readonly emitEvent: CompanionEventEmitter;
@@ -86,6 +92,7 @@ export class CompanionStepRuntime {
   private completionCoordinator: CompanionCompletionCoordinator | undefined;
   private baselineSha = '';
   private currentFollowUpRound = 0;
+  private reviewAttemptStarted = false;
   private stopped = false;
   private latestImplementerExplanation: string | undefined;
   private readonly emittedReviewSkipGenerations = new Map<string, number>();
@@ -256,6 +263,7 @@ export class CompanionStepRuntime {
   beginReviewAttempt(): void {
     this.currentFollowUpRound = 0;
     this.latestImplementerExplanation = undefined;
+    this.reviewAttemptStarted = true;
     this.events.beginAttempt();
     if (this.deps.reviewMode === 'live') {
       this.scheduler?.start();
@@ -265,7 +273,11 @@ export class CompanionStepRuntime {
   beginFollowUpRound(sequence: number, findingCount: number): void {
     this.currentFollowUpRound = sequence - 1;
     this.events.fixRound(sequence, findingCount);
-    if (this.deps.reviewMode === 'live' && this.deps.fixPolicy === 'loop') {
+    if (
+      this.deps.reviewMode === 'live'
+      && this.deps.fixPolicy === 'loop'
+      && this.reviewAttemptStarted
+    ) {
       this.scheduler?.start();
     }
   }
@@ -310,10 +322,9 @@ export class CompanionStepRuntime {
       this.requireProvider(item.name);
       return { name: item.name, definition };
     });
-    this.baselineSha = await this.deps.diffReader.readBaselineSha(
-      this.deps.cwd,
-      this.deps.abortSignal,
-    );
+    this.baselineSha = this.deps.diffBaseline === undefined
+      ? await this.deps.diffReader.readBaselineSha(this.deps.cwd, this.deps.abortSignal)
+      : await this.deps.diffBaseline.resolve();
     for (const { name, definition } of resolved) {
       this.active.set(name, definition);
       this.detectors.set(name, new CompanionChangeDetector({
@@ -364,7 +375,6 @@ export class CompanionStepRuntime {
         observedGeneration: candidate.observedGeneration,
       }),
     });
-    this.scheduler?.start();
     for (const name of this.active.keys()) {
       this.events.start(name);
     }
@@ -528,6 +538,7 @@ export class CompanionStepRuntime {
   private mailboxPath(name: string): string {
     return buildCompanionMailboxPath({
       cwd: this.deps.cwd,
+      ...(this.deps.runRootDirectory === undefined ? {} : { runRootDirectory: this.deps.runRootDirectory }),
       runSlug: this.deps.runSlug,
       runPathNamespace: this.deps.runPathNamespace,
       stepName: this.deps.step.name,

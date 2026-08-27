@@ -22,6 +22,8 @@
 | `{ID}` | {path from entry point to endpoint} | {where the value or state is produced} | {where the value or state is consumed} | {propagation, conversion, persistence, event emission, etc.} | `{test name or test file}` | {reason only when not created} |
 
 ## Continuous Execution, Ownership, and Concurrency (when applicable)
+This section applies when a requirement names a specific change (such as a change in input, environment, configuration, or connection state), asks behavior to continue following the state at that point after the change, and the same entity (a screen, process, connection, session, cache, or similar) persists across that change. A requirement to preserve existing behavior, or a requirement that does not name a change, does not apply on that basis alone.
+
 | Contract ID | Execution Sequence or Interleaving | Real Upper-Level Entry Point | Invariant Observed | Test | Uncovered Reason |
 |-------------|------------------------------------|------------------------------|--------------------|------|------------------|
 | `{ID}` | {create->persist->restore->continue->re-enter, failure terminal, parallel interleaving, etc.} | {production-equivalent entry point} | {ownership, identity, terminal pairing, etc.} | `{test name or test file}` | {reason only when not created} |

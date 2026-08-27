@@ -66,6 +66,18 @@ describe('traced config boundaries', () => {
     expect(getGlobalTracedSchema().auto_requeue_max_attempts?.sources?.env).toBe(true);
     expect(getProjectTracedSchema().ignore_exceed?.sources?.env).toBe(true);
     expect(getGlobalTracedSchema().ignore_exceed?.sources?.env).toBe(true);
+    expect(getProjectTracedSchema()['assistant.formal_spec.mode']?.sources).toMatchObject({
+      local: true,
+      global: false,
+      env: false,
+      cli: false,
+    });
+    expect(getGlobalTracedSchema()['assistant.formal_spec.comments']?.sources).toMatchObject({
+      local: false,
+      global: true,
+      env: false,
+      cli: false,
+    });
   });
 
   it('global/project traced schema tracks auto_routing but contains no removed default provider boundary', () => {
@@ -104,6 +116,40 @@ describe('traced config boundaries', () => {
       expect(projectResult.trace.getOrigin('assistant.formal_spec')).toBe('local');
       expect(globalResult.rawConfig).toMatchObject({ assistant: { formal_spec: 'y/N' } });
       expect(globalResult.trace.getOrigin('assistant.formal_spec')).toBe('global');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('global and project config traces preserve structured formal_spec fields and their origins', () => {
+    const tempDir = join(tmpdir(), `takt-traced-formal-spec-structured-${randomUUID()}`);
+    const projectConfigPath = join(tempDir, 'project', '.takt', 'config.yaml');
+    const globalConfigPath = join(tempDir, 'global', 'config.yaml');
+    mkdirSync(join(tempDir, 'project', '.takt'), { recursive: true });
+    mkdirSync(join(tempDir, 'global'), { recursive: true });
+    writeFileSync(
+      projectConfigPath,
+      ['assistant:', '  formal_spec:', '    comments: false'].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      globalConfigPath,
+      ['assistant:', '  formal_spec:', '    mode: true'].join('\n'),
+      'utf-8',
+    );
+
+    try {
+      const projectResult = loadProjectConfigTrace(projectConfigPath, []);
+      const globalResult = loadGlobalConfigTrace(globalConfigPath, (value) => value, []);
+
+      expect(projectResult.rawConfig).toMatchObject({
+        assistant: { formal_spec: { comments: false } },
+      });
+      expect(projectResult.trace.getOrigin('assistant.formal_spec.comments')).toBe('local');
+      expect(globalResult.rawConfig).toMatchObject({
+        assistant: { formal_spec: { mode: true } },
+      });
+      expect(globalResult.trace.getOrigin('assistant.formal_spec.mode')).toBe('global');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

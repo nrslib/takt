@@ -29,6 +29,16 @@ This document provides a complete reference for all TAKT CLI commands and option
 
 The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
 
+## Web UI execution boundary
+
+Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.
+
+The Web UI stores its queued tasks, runs, and sessions in channel-neutral central state below `TAKT_CONFIG_DIR`. The CLI keeps its existing project-local state behavior. Concurrent execution or mutation of the same canonical project through the CLI and Web UI is not supported; use one channel for a given execution target at a time.
+
+Viewer is focused on execution status, the observed execution path, live log, and reports. Use its “Create task” action to open the dedicated conversation surface. `/setup` configures the worktree, task branch, base branch, automatic pull-request creation, and draft status; an instruction produced by `/go` keeps a snapshot of those settings. The header language control switches between Japanese and English and persists the choice in the browser. When automatic PR creation is enabled, a successful workflow is committed, pushed, and published as a PR. A failed central task can be submitted again with the same settings from `Requeue` in its run detail.
+
+Central workflow bundles keep ordinary MCP configuration portable. Non-credential environment variables and headers (for example `LOG_LEVEL`, `NODE_ENV`, `ENDPOINT`, and `Content-Type`) may remain literal. Credential-bearing environment/header keys and credential flags in stdio arguments must use one complete `${ENV_VAR}` reference; mixed or literal credential values are rejected. MCP URLs reject userinfo and credential-bearing query or fragment keys, while ordinary metadata such as `version=2` is allowed. Local CLI bundles keep their existing behavior.
+
 ## Interactive Mode
 
 A mode where you refine task content through conversation with AI before execution. Useful when task requirements are ambiguous or when you want to clarify content while consulting with AI.

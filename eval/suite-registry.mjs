@@ -43,6 +43,16 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: '変化を名指しし、その後も状態に合わせて振る舞うことを求め、同じ実体が存続する契約の発火・誤発火・証拠境界を測る',
+    suites: [
+      'state-after-event-plan',
+      'state-after-event-plan-config',
+      'state-after-event-write-tests',
+      'state-after-event-testing-review',
+    ],
+  },
+  {
+    tier: 'active',
     reason: '現在の fix-verifier の状態閉包・経路判定・証拠境界を測る',
     suites: [
       'fix-verifier-family-boundary',
@@ -229,6 +239,30 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
+  },
+  'state-after-event-plan': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: 'Claude Opus と Codex Luna を含む production-condition の計画比較を行う',
+  },
+  'state-after-event-plan-config': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: 'Claude Opus と Codex Luna を含む production-condition の設定変更計画比較を行う',
+  },
+  'state-after-event-testing-review': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: 'Claude Opus と Codex Luna を含む production-condition の testing-review 比較を行う',
+  },
+  'state-after-event-write-tests': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: 'mutable artifact assertion を Codex SDK の workspace-write で実行する',
   },
   'review-adjudication-binding': {
     defaultEligible: false,

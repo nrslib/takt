@@ -21,6 +21,8 @@ import { getErrorMessage } from '../../shared/utils/index.js';
 
 export interface ConversationSessionStrategy {
   systemPrompt: string;
+  /** Whether formal notation blocks must include natural-language meaning comments. */
+  formalSpecComments?: boolean;
   allowedTools: string[];
   /** Constraint the provider must enforce for this mode (Grill Me is read-only). */
   permissionMode?: PermissionMode;
@@ -44,6 +46,8 @@ export interface ConversationSessionStrategy {
 export interface ConversationSessionOptions {
   cwd: string;
   formalSpec: boolean;
+  /** Resolved setting propagated to this session's summary prompt. */
+  formalSpecComments?: boolean;
   outputMode?: 'terminal' | 'silent';
   ctx: SessionContext;
   strategy: ConversationSessionStrategy;
@@ -205,6 +209,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     : [];
   let sessionId = options.ctx.sessionId;
   let formalSpec = options.formalSpec;
+  let formalSpecComments = options.formalSpecComments ?? options.strategy.formalSpecComments ?? true;
   let systemPrompt = options.strategy.systemPrompt;
   let ctx: SessionContext = { ...options.ctx };
   let pendingHandoffHistory = options.handoffHistory && options.handoffHistory.length > 0
@@ -379,6 +384,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
           ? { promptContext: options.strategy.summaryPromptContext }
           : {}),
         formalSpec,
+        formalSpecComments,
         userNote,
       })
       : buildConversationSummaryPrompt(
@@ -393,6 +399,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
           ...(resumedSessionNote === undefined ? {} : { resumedSessionNote }),
           ...(pendingHandoffHistory === undefined ? {} : { hasReferenceHistory: true }),
         },
+        formalSpecComments,
       );
     if (!summaryPrompt) {
       return { kind: 'error', code: 'no_conversation', message: 'No conversation to summarize' };
@@ -484,6 +491,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
     setPromptConfiguration(configuration: ConversationPromptConfiguration): void {
       formalSpec = configuration.formalSpec;
+      formalSpecComments = configuration.formalSpecComments ?? true;
       systemPrompt = configuration.systemPrompt;
     },
 

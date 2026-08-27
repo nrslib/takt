@@ -43,7 +43,7 @@ import {
   writePrivateFileWithMode,
   type PrivateDirectoryReadSnapshot,
 } from '../../../shared/utils/private-file.js';
-import { buildRunPaths } from './run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory } from './run-paths.js';
 import { isResumeReportConsumerKey } from './resume-report-consumer.js';
 
 // reports/ 直下の予約名（単一情報源は core/models/reserved-report-names.ts）。
@@ -87,6 +87,8 @@ export interface ResumeReportSnapshotManifest {
 export interface InheritResumeReportSnapshotOptions {
   /** .takt/runs が存在するディレクトリ（実行 cwd） */
   readonly cwd: string;
+  /** Central execution may own the runs directory outside project cwd. */
+  readonly runsDirectory?: string;
   readonly sourceRunSlug: string;
   readonly targetRunSlug: string;
   readonly resumeReportConsumers?: readonly ResumeReportSnapshotConsumerEntry[];
@@ -411,18 +413,25 @@ function isEmptyDir(dirAbs: string): boolean {
   return readdirSync(dirAbs).length === 0;
 }
 
-export function resumeArtifactsPath(cwd: string, runSlug: string): string {
-  return join(buildRunPaths(cwd, runSlug).reportsRootAbs, RESUME_ARTIFACTS_FILE_NAME);
+function buildResumeRunPaths(cwd: string, runSlug: string, runsDirectory?: string) {
+  return runsDirectory === undefined
+    ? buildRunPaths(cwd, runSlug)
+    : buildRunPathsFromRunsDirectory(runsDirectory, runSlug);
+}
+
+export function resumeArtifactsPath(cwd: string, runSlug: string, runsDirectory?: string): string {
+  return join(buildResumeRunPaths(cwd, runSlug, runsDirectory).reportsRootAbs, RESUME_ARTIFACTS_FILE_NAME);
 }
 
 export function readResumeReportSnapshotManifest(
   cwd: string,
   runSlug: string,
+  runsDirectory?: string,
 ): ResumeReportSnapshotManifest | undefined {
   if (!isValidReportDirName(runSlug)) {
     return undefined;
   }
-  const manifestAbs = resumeArtifactsPath(cwd, runSlug);
+  const manifestAbs = resumeArtifactsPath(cwd, runSlug, runsDirectory);
   const manifestStat = lstatOrUndefined(manifestAbs);
   if (manifestStat === undefined) {
     return undefined;
@@ -452,8 +461,12 @@ export function inheritResumeReportSnapshot(
     throw new Error(`Resume report snapshot: invalid target run slug: ${targetRunSlug}`);
   }
 
-  const targetPaths = buildRunPaths(cwd, targetRunSlug);
-  assertDirectoryChain(cwd, targetPaths.runRootAbs, 'target run path');
+  const targetPaths = buildResumeRunPaths(cwd, targetRunSlug, options.runsDirectory);
+  const runsRoot = options.runsDirectory === undefined
+    ? resolve(cwd, '.takt', 'runs')
+    : resolve(options.runsDirectory);
+  const trustedRoot = options.runsDirectory === undefined ? cwd : runsRoot;
+  assertDirectoryChain(trustedRoot, targetPaths.runRootAbs, 'target run path');
   const targetReportsStat = lstatOrUndefined(targetPaths.reportsAbs);
   if (targetReportsStat !== undefined && !targetReportsStat.isDirectory()) {
     throw new Error(`Resume report snapshot: target run "${targetRunSlug}" reports path is not a directory`);
@@ -471,7 +484,7 @@ export function inheritResumeReportSnapshot(
     throw new Error(`Resume report snapshot: source and target run slugs are identical: ${sourceRunSlug}`);
   }
 
-  const sourcePaths = buildRunPaths(cwd, sourceRunSlug);
+  const sourcePaths = buildResumeRunPaths(cwd, sourceRunSlug, options.runsDirectory);
   const sourceRunStat = inspectSnapshotSource(() => lstatOrUndefined(sourcePaths.runRootAbs));
   if (sourceRunStat === undefined) {
     throw new ResumeReportSnapshotSourceError(
@@ -500,8 +513,8 @@ export function inheritResumeReportSnapshot(
     ? undefined
     : inspectSnapshotSource(() => capturePrivateDirectoryReadSnapshot(sourcePaths.reportsAbs));
 
-  createDirectoryChain(cwd, targetPaths.runRootAbs, 'target run path');
-  assertDirectoryChain(cwd, targetPaths.runRootAbs, 'target run path');
+  createDirectoryChain(trustedRoot, targetPaths.runRootAbs, 'target run path');
+  assertDirectoryChain(trustedRoot, targetPaths.runRootAbs, 'target run path');
   const uniqueSuffix = `${process.pid}-${Date.now().toString(36)}`;
   const stagingRootAbs = join(targetPaths.runRootAbs, `.reports-inherit-tmp-${uniqueSuffix}`);
   const targetRunStat = lstatSync(targetPaths.runRootAbs) as Stats;

@@ -48,6 +48,8 @@
 |-------------|-------------------------|----------------------------------------|-----------------------------------------------|-------------------|----------------------------|------------------|
 | `{same stable ID}` | {definition and producers} | {existing intermediate path} | {all consumers and entry points} | {state and ownership} | {for a replacement, consumers moving to the new contract} | {only when required: target and scope} |
 
+The `State / Ownership` column applies when a requirement names a specific change (such as a change in input, environment, configuration, or connection state), asks behavior to continue following the state at that point after the change, and the same entity (a screen, process, connection, session, cache, or similar) persists across that change. A requirement to preserve existing behavior, or a requirement that does not name a change, does not apply on that basis alone.
+
 ### Reachability and Launch Conditions (when adding/changing user-facing features)
 | Item | Content |
 |------|---------|

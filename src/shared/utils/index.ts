@@ -3,6 +3,7 @@
  */
 
 export * from './child-process-guard.js';
+export * from './child-process-env.js';
 export * from './debug.js';
 export * from './delay.js';
 export * from './entrypoint.js';

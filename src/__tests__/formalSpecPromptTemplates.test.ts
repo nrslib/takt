@@ -1,24 +1,42 @@
 import { describe, expect, it } from 'vitest';
-import { loadTemplate } from '../shared/prompts/index.js';
 import { buildSummaryPrompt } from '../features/interactive/interactive-summary.js';
+import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
 
-function renderInteractivePrompt(lang: 'en' | 'ja', formalSpec: boolean): string {
-  return loadTemplate('score_interactive_system_prompt', lang, {
-    grillMe: false,
+const EXPECTED_INVESTIGATION_POLICIES = {
+  assistant: {
+    currentStateScope: 'current-state-and-prerequisites',
+    implementationInvestigationOwner: 'workflow-execution',
+  },
+  grillMe: {
+    currentStateScope: 'requirements-decisions-only',
+    implementationInvestigationOwner: 'workflow-execution',
+  },
+} as const;
+
+function renderInteractivePrompt(
+  lang: 'en' | 'ja',
+  formalSpec: boolean,
+  grillMe = false,
+  formalSpecComments = true,
+): string {
+  return buildInteractiveSystemPrompt(lang, {
     formalSpec,
-    hasWorkflowPreview: false,
-    workflowStructure: '',
-    stepDetails: '',
-    hasRunSession: false,
-    runTask: '',
-    runWorkflow: '',
-    runStatus: '',
-    runStepLogs: '',
-    runReports: '',
+    formalSpecComments,
+    grillMe,
   });
 }
 
-function renderJapaneseSummaryPrompt(formalSpec: boolean): string {
+function parseInvestigationPolicy(prompt: string): unknown {
+  const match = prompt.match(
+    /<takt-investigation-policy>\s*([\s\S]*?)\s*<\/takt-investigation-policy>/,
+  );
+  if (match === null) {
+    throw new Error('interactive investigation policy metadata is missing');
+  }
+  return JSON.parse(match[1]) as unknown;
+}
+
+function renderJapaneseSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
   return buildSummaryPrompt(
     [{ role: 'user', content: '状態を更新する機能を追加する' }],
     false,
@@ -29,71 +47,80 @@ function renderJapaneseSummaryPrompt(formalSpec: boolean): string {
     undefined,
     undefined,
     formalSpec,
+    false,
+    formalSpecComments,
   );
 }
 
-describe('interactive formal specification prompt templates', () => {
-  it('selects English conditional Gherkin guidance without formal notation guidance when disabled', () => {
-    const prompt = renderInteractivePrompt('en', false);
+function renderEnglishSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
+  return buildSummaryPrompt(
+    [{ role: 'user', content: 'Add a stateful feature' }],
+    false,
+    'en',
+    'No transcript',
+    'Conversation:',
+    undefined,
+    undefined,
+    undefined,
+    formalSpec,
+    false,
+    formalSpecComments,
+  );
+}
 
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('whose deliverable is not an implementation, do not use Gherkin');
-    expect(prompt).toContain('where a misunderstanding would materially change the implementation result');
-    expect(prompt).toContain('do not duplicate the same acceptance clause in Markdown and Gherkin');
-    expect(prompt).not.toContain('Quint');
-    expect(prompt).not.toContain('Alloy');
-  });
+describe('interactive investigation policy template wiring', () => {
+  it.each([
+    ['en', false, EXPECTED_INVESTIGATION_POLICIES.assistant],
+    ['en', true, EXPECTED_INVESTIGATION_POLICIES.grillMe],
+    ['ja', false, EXPECTED_INVESTIGATION_POLICIES.assistant],
+    ['ja', true, EXPECTED_INVESTIGATION_POLICIES.grillMe],
+  ] as const)(
+    'renders the structured policy for %s when grillMe is %s',
+    (lang, grillMe, expectedPolicy) => {
+      const prompt = renderInteractivePrompt(lang, false, grillMe);
 
-  it('selects Japanese conditional Gherkin guidance without formal notation guidance when disabled', () => {
-    const prompt = renderInteractivePrompt('ja', false);
-
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('実装を成果物としないタスクでは Gherkin を使用しない');
-    expect(prompt).toContain('解釈の誤りが実装結果を実質的に変える');
-    expect(prompt).toContain('同じ受け入れ条件を Markdown と Gherkin に重複して記述しない');
-    expect(prompt).not.toContain('Quint');
-    expect(prompt).not.toContain('Alloy');
-  });
-
-  it('selects English formal notation guidance when enabled', () => {
-    const prompt = renderInteractivePrompt('en', true);
-
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('Quint');
-    expect(prompt).toContain('Alloy');
-    expect(prompt).toContain('ASCII');
-    expect(prompt).toContain('keep the prohibition on duplicating acceptance clauses between Markdown and Gherkin');
-  });
-
-  it('selects Japanese formal notation guidance when enabled', () => {
-    const prompt = renderInteractivePrompt('ja', true);
-
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('Quint');
-    expect(prompt).toContain('Alloy');
-    expect(prompt).toContain('ASCII');
-    expect(prompt).toContain('Markdown と Gherkin の重複禁止は維持する');
-  });
+      expect(parseInvestigationPolicy(prompt)).toEqual(expectedPolicy);
+    },
+  );
 });
 
-describe('Japanese task instruction formal specification prompt', () => {
-  it('selects Gherkin guidance without formal notation guidance when disabled', () => {
-    const prompt = renderJapaneseSummaryPrompt(false);
+describe('interactive formal specification prompt template wiring', () => {
+  it.each(['en', 'ja'] as const)(
+    'applies formal specification and comment switches independently for %s',
+    (lang) => {
+      const withoutFormalSpec = renderInteractivePrompt(lang, false, false, false);
+      const withoutFormalSpecButCommentsEnabled = renderInteractivePrompt(lang, false, false, true);
+      const withoutComments = renderInteractivePrompt(lang, true, false, false);
+      const withComments = renderInteractivePrompt(lang, true, false, true);
+      const withDefaultComments = renderInteractivePrompt(lang, true);
 
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).not.toContain('Quint');
-    expect(prompt).not.toContain('Alloy');
-    expect(prompt).toContain('ASCII');
-  });
+      expect(withoutFormalSpecButCommentsEnabled).toBe(withoutFormalSpec);
+      expect(withoutComments).not.toBe(withoutFormalSpec);
+      expect(withComments).not.toBe(withoutComments);
+      expect(withComments.length).toBeGreaterThan(withoutComments.length);
+      expect(withDefaultComments).toBe(withComments);
+    },
+  );
+});
 
-  it('selects formal notation guidance when enabled', () => {
-    const prompt = renderJapaneseSummaryPrompt(true);
+describe('task instruction formal specification prompt template wiring', () => {
+  it.each([
+    ['en', renderEnglishSummaryPrompt],
+    ['ja', renderJapaneseSummaryPrompt],
+  ] as const)(
+    'applies formal specification and comment switches independently for %s',
+    (_lang, renderPrompt) => {
+      const withoutFormalSpec = renderPrompt(false, false);
+      const withoutFormalSpecButCommentsEnabled = renderPrompt(false, true);
+      const withoutComments = renderPrompt(true, false);
+      const withComments = renderPrompt(true, true);
+      const withDefaultComments = renderPrompt(true);
 
-    expect(prompt).toContain('Gherkin');
-    expect(prompt).toContain('Quint');
-    expect(prompt).toContain('Alloy');
-    expect(prompt).toContain('ASCII');
-    expect(prompt).toContain('非開発タスクには Gherkin を追加しない');
-    expect(prompt).toContain('Markdown と Gherkin の重複禁止は維持する');
-  });
+      expect(withoutFormalSpecButCommentsEnabled).toBe(withoutFormalSpec);
+      expect(withoutComments).not.toBe(withoutFormalSpec);
+      expect(withComments).not.toBe(withoutComments);
+      expect(withComments.length).toBeGreaterThan(withoutComments.length);
+      expect(withDefaultComments).toBe(withComments);
+    },
+  );
 });

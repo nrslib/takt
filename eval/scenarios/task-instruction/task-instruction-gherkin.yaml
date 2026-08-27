@@ -93,7 +93,13 @@ tests:
         metric: task-instruction-gherkin/structure-ja
         value: |
           const block = output.match(/```gherkin\s*([\s\S]*?)```/i)?.[1] ?? '';
-          return /Feature\s*:/i.test(block) && /Scenario\s*:/i.test(block);
+          return /Feature\s*:/i.test(block)
+            && /Scenario\s*:/i.test(block)
+            && /^\s*Given\b/im.test(block)
+            && /^\s*When\b/im.test(block)
+            && /^\s*Then\b/im.test(block)
+            && !/^\s*(?:機能|ルール|背景|シナリオ(?:アウトライン)?|例|前提|もし|ならば|かつ|しかし)(?:\s*:|\s+)/m.test(block)
+            && !/^\s*#\s*language\s*:/im.test(block);
       - type: javascript
         metric: task-instruction-gherkin/no-implementation-in-gherkin-ja
         value: |
@@ -124,6 +130,7 @@ tests:
     vars:
       language: en
       formalSpec: true
+      formalSpecComments: true
       conversation: |
         Add a lease service with Requested, Active, Expired, and Released states.
         Activation is allowed only from Requested. An active lease eventually
@@ -146,11 +153,32 @@ tests:
           Gherkin, Quint, Alloy, and Markdown is expected and must not be
           penalized. The output must not contain an ASCII diagram or invent
           pseudo-notation.
+      - type: llm-rubric
+        metric: task-instruction-formal-spec/meaning-comments
+        value: |
+          Evaluate the Quint and Alloy code blocks independently. Pass only if a
+          developer can read just the natural-language comments inside the Quint
+          block and recover every requested lease requirement, and can do the same
+          from just the comments inside the Alloy block: the four states, activation
+          only from Requested, eventual expiration when release does not happen
+          first, at most one active lease per resource, and exactly one resource and
+          owner per lease. The comments must be adjacent to the requirement-level
+          formal construct they explain and must state its domain conditions and
+          required outcome with enough detail to understand it without interpreting
+          the syntax. Fail if either notation refers to the other notation or relies
+          on Markdown, Gherkin, or prose outside its own block; if a requested
+          requirement has no adjacent comment; or if a comment merely paraphrases
+          syntax or gives a vague label. Multiple comment lines may explain one
+          construct, and one complete adjacent comment may explain a whole construct;
+          do not require separate comments for language scaffolding or every nested
+          subexpression. Comments do not replace formal expressions, and the amount
+          or coverage of formal specification must not be reduced.
 
   - description: 'Japanese: formal specification mode expresses requirements in both Quint and Alloy'
     vars:
       language: ja
       formalSpec: true
+      formalSpecComments: true
       conversation: |
         予約サービスを追加してほしい。予約は Requested, Confirmed, Cancelled,
         Fulfilled の状態を持つ。Confirmed にできるのは Requested からだけ。
@@ -172,3 +200,42 @@ tests:
           表現可能である。同じ要件が Gherkin・Quint・Alloy・Markdown に重複して
           記載されていても減点しない。ASCII 図や独自の疑似記法を含む場合は
           不合格とする。
+      - type: llm-rubric
+        metric: task-instruction-formal-spec/meaning-comments-ja
+        value: |
+          Quint と Alloy のコードブロックを別々に評価すること。Quint ブロック内の
+          自然言語コメントだけを読んで、4つの予約状態、Requested からだけ許可する
+          Confirmed への遷移、キャンセルされない場合の Fulfilled への最終到達、
+          資源ごとの確定済み予約が最大1件であること、各予約がちょうど1つの資源と
+          1人の利用者に属することの全要件を把握でき、Alloy ブロック内のコメント
+          だけからも同じ全要件を把握できる場合のみ合格とする。コメントは説明対象の
+          要件単位の形式構造に隣接し、構文を解釈しなくても分かる具体性で、条件と
+          要求される結果を説明しなければならない。他方の記法やブロック外の
+          Markdown、Gherkin、説明文を参照する場合、いずれかの要件に隣接コメントが
+          ない場合、構文の言い換えや曖昧な見出しだけの場合は不合格とする。1つの
+          形式構造は複数行または1つの完全な隣接コメントで説明してよく、言語上の
+          足場や入れ子の各部分式にまで個別コメントを要求しない。コメントは形式表現を
+          置き換えず、形式仕様の量または網羅性を減らしてはならない。
+
+  - description: 'Formal specification mode keeps notation when meaning comments are disabled'
+    vars:
+      language: en
+      formalSpec: true
+      formalSpecComments: false
+      conversation: |
+        Add a lease service with Requested, Active, Expired, and Released states.
+        Activation is allowed only from Requested. An active lease eventually
+        becomes Expired unless it is released first. Each resource has at most one
+        active lease, and every lease belongs to exactly one resource and one owner.
+        Keep observable API behavior in Gherkin and use actual formal syntax.
+    assert:
+      - type: llm-rubric
+        metric: task-instruction-formal-spec/comments-disabled
+        value: |
+          Pass only if the generated task instruction still contains actual Quint
+          and Alloy specifications with the requested states, transitions, temporal
+          behavior, and ownership/cardinality requirements. The output must retain
+          the formal-specification amount, requirement coverage, and valid-syntax and
+          correctness guidance. Do not require natural-language meaning comments in
+          the formal blocks and do not fail merely because the model writes comments
+          on its own; this scenario disables only the forced comment guidance.

@@ -2,14 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockCreateConversationSession,
-  mockResolveFormalSpecModeWithoutPrompt,
+  mockResolveFormalSpecConfigurationWithoutPrompt,
 } = vi.hoisted(() => ({
   mockCreateConversationSession: vi.fn(),
-  mockResolveFormalSpecModeWithoutPrompt: vi.fn(),
+  mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
 }));
 
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({
-  resolveFormalSpecModeWithoutPrompt: (cwd: string) => mockResolveFormalSpecModeWithoutPrompt(cwd),
+  resolveFormalSpecConfigurationWithoutPrompt: (cwd: string) => mockResolveFormalSpecConfigurationWithoutPrompt(cwd),
 }));
 
 vi.mock('../features/interactive/conversationSession.js', () => ({
@@ -47,13 +47,13 @@ describe('ACP conversation factory formal specification mode', () => {
   it.each([false, true])(
     'resolves formal specification mode=%s without a prompt and passes it to the ACP session',
     (formalSpec) => {
-      mockResolveFormalSpecModeWithoutPrompt.mockReturnValue(formalSpec);
+      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: formalSpec, comments: true });
 
       const result = createDefaultConversationSession({ cwd: '/repo', outputMode: 'silent' });
 
       expect(result).toBe(conversationSession);
-      expect(mockResolveFormalSpecModeWithoutPrompt).toHaveBeenCalledOnce();
-      expect(mockResolveFormalSpecModeWithoutPrompt).toHaveBeenCalledWith('/repo');
+      expect(mockResolveFormalSpecConfigurationWithoutPrompt).toHaveBeenCalledOnce();
+      expect(mockResolveFormalSpecConfigurationWithoutPrompt).toHaveBeenCalledWith('/repo');
       expect(mockCreateConversationSession).toHaveBeenCalledWith(expect.objectContaining({
         cwd: '/repo',
         outputMode: 'silent',

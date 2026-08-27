@@ -201,8 +201,10 @@ Rules 决定每个 step 如何路由到下一个 step。instruction builder 会�
 rules:
   - condition: "Implementation complete"
     next: review
+    command_gates: required
   - condition: "Cannot proceed"
     next: ABORT
+    command_gates: skip
     appendix: |
       Explain what is blocking progress.
 ```
@@ -231,6 +233,10 @@ rules:
 ### `interactive_only`
 
 `interactive_only: true` 的规则只在交互执行中考虑。`--pipeline` 或 `takt run` 等非交互运行会跳过它，就像该规则未声明一样。可用于需要人工输入的转移。
+
+### `command_gates`
+
+`command_gates` 控制选中规则的 command quality gate。`required` 会在规则和 transition 解析后、应用 transition 前执行该 step 的 command gate，并且只在 gate 成功后应用 transition。`skip` 不执行 command gate，直接应用选中的 transition。省略时等同于 `required`。
 
 ## Step 类型
 
@@ -705,7 +711,7 @@ steps:
 | `knowledge` | - | knowledge key 或数组 |
 | `instruction` | - | instruction key |
 | `edit` | - | 是否可以编辑项目文件 |
-| `companion` | - | 与 normal agent step 并行运行 companion reviewer |
+| `companion` | - | 在 normal agent step 或 Team Leader step 上运行 companion reviewer |
 | `completion_retry` | - | opt-in 的 reviewer 完整性检查与有界重试 |
 | `pass_previous_response` | `true` | 将上一个 step 输出传给 `{previous_response}` |
 | `capabilities` | - | capability preset；解析工具、网络、sandbox 和 skill，不选择 provider/model |
@@ -812,7 +818,7 @@ subworkflow:
       default: peer-review-suite-base
 ```
 
-`facet_ref`、`facet_ref[]` 使用 `facet_kind`：`policy`、`knowledge`、`instruction`、`persona` 或 `report_format`。`workflow_ref` 用于 `call: { $param: reviewer_suite }`；`facet_pool_ref` 用于 `dynamic_facets.pool`；`companion_ref[]` 用于普通 agent step 的固定 companion。参数默认值可选，数组参数可以为空；`facet_ref[]` 在 `policy` 或 `knowledge` 中会在原位置展开，`facet_pool_ref` 必须是 child 顶层 `facet_pools` 的标量 key，`companion_ref[]` 的空数组会省略 `companion` 字段。未知 child-local pool、未展开参数、非数组 companion 参数和未知 companion 定义都会在执行前失败。
+`facet_ref`、`facet_ref[]` 使用 `facet_kind`：`policy`、`knowledge`、`instruction`、`persona` 或 `report_format`。`workflow_ref` 用于 `call: { $param: reviewer_suite }`；`facet_pool_ref` 用于 `dynamic_facets.pool`；`companion_ref[]` 用于普通 agent step 或 Team Leader step 的固定 companion。参数默认值可选，数组参数可以为空；`facet_ref[]` 在 `policy` 或 `knowledge` 中会在原位置展开，`facet_pool_ref` 必须是 child 顶层 `facet_pools` 的标量 key，`companion_ref[]` 的空数组会省略 `companion` 字段。未知 child-local pool、未展开参数、非数组 companion 参数和未知 companion 定义都会在执行前失败。
 
 ## 示例
 
@@ -911,7 +917,7 @@ steps:
 
 ## Companion Reviewer
 
-在普通 agent step 上增加 `companion`，即可在主 agent 编辑时运行无状态、只读 reviewer。列表形式选择固定 reviewer；对象形式可以组合 fixed、启动时选择一次的 pool 和可选 moderator，最多同时运行三个 reviewer。
+在普通 agent step 或 Team Leader step 上增加 `companion`，即可运行无状态、只读 reviewer。列表形式选择固定 reviewer；对象形式可以组合 fixed、runtime 启动时选择一次的 pool 和可选 moderator，最多同时运行三个 reviewer。
 
 Companion 默认禁用；在 `runtime.yaml` 设置 `companion.enabled: true` 才会运行 workflow 声明的 companion。
 
@@ -934,6 +940,8 @@ project 层级，不支持 step 或 Companion 定义级覆盖。
 ```
 
 workflow transition rule 不能引用 `companion.*` state。companion finding 和 failure 是 advisory diagnostic；主 workflow 仍由普通 semantic condition 和 Phase 3 judgment 控制。定义文件按 `.takt/companions/` → `~/.takt/companions/` → `builtins/{language}/companions/` 查找，只能包含名称、描述、facet 引用和 `interval_ms`，不能包含 provider/tool 设置；`interval_ms` 必须是 1 到 `2,147,483,647` 的正整数。
+
+对于 Team Leader step，每个 part 都使用独立的 Companion runtime。TAKT 在 part 响应后审查当时的累计 diff，将采纳的 finding 传回同一 part session，并在 part-level loop settle 后才发布 `PartResult`；其他 part 继续并行执行。全部 part 完成且 Team Leader 判断无需新增工作后，TAKT 会在确定 aggregated response 前执行独立的 Team 完成审查。采纳的 Team finding 会作为 typed evidence 交给现有的追加 part 规划路径，修复 part 仍使用普通 part 执行路径。修复 part 完成后，TAKT 会在确定 aggregated response 前再次执行 Team 完成审查。该流程不会创建 part 专用 worktree、patch、changed-path 所有权或 Companion 专用 scheduler。
 
 在 `live` mode，TAKT 观察 mutating tool event，并在 quiet period、强制间隔或 commit 触发后审查当前累计 diff。在 `completion` mode，TAKT 等待 implementer 响应边界再审查。每个 round 使用新的 finding list；可选 moderator 按 round-local index 接受或拒绝 finding。已接受 finding 以 NDJSON 写入 `.takt/runs/{run}/companion/{step}/{companion}.jsonl`。在 implementer 每个 turn 边界，未传递的 finding 会直接嵌入 follow-up prompt，然后清空内存缓冲；implementer 决定是否处理并说明不处理原因。完成时停止新触发、排空 review round，只有 diff digest 未审查时才执行 completion review。取消通过 workflow 或 step abort signal 终止 follow-up loop；follow-up 的错误、限流或 blocked 会停止 follow-up，并继续使用最近一次成功的 implementer response。
 

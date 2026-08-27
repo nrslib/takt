@@ -97,6 +97,8 @@ function summaryTemplateVars(): Record<string, unknown> {
 function createPlan(assistantMode: AssistantInteractiveMode = 'assistant'): ConversationPlan {
   return createAssistantConversationPlan('/repo', {
     assistantMode,
+    formalSpec: false,
+    formalSpecComments: true,
     workflowContext: WORKFLOW_CONTEXT,
   });
 }
@@ -584,7 +586,11 @@ describe('TUI local commands', () => {
     expect(regularCall?.[4]).toMatchObject({ sessionId: 'resumed-session' });
 
     await send(conversation, '/go', chunks);
-    expect(mockLoadTemplate).toHaveBeenCalledWith('score_summary_formal_spec_instructions', 'en');
+    expect(mockLoadTemplate).toHaveBeenCalledWith(
+      'score_summary_formal_spec_instructions',
+      'en',
+      { formalSpecComments: true },
+    );
   });
 
   it('should report /replay and /retry as unavailable, matching the readline loop', () => {

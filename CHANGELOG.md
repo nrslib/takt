@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.62.0] - 2026-08-25
+
+### Added
+
+- Conversation settings commands in interactive mode (#1471). `/workflow`, `/interaction`, and `/provider` reopen the usual selectors, and `/model <value>` and `/effort <value>` set free-form overrides for the current conversation. Selections are temporary and never persisted: workflow, mode, provider, and model changes start a new assistant session on the next ordinary message or `/go`, with the prior transcript included once as reference context; an effort-only change applies to the next call; changing provider clears the temporary model and effort overrides; when several commands run before the next input, only the last value per setting is applied. These overrides do not affect workflow execution.
+- Rule field `command_gates` (#1127). Rule conditions and the transition are now resolved before command quality gates run. `required` (the default when omitted) runs the step's gates after rule resolution and applies the transition only when they succeed; a failed gate is fed back to the same step as before. `skip` applies the selected transition without running gates, so a `needs_fix` or `ABORT` transition can leave a read-only reviewer step even when its gate would fail. Invalid values fail at load, and parallel sub-steps follow the same policy.
+- Companion reviews for Team Leader steps (#1435). A Team Leader step declares `companion` like a normal agent step. Each part gets its own Companion runtime: after the part responds, the current cumulative diff is reviewed, accepted findings go back to the same part session, and the part result is published only after that loop settles while other parts keep running. Once every part is complete and the Team Leader proposes no further work, a Team completion review runs before aggregation; its findings feed the existing additional-part planner, and correction parts are followed by another completion review. `takt-default-team`, `development-implement-team`, and `development-remediation-team` now wire their companions to the Team Leader step.
+
+### Changed
+
+- **BREAKING:** The `quiet` and `passthrough` interactive modes and the workflow-level `interactive_mode` field were removed (#1471). Interactive mode offers `assistant`, `grill-me`, and `persona`; a workflow YAML that still contains `interactive_mode` fails to load, so remove the field. Pass the task as a command-line argument when you previously relied on `passthrough`.
+- Gherkin guidance is limited to development and implementation tasks, and Gherkin keywords stay in English (#1471, #1497). The assistant first decides whether a task creates or changes code, configuration, infrastructure, or tests; research, analysis, review, planning, documentation, and other non-implementation tasks are written entirely in Markdown. `Feature`, `Scenario`, `Given`, `When`, `Then`, and the other structural keywords are always written in English even in Japanese instructions, with no `# language` directive; descriptions after the keywords may use the instruction language.
+- Submitted user messages are highlighted in the conversation TUI (#1490). Each submitted message is drawn on a full-width background band with one blank row above and below and a `❯ ` marker; the colors adapt to the terminal background when the terminal reports it, falling back to dark gray and white. The unsubmitted draft keeps the normal input styling.
+- The `requeue` start-position picker shows the full resume path (#1494). The default resume candidate lists the root workflow, each `workflow_call` step, the called workflow, and the final step as quoted segments joined by ` > `, and the `Selected start position` log prints the same path.
+- Loop analysis (experimental) keeps a private copy of the complete report (#1495). Before sanitizing, the worker saves the full report and a `source.json` describing the source run under `loop-analysis/<source-run-slug>-<hash>/` in the global config directory, and the sanitized report and PR comment end with a `source run: <slug>` line.
+
+### Fixed
+
+- Loop analysis reports no longer mask relative paths (#1495). Paths such as `reports/subworkflows/**/plan.md` were turned into `[path]` because the `/` after `**` was treated as an absolute path; the shared path sanitizer now decides from the path boundary, keeping relative paths, globs, `//` comments, HTML closing tags, and URLs while still masking POSIX, Windows, UNC, `file://`, and `~/` paths in reports and external error messages.
+
+### Internal
+
+- Prompt eval suites are organized under `eval/agents/<step>/` and `eval/scenarios/<flow>/`, with recursive suite discovery and duplicate suite ID rejection (#1482).
+
 ## [0.61.0] - 2026-08-23
 
 ### Added

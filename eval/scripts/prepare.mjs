@@ -88,6 +88,32 @@ const TARGETS = [
     fixture: 'eval/fixtures/testing-review-observable-evidence',
   },
   {
+    id: 'state-after-event-plan',
+    workflow: 'default',
+    step: 'plan',
+    fixture: 'eval/fixtures/state-after-event-plan',
+  },
+  {
+    id: 'state-after-event-plan-config',
+    workflow: 'default',
+    step: 'plan',
+    fixture: 'eval/fixtures/state-after-event-plan-config',
+  },
+  {
+    id: 'state-after-event-write-tests',
+    workflow: 'default',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/state-after-event-write-tests',
+    mutable: true,
+  },
+  {
+    id: 'state-after-event-testing-review',
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step: 'testing-review',
+    fixture: 'eval/fixtures/state-after-event-testing-review',
+  },
+  {
     id: 'initial-plan-contract-closure',
     workflow: 'default',
     step: 'plan',

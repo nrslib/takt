@@ -1,4 +1,5 @@
 import type {
+  NormalAgentWorkflowStep,
   PartDefinition,
   PartResult,
   WorkflowStep,
@@ -29,7 +30,7 @@ export function resolvePartErrorDetail(partResult: PartResult): string {
   return detail;
 }
 
-export function createPartStep(step: WorkflowStep, part: PartDefinition): WorkflowStep {
+export function createPartStep(step: WorkflowStep, part: PartDefinition): NormalAgentWorkflowStep {
   if (!step.teamLeader) {
     throw new Error(`Step "${step.name}" has no teamLeader configuration`);
   }
@@ -66,6 +67,7 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     policyContents: step.policyContents,
     knowledgeContents: step.knowledgeContents,
     qualityGates: step.qualityGates,
+    companion: step.companion,
   };
 }
 

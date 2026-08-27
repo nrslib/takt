@@ -131,7 +131,7 @@ call: supervisor-final-gate
 
 step fragment は root の `params` で必須の型付き parameter を宣言し、各 `uses` caller は `with` で値を束縛できます。facet parameter は `type: facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` のいずれかの `facet_kind` を指定します。workflow の呼び出し先を表す parameter は `type: workflow_ref` とし、`facet_kind` は指定しません。dynamic facet pool 名を受け取る fragment は `facet_pool_ref` を `facet_kind` なしで指定できます。companion parameter は現在 callable workflow のみが対応し、step fragment の `params` では対応しません。fragment 自体には空でない companion の固定指定を置けます。fragment では default と optional parameter は利用できません。
 
-`{ $param: name }` は宣言と対応する step fragment の `policy`、`knowledge`、`persona`、`instruction`、`output_contracts.report[].format`、`workflow_call.call`、`dynamic_facets.pool`、または callable workflow の通常 agent step の `companion` に配置します。`companion_ref[]` は固定 companion 名の配列へ展開されます。空配列の場合は `companion` フィールド自体を省略し、残存する未引用の `companion.*` state 参照を拒否します。したがって、空の raw `companion` や不正な companion 依存 route を許可せずに、generic wrapper の companion なし挙動を維持できます。指定した companion 名は通常の companion 定義解決でロード時に検証され、未知の参照は fail-fast します。`facet_ref` / `facet_ref[]` parameter は `policy` / `knowledge` の配列要素として固定参照と混在でき、配列値は順序を保ってその位置へ展開されます。空の `facet_ref[]` は要素を追加しません。`facet_pool_ref` は policy や knowledge facet ではなく、呼び出される callable workflow のトップレベル `facet_pools` map にある pool 名の scalar です。callable workflow parameter は `workflow_call.args` の直接の値として渡せます。step fragment の `with` で渡せるのは上記の fragment parameter 型です。nested fragment は lexical scope を使い、outer parameter を暗黙 capture できません。`with: { child_param: { $param: outer_param } }` と明示的に渡します。callable workflow parameter も同じ方法で渡せ、fragment 展開後に解決されます。resolver は未知・不足 binding、scalar/list 不一致、kind 不一致、未宣言参照、未対応 field の参照を拒否します。`params` と `with` は schema 検証前に消費され、`workflow_call` fragment 自身の `args` は保持・展開され、通常の caller overlay は parameter 展開後に適用されます。
+`{ $param: name }` は宣言と対応する step fragment の `policy`、`knowledge`、`persona`、`instruction`、`output_contracts.report[].format`、`workflow_call.call`、`dynamic_facets.pool`、または callable workflow の通常 agent step／Team Leader step の `companion` に配置します。`companion_ref[]` は固定 companion 名の配列へ展開されます。空配列の場合は `companion` フィールド自体を省略し、残存する未引用の `companion.*` state 参照を拒否します。したがって、空の raw `companion` や不正な companion 依存 route を許可せずに、generic wrapper の companion なし挙動を維持できます。指定した companion 名は通常の companion 定義解決でロード時に検証され、未知の参照は fail-fast します。`facet_ref` / `facet_ref[]` parameter は `policy` / `knowledge` の配列要素として固定参照と混在でき、配列値は順序を保ってその位置へ展開されます。空の `facet_ref[]` は要素を追加しません。`facet_pool_ref` は policy や knowledge facet ではなく、呼び出される callable workflow のトップレベル `facet_pools` map にある pool 名の scalar です。callable workflow parameter は `workflow_call.args` の直接の値として渡せます。step fragment の `with` で渡せるのは上記の fragment parameter 型です。nested fragment は lexical scope を使い、outer parameter を暗黙 capture できません。`with: { child_param: { $param: outer_param } }` と明示的に渡します。callable workflow parameter も同じ方法で渡せ、fragment 展開後に解決されます。resolver は未知・不足 binding、scalar/list 不一致、kind 不一致、未宣言参照、未対応 field の参照を拒否します。`params` と `with` は schema 検証前に消費され、`workflow_call` fragment 自身の `args` は保持・展開され、通常の caller overlay は parameter 展開後に適用されます。
 
 fragment が parallel step に解決される場合、呼び出し側は通常の配列ではなく strict な rule tree を指定します。`self` に parallel parent の空でない rule 配列を、`parallel` に明示的かつ一意な全 final child 名と各 child の空でない rule 配列を定義します。workflow の parallel step は nested にできないため、child rule tree は無効です。全 child を過不足なく1回ずつ列挙する必要があり、不明な child は指定できません。loader は fragment の展開後に rule tree を適用し、schema 検証前に各 step の通常の `rules` 配列へ変換します。
 
@@ -223,8 +223,10 @@ base コミットは `refs/takt/pr-base/<branch>` → `refs/takt/base/<branch>` 
 rules:
   - condition: "Implementation complete"
     next: review
+    command_gates: required
   - condition: "Cannot proceed"
     next: ABORT
+    command_gates: skip
     appendix: |
       何が進行を妨げているかを説明してください。
 ```
@@ -253,6 +255,10 @@ rule は YAML 記述順で評価され、最初に成立した rule を採用し
 ### ルールフィールド: `interactive_only`
 
 `interactive_only: true` を指定した rule は interactive 実行時にのみ評価対象になります。非 interactive 実行（`--pipeline` や `takt run` など）ではその rule は宣言されていないものとしてスキップされ、残りの rule で評価が続行されます。ユーザー入力を待つ遷移など、人間の介在が必要な遷移に使用します。
+
+### ルールフィールド: `command_gates`
+
+`command_gates` は、選択された rule で command quality gate を実行するか制御します。`required` は rule と transition の解決後、transition の適用前に step の command gate を実行し、成功した場合だけ transition を適用します。`skip` は command gate を実行せず、選択済みの transition を適用します。省略時は `required` です。
 
 ## Step タイプ
 
@@ -849,7 +855,7 @@ promotion は並列サブ step ではサポートされません。
 | `knowledge` | - | knowledge キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `instruction` | - | instruction キー（section map、または bare 名で project → user → builtin の順に解決） |
 | `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
-| `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step と並行実行（[Companion レビュアー](#companion-レビュアー)参照） |
+| `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step または Team Leader step で実行（[Companion レビュアー](#companion-レビュアー)参照） |
 | `completion_retry` | - | 必須の `retry_instruction` facet と任意の再試行上限を持つ object でレビュー網羅性確認を有効化 |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
 | `capabilities` | - | provider option preset の名前またはリスト。tool、network、sandbox、skills などの能力だけを指定し、provider / model は選択しない |
@@ -981,7 +987,7 @@ subworkflow:
 
 builtin callable workflow ではcall tree 全体の予算を root workflow が所有するため `max_steps` を省略します。同じ実装に直接実行の入口も必要な場合は standalone の root wrapper に `max_steps` を指定し、callable child は `workflow_call` から呼び出す設計にします。
 
-callable workflow の facet parameter は `facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` の5種の `facet_kind` を使います。呼び出す callable workflow を表す `workflow_ref` parameter には `facet_kind` を指定せず、`call: { $param: reviewer_suite }` の形で利用できます。`facet_pool_ref` parameter も `facet_kind` を指定せず、callable child のトップレベル `facet_pools` map にある pool 名の scalar を表します。`dynamic_facets.pool: { $param: implementation_pool }` の形で使用できます。`companion_ref[]` parameter も `facet_kind` を指定せず、`companion: { $param: implementation_companions }` の形で通常の agent step の固定 companion 配列を表します。空配列は `companion` を省略し、残存する未引用の `companion.*` state 参照を拒否します。literal な空 companion は許可しません。default は省略可能です。`facet_ref[]` の引数と default には空配列を指定でき、任意の追加 facet を表現できます。`policy` / `knowledge` では固定参照と scalar/list parameter を混在でき、list parameter は field の記載順を保ってその位置へ平坦化されます。`facet_pool_ref` の必須引数未設定、配列などの型不一致、child-local でない pool、未展開 `$param` は実行前に fail-fast し、暗黙の pool fallback はありません。`companion_ref[]` の配列以外の引数、未宣言参照、未知の companion 定義も実行前に fail-fast します。parameter は `workflow_call.args` を通じてさらに下位へ渡すこともできます。
+callable workflow の facet parameter は `facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` の5種の `facet_kind` を使います。呼び出す callable workflow を表す `workflow_ref` parameter には `facet_kind` を指定せず、`call: { $param: reviewer_suite }` の形で利用できます。`facet_pool_ref` parameter も `facet_kind` を指定せず、callable child のトップレベル `facet_pools` map にある pool 名の scalar を表します。`dynamic_facets.pool: { $param: implementation_pool }` の形で使用できます。`companion_ref[]` parameter も `facet_kind` を指定せず、`companion: { $param: implementation_companions }` の形で通常の agent step または Team Leader step の固定 companion 配列を表します。空配列は `companion` を省略し、残存する未引用の `companion.*` state 参照を拒否します。literal な空 companion は許可しません。default は省略可能です。`facet_ref[]` の引数と default には空配列を指定でき、任意の追加 facet を表現できます。`policy` / `knowledge` では固定参照と scalar/list parameter を混在でき、list parameter は field の記載順を保ってその位置へ平坦化されます。`facet_pool_ref` の必須引数未設定、配列などの型不一致、child-local でない pool、未展開 `$param` は実行前に fail-fast し、暗黙の pool fallback はありません。`companion_ref[]` の配列以外の引数、未宣言参照、未知の companion 定義も実行前に fail-fast します。parameter は `workflow_call.args` を通じてさらに下位へ渡すこともできます。
 
 `instruction` も空でない順序付き配列を受け付け、facet 参照とインライン文字列を混在できます。`facet_ref` / `facet_ref[]` parameter は配列要素に指定でき、`facet_ref[]` はその位置へ平坦化した後、解決済み要素を `\n\n---\n\n` で結合します。
 
@@ -1082,7 +1088,7 @@ steps:
 
 ## Companion レビュアー
 
-通常の agent step に `companion` を指定すると、実装エージェントの編集と並行して、ステートレスかつ read-only のレビュアーが動きます。名前配列は固定レビュアーの短縮形です。object 形式では固定レビュアー、step 開始時に1回だけ選抜する pool、任意の moderator を組み合わせられます。同時実行は最大3名です。
+通常の agent step または Team Leader step に `companion` を指定すると、ステートレスかつ read-only のレビュアーが動きます。名前配列は固定レビュアーの短縮形です。object 形式では固定レビュアー、runtime 開始時に1回だけ選抜する pool、任意の moderator を組み合わせられます。同時実行は最大3名です。
 
 companion reviewer は既定で無効です。workflow に宣言した reviewer を実行するには
 `runtime.yaml` で `companion.enabled: true` を設定します。
@@ -1107,6 +1113,8 @@ step や Companion 定義単位の上書きはできません。
 ```
 
 workflow の遷移ルールから `companion.*` state は参照できません。Companion の指摘と失敗は advisory な診断情報であり、主 workflow の遷移は通常の semantic condition と Phase 3 の判定だけで決まります。
+
+Team Leader step では、各 part が独立した Companion runtime を持ちます。part 応答後にその時点の累積 diff をレビューし、採用 finding を同じ part session へ渡し、part-level loop が settle してから `PartResult` を公開します。他の part は並行実行を継続します。全 part が完了し、Team Leader が追加作業なしと判断した後は、aggregated response の確定前に別の Team 完了レビューを行います。採用された Team finding は typed evidence として既存の追加 part 計画へ渡され、修正 part も通常の part 実行経路を使います。修正 part が完了した場合は、aggregated response を確定する前に Team 完了レビューを再実行します。part 専用 worktree、patch、changed-path 所有権、Companion 専用 scheduler は作成しません。
 
 定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。
 

@@ -1,5 +1,5 @@
 name: takt-default-team
-description: takt-default の計画・テスト・レビュー契約を維持し、現行 schema 制約に合わせて実装系の dynamic facets と companion を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。
+description: takt-default の計画・テスト・レビュー・最終ゲート・実装 Companion 契約を維持し、実装系の dynamic facets を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。
 max_steps: 51
 initial_step: develop
 
@@ -56,6 +56,12 @@ steps:
         - takt
         - architecture
         - implementation-semantics
+      implementation_companions:
+        fixed:
+          - ai-antipattern-review-companion
+          - testing-review-companion
+        pool: []
+        moderator: review-companion-moderator
     rules:
       - condition: COMPLETE
         next: COMPLETE

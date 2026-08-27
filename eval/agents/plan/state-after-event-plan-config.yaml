@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT ファセット評価: 実行中の設定変更とプロセス再起動後の設定保存を対で確認する'
+
+prompts:
+  - file://../../prompts/state-after-event-plan-config.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: low
+      working_dir: fixtures/state-after-event-plan-config
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/state-after-event-plan-config
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/state-after-event-plan-config
+      isolate_working_dir: true
+
+evaluateOptions:
+  maxConcurrency: 3
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: '計画: 実行中の設定変更を制限へ反映する'
+    vars:
+      task: file://../../cases/state-after-event-plan-config-trigger-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: plan/state-after-event-config-trigger
+        value: |
+          見出し、IDの形式、表の形、正確な文言ではなく、計画の実質で判定する。合格条件はすべて満たすこと。
+
+          - `createService` が起動時の `settings.rateLimit` で limiter を組み立て、その後は設定変更に反応しない構造であることを実装から見抜く。`settingsWatcher` が変更を検知してログを出すだけであることも含める。
+          - 実行中の設定変更後も制限を成立させる構造変更を計画に含める。方式は問わないが、起動時に一度だけ作った limiter を更新可能にする、または現在の設定で制限を再構成する必要がある。
+          - 完了契約と完了証拠を、同じサービスで「初期値で制限 → 設定変更 → 新しい値で制限」を一続きに観測する自動テストとする。
+          - 設定値ごとに別々のサービスを作るテストや、監視ログの出力だけを設定変更後の制限の証拠にしない。
+
+          これらを満たさない計画は不合格とする。
+  - description: '計画: プロセス再起動後の設定保存を扱う'
+    vars:
+      task: file://../../cases/state-after-event-plan-config-no-trigger-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: plan/state-after-event-config-no-trigger
+        value: |
+          見出し、IDの形式、表の形、正確な文言ではなく、計画の実質で判定する。合格条件はすべて満たすこと。
+
+          - 設定を保存し、プロセス再起動後に新しい `createService` が保存済みの設定を読み込んで起動する永続化の契約を主対象にする。
+          - 保存 → 新しいプロセスでの読み込みを自動テストで確認する計画にする。
+          - 同一プロセス内で実行中の limiter が設定変更に追従することを契約にした場合、または同じ実体での変化前後の一続きの観測を完了証拠にした場合だけ不合格とする。保存契機として変更時に保存する設計や、新しいプロセスまたは別の `createService` インスタンスで読み込むテストは合格とする。
+          - 新しいプロセスの起動を明示していないことだけでは不合格にしない。保存済み設定を別の実体で読み込む復元テストを計画していれば合格とする。
+
+          これらを満たさず、実行中の limiter の設定変更追従を契約として追加した場合や、同じ実体での変化前後の一続きの観測を完了証拠にした場合は不合格とする。

@@ -30,6 +30,8 @@ vi.mock('node:fs', () => ({
     mkdirSync: vi.fn(),
     mkdtempSync: vi.fn(),
     writeFileSync: vi.fn(),
+    chmodSync: vi.fn(),
+    renameSync: vi.fn(),
     readFileSync: vi.fn(),
     statSync: vi.fn(() => ({ isFile: () => false })),
     realpathSync: vi.fn((value: string) => value),
@@ -42,6 +44,8 @@ vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
   mkdtempSync: vi.fn(),
   writeFileSync: vi.fn(),
+  chmodSync: vi.fn(),
+  renameSync: vi.fn(),
   readFileSync: vi.fn(),
   statSync: vi.fn(() => ({ isFile: () => false })),
   realpathSync: vi.fn((value: string) => value),
@@ -2656,11 +2660,20 @@ describe('auto clone path allocation', () => {
       const metadataByBranch = new Map<string, { filePath: string; clonePath: string }>(
         vi.mocked(fs.writeFileSync).mock.calls
           .filter(([filePath]) => String(filePath).includes('/.takt/clone-meta/'))
-          .map(([filePath, content]) => {
+          .map(([temporaryPath, content]) => {
             const metadata = JSON.parse(String(content)) as { branch: string; clonePath: string };
-            return [metadata.branch, { filePath: String(filePath), clonePath: metadata.clonePath }];
+            const renameCall = vi.mocked(fs.renameSync).mock.calls.find(
+              ([source]) => String(source) === String(temporaryPath),
+            );
+            expect(renameCall).toBeDefined();
+            return [metadata.branch, {
+              filePath: String(renameCall?.[1]),
+              clonePath: metadata.clonePath,
+            }];
           }),
       );
+
+      expect(vi.mocked(fs.renameSync)).toHaveBeenCalledTimes(2);
 
       expect(metadataByBranch.get(first.branch)).toEqual({
         filePath: '/project/.takt/clone-meta/takt--827--add-trace-task-metadata.json',

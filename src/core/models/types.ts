@@ -161,5 +161,10 @@ export type {
   ResolvedObservabilityConfig,
   Language,
   PipelineConfig,
+  FormalSpecMode,
+  FormalSpecConfig,
+  FormalSpecSetting,
+  AssistantConfig,
+  GlobalAssistantConfig,
   ProjectConfig,
 } from './config-types.js';

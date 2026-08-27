@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 
 const DISABLE_SLASH_COMMANDS_FLAG = '--disable-slash-commands';
 const CAPABILITY_PROBE_TIMEOUT_MS = 5_000;
@@ -30,6 +31,7 @@ function readClaudeHelp(executable: string, abortSignal: AbortSignal): Promise<s
         timeout: CAPABILITY_PROBE_TIMEOUT_MS,
         killSignal: 'SIGTERM',
         signal: abortSignal,
+        env: buildChildProcessEnv(),
       },
       (error, stdout, stderr) => {
         if (error) {

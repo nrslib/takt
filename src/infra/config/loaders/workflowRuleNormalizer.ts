@@ -11,6 +11,7 @@ export function normalizeRule(rule: {
   appendix?: string;
   requires_user_input?: boolean;
   interactive_only?: boolean;
+  command_gates?: 'required' | 'skip';
 }): WorkflowRule {
   if (rule.condition === undefined) throw new Error('Workflow rule requires condition');
   const condition = parseWorkflowRuleCondition(rule.condition);
@@ -24,5 +25,6 @@ export function normalizeRule(rule: {
     appendix: rule.appendix,
     requiresUserInput: rule.requires_user_input,
     interactiveOnly: rule.interactive_only,
+    ...(rule.command_gates === undefined ? {} : { commandGates: rule.command_gates }),
   };
 }

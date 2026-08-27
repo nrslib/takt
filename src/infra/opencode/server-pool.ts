@@ -10,6 +10,7 @@ import {
   runWithNestedObservabilityProcessEnv,
 } from '../../shared/telemetry/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { versionAllowsListToolShim } from './list-tool-shim-guard.js';
 import { startOpenCodeServer } from './server-process.js';
@@ -73,7 +74,7 @@ function pluginPath(name: string): string {
 
 function resolveOpenCodeBinaryVersion(): Promise<string | undefined> {
   opencodeBinaryVersionPromise ??= new Promise((resolvePromise) => {
-    execFile('opencode', ['--version'], { timeout: 10_000 }, (error, stdout) => {
+    execFile('opencode', ['--version'], { timeout: 10_000, env: buildChildProcessEnv() }, (error, stdout) => {
       resolvePromise(error ? undefined : String(stdout).trim());
     });
   });

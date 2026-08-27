@@ -48,6 +48,7 @@ export function projectWorkflowTerminalStage(
         payload.projectCwd,
         context.publicationId,
         payload.sessionState,
+        payload.sessionStorageDirectory,
       );
       projectTerminalSessionRecord(
         join(context.runPaths.logsAbs, payload.ndjsonLogFile),

@@ -1,5 +1,6 @@
 import type {
   AgentResponse,
+  CompanionFinding,
   Language,
   PermissionMode,
   PartDefinition,
@@ -75,6 +76,9 @@ export type MorePartsOptions = Omit<
   'onPromptResolved'
 > & {
   cancellablePartIds: readonly string[];
+  /** Known IDs tolerated in model output but removed before the response is returned. */
+  ignoredCancelPartIds?: readonly string[];
+  companionFindings?: readonly CompanionFinding[];
 };
 
 export interface MorePartsResponse {
@@ -207,6 +211,7 @@ export async function requestMorePartsRawResponse(
     options.cancellablePartIds,
     options.inspectTools,
     options.inspectGuidance === true,
+    options.companionFindings,
   );
 
   let response: AgentResponse;
@@ -269,8 +274,14 @@ export async function requestMoreParts(
     throw createAgentResponseFailureError(response, 'Team leader feedback failed');
   }
 
+  const ignoredCancelPartIds = new Set(options.ignoredCancelPartIds ?? []);
+  const parsedResponse = toMorePartsResponse(response.structuredOutput, [
+    ...options.cancellablePartIds,
+    ...ignoredCancelPartIds,
+  ]);
   return {
-    ...toMorePartsResponse(response.structuredOutput, options.cancellablePartIds),
+    ...parsedResponse,
+    cancelPartIds: parsedResponse.cancelPartIds.filter((partId) => !ignoredCancelPartIds.has(partId)),
     ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
   };
 }

@@ -13,6 +13,7 @@ import type {
   WorkflowStep,
 } from '../core/models/types.js';
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
+import { isNormalOrTeamLeaderWorkflowStep, type NormalOrTeamLeaderWorkflowStep } from '../core/models/workflow-types.js';
 import type { Provider } from '../infra/providers/types.js';
 import type { SessionContext } from '../features/interactive/aiCaller.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
@@ -68,6 +69,22 @@ export function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     passPreviousResponse: false,
     ...overrides,
   } as WorkflowStep;
+}
+
+export function findWorkflowStep(workflow: WorkflowConfig, name: string): WorkflowStep {
+  const step = workflow.steps.find((candidate) => candidate.name === name);
+  if (step === undefined) {
+    throw new Error(`Workflow step "${name}" was not found in "${workflow.name}"`);
+  }
+  return step;
+}
+
+export function findAgentWorkflowStep(workflow: WorkflowConfig, name: string): NormalOrTeamLeaderWorkflowStep {
+  const step = findWorkflowStep(workflow, name);
+  if (!isNormalOrTeamLeaderWorkflowStep(step)) {
+    throw new Error(`Expected agent workflow step "${name}"`);
+  }
+  return step;
 }
 
 export function makeInstructionContext(overrides: Partial<InstructionContext> = {}): InstructionContext {

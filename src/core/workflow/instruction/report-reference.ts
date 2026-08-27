@@ -13,7 +13,7 @@
  */
 
 import { lstatSync, realpathSync, type Stats } from 'node:fs';
-import { relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   classifyReportRelativePath,
   reportPathRejectionMessage,
@@ -78,7 +78,26 @@ export interface ResolvedReportReferencePath {
 const SUBWORKFLOWS_NAMESPACE_DIR = 'subworkflows';
 
 /** reportDir の絶対パスから run slug を導出する。 */
-function deriveRunInfoFromReportDir(reportDir: string): { cwd: string; runSlug: string } | undefined {
+function deriveRunInfoFromReportDir(
+  reportDir: string,
+  reportsRootDir?: string,
+): { cwd: string; runSlug: string; runsDirectory?: string } | undefined {
+  if (reportsRootDir !== undefined) {
+    const reportsRoot = resolve(reportsRootDir);
+    const resolvedReportDir = resolve(reportDir);
+    const fromReportsRoot = relative(reportsRoot, resolvedReportDir);
+    if (fromReportsRoot === '..' || fromReportsRoot.startsWith(`..${sep}`) || isAbsolute(fromReportsRoot)) {
+      return undefined;
+    }
+    const runRoot = dirname(reportsRoot);
+    const runSlug = basename(runRoot);
+    if (runSlug.length === 0) return undefined;
+    return {
+      cwd: resolvedReportDir,
+      runSlug,
+      runsDirectory: dirname(runRoot),
+    };
+  }
   const marker = `${sep}.takt${sep}runs${sep}`;
   const markerIndex = reportDir.lastIndexOf(marker);
   if (markerIndex < 0) {
@@ -218,10 +237,10 @@ function resolveExistingReportReference(
   if (stepFile !== undefined) {
     return { ...stepFile, scope: 'step' };
   }
-  const runInfo = deriveRunInfoFromReportDir(reportDir);
+  const runInfo = deriveRunInfoFromReportDir(reportDir, reportsRoot);
   if (runInfo !== undefined && reportsRoot !== undefined && context.resumeReportConsumerKey !== undefined) {
     const manifest = readPathValueOrUndefined(
-      () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug),
+      () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug, runInfo.runsDirectory),
     );
     const snapshotReference = manifest?.resumeReportConsumers
       ?.find((consumer) => consumer.consumerKey === context.resumeReportConsumerKey)
