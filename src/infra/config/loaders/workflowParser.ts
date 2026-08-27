@@ -149,6 +149,7 @@ export function normalizeWorkflowConfig(
     context?.projectDir ?? workflowDir,
     context?.lang ?? 'en',
     context?.resourceRoot === undefined ? undefined : join(context.resourceRoot, 'workflows'),
+    context?.resourceRoot,
   );
   const selectorInstructionRefs = collectSelectorInstructionRefs(parsed.steps);
   const resolvedPoliciesWithSource = resolveSectionMapWithSource(parsed.policies, workflowDir, 'policies', context);

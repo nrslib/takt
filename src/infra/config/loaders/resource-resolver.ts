@@ -558,7 +558,7 @@ export function resolveFacetPath(
   facetType: FacetType,
   context: FacetResolutionContext,
 ): string | undefined {
-  if (isScopeRef(name) && context.repertoireDir) {
+  if (isScopeRef(name) && context.resourceRoot === undefined && context.repertoireDir) {
     const scopeRef = parseScopeRef(name);
     const filePath = resolveScopeRef(scopeRef, facetType, context.repertoireDir);
     if (!existsSync(filePath)) {
@@ -722,7 +722,7 @@ export function resolveRefToContentWithSource(
     return applyFacetIncludes(expandFacetInheritance(resolved, facetType, context, [], options?.selectorInstruction === true), context);
   }
 
-  if (facetType && context && isScopeRef(ref) && context.repertoireDir) {
+  if (facetType && context && isScopeRef(ref) && context.resourceRoot === undefined && context.repertoireDir) {
     const scopeRef = parseScopeRef(ref);
     const filePath = resolveScopeRef(scopeRef, facetType, context.repertoireDir);
     if (options?.selectorInstruction && existsSync(filePath)) {
@@ -739,6 +739,10 @@ export function resolveRefToContentWithSource(
   }
 
   if (options?.selectorInstruction === true && isScopeRef(ref)) {
+    return undefined;
+  }
+
+  if (context?.resourceRoot !== undefined && isScopeRef(ref)) {
     return undefined;
   }
 
@@ -862,7 +866,7 @@ export function resolvePersona(
   workflowDir: string,
   context?: FacetResolutionContext,
 ): { personaSpec?: string; personaPath?: string } {
-  if (rawPersona && isScopeRef(rawPersona) && context?.repertoireDir) {
+  if (rawPersona && isScopeRef(rawPersona) && context?.resourceRoot === undefined && context?.repertoireDir) {
     const scopeRef = parseScopeRef(rawPersona);
     const personaPath = resolveScopeRef(scopeRef, 'personas', context.repertoireDir);
     if (existsSync(personaPath)) {

@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -304,9 +305,9 @@ steps:
     }
 
     const sourceCases = [
-      { arrows: 1, label: 'Project workflows', source: 'project', root: projectWorkflowsDir },
+      { arrows: 1, label: 'Project workflows', source: 'project', root: realpathSync(projectWorkflowsDir) },
       { arrows: 2, label: 'Global workflows', source: 'user', root: globalWorkflowsDir },
-      { arrows: 3, label: 'Builtin workflows', source: 'builtin', root: resolve(__dirname, '../../builtins/en/workflows') },
+      { arrows: 3, label: 'Builtin workflows', source: 'builtin', root: realpathSync(resolve(__dirname, '../../builtins/en/workflows')) },
       { arrows: 4, label: 'Repertoire workflows', source: 'repertoire', root: repertoireWorkflowsDir },
     ] as const;
 
@@ -334,7 +335,7 @@ steps:
       expect(prompt).toBeDefined();
       const selectedPath = /Workflow path: (.+)/.exec(prompt!)?.[1];
       expect(selectedPath).toBeDefined();
-      expect(selectedPath).toMatch(new RegExp(`^${sourceCase.root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+      expect(selectedPath!.startsWith(sourceCase.root)).toBe(true);
       expect(prompt).toContain(`Workflow source: ${sourceCase.source}`);
       expect(prompt).toContain(readFileSync(selectedPath!, 'utf-8'));
       const selectedYaml = parseYaml(readFileSync(selectedPath!, 'utf-8')) as { name?: string };
@@ -358,6 +359,7 @@ steps:
   - name: plan
     instruction: Plan this workflow directly.
 `, 'utf-8');
+    const expectedUnsafePath = realpathSync(unsafePath);
     const promptLog = join(testRepo.path, 'maker-unsafe-filename-prompts.jsonl');
     const tui = start('tui-conversation.json', ['make'], { TAKT_MOCK_PROMPT_LOG: promptLog });
 
@@ -381,7 +383,7 @@ steps:
       .split('\n')
       .filter(Boolean)
       .map((line) => JSON.parse(line) as { prompt: string })[0]?.prompt;
-    expect(firstPrompt).toContain(`Workflow path: ${unsafePath}`);
+    expect(firstPrompt).toContain(`Workflow path: ${expectedUnsafePath}`);
 
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit()).resolves.toBe(0);
@@ -707,6 +709,7 @@ steps:
   - name: plan
     instruction: Plan the second workflow.
 `, 'utf-8');
+    const expectedSecondPath = realpathSync(secondPath);
     const promptLog = join(testRepo.path, 'maker-base-handoff-prompts.jsonl');
     const tui = start('workflow-maker-base-handoff.json', ['make'], {
       TAKT_MOCK_PROMPT_LOG: promptLog,
@@ -768,7 +771,7 @@ steps:
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain('retain this request across the base handoff');
     expect(prompts[1]).toContain('Workflow source: project');
-    expect(prompts[1]).toContain(`Workflow path: ${secondPath}`);
+    expect(prompts[1]).toContain(`Workflow path: ${expectedSecondPath}`);
     expect(prompts[1]).toContain(basename(secondPath));
     expect(prompts[1]).toContain('name: second-base-name');
     expect(prompts[1]).toContain('SECOND_BASE_UNIQUE_CONTENT');
@@ -1025,7 +1028,7 @@ steps:
 
   it.each(['missing', 'unreadable'] as const)(
     'should route a %s Doctor report through needs_fix before returning to the Maker TUI',
-    async (doctorState) => {
+    async (doctorState, context) => {
       const scenarioPath = join(testRepo.path, `workflow-maker-doctor-${doctorState}.json`);
       writeFileSync(scenarioPath, JSON.stringify([
         { persona: 'interactive', status: 'done', content: 'TUI-MAKER-DOCTOR-REPLY' },
@@ -1093,6 +1096,17 @@ steps:
         rmSync(doctorReport);
       } else {
         chmodSync(doctorReport, 0o000);
+        let readable = true;
+        try {
+          readFileSync(doctorReport, 'utf-8');
+        } catch {
+          readable = false;
+        }
+        if (readable) {
+          chmodSync(doctorReport, 0o644);
+          context.skip();
+          return;
+        }
       }
 
       await tui.waitForScreen(

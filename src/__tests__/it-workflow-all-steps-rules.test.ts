@@ -129,6 +129,21 @@ steps:
     expect(resolvedRules(isolated)?.[0]?.content).toBe('ISOLATED_SHARED');
   });
 
+  it('fails isolated loading when a rule exists only in the project layer', () => {
+    const projectRulesDir = join(projectDir, '.takt', 'workflows', 'rules');
+    const isolatedRoot = join(projectDir, '.takt', 'make', 'isolated');
+    const isolatedWorkflowsDir = join(isolatedRoot, 'workflows');
+    mkdirSync(projectRulesDir, { recursive: true });
+    mkdirSync(isolatedWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectRulesDir, 'project-only.md'), 'PROJECT_ONLY', 'utf-8');
+    const workflowPath = join(isolatedWorkflowsDir, 'rules.yaml');
+    writeFileSync(workflowPath, workflowYaml('rules', ['project-only']), 'utf-8');
+
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir, { resourceRoot: isolatedRoot })).toThrow(
+      /project-only/,
+    );
+  });
+
   it('fails at workflow load when a declared rule cannot be resolved', () => {
     const workflowPath = join(projectDir, 'missing-rule.yaml');
     writeFileSync(workflowPath, workflowYaml('missing-rule', ['does-not-exist']), 'utf-8');

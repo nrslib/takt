@@ -80,12 +80,12 @@ export function buildCandidateDirsWithPackage(
   facetType: FacetType,
   context: FacetResolutionContext,
 ): string[] {
-  const dirs: string[] = [];
-
   const artifactFacetsDir = getIsolatedWorkflowResourceDir(context, 'facets');
-  if (artifactFacetsDir) {
-    dirs.push(path.join(artifactFacetsDir, facetType));
+  if (artifactFacetsDir !== undefined) {
+    return [path.join(artifactFacetsDir, facetType)];
   }
+
+  const dirs: string[] = [];
 
   if (context.workflowDir && context.repertoireDir) {
     const workflowBaseDir = normalizeWorkflowBaseDir(context.workflowDir);
@@ -105,12 +105,12 @@ export function buildCandidateDirsWithPackage(
 }
 
 export function buildFacetsRoots(context: FacetResolutionContext): string[] {
-  const roots: string[] = [];
-
   const artifactFacetsDir = getIsolatedWorkflowResourceDir(context, 'facets');
-  if (artifactFacetsDir) {
-    roots.push(artifactFacetsDir);
+  if (artifactFacetsDir !== undefined) {
+    return [artifactFacetsDir];
   }
+
+  const roots: string[] = [];
 
   if (context.workflowDir && context.repertoireDir) {
     const workflowBaseDir = normalizeWorkflowBaseDir(context.workflowDir);

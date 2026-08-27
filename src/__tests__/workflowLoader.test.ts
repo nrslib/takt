@@ -2027,7 +2027,7 @@ describe('Workflow Maker artifact isolation', () => {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(configDir, { recursive: true, force: true });
     for (const fixturePath of repositoryFixturePaths.splice(0)) {
-      rmSync(fixturePath, { force: true });
+      rmSync(fixturePath, { recursive: true, force: true });
     }
     if (previousConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
@@ -2113,6 +2113,17 @@ instruction: ${personaName}
           join(process.cwd(), 'builtins', 'en', 'assets', `${name}.md`),
           join(process.cwd(), 'builtins', 'en', 'assets', `${name}.cjs`),
         ];
+        const builtinAssetsDir = dirname(assetPaths[0]);
+        const builtinAssetsDirExisted = existsSync(builtinAssetsDir);
+        repositoryFixturePaths.push(
+          rootPath,
+          personaPath,
+          companionInstructionPath,
+          companionPath,
+          capabilityPath,
+          ...assetPaths,
+          ...(builtinAssetsDirExisted ? [] : [builtinAssetsDir]),
+        );
         mkdirSync(dirname(personaPath), { recursive: true });
         mkdirSync(dirname(companionInstructionPath), { recursive: true });
         mkdirSync(dirname(companionPath), { recursive: true });
@@ -2129,14 +2140,6 @@ instruction: ${personaName}
         writeFileSync(assetPaths[0], 'value\nbuiltin\n', 'utf-8');
         writeFileSync(assetPaths[1], 'Process builtin {value}.\n', 'utf-8');
         writeFileSync(assetPaths[2], 'export default (items) => items.join("\\n");\n', 'utf-8');
-        repositoryFixturePaths.push(
-          rootPath,
-          personaPath,
-          companionInstructionPath,
-          companionPath,
-          capabilityPath,
-          ...assetPaths,
-        );
       } else {
         rootPath = writeConfigFixture(
           `repertoire/@owner/pkg/workflows/${name}.yaml`,

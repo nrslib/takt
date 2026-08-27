@@ -28,13 +28,13 @@ export function getScopedProviderOptionsCandidateKey(owner: string, repo: string
 }
 
 export function buildProviderOptionsLookupDirs(context: FacetResolutionContext): string[] {
+  const artifactProviderOptionsDir = getIsolatedWorkflowResourceDir(context, 'provider-options');
+  if (artifactProviderOptionsDir !== undefined) {
+    return [artifactProviderOptionsDir];
+  }
+
   const dirs: string[] = [];
   const builtinProviderOptionsDir = getBuiltinProviderOptionsDir(context.lang);
-
-  const artifactProviderOptionsDir = getIsolatedWorkflowResourceDir(context, 'provider-options');
-  if (artifactProviderOptionsDir) {
-    dirs.push(artifactProviderOptionsDir);
-  }
 
   if (context.workflowDir && context.repertoireDir) {
     const pkg = getPackageFromWorkflowDir(getWorkflowBaseDir(context.workflowDir), context.repertoireDir);
@@ -78,6 +78,14 @@ export function resolveProviderOptionsScopeRef(
   fileAccess?: NamedResourceFileAccess,
   scopedCandidateDirs?: ScopedProviderOptionsCandidateDirs,
 ): ResolvedProviderOptionsResource | undefined {
+  if (context.resourceRoot !== undefined) {
+    const artifactProviderOptionsDir = getIsolatedWorkflowResourceDir(context, 'provider-options');
+    if (artifactProviderOptionsDir === undefined) {
+      return undefined;
+    }
+    const scopeRef = parseScopeRef(ref);
+    return resolveProviderOptionsByName(scopeRef.name, [artifactProviderOptionsDir], fileAccess);
+  }
   if (!context.repertoireDir) {
     throw new Error(`Configuration error: provider_options.extends requires repertoireDir to resolve scope reference: ${ref}`);
   }

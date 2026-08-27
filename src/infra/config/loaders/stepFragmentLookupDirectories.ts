@@ -42,11 +42,12 @@ function requireContext(ref: string, context: FacetResolutionContext | undefined
 }
 
 export function buildStepFragmentLookupDirs(context: FacetResolutionContext): string[] {
-  const dirs: string[] = [];
   const artifactStepsDir = getIsolatedWorkflowResourceDir(context, 'steps');
-  if (artifactStepsDir) {
-    dirs.push(artifactStepsDir);
+  if (artifactStepsDir !== undefined) {
+    return [artifactStepsDir];
   }
+
+  const dirs: string[] = [];
   if (context.workflowDir && context.repertoireDir) {
     const pkg = getPackageFromWorkflowDir(getWorkflowBaseDir(context.workflowDir), context.repertoireDir);
     if (pkg) {
@@ -80,12 +81,18 @@ function resolveStepFragmentByName(ref: string, candidateDirs: readonly string[]
 
 export function getStepFragmentLookupDirs(ref: string, scope: StepFragmentLookupScope): readonly string[] {
   if (!ref.startsWith('@')) {
+    if (scope.context?.resourceRoot !== undefined) {
+      return buildStepFragmentLookupDirs(scope.context);
+    }
     return scope.candidateDirs ?? buildStepFragmentLookupDirs(requireContext(ref, scope.context));
   }
   if (!isScopeRef(ref)) {
     throw new Error(`Configuration error: invalid scoped step fragment reference "${ref}"; expected @owner/repo/name`);
   }
   const context = requireContext(ref, scope.context);
+  if (context.resourceRoot !== undefined) {
+    return buildStepFragmentLookupDirs(context);
+  }
   if (!context.repertoireDir) {
     throw new Error(`Configuration error: step fragment requires repertoireDir to resolve scoped reference "${ref}"`);
   }

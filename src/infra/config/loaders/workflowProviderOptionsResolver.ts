@@ -119,6 +119,9 @@ function resolvePathLikeProviderOptionsExtends(
 }
 
 function getProviderOptionsCandidateDirs(scope: ProviderOptionsResolutionScope, ref: string): readonly string[] {
+  if (scope.context?.resourceRoot !== undefined) {
+    return buildProviderOptionsLookupDirs(scope.context);
+  }
   if (scope.candidateDirs) {
     return scope.candidateDirs;
   }

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { chmodSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -372,13 +372,24 @@ describe('scenario file conditions', () => {
 
   itPosix.each(['fail', 'missing', 'unreadable'] as const)(
     'should return mismatch content when the Doctor report is %s',
-    async (doctorState) => {
+    async (doctorState, context) => {
       const reportPath = join(tempDir, 'workflow-maker-doctor.md');
       if (doctorState !== 'missing') {
         writeFileSync(reportPath, 'Result: FAIL\n');
       }
       if (doctorState === 'unreadable') {
         chmodSync(reportPath, 0o000);
+        let readable = true;
+        try {
+          readFileSync(reportPath, 'utf-8');
+        } catch {
+          readable = false;
+        }
+        if (readable) {
+          chmodSync(reportPath, 0o644);
+          context.skip();
+          return;
+        }
       }
       setMockScenario([{
         status: 'done',
@@ -416,10 +427,21 @@ describe('scenario file conditions', () => {
       .rejects.toThrow('to be missing');
   });
 
-  itPosix('should require an unreadable file before returning its response', async () => {
+  itPosix('should require an unreadable file before returning its response', async (context) => {
     const doctorReport = join(tempDir, 'workflow-maker-doctor.md');
     writeFileSync(doctorReport, 'Result: PASS\n');
     chmodSync(doctorReport, 0o000);
+    let readable = true;
+    try {
+      readFileSync(doctorReport, 'utf-8');
+    } catch {
+      readable = false;
+    }
+    if (readable) {
+      chmodSync(doctorReport, 0o644);
+      context.skip();
+      return;
+    }
     setMockScenario([{
       status: 'done',
       content: '[REVIEW:2]',

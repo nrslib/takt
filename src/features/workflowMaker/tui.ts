@@ -87,12 +87,14 @@ function buildMakerPlan(
   base: WorkflowMakerBase,
   agentOverrides: TaskExecutionOptions | undefined,
 ): ConversationPlan {
-  const plan = createAssistantConversationPlan(projectDir, {
-    assistantMode: 'assistant',
+  const assistantConversationInput = {
+    assistantMode: 'assistant' as const,
     formalSpec: false,
+    formalSpecComments: true,
     ...(agentOverrides?.provider ? { provider: agentOverrides.provider } : {}),
     ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
-  });
+  };
+  const plan = createAssistantConversationPlan(projectDir, assistantConversationInput);
   const makerPrompt = loadTemplate('workflow_maker_assistant', plan.ctx.lang).trim();
   return {
     ctx: plan.ctx,

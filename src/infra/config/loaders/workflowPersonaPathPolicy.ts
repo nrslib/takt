@@ -19,8 +19,10 @@ import {
 
 function getWorkflowPersonaBases(context: FacetResolutionContext): string[] {
   const artifactFacetsDir = getIsolatedWorkflowResourceDir(context, 'facets');
+  if (artifactFacetsDir !== undefined) {
+    return [join(artifactFacetsDir, 'personas')];
+  }
   const bases = [
-    ...(artifactFacetsDir === undefined ? [] : [join(artifactFacetsDir, 'personas')]),
     getBuiltinFacetDir(context.lang, 'personas'),
     getGlobalFacetDir('personas'),
     join(getGlobalConfigDir(), 'personas'),

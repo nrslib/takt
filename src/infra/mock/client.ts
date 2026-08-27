@@ -258,9 +258,18 @@ function applyScenarioFileWrites(entry: ScenarioEntry | undefined, cwd: string):
 }
 
 function findScenarioFiles(root: string, filename: string): string[] {
-  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true, encoding: 'utf8' });
+  } catch {
+    return [];
+  }
+  return entries.flatMap((entry) => {
     const entryPath = resolve(root, entry.name);
     if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === '.git') {
+        return [];
+      }
       return findScenarioFiles(entryPath, filename);
     }
     return entry.isFile() && entry.name === filename ? [entryPath] : [];

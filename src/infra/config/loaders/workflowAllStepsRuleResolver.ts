@@ -136,21 +136,27 @@ export function resolveWorkflowWideRules(
   projectCwd: string,
   language: Language,
   workflowDir?: string,
+  resourceRoot?: string,
 ): readonly WorkflowWideRule[] | undefined {
   if (entries === undefined) {
     return undefined;
   }
 
-  const roots = [
-    ...(workflowDir === undefined ? [] : [workflowDir]),
-    getProjectWorkflowsDir(projectCwd),
-    getGlobalWorkflowsDir(),
-    getBuiltinWorkflowsDir(language),
-  ].filter((root, index, all) => all.indexOf(root) === index);
+  const roots = resourceRoot === undefined
+    ? [
+      ...(workflowDir === undefined ? [] : [workflowDir]),
+      getProjectWorkflowsDir(projectCwd),
+      getGlobalWorkflowsDir(),
+      getBuiltinWorkflowsDir(language),
+    ]
+    : workflowDir === undefined
+      ? [join(resourceRoot, 'workflows')]
+      : [workflowDir];
+  const uniqueRoots = roots.filter((root, index, all) => all.indexOf(root) === index);
 
   return entries.map((entry, index) => {
     const normalized = normalizeRuleEntry(entry);
-    const resolved = resolveRuleFile(normalized.ref, roots, index);
+    const resolved = resolveRuleFile(normalized.ref, uniqueRoots, index);
     assertAllowedRuleContent(resolved.content, resolved.filePath, index);
     return {
       ref: normalized.ref,
