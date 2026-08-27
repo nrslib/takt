@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.63.0] - 2026-08-27
+
+### Added
+
+- Structured `assistant.formal_spec` with `mode` and `comments` (#1512). The plain `true` / `false` / `"Y/n"` / `"y/N"` value is still accepted; the object form sets the Alloy/Quint `mode` and a `comments` flag independently, and project and global objects are resolved per field with project values taking precedence. When `comments` is `true` (the default), the assistant is asked to add natural-language comments inside each Quint and Alloy block next to states, transitions, temporal requirements, invariants, ownership, and cardinality, so each notation can be read on its own. `comments: false` removes only that instruction; the amount of formal specification, requirement coverage, and syntax/correctness guidance are unchanged.
+- `takt ui` (experimental) starts a local Web UI on `http://127.0.0.1:20525` (#1502). It offers a Viewer for task and run navigation, an execution graph, live logs and reports, a conversation surface that creates tasks with `/setup` and `/go`, and the `takt list` task actions such as retry and instruct. Web UI tasks, runs, and sessions are stored in central state under `TAKT_CONFIG_DIR`, while CLI execution stays project-local; using the CLI and the Web UI on the same project at the same time is not supported. `takt ui stop` and `takt ui restart [--port <number>]` manage the process. The interface may change without notice.
+
+### Changed
+
+- Codebase investigation in interactive mode is scoped per mode (#1506). Assistant mode performs read-only investigation to understand the current specification, behavior, prerequisites, and constraints instead of asking the user for them, and Grill Me mode checks the current-state facts it needs to challenge the requirements; both stop once the facts needed to clarify the requirements are established. Identifying files to change, analyzing dependencies and call paths, comparing fixes or designs, and preparing implementation steps are left to workflow execution. Previously the Assistant prompt told the model not to investigate the codebase at all.
+- Builtin facets require state-after-change contracts on a persisting entity (#1498). When a requirement names a specific change (input, environment, configuration, connection state, ...) and asks behavior to keep following the state after it, and the same screen, process, connection, session, or cache persists across the change, the `plan`, `write_tests`, and `implement` instructions align the observation unit with that entity: observing before → change → after on the same entity is the completion evidence, artifacts produced before the change are in scope, and a structure that creates once, computes only initially, or caches must be changed in the plan. The `testing` policy rejects evidence that recreates another entity, excludes pre-change artifacts, sends an observable entity to manual verification only, or marks `State / Ownership` or `Continuous Execution, Ownership, and Concurrency` as not applicable when the contract applies. Requirements with no entity that persists across the change are unaffected.
+
 ## [0.62.0] - 2026-08-25
 
 ### Added

@@ -531,7 +531,17 @@ export function normalizeAssistantConfig(
   }
   return {
     ...(initFiles !== undefined ? { initFiles } : {}),
-    ...(raw?.formal_spec !== undefined ? { formalSpec: raw.formal_spec } : {}),
+    ...(raw?.formal_spec !== undefined ? { formalSpec: normalizeFormalSpecSetting(raw.formal_spec) } : {}),
+  };
+}
+
+function normalizeFormalSpecSetting(setting: FormalSpecSetting): FormalSpecSetting {
+  if (typeof setting !== 'object' || setting === null) {
+    return setting;
+  }
+  return {
+    ...(setting.mode !== undefined ? { mode: setting.mode } : {}),
+    ...(setting.comments !== undefined ? { comments: setting.comments } : {}),
   };
 }
 
@@ -544,7 +554,7 @@ export function denormalizeAssistantConfig(
   }
   return {
     ...(initFiles !== undefined ? { init_files: initFiles } : {}),
-    ...(config?.formalSpec !== undefined ? { formal_spec: config.formalSpec } : {}),
+    ...(config?.formalSpec !== undefined ? { formal_spec: normalizeFormalSpecSetting(config.formalSpec) } : {}),
   };
 }
 

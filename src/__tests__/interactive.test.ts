@@ -10,8 +10,8 @@ import {
   createMockProvider,
 } from './helpers/stdinSimulator.js';
 
-const { mockResolveFormalSpecMode, mockSelectRecentSession } = vi.hoisted(() => ({
-  mockResolveFormalSpecMode: vi.fn(),
+const { mockResolveFormalSpecConfiguration, mockSelectRecentSession } = vi.hoisted(() => ({
+  mockResolveFormalSpecConfiguration: vi.fn(),
   mockSelectRecentSession: vi.fn(),
 }));
 
@@ -26,7 +26,7 @@ vi.mock('../infra/providers/index.js', () => ({
 
 vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveFormalSpecMode: (cwd: string) => mockResolveFormalSpecMode(cwd),
+  resolveFormalSpecConfiguration: (cwd: string) => mockResolveFormalSpecConfiguration(cwd),
 }));
 
 vi.mock('../features/interactive/sessionSelector.js', () => ({
@@ -85,7 +85,7 @@ function setupMockProvider(responses: string[]): void {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSelectOption.mockResolvedValue('execute');
-  mockResolveFormalSpecMode.mockResolvedValue(false);
+  mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: false, comments: true });
   mockSelectRecentSession.mockResolvedValue(null);
 });
 
@@ -104,8 +104,8 @@ describe('interactiveMode', () => {
 
     await interactiveMode('/project', undefined, undefined, sessionId, undefined, options);
 
-    expect(mockResolveFormalSpecMode).toHaveBeenCalledOnce();
-    expect(mockResolveFormalSpecMode).toHaveBeenCalledWith('/project');
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledOnce();
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledWith('/project');
   });
 
   it.each([
@@ -127,15 +127,15 @@ describe('interactiveMode', () => {
       ]);
       mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
       mockSelectRecentSession.mockResolvedValue('selected-session');
-      mockResolveFormalSpecMode
-        .mockResolvedValueOnce(initialFormalSpec)
-        .mockResolvedValueOnce(resumedFormalSpec);
+      mockResolveFormalSpecConfiguration
+        .mockResolvedValueOnce({ mode: initialFormalSpec, comments: true })
+        .mockResolvedValueOnce({ mode: resumedFormalSpec, comments: true });
 
       await interactiveMode('/project');
 
-      expect(mockResolveFormalSpecMode).toHaveBeenCalledTimes(2);
-      expect(mockResolveFormalSpecMode).toHaveBeenNthCalledWith(1, '/project');
-      expect(mockResolveFormalSpecMode).toHaveBeenNthCalledWith(2, '/project');
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledTimes(2);
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(1, '/project');
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project');
       expect(capture.systemPrompts).toHaveLength(3);
     },
   );
@@ -147,7 +147,7 @@ describe('interactiveMode', () => {
 
     await interactiveMode('/project');
 
-    expect(mockResolveFormalSpecMode).toHaveBeenCalledOnce();
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -157,7 +157,7 @@ describe('interactiveMode', () => {
     setupRawStdin(toRawInputs(['plan a stateful feature', '/cancel']));
     const { provider, capture } = createMockProvider(['Which states are involved?']);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecMode.mockResolvedValue(true);
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
 
     await interactiveMode('/project', undefined, undefined, undefined, undefined, options);
 

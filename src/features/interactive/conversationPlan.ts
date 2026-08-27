@@ -30,10 +30,6 @@ import {
 } from './promptSections.js';
 import { formatRunSessionForPrompt, type RunSessionContext } from './runSessionReader.js';
 import { initializeSession } from './sessionInitialization.js';
-import {
-  resolveFormalSpecMode,
-  resolveFormalSpecModeWithoutPrompt,
-} from './taskInstructionFormat.js';
 
 /**
  * The order `/replay` resubmits and `/retry` offers, or nothing when there is
@@ -58,9 +54,31 @@ const EMPTY_RUN_SESSION_VARS = {
   runReports: '',
 };
 
+const INTERACTIVE_INVESTIGATION_POLICIES = {
+  assistant: {
+    currentStateScope: 'current-state-and-prerequisites',
+    implementationInvestigationOwner: 'workflow-execution',
+  },
+  grillMe: {
+    currentStateScope: 'requirements-decisions-only',
+    implementationInvestigationOwner: 'workflow-execution',
+  },
+} as const;
+
+function serializeInvestigationPolicy(
+  policy: (typeof INTERACTIVE_INVESTIGATION_POLICIES)[keyof typeof INTERACTIVE_INVESTIGATION_POLICIES],
+): string {
+  const serialized = JSON.stringify(policy);
+  if (serialized === undefined) {
+    throw new Error('Interactive investigation policy must be serializable');
+  }
+  return serialized;
+}
+
 export interface InteractiveSystemPromptInput {
   grillMe: boolean;
   formalSpec?: boolean;
+  formalSpecComments?: boolean;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
 }
@@ -74,10 +92,16 @@ export function buildInteractiveSystemPrompt(
   const runSessionVars = input.runSessionContext
     ? formatRunSessionForPrompt(input.runSessionContext)
     : EMPTY_RUN_SESSION_VARS;
+  const investigationPolicy = input.grillMe
+    ? INTERACTIVE_INVESTIGATION_POLICIES.grillMe
+    : INTERACTIVE_INVESTIGATION_POLICIES.assistant;
 
   return loadTemplate('score_interactive_system_prompt', lang, {
     grillMe: input.grillMe,
+    investigationPolicy: serializeInvestigationPolicy(investigationPolicy),
     formalSpec: input.formalSpec ?? false,
+    formalSpecComments: input.formalSpecComments ?? true,
+    formalSpecCommentsEnabled: (input.formalSpec ?? false) && (input.formalSpecComments ?? true),
     hasWorkflowPreview,
     workflowStructure: input.workflowContext?.workflowStructure ?? '',
     stepDetails: hasWorkflowPreview ? formatStepPreviews(stepPreviews, lang) : '',
@@ -94,8 +118,12 @@ export interface ConversationPlan {
 
 export interface AssistantConversationInput {
   assistantMode: AssistantInteractiveMode;
-  /** Initial value resolved by the front-end before the conversation starts. */
-  formalSpec?: boolean;
+  /** Initial values resolved by the front-end before the conversation starts. */
+  formalSpec: boolean;
+  /** Whether formal notation blocks must include natural-language meaning comments. */
+  formalSpecComments: boolean;
+  /** Resolve the formal-spec setting again when the user resumes another session. */
+  resolveResumedFormalSpecConfiguration?: () => Promise<{ mode: boolean; comments: boolean }>;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
   provider?: ProviderType;
@@ -155,19 +183,27 @@ export function createAssistantConversationPlan(
   };
   const grillMe = input.assistantMode === 'grill-me';
   const assistantInitContext = loadAssistantInitContext(cwd);
-  const formalSpec = input.formalSpec ?? resolveFormalSpecModeWithoutPrompt(cwd);
-  const buildPromptConfiguration = (resolvedFormalSpec: boolean): ConversationPromptConfiguration => ({
-    formalSpec: resolvedFormalSpec,
+  const buildPromptConfiguration = (
+    formalSpecConfiguration: { mode: boolean; comments: boolean },
+  ): ConversationPromptConfiguration => ({
+    formalSpec: formalSpecConfiguration.mode,
+    formalSpecComments: formalSpecConfiguration.comments,
     systemPrompt: buildInteractiveSystemPrompt(ctx.lang, {
       grillMe,
-      formalSpec: resolvedFormalSpec,
+      formalSpec: formalSpecConfiguration.mode,
+      formalSpecComments: formalSpecConfiguration.comments,
       ...(input.workflowContext ? { workflowContext: input.workflowContext } : {}),
       ...(input.runSessionContext ? { runSessionContext: input.runSessionContext } : {}),
     }),
   });
-  const resolvePromptConfiguration = async (): Promise<ConversationPromptConfiguration> =>
-    buildPromptConfiguration(await resolveFormalSpecMode(cwd));
-  const initialPromptConfiguration = buildPromptConfiguration(formalSpec);
+  const resolvePromptConfiguration = input.resolveResumedFormalSpecConfiguration
+    ? async (): Promise<ConversationPromptConfiguration> =>
+      buildPromptConfiguration(await input.resolveResumedFormalSpecConfiguration!())
+    : undefined;
+  const initialPromptConfiguration = buildPromptConfiguration({
+    mode: input.formalSpec,
+    comments: input.formalSpecComments,
+  });
 
   return {
     ctx,
@@ -180,7 +216,9 @@ export function createAssistantConversationPlan(
       introMessage: getLabel(grillMe ? 'interactive.ui.introGrillMe' : 'interactive.ui.intro', ctx.lang),
       initialPromptContext: assistantInitContext,
       summaryPromptContext: assistantInitContext,
-      resolveResumedSessionConfiguration: resolvePromptConfiguration,
+      ...(resolvePromptConfiguration
+        ? { resolveResumedSessionConfiguration: resolvePromptConfiguration }
+        : {}),
     },
   };
 }

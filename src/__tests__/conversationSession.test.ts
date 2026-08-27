@@ -321,6 +321,7 @@ describe('conversation session application API', () => {
       'summary context',
       false,
       { workflowContext },
+      true,
     );
     expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
       providerType: 'mock',
@@ -532,6 +533,7 @@ describe('conversation session application API', () => {
       false,
       // The adapter never opts into resumed-session summaries, so no note is added.
       {},
+      true,
     );
     expect(result).toEqual({
       kind: 'workflow_execution_requested',
@@ -604,6 +606,7 @@ describe('conversation session application API', () => {
       false,
       // The adapter never opts into resumed-session summaries, so no note is added.
       {},
+      true,
     );
     expect(mockCallAIWithRetry).toHaveBeenCalledWith(
       'summary prompt',
@@ -809,6 +812,7 @@ describe('conversation session application API', () => {
       false,
       // The adapter never opts into resumed-session summaries, so no note is added.
       {},
+      true,
     );
   });
 
@@ -833,7 +837,7 @@ describe('conversation session application API', () => {
       code: 'no_conversation',
       message: 'No conversation to summarize',
     });
-    expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith([], '', 'en', 'summary context', false, {});
+    expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith([], '', 'en', 'summary context', false, {}, true);
     expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1);
   });
 
@@ -854,6 +858,7 @@ describe('conversation session application API', () => {
 
     expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith(
       [], '', 'en', undefined, false, { resumedSessionNote: expect.any(String) },
+      true,
     );
   });
 
@@ -879,6 +884,7 @@ describe('conversation session application API', () => {
       undefined,
       false,
       {},
+      true,
     );
   });
 
@@ -906,6 +912,7 @@ describe('conversation session application API', () => {
       undefined,
       false,
       { workflowContext, sourceContext: 'Issue #12 body' },
+      true,
     );
   });
 });

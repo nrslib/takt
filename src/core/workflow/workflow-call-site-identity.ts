@@ -32,20 +32,38 @@ export function buildWorkflowCallSiteIdentity(input: {
   if (currentFrame === undefined || currentFrame.kind !== 'workflow_call') {
     throw new Error('Canonical workflow call-site identity requires an active workflow_call frame');
   }
+  return {
+    runPathSegment: buildWorkflowCallSiteRunPathSegment({
+      stack: input.stack,
+      childWorkflowName: input.childWorkflow.name,
+      childWorkflowRef: getWorkflowReference(input.childWorkflow),
+    }),
+  };
+}
+
+/**
+ * Build the persisted report namespace from already-serialized workflow data.
+ * Web UI readers use this same implementation because they only have the
+ * stack and child workflow identity from session logs, not a live config.
+ */
+export function buildWorkflowCallSiteRunPathSegment(input: {
+  readonly stack: readonly WorkflowResumePointEntry[];
+  readonly childWorkflowName: string;
+  readonly childWorkflowRef: string;
+}): string {
+  const currentFrame = input.stack.at(-1);
+  if (currentFrame === undefined || currentFrame.kind !== 'workflow_call') {
+    throw new Error('Canonical workflow call-site identity requires an active workflow_call frame');
+  }
   const canonicalJson = JSON.stringify({
     stack: input.stack.map(frameIdentity),
-    childWorkflow: getWorkflowReference(input.childWorkflow),
+    childWorkflow: input.childWorkflowRef,
   });
   const digest = createHash('sha256').update(canonicalJson).digest('hex');
   const readableRunPathPrefix = buildWorkflowCallNamespaceSegment(
     currentFrame.step,
-    input.childWorkflow.name,
+    input.childWorkflowName,
     currentFrame.occurrence,
   ).slice(0, MAX_READABLE_RUN_PATH_PREFIX_LENGTH);
-  return {
-    runPathSegment: [
-      readableRunPathPrefix,
-      digest,
-    ].join('--site-'),
-  };
+  return [readableRunPathPrefix, digest].join('--site-');
 }

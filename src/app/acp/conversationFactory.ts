@@ -4,13 +4,20 @@ import {
 } from '../../features/interactive/conversationSession.js';
 import { createAssistantConversationPlan } from '../../features/interactive/conversationPlan.js';
 import type { AcpConversationSessionOptions } from './types.js';
-import { resolveFormalSpecModeWithoutPrompt } from '../../features/interactive/taskInstructionFormat.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from '../../features/interactive/taskInstructionFormat.js';
 
 export function createDefaultConversationSession(options: AcpConversationSessionOptions): ConversationSession {
-  const formalSpec = resolveFormalSpecModeWithoutPrompt(options.cwd);
+  const formalSpecConfiguration = resolveFormalSpecConfigurationWithoutPrompt(options.cwd);
   const { ctx, strategy } = createAssistantConversationPlan(options.cwd, {
     assistantMode: 'assistant',
-    formalSpec,
+    formalSpec: formalSpecConfiguration.mode,
+    formalSpecComments: formalSpecConfiguration.comments,
   });
-  return createConversationSession({ ...options, formalSpec, ctx, strategy });
+  return createConversationSession({
+    ...options,
+    formalSpec: formalSpecConfiguration.mode,
+    formalSpecComments: formalSpecConfiguration.comments,
+    ctx,
+    strategy,
+  });
 }

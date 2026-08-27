@@ -271,6 +271,7 @@ steps:
 | `takt add` | 通过 AI 对话完善任务并加入队列，也可从 GitHub Issue 创建 |
 | `takt run` | 执行所有待处理任务 |
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
+| `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
 | `takt list` | 管理任务分支：合并、重试、重新排队、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
 | `takt eject` | 复制 builtin workflow/facet 以便定制 |

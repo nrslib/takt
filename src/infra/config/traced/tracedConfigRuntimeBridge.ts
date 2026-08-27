@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import type { SchemaShape, TracedValue } from 'traced-config';
 import { ensureCurrentTmpDirExists } from '../../../shared/utils/index.js';
+import { buildChildProcessEnv } from '../../../shared/utils/child-process-env.js';
 
 type SerializedSchemaFormat = 'string' | 'number' | 'boolean' | 'json' | undefined;
 
@@ -41,7 +42,7 @@ function executeRuntimeLoader(input: RuntimeLoadInput): string {
     ['--input-type=module', '-e', TRACED_CONFIG_RUNTIME_SCRIPT],
     {
       cwd: TAKT_PACKAGE_ROOT,
-      env: process.env,
+      env: buildChildProcessEnv(),
       input: JSON.stringify(input),
       encoding: 'utf-8',
     },

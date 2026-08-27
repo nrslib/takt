@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { isRuntimePreparePreset, type WorkflowRuntimeConfig, type RuntimePrepareEntry, type RuntimePreparePreset } from '../models/workflow-types.js';
 import { ensurePrivateDirectory } from '../../shared/utils/private-file.js';
+import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 
 export interface RuntimeEnvironmentResult {
   runtimeRoot: string;
@@ -204,7 +205,7 @@ function runPrepareScript(
   const result = spawnSync('bash', [scriptPath], {
     cwd,
     env: {
-      ...process.env,
+      ...buildChildProcessEnv(),
       ...env,
       TAKT_RUNTIME_ROOT: runtimeRoot,
       TAKT_RUNTIME_TMP: runtimeTmp,

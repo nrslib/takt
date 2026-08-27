@@ -144,7 +144,16 @@ export interface TaktProvidersConfig {
   selector?: TaktSelectorProviderConfigEntry;
 }
 
-export type FormalSpecSetting = boolean | 'Y/n' | 'y/N';
+export type FormalSpecMode = boolean | 'Y/n' | 'y/N';
+
+/** Structured formal specification settings. Both fields are independently optional per layer. */
+export interface FormalSpecConfig {
+  mode?: FormalSpecMode;
+  comments?: boolean;
+}
+
+/** Legacy scalar mode or the structured formal specification settings. */
+export type FormalSpecSetting = FormalSpecMode | FormalSpecConfig;
 
 export interface AssistantConfig {
   initFiles?: string[];

@@ -9,7 +9,7 @@ import type { WorkflowCallResolver } from '../types.js';
 import { extractReportReferences } from '../instruction/report-reference.js';
 import { buildWorkflowCallInvocationIdentity } from '../workflow-call-invocation-index.js';
 import { getResumePointWorkflowReference, getWorkflowReference } from '../workflow-reference.js';
-import { buildRunPaths } from './run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory } from './run-paths.js';
 import {
   readResumeReportSnapshotManifest,
   type ResumeReportSnapshotConsumerEntry,
@@ -18,6 +18,7 @@ import { buildResumeReportConsumerKeyFromStack } from './resume-report-consumer.
 
 interface BuildResumeReportSnapshotConsumerOptions {
   readonly cwd: string;
+  readonly runsDirectory?: string;
   readonly projectCwd: string;
   readonly sourceRunSlug: string;
   readonly workflow: WorkflowConfig;
@@ -124,14 +125,16 @@ export function buildResumeReportSnapshotConsumerEntry(
   if (consumerKey === undefined || location === undefined) {
     return undefined;
   }
-  const inheritedConsumer = readResumeReportSnapshotManifest(options.cwd, options.sourceRunSlug)
+  const inheritedConsumer = readResumeReportSnapshotManifest(options.cwd, options.sourceRunSlug, options.runsDirectory)
     ?.resumeReportConsumers
     ?.find((consumer) => consumer.consumerKey === consumerKey);
   const reportDirectories = [...new Set([
     location.reportDirectory,
     ...(inheritedConsumer?.reportDirectories ?? []),
   ])];
-  const reportsRoot = buildRunPaths(options.cwd, options.sourceRunSlug).reportsRootAbs;
+  const reportsRoot = (options.runsDirectory === undefined
+    ? buildRunPaths(options.cwd, options.sourceRunSlug)
+    : buildRunPathsFromRunsDirectory(options.runsDirectory, options.sourceRunSlug)).reportsRootAbs;
   const references = [...new Set(extractReportReferences(location.activeStep.instruction)
     .map((reference) => reference.trim()))]
     .flatMap((reference) => {
