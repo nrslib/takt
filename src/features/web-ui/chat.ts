@@ -12,7 +12,7 @@ import {
   type ConversationSessionResult,
 } from '../interactive/conversationSession.js';
 import type { WorkflowContext } from '../interactive/interactive-summary-types.js';
-import { resolveFormalSpecModeWithoutPrompt } from '../interactive/taskInstructionFormat.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/taskInstructionFormat.js';
 import {
   createInstructConversationPlan,
   createRetryConversationPlan,
@@ -244,11 +244,12 @@ function createPlan(
     };
   }
 
-  const formalSpec = resolveFormalSpecModeWithoutPrompt(projectDirectory);
+  const formalSpecConfiguration = resolveFormalSpecConfigurationWithoutPrompt(projectDirectory);
   return {
     plan: createAssistantConversationPlan(projectDirectory, {
       assistantMode: request.mode === 'grill-me' ? 'grill-me' : 'assistant',
-      formalSpec,
+      formalSpec: formalSpecConfiguration.mode,
+      formalSpecComments: formalSpecConfiguration.comments,
       workflowContext,
     }),
     workflowContext,

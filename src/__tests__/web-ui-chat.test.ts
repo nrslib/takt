@@ -7,14 +7,14 @@ const {
   mockCreateInstructConversationPlan,
   mockCreateRetryConversationPlan,
   mockGetWorkflowDescription,
-  mockResolveFormalSpecModeWithoutPrompt,
+  mockResolveFormalSpecConfigurationWithoutPrompt,
 } = vi.hoisted(() => ({
   mockCreateAssistantConversationPlan: vi.fn(),
   mockCreateConversationSession: vi.fn(),
   mockCreateInstructConversationPlan: vi.fn(),
   mockCreateRetryConversationPlan: vi.fn(),
   mockGetWorkflowDescription: vi.fn(),
-  mockResolveFormalSpecModeWithoutPrompt: vi.fn(),
+  mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
@@ -35,8 +35,8 @@ vi.mock('../features/interactive/conversationSession.js', async (importOriginal)
 
 vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/interactive/taskInstructionFormat.js')>()),
-  resolveFormalSpecModeWithoutPrompt: (...args: unknown[]) =>
-    mockResolveFormalSpecModeWithoutPrompt(...args),
+  resolveFormalSpecConfigurationWithoutPrompt: (...args: unknown[]) =>
+    mockResolveFormalSpecConfigurationWithoutPrompt(...args),
 }));
 
 vi.mock('../features/interactive/taskActionConversationPlan.js', () => ({
@@ -65,6 +65,7 @@ function createPlan(workflow: string, model: string | null = `model-${workflow}`
       systemPrompt: `${workflow} system`,
       allowedTools: [],
       formalSpec: false,
+      formalSpecComments: true,
       transformPrompt: (message: string) => message,
     },
   };
@@ -94,7 +95,7 @@ beforeEach(() => {
     workflowStructure: '1. discuss',
     stepPreviews: [],
   }));
-  mockResolveFormalSpecModeWithoutPrompt.mockReturnValue(false);
+  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
   mockCreateAssistantConversationPlan.mockImplementation((
     _cwd: string,
     options: { workflowContext: { name: string } },
