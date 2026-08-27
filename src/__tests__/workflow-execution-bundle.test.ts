@@ -10,6 +10,11 @@ import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 import {
   loadWorkflowExecutionBundle,
+  loadWorkflowExecutionBundleMetadata,
+  MAX_WORKFLOW_BUNDLE_MANIFEST_BYTES,
+  MAX_WORKFLOW_BUNDLE_OBJECT_BYTES,
+  MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES,
+  MAX_WORKFLOW_BUNDLE_RESOURCES_BYTES,
   prepareWorkflowExecutionBundle,
   publishWorkflowExecutionBundle,
 } from '../features/tasks/execute/workflowExecutionBundle.js';
@@ -449,6 +454,143 @@ steps:
     const objectFile = join(paths.workflowBundleObjectsAbs, `${objectHash}.json`);
     writeFileSync(objectFile, readFileSync(objectFile, 'utf-8').replace('"name":"root"', '"name":"evil"'));
     expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/integrity|hash/i);
+    expect(() => loadWorkflowExecutionBundleMetadata(paths)).toThrow(/integrity|hash/i);
+  });
+
+  it('validates UI bundle metadata without reading resource contents', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-metadata-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'work',
+      kind: 'agent',
+      persona: 'prompt',
+      personaDisplayName: 'work',
+      instruction: '{task}',
+    }]);
+    const paths = buildRunPaths(root, 'metadata-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+
+    const manifest = JSON.parse(readFileSync(paths.workflowBundleManifestAbs, 'utf-8')) as {
+      resources: Record<string, { size: number }>;
+    };
+    const [resourceHash, descriptor] = Object.entries(manifest.resources)[0]!;
+    const resourcePath = join(paths.workflowBundleResourcesAbs, resourceHash);
+    writeFileSync(resourcePath, Buffer.alloc(descriptor.size, 0x78));
+
+    expect(loadWorkflowExecutionBundleMetadata(paths).rootWorkflow.name).toBe('root');
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/integrity|hash/i);
+  });
+
+  it('bounds persisted manifest and object reads before JSON parsing', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-size-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'work', kind: 'agent', persona: 'prompt', personaDisplayName: 'work', instruction: '{task}',
+    }]);
+    const paths = buildRunPaths(root, 'size-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+    writeFileSync(paths.workflowBundleManifestAbs, 'x'.repeat(MAX_WORKFLOW_BUNDLE_MANIFEST_BYTES + 1));
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/limit/);
+
+    const secondRoot = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-object-size-'));
+    roots.push(secondRoot);
+    const secondPaths = buildRunPaths(secondRoot, 'object-size-run');
+    publishWorkflowExecutionBundle(secondPaths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: secondRoot,
+      lookupCwd: secondRoot,
+    }));
+    const manifest = JSON.parse(readFileSync(secondPaths.workflowBundleManifestAbs, 'utf-8')) as {
+      nodes: Record<string, string>;
+    };
+    const objectHash = Object.values(manifest.nodes)[0]!;
+    writeFileSync(
+      join(secondPaths.workflowBundleObjectsAbs, `${objectHash}.json`),
+      'x'.repeat(MAX_WORKFLOW_BUNDLE_OBJECT_BYTES + 1),
+    );
+    expect(() => loadWorkflowExecutionBundle(secondPaths)).toThrow(/limit/);
+  });
+
+  it('bounds resource descriptors before a full loader reads their bytes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-resource-size-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'work',
+      kind: 'agent',
+      persona: 'prompt',
+      personaDisplayName: 'work',
+      instruction: '{task}',
+    }]);
+    const paths = buildRunPaths(root, 'resource-size-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+    const manifest = JSON.parse(readFileSync(paths.workflowBundleManifestAbs, 'utf-8')) as {
+      resources: Record<string, { kind: string; size: number }>;
+    };
+    const [resourceHash, descriptor] = Object.entries(manifest.resources)[0]!;
+    descriptor.size = MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES + 1;
+    const manifestText = canonicalJson(manifest);
+    writeFileSync(paths.workflowBundleManifestAbs, `${manifestText}\n`);
+    writeFileSync(
+      paths.workflowBundleManifestHashAbs,
+      `${createHash('sha256').update(manifestText).digest('hex')}\n`,
+    );
+    expect(() => loadWorkflowExecutionBundleMetadata(paths)).toThrow(/limit/);
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/limit/);
+    expect(resourceHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(MAX_WORKFLOW_BUNDLE_RESOURCES_BYTES).toBeGreaterThan(MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES);
+  });
+
+  it('rejects an oversized resource from its actual file size before reading it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-resource-actual-size-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'work',
+      kind: 'agent',
+      persona: 'prompt',
+      personaDisplayName: 'work',
+      instruction: '{task}',
+    }]);
+    const paths = buildRunPaths(root, 'resource-actual-size-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+    const manifest = JSON.parse(readFileSync(paths.workflowBundleManifestAbs, 'utf-8')) as {
+      resources: Record<string, { kind: string; size: number }>;
+    };
+    const [resourceHash, descriptor] = Object.entries(manifest.resources)[0]!;
+    descriptor.size = 0;
+    const resourcePath = join(paths.workflowBundleResourcesAbs, resourceHash);
+    // The forged zero descriptor must not make the loader allocate/read this
+    // file before enforcing the actual per-resource bound.
+    writeFileSync(resourcePath, Buffer.alloc(MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES + 1));
+    const manifestText = canonicalJson(manifest);
+    writeFileSync(paths.workflowBundleManifestAbs, `${manifestText}\n`);
+    writeFileSync(
+      paths.workflowBundleManifestHashAbs,
+      `${createHash('sha256').update(manifestText).digest('hex')}\n`,
+    );
+
+    expect(() => loadWorkflowExecutionBundleMetadata(paths)).toThrow(/limit|size/i);
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/limit|size/i);
   });
 
   it('rebinds a team leader part persona to the verified bundle resource', () => {

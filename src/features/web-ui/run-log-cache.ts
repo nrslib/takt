@@ -11,6 +11,11 @@ const MAX_HISTORY_EVENTS = 10_000;
 const MAX_GRAPH_OCCURRENCES = 10_000;
 const MAX_RECORD_BYTES = 1 * 1024 * 1024;
 const MAX_PREVIEW_CHARS = 2_000;
+export const MAX_PROMPT_LINE_OWNERSHIP_ENTRIES = 10_000;
+export const MAX_AMBIGUOUS_PROMPT_LINE_OWNERSHIP_ENTRIES = 1_000;
+export const MAX_OCCURRENCE_PROMPT_COUNT = 64;
+export const MAX_OCCURRENCE_PROMPT_BODY_BYTES = 2 * 1024 * 1024;
+const PROMPT_OWNERSHIP_SCHEMA_VERSION = 1;
 const READ_CHUNK_BYTES = 64 * 1024;
 const FINGERPRINT_BYTES = 4 * 1024;
 const NOFOLLOW = (constants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
@@ -24,6 +29,13 @@ const LIFECYCLE_EVENT_TYPES = new Set([
 ]);
 const OCCURRENCE_START_EVENT_TYPES = new Set(['step_start', 'workflow_call_start']);
 const OCCURRENCE_TERMINAL_EVENT_TYPES = new Set(['step_complete', 'workflow_call_complete']);
+
+export interface RunJudgeStage {
+  readonly stage: number;
+  readonly method: string;
+  readonly status: string;
+  readonly response: string;
+}
 
 export interface RunLogEvent {
   readonly type: string;
@@ -39,6 +51,19 @@ export interface RunLogEvent {
   readonly callInstance?: string;
   readonly stack?: readonly NdjsonWorkflowStackEntry[];
   readonly status?: string;
+  readonly provider?: string;
+  readonly providerSource?: string;
+  readonly model?: string;
+  readonly modelSource?: string;
+  readonly matchedRuleIndex?: number;
+  readonly matchedRuleMethod?: string;
+  readonly matchMethod?: string;
+  readonly returnValue?: string;
+  readonly stage?: number;
+  readonly method?: string;
+  readonly response?: string;
+  readonly judgeStage?: RunJudgeStage;
+  readonly judgeStages?: readonly RunJudgeStage[];
   readonly content?: string;
   readonly error?: string;
   readonly reason?: string;
@@ -84,6 +109,12 @@ export interface RunPromptArtifact {
   readonly instruction?: string;
 }
 
+export interface RunPromptReadResult {
+  readonly prompts: readonly RunPromptArtifact[];
+  readonly promptsTruncated: boolean;
+  readonly omittedPromptCount: number;
+}
+
 export type RunLogArtifactsDiagnostics = RunLogArtifacts & {
   readonly scan: RunLogScanStats;
 };
@@ -104,9 +135,20 @@ interface GraphRecord {
 }
 
 export interface RunOccurrenceLifecycle {
+  readonly occurrenceId: string;
   readonly path: string;
   readonly startLine: number;
   readonly endLine?: number;
+  /**
+   * Line-level ownership assigned while the source log is indexed. An absent
+   * entry is not considered safe for a prompt read because it may have been
+   * evicted or may belong to a legacy/incomplete cache.
+   */
+  readonly promptLineOwnership: ReadonlyMap<number, string>;
+  /** Ambiguous phase lines are retained in a separate bounded index. */
+  readonly ambiguousPromptLines: ReadonlyMap<number, true>;
+  readonly promptOwnershipSchemaVersion: number;
+  readonly promptOwnershipComplete: boolean;
   /**
    * A second lifecycle boundary reused this identity before the first one
    * closed.  The source range is no longer trustworthy, so prompt reads must
@@ -137,6 +179,11 @@ interface SessionLogState {
   graph: Map<string, GraphRecord>;
   occurrenceLifecycles: Map<string, RunOccurrenceLifecycle>;
   activeGraphOccurrences: Map<string, string>;
+  promptLineOwnership: Map<number, string>;
+  promptLineOwnershipByOccurrence: Map<string, Set<number>>;
+  ambiguousPromptLines: Map<number, true>;
+  promptOwnershipSchemaVersion: number;
+  promptOwnershipComplete: boolean;
   warnings: string[];
   historyDropped: number;
   graphTotalOccurrences: number;
@@ -215,10 +262,42 @@ function parseLogEvent(value: unknown): RunLogEvent | null {
         : undefined,
     stack: optionalWorkflowStack(raw.stack),
     status: typeof raw.status === 'string' ? raw.status : undefined,
+    provider: typeof raw.provider === 'string' ? raw.provider : undefined,
+    providerSource: typeof raw.providerSource === 'string' ? raw.providerSource : undefined,
+    model: typeof raw.model === 'string' ? raw.model : undefined,
+    modelSource: typeof raw.modelSource === 'string' ? raw.modelSource : undefined,
+    matchedRuleIndex: typeof raw.matchedRuleIndex === 'number'
+      && Number.isSafeInteger(raw.matchedRuleIndex)
+      && raw.matchedRuleIndex >= 0
+      ? raw.matchedRuleIndex
+      : undefined,
+    matchedRuleMethod: typeof raw.matchedRuleMethod === 'string' ? raw.matchedRuleMethod : undefined,
+    matchMethod: typeof raw.matchMethod === 'string' ? raw.matchMethod : undefined,
+    returnValue: typeof raw.returnValue === 'string' ? raw.returnValue.slice(0, 8_000) : undefined,
+    stage: typeof raw.stage === 'number' && Number.isSafeInteger(raw.stage) && raw.stage >= 1
+      ? raw.stage
+      : undefined,
+    method: typeof raw.method === 'string' ? raw.method : undefined,
+    response: typeof raw.response === 'string' ? raw.response.slice(0, 8_000) : undefined,
     content: typeof raw.content === 'string' ? raw.content.slice(0, 8_000) : undefined,
     error: typeof raw.error === 'string' ? raw.error.slice(0, 8_000) : undefined,
     reason: typeof raw.reason === 'string' ? raw.reason.slice(0, 8_000) : undefined,
   };
+  if (event.type === 'phase_judge_stage'
+    && event.stage !== undefined
+    && event.method !== undefined
+    && event.status !== undefined
+    && event.response !== undefined) {
+    return {
+      ...event,
+      judgeStage: {
+        stage: event.stage,
+        method: event.method,
+        status: event.status,
+        response: event.response,
+      },
+    };
+  }
   return event;
 }
 
@@ -263,6 +342,19 @@ function toHistoryEvent(event: RunLogEvent): RunLogEvent {
     ...(event.callInstance === undefined ? {} : { callInstance: event.callInstance }),
     ...(event.stack === undefined ? {} : { stack: event.stack }),
     ...(event.status === undefined ? {} : { status: event.status }),
+    ...(event.provider === undefined ? {} : { provider: event.provider }),
+    ...(event.providerSource === undefined ? {} : { providerSource: event.providerSource }),
+    ...(event.model === undefined ? {} : { model: event.model }),
+    ...(event.modelSource === undefined ? {} : { modelSource: event.modelSource }),
+    ...(event.matchedRuleIndex === undefined ? {} : { matchedRuleIndex: event.matchedRuleIndex }),
+    ...(event.matchedRuleMethod === undefined ? {} : { matchedRuleMethod: event.matchedRuleMethod }),
+    ...(event.matchMethod === undefined ? {} : { matchMethod: event.matchMethod }),
+    ...(event.returnValue === undefined ? {} : { returnValue: event.returnValue }),
+    ...(event.stage === undefined ? {} : { stage: event.stage }),
+    ...(event.method === undefined ? {} : { method: event.method }),
+    ...(event.response === undefined ? {} : { response: event.response }),
+    ...(event.judgeStage === undefined ? {} : { judgeStage: event.judgeStage }),
+    ...(event.judgeStages === undefined ? {} : { judgeStages: event.judgeStages }),
     ...(event.occurrenceId === undefined ? {} : { occurrenceId: event.occurrenceId }),
     ...previewForEvent(event),
   };
@@ -343,6 +435,11 @@ function createState(path: string, identity: FileIdentity, size: number, modifie
     graph: new Map(),
     occurrenceLifecycles: new Map(),
     activeGraphOccurrences: new Map(),
+    promptOwnershipSchemaVersion: PROMPT_OWNERSHIP_SCHEMA_VERSION,
+    promptOwnershipComplete: false,
+    promptLineOwnership: new Map(),
+    promptLineOwnershipByOccurrence: new Map(),
+    ambiguousPromptLines: new Map(),
     warnings: [],
     historyDropped: 0,
     graphTotalOccurrences: 0,
@@ -375,6 +472,7 @@ function evictOldestGraphRecord(state: SessionLogState): void {
     selected === undefined || candidate[1].order < selected[1].order ? candidate : selected
   ), undefined as [string, GraphRecord] | undefined);
   if (oldest !== undefined) {
+    removePromptOwnershipForOccurrence(state, oldest[0]);
     state.graph.delete(oldest[0]);
     state.occurrenceLifecycles.delete(oldest[0]);
   }
@@ -395,6 +493,68 @@ function activeOccurrenceCandidates(
     candidates.push([baseKey, key]);
   }
   return candidates;
+}
+
+function removePromptOwnershipForOccurrence(state: SessionLogState, occurrenceId: string): void {
+  const lines = state.promptLineOwnershipByOccurrence.get(occurrenceId);
+  if (lines === undefined) return;
+  for (const line of lines) {
+    if (state.promptLineOwnership.get(line) === occurrenceId) {
+      state.promptLineOwnership.delete(line);
+    }
+  }
+  state.promptLineOwnershipByOccurrence.delete(occurrenceId);
+}
+
+function evictOldestPromptOwnership(state: SessionLogState): void {
+  const oldest = state.promptLineOwnership.keys().next().value;
+  if (typeof oldest !== 'number') return;
+  const occurrenceId = state.promptLineOwnership.get(oldest);
+  state.promptLineOwnership.delete(oldest);
+  if (occurrenceId === undefined) return;
+  const lines = state.promptLineOwnershipByOccurrence.get(occurrenceId);
+  if (lines === undefined) return;
+  lines.delete(oldest);
+  if (lines.size === 0) state.promptLineOwnershipByOccurrence.delete(occurrenceId);
+}
+
+function recordPromptOwnership(
+  state: SessionLogState,
+  line: number,
+  occurrenceId: string,
+): void {
+  state.ambiguousPromptLines.delete(line);
+  const previousOccurrenceId = state.promptLineOwnership.get(line);
+  if (previousOccurrenceId !== undefined) {
+    state.promptLineOwnership.delete(line);
+    const previousLines = state.promptLineOwnershipByOccurrence.get(previousOccurrenceId);
+    previousLines?.delete(line);
+    if (previousLines?.size === 0) state.promptLineOwnershipByOccurrence.delete(previousOccurrenceId);
+  }
+  while (state.promptLineOwnership.size >= MAX_PROMPT_LINE_OWNERSHIP_ENTRIES) {
+    evictOldestPromptOwnership(state);
+  }
+  state.promptLineOwnership.set(line, occurrenceId);
+  const lines = state.promptLineOwnershipByOccurrence.get(occurrenceId) ?? new Set<number>();
+  lines.add(line);
+  state.promptLineOwnershipByOccurrence.set(occurrenceId, lines);
+}
+
+function recordAmbiguousPromptLine(state: SessionLogState, line: number): void {
+  const previousOccurrenceId = state.promptLineOwnership.get(line);
+  state.promptLineOwnership.delete(line);
+  if (previousOccurrenceId !== undefined) {
+    const previousLines = state.promptLineOwnershipByOccurrence.get(previousOccurrenceId);
+    previousLines?.delete(line);
+    if (previousLines?.size === 0) state.promptLineOwnershipByOccurrence.delete(previousOccurrenceId);
+  }
+  while (state.ambiguousPromptLines.size >= MAX_AMBIGUOUS_PROMPT_LINE_OWNERSHIP_ENTRIES) {
+    const oldest = state.ambiguousPromptLines.keys().next().value;
+    if (typeof oldest !== 'number') break;
+    state.ambiguousPromptLines.delete(oldest);
+  }
+  state.ambiguousPromptLines.delete(line);
+  state.ambiguousPromptLines.set(line, true);
 }
 
 function markLifecycleAmbiguous(state: SessionLogState, occurrenceId: string): void {
@@ -453,8 +613,13 @@ function updateGraph(
     if (state.graph.size >= MAX_GRAPH_OCCURRENCES) evictOldestGraphRecord(state);
     state.graphTotalOccurrences += 1;
     state.occurrenceLifecycles.set(key, {
+      occurrenceId: key,
       path: state.path,
       startLine: line,
+      promptLineOwnership: state.promptLineOwnership,
+      ambiguousPromptLines: state.ambiguousPromptLines,
+      promptOwnershipSchemaVersion: state.promptOwnershipSchemaVersion,
+      promptOwnershipComplete: state.promptOwnershipComplete,
     });
   }
   state.graph.set(key, {
@@ -477,6 +642,30 @@ function updateGraph(
   return key;
 }
 
+function attachJudgeStageToGraph(
+  state: SessionLogState,
+  event: RunLogEvent,
+): string | undefined {
+  const stage = event.judgeStage;
+  if (stage === undefined) return undefined;
+  const candidates = activeOccurrenceCandidates(state, event);
+  if (candidates.length !== 1) return undefined;
+  const [, occurrenceId] = candidates[0]!;
+  const previous = state.graph.get(occurrenceId);
+  if (previous === undefined) return undefined;
+  const judgeStages = previous.event.judgeStages === undefined
+    ? [stage]
+    : [...previous.event.judgeStages, stage];
+  state.graph.set(occurrenceId, {
+    ...previous,
+    event: {
+      ...previous.event,
+      judgeStages,
+    },
+  });
+  return occurrenceId;
+}
+
 function acceptEvent(
   state: SessionLogState,
   cache: RunLogCache,
@@ -487,11 +676,25 @@ function acceptEvent(
   cache.nextOrder += 1;
   if (LIFECYCLE_EVENT_TYPES.has(event.type)) {
     const occurrenceId = updateGraph(state, event, order, line);
+    if (event.type === 'phase_start') {
+      // The graph resolver is deliberately the sole authority for phase
+      // ownership. In particular, an omitted optional scope that matches
+      // several active lifecycles is recorded as ambiguous rather than being
+      // re-matched later by broad field-by-field prompt filtering.
+      if (occurrenceId === undefined) recordAmbiguousPromptLine(state, line);
+      else recordPromptOwnership(state, line, occurrenceId);
+    }
     const annotatedEvent = occurrenceId === undefined ? event : { ...event, occurrenceId };
     appendBounded(state.events, { event: annotatedEvent, order }, MAX_LOG_EVENTS);
     if (appendBounded(state.history, { event: toHistoryEvent(annotatedEvent), order }, MAX_HISTORY_EVENTS)) {
       state.historyDropped += 1;
     }
+    return;
+  }
+  if (event.type === 'phase_judge_stage') {
+    const occurrenceId = attachJudgeStageToGraph(state, event);
+    const annotatedEvent = occurrenceId === undefined ? event : { ...event, occurrenceId };
+    appendBounded(state.events, { event: annotatedEvent, order }, MAX_LOG_EVENTS);
     return;
   }
   appendBounded(state.events, { event, order }, MAX_LOG_EVENTS);
@@ -559,6 +762,28 @@ function resetState(state: SessionLogState, identity: FileIdentity, size: number
   state.error = undefined;
 }
 
+function setPromptOwnershipComplete(state: SessionLogState, complete: boolean): void {
+  state.promptOwnershipComplete = complete;
+  for (const [occurrenceId, lifecycle] of state.occurrenceLifecycles) {
+    if (lifecycle.promptOwnershipComplete === complete) continue;
+    state.occurrenceLifecycles.set(occurrenceId, { ...lifecycle, promptOwnershipComplete: complete });
+  }
+}
+
+function hasCurrentPromptOwnershipSchema(state: SessionLogState): boolean {
+  if (state.promptOwnershipSchemaVersion !== PROMPT_OWNERSHIP_SCHEMA_VERSION
+    || typeof state.promptOwnershipComplete !== 'boolean'
+    || !(state.promptLineOwnership instanceof Map)
+    || !(state.promptLineOwnershipByOccurrence instanceof Map)
+    || !(state.ambiguousPromptLines instanceof Map)) return false;
+  return [...state.occurrenceLifecycles.values()].every((lifecycle) => (
+    lifecycle.promptOwnershipSchemaVersion === PROMPT_OWNERSHIP_SCHEMA_VERSION
+    && typeof lifecycle.promptOwnershipComplete === 'boolean'
+    && lifecycle.promptLineOwnership instanceof Map
+    && lifecycle.ambiguousPromptLines instanceof Map
+  ));
+}
+
 function appendFingerprint(state: SessionLogState, bytes: Buffer): void {
   const prefix = state.fingerprint.prefix.length >= FINGERPRINT_BYTES
     ? state.fingerprint.prefix
@@ -618,6 +843,7 @@ async function scanFile(
     const stats = await handle.stat();
     const identity = { dev: stats.dev, ino: stats.ino };
     let state = cache.files.get(path);
+    const legacyOwnershipSchema = state !== undefined && !hasCurrentPromptOwnershipSchema(state);
     const identityChanged = state !== undefined && (
       state.identity.dev !== identity.dev
       || state.identity.ino !== identity.ino
@@ -625,7 +851,7 @@ async function scanFile(
     if (state === undefined) {
       state = createState(path, identity, stats.size, stats.mtimeMs);
       cache.files.set(path, state);
-    } else if (identityChanged || stats.size < state.offset) {
+    } else if (legacyOwnershipSchema || identityChanged || stats.size < state.offset) {
       resetState(state, identity, stats.size, stats.mtimeMs);
     } else if (stats.size !== state.size || stats.mtimeMs !== state.modifiedAt) {
       // A same-inode rewrite can grow beyond the old offset. Verify a bounded
@@ -635,10 +861,12 @@ async function scanFile(
         resetState(state, identity, stats.size, stats.mtimeMs);
       }
     }
+    setPromptOwnershipComplete(state, false);
     if (state.error !== undefined) throw state.error;
     if (stats.size <= state.offset) {
       state.size = stats.size;
       state.modifiedAt = stats.mtimeMs;
+      setPromptOwnershipComplete(state, true);
       return { bytesRead: 0, reusedBytes: stats.size };
     }
 
@@ -658,6 +886,7 @@ async function scanFile(
     state.size = state.offset;
     state.modifiedAt = stats.mtimeMs;
     await verifySnapshot();
+    setPromptOwnershipComplete(state, true);
     return { bytesRead, reusedBytes: Math.max(0, stats.size - bytesRead) };
   } finally {
     await handle.close();
@@ -701,7 +930,8 @@ export function getRunOccurrenceLifecycle(
     const candidate = state.occurrenceLifecycles.get(occurrenceId);
     if (candidate === undefined) continue;
     if (found !== undefined && (
-      found.path !== candidate.path
+      found.occurrenceId !== candidate.occurrenceId
+      || found.path !== candidate.path
       || found.startLine !== candidate.startLine
       || found.endLine !== candidate.endLine
       || found.ambiguous !== candidate.ambiguous
@@ -844,11 +1074,38 @@ function promptBelongsToOccurrence(
       || workflowStacksMatch(event.stack, occurrence.stack));
 }
 
+interface PromptReadAccumulator {
+  readonly prompts: RunPromptArtifact[];
+  bodyBytes: number;
+  omittedPromptCount: number;
+}
+
+function promptBodyBytes(prompt: RunPromptArtifact): number {
+  return [prompt.systemPrompt, prompt.userInstruction, prompt.instruction]
+    .filter((value): value is string => value !== undefined)
+    .reduce((total, value) => total + Buffer.byteLength(value, 'utf8'), 0);
+}
+
+function appendBoundedPrompt(accumulator: PromptReadAccumulator, prompt: RunPromptArtifact): void {
+  const bodyBytes = promptBodyBytes(prompt);
+  const exceedsCount = accumulator.prompts.length >= MAX_OCCURRENCE_PROMPT_COUNT;
+  const exceedsBytes = bodyBytes > MAX_OCCURRENCE_PROMPT_BODY_BYTES - accumulator.bodyBytes;
+  if (exceedsCount || exceedsBytes) {
+    accumulator.omittedPromptCount = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      accumulator.omittedPromptCount + 1,
+    );
+    return;
+  }
+  accumulator.prompts.push(prompt);
+  accumulator.bodyBytes += bodyBytes;
+}
+
 async function readPromptLogFile(
   path: string,
   occurrence: Pick<RunLogEvent, 'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack'>,
   verifySnapshot: () => Promise<void>,
-  prompts: RunPromptArtifact[],
+  accumulator: PromptReadAccumulator,
   lifecycle: RunOccurrenceLifecycle,
 ): Promise<void> {
   await verifySnapshot();
@@ -878,8 +1135,18 @@ async function readPromptLogFile(
         throw error;
       }
       const parsed = parsePromptArtifact(value);
+      if (parsed?.event.type === 'phase_start') {
+        const owner = lifecycle.promptLineOwnership?.get(currentLine);
+        if (owner !== lifecycle.occurrenceId
+          || lifecycle.ambiguousPromptLines?.has(currentLine) === true) {
+          // Do not use wildcard identity matching for a phase line whose
+          // ownership was ambiguous during the scan. A later reader cannot
+          // safely recover which lifecycle emitted that line.
+          return;
+        }
+      }
       if (parsed?.prompt !== undefined && promptBelongsToOccurrence(parsed.event, occurrence)) {
-        prompts.push(parsed.prompt);
+        appendBoundedPrompt(accumulator, parsed.prompt);
       }
     };
 
@@ -935,7 +1202,7 @@ export async function readRunOccurrencePrompts(
   occurrence: Pick<RunLogEvent, 'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack'>,
   verifySnapshot: () => Promise<void>,
   lifecycle?: RunOccurrenceLifecycle,
-): Promise<readonly RunPromptArtifact[]> {
+): Promise<RunPromptReadResult> {
   // Prompt scope is intentionally fail-closed when the occurrence's source
   // and lifecycle boundary are unavailable. Matching values across all logs
   // is not sufficient to distinguish repeated executions.
@@ -943,10 +1210,16 @@ export async function readRunOccurrencePrompts(
     lifecycle === undefined
     || lifecycle.ambiguous === true
     || !paths.includes(lifecycle.path)
-  ) return [];
-  const prompts: RunPromptArtifact[] = [];
-  await readPromptLogFile(lifecycle.path, occurrence, verifySnapshot, prompts, lifecycle);
-  return prompts
+    || lifecycle.promptOwnershipSchemaVersion !== PROMPT_OWNERSHIP_SCHEMA_VERSION
+    || lifecycle.promptOwnershipComplete !== true
+  ) return { prompts: [], promptsTruncated: false, omittedPromptCount: 0 };
+  const accumulator: PromptReadAccumulator = {
+    prompts: [],
+    bodyBytes: 0,
+    omittedPromptCount: 0,
+  };
+  await readPromptLogFile(lifecycle.path, occurrence, verifySnapshot, accumulator, lifecycle);
+  const prompts = accumulator.prompts
     .map((prompt, index) => ({ prompt, index }))
     .sort((left, right) => {
       const timestampOrder = (left.prompt.timestamp ?? '').localeCompare(right.prompt.timestamp ?? '');
@@ -956,6 +1229,11 @@ export async function readRunOccurrencePrompts(
       return phaseOrder || left.index - right.index;
     })
     .map(({ prompt }) => prompt);
+  return {
+    prompts,
+    promptsTruncated: accumulator.omittedPromptCount > 0,
+    omittedPromptCount: accumulator.omittedPromptCount,
+  };
 }
 
 export async function readRunLogArtifacts(

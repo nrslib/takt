@@ -6,6 +6,8 @@ const EVENT_STATUS_MAP = new Map([
   ['blocked', 'failed'],
   ['error', 'failed'],
   ['rate_limited', 'failed'],
+  ['cancelled', 'aborted'],
+  ['canceled', 'aborted'],
   ['aborted', 'aborted'],
 ]);
 const MAX_GRAPH_OCCURRENCES = 10_000;
@@ -76,6 +78,154 @@ function stackPathKey(stack) {
   return normalized === null ? 'root' : JSON.stringify(normalized);
 }
 
+function parallelFrameIndex(stack) {
+  return [...stack].findLastIndex((frame) => frame?.kind === 'parallel');
+}
+
+function workflowCallInvocationIdentity(stack, frameIndex) {
+  const frame = stack[frameIndex];
+  if (frame?.kind !== 'workflow_call') return undefined;
+  if (typeof frame.workflow_ref !== 'string' || frame.workflow_ref.length === 0
+    || typeof frame.step !== 'string' || frame.step.length === 0) return undefined;
+  const calls = [];
+  for (const entry of stack.slice(0, frameIndex)) {
+    const instance = entry.kind === 'workflow_call'
+      ? entry.call_instance ?? entry.occurrence
+      : entry.occurrence;
+    if (!Number.isSafeInteger(instance) || instance < 1
+      || typeof entry.workflow_ref !== 'string' || entry.workflow_ref.length === 0
+      || typeof entry.step !== 'string' || entry.step.length === 0) return undefined;
+    calls.push({
+      workflow: entry.workflow_ref,
+      step: entry.step,
+      kind: entry.kind,
+      instance,
+    });
+  }
+  return JSON.stringify({ workflow: frame.workflow_ref, step: frame.step, calls });
+}
+
+function siteDigestFromNamespace(value) {
+  if (typeof value !== 'string') return undefined;
+  const match = value.match(/--site-([0-9a-f]{64})$/iu);
+  return match?.[1]?.toLowerCase();
+}
+
+function canonicalSiteToken(frame, stack, frameIndex, evidence) {
+  const direct = [
+    frame.workflowCallSiteDigest,
+    frame.callSiteDigest,
+    frame.siteDigest,
+  ].find((candidate) => typeof candidate === 'string' && candidate.length > 0);
+  if (direct !== undefined) return `site:${direct}`;
+  const invocations = evidence?.resumePoint?.workflow_call_invocations;
+  if (invocations === null || typeof invocations !== 'object' || Array.isArray(invocations)) {
+    return undefined;
+  }
+  const identity = workflowCallInvocationIdentity(stack, frameIndex);
+  if (identity === undefined) return undefined;
+  const record = invocations[identity];
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) return undefined;
+  const explicit = [record.workflowCallSiteDigest, record.callSiteDigest, record.siteDigest]
+    .find((candidate) => typeof candidate === 'string' && candidate.length > 0);
+  const digest = explicit ?? siteDigestFromNamespace(record.report_namespace_segment);
+  return digest === undefined ? undefined : `site:${digest}`;
+}
+
+function parallelFamilyFrame(frame, isParallelFrame, stack, frameIndex, evidence) {
+  if (isParallelFrame) {
+    return [frame.workflow, frame.workflow_ref, frame.step, frame.kind];
+  }
+  if (frame.kind === 'workflow_call') {
+    const siteToken = canonicalSiteToken(frame, stack, frameIndex, evidence);
+    // Historical logs do not carry call-site evidence. Preserve their
+    // dynamic-alias grouping, while a verified site token makes same-named
+    // call sites distinct and lets aliases sharing that token remain grouped.
+    return siteToken === undefined
+      ? [frame.workflow, frame.workflow_ref, frame.kind]
+      : [frame.workflow, frame.workflow_ref, frame.kind, siteToken];
+  }
+  return [frame.workflow, frame.workflow_ref, frame.step, frame.kind];
+}
+
+export function parallelGroupFamilyKey(stack, evidence) {
+  if (!Array.isArray(stack) || stack.length === 0) return undefined;
+  const frameIndex = parallelFrameIndex(stack);
+  if (frameIndex < 0) return undefined;
+  return JSON.stringify(stack.slice(0, frameIndex + 1).map((frame, index) => (
+    parallelFamilyFrame(frame, index === frameIndex, stack, index, evidence)
+  )));
+}
+
+function parallelInvocationPathKey(stack, frameIndex) {
+  return JSON.stringify(stack.slice(0, frameIndex + 1).map((frame) => [
+    frame.workflow,
+    frame.workflow_ref,
+    frame.kind,
+    frame.occurrence,
+  ]));
+}
+
+function parallelGroupDescriptor(event, meta) {
+  if (!Array.isArray(event.stack) || event.stack.length === 0) return null;
+  const frameIndex = parallelFrameIndex(event.stack);
+  if (frameIndex < 0) return null;
+  const frame = event.stack[frameIndex];
+  if (!Number.isSafeInteger(event.iteration) || event.iteration < 0) {
+    return { ambiguous: true };
+  }
+  const familyKey = parallelGroupFamilyKey(event.stack, meta);
+  if (familyKey === undefined) return { ambiguous: true };
+  return {
+    key: JSON.stringify({
+      familyKey,
+      iteration: event.iteration,
+      invocationPath: parallelInvocationPathKey(event.stack, frameIndex),
+    }),
+    familyKey,
+    label: frame.step,
+    iteration: event.iteration,
+  };
+}
+
+function parallelGroupFields(event, previous = {}, meta) {
+  if (previous.parallelGroupAmbiguous === true) {
+    return {
+      parallelGroupKey: undefined,
+      parallelGroupFamilyKey: undefined,
+      parallelGroupIteration: undefined,
+      parallelGroupLabel: undefined,
+      parallelGroupAmbiguous: true,
+    };
+  }
+  const descriptor = parallelGroupDescriptor(event, meta);
+  if (descriptor === null || descriptor.parent === true) return {};
+  if (descriptor.ambiguous === true) {
+    return {
+      parallelGroupKey: undefined,
+      parallelGroupFamilyKey: undefined,
+      parallelGroupIteration: undefined,
+      parallelGroupLabel: undefined,
+      parallelGroupAmbiguous: true,
+    };
+  }
+  if (previous.parallelGroupKey !== undefined && previous.parallelGroupKey !== descriptor.key) {
+    return {
+      parallelGroupKey: undefined,
+      parallelGroupFamilyKey: undefined,
+      parallelGroupIteration: undefined,
+      parallelGroupLabel: undefined,
+      parallelGroupAmbiguous: true,
+    };
+  }
+  return {
+    parallelGroupKey: descriptor.key,
+    parallelGroupFamilyKey: descriptor.familyKey,
+    parallelGroupIteration: descriptor.iteration,
+    parallelGroupLabel: descriptor.label,
+  };
+}
+
 function statusFromEvent(event) {
   const mapped = typeof event.status === 'string' ? EVENT_STATUS_MAP.get(event.status) : undefined;
   if (mapped === 'completed' && !TERMINAL_EVENT_TYPES.has(event.type)) return 'running';
@@ -108,7 +258,76 @@ function eventDescriptor(event, meta) {
   };
 }
 
-function createOccurrence(event, descriptor, firstEventIndex, recordEventIndexes) {
+function mergeJudgeStages(previous, next) {
+  const stages = Array.isArray(previous) ? [...previous] : [];
+  for (const candidate of Array.isArray(next) ? next : []) {
+    if (candidate === null || typeof candidate !== 'object') continue;
+    const duplicate = stages.some((stage) => (
+      stage.stage === candidate.stage
+      && stage.method === candidate.method
+      && stage.status === candidate.status
+      && stage.response === candidate.response
+    ));
+    if (!duplicate) stages.push(candidate);
+  }
+  return stages;
+}
+
+function judgeStageFromEvent(event) {
+  if (event.type !== 'phase_judge_stage'
+    || !Number.isSafeInteger(event.stage)
+    || event.stage < 1
+    || typeof event.method !== 'string'
+    || typeof event.status !== 'string'
+    || typeof event.response !== 'string') return undefined;
+  return {
+    stage: event.stage,
+    method: event.method,
+    status: event.status,
+    response: event.response,
+  };
+}
+
+function terminalStatusFromEvent(event) {
+  if (TERMINAL_EVENT_TYPES.has(event.type)) return statusFromEvent(event);
+  if (event.type !== 'phase_complete') return undefined;
+  const mapped = typeof event.status === 'string' ? EVENT_STATUS_MAP.get(event.status) : undefined;
+  if (mapped === 'failed' || mapped === 'aborted') return mapped;
+  // A completed execute/report phase is progress, not a completed step. The
+  // judge phase is the persisted terminal phase for parallel children.
+  return event.phaseName === 'judge' && mapped === 'completed' ? 'completed' : undefined;
+}
+
+function occurrenceMetadata(event, previous = {}) {
+  const metadata = {};
+  for (const key of [
+    'matchedRuleIndex',
+    'matchedRuleMethod',
+    'matchMethod',
+    'returnValue',
+    'provider',
+    'providerSource',
+    'model',
+    'modelSource',
+  ]) {
+    if (event[key] !== undefined) metadata[key] = event[key];
+    else if (previous[key] !== undefined) metadata[key] = previous[key];
+  }
+  const judgeStages = mergeJudgeStages(previous.judgeStages, event.judgeStages);
+  const eventStage = event.judgeStage ?? judgeStageFromEvent(event);
+  if (eventStage !== undefined) {
+    const withEventStage = mergeJudgeStages(judgeStages, [eventStage]);
+    if (withEventStage.length > 0) metadata.judgeStages = withEventStage;
+  } else if (judgeStages.length > 0) {
+    metadata.judgeStages = judgeStages;
+  }
+  const terminalStatus = terminalStatusFromEvent(event);
+  if (terminalStatus !== undefined) metadata.terminalStatus = terminalStatus;
+  else if (previous.terminalStatus !== undefined) metadata.terminalStatus = previous.terminalStatus;
+  return metadata;
+}
+
+function createOccurrence(event, descriptor, firstEventIndex, recordEventIndexes, meta) {
   const preview = event.preview ?? event.error ?? event.reason ?? event.content?.slice(0, 2_000);
   return {
     id: descriptor.occurrenceId,
@@ -129,6 +348,8 @@ function createOccurrence(event, descriptor, firstEventIndex, recordEventIndexes
     eventIndexes: recordEventIndexes ? [firstEventIndex] : [],
     firstEventIndex,
     lastEventIndex: firstEventIndex,
+    ...occurrenceMetadata(event),
+    ...parallelGroupFields(event, {}, meta),
   };
 }
 
@@ -139,7 +360,7 @@ function mergeStatus(previous, next) {
   return previous;
 }
 
-function updateOccurrence(occurrence, event, eventIndex, recordEventIndexes) {
+function updateOccurrence(occurrence, event, eventIndex, recordEventIndexes, meta) {
   const phases = event.phaseName !== undefined && !occurrence.phases.includes(event.phaseName)
     ? [...occurrence.phases, event.phaseName]
     : occurrence.phases;
@@ -157,6 +378,8 @@ function updateOccurrence(occurrence, event, eventIndex, recordEventIndexes) {
       preview,
       previewTruncated: event.previewTruncated === true || event.content?.length > 2_000,
     }),
+    ...occurrenceMetadata(event, occurrence),
+    ...parallelGroupFields(event, occurrence, meta),
     eventIndexes: recordEventIndexes
       ? [...occurrence.eventIndexes, eventIndex]
       : occurrence.eventIndexes,
@@ -197,8 +420,8 @@ function addGraphEvent(event, index, meta, graph) {
   }
   const descriptor = { ...initialDescriptor, occurrenceId };
   const occurrence = previous === undefined
-    ? createOccurrence(event, descriptor, index, graph.recordEventIndexes)
-    : updateOccurrence(previous, event, index, graph.recordEventIndexes);
+    ? createOccurrence(event, descriptor, index, graph.recordEventIndexes, meta)
+    : updateOccurrence(previous, event, index, graph.recordEventIndexes, meta);
   graph.occurrencesById.set(occurrence.id, occurrence);
   graph.occurrenceByEventIndex.set(index, occurrence);
   replaceOccurrence(graph.nodesByLogicalId, occurrence);
@@ -356,7 +579,7 @@ function annotateLiveEventIndexes(nodes, liveEvents, meta) {
           ?? occurrence.preview;
       const updated = latestEvent === undefined
         ? occurrence
-        : updateOccurrence(occurrence, latestEvent, eventIndexes.at(-1), true);
+        : updateOccurrence(occurrence, latestEvent, eventIndexes.at(-1), true, meta);
       return {
         ...updated,
         eventIndexes,
@@ -386,6 +609,54 @@ function assignOccurrenceOrdinals(nodes) {
   }));
 }
 
+function assignParallelGroupOrdinals(nodes) {
+  const groupsByFamily = new Map();
+  for (const node of nodes) {
+    for (const occurrence of node.occurrences) {
+      if (occurrence.parallelGroupKey === undefined
+        || occurrence.parallelGroupFamilyKey === undefined
+        || occurrence.parallelGroupAmbiguous === true) continue;
+      const family = groupsByFamily.get(occurrence.parallelGroupFamilyKey) ?? new Map();
+      const previous = family.get(occurrence.parallelGroupKey);
+      family.set(occurrence.parallelGroupKey, {
+        key: occurrence.parallelGroupKey,
+        familyKey: occurrence.parallelGroupFamilyKey,
+        label: occurrence.parallelGroupLabel,
+        iteration: occurrence.parallelGroupIteration,
+        firstEventIndex: Math.min(previous?.firstEventIndex ?? occurrence.firstEventIndex, occurrence.firstEventIndex),
+        nodeIds: [...new Set([...(previous?.nodeIds ?? []), node.id])],
+        occurrenceIds: [...new Set([...(previous?.occurrenceIds ?? []), occurrence.id])],
+      });
+      groupsByFamily.set(occurrence.parallelGroupFamilyKey, family);
+    }
+  }
+  const ordinalByKey = new Map();
+  const groups = [];
+  for (const family of groupsByFamily.values()) {
+    const ordered = [...family.values()].sort((left, right) => (
+      left.firstEventIndex - right.firstEventIndex || left.key.localeCompare(right.key)
+    ));
+    ordered.forEach((group, index) => {
+      ordinalByKey.set(group.key, index + 1);
+      groups.push({ ...group, ordinal: index + 1 });
+    });
+  }
+  return {
+    nodes: nodes.map((node) => ({
+      ...node,
+      occurrences: node.occurrences.map((occurrence) => (
+        occurrence.parallelGroupKey === undefined
+          ? occurrence
+          : {
+              ...occurrence,
+              parallelGroupOrdinal: ordinalByKey.get(occurrence.parallelGroupKey),
+            }
+      )),
+    })),
+    groups,
+  };
+}
+
 function applyTerminalRunStatus(meta, nodes) {
   const finalStatus = meta.status === 'completed' || meta.status === 'failed' || meta.status === 'aborted'
     ? meta.status
@@ -406,6 +677,45 @@ function applyTerminalRunStatus(meta, nodes) {
         ? { ...occurrence, status: finalStatus }
         : occurrence
     )),
+  }));
+}
+
+function isParallelParentOccurrence(node, occurrence) {
+  const frame = occurrence.stack?.at(-1);
+  return frame?.kind === 'parallel' && node.label === frame.step;
+}
+
+function projectParallelChildStatuses(nodes) {
+  const parentStatuses = new Map();
+  for (const node of nodes) {
+    for (const occurrence of node.occurrences) {
+      if (occurrence.parallelGroupKey === undefined
+        || occurrence.parallelGroupAmbiguous === true
+        || !isParallelParentOccurrence(node, occurrence)
+        || occurrence.terminalStatus === undefined) continue;
+      const statuses = parentStatuses.get(occurrence.parallelGroupKey) ?? new Set();
+      statuses.add(occurrence.terminalStatus);
+      parentStatuses.set(occurrence.parallelGroupKey, statuses);
+    }
+  }
+  return nodes.map((node) => ({
+    ...node,
+    occurrences: node.occurrences.map((occurrence) => {
+      if (occurrence.parallelGroupKey === undefined
+        || occurrence.parallelGroupAmbiguous === true
+        || isParallelParentOccurrence(node, occurrence)) return occurrence;
+      if (occurrence.terminalStatus !== undefined) {
+        return occurrence.status === occurrence.terminalStatus
+          ? occurrence
+          : { ...occurrence, status: occurrence.terminalStatus };
+      }
+      const statuses = parentStatuses.get(occurrence.parallelGroupKey);
+      // A parent terminal is evidence that the child scope ended. Without a
+      // child terminal record, retain the uncertainty instead of displaying
+      // RUNNING for a finished parallel invocation.
+      if (statuses === undefined || statuses.size !== 1) return occurrence;
+      return { ...occurrence, status: 'unknown' };
+    }),
   }));
 }
 
@@ -568,7 +878,10 @@ export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory,
     nodes = annotateLiveEventIndexes(nodes, events, meta);
   }
   nodes = applyTerminalRunStatus(meta, nodes);
+  nodes = projectParallelChildStatuses(nodes);
   nodes = assignOccurrenceOrdinals(nodes);
+  const parallelGroupResult = assignParallelGroupOrdinals(nodes);
+  nodes = parallelGroupResult.nodes;
   const callObservations = collectCallObservations(newestFirstEvents, newestFirstHistory, meta);
   const calls = attachCallTargets([...graph.callsByOccurrenceId.values()].map((call) => {
     const observation = callObservations.get(call.occurrenceId);
@@ -607,6 +920,7 @@ export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory,
     nodes,
     transitions,
     loops,
+    parallelGroups: parallelGroupResult.groups,
     calls: localizedCalls,
     totalOccurrences: nodes.reduce((total, node) => total + node.occurrences.length, 0),
     graphOccurrenceCount: graphSummary?.totalOccurrences ?? nodes.reduce(

@@ -16,6 +16,7 @@ import {
   curvePath,
   disposeExecutionMap,
   edgeAnchorGeometry,
+  parallelGroupPresentationOrdinal,
   renderExecutionMap,
   updateExecutionMapSelection,
 } from '../../web-ui/public/execution-map.js';
@@ -270,6 +271,81 @@ describe('Web UI execution model', () => {
         }),
       ],
     });
+  });
+
+  it('keeps the recorded result and judge stages on the ITER occurrence', () => {
+    const chronologicalEvents: ExecutionEvent[] = [
+      {
+        type: 'step_start',
+        step: 'review',
+        iteration: 1,
+        provider: 'codex',
+        providerSource: 'step',
+        model: 'gpt-test',
+        modelSource: 'step',
+      },
+      {
+        type: 'phase_judge_stage',
+        step: 'review',
+        stage: 1,
+        method: 'structured_output',
+        status: 'done',
+        response: '{"step":1}',
+      },
+      {
+        type: 'phase_judge_stage',
+        step: 'review',
+        stage: 2,
+        method: 'text_fallback',
+        status: 'done',
+        response: 'APPROVE',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        iteration: 1,
+        status: 'done',
+        matchedRuleIndex: 0,
+        matchedRuleMethod: 'structured_output',
+        matchMethod: 'structured_output',
+        content: 'approved',
+      },
+    ];
+    const trace = buildExecutionTrace(
+      { workflow: 'default', status: 'running' },
+      chronologicalEvents.slice().reverse(),
+    );
+    const review = trace.nodes.find((node) => node.label === 'review');
+    expect(review?.occurrences[0]).toMatchObject({
+      matchedRuleIndex: 0,
+      matchedRuleMethod: 'structured_output',
+      matchMethod: 'structured_output',
+      provider: 'codex',
+      providerSource: 'step',
+      model: 'gpt-test',
+      modelSource: 'step',
+      judgeStages: [
+        { stage: 1, method: 'structured_output', status: 'done', response: '{"step":1}' },
+        { stage: 2, method: 'text_fallback', status: 'done', response: 'APPROVE' },
+      ],
+    });
+
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const section = renderExecutionMap(trace, {
+        liveIndicator: new FakeDomNode('span'),
+        emptyState: new FakeDomNode('div'),
+        selectedOccurrenceId: null,
+        onSelectOccurrence: () => undefined,
+      });
+      const chip = section.querySelectorAll('.iteration-chip')[0] as FakeDomNode | undefined;
+      expect(chip?.querySelector('.iteration-chip-result')?.textContent).toBe('RESULT 1');
+      expect(chip?.querySelector('.iteration-chip-status')).toBeNull();
+    } finally {
+      runtime.document = previousDocument;
+    }
   });
 
   it('keeps repeated logical steps as chronological occurrences without synthetic self-loops', () => {
@@ -1049,6 +1125,311 @@ describe('Web UI execution model', () => {
     }
   });
 
+  it('selects a parallel group ITER without fetching artifacts until a child is selected', async () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const parallelFrame: ExecutionStackFrame = {
+        workflow: 'review',
+        workflow_ref: 'review-ref',
+        step: 'reviewers',
+        kind: 'parallel',
+        occurrence: 1,
+      };
+      const event = (type: 'step_start' | 'step_complete', step: string): ExecutionEvent => ({
+        type,
+        workflow: 'review',
+        step,
+        iteration: 4,
+        ...(type === 'step_complete' ? { status: 'done', matchedRuleIndex: 0 } : {}),
+        stack: [parallelFrame, {
+          workflow: 'review',
+          workflow_ref: 'review-ref',
+          step,
+          kind: 'agent',
+          occurrence: 1,
+        }],
+      });
+      const detail = {
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { workflow: 'review', runSlug: 'run-1', status: 'running', task: 'task' },
+        events: [
+          event('step_start', 'coding-review'),
+          event('step_complete', 'coding-review'),
+          event('step_start', 'architecture-review'),
+          event('step_complete', 'architecture-review'),
+        ].reverse(),
+        reports: [],
+      };
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      let artifactRequests = 0;
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        getOccurrenceArtifacts: async () => {
+          artifactRequests += 1;
+          return { reports: [], prompts: [] };
+        },
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+      });
+      expect(executionView.renderDetail(detail, { projectId: 'project-a', slug: 'run-1' })).toBe(true);
+      const groupButtons = runDetail.querySelectorAll('.execution-parallel-iteration') as FakeDomNode[];
+      expect(groupButtons).toHaveLength(1);
+      groupButtons[0]?.dispatchEvent('click');
+      expect(artifactRequests).toBe(0);
+      expect(inspector.querySelectorAll('.inspector-parallel-summary')).toHaveLength(1);
+      const children = inspector.querySelectorAll('.inspector-parallel-child') as FakeDomNode[];
+      expect(children).toHaveLength(2);
+      expect(children[0]?.children[1]?.textContent).toBe('RESULT 1');
+
+      children[0]?.dispatchEvent('click');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(artifactRequests).toBe(1);
+      executionView.dispose();
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('selects the latest parallel group by default and keeps one batch visible after live rerender', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const parallelParent = (outerOccurrence: number): ExecutionStackFrame[] => [
+        {
+          workflow: 'root',
+          workflow_ref: 'root-ref',
+          step: 'peer-review',
+          kind: 'workflow_call',
+          occurrence: 1,
+        },
+        {
+          workflow: 'peer-review',
+          workflow_ref: 'peer-review-ref',
+          step: 'reviewers',
+          kind: 'workflow_call',
+          occurrence: outerOccurrence,
+        },
+        {
+          workflow: 'review',
+          workflow_ref: 'review-ref',
+          step: 'review',
+          kind: 'parallel',
+          occurrence: 1,
+        },
+      ];
+      const event = (
+        type: 'step_start' | 'step_complete',
+        step: string,
+        iteration: number,
+        outerOccurrence: number,
+      ): ExecutionEvent => ({
+        type,
+        workflow: 'review',
+        step,
+        iteration,
+        ...(type === 'step_complete' ? { status: 'done', matchedRuleIndex: 0 } : {}),
+        stack: step === 'review'
+          ? parallelParent(outerOccurrence)
+          : [...parallelParent(outerOccurrence), {
+              workflow: 'review',
+              workflow_ref: 'review-ref',
+              step,
+              kind: 'agent',
+              occurrence: 1,
+            }],
+      });
+      const chronological: ExecutionEvent[] = [];
+      for (const [iteration, outerOccurrence] of [[4, 1], [9, 1], [14, 2]] as const) {
+        chronological.push(
+          event('step_start', 'review', iteration, outerOccurrence),
+          event('step_start', 'coding-review', iteration, outerOccurrence),
+          event('step_complete', 'coding-review', iteration, outerOccurrence),
+          event('step_start', 'architecture-review', iteration, outerOccurrence),
+          event('step_complete', 'architecture-review', iteration, outerOccurrence),
+          event('step_complete', 'review', iteration, outerOccurrence),
+        );
+      }
+      const detail = {
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { workflow: 'review', runSlug: 'run-1', status: 'completed', task: 'task' },
+        events: chronological.slice().reverse(),
+        reports: [],
+      };
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+      });
+      const selection = { projectId: 'project-a', slug: 'run-1' };
+      expect(executionView.renderDetail(detail, selection)).toBe(true);
+
+      const groupButtons = runDetail.querySelectorAll('.execution-parallel-iteration') as FakeDomNode[];
+      expect(groupButtons).toHaveLength(3);
+      expect(groupButtons.filter((button) => button.attributes['aria-selected'] === 'true')).toHaveLength(1);
+      expect(groupButtons[2]?.textContent).toBe('ITER 3');
+      expect(groupButtons[2]?.attributes['aria-selected']).toBe('true');
+
+      const parallelChips = () => (runDetail.querySelectorAll('.iteration-chip') as FakeDomNode[])
+        .filter((chip) => chip.dataset.parallelGroupKey !== '');
+      const visibleChips = () => parallelChips().filter((chip) => (
+        (chip as unknown as { readonly hidden?: boolean }).hidden !== true
+      ));
+      expect(visibleChips()).toHaveLength(3);
+      const reviewStep = (runDetail.querySelectorAll('.execution-step') as FakeDomNode[])
+        .find((step) => step.querySelector('.execution-step-title')?.textContent === 'review');
+      expect(reviewStep).toBeDefined();
+      expect(reviewStep?.querySelectorAll('.iteration-chip')).toHaveLength(3);
+      expect(reviewStep?.querySelectorAll('.iteration-chip').filter((chip) => (
+        (chip as unknown as { readonly hidden?: boolean }).hidden !== true
+      ))).toHaveLength(1);
+
+      groupButtons[1]?.dispatchEvent('pointerdown', {
+        target: groupButtons[1],
+        stopPropagation: () => undefined,
+      });
+      groupButtons[1]?.dispatchEvent('pointerup', { target: groupButtons[1] });
+      groupButtons[1]?.dispatchEvent('click', {
+        target: groupButtons[1],
+        stopPropagation: () => undefined,
+      });
+      expect(groupButtons.filter((button) => button.attributes['aria-selected'] === 'true')).toHaveLength(1);
+      expect(groupButtons[1]?.attributes['aria-selected']).toBe('true');
+      expect(visibleChips()).toHaveLength(3);
+      expect(visibleChips().every((chip) => chip.dataset.parallelGroupKey === groupButtons[1]?.dataset.parallelGroupKey)).toBe(true);
+      expect(reviewStep?.querySelectorAll('.iteration-chip').filter((chip) => (
+        (chip as unknown as { readonly hidden?: boolean }).hidden !== true
+      ))).toHaveLength(1);
+
+      executionView.renderDetail({ ...detail, events: [...detail.events] }, selection);
+      const rerenderedButtons = runDetail.querySelectorAll('.execution-parallel-iteration') as FakeDomNode[];
+      expect(rerenderedButtons.filter((button) => button.attributes['aria-selected'] === 'true')).toHaveLength(1);
+      expect(rerenderedButtons[1]?.attributes['aria-selected']).toBe('true');
+      expect(
+        (runDetail.querySelectorAll('.iteration-chip') as FakeDomNode[])
+          .filter((chip) => chip.dataset.parallelGroupKey !== ''
+            && (chip as unknown as { readonly hidden?: boolean }).hidden !== true)
+          .every((chip) => chip.dataset.parallelGroupKey === rerenderedButtons[1]?.dataset.parallelGroupKey),
+      )
+        .toBe(true);
+      executionView.dispose();
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('renders the selected ITER result, transition, output, and recorded judge path', async () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const events: ExecutionEvent[] = [
+        {
+          type: 'step_start',
+          step: 'review',
+          iteration: 1,
+          provider: 'codex',
+          providerSource: 'step',
+          model: 'gpt-test',
+          modelSource: 'step',
+        },
+        {
+          type: 'step_complete',
+          step: 'review',
+          iteration: 1,
+          status: 'done',
+          matchedRuleIndex: 1,
+          matchedRuleMethod: 'structured_output',
+          matchMethod: 'structured_output',
+          content: 'approved output',
+        },
+      ];
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+        getOccurrenceArtifacts: async () => ({
+          reports: [],
+          prompts: [],
+          outcome: {
+            matchedRuleIndex: 1,
+            condition: 'REVISE',
+            nextStep: 'review',
+            matchedRuleMethod: 'structured_output',
+            matchMethod: 'structured_output',
+            provider: 'codex',
+            providerSource: 'step',
+            model: 'gpt-test',
+            modelSource: 'step',
+            outputPreview: 'approved output',
+            judgeStages: [
+              { stage: 1, method: 'structured_output', status: 'done', response: '{"step":2}' },
+              { stage: 2, method: 'text_fallback', status: 'done', response: 'REVISE' },
+            ],
+          },
+        }),
+      });
+      const selection = { projectId: 'project-a', slug: 'run-1' };
+      executionView.renderDetail({
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: {
+          runSlug: 'run-1',
+          workflow: 'default',
+          status: 'running',
+          task: 'Inspect this run',
+        },
+        events: events.slice().reverse(),
+        history: [],
+        reports: [],
+      }, selection);
+      runDetail.querySelector('.execution-step-header')?.dispatchEvent('click');
+      inspector.querySelector('.inspector-iteration-item')?.dispatchEvent('click');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const facts = inspector.querySelector('.inspector-iteration-facts');
+      const factValues = facts?.children.map((fact) => [
+        fact.children[0]?.textContent,
+        fact.children[1]?.textContent,
+      ]);
+      expect(factValues).toEqual(expect.arrayContaining([
+        ['結果', 'RESULT 2'],
+        ['一致した条件', 'REVISE'],
+        ['遷移先', 'review'],
+        ['STEP実行先', 'codex / gpt-test'],
+      ]));
+      expect(inspector.querySelector('.inspector-iteration-output-content')?.textContent)
+        .toBe('approved output');
+      const stages = inspector.querySelectorAll('.inspector-judge-stage') as FakeDomNode[];
+      expect(stages).toHaveLength(2);
+      expect(stages[0]?.children[0]?.textContent).toBe('STAGE 1');
+      expect(stages[0]?.children[1]?.textContent).toBe('structured_output · done');
+      expect(stages[0]?.children[2]?.textContent).toBe('{"step":2}');
+      expect(stages[1]?.children[0]?.textContent).toBe('STAGE 2');
+      expect(stages[1]?.children[1]?.textContent).toBe('text_fallback · done');
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
   it('does not apply a stale occurrence artifact response after selecting another ITER', async () => {
     const runtime = globalThis as unknown as { document?: FakeDomDocument };
     const previousDocument = runtime.document;
@@ -1344,6 +1725,8 @@ describe('Web UI execution model', () => {
       pending[0]!.resolve({
         reports: [{ filename: 'selected.md', content: 'selected', omitted: false }],
         prompts: [{ phase: 1, systemPrompt: 'prompt' }],
+        promptsTruncated: true,
+        omittedPromptCount: 2,
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
       inspector.querySelectorAll('.tab-button')
@@ -1360,6 +1743,8 @@ describe('Web UI execution model', () => {
       inspector.querySelectorAll('.tab-button')
         .find((button) => button.textContent === 'PROMPTS')
         ?.dispatchEvent('click');
+      expect(inspector.querySelector('.artifact-limit-notice')?.textContent)
+        .toBe('上限により 2 件の PROMPT を省略しました。');
       const promptCard = inspector.querySelector('.prompt-card');
       promptCard?.focus();
       executionView.renderDetail({
@@ -1459,10 +1844,427 @@ describe('Web UI execution model', () => {
       expect(groups).toHaveLength(1);
       expect(groups[0]?.textContent).toBe('');
       expect(groups[0]?.children[0]?.textContent).toBe('PARALLEL · review');
+      const memberTop = Math.min(...(section.querySelectorAll('.execution-step') as FakeDomNode[])
+        .map((step) => Number.parseFloat(step.style.top)));
+      const groupTop = Number.parseFloat(groups[0]?.style.top ?? 'NaN');
+      expect(memberTop - groupTop).toBe(58);
+      expect(Number.parseFloat(groups[0]?.style.height ?? 'NaN')).toBeGreaterThan(200);
       expect(section.querySelectorAll('.workflow-lane')).toHaveLength(0);
     } finally {
       runtime.document = previousDocument;
     }
+  });
+
+  it('groups parallel children by invocation and assigns local group ITER ordinals', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const parent = (
+        outerStep: string,
+        outerOccurrence: number,
+        parallelOccurrence: number,
+      ): ExecutionStackFrame[] => [
+        {
+          workflow: 'root',
+          workflow_ref: 'root-ref',
+          step: 'peer-review',
+          kind: 'workflow_call',
+          occurrence: 1,
+        },
+        {
+          workflow: 'peer-review',
+          workflow_ref: 'peer-review-ref',
+          step: outerStep,
+          kind: 'workflow_call',
+          occurrence: outerOccurrence,
+        },
+        {
+          workflow: 'review',
+          workflow_ref: 'review-ref',
+          step: 'review',
+          kind: 'parallel',
+          occurrence: parallelOccurrence,
+        },
+      ];
+      const event = (
+        type: 'step_start' | 'step_complete',
+        step: string,
+        iteration: number | undefined,
+        outerStep = 'reviewers',
+        outerOccurrence = 1,
+        parallelOccurrence = 1,
+      ): ExecutionEvent => ({
+        type,
+        workflow: 'review',
+        step,
+        iteration,
+        ...(type === 'step_complete' ? { status: 'done', matchedRuleIndex: 0 } : {}),
+        stack: [...parent(outerStep, outerOccurrence, parallelOccurrence), {
+          workflow: 'review',
+          workflow_ref: 'review-ref',
+          step,
+          kind: 'agent',
+          occurrence: 1,
+        }],
+      });
+      const chronological: ExecutionEvent[] = [
+        event('step_start', 'review', 4, 'initial-reviewers'),
+        event('step_start', 'coding-review', 4, 'initial-reviewers'),
+        event('step_complete', 'coding-review', 4, 'initial-reviewers'),
+        event('step_start', 'architecture-review', 4, 'initial-reviewers'),
+        event('step_complete', 'architecture-review', 4, 'initial-reviewers'),
+        event('step_start', 'coding-review', 9),
+        event('step_complete', 'coding-review', 9),
+        event('step_start', 'architecture-review', 9),
+        event('step_complete', 'architecture-review', 9),
+        event('step_start', 'coding-review', 14, 'reviewers', 2),
+        event('step_complete', 'coding-review', 14, 'reviewers', 2),
+        event('step_start', 'coding-review', 4, 'reviewers', 1, 2),
+        event('step_complete', 'coding-review', 4, 'reviewers', 1, 2),
+        event('step_start', 'architecture-review', 4, 'reviewers', 1, 2),
+        event('step_complete', 'architecture-review', 4, 'reviewers', 1, 2),
+        event('step_start', 'missing-iteration', undefined),
+        event('step_complete', 'missing-iteration', undefined),
+      ];
+      const trace = buildExecutionTrace(
+        { workflow: 'review', status: 'running' },
+        chronological.slice().reverse(),
+      );
+
+      expect(trace.parallelGroups.map((group) => [group.ordinal, group.iteration])).toEqual([
+        [1, 4], [2, 9], [3, 14], [4, 4],
+      ]);
+      const firstFamilyKey = trace.parallelGroups[0]?.familyKey;
+      const firstFamily = trace.parallelGroups.filter((group) => group.familyKey === firstFamilyKey);
+      expect(firstFamily[0]?.occurrenceIds).toHaveLength(3);
+      expect(firstFamily[1]?.occurrenceIds).toHaveLength(2);
+      expect(firstFamily[2]?.occurrenceIds).toHaveLength(1);
+      expect(firstFamily).toHaveLength(4);
+      expect(firstFamily[3]?.occurrenceIds).toHaveLength(2);
+      const missing = trace.nodes.find((node) => node.label === 'missing-iteration')?.occurrences[0];
+      expect(missing?.parallelGroupKey).toBeUndefined();
+      expect(missing?.parallelGroupAmbiguous).toBe(true);
+
+      const selected: string[] = [];
+      const section = renderExecutionMap(trace, {
+        liveIndicator: new FakeDomNode('span'),
+        emptyState: new FakeDomNode('div'),
+        selectedOccurrenceId: null,
+        selectedParallelGroupKey: null,
+        onSelectOccurrence: () => undefined,
+        onSelectParallelGroup: (_group, iteration) => selected.push(iteration.key),
+      });
+      const groupButtons = section.querySelectorAll('.execution-parallel-iteration') as FakeDomNode[];
+      expect(groupButtons).toHaveLength(4);
+      const firstGroupKey = trace.parallelGroups.find((group) => group.ordinal === 1)?.key;
+      expect(firstGroupKey).toBeDefined();
+      groupButtons[0]?.dispatchEvent('click');
+      expect(selected).toEqual([firstGroupKey]);
+      expect(groupButtons[0]?.textContent).toBe('ITER 1');
+      const childChips = (section.querySelectorAll('.iteration-chip') as FakeDomNode[])
+        .filter((chip) => chip.dataset.parallelGroupKey === firstGroupKey);
+      expect(childChips).toHaveLength(3);
+      expect(childChips.every((chip) => chip.children[0]?.textContent !== 'ITER 1')).toBe(true);
+      expect(childChips.some((chip) => chip.children[0]?.textContent === 'RESULT 1')).toBe(true);
+      const map = section.querySelectorAll('.execution-map')[0] as FakeDomNode;
+      updateExecutionMapSelection(map, null, null, firstGroupKey ?? null);
+      const parallelChips = (section.querySelectorAll('.iteration-chip') as FakeDomNode[])
+        .filter((chip) => chip.dataset.parallelGroupKey !== '');
+      const isHidden = (chip: FakeDomNode) => (
+        (chip as unknown as { readonly hidden?: boolean }).hidden === true
+      );
+      expect(parallelChips.filter((chip) => !isHidden(chip))).toHaveLength(3);
+      expect(parallelChips.filter(isHidden)).toHaveLength(5);
+      expect(section.querySelectorAll('[data-edge-role="incoming-outgoing"]')).not.toHaveLength(0);
+      expect(section.querySelectorAll('.execution-map-legend-incoming')).not.toHaveLength(0);
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('uses verified call-site digests to separate same-occurrence sites and merge aliases', () => {
+    const parallelFrame: ExecutionStackFrame = {
+      workflow: 'review',
+      workflow_ref: 'review-ref',
+      step: 'review',
+      kind: 'parallel',
+      occurrence: 1,
+    };
+    const callFrame = (step: string): ExecutionStackFrame => ({
+      workflow: 'peer-review',
+      workflow_ref: 'peer-review-ref',
+      step,
+      kind: 'workflow_call',
+      occurrence: 1,
+    });
+    const invocationIdentity = (step: string) => JSON.stringify({
+      workflow: 'peer-review-ref',
+      step,
+      calls: [],
+    });
+    const namespace = (step: string, digest: string) => (
+      `iteration-1--step-${step}--workflow-review--site-${digest}`
+    );
+    const childEvent = (step: string, callStep: string): ExecutionEvent => ({
+      type: 'step_start',
+      workflow: 'review',
+      step,
+      iteration: 1,
+      stack: [callFrame(callStep), parallelFrame, {
+        workflow: 'review',
+        workflow_ref: 'review-ref',
+        step,
+        kind: 'agent',
+        occurrence: 1,
+      }],
+    });
+    const siteA = 'a'.repeat(64);
+    const siteB = 'b'.repeat(64);
+    const separateMeta = {
+      workflow: 'review',
+      status: 'running',
+      resumePoint: {
+        workflow_call_invocations: {
+          [invocationIdentity('site-a')]: {
+            call_instance: 1,
+            report_namespace_segment: namespace('site-a', siteA),
+          },
+          [invocationIdentity('site-b')]: {
+            call_instance: 1,
+            report_namespace_segment: namespace('site-b', siteB),
+          },
+        },
+      },
+    };
+    const separateTrace = buildExecutionTrace(
+      separateMeta,
+      [childEvent('coding-review', 'site-b'), childEvent('coding-review', 'site-a')],
+    );
+    expect(new Set(separateTrace.parallelGroups.map((group) => group.familyKey)).size).toBe(2);
+    expect(separateTrace.parallelGroups.flatMap((group) => group.occurrenceIds)).toHaveLength(2);
+
+    const aliasDigest = 'c'.repeat(64);
+    const aliasMeta = {
+      workflow: 'review',
+      status: 'running',
+      resumePoint: {
+        workflow_call_invocations: {
+          [invocationIdentity('initial-reviewers')]: {
+            call_instance: 1,
+            report_namespace_segment: namespace('initial-reviewers', aliasDigest),
+          },
+          [invocationIdentity('reviewers')]: {
+            call_instance: 1,
+            report_namespace_segment: namespace('reviewers', aliasDigest),
+          },
+        },
+      },
+    };
+    const aliasTrace = buildExecutionTrace(
+      aliasMeta,
+      [childEvent('architecture-review', 'reviewers'), childEvent('coding-review', 'initial-reviewers')],
+    );
+    expect(new Set(aliasTrace.parallelGroups.map((group) => group.familyKey)).size).toBe(1);
+  });
+
+  it('reassigns presentation ITER ordinals across families with colliding local ordinals', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const parent = (callStep: string): ExecutionStackFrame[] => [
+        {
+          workflow: 'peer-review',
+          workflow_ref: 'peer-review-ref',
+          step: callStep,
+          kind: 'workflow_call',
+          occurrence: 1,
+        },
+        {
+          workflow: 'review',
+          workflow_ref: 'review-ref',
+          step: 'review',
+          kind: 'parallel',
+          occurrence: 1,
+        },
+      ];
+      const invocationIdentity = (step: string) => JSON.stringify({
+        workflow: 'peer-review-ref',
+        step,
+        calls: [],
+      });
+      const namespace = (step: string, digest: string) => (
+        `iteration-1--step-${step}--workflow-review--site-${digest}`
+      );
+      const event = (
+        type: 'step_start' | 'step_complete',
+        step: string,
+        iteration: number,
+        callStep: string,
+      ): ExecutionEvent => ({
+        type,
+        workflow: 'review',
+        step,
+        iteration,
+        ...(type === 'step_complete' ? { status: 'done', matchedRuleIndex: 0 } : {}),
+        stack: step === 'review'
+          ? parent(callStep)
+          : [...parent(callStep), {
+              workflow: 'review',
+              workflow_ref: 'review-ref',
+              step,
+              kind: 'agent',
+              occurrence: 1,
+            }],
+      });
+      const siteA = 'a'.repeat(64);
+      const siteB = 'b'.repeat(64);
+      const trace = buildExecutionTrace(
+        {
+          workflow: 'review',
+          status: 'running',
+          resumePoint: {
+            workflow_call_invocations: {
+              [invocationIdentity('site-a')]: {
+                report_namespace_segment: namespace('site-a', siteA),
+              },
+              [invocationIdentity('site-b')]: {
+                report_namespace_segment: namespace('site-b', siteB),
+              },
+            },
+          },
+        },
+        [
+          event('step_start', 'review', 4, 'site-a'),
+          event('step_start', 'coding-review', 4, 'site-a'),
+          event('step_complete', 'coding-review', 4, 'site-a'),
+          event('step_start', 'review', 9, 'site-b'),
+          event('step_start', 'coding-review', 9, 'site-b'),
+          event('step_complete', 'coding-review', 9, 'site-b'),
+          event('step_start', 'review', 14, 'site-b'),
+          event('step_start', 'coding-review', 14, 'site-b'),
+          event('step_complete', 'coding-review', 14, 'site-b'),
+        ].reverse(),
+      );
+      const selected: string[] = [];
+      const section = renderExecutionMap(trace, {
+        liveIndicator: new FakeDomNode('span'),
+        emptyState: new FakeDomNode('div'),
+        selectedOccurrenceId: null,
+        selectedParallelGroupKey: null,
+        onSelectOccurrence: () => undefined,
+        onSelectParallelGroup: (_group, iteration) => selected.push(iteration.key),
+      });
+      const groupButtons = section.querySelectorAll('.execution-parallel-iteration') as FakeDomNode[];
+      expect(groupButtons).toHaveLength(3);
+      expect(groupButtons.map((button) => button.textContent)).toEqual(['ITER 1', 'ITER 2', 'ITER 3']);
+      expect(new Set(groupButtons.map((button) => button.dataset.parallelGroupKey)).size).toBe(3);
+      const parallelChips = (section.querySelectorAll('.iteration-chip') as FakeDomNode[])
+        .filter((chip) => chip.dataset.parallelGroupKey !== '');
+      expect(parallelChips.every((chip) => (
+        !chip.children.some((child) => child.textContent.startsWith('PARALLEL ITER'))
+      ))).toBe(true);
+      const thirdGroupKey = groupButtons[2]?.dataset.parallelGroupKey;
+      expect(thirdGroupKey).toBeDefined();
+      expect(parallelGroupPresentationOrdinal(trace, thirdGroupKey)).toBe(3);
+      expect(parallelChips
+        .filter((chip) => chip.dataset.parallelGroupKey === thirdGroupKey)
+        .every((chip) => chip.attributes['aria-label']?.includes('PARALLEL ITER 3')))
+        .toBe(true);
+
+      groupButtons[1]?.dispatchEvent('click');
+      expect(selected).toEqual([trace.parallelGroups[1]?.key]);
+
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+      });
+      expect(executionView.renderDetail({
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { workflow: 'review', runSlug: 'run-1', status: 'running', task: 'task' },
+        events: [...trace.events].reverse(),
+        reports: [],
+      }, { projectId: 'project-a', slug: 'run-1' })).toBe(true);
+      const inspectorTitle = inspector.querySelector('.inspector-selection-title');
+      expect(inspectorTitle?.textContent).toBe('PARALLEL · review · ITER 3');
+      executionView.dispose();
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('projects terminal phase outcomes for parallel children and hides false running state', () => {
+    const parent: ExecutionStackFrame = {
+      workflow: 'review',
+      workflow_ref: 'review-ref',
+      step: 'review',
+      kind: 'parallel',
+      occurrence: 1,
+    };
+    // Canonical parallel child records share the parent parallel frame; they
+    // do not necessarily carry an additional agent frame.
+    const childStack: ExecutionStackFrame[] = [parent];
+    const event = (
+      type: string,
+      step: string,
+      iteration: number,
+      status?: string,
+      phaseName?: string,
+    ): ExecutionEvent => ({
+      type,
+      workflow: 'review',
+      step,
+      iteration,
+      ...(status === undefined ? {} : { status }),
+      ...(phaseName === undefined ? {} : { phaseName }),
+      ...(type === 'phase_judge_stage'
+        ? { stage: 1, method: 'structured_output', response: 'ok' }
+        : {}),
+      stack: step === 'review' ? [parent] : childStack,
+    });
+    const batch = (iteration: number, terminalStatus: string): ExecutionEvent[] => [
+      event('step_start', 'review', iteration),
+      event('step_start', 'coding-review', iteration),
+      event('phase_start', 'coding-review', iteration, undefined, 'judge'),
+      event('phase_judge_stage', 'coding-review', iteration, 'done', 'judge'),
+      event('phase_complete', 'coding-review', iteration, terminalStatus, 'judge'),
+      event('step_start', 'unobserved-review', iteration),
+      event('step_complete', 'review', iteration, 'done'),
+    ];
+    const trace = buildExecutionTrace(
+      { workflow: 'review', status: 'completed' },
+      [
+        ...batch(4, 'done'),
+        ...batch(9, 'failed'),
+        ...batch(14, 'aborted'),
+      ].reverse(),
+    );
+    const occurrence = (step: string, iteration: number) => (
+      trace.nodes.find((node) => node.label === step)?.occurrences.find(
+        (candidate) => candidate.iteration === iteration,
+      )
+    );
+
+    expect(occurrence('coding-review', 4)?.status).toBe('completed');
+    expect(occurrence('coding-review', 9)?.status).toBe('failed');
+    expect(occurrence('coding-review', 14)?.status).toBe('aborted');
+    expect([4, 9, 14].map((iteration) => occurrence('unobserved-review', iteration)?.status))
+      .toEqual(['unknown', 'unknown', 'unknown']);
+
+    const activeTrace = buildExecutionTrace(
+      { workflow: 'review', status: 'running' },
+      [event('step_start', 'unobserved-review', 1), event('step_start', 'review', 1)].reverse(),
+    );
+    expect(activeTrace.nodes.find((node) => node.label === 'unobserved-review')?.occurrences[0]?.status)
+      .toBe('running');
   });
 
   it('moves every parallel member by one scaled delta and reports each node position', () => {
@@ -1494,28 +2296,74 @@ describe('Web UI execution model', () => {
         { workflow: 'default', status: 'running' },
         [event('architecture-review'), event('coding-review')],
       );
+      const selected: string[] = [];
       const moved: Array<{ id: string; x: number; y: number }> = [];
       const section = renderExecutionMap(trace, {
         liveIndicator: new FakeDomNode('span'),
         emptyState: new FakeDomNode('div'),
         selectedOccurrenceId: null,
         onSelectOccurrence: () => undefined,
+        onSelectParallelGroup: (_group, iteration) => selected.push(iteration.key),
         onMoveNode: (id, position) => moved.push({ id, ...position }),
       });
       const steps = section.querySelectorAll('.execution-step') as FakeDomNode[];
       const header = section.querySelectorAll('.execution-parallel-group-header')[0] as FakeDomNode;
+      const iterationButton = section.querySelectorAll('.execution-parallel-iteration')[0] as FakeDomNode;
       const before = steps.map((step) => ({
         id: step.dataset.stepId,
         x: Number.parseFloat(step.style.left),
         y: Number.parseFloat(step.style.top),
       }));
 
+      let interactivePointerDownStopped = false;
+      iterationButton.dispatchEvent('pointerdown', {
+        target: iterationButton,
+        pointerId: 11,
+        clientX: 40,
+        clientY: 40,
+        button: 0,
+        stopPropagation: () => { interactivePointerDownStopped = true; },
+      });
+      iterationButton.dispatchEvent('pointerup', { target: iterationButton, pointerId: 11 });
+      iterationButton.dispatchEvent('click', {
+        target: iterationButton,
+        stopPropagation: () => undefined,
+      });
+      expect(interactivePointerDownStopped).toBe(true);
+      expect(selected).toHaveLength(1);
+      expect(moved).toHaveLength(0);
+
+      // Exercise the overlap/propagation failure mode: even if the group's
+      // listener sees an interactive target, it must not start a drag.
       header.dispatchEvent('pointerdown', {
+        target: iterationButton,
+        pointerId: 13,
+        clientX: 40,
+        clientY: 40,
+        button: 0,
+        stopPropagation: () => undefined,
+        preventDefault: () => undefined,
+      });
+      header.dispatchEvent('pointermove', {
+        target: iterationButton,
+        pointerId: 13,
+        clientX: 100,
+        clientY: 70,
+        preventDefault: () => undefined,
+      });
+      header.dispatchEvent('pointerup', { target: iterationButton, pointerId: 13 });
+      expect(moved).toHaveLength(0);
+
+      let pointerDownPrevented = false;
+      header.dispatchEvent('pointerdown', {
+        target: header,
         pointerId: 12,
         clientX: 40,
         clientY: 40,
         button: 0,
+        preventDefault: () => { pointerDownPrevented = true; },
       });
+      expect(pointerDownPrevented).toBe(true);
       header.dispatchEvent('pointermove', {
         pointerId: 12,
         clientX: 100,

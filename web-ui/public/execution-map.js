@@ -1,10 +1,14 @@
 import { t } from './i18n.js';
+import { parallelGroupFamilyKey } from './execution-model.js';
 
 const executionMapDisposers = new WeakMap();
 const executionMapHeaders = new WeakMap();
 const PAN_THRESHOLD = 4;
 const NODE_MARGIN = 16;
 const PARALLEL_GROUP_PADDING = 14;
+// The group frame reserves this band above its member nodes for the label and
+// ITER selector. Keep the frame geometry and hit-test geometry in one place.
+const PARALLEL_GROUP_HEADER_HEIGHT = 58;
 export const MIN_MAP_SCALE = 0.6;
 export const MAX_MAP_SCALE = 2;
 export const DEFAULT_MAP_SCALE = 1;
@@ -56,41 +60,96 @@ function occurrenceLabel(occurrence, index) {
   return `${t('map.iter', { number: occurrence.ordinal ?? index + 1 })}${callLabel}`;
 }
 
-function renderIterationChip(node, occurrence, index, selectedOccurrenceId, onSelectOccurrence) {
+function occurrenceOutcomeLabel(occurrence) {
+  return occurrence.status === 'completed'
+    && Number.isSafeInteger(occurrence.matchedRuleIndex)
+    && occurrence.matchedRuleIndex >= 0
+    ? t('map.result', { number: occurrence.matchedRuleIndex + 1 })
+    : null;
+}
+
+function renderIterationChip(
+  node,
+  occurrence,
+  index,
+  selectedOccurrenceId,
+  selectedParallelGroupKey,
+  presentationParallelGroupOrdinals,
+  onSelectOccurrence,
+) {
   const button = element('button', 'iteration-chip');
   button.type = 'button';
   button.dataset.occurrenceId = occurrence.id;
   button.dataset.kind = 'iteration';
-  button.dataset.selected = String(occurrence.id === selectedOccurrenceId);
-  button.setAttribute('aria-pressed', String(occurrence.id === selectedOccurrenceId));
+  const isParallelChild = occurrence.parallelGroupKey !== undefined
+    && occurrence.parallelGroupAmbiguous !== true;
+  const groupSelected = isParallelChild && occurrence.parallelGroupKey === selectedParallelGroupKey;
+  const selected = occurrence.id === selectedOccurrenceId || groupSelected;
+  button.dataset.parallelGroupKey = occurrence.parallelGroupKey ?? '';
+  button.dataset.selected = String(selected);
+  button.setAttribute('aria-pressed', String(selected));
   const ordinal = occurrence.ordinal ?? index + 1;
   const callValue = occurrenceCallValue(occurrence);
+  const outcomeLabel = occurrenceOutcomeLabel(occurrence);
+  const groupOrdinal = isParallelChild
+    ? presentationParallelGroupOrdinals.get(occurrence.parallelGroupKey)
+    : undefined;
+  const groupLabel = groupOrdinal === undefined
+    ? t('map.parallelMember')
+    : t('map.parallelIteration', { number: groupOrdinal });
+  const visibleLabel = isParallelChild
+    ? outcomeLabel ?? statusLabel(occurrence.status)
+    : occurrenceLabel(occurrence, index);
+  const visibleDetail = isParallelChild
+    ? callValue === undefined ? statusLabel(occurrence.status) : t('map.call', { value: callValue })
+    : outcomeLabel ?? statusLabel(occurrence.status);
   const accessibleLabel = [
     nodeLabel(node),
-    t('map.iteration', { number: ordinal }),
+    isParallelChild ? groupLabel : t('map.iteration', { number: ordinal }),
     occurrence.iteration === undefined
       ? ''
       : t('map.workflowIteration', { number: occurrence.iteration }),
     callValue === undefined ? '' : t('map.call', { value: callValue }),
     occurrence.phases.join(' / '),
     occurrence.personas.join(' / '),
+    outcomeLabel ?? statusLabel(occurrence.status),
   ].filter(Boolean).join(' · ');
   button.setAttribute('aria-label', accessibleLabel);
   button.title = accessibleLabel;
   button.append(
-    element('span', 'iteration-chip-label', occurrenceLabel(occurrence, index)),
-    element('span', 'iteration-chip-status', statusLabel(occurrence.status)),
+    element('span', 'iteration-chip-label', visibleLabel),
+    element(
+      'span',
+      isParallelChild
+        ? 'iteration-chip-parallel-detail'
+        : outcomeLabel === null
+        ? 'iteration-chip-status'
+        : 'iteration-chip-result',
+      visibleDetail,
+    ),
   );
   button.addEventListener('click', () => onSelectOccurrence(node, occurrence));
   return button;
 }
 
-function renderStep(node, position, selectedStepId, selectedOccurrenceId, onSelectStep, onSelectOccurrence, hasIteration) {
+function renderStep(
+  node,
+  position,
+  selectedStepId,
+  selectedOccurrenceId,
+  selectedParallelGroupKey,
+  presentationParallelGroupOrdinals,
+  onSelectStep,
+  onSelectOccurrence,
+  hasIteration,
+) {
   const latest = node.occurrences.at(-1);
   if (latest === undefined) return null;
   const selectedStep = selectedOccurrenceId === null && node.id === selectedStepId;
   const activeOccurrence = selectedOccurrenceId !== null && node.occurrences.some(
     (occurrence) => occurrence.id === selectedOccurrenceId,
+  ) || selectedParallelGroupKey !== null && node.occurrences.some(
+    (occurrence) => occurrence.parallelGroupKey === selectedParallelGroupKey,
   );
   const step = element('article', `execution-step execution-step-${latest.status}`);
   step.dataset.stepId = node.id;
@@ -136,7 +195,15 @@ function renderStep(node, position, selectedStepId, selectedOccurrenceId, onSele
   );
   const chips = element('div', 'iteration-chips');
   node.occurrences.forEach((occurrence, index) => {
-    chips.append(renderIterationChip(node, occurrence, index, selectedOccurrenceId, onSelectOccurrence));
+    chips.append(renderIterationChip(
+      node,
+      occurrence,
+      index,
+      selectedOccurrenceId,
+      selectedParallelGroupKey,
+      presentationParallelGroupOrdinals,
+      onSelectOccurrence,
+    ));
   });
   iterations.append(iterationHeader, chips);
   const metadata = [
@@ -148,29 +215,76 @@ function renderStep(node, position, selectedStepId, selectedOccurrenceId, onSele
   return { step, headerButton };
 }
 
-function parallelFrame(node) {
-  const frames = node.occurrences.flatMap((occurrence) => occurrence.stack ?? []);
-  return [...frames].reverse().find((frame) => frame.kind === 'parallel');
+function parallelContexts(node) {
+  const candidates = node.occurrences
+    .map((occurrence) => ({ occurrence, stack: occurrence.stack }))
+    .filter(({ stack }) => Array.isArray(stack))
+    .map(({ occurrence, stack }) => {
+      const frameIndex = [...stack].findLastIndex((frame) => frame?.kind === 'parallel');
+      if (frameIndex < 0) return null;
+      const frame = stack[frameIndex];
+      const familyKey = occurrence.parallelGroupFamilyKey ?? parallelGroupFamilyKey(stack);
+      const presentationKey = parallelGroupFamilyKey(stack);
+      if (familyKey === undefined || presentationKey === undefined) return null;
+      return {
+        frame,
+        familyKey,
+        presentationKey,
+      };
+    })
+    .filter(Boolean);
+  return candidates;
 }
 
-function parallelGroupId(frame) {
-  return frame === undefined
-    ? null
-    : JSON.stringify([frame.workflow_ref, frame.step, frame.occurrence]);
-}
-
-function parallelGroups(nodes) {
+function parallelGroups(nodes, traceGroups = []) {
   const groups = new Map();
+  const presentationByFamily = new Map();
   for (const node of nodes) {
-    const frame = parallelFrame(node);
-    const id = parallelGroupId(frame);
-    if (id === null || frame === undefined) continue;
-    const previous = groups.get(id);
-    groups.set(id, previous === undefined
-      ? { id, label: frame.step, nodeIds: [node.id] }
-      : { ...previous, nodeIds: [...previous.nodeIds, node.id] });
+    for (const context of parallelContexts(node)) {
+      presentationByFamily.set(context.familyKey, context.presentationKey);
+      const previous = groups.get(context.presentationKey);
+      groups.set(context.presentationKey, previous === undefined
+        ? {
+            id: context.presentationKey,
+            label: context.frame.step,
+            nodeIds: [node.id],
+            iterations: [],
+          }
+        : { ...previous, nodeIds: [...new Set([...previous.nodeIds, node.id])] });
+    }
   }
-  return [...groups.values()].filter((group) => group.nodeIds.length > 1);
+  for (const traceGroup of traceGroups) {
+    if (traceGroup?.familyKey === undefined) continue;
+    const presentationKey = presentationByFamily.get(traceGroup.familyKey);
+    if (presentationKey === undefined) continue;
+    const context = groups.get(presentationKey);
+    if (context === undefined) continue;
+    const previous = context.iterations.find((candidate) => candidate.key === traceGroup.key);
+    groups.set(presentationKey, {
+      ...context,
+      nodeIds: [...new Set([...context.nodeIds, ...(traceGroup.nodeIds ?? [])])],
+      iterations: previous === undefined
+        ? [...context.iterations, traceGroup]
+        : context.iterations.map((candidate) => candidate.key === traceGroup.key
+          ? { ...candidate, ...traceGroup }
+          : candidate),
+    });
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      iterations: [...group.iterations]
+        .sort((left, right) => left.firstEventIndex - right.firstEventIndex || left.key.localeCompare(right.key))
+        .map((iteration, index) => ({ ...iteration, ordinal: index + 1 })),
+    }))
+    .filter((group) => group.nodeIds.length > 1);
+}
+
+export function parallelGroupPresentationOrdinal(trace, groupKey) {
+  if (typeof groupKey !== 'string' || groupKey === '') return undefined;
+  return parallelGroups(stepNodes(trace), trace.parallelGroups ?? [])
+    .flatMap((group) => group.iterations)
+    .find((iteration) => iteration.key === groupKey)?.ordinal;
 }
 
 function findOccurrence(trace, occurrenceId) {
@@ -263,7 +377,7 @@ function layoutSteps(trace, customNodePositions) {
     maxX = Math.max(maxX, x + 220);
     maxY = Math.max(maxY, y + 136);
   });
-  for (const group of parallelGroups(nodes)) {
+  for (const group of parallelGroups(nodes, trace.parallelGroups ?? [])) {
     const groupedNodes = group.nodeIds
       .map((nodeId) => nodeByLogicalId.get(nodeId))
       .filter(Boolean)
@@ -295,7 +409,7 @@ function positionParallelGroup(group, canvas) {
     .find((candidate) => candidate.dataset.parallelGroupId === group.id);
   if (container === undefined || members.length === 0) return;
   const left = Math.min(...members.map((member) => Number.parseFloat(member.style.left))) - PARALLEL_GROUP_PADDING;
-  const top = Math.min(...members.map((member) => Number.parseFloat(member.style.top))) - PARALLEL_GROUP_PADDING - 19;
+  const top = Math.min(...members.map((member) => Number.parseFloat(member.style.top))) - PARALLEL_GROUP_HEADER_HEIGHT;
   const right = Math.max(...members.map((member) => (
     Number.parseFloat(member.style.left) + Math.max(member.offsetWidth, 220)
   )));
@@ -312,9 +426,12 @@ function updateParallelGroups(groups, canvas) {
   groups.forEach((group) => positionParallelGroup(group, canvas));
 }
 
-function renderParallelGroup(group) {
+function renderParallelGroup(group, selectedParallelGroupKey, onSelectParallelGroup) {
   const container = element('section', 'execution-parallel-group');
   container.dataset.parallelGroupId = group.id;
+  container.dataset.selected = String(group.iterations.some(
+    (iteration) => iteration.key === selectedParallelGroupKey,
+  ));
   container.setAttribute('aria-label', t('map.parallelGroup', { step: group.label }));
   const header = element('button', 'execution-parallel-label execution-parallel-group-header', t('map.parallel', { step: group.label }));
   header.type = 'button';
@@ -322,12 +439,72 @@ function renderParallelGroup(group) {
   header.setAttribute('aria-label', t('map.moveParallelGroup', { step: group.label }));
   header.title = t('map.moveParallelGroup', { step: group.label });
   container.append(header);
+  if (group.iterations.length > 0) {
+    const iterationList = element('div', 'execution-parallel-iterations');
+    iterationList.setAttribute('role', 'tablist');
+    iterationList.setAttribute('aria-label', t('map.parallelIterations', { step: group.label }));
+    for (const iteration of group.iterations) {
+      const button = element(
+        'button',
+        'execution-parallel-iteration',
+        t('map.iter', { number: iteration.ordinal }),
+      );
+      button.type = 'button';
+      button.dataset.interactive = 'true';
+      button.dataset.parallelGroupKey = iteration.key;
+      button.dataset.selected = String(iteration.key === selectedParallelGroupKey);
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(iteration.key === selectedParallelGroupKey));
+      button.setAttribute('aria-pressed', String(iteration.key === selectedParallelGroupKey));
+      button.setAttribute('aria-label', t('map.selectParallelIteration', {
+        step: group.label,
+        number: iteration.ordinal,
+      }));
+      button.title = t('map.selectParallelIteration', {
+        step: group.label,
+        number: iteration.ordinal,
+      });
+      // Keep the iteration selector independent from the group's drag handle.
+      // In particular, do not prevent the native button activation/focus path.
+      button.addEventListener('pointerdown', (event) => event.stopPropagation?.());
+      button.addEventListener('click', (event) => {
+        event.stopPropagation?.();
+        onSelectParallelGroup?.(group, iteration);
+      });
+      button.addEventListener('keydown', (event) => {
+        event.stopPropagation?.();
+        const index = group.iterations.findIndex((candidate) => candidate.key === iteration.key);
+        let nextIndex = index;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+          nextIndex = (index + 1) % group.iterations.length;
+        } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+          nextIndex = (index - 1 + group.iterations.length) % group.iterations.length;
+        } else if (event.key === 'Home') {
+          nextIndex = 0;
+        } else if (event.key === 'End') {
+          nextIndex = group.iterations.length - 1;
+        } else return;
+        event.preventDefault?.();
+        const next = group.iterations[nextIndex];
+        const buttons = [...iterationList.querySelectorAll('.execution-parallel-iteration')];
+        buttons[nextIndex]?.focus?.();
+        if (next !== undefined) onSelectParallelGroup?.(group, next);
+      });
+      iterationList.append(button);
+    }
+    container.append(iterationList);
+  }
   return container;
 }
 
 function readMapScale(canvas) {
   const value = Number.parseFloat(canvas.dataset.scale ?? '');
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_MAP_SCALE;
+}
+
+function prepareDragPointerDown(event, handle) {
+  event.preventDefault?.();
+  handle.focus?.();
 }
 
 function updateCanvasBounds(canvas, steps) {
@@ -362,6 +539,7 @@ function attachNodeDrag(step, header, canvas, groups, onMoveNode) {
   };
   header.addEventListener('pointerdown', (event) => {
     if (event.button !== undefined && event.button !== 0) return;
+    prepareDragPointerDown(event, header);
     dragState = {
       pointerId: event.pointerId,
       clientX: event.clientX,
@@ -409,6 +587,11 @@ function attachParallelGroupDrag(group, container, canvas, groups, onMoveNode) {
     .map((nodeId) => [...canvas.querySelectorAll('.execution-step')]
       .find((step) => step.dataset.stepId === nodeId))
     .filter(Boolean);
+  const isDragHandleTarget = (target) => {
+    if (target === undefined || target === null || target === header) return true;
+    return typeof target.closest === 'function'
+      && target.closest('.execution-parallel-group-header') === header;
+  };
   const clear = (event) => {
     if (dragState === null || (event?.pointerId !== undefined && event.pointerId !== dragState.pointerId)) return;
     const completed = dragState;
@@ -426,6 +609,14 @@ function attachParallelGroupDrag(group, container, canvas, groups, onMoveNode) {
   };
   const pointerDown = (event) => {
     if (event.button !== undefined && event.button !== 0) return;
+    // The header is the only drag surface. If an interactive descendant ever
+    // gets added to it, keep that control's pointer sequence intact.
+    if (!isDragHandleTarget(event.target)) {
+      event.stopPropagation?.();
+      return;
+    }
+    event.stopPropagation?.();
+    prepareDragPointerDown(event, header);
     const steps = memberSteps();
     if (steps.length === 0) return;
     dragState = {
@@ -493,7 +684,11 @@ function visibleTransitionRelations(trace) {
     return source?.node.kind === 'step'
       && target?.node.kind === 'step'
       && !callPairs.has(`${transition.source}->${transition.target}`);
-  });
+  }).map((transition) => ({
+    ...transition,
+    sourceParallelGroupKey: findOccurrence(trace, transition.source)?.occurrence.parallelGroupKey,
+    targetParallelGroupKey: findOccurrence(trace, transition.target)?.occurrence.parallelGroupKey,
+  }));
 }
 
 function findCallSource(trace, call) {
@@ -535,6 +730,10 @@ function visibleEdgeRelations(trace) {
         sourceStepId: source?.node.id,
         targetStepId: target?.node.id,
         targetWorkflow: call.childWorkflow,
+        sourceParallelGroupKey: source?.occurrence.parallelGroupKey,
+        targetParallelGroupKey: target?.occurrence.parallelGroupKey,
+        sourceParallelGroupKey: source?.occurrence.parallelGroupKey,
+        targetParallelGroupKey: target?.occurrence.parallelGroupKey,
       };
     });
   return [...transitions, ...calls];
@@ -547,13 +746,20 @@ function edgeRole(
   sourceStepId,
   targetStepId,
   selectedStepId,
+  selectedParallelGroupKey = null,
+  sourceParallelGroupKey,
+  targetParallelGroupKey,
 ) {
   const incoming = selectedOccurrenceId !== null
     ? target === selectedOccurrenceId
-    : selectedStepId !== null && targetStepId === selectedStepId;
+    : selectedStepId !== null
+      ? targetStepId === selectedStepId
+      : selectedParallelGroupKey !== null && targetParallelGroupKey === selectedParallelGroupKey;
   const outgoing = selectedOccurrenceId !== null
     ? source === selectedOccurrenceId
-    : selectedStepId !== null && sourceStepId === selectedStepId;
+    : selectedStepId !== null
+      ? sourceStepId === selectedStepId
+      : selectedParallelGroupKey !== null && sourceParallelGroupKey === selectedParallelGroupKey;
   if (incoming && outgoing) return 'incoming-outgoing';
   if (incoming) return 'incoming';
   if (outgoing) return 'outgoing';
@@ -564,14 +770,18 @@ function edgeRoleParts(role) {
   return role === 'incoming-outgoing' ? ['incoming', 'outgoing'] : role === 'none' ? [] : [role];
 }
 
-function edgeDirectionLabelKey(selectedOccurrenceId, selectedStepId, role) {
+function edgeDirectionLabelKey(selectedOccurrenceId, selectedStepId, selectedParallelGroupKey, role) {
   if (role === 'incoming') {
-    return selectedOccurrenceId === null && selectedStepId !== null
+    return selectedOccurrenceId === null && selectedStepId === null && selectedParallelGroupKey !== null
+      ? 'map.parallelEdgeIncoming'
+      : selectedOccurrenceId === null && selectedStepId !== null
       ? 'map.stepEdgeIncoming'
       : 'map.edgeIncoming';
   }
   if (role === 'outgoing') {
-    return selectedOccurrenceId === null && selectedStepId !== null
+    return selectedOccurrenceId === null && selectedStepId === null && selectedParallelGroupKey !== null
+      ? 'map.parallelEdgeOutgoing'
+      : selectedOccurrenceId === null && selectedStepId !== null
       ? 'map.stepEdgeOutgoing'
       : 'map.edgeOutgoing';
   }
@@ -588,7 +798,7 @@ function markersForEdgeRole(role) {
   };
 }
 
-function applyEdgeSelection(svg, selectedOccurrenceId, selectedStepId = null) {
+function applyEdgeSelection(svg, selectedOccurrenceId, selectedStepId = null, selectedParallelGroupKey = null) {
   for (const path of svg.querySelectorAll('[data-edge]')) {
     const role = edgeRole(
       path.getAttribute('data-source-occurrence-id'),
@@ -597,6 +807,9 @@ function applyEdgeSelection(svg, selectedOccurrenceId, selectedStepId = null) {
       path.getAttribute('data-source-step-id'),
       path.getAttribute('data-target-step-id'),
       selectedStepId,
+      selectedParallelGroupKey,
+      path.getAttribute('data-source-parallel-group-key'),
+      path.getAttribute('data-target-parallel-group-key'),
     );
     const baseClass = path.getAttribute('data-edge-base-class') ?? path.getAttribute('class') ?? '';
     const roleClasses = edgeRoleParts(role).map((part) => `execution-edge-emphasis-${part}`);
@@ -607,7 +820,7 @@ function applyEdgeSelection(svg, selectedOccurrenceId, selectedStepId = null) {
     path.setAttribute('marker-end', markers.end);
     const baseLabel = path.getAttribute('data-edge-base-label') ?? path.getAttribute('aria-label') ?? '';
     const directionLabels = edgeRoleParts(role)
-      .map((part) => edgeDirectionLabelKey(selectedOccurrenceId, selectedStepId, part))
+      .map((part) => edgeDirectionLabelKey(selectedOccurrenceId, selectedStepId, selectedParallelGroupKey, part))
       .filter((key) => key !== null)
       .map((key) => t(key));
     const accessibleLabel = directionLabels.length === 0
@@ -619,18 +832,20 @@ function applyEdgeSelection(svg, selectedOccurrenceId, selectedStepId = null) {
   }
 }
 
-function renderSelectionLegend(selectedOccurrenceId, selectedStepId, roles) {
-  if ((selectedOccurrenceId === null && selectedStepId === null) || roles.size === 0) return null;
+function renderSelectionLegend(selectedOccurrenceId, selectedStepId, selectedParallelGroupKey, roles) {
+  if ((selectedOccurrenceId === null && selectedStepId === null && selectedParallelGroupKey === null) || roles.size === 0) return null;
   const legend = element('div', 'execution-map-legend execution-map-selection-legend');
   legend.setAttribute(
     'aria-label',
-    t(selectedOccurrenceId === null ? 'map.stepEdgeLegend' : 'map.edgeLegend'),
+    t(selectedParallelGroupKey !== null
+      ? 'map.parallelEdgeLegend'
+      : selectedOccurrenceId === null ? 'map.stepEdgeLegend' : 'map.edgeLegend'),
   );
   const incomingLabel = selectedOccurrenceId === null
-    ? 'map.stepEdgeIncoming'
+    ? selectedParallelGroupKey !== null ? 'map.parallelEdgeIncoming' : 'map.stepEdgeIncoming'
     : 'map.edgeIncoming';
   const outgoingLabel = selectedOccurrenceId === null
-    ? 'map.stepEdgeOutgoing'
+    ? selectedParallelGroupKey !== null ? 'map.parallelEdgeOutgoing' : 'map.stepEdgeOutgoing'
     : 'map.edgeOutgoing';
   for (const [role, labelKey] of [
     ['incoming', incomingLabel],
@@ -651,9 +866,14 @@ function renderSelectionLegend(selectedOccurrenceId, selectedStepId, roles) {
   return legend;
 }
 
-function selectionRolesFromRelations(relations, selectedOccurrenceId, selectedStepId = null) {
+function selectionRolesFromRelations(
+  relations,
+  selectedOccurrenceId,
+  selectedStepId = null,
+  selectedParallelGroupKey = null,
+) {
   const roles = new Set();
-  if (selectedOccurrenceId === null && selectedStepId === null) return roles;
+  if (selectedOccurrenceId === null && selectedStepId === null && selectedParallelGroupKey === null) return roles;
   for (const relation of relations) {
     const role = edgeRole(
       relation.source,
@@ -662,15 +882,23 @@ function selectionRolesFromRelations(relations, selectedOccurrenceId, selectedSt
       relation.sourceStepId ?? relation.sourceLogicalId,
       relation.targetStepId ?? relation.targetLogicalId,
       selectedStepId,
+      selectedParallelGroupKey,
+      relation.sourceParallelGroupKey,
+      relation.targetParallelGroupKey,
     );
     for (const part of edgeRoleParts(role)) roles.add(part);
   }
   return roles;
 }
 
-function selectionRolesFromEdges(edges, selectedOccurrenceId, selectedStepId = null) {
+function selectionRolesFromEdges(
+  edges,
+  selectedOccurrenceId,
+  selectedStepId = null,
+  selectedParallelGroupKey = null,
+) {
   const roles = new Set();
-  if (selectedOccurrenceId === null && selectedStepId === null) return roles;
+  if (selectedOccurrenceId === null && selectedStepId === null && selectedParallelGroupKey === null) return roles;
   for (const edge of edges) {
     const role = edgeRole(
       edge.getAttribute('data-source-occurrence-id'),
@@ -679,16 +907,24 @@ function selectionRolesFromEdges(edges, selectedOccurrenceId, selectedStepId = n
       edge.getAttribute('data-source-step-id'),
       edge.getAttribute('data-target-step-id'),
       selectedStepId,
+      selectedParallelGroupKey,
+      edge.getAttribute('data-source-parallel-group-key'),
+      edge.getAttribute('data-target-parallel-group-key'),
     );
     for (const part of edgeRoleParts(role)) roles.add(part);
   }
   return roles;
 }
 
-function replaceSelectionLegend(header, selectedOccurrenceId, selectedStepId, roles) {
+function replaceSelectionLegend(header, selectedOccurrenceId, selectedStepId, selectedParallelGroupKey, roles) {
   const existing = header.querySelectorAll('.execution-map-selection-legend')[0];
   const children = [...header.children].filter((child) => child !== existing);
-  const legend = renderSelectionLegend(selectedOccurrenceId, selectedStepId, roles);
+  const legend = renderSelectionLegend(
+    selectedOccurrenceId,
+    selectedStepId,
+    selectedParallelGroupKey,
+    roles,
+  );
   header.replaceChildren(...children, ...(legend === null ? [] : [legend]));
 }
 
@@ -861,6 +1097,12 @@ function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas
   path.setAttribute('data-target-occurrence-id', relation.target);
   if (sourceStepId !== undefined) path.setAttribute('data-source-step-id', sourceStepId);
   if (targetStepId !== undefined) path.setAttribute('data-target-step-id', targetStepId);
+  if (relation.sourceParallelGroupKey !== undefined) {
+    path.setAttribute('data-source-parallel-group-key', relation.sourceParallelGroupKey);
+  }
+  if (relation.targetParallelGroupKey !== undefined) {
+    path.setAttribute('data-target-parallel-group-key', relation.targetParallelGroupKey);
+  }
   if (relation.targetWorkflow !== undefined) path.setAttribute('data-target-workflow', relation.targetWorkflow);
   const markers = markersForEdgeRole('none');
   path.setAttribute('marker-start', markers.start);
@@ -936,6 +1178,7 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
     svg,
     canvas.dataset.selectedOccurrenceId || null,
     canvas.dataset.selectedStepId || null,
+    canvas.dataset.selectedParallelGroupKey || null,
   );
 }
 
@@ -956,6 +1199,8 @@ function renderRelationOverlay(section, map, canvas, trace, groups, onMoveNode, 
     'aria-label',
     canvas.dataset.selectedOccurrenceId !== undefined && canvas.dataset.selectedOccurrenceId !== ''
       ? t('map.edgeLegend')
+      : canvas.dataset.selectedParallelGroupKey !== undefined && canvas.dataset.selectedParallelGroupKey !== ''
+        ? t('map.parallelEdgeLegend')
       : canvas.dataset.selectedStepId !== undefined && canvas.dataset.selectedStepId !== ''
         ? t('map.stepEdgeLegend')
         : t('map.observedPath'),
@@ -1100,7 +1345,10 @@ export function renderExecutionMap(trace, options) {
 
   const customNodePositions = options.customNodePositions ?? new Map();
   const layout = layoutSteps(trace, customNodePositions);
-  const groups = parallelGroups(nodes);
+  const groups = parallelGroups(nodes, trace.parallelGroups ?? []);
+  const presentationParallelGroupOrdinals = new Map(
+    groups.flatMap((group) => group.iterations.map((iteration) => [iteration.key, iteration.ordinal])),
+  );
   const iterationTargets = new Set(trace.transitions
     .filter((transition) => transition.kind === 'loop')
     .map((transition) => transition.targetLogicalId));
@@ -1116,10 +1364,12 @@ export function renderExecutionMap(trace, options) {
   const selectionLegend = renderSelectionLegend(
     options.selectedOccurrenceId ?? null,
     options.selectedStepId ?? null,
+    options.selectedParallelGroupKey ?? null,
     selectionRolesFromRelations(
       visibleEdgeRelations(trace),
       options.selectedOccurrenceId ?? null,
       options.selectedStepId ?? null,
+      options.selectedParallelGroupKey ?? null,
     ),
   );
   if (selectionLegend !== null) mapHeader.append(selectionLegend);
@@ -1131,7 +1381,9 @@ export function renderExecutionMap(trace, options) {
   map.setAttribute('aria-label', t('map.ariaLabel'));
   map.setAttribute('aria-description', t('map.panHint'));
   map.dataset.panHint = t('map.panHint');
-  map.dataset.iterationSelected = String(options.selectedOccurrenceId !== null);
+  map.dataset.iterationSelected = String(
+    options.selectedOccurrenceId !== null || options.selectedParallelGroupKey !== null,
+  );
   executionMapHeaders.set(map, mapHeader);
   const canvas = element('div', 'execution-map-canvas');
   const scale = clampMapScale(options.scale === undefined ? DEFAULT_MAP_SCALE : options.scale);
@@ -1140,17 +1392,26 @@ export function renderExecutionMap(trace, options) {
   canvas.dataset.scale = String(scale);
   canvas.dataset.selectedOccurrenceId = options.selectedOccurrenceId ?? '';
   canvas.dataset.selectedStepId = options.selectedStepId ?? '';
+  canvas.dataset.selectedParallelGroupKey = options.selectedParallelGroupKey ?? '';
   canvas.style.setProperty('width', `${layout.width}px`);
   canvas.style.setProperty('height', `${layout.height}px`);
   canvas.style.setProperty('transform', `scale(${scale})`);
   canvas.style.setProperty('transform-origin', '0 0');
-  for (const group of groups) canvas.append(renderParallelGroup(group));
+  for (const group of groups) {
+    canvas.append(renderParallelGroup(
+      group,
+      options.selectedParallelGroupKey ?? null,
+      options.onSelectParallelGroup,
+    ));
+  }
   for (const node of nodes) {
     const renderedStep = renderStep(
       node,
       layout.positions.get(node.id) ?? { x: 28, y: 28 },
       options.selectedStepId,
       options.selectedOccurrenceId,
+      options.selectedParallelGroupKey ?? null,
+      presentationParallelGroupOrdinals,
       options.onSelectStep,
       options.onSelectOccurrence,
       iterationTargets.has(node.id),
@@ -1188,6 +1449,7 @@ export function renderExecutionMap(trace, options) {
     map,
     options.selectedOccurrenceId ?? null,
     options.selectedStepId ?? null,
+    options.selectedParallelGroupKey ?? null,
   );
   return section;
 }
@@ -1206,36 +1468,66 @@ export function disposeExecutionMap(container) {
   }
 }
 
-export function updateExecutionMapSelection(container, selectedOccurrenceId, selectedStepId = null) {
-  container.dataset.iterationSelected = String(selectedOccurrenceId !== null);
+export function updateExecutionMapSelection(
+  container,
+  selectedOccurrenceId,
+  selectedStepId = null,
+  selectedParallelGroupKey = null,
+) {
+  container.dataset.iterationSelected = String(
+    selectedOccurrenceId !== null || selectedParallelGroupKey !== null,
+  );
   const canvas = container.querySelectorAll('.execution-map-canvas')[0];
   if (canvas !== undefined) {
     canvas.dataset.selectedOccurrenceId = selectedOccurrenceId ?? '';
     canvas.dataset.selectedStepId = selectedStepId ?? '';
+    canvas.dataset.selectedParallelGroupKey = selectedParallelGroupKey ?? '';
   }
   for (const step of container.querySelectorAll('.execution-step')) {
     const selectedStep = selectedStepId !== null
       && selectedOccurrenceId === null
       && step.dataset.stepId === selectedStepId;
     const selectedOccurrence = [...step.querySelectorAll('[data-occurrence-id]')]
-      .some((button) => button.dataset.occurrenceId === selectedOccurrenceId);
+      .some((button) => button.dataset.occurrenceId === selectedOccurrenceId
+        || selectedParallelGroupKey !== null
+          && button.dataset.parallelGroupKey === selectedParallelGroupKey);
     step.dataset.selected = String(selectedStep);
     step.dataset.active = String(selectedOccurrence);
     const header = step.querySelectorAll('.execution-step-header')[0];
     if (header !== undefined) header.setAttribute('aria-pressed', String(selectedStep));
   }
   for (const chip of container.querySelectorAll('[data-occurrence-id]')) {
-    const selected = chip.dataset.occurrenceId === selectedOccurrenceId;
+    const parallelGroupKey = chip.dataset.parallelGroupKey ?? '';
+    const hidden = selectedParallelGroupKey !== null
+      && parallelGroupKey !== ''
+      && parallelGroupKey !== selectedParallelGroupKey;
+    chip.hidden = hidden;
+    const selected = chip.dataset.occurrenceId === selectedOccurrenceId
+      || selectedParallelGroupKey !== null
+        && parallelGroupKey === selectedParallelGroupKey;
     chip.dataset.selected = String(selected);
     chip.setAttribute('aria-pressed', String(selected));
   }
+  for (const button of container.querySelectorAll('.execution-parallel-iteration')) {
+    const selected = button.dataset.parallelGroupKey === selectedParallelGroupKey;
+    button.dataset.selected = String(selected);
+    button.setAttribute('aria-selected', String(selected));
+    button.setAttribute('aria-pressed', String(selected));
+  }
+  for (const group of container.querySelectorAll('.execution-parallel-group')) {
+    const selected = [...group.querySelectorAll('.execution-parallel-iteration')]
+      .some((button) => button.dataset.parallelGroupKey === selectedParallelGroupKey);
+    group.dataset.selected = String(selected);
+  }
   const overlay = container.querySelectorAll('.execution-edge-overlay')[0];
   if (overlay !== undefined) {
-    applyEdgeSelection(overlay, selectedOccurrenceId, selectedStepId);
+    applyEdgeSelection(overlay, selectedOccurrenceId, selectedStepId, selectedParallelGroupKey);
     overlay.setAttribute(
       'aria-label',
       selectedOccurrenceId === null
-        ? selectedStepId === null ? t('map.observedPath') : t('map.stepEdgeLegend')
+        ? selectedParallelGroupKey !== null
+          ? t('map.parallelEdgeLegend')
+          : selectedStepId === null ? t('map.observedPath') : t('map.stepEdgeLegend')
         : t('map.edgeLegend'),
     );
   }
@@ -1245,7 +1537,8 @@ export function updateExecutionMapSelection(container, selectedOccurrenceId, sel
       container.querySelectorAll('[data-edge]'),
       selectedOccurrenceId,
       selectedStepId,
+      selectedParallelGroupKey,
     );
-    replaceSelectionLegend(header, selectedOccurrenceId, selectedStepId, roles);
+    replaceSelectionLegend(header, selectedOccurrenceId, selectedStepId, selectedParallelGroupKey, roles);
   }
 }

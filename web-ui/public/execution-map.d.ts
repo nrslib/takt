@@ -1,6 +1,7 @@
 import type {
   ExecutionNode,
   ExecutionOccurrence,
+  ExecutionParallelGroup,
   ExecutionTrace,
 } from './execution-model.js';
 
@@ -12,6 +13,10 @@ export const MIN_MAP_SCALE: number;
 export const MAX_MAP_SCALE: number;
 export const DEFAULT_MAP_SCALE: number;
 export function clampMapScale(value: number): number;
+export function parallelGroupPresentationOrdinal(
+  trace: ExecutionTrace,
+  groupKey: string | null | undefined,
+): number | undefined;
 
 export interface EdgePoint {
   readonly x: number;
@@ -38,8 +43,18 @@ export interface ExecutionMapOptions {
   readonly emptyState: unknown;
   readonly selectedStepId?: string | null;
   readonly selectedOccurrenceId: string | null;
+  readonly selectedParallelGroupKey?: string | null;
   readonly onSelectStep?: (node: ExecutionNode) => void;
   readonly onSelectOccurrence: (node: ExecutionNode, occurrence: ExecutionOccurrence) => void;
+  readonly onSelectParallelGroup?: (
+    group: ExecutionParallelGroup,
+    iteration: {
+      readonly key: string;
+      readonly ordinal: number;
+      readonly familyKey?: string;
+      readonly iteration?: number;
+    },
+  ) => void;
   readonly customNodePositions?: ReadonlyMap<string, { readonly x: number; readonly y: number }>;
   readonly onMoveNode?: (
     nodeId: string,
@@ -60,4 +75,5 @@ export function updateExecutionMapSelection(
   container: ExecutionMapElement,
   selectedOccurrenceId: string | null,
   selectedStepId?: string | null,
+  selectedParallelGroupKey?: string | null,
 ): void;

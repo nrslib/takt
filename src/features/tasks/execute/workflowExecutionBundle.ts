@@ -1,9 +1,14 @@
 import {
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -39,6 +44,21 @@ import { loadAgentPrompt, loadCustomAgents } from '../../../infra/config/loaders
 const BUNDLE_VERSION = 1;
 const RESOURCE_REF_PREFIX = 'bundle-resource:sha256:';
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+/**
+ * Inspection must not turn a persisted run into an unbounded JSON parser.
+ * These limits are deliberately per-file so a normal bundle may still contain
+ * many nodes/resources while a single manifest/object cannot exhaust memory.
+ */
+export const MAX_WORKFLOW_BUNDLE_MANIFEST_BYTES = 1 * 1024 * 1024;
+export const MAX_WORKFLOW_BUNDLE_OBJECT_BYTES = 4 * 1024 * 1024;
+/**
+ * Resource descriptors are validated before a full execution loader allocates
+ * their contents.  The metadata-only reader uses the same bounds while it
+ * intentionally never reads resource bytes.
+ */
+export const MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES = 16 * 1024 * 1024;
+export const MAX_WORKFLOW_BUNDLE_RESOURCES_BYTES = 64 * 1024 * 1024;
+const OPEN_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 type JsonPrimitive = null | boolean | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -329,9 +349,18 @@ export interface PreparedWorkflowExecutionBundle {
 export interface LoadedWorkflowExecutionBundle {
   readonly manifest: BundleManifest;
   readonly rootWorkflow: WorkflowConfig;
+  /** Every verified node config, including parallel/fixed/pool children. */
+  readonly workflows: readonly WorkflowConfig[];
   readonly workflowCallResolver: WorkflowCallResolver;
   readonly prepared: PreparedWorkflowExecutionBundle;
   readonly resourceRoot: string;
+}
+
+export interface LoadedWorkflowExecutionBundleMetadata {
+  readonly manifest: BundleManifest;
+  readonly rootWorkflow: WorkflowConfig;
+  /** Every verified node config, including parallel/fixed/pool children. */
+  readonly workflows: readonly WorkflowConfig[];
 }
 
 function sha256(content: string | Buffer): string {
@@ -680,6 +709,83 @@ function assertRegularFile(path: string, label: string): void {
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${label} must be a regular file: ${path}`);
 }
 
+function readBoundedFile(path: string, label: string, maxBytes: number, encoding: BufferEncoding): string {
+  assertRegularFile(path, label);
+  const size = lstatSync(path).size;
+  if (size > maxBytes) {
+    throw new Error(`${label} exceeds the ${maxBytes}-byte limit`);
+  }
+  return readFileSync(path, encoding);
+}
+
+interface VerifiedWorkflowBundleResource {
+  readonly size: number;
+  readonly bytes?: Buffer;
+}
+
+/**
+ * Validate a resource through one bounded file descriptor. The descriptor
+ * metadata is checked against the descriptor before any Buffer is allocated;
+ * the post-read stat and digest checks close the remaining replacement and
+ * content races without ever reading an unbounded file into memory.
+ */
+function readVerifiedWorkflowBundleResource(
+  path: string,
+  label: string,
+  expectedHash: string,
+  expectedSize: number,
+  currentTotalBytes: number,
+  loadResources: boolean,
+): VerifiedWorkflowBundleResource {
+  if (expectedSize > MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES) {
+    throw new Error(`${label} exceeds the ${MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES}-byte limit`);
+  }
+  assertRegularFile(path, label);
+  let fileDescriptor: number | undefined;
+  try {
+    fileDescriptor = openSync(path, constants.O_RDONLY | OPEN_NOFOLLOW);
+    const before = fstatSync(fileDescriptor);
+    if (!before.isFile()) throw new Error(`${label} must be a regular file: ${path}`);
+    if (!Number.isSafeInteger(before.size)) {
+      throw new Error(`${label} has an invalid size: ${path}`);
+    }
+    if (before.size > MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES) {
+      throw new Error(`${label} exceeds the ${MAX_WORKFLOW_BUNDLE_RESOURCE_BYTES}-byte limit`);
+    }
+    if (before.size !== expectedSize) {
+      throw new Error(`${label} size does not match its manifest descriptor`);
+    }
+    const totalBytes = currentTotalBytes + before.size;
+    if (totalBytes > MAX_WORKFLOW_BUNDLE_RESOURCES_BYTES) {
+      throw new Error(`Workflow bundle resources exceed the ${MAX_WORKFLOW_BUNDLE_RESOURCES_BYTES}-byte limit`);
+    }
+    if (!loadResources) return { size: before.size };
+
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const bytesRead = readSync(fileDescriptor, bytes, offset, bytes.length - offset, offset);
+      if (bytesRead === 0) throw new Error(`${label} changed while it was being read`);
+      offset += bytesRead;
+    }
+    const after = fstatSync(fileDescriptor);
+    if (!after.isFile() || after.size !== before.size) {
+      throw new Error(`${label} changed while it was being read`);
+    }
+    if (sha256(bytes) !== expectedHash) {
+      throw new Error(`${label} failed integrity validation`);
+    }
+    return { size: before.size, bytes };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new Error(`${label} must be a regular file: ${path}`);
+    }
+    throw error;
+  } finally {
+    if (fileDescriptor !== undefined) closeSync(fileDescriptor);
+  }
+}
+
 function assertRegularDirectory(path: string, label: string): void {
   const stat = lstatSync(path);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${label} must be a regular directory: ${path}`);
@@ -925,7 +1031,10 @@ function pathKey(path: StepPath): string {
   return canonicalJson(path);
 }
 
-export function loadWorkflowExecutionBundle(runPaths: RunPaths): LoadedWorkflowExecutionBundle {
+function loadWorkflowExecutionBundleInternal(
+  runPaths: RunPaths,
+  loadResources: boolean,
+): LoadedWorkflowExecutionBundle {
   if (!existsSync(runPaths.workflowBundleAbs)) throw new Error(`Workflow execution bundle is missing for run "${runPaths.slug}"`);
   assertRegularDirectory(runPaths.workflowBundleAbs, 'Workflow execution bundle root');
   assertRegularDirectory(runPaths.workflowBundleObjectsAbs, 'Workflow execution bundle objects');
@@ -936,11 +1045,21 @@ export function loadWorkflowExecutionBundle(runPaths: RunPaths): LoadedWorkflowE
   }
   assertRegularFile(runPaths.workflowBundleManifestAbs, 'Workflow bundle manifest');
   assertRegularFile(runPaths.workflowBundleManifestHashAbs, 'Workflow bundle manifest hash');
-  const manifestRaw = readFileSync(runPaths.workflowBundleManifestAbs, 'utf-8');
+  const manifestRaw = readBoundedFile(
+    runPaths.workflowBundleManifestAbs,
+    'Workflow bundle manifest',
+    MAX_WORKFLOW_BUNDLE_MANIFEST_BYTES,
+    'utf-8',
+  );
   const manifestParsed = JSON.parse(manifestRaw) as unknown;
   const manifestText = canonicalJson(manifestParsed);
   if (manifestRaw !== `${manifestText}\n`) throw new Error('Workflow execution bundle manifest is not canonical JSON');
-  const manifestHashRaw = readFileSync(runPaths.workflowBundleManifestHashAbs, 'utf-8');
+  const manifestHashRaw = readBoundedFile(
+    runPaths.workflowBundleManifestHashAbs,
+    'Workflow bundle manifest hash',
+    128,
+    'utf-8',
+  );
   const expectedManifestHash = requireSha256(manifestHashRaw.trim(), 'Workflow bundle manifest hash');
   if (manifestHashRaw !== `${expectedManifestHash}\n`) throw new Error('Workflow execution bundle manifest hash file is not canonical');
   if (sha256(manifestText) !== expectedManifestHash) {
@@ -958,20 +1077,31 @@ export function loadWorkflowExecutionBundle(runPaths: RunPaths): LoadedWorkflowE
     throw new Error('Workflow execution bundle resource set does not match manifest');
   }
   const resources = new Map<string, Buffer>();
+  let resourceBytes = 0;
   for (const [hash, descriptor] of Object.entries(manifest.resources)) {
     const path = join(runPaths.workflowBundleResourcesAbs, hash);
-    assertRegularFile(path, `Workflow bundle resource ${hash}`);
-    const bytes = readFileSync(path);
-    if (bytes.length !== descriptor.size || sha256(bytes) !== hash) throw new Error(`Workflow bundle resource ${hash} failed integrity validation`);
-    resources.set(hash, bytes);
+    const verified = readVerifiedWorkflowBundleResource(
+      path,
+      `Workflow bundle resource ${hash}`,
+      hash,
+      descriptor.size,
+      resourceBytes,
+      loadResources,
+    );
+    resourceBytes += verified.size;
+    if (verified.bytes !== undefined) resources.set(hash, verified.bytes);
   }
   const nodes = new Map<string, { object: BundleNodeObject; config: WorkflowConfig }>();
   const objects = new Map<string, string>();
   const usedResources = new Set<string>();
   for (const [nodeId, objectHash] of Object.entries(manifest.nodes)) {
     const path = join(runPaths.workflowBundleObjectsAbs, `${objectHash}.json`);
-    assertRegularFile(path, `Workflow bundle object ${objectHash}`);
-    const raw = readFileSync(path, 'utf-8');
+    const raw = readBoundedFile(
+      path,
+      `Workflow bundle object ${objectHash}`,
+      MAX_WORKFLOW_BUNDLE_OBJECT_BYTES,
+      'utf-8',
+    );
     const parsed = JSON.parse(raw) as unknown;
     const encoded = canonicalJson(parsed);
     if (raw !== `${encoded}\n`) throw new Error(`Workflow bundle object ${objectHash} is not canonical JSON`);
@@ -1052,8 +1182,54 @@ export function loadWorkflowExecutionBundle(runPaths: RunPaths): LoadedWorkflowE
   return {
     manifest,
     rootWorkflow: root.config,
+    workflows: [...nodes.values()].map(({ config }) => config),
     workflowCallResolver,
     prepared: { manifest, objects, resources },
     resourceRoot: runPaths.workflowBundleResourcesAbs,
   };
+}
+
+export function loadWorkflowExecutionBundle(runPaths: RunPaths): LoadedWorkflowExecutionBundle {
+  return loadWorkflowExecutionBundleInternal(runPaths, true);
+}
+
+/**
+ * Validate the persisted bundle identity and workflow graph for read-only
+ * inspection without materializing any prompt/arpeggio resource bytes.
+ */
+export function loadWorkflowExecutionBundleMetadata(
+  runPaths: RunPaths,
+): LoadedWorkflowExecutionBundleMetadata {
+  const loaded = loadWorkflowExecutionBundleInternal(runPaths, false);
+  return {
+    manifest: loaded.manifest,
+    rootWorkflow: loaded.rootWorkflow,
+    workflows: loaded.workflows,
+  };
+}
+
+/**
+ * Read-only consumers such as the Web UI intentionally fail closed when a
+ * legacy, missing, or corrupted bundle cannot pass the same validation used
+ * by execution.  Execution callers should continue using the throwing loader
+ * so corruption remains visible at the execution boundary.
+ */
+export function tryLoadWorkflowExecutionBundle(
+  runPaths: RunPaths,
+): LoadedWorkflowExecutionBundle | undefined {
+  try {
+    return loadWorkflowExecutionBundle(runPaths);
+  } catch {
+    return undefined;
+  }
+}
+
+export function tryLoadWorkflowExecutionBundleMetadata(
+  runPaths: RunPaths,
+): LoadedWorkflowExecutionBundleMetadata | undefined {
+  try {
+    return loadWorkflowExecutionBundleMetadata(runPaths);
+  } catch {
+    return undefined;
+  }
 }

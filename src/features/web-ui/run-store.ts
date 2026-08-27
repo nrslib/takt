@@ -4,11 +4,16 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { StatePaths } from '../../core/execution/locations.js';
 import {
+  getAllParallelSubSteps,
+  type WorkflowConfig,
+} from '../../core/models/index.js';
+import {
   readRunLogArtifacts,
   readRunOccurrencePrompts,
   getRunOccurrenceLifecycle,
   type RunLogArtifacts,
   type RunLogEvent,
+  type RunJudgeStage,
   type RunPromptArtifact,
 } from './run-log-cache.js';
 import type { WorkflowResumePoint, WorkflowResumePointEntry } from '../../core/models/index.js';
@@ -17,6 +22,13 @@ import { parseWorkflowCallNamespaceSegment } from '../../core/workflow/workflow-
 import { buildWorkflowCallInvocationIdentity } from '../../core/workflow/workflow-call-invocation-index.js';
 import { buildWorkflowStepParticipationIdentity } from '../../core/workflow/workflow-step-participation-index.js';
 import { buildWorkflowCallSiteRunPathSegment } from '../../core/workflow/workflow-call-site-identity.js';
+import { getWorkflowReference } from '../../core/workflow/workflow-reference.js';
+import { buildRunPathsFromRunsDirectory } from '../../core/workflow/run/run-paths.js';
+import { tryLoadWorkflowExecutionBundleMetadata } from '../tasks/execute/workflowExecutionBundle.js';
+import {
+  formatWorkflowRuleCondition,
+  type WorkflowRuleCondition,
+} from '../../core/models/workflow-rule-condition.js';
 const NOFOLLOW = (constants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
 
 const RUN_STATUSES = new Set(['running', 'completed', 'aborted', 'failed']);
@@ -35,6 +47,21 @@ export class RunOccurrenceNotFoundError extends Error {
   constructor() {
     super('Occurrence was not found in this run');
   }
+}
+
+export interface RunOccurrenceOutcome {
+  readonly matchedRuleIndex?: number;
+  readonly condition?: string;
+  readonly nextStep?: string;
+  readonly returnValue?: string;
+  readonly matchedRuleMethod?: string;
+  readonly matchMethod?: string;
+  readonly provider?: string;
+  readonly providerSource?: string;
+  readonly model?: string;
+  readonly modelSource?: string;
+  readonly judgeStages?: readonly RunJudgeStage[];
+  readonly outputPreview?: string;
 }
 
 interface RunMeta {
@@ -512,23 +539,36 @@ function selectedParticipationReportPaths(
   const step = selectedOccurrence.step ?? current?.step;
   if (stack === undefined || current === undefined || step === undefined) return undefined;
   const enrichedStack = participationStack(stack, meta.resumePoint);
-  const directParent = current.kind === 'parallel' ? undefined : stack.at(-2);
-  const parallelParent = directParent?.kind === 'parallel'
-    && directParent.workflow_ref === current.workflow_ref
-    ? directParent
+  // Session logs produced by the parallel runner keep the group frame as the
+  // last stack entry for every child event.  Older logs can include a child
+  // agent frame as well, so accept both shapes while deriving the same
+  // canonical participation identity.
+  const stackParallelParent = current.kind === 'parallel'
+    && current.step !== step
+    && (current.workflow === selectedOccurrence.workflow
+      || current.workflow_ref === selectedOccurrence.workflow)
+    ? current
     : undefined;
+  const directParent = current.kind === 'parallel' ? undefined : stack.at(-2);
+  const parallelParent = stackParallelParent ?? (
+    directParent?.kind === 'parallel'
+      && directParent.workflow_ref === current.workflow_ref
+      ? directParent
+      : undefined
+  );
+  const workflowReference = stackParallelParent?.workflow_ref ?? current.workflow_ref;
   // Parallel child reports are indexed with the active workflow-call prefix
   // plus a separate parallel_parent field.  The parallel frame in a child
   // event stack is therefore excluded from calls when reconstructing that
   // producer identity.
-  const workflowCallPath = parallelParent === undefined
+  const workflowCallPath = parallelParent === undefined || stackParallelParent !== undefined
     ? enrichedStack.slice(0, -1)
     : enrichedStack.slice(0, -2);
   const parallelParentStepName = parallelParent?.step;
   let identity: string;
   try {
     identity = buildWorkflowStepParticipationIdentity(
-      current.workflow_ref,
+      workflowReference,
       step,
       workflowCallPath,
       parallelParentStepName,
@@ -696,6 +736,144 @@ async function loadLogArtifacts(
   );
 }
 
+interface FrozenRuleMatch {
+  readonly condition?: string;
+  readonly nextStep?: string;
+  readonly returnValue?: string;
+}
+
+function objectRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>>
+    : undefined;
+}
+
+function formatFrozenCondition(value: unknown): string | undefined {
+  const record = objectRecord(value);
+  if (record === undefined || typeof record.kind !== 'string') return undefined;
+  try {
+    const formatted = formatWorkflowRuleCondition(record as WorkflowRuleCondition);
+    return typeof formatted === 'string' && formatted.length > 0 ? formatted : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function workflowReferenceForOccurrence(
+  occurrence: RunLogEvent,
+): string | undefined {
+  const stack = occurrence.stack;
+  if (stack === undefined || stack.length === 0) return undefined;
+  const named = stack.filter((frame) => (
+    occurrence.workflow !== undefined
+      && (frame.workflow === occurrence.workflow || frame.workflow_ref === occurrence.workflow)
+  ));
+  const scoped = named.length > 0
+    ? named
+    : stack.filter((frame) => frame.step === occurrence.step);
+  const references = [...new Set(scoped.map((frame) => frame.workflow_ref))];
+  return references.length === 1 ? references[0] : undefined;
+}
+
+function frozenRuleFromStep(
+  config: WorkflowConfig,
+  stepName: string,
+  ruleIndex: number,
+): FrozenRuleMatch | undefined {
+  const candidates = config.steps.flatMap((step) => [
+    ...(step.name === stepName ? [step] : []),
+    ...(step.parallel === undefined
+      ? []
+      : getAllParallelSubSteps(step.parallel).filter((child) => child.name === stepName)),
+  ]);
+  if (candidates.length !== 1) return undefined;
+  const rules = candidates[0]!.rules;
+  if (!Array.isArray(rules)) return undefined;
+  const rule = rules[ruleIndex];
+  if (rule === undefined) return undefined;
+  const condition = formatFrozenCondition(rule.condition);
+  const next = typeof rule.next === 'string' && rule.next.length > 0 ? rule.next : undefined;
+  const returnValue = typeof rule.returnValue === 'string' && rule.returnValue.length > 0
+    ? rule.returnValue
+    : undefined;
+  if (condition === undefined && next === undefined && returnValue === undefined) return undefined;
+  return {
+    ...(condition === undefined ? {} : { condition }),
+    ...(next === undefined ? {} : { nextStep: next }),
+    ...(returnValue === undefined ? {} : { returnValue }),
+  };
+}
+
+async function readFrozenRuleMatch(
+  location: RunStoreLocation,
+  snapshot: RunsRootSnapshot,
+  meta: RunMeta,
+  occurrence: RunLogEvent,
+): Promise<FrozenRuleMatch | undefined> {
+  if (occurrence.matchedRuleIndex === undefined || occurrence.step === undefined) return undefined;
+  const workflowRef = workflowReferenceForOccurrence(occurrence);
+  if (workflowRef === undefined) return undefined;
+  const runPaths = buildRunPathsFromRunsDirectory(snapshot.directory, meta.runSlug);
+  const loaded = tryLoadWorkflowExecutionBundleMetadata(runPaths);
+  if (loaded === undefined) return undefined;
+
+  // A workflow reference alone is not enough to distinguish two call-site
+  // bindings of the same workflow.  Showing a condition in that case would
+  // make the UI look authoritative while selecting the wrong frozen object,
+  // so only a unique verified bundle identity is accepted.
+  const matchingConfigs = loaded.workflows.filter((config) => getWorkflowReference(config) === workflowRef);
+  if (matchingConfigs.length !== 1) return undefined;
+  return frozenRuleFromStep(
+    matchingConfigs[0]!,
+    occurrence.step,
+    occurrence.matchedRuleIndex,
+  );
+}
+
+async function readOccurrenceOutcome(
+  location: RunStoreLocation,
+  snapshot: RunsRootSnapshot,
+  meta: RunMeta,
+  occurrence: RunLogEvent,
+): Promise<RunOccurrenceOutcome | undefined> {
+  const hasObservedResult = occurrence.matchedRuleIndex !== undefined
+    || occurrence.returnValue !== undefined
+    || occurrence.matchedRuleMethod !== undefined
+    || occurrence.matchMethod !== undefined
+    || occurrence.provider !== undefined
+    || occurrence.providerSource !== undefined
+    || occurrence.model !== undefined
+    || occurrence.modelSource !== undefined
+    || occurrence.judgeStages !== undefined
+    || occurrence.preview !== undefined;
+  if (!hasObservedResult) return undefined;
+  const frozenRule = await readFrozenRuleMatch(location, snapshot, meta, occurrence);
+  return {
+    ...(occurrence.matchedRuleIndex === undefined ? {} : { matchedRuleIndex: occurrence.matchedRuleIndex }),
+    ...(frozenRule?.condition === undefined ? {} : { condition: frozenRule.condition }),
+    ...(frozenRule?.nextStep === undefined ? {} : { nextStep: frozenRule.nextStep }),
+    ...(occurrence.returnValue ?? frozenRule?.returnValue) === undefined
+      ? {}
+      : { returnValue: occurrence.returnValue ?? frozenRule?.returnValue },
+    ...(occurrence.matchedRuleMethod === undefined ? {} : { matchedRuleMethod: occurrence.matchedRuleMethod }),
+    ...(occurrence.matchMethod === undefined ? {} : { matchMethod: occurrence.matchMethod }),
+    ...(occurrence.provider === undefined ? {} : { provider: occurrence.provider }),
+    ...(occurrence.providerSource === undefined ? {} : { providerSource: occurrence.providerSource }),
+    ...(occurrence.model === undefined ? {} : { model: occurrence.model }),
+    ...(occurrence.modelSource === undefined ? {} : { modelSource: occurrence.modelSource }),
+    ...(occurrence.judgeStages === undefined ? {} : { judgeStages: occurrence.judgeStages }),
+    ...(occurrence.preview === undefined ? {} : { outputPreview: occurrence.preview }),
+  };
+}
+
+export interface RunOccurrenceArtifacts {
+  readonly reports: readonly Awaited<ReturnType<typeof readReport>>[];
+  readonly prompts: readonly RunPromptArtifact[];
+  readonly promptsTruncated: boolean;
+  readonly omittedPromptCount: number;
+  readonly outcome?: RunOccurrenceOutcome;
+}
+
 export async function readRunDetail(location: RunStoreLocation, slug: string) {
   assertRunSlug(slug);
   const snapshot = await captureRunsRoot(location);
@@ -712,10 +890,7 @@ export async function readRunOccurrenceArtifacts(
   location: RunStoreLocation,
   slug: string,
   occurrenceId: string,
-): Promise<{
-  readonly reports: readonly Awaited<ReturnType<typeof readReport>>[];
-  readonly prompts: readonly RunPromptArtifact[];
-}> {
+): Promise<RunOccurrenceArtifacts> {
   assertRunSlug(slug);
   if (occurrenceId.length === 0) throw new Error('Occurrence id is required');
   const snapshot = await captureRunsRoot(location);
@@ -733,12 +908,13 @@ export async function readRunOccurrenceArtifacts(
     throw new RunOccurrenceNotFoundError();
   }
   const paths = await resolveSessionLogPaths(location, snapshot, meta);
-  const prompts = await readRunOccurrencePrompts(
+  const promptResult = await readRunOccurrencePrompts(
     paths,
     selectedOccurrence,
     () => verifyRunsRootSnapshot(location, snapshot),
     lifecycle,
   );
+  const outcome = await readOccurrenceOutcome(location, snapshot, meta, selectedOccurrence);
   const reports = await loadReports(
     location,
     snapshot,
@@ -752,7 +928,13 @@ export async function readRunOccurrenceArtifacts(
     ),
   );
   await verifyRunsRootSnapshot(location, snapshot);
-  return { reports, prompts };
+  return {
+    reports,
+    prompts: promptResult.prompts,
+    promptsTruncated: promptResult.promptsTruncated,
+    omittedPromptCount: promptResult.omittedPromptCount,
+    ...(outcome === undefined ? {} : { outcome }),
+  };
 }
 
 export async function resolveRunWatchDirectories(

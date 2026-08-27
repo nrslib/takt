@@ -7,6 +7,7 @@ import {
 import {
   DEFAULT_MAP_SCALE,
   disposeExecutionMap,
+  parallelGroupPresentationOrdinal,
   renderExecutionMap,
   updateExecutionMapSelection,
 } from './execution-map.js';
@@ -98,6 +99,53 @@ function findStep(trace, stepId) {
   return trace.nodes.find((node) => node.id === stepId) ?? null;
 }
 
+function latestParallelGroup(trace) {
+  return [...(trace.parallelGroups ?? [])]
+    .filter((group) => typeof group?.key === 'string' && group.key !== '')
+    .sort((left, right) => (
+      left.firstEventIndex - right.firstEventIndex
+      || left.ordinal - right.ordinal
+      || left.key.localeCompare(right.key)
+    ))
+    .at(-1) ?? null;
+}
+
+function validRuleIndex(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function occurrenceResultIndex(occurrence, outcome) {
+  return validRuleIndex(outcome?.matchedRuleIndex)
+    ?? validRuleIndex(occurrence?.matchedRuleIndex);
+}
+
+function occurrenceResultValue(occurrence, outcome) {
+  return outcome?.returnValue ?? occurrence?.returnValue;
+}
+
+function occurrenceJudgeStages(occurrence, outcome) {
+  const stages = Array.isArray(outcome?.judgeStages)
+    ? outcome.judgeStages
+    : Array.isArray(occurrence?.judgeStages) ? occurrence.judgeStages : [];
+  return stages.filter((stage) => stage !== null && typeof stage === 'object');
+}
+
+function observedTransitionLabel(trace, occurrence) {
+  const relation = trace.transitions.find((candidate) => candidate.source === occurrence.id);
+  if (relation === undefined) return undefined;
+  const target = findOccurrence(trace, relation.target);
+  if (target === null) return undefined;
+  const targetOrdinal = target.occurrence.ordinal === undefined
+    ? ''
+    : ` · ${t('map.iter', { number: target.occurrence.ordinal })}`;
+  return `${target.node.displayLabel ?? target.node.label}${targetOrdinal}`;
+}
+
+function executionTargetLabel(occurrence) {
+  const target = [occurrence.provider, occurrence.model].filter(Boolean).join(' / ');
+  return target === '' ? undefined : target;
+}
+
 export function resolveLogSelection(trace, selectedOccurrenceId) {
   if (selectedOccurrenceId === null) {
     return { events: trace.events, occurrence: null, historyPreview: false, scope: 'run' };
@@ -126,6 +174,10 @@ export function createExecutionView(options) {
   let activeTab = 'live';
   let selectedStepId = null;
   let selectedOccurrenceId = null;
+  let selectedParallelGroupKey = null;
+  let selectedParallelGroupFamilyKey = null;
+  let selectedParallelGroupIteration = null;
+  let parallelSelectionInitialized = false;
   let selectedReport = '';
   let currentDetail = null;
   let currentTrace = null;
@@ -144,6 +196,9 @@ export function createExecutionView(options) {
     status: 'idle',
     reports: [],
     prompts: [],
+    promptsTruncated: false,
+    omittedPromptCount: 0,
+    outcome: null,
     error: null,
   };
 
@@ -176,6 +231,10 @@ export function createExecutionView(options) {
     if (typeof promptIndex === 'string' && promptIndex !== '') {
       return { kind: 'prompt', value: promptIndex };
     }
+    const parallelGroupKey = node.dataset?.parallelGroupKey;
+    if (typeof parallelGroupKey === 'string' && parallelGroupKey !== '') {
+      return { kind: 'parallel-group', value: parallelGroupKey };
+    }
     if (typeof id === 'string' && id !== '') return { kind: 'id', value: id };
     return null;
   }
@@ -199,6 +258,10 @@ export function createExecutionView(options) {
     if (key.kind === 'prompt') {
       return [...focusRoot?.querySelectorAll?.('[data-prompt-index]') ?? []]
         .find((node) => node.dataset?.promptIndex === key.value) ?? null;
+    }
+    if (key.kind === 'parallel-group') {
+      return [...focusRoot?.querySelectorAll?.('[data-parallel-group-key]') ?? []]
+        .find((node) => node.dataset?.parallelGroupKey === key.value) ?? null;
     }
     return null;
   }
@@ -228,6 +291,9 @@ export function createExecutionView(options) {
       status: 'idle',
       reports: [],
       prompts: [],
+      promptsTruncated: false,
+      omittedPromptCount: 0,
+      outcome: null,
       error: null,
     };
     selectedReport = '';
@@ -243,7 +309,16 @@ export function createExecutionView(options) {
     const key = currentOccurrenceArtifactKey();
     return key !== null && occurrenceArtifacts.key === key
       ? occurrenceArtifacts
-      : { key, status: 'idle', reports: [], prompts: [], error: null };
+      : {
+          key,
+          status: 'idle',
+          reports: [],
+          prompts: [],
+          promptsTruncated: false,
+          omittedPromptCount: 0,
+          outcome: null,
+          error: null,
+        };
   }
 
   function requestOccurrenceArtifacts() {
@@ -261,6 +336,9 @@ export function createExecutionView(options) {
       status: 'loading',
       reports: [],
       prompts: [],
+      promptsTruncated: false,
+      omittedPromptCount: 0,
+      outcome: null,
       error: null,
     };
     renderInspectorPanel();
@@ -285,7 +363,23 @@ export function createExecutionView(options) {
         const prompts = Array.isArray(result?.prompts)
           ? result.prompts.filter((prompt) => prompt !== null && typeof prompt === 'object')
           : [];
-        occurrenceArtifacts = { key, status: 'ready', reports, prompts, error: null };
+        const omittedPromptCount = Number.isSafeInteger(result?.omittedPromptCount)
+          && result.omittedPromptCount >= 0
+          ? result.omittedPromptCount
+          : 0;
+        const outcome = result?.outcome !== null && typeof result?.outcome === 'object'
+          ? result.outcome
+          : null;
+        occurrenceArtifacts = {
+          key,
+          status: 'ready',
+          reports,
+          prompts,
+          promptsTruncated: result?.promptsTruncated === true && omittedPromptCount > 0,
+          omittedPromptCount,
+          outcome,
+          error: null,
+        };
         renderInspectorPanel();
       })
       .catch((error) => {
@@ -295,6 +389,9 @@ export function createExecutionView(options) {
           status: 'error',
           reports: [],
           prompts: [],
+          promptsTruncated: false,
+          omittedPromptCount: 0,
+          outcome: null,
           error: error instanceof Error ? error.message : String(error),
         };
         renderInspectorPanel();
@@ -333,8 +430,10 @@ export function createExecutionView(options) {
       emptyState: renderEmpty(t('viewer.waitingForExecution'), t('viewer.firstStepDescription')),
       selectedStepId,
       selectedOccurrenceId,
+      selectedParallelGroupKey,
       onSelectStep: selectStep,
       onSelectOccurrence: selectOccurrence,
+      onSelectParallelGroup: selectParallelGroup,
       customNodePositions,
       onMoveNode(nodeId, position) {
         customNodePositions = new Map(customNodePositions).set(nodeId, position);
@@ -437,6 +536,19 @@ export function createExecutionView(options) {
     return panel;
   }
 
+  function renderPromptLimitNotice(state) {
+    if (state.promptsTruncated !== true
+      || !Number.isSafeInteger(state.omittedPromptCount)
+      || state.omittedPromptCount <= 0) return null;
+    const notice = element(
+      'p',
+      'artifact-limit-notice',
+      t('viewer.promptsTruncated', { count: state.omittedPromptCount }),
+    );
+    notice.setAttribute('role', 'status');
+    return notice;
+  }
+
   function renderOccurrenceArtifactState(kind) {
     const panel = element('section', `detail-panel ${kind === 'reports' ? 'reports-panel' : 'prompts-panel'}`);
     const state = occurrenceArtifactState();
@@ -455,7 +567,9 @@ export function createExecutionView(options) {
       }
       return renderReportsPanel(state.reports);
     }
+    const limitNotice = renderPromptLimitNotice(state);
     if (state.prompts.length === 0) {
+      if (limitNotice !== null) panel.append(limitNotice);
       panel.append(renderEmpty(t('viewer.iterationPromptsEmpty'), t('viewer.iterationPromptsEmptyDescription')));
       return panel;
     }
@@ -490,7 +604,7 @@ export function createExecutionView(options) {
       card.dataset.promptIndex = String(index);
       list.append(card);
     }
-    panel.append(list);
+    panel.append(...(limitNotice === null ? [] : [limitNotice]), list);
     return panel;
   }
 
@@ -679,12 +793,18 @@ export function createExecutionView(options) {
       item.dataset.occurrenceId = occurrence.id;
       item.dataset.selected = 'false';
       item.setAttribute('aria-pressed', 'false');
-      const label = `${selected.displayLabel ?? selected.label} · ${t('map.iteration', { number: ordinal })}`;
+      const resultIndex = validRuleIndex(occurrence.matchedRuleIndex);
+      const resultLabel = resultIndex === undefined
+        ? t(`app.status.${occurrence.status}`)
+        : t('map.result', { number: resultIndex + 1 });
+      const label = `${selected.displayLabel ?? selected.label} · ${t('map.iteration', { number: ordinal })} · ${resultLabel}`;
       item.setAttribute('aria-label', label);
       item.title = label;
       item.append(
         element('span', 'inspector-iteration-item-label', t('map.iter', { number: ordinal })),
-        statusBadge(occurrence.status),
+        resultIndex === undefined
+          ? statusBadge(occurrence.status)
+          : element('span', 'iteration-chip-result', resultLabel),
       );
       item.addEventListener('click', () => selectOccurrence(selected, occurrence));
       iterationList.append(item);
@@ -696,9 +816,73 @@ export function createExecutionView(options) {
     return summary;
   }
 
+  function renderParallelGroupSummary(trace) {
+    const selectedGroup = trace.parallelGroups?.find(
+      (group) => group.key === selectedParallelGroupKey,
+    );
+    if (selectedGroup === undefined) return null;
+    const children = selectedGroup.occurrenceIds
+      .map((occurrenceId) => findOccurrence(trace, occurrenceId))
+      .filter(Boolean)
+      .sort((left, right) => left.occurrence.firstEventIndex - right.occurrence.firstEventIndex);
+    const summary = element('section', 'inspector-run-summary inspector-parallel-summary');
+    const heading = element('div', 'inspector-run-heading');
+    const presentationOrdinal = parallelGroupPresentationOrdinal(trace, selectedParallelGroupKey);
+    const iterationLabel = presentationOrdinal === undefined
+      ? t('map.parallelMember')
+      : t('map.iter', { number: presentationOrdinal });
+    heading.append(
+      element('span', 'section-kicker', t('viewer.parallelInspector')),
+      element('span', 'scope-label', t('viewer.parallelScope')),
+      element('strong', 'inspector-selection-title', `${t('map.parallel', { step: selectedGroup.label ?? '—' })} · ${iterationLabel}`),
+    );
+    const facts = element('dl', 'run-facts inspector-parallel-facts');
+    const iterations = [...new Set(children
+      .map(({ occurrence }) => occurrence.iteration)
+      .filter((iteration) => iteration !== undefined))];
+    for (const [label, value] of [
+      [t('viewer.parallelChildren'), String(children.length)],
+      [t('viewer.iteration'), iterations.length === 0 ? '—' : iterations.join(' / ')],
+    ]) {
+      const fact = element('div', 'run-fact');
+      fact.append(element('dt', '', label), element('dd', '', value));
+      facts.append(fact);
+    }
+    const list = element('div', 'inspector-parallel-children');
+    list.append(element('h4', 'inspector-iteration-list-heading', t('viewer.parallelChildResults')));
+    for (const { node, occurrence } of children) {
+      const item = element('button', 'inspector-parallel-child');
+      item.type = 'button';
+      item.dataset.occurrenceId = occurrence.id;
+      const resultIndex = validRuleIndex(occurrence.matchedRuleIndex);
+      const result = resultIndex === undefined
+        ? t(`app.status.${occurrence.status}`)
+        : t('map.result', { number: resultIndex + 1 });
+      const label = `${node.displayLabel ?? node.label} · ${result}`;
+      item.setAttribute('aria-label', t('viewer.selectParallelChild', { child: label }));
+      item.append(
+        element('strong', '', node.displayLabel ?? node.label),
+        resultIndex === undefined ? statusBadge(occurrence.status) : element('span', 'iteration-chip-result', result),
+      );
+      item.addEventListener('click', () => selectOccurrence(node, occurrence));
+      list.append(item);
+    }
+    const clear = element('button', 'toolbar-button inspector-clear-selection', t('viewer.backToRun'));
+    clear.type = 'button';
+    clear.addEventListener('click', clearParallelGroupSelection);
+    summary.append(heading, facts, list, clear);
+    return summary;
+  }
+
   function renderIterationSummary(trace) {
     const selected = findOccurrence(trace, selectedOccurrenceId);
     if (selected === null) return null;
+    const artifacts = occurrenceArtifactState();
+    const outcome = artifacts.outcome;
+    const resultIndex = occurrenceResultIndex(selected.occurrence, outcome);
+    const returnValue = occurrenceResultValue(selected.occurrence, outcome);
+    const observedTransition = observedTransitionLabel(trace, selected.occurrence);
+    const stages = occurrenceJudgeStages(selected.occurrence, outcome);
     const occurrenceIndex = selected.node.occurrences.findIndex(
       (candidate) => candidate.id === selected.occurrence.id,
     );
@@ -715,6 +899,14 @@ export function createExecutionView(options) {
       ),
       statusBadge(selected.occurrence.status),
     );
+    const resultLabel = resultIndex === undefined
+      ? returnValue === undefined ? t('viewer.resultUnknown') : `${t('viewer.returnValue')}: ${returnValue}`
+      : t('map.result', { number: resultIndex + 1 });
+    const transitionLabel = outcome?.nextStep === undefined
+      ? observedTransition ?? t('viewer.transitionUnknown')
+      : observedTransition === undefined
+        ? outcome.nextStep
+        : `${outcome.nextStep} · ${t('viewer.observedTransition')}: ${observedTransition}`;
     const entries = [
       [t('viewer.execution'), String(ordinal)],
       [t('viewer.iteration'), selected.occurrence.iteration === undefined
@@ -722,7 +914,24 @@ export function createExecutionView(options) {
         : String(selected.occurrence.iteration)],
       [t('viewer.phase'), selected.occurrence.phases.join(' / ') || '—'],
       [t('viewer.persona'), selected.occurrence.personas.join(' / ') || '—'],
+      [t('viewer.result'), resultLabel],
+      [t('viewer.condition'), outcome?.condition ?? t('viewer.conditionUnknown')],
+      [t('viewer.transition'), transitionLabel],
     ];
+    const executionTarget = executionTargetLabel(selected.occurrence);
+    if (executionTarget !== undefined) entries.push([t('viewer.executionTarget'), executionTarget]);
+    if (selected.occurrence.providerSource !== undefined) {
+      entries.push([t('viewer.providerSource'), selected.occurrence.providerSource]);
+    }
+    if (selected.occurrence.modelSource !== undefined) {
+      entries.push([t('viewer.modelSource'), selected.occurrence.modelSource]);
+    }
+    if (selected.occurrence.matchedRuleMethod !== undefined) {
+      entries.push([t('viewer.judgeMethod'), selected.occurrence.matchedRuleMethod]);
+    }
+    if (selected.occurrence.matchMethod !== undefined) {
+      entries.push([t('viewer.matchMethod'), selected.occurrence.matchMethod]);
+    }
     const facts = element('dl', 'run-facts inspector-iteration-facts');
     for (const [label, value] of entries) {
       const fact = element('div', 'run-fact');
@@ -732,7 +941,38 @@ export function createExecutionView(options) {
     const clear = element('button', 'toolbar-button inspector-clear-selection', t('viewer.backToStep'));
     clear.type = 'button';
     clear.addEventListener('click', clearIterationSelection);
-    summary.append(heading, facts, clear);
+    summary.append(heading, facts);
+    if (outcome?.outputPreview !== undefined) {
+      const output = element('section', 'inspector-iteration-output');
+      output.append(
+        element('h4', 'inspector-iteration-subheading', t('viewer.output')),
+        element('pre', 'inspector-iteration-output-content', outcome.outputPreview),
+      );
+      summary.append(output);
+    }
+    const judgePanel = element('section', 'inspector-judge-panel');
+    judgePanel.append(
+      element('h4', 'inspector-iteration-subheading', t('viewer.judgePath')),
+      element('p', 'inspector-judge-description', t('viewer.judgePathDescription')),
+    );
+    if (stages.length === 0) {
+      judgePanel.append(element('p', 'inspector-judge-empty', t('viewer.judgeStagesEmpty')));
+    } else {
+      const stageList = element('ol', 'inspector-judge-stages');
+      for (const stage of stages) {
+        const stageItem = element('li', 'inspector-judge-stage');
+        stageItem.append(
+          element('strong', '', t('viewer.judgeStage', { number: stage.stage })),
+          element('span', '', `${stage.method} · ${stage.status}`),
+        );
+        if (stage.response !== undefined && stage.response !== '') {
+          stageItem.append(element('pre', 'inspector-judge-response', stage.response));
+        }
+        stageList.append(stageItem);
+      }
+      judgePanel.append(stageList);
+    }
+    summary.append(judgePanel, clear);
     return summary;
   }
 
@@ -744,6 +984,10 @@ export function createExecutionView(options) {
       const screen = options.inspector?.closest?.('.viewer-screen');
       if (screen !== null && screen !== undefined) screen.dataset.mobileView = 'detail';
     });
+    if (selectedParallelGroupKey !== null && selectedOccurrenceId === null) {
+      inspector.append(back, renderParallelGroupSummary(trace) ?? renderRunSummary(detail));
+      return inspector;
+    }
     if (selectedStepId !== null && selectedOccurrenceId === null) {
       inspector.append(back, renderStepSummary(trace) ?? renderRunSummary(detail));
       return inspector;
@@ -759,6 +1003,10 @@ export function createExecutionView(options) {
   function selectStep(node) {
     selectedStepId = node.id;
     selectedOccurrenceId = null;
+    selectedParallelGroupKey = null;
+    selectedParallelGroupFamilyKey = null;
+    selectedParallelGroupIteration = null;
+    parallelSelectionInitialized = true;
     resetOccurrenceArtifacts();
     activeTab = 'live';
     const map = options.runDetail.querySelector('.execution-map');
@@ -776,6 +1024,10 @@ export function createExecutionView(options) {
 
   function clearIterationSelection() {
     selectedOccurrenceId = null;
+    selectedParallelGroupKey = null;
+    selectedParallelGroupFamilyKey = null;
+    selectedParallelGroupIteration = null;
+    parallelSelectionInitialized = true;
     resetOccurrenceArtifacts();
     activeTab = 'live';
     const map = options.runDetail.querySelector('.execution-map');
@@ -796,6 +1048,10 @@ export function createExecutionView(options) {
     const changed = selectedOccurrenceId !== nextOccurrenceId || selectedStepId !== (node?.id ?? null);
     selectedStepId = node?.id ?? null;
     selectedOccurrenceId = nextOccurrenceId;
+    selectedParallelGroupKey = null;
+    selectedParallelGroupFamilyKey = null;
+    selectedParallelGroupIteration = null;
+    parallelSelectionInitialized = true;
     if (changed) resetOccurrenceArtifacts();
     activeTab = 'live';
     const map = options.runDetail.querySelector('.execution-map');
@@ -812,6 +1068,55 @@ export function createExecutionView(options) {
     if (selectedOccurrenceId !== null) requestOccurrenceArtifacts();
   }
 
+  function selectParallelGroup(_group, iteration) {
+    const nextKey = iteration?.key ?? null;
+    if (nextKey === null) return;
+    const changed = selectedParallelGroupKey !== nextKey
+      || selectedOccurrenceId !== null
+      || selectedStepId !== null;
+    selectedParallelGroupKey = nextKey;
+    selectedParallelGroupFamilyKey = iteration?.familyKey ?? null;
+    selectedParallelGroupIteration = Number.isSafeInteger(iteration?.iteration)
+      ? iteration.iteration
+      : null;
+    selectedOccurrenceId = null;
+    selectedStepId = null;
+    parallelSelectionInitialized = true;
+    if (changed) resetOccurrenceArtifacts();
+    activeTab = 'live';
+    const map = options.runDetail.querySelector('.execution-map');
+    if (map !== null) updateExecutionMapSelection(map, null, null, selectedParallelGroupKey);
+    if (currentDetail !== null && currentTrace !== null && options.inspector !== undefined) {
+      const state = captureViewState();
+      const focus = captureFocusState();
+      options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
+      restoreViewState({ ...state, inspectorScrollTop: 0 });
+      restoreFocusState(focus);
+    } else {
+      renderDetailPanel();
+    }
+  }
+
+  function clearParallelGroupSelection() {
+    selectedParallelGroupKey = null;
+    selectedParallelGroupFamilyKey = null;
+    selectedParallelGroupIteration = null;
+    parallelSelectionInitialized = true;
+    resetOccurrenceArtifacts();
+    activeTab = 'live';
+    const map = options.runDetail.querySelector('.execution-map');
+    if (map !== null) updateExecutionMapSelection(map, null, null, null);
+    if (currentDetail !== null && currentTrace !== null && options.inspector !== undefined) {
+      const state = captureViewState();
+      const focus = captureFocusState();
+      options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
+      restoreViewState({ ...state, inspectorScrollTop: 0 });
+      restoreFocusState(focus);
+    } else {
+      renderDetailPanel();
+    }
+  }
+
   function renderDetail(detail, selection) {
     if (detail === null || selection === null) return false;
     if (detail.project.id !== selection.projectId || detail.meta.runSlug !== selection.slug) return false;
@@ -825,6 +1130,10 @@ export function createExecutionView(options) {
       activeTab = detail.meta.status === 'completed' && detail.reports.length > 0 ? 'reports' : 'live';
       selectedStepId = null;
       selectedOccurrenceId = null;
+      selectedParallelGroupKey = null;
+      selectedParallelGroupFamilyKey = null;
+      selectedParallelGroupIteration = null;
+      parallelSelectionInitialized = false;
       selectedReport = '';
       customNodePositions = new Map();
       mapScale = DEFAULT_MAP_SCALE;
@@ -840,6 +1149,38 @@ export function createExecutionView(options) {
     if (sameRun && selectedOccurrenceId !== null && findOccurrence(trace, selectedOccurrenceId) === null) {
       selectedOccurrenceId = null;
       resetOccurrenceArtifacts();
+    }
+    if (sameRun && selectedParallelGroupKey !== null) {
+      const exactGroup = trace.parallelGroups?.find((group) => group.key === selectedParallelGroupKey);
+      if (exactGroup !== undefined) {
+        selectedParallelGroupFamilyKey = exactGroup.familyKey ?? selectedParallelGroupFamilyKey;
+        selectedParallelGroupIteration = exactGroup.iteration ?? selectedParallelGroupIteration;
+      } else {
+        const candidates = trace.parallelGroups?.filter((group) => (
+          group.familyKey === selectedParallelGroupFamilyKey
+          && group.iteration === selectedParallelGroupIteration
+        )) ?? [];
+        if (candidates.length === 1) {
+          selectedParallelGroupKey = candidates[0].key;
+        } else {
+          selectedParallelGroupKey = null;
+          selectedParallelGroupFamilyKey = null;
+          selectedParallelGroupIteration = null;
+          parallelSelectionInitialized = true;
+        }
+      }
+    }
+    if (selectedParallelGroupKey === null
+      && selectedOccurrenceId === null
+      && selectedStepId === null
+      && !parallelSelectionInitialized) {
+      const defaultGroup = latestParallelGroup(trace);
+      if (defaultGroup !== null) {
+        selectedParallelGroupKey = defaultGroup.key;
+        selectedParallelGroupFamilyKey = defaultGroup.familyKey ?? null;
+        selectedParallelGroupIteration = defaultGroup.iteration ?? null;
+        parallelSelectionInitialized = true;
+      }
     }
     if (selectedOccurrenceId !== null && selectedStepId === null) {
       selectedStepId = findOccurrence(trace, selectedOccurrenceId)?.node.id ?? null;
@@ -893,6 +1234,10 @@ export function createExecutionView(options) {
     currentTrace = null;
     selectedStepId = null;
     selectedOccurrenceId = null;
+    selectedParallelGroupKey = null;
+    selectedParallelGroupFamilyKey = null;
+    selectedParallelGroupIteration = null;
+    parallelSelectionInitialized = false;
     resetOccurrenceArtifacts();
     mapScale = DEFAULT_MAP_SCALE;
     disposeExecutionMap(options.runDetail);
@@ -927,6 +1272,7 @@ export function createExecutionView(options) {
     },
     dispose() {
       disposeExecutionMap(options.runDetail);
+      resetOccurrenceArtifacts();
       focusObserverTarget?.removeEventListener?.('focusin', focusObserver);
     },
     setLiveState(state) {

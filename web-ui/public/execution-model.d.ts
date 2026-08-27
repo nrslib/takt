@@ -12,6 +12,19 @@ export interface ExecutionEvent {
   readonly callInstance?: string;
   readonly stack?: readonly ExecutionStackFrame[];
   readonly status?: string;
+  readonly provider?: string;
+  readonly providerSource?: string;
+  readonly model?: string;
+  readonly modelSource?: string;
+  readonly matchedRuleIndex?: number;
+  readonly matchedRuleMethod?: string;
+  readonly matchMethod?: string;
+  readonly returnValue?: string;
+  readonly stage?: number;
+  readonly method?: string;
+  readonly response?: string;
+  readonly judgeStage?: ExecutionJudgeStage;
+  readonly judgeStages?: readonly ExecutionJudgeStage[];
   readonly content?: string;
   readonly error?: string;
   readonly reason?: string;
@@ -21,12 +34,38 @@ export interface ExecutionEvent {
   readonly occurrenceId?: string;
 }
 
+export interface ExecutionJudgeStage {
+  readonly stage: number;
+  readonly method: string;
+  readonly status: string;
+  readonly response: string;
+}
+
 export interface ExecutionStackFrame {
   readonly workflow: string;
   readonly workflow_ref: string;
   readonly step: string;
   readonly kind: 'agent' | 'system' | 'workflow_call' | 'parallel';
   readonly occurrence: number;
+  /** Optional persisted canonical call-site evidence from newer run logs. */
+  readonly workflowCallSiteDigest?: string;
+  readonly callSiteDigest?: string;
+  readonly siteDigest?: string;
+}
+
+export function parallelGroupFamilyKey(
+  stack: readonly ExecutionStackFrame[],
+  evidence?: ExecutionMeta,
+): string | undefined;
+
+export interface ExecutionResumePointEvidence {
+  readonly workflow_call_invocations?: Readonly<Record<string, {
+    readonly call_instance?: number;
+    readonly report_namespace_segment?: string;
+    readonly workflowCallSiteDigest?: string;
+    readonly callSiteDigest?: string;
+    readonly siteDigest?: string;
+  }>>;
 }
 
 export interface ExecutionMeta {
@@ -34,6 +73,7 @@ export interface ExecutionMeta {
   readonly status: string;
   readonly currentStep?: string;
   readonly currentIteration?: number;
+  readonly resumePoint?: ExecutionResumePointEvidence;
 }
 
 export interface ExecutionOccurrence {
@@ -46,13 +86,31 @@ export interface ExecutionOccurrence {
   readonly callInstance?: string;
   readonly stack?: readonly ExecutionStackFrame[];
   readonly status: string;
+  /** Terminal status observed from a lifecycle boundary or terminal phase. */
+  readonly terminalStatus?: 'completed' | 'failed' | 'aborted';
   readonly phases: readonly string[];
   readonly personas: readonly string[];
+  readonly matchedRuleIndex?: number;
+  readonly matchedRuleMethod?: string;
+  readonly matchMethod?: string;
+  readonly returnValue?: string;
+  readonly provider?: string;
+  readonly providerSource?: string;
+  readonly model?: string;
+  readonly modelSource?: string;
+  readonly judgeStages?: readonly ExecutionJudgeStage[];
   readonly preview?: string;
   readonly previewTruncated?: boolean;
   readonly eventIndexes: readonly number[];
   readonly firstEventIndex: number;
   readonly lastEventIndex: number;
+  /** Canonical parent parallel invocation identity, when unambiguous. */
+  readonly parallelGroupKey?: string;
+  readonly parallelGroupFamilyKey?: string;
+  readonly parallelGroupIteration?: number;
+  readonly parallelGroupLabel?: string;
+  readonly parallelGroupOrdinal?: number;
+  readonly parallelGroupAmbiguous?: boolean;
   /** One-based chronological ordinal across all observed step occurrences. */
   readonly ordinal?: number;
 }
@@ -95,12 +153,24 @@ export interface ExecutionLoop {
   readonly ordinal?: number;
 }
 
+export interface ExecutionParallelGroup {
+  readonly key: string;
+  readonly familyKey: string;
+  readonly label?: string;
+  readonly ordinal: number;
+  readonly iteration?: number;
+  readonly firstEventIndex: number;
+  readonly nodeIds: readonly string[];
+  readonly occurrenceIds: readonly string[];
+}
+
 export interface ExecutionTrace {
   readonly events: readonly ExecutionEvent[];
   readonly lanes: readonly ExecutionLane[];
   readonly nodes: readonly ExecutionNode[];
   readonly transitions: readonly ExecutionTransition[];
   readonly loops: readonly ExecutionLoop[];
+  readonly parallelGroups: readonly ExecutionParallelGroup[];
   readonly calls: readonly ExecutionCall[];
   readonly totalOccurrences: number;
   readonly graphOccurrenceCount: number;

@@ -3,12 +3,39 @@ export function getTasks(): Promise<unknown>;
 export function getProjects(): Promise<unknown>;
 export function getWorkflows(projectId: string): Promise<unknown>;
 export function getRun(projectId: string, slug: string): Promise<unknown>;
+export interface RunOccurrencePrompt {
+  readonly timestamp?: string;
+  readonly step?: string;
+  readonly phase?: number;
+  readonly phaseName?: string;
+  readonly phaseExecutionId?: string;
+  readonly iteration?: number;
+  readonly workflow?: string;
+  readonly systemPrompt?: string;
+  readonly userInstruction?: string;
+  readonly instruction?: string;
+}
+
+export interface RunOccurrenceArtifactReport {
+  readonly filename: string;
+  readonly content: string;
+  readonly omitted: boolean;
+}
+
+export interface RunOccurrenceArtifactsResponse {
+  readonly reports: readonly RunOccurrenceArtifactReport[];
+  readonly prompts: readonly RunOccurrencePrompt[];
+  readonly promptsTruncated: boolean;
+  readonly omittedPromptCount: number;
+  readonly outcome?: Readonly<Record<string, unknown>>;
+}
+
 export function getRunOccurrenceArtifacts(
   projectId: string,
   slug: string,
   occurrenceId: string,
   signal?: AbortSignal,
-): Promise<unknown>;
+): Promise<RunOccurrenceArtifactsResponse>;
 export function browseDirectories(path: string | null): Promise<unknown>;
 export function pickNativeDirectory(): Promise<unknown>;
 export function registerProject(projectDirectory: string): Promise<unknown>;
