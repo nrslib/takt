@@ -428,12 +428,12 @@ describe('CodexProvider — structured output', () => {
     });
   });
 
-  it('permission_control=codex と provider options を通常経路と strict isolated structured 経路へ渡す', async () => {
+  it.each([false, true])('permission_control=codex と provider options (networkAccess=%s) を通常経路と strict isolated structured 経路へ渡す', async (networkAccess) => {
     mockCallCodex.mockResolvedValue(doneResponse('coder'));
     const providerOptions: StepProviderOptions = {
       codex: {
         permissionControl: 'codex',
-        networkAccess: false,
+        networkAccess,
         reasoningEffort: 'high',
         fastMode: true,
         skills: { repo: true, user: true },
@@ -449,7 +449,7 @@ describe('CodexProvider — structured output', () => {
     expect(mockCallCodex.mock.calls[0]?.[2]).toMatchObject({
       permissionMode: 'edit',
       permissionControl: 'codex',
-      networkAccess: false,
+      networkAccess,
       reasoningEffort: 'high',
       fastMode: true,
       skills: { repo: true, user: true },
@@ -464,7 +464,7 @@ describe('CodexProvider — structured output', () => {
     expect(mockCallCodex.mock.calls[1]?.[2]).toMatchObject({
       permissionMode: 'readonly',
       permissionControl: 'codex',
-      networkAccess: false,
+      networkAccess,
       reasoningEffort: 'high',
       fastMode: true,
       skills: { repo: false, user: false },

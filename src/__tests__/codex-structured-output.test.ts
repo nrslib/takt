@@ -10,6 +10,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { CodexCallOptions } from '../infra/codex/types.js';
 
 const {
@@ -32,14 +33,14 @@ const {
 // ===== Codex SDK mock =====
 
 let mockEvents: Array<Record<string, unknown>> = [];
-let lastThreadOptions: Record<string, unknown> | undefined;
-let lastTurnOptions: Record<string, unknown> | undefined;
-let lastCodexConstructorOptions: Record<string, unknown> | undefined;
+let lastThreadOptions: ThreadOptions | undefined;
+let lastTurnOptions: TurnOptions | undefined;
+let lastCodexConstructorOptions: CodexOptions | undefined;
 
 vi.mock('@openai/codex-sdk', () => {
   const createMockThread = () => ({
     id: 'thread-mock',
-    runStreamed: async (_input: unknown, options?: Record<string, unknown>) => {
+    runStreamed: async (_input: unknown, options?: TurnOptions) => {
       lastTurnOptions = options;
       return {
         events: (async function* () {
@@ -53,15 +54,15 @@ vi.mock('@openai/codex-sdk', () => {
 
   return {
     Codex: class MockCodex {
-      constructor(options?: Record<string, unknown>) {
+      constructor(options?: CodexOptions) {
         lastCodexConstructorOptions = options;
       }
-      async startThread(options?: Record<string, unknown>) {
+      async startThread(options?: ThreadOptions) {
         mockStartThread(options);
         lastThreadOptions = options;
         return createMockThread();
       }
-      async resumeThread(threadId: string, options?: Record<string, unknown>) {
+      async resumeThread(threadId: string, options?: ThreadOptions) {
         mockResumeThread(threadId, options);
         lastThreadOptions = options;
         return createMockThread();
