@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { TaskInfo, TaskResult, TaskRunner } from '../infra/task/index.js';
+import type { buildBooleanTaskResult } from '../features/tasks/execute/taskResultHandler.js';
+
+type AddTaskArgs = Parameters<TaskRunner['addTask']>;
+type BuildBooleanTaskResultArgs = Parameters<typeof buildBooleanTaskResult>;
 
 const {
   mockAddTask,
@@ -7,7 +12,10 @@ const {
   mockPersistTaskError,
   mockBuildBooleanTaskResult,
 } = vi.hoisted(() => ({
-  mockAddTask: vi.fn(() => ({
+  mockAddTask: vi.fn((
+    _content: AddTaskArgs[0],
+    _options?: AddTaskArgs[1],
+  ): TaskInfo => ({
     name: 'test-task',
     content: 'test task',
     filePath: '/project/.takt/tasks.yaml',
@@ -18,7 +26,16 @@ const {
   mockExecuteTask: vi.fn(),
   mockPersistTaskResult: vi.fn(),
   mockPersistTaskError: vi.fn(),
-  mockBuildBooleanTaskResult: vi.fn(() => ({ task: 'mock-result' })),
+  mockBuildBooleanTaskResult: vi.fn((
+    params: BuildBooleanTaskResultArgs[0],
+  ): TaskResult => ({
+    task: params.task,
+    success: params.taskSuccess,
+    response: params.taskSuccess ? params.successResponse : params.failureResponse,
+    executionLog: [],
+    startedAt: params.startedAt,
+    completedAt: params.completedAt,
+  })),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -39,7 +56,7 @@ vi.mock('../infra/task/index.js', () => ({
   resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   buildTaskInstruction: vi.fn((_taskDir: string, orderFile: string) => `Primary spec: \`${orderFile}\`.`),
   TaskRunner: vi.fn(() => ({
-    addTask: (...args: unknown[]) => mockAddTask(...args),
+    addTask: (...args: AddTaskArgs) => mockAddTask(...args),
   })),
 }));
 
@@ -73,7 +90,7 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
-  buildBooleanTaskResult: (...args: unknown[]) => mockBuildBooleanTaskResult(...args),
+  buildBooleanTaskResult: (...args: BuildBooleanTaskResultArgs) => mockBuildBooleanTaskResult(...args),
   persistTaskResult: (...args: unknown[]) => mockPersistTaskResult(...args),
   persistTaskError: (...args: unknown[]) => mockPersistTaskError(...args),
 }));
