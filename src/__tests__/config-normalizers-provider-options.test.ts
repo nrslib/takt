@@ -471,7 +471,7 @@ describe('buildRawTaktProvidersOrThrow', () => {
   it('should throw when assistant is empty object', () => {
     expect(() =>
       buildRawTaktProvidersOrThrow({
-        assistant: {},
+        assistant: {} as never,
       }),
     ).toThrow(/Configuration error: 'takt_providers\.assistant' must include provider or model\./);
   });

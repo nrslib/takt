@@ -391,6 +391,9 @@ describe('resolveProviderOptionsWithTrace', () => {
     );
 
     const result = resolveProviderOptionsWithTrace(projectDir);
+    if (result.value === undefined) {
+      throw new Error('Expected provider options to resolve');
+    }
 
     expect(result.value.codex).toMatchObject({
       permissionControl: 'codex',

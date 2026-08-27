@@ -41,6 +41,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 const MOCK_SELECTOR_PROVIDER = {
   provider: 'mock' as const,
+  model: undefined,
   providerOptions: {},
 };
 
