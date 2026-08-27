@@ -927,7 +927,7 @@ implementer 成功响应完成后、workflow 继续前审查累计 diff，响应
 现有的 quiet、forced、commit、queue 和 completion drain 行为。该设置只支持 global 或
 project 层级，不支持 step 或 Companion 定义级覆盖。
 
-在 `runtime.yaml` 中使用 `companion.fix_policy` 选择 reviewer 接受 finding 后的修复方式。
+在 `runtime.yaml` 中使用 `companion.fix_policy` 选择 finding 在审查中被采纳后的修复方式。
 默认值 `single` 最多执行一次 advisory 修复 follow-up，且不会再次审查该 follow-up。显式设置
 `loop` 后会保留原有行为，持续审查和修复，直到针对当前累计 diff 的完成处理不再产生新的已接受
 finding。已经审查过的 digest 不会重复审查。与 `review_mode` 相同，该设置只支持 global 或
