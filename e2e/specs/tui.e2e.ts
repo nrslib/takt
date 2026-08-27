@@ -276,8 +276,17 @@ describe('E2E: Ink TUI', () => {
     responseMarker?: string,
   ): Promise<void> {
     await waitForPromptReady(tui, responseMarker);
+    const outputOffset = tui.output().length;
     tui.write(text);
-    await tui.waitForOutput(`❯ ${text}`);
+    // Scope the echo to this write: a repeated command such as /go must not
+    // match an earlier frame in the PTY history. The live exact row also
+    // excludes the similarly prefixed slash-completion description.
+    await waitForNewOutput(tui, outputOffset, `❯ ${text}`);
+    await tui.waitForScreen(
+      `the current draft ${JSON.stringify(text)}`,
+      (screen) => hasExactVisibleLine(screen, `❯ ${text}`),
+      10_000,
+    );
     tui.write(ENTER);
   }
 
