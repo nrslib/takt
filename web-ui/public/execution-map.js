@@ -83,7 +83,9 @@ function renderIterationChip(
   button.dataset.kind = 'iteration';
   const isParallelChild = occurrence.parallelGroupKey !== undefined
     && occurrence.parallelGroupAmbiguous !== true;
-  const groupSelected = isParallelChild && occurrence.parallelGroupKey === selectedParallelGroupKey;
+  const groupSelected = selectedOccurrenceId === null
+    && isParallelChild
+    && occurrence.parallelGroupKey === selectedParallelGroupKey;
   const selected = occurrence.id === selectedOccurrenceId || groupSelected;
   button.dataset.parallelGroupKey = occurrence.parallelGroupKey ?? '';
   button.dataset.selected = String(selected);
@@ -772,14 +774,14 @@ function edgeRoleParts(role) {
 
 function edgeDirectionLabelKey(selectedOccurrenceId, selectedStepId, selectedParallelGroupKey, role) {
   if (role === 'incoming') {
-    return selectedOccurrenceId === null && selectedStepId === null && selectedParallelGroupKey !== null
+    return selectedStepId === null && selectedParallelGroupKey !== null
       ? 'map.parallelEdgeIncoming'
       : selectedOccurrenceId === null && selectedStepId !== null
       ? 'map.stepEdgeIncoming'
       : 'map.edgeIncoming';
   }
   if (role === 'outgoing') {
-    return selectedOccurrenceId === null && selectedStepId === null && selectedParallelGroupKey !== null
+    return selectedStepId === null && selectedParallelGroupKey !== null
       ? 'map.parallelEdgeOutgoing'
       : selectedOccurrenceId === null && selectedStepId !== null
       ? 'map.stepEdgeOutgoing'
@@ -841,11 +843,15 @@ function renderSelectionLegend(selectedOccurrenceId, selectedStepId, selectedPar
       ? 'map.parallelEdgeLegend'
       : selectedOccurrenceId === null ? 'map.stepEdgeLegend' : 'map.edgeLegend'),
   );
-  const incomingLabel = selectedOccurrenceId === null
-    ? selectedParallelGroupKey !== null ? 'map.parallelEdgeIncoming' : 'map.stepEdgeIncoming'
+  const incomingLabel = selectedParallelGroupKey !== null && selectedStepId === null
+    ? 'map.parallelEdgeIncoming'
+    : selectedOccurrenceId === null
+      ? 'map.stepEdgeIncoming'
     : 'map.edgeIncoming';
-  const outgoingLabel = selectedOccurrenceId === null
-    ? selectedParallelGroupKey !== null ? 'map.parallelEdgeOutgoing' : 'map.stepEdgeOutgoing'
+  const outgoingLabel = selectedParallelGroupKey !== null && selectedStepId === null
+    ? 'map.parallelEdgeOutgoing'
+    : selectedOccurrenceId === null
+      ? 'map.stepEdgeOutgoing'
     : 'map.edgeOutgoing';
   for (const [role, labelKey] of [
     ['incoming', incomingLabel],
@@ -983,18 +989,6 @@ function directionForSide(side) {
   }[side] ?? { x: 1, y: 0 };
 }
 
-function sideForRelativePosition(anchorRect, otherRect, fallback) {
-  const anchorCenterX = (anchorRect.left + anchorRect.right) / 2;
-  const anchorCenterY = (anchorRect.top + anchorRect.bottom) / 2;
-  const otherCenterX = (otherRect.left + otherRect.right) / 2;
-  const otherCenterY = (otherRect.top + otherRect.bottom) / 2;
-  const deltaX = otherCenterX - anchorCenterX;
-  const deltaY = otherCenterY - anchorCenterY;
-  if (deltaX === 0 && deltaY === 0) return fallback;
-  if (Math.abs(deltaX) >= Math.abs(deltaY)) return deltaX >= 0 ? 'right' : 'left';
-  return deltaY >= 0 ? 'bottom' : 'top';
-}
-
 function pointOnSide(anchorRect, canvasRect, scale, side, scrollLeft = 0, scrollTop = 0) {
   const x = side === 'right'
     ? anchorRect.right
@@ -1013,17 +1007,11 @@ function pointOnSide(anchorRect, canvasRect, scale, side, scrollLeft = 0, scroll
   };
 }
 
-export function edgeAnchorGeometry(sourceRect, targetRect, canvasRect, scale = 1, forceLoopPorts = false) {
+export function edgeAnchorGeometry(sourceRect, targetRect, canvasRect, scale = 1, _forceLoopPorts = false) {
   const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
-  const sourceSide = forceLoopPorts
-    ? 'right'
-    : sideForRelativePosition(sourceRect, targetRect, 'right');
-  const targetSide = forceLoopPorts
-    ? 'right'
-    : sideForRelativePosition(targetRect, sourceRect, 'left');
   return {
-    source: pointOnSide(sourceRect, canvasRect, safeScale, sourceSide),
-    target: pointOnSide(targetRect, canvasRect, safeScale, targetSide),
+    source: pointOnSide(sourceRect, canvasRect, safeScale, 'right'),
+    target: pointOnSide(targetRect, canvasRect, safeScale, 'left'),
   };
 }
 
@@ -1091,6 +1079,8 @@ function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas
   path.setAttribute('data-edge-key', `${relation.kind}:${relation.id}`);
   path.setAttribute('data-edge-base-label', label);
   path.setAttribute('data-edge-kind', relation.kind);
+  path.setAttribute('data-source-port', 'NEXT');
+  path.setAttribute('data-target-port', 'PREV');
   path.setAttribute('aria-label', label);
   path.setAttribute('data-relation-id', relation.id);
   path.setAttribute('data-source-occurrence-id', relation.source);
@@ -1197,13 +1187,15 @@ function renderRelationOverlay(section, map, canvas, trace, groups, onMoveNode, 
   svg.setAttribute('role', 'img');
   svg.setAttribute(
     'aria-label',
-    canvas.dataset.selectedOccurrenceId !== undefined && canvas.dataset.selectedOccurrenceId !== ''
-      ? t('map.edgeLegend')
-      : canvas.dataset.selectedParallelGroupKey !== undefined && canvas.dataset.selectedParallelGroupKey !== ''
-        ? t('map.parallelEdgeLegend')
-      : canvas.dataset.selectedStepId !== undefined && canvas.dataset.selectedStepId !== ''
-        ? t('map.stepEdgeLegend')
-        : t('map.observedPath'),
+    canvas.dataset.selectedParallelGroupKey !== undefined
+      && canvas.dataset.selectedParallelGroupKey !== ''
+      && (canvas.dataset.selectedStepId === undefined || canvas.dataset.selectedStepId === '')
+      ? t('map.parallelEdgeLegend')
+      : canvas.dataset.selectedOccurrenceId !== undefined && canvas.dataset.selectedOccurrenceId !== ''
+        ? t('map.edgeLegend')
+        : canvas.dataset.selectedStepId !== undefined && canvas.dataset.selectedStepId !== ''
+          ? t('map.stepEdgeLegend')
+          : t('map.observedPath'),
   );
   let disposed = false;
   const update = () => {
@@ -1490,6 +1482,7 @@ export function updateExecutionMapSelection(
     const selectedOccurrence = [...step.querySelectorAll('[data-occurrence-id]')]
       .some((button) => button.dataset.occurrenceId === selectedOccurrenceId
         || selectedParallelGroupKey !== null
+          && selectedOccurrenceId === null
           && button.dataset.parallelGroupKey === selectedParallelGroupKey);
     step.dataset.selected = String(selectedStep);
     step.dataset.active = String(selectedOccurrence);
@@ -1504,6 +1497,7 @@ export function updateExecutionMapSelection(
     chip.hidden = hidden;
     const selected = chip.dataset.occurrenceId === selectedOccurrenceId
       || selectedParallelGroupKey !== null
+        && selectedOccurrenceId === null
         && parallelGroupKey === selectedParallelGroupKey;
     chip.dataset.selected = String(selected);
     chip.setAttribute('aria-pressed', String(selected));
@@ -1524,10 +1518,10 @@ export function updateExecutionMapSelection(
     applyEdgeSelection(overlay, selectedOccurrenceId, selectedStepId, selectedParallelGroupKey);
     overlay.setAttribute(
       'aria-label',
-      selectedOccurrenceId === null
-        ? selectedParallelGroupKey !== null
-          ? t('map.parallelEdgeLegend')
-          : selectedStepId === null ? t('map.observedPath') : t('map.stepEdgeLegend')
+      selectedParallelGroupKey !== null && selectedStepId === null
+        ? t('map.parallelEdgeLegend')
+        : selectedOccurrenceId === null
+          ? selectedStepId === null ? t('map.observedPath') : t('map.stepEdgeLegend')
         : t('map.edgeLegend'),
     );
   }

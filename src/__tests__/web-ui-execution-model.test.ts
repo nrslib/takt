@@ -796,6 +796,9 @@ describe('Web UI execution model', () => {
       expect(section.querySelectorAll('.execution-edge-loop')).toHaveLength(1);
       expect(section.querySelectorAll('.execution-edge-call')).toHaveLength(1);
       expect(section.querySelectorAll('[data-edge]')).toHaveLength(4);
+      const edgePaths = section.querySelectorAll('[data-edge]') as FakeDomNode[];
+      expect(edgePaths.every((path) => path.attributes['data-source-port'] === 'NEXT'
+        && path.attributes['data-target-port'] === 'PREV')).toBe(true);
       const loopPath = section.querySelectorAll('.execution-edge-loop')[0] as FakeDomNode | undefined;
       const callPath = section.querySelectorAll('.execution-edge-call')[0] as FakeDomNode | undefined;
       expect(loopPath?.attributes['data-source-occurrence-id']).toBeDefined();
@@ -1191,6 +1194,123 @@ describe('Web UI execution model', () => {
       children[0]?.dispatchEvent('click');
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(artifactRequests).toBe(1);
+      executionView.dispose();
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('keeps parallel child details in the selected group without exposing global ITERATION', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const parallelFrame: ExecutionStackFrame = {
+        workflow: 'review',
+        workflow_ref: 'review-ref',
+        step: 'reviewers',
+        kind: 'parallel',
+        occurrence: 1,
+      };
+      const childFrame = (step: string): ExecutionStackFrame => ({
+        workflow: 'review',
+        workflow_ref: 'review-ref',
+        step,
+        kind: 'agent',
+        occurrence: 1,
+      });
+      const event = (
+        type: 'step_start' | 'step_complete',
+        step: string,
+        iteration: number,
+      ): ExecutionEvent => ({
+        type,
+        workflow: 'review',
+        step,
+        iteration,
+        ...(type === 'step_complete' ? { status: 'done', matchedRuleIndex: 0 } : {}),
+        stack: [parallelFrame, childFrame(step)],
+      });
+      const chronological: ExecutionEvent[] = [
+        event('step_start', 'coding-review', 4),
+        event('step_complete', 'coding-review', 4),
+        event('step_start', 'architecture-review', 4),
+        event('step_complete', 'architecture-review', 4),
+        event('step_start', 'coding-review', 9),
+        event('step_complete', 'coding-review', 9),
+        event('step_start', 'architecture-review', 9),
+        event('step_complete', 'architecture-review', 9),
+        event('step_start', 'coding-review', 14),
+        event('step_complete', 'coding-review', 14),
+        event('step_start', 'architecture-review', 14),
+        event('step_complete', 'architecture-review', 14),
+      ];
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+      });
+      const selection = { projectId: 'project-a', slug: 'run-1' };
+      const detail = {
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { runSlug: 'run-1', workflow: 'review', status: 'completed', task: 'task' },
+        events: chronological.slice().reverse(),
+        history: [],
+        reports: [],
+      };
+      expect(executionView.renderDetail(detail, selection)).toBe(true);
+
+      const groupButtons = runDetail.querySelectorAll('.execution-parallel-iteration') as FakeDomNode[];
+      expect(groupButtons).toHaveLength(3);
+      expect(groupButtons[1]?.textContent).toBe('ITER 2');
+      expect(groupButtons[2]?.textContent).toBe('ITER 3');
+      groupButtons[1]?.dispatchEvent('click');
+      expect(inspector.querySelector('.inspector-selection-title')?.textContent).toContain('ITER 2');
+      expect(inspector.querySelector('.inspector-parallel-facts')?.textContent).not.toContain('ITERATION');
+
+      const map = runDetail.querySelector('.execution-map') as FakeDomNode;
+      const canvas = runDetail.querySelector('.execution-map-canvas') as FakeDomNode;
+      map.scrollLeft = 31;
+      map.scrollTop = 17;
+      canvas.dataset.scale = '1.25';
+      const beforePositions = (runDetail.querySelectorAll('.execution-step') as FakeDomNode[])
+        .map((step) => [step.dataset.stepId, step.style.left, step.style.top]);
+      const selectedGroupKey = groupButtons[1]?.dataset.parallelGroupKey;
+      const child = inspector.querySelectorAll('.inspector-parallel-child')[0] as FakeDomNode;
+      const childOccurrenceId = child?.dataset.occurrenceId;
+      child?.dispatchEvent('click');
+
+      expect(inspector.querySelector('.inspector-iteration-summary')).not.toBeNull();
+      expect(inspector.querySelector('.inspector-selection-title')?.textContent).toContain('ITER 2');
+      expect(inspector.querySelector('.inspector-iteration-facts')?.textContent).not.toContain('ITERATION');
+      expect(inspector.textContent).not.toContain('ITERATION 9');
+      expect(inspector.textContent).not.toContain('ITERATION 14');
+      expect(inspector.querySelectorAll('.tab-button').map((button) => button.textContent)).toEqual([
+        'ITER LOG',
+        'REPORTS',
+        'PROMPTS',
+      ]);
+      expect(runDetail.querySelectorAll('.execution-parallel-iteration')
+        .find((button) => button.attributes['aria-selected'] === 'true')?.dataset.parallelGroupKey)
+        .toBe(selectedGroupKey);
+      expect((runDetail.querySelectorAll('.execution-step') as FakeDomNode[])
+        .map((step) => [step.dataset.stepId, step.style.left, step.style.top]))
+        .toEqual(beforePositions);
+      expect(map.scrollLeft).toBe(31);
+      expect(map.scrollTop).toBe(17);
+      expect(canvas.dataset.scale).toBe('1.25');
+      const highlighted = [
+        ...runDetail.querySelectorAll('[data-edge-role="incoming"]'),
+        ...runDetail.querySelectorAll('[data-edge-role="outgoing"]'),
+      ] as FakeDomNode[];
+      expect(highlighted.some((edge) => edge.attributes['data-source-occurrence-id'] === childOccurrenceId
+        || edge.attributes['data-target-occurrence-id'] === childOccurrenceId)).toBe(true);
       executionView.dispose();
     } finally {
       runtime.document = previousDocument;
@@ -2459,7 +2579,7 @@ describe('Web UI execution model', () => {
     }
   });
 
-  it('recomputes boundary ports and terminal tangents from the current relative position', () => {
+  it('keeps every edge on the fixed NEXT-to-PREV ports', () => {
     const canvas = { left: 0, top: 0 };
     const source = { left: 10, top: 10, right: 110, bottom: 110 };
     const rightTarget = { left: 300, top: 20, right: 400, bottom: 120 };
@@ -2478,18 +2598,18 @@ describe('Web UI execution model', () => {
 
     const lowerTarget = { left: 20, top: 300, right: 120, bottom: 400 };
     const lowerGeometry = edgeAnchorGeometry(source, lowerTarget, canvas);
-    expect(lowerGeometry.source.side).toBe('bottom');
-    expect(lowerGeometry.target.side).toBe('top');
+    expect(lowerGeometry.source.side).toBe('right');
+    expect(lowerGeometry.target.side).toBe('left');
     const lowerPath = curvePath(lowerGeometry.source, lowerGeometry.target, 'transition');
     expect(lowerPath).toContain(` ${lowerGeometry.target.x} ${lowerGeometry.target.y}`);
     const lowerPathNumbers = lowerPath.match(/-?\d+(?:\.\d+)?/gu)?.map(Number) ?? [];
-    expect(lowerPathNumbers[7]! - lowerPathNumbers[5]!).toBeGreaterThan(0);
+    expect(lowerPathNumbers[6]! - lowerPathNumbers[4]!).toBeGreaterThan(0);
     expect(lowerPath).not.toBe(curvePath(rightGeometry.source, rightGeometry.target, 'transition'));
 
     const movedTarget = { left: -320, top: 20, right: -220, bottom: 120 };
     const movedGeometry = edgeAnchorGeometry(source, movedTarget, canvas);
-    expect(movedGeometry.source.side).toBe('left');
-    expect(movedGeometry.target.side).toBe('right');
+    expect(movedGeometry.source.side).toBe('right');
+    expect(movedGeometry.target.side).toBe('left');
     expect(curvePath(movedGeometry.source, movedGeometry.target, 'transition')).not.toBe(lowerPath);
   });
 

@@ -837,13 +837,7 @@ export function createExecutionView(options) {
       element('strong', 'inspector-selection-title', `${t('map.parallel', { step: selectedGroup.label ?? '—' })} · ${iterationLabel}`),
     );
     const facts = element('dl', 'run-facts inspector-parallel-facts');
-    const iterations = [...new Set(children
-      .map(({ occurrence }) => occurrence.iteration)
-      .filter((iteration) => iteration !== undefined))];
-    for (const [label, value] of [
-      [t('viewer.parallelChildren'), String(children.length)],
-      [t('viewer.iteration'), iterations.length === 0 ? '—' : iterations.join(' / ')],
-    ]) {
+    for (const [label, value] of [[t('viewer.parallelChildren'), String(children.length)]]) {
       const fact = element('div', 'run-fact');
       fact.append(element('dt', '', label), element('dd', '', value));
       facts.append(fact);
@@ -864,7 +858,7 @@ export function createExecutionView(options) {
         element('strong', '', node.displayLabel ?? node.label),
         resultIndex === undefined ? statusBadge(occurrence.status) : element('span', 'iteration-chip-result', result),
       );
-      item.addEventListener('click', () => selectOccurrence(node, occurrence));
+      item.addEventListener('click', () => selectParallelChild(node, occurrence));
       list.append(item);
     }
     const clear = element('button', 'toolbar-button inspector-clear-selection', t('viewer.backToRun'));
@@ -874,9 +868,10 @@ export function createExecutionView(options) {
     return summary;
   }
 
-  function renderIterationSummary(trace) {
+  function renderIterationSummary(trace, parallelGroup = null) {
     const selected = findOccurrence(trace, selectedOccurrenceId);
     if (selected === null) return null;
+    const isParallelChild = parallelGroup !== null;
     const artifacts = occurrenceArtifactState();
     const outcome = artifacts.outcome;
     const resultIndex = occurrenceResultIndex(selected.occurrence, outcome);
@@ -890,12 +885,14 @@ export function createExecutionView(options) {
     const summary = element('section', 'inspector-run-summary inspector-iteration-summary');
     const heading = element('div', 'inspector-run-heading');
     heading.append(
-      element('span', 'section-kicker', t('viewer.iterationInspector')),
-      element('span', 'scope-label', t('viewer.iterationScope')),
+      element('span', 'section-kicker', t(isParallelChild ? 'viewer.parallelInspector' : 'viewer.iterationInspector')),
+      element('span', 'scope-label', t(isParallelChild ? 'viewer.parallelScope' : 'viewer.iterationScope')),
       element(
         'strong',
         'inspector-selection-title',
-        `${selected.node.displayLabel ?? selected.node.label} · ${t('map.iter', { number: ordinal })}`,
+        isParallelChild
+          ? `${t('map.parallel', { step: parallelGroup.label ?? '—' })} · ${t('map.iter', { number: parallelGroup.ordinal })} · ${selected.node.displayLabel ?? selected.node.label}`
+          : `${selected.node.displayLabel ?? selected.node.label} · ${t('map.iter', { number: ordinal })}`,
       ),
       statusBadge(selected.occurrence.status),
     );
@@ -908,10 +905,12 @@ export function createExecutionView(options) {
         ? outcome.nextStep
         : `${outcome.nextStep} · ${t('viewer.observedTransition')}: ${observedTransition}`;
     const entries = [
-      [t('viewer.execution'), String(ordinal)],
-      [t('viewer.iteration'), selected.occurrence.iteration === undefined
-        ? '—'
-        : String(selected.occurrence.iteration)],
+      ...(isParallelChild ? [] : [
+        [t('viewer.execution'), String(ordinal)],
+        [t('viewer.iteration'), selected.occurrence.iteration === undefined
+          ? '—'
+          : String(selected.occurrence.iteration)],
+      ]),
       [t('viewer.phase'), selected.occurrence.phases.join(' / ') || '—'],
       [t('viewer.persona'), selected.occurrence.personas.join(' / ') || '—'],
       [t('viewer.result'), resultLabel],
@@ -938,9 +937,13 @@ export function createExecutionView(options) {
       fact.append(element('dt', '', label), element('dd', '', value));
       facts.append(fact);
     }
-    const clear = element('button', 'toolbar-button inspector-clear-selection', t('viewer.backToStep'));
+    const clear = element(
+      'button',
+      'toolbar-button inspector-clear-selection',
+      t(isParallelChild ? 'viewer.backToParallel' : 'viewer.backToStep'),
+    );
     clear.type = 'button';
-    clear.addEventListener('click', clearIterationSelection);
+    clear.addEventListener('click', isParallelChild ? clearParallelChildSelection : clearIterationSelection);
     summary.append(heading, facts);
     if (outcome?.outputPreview !== undefined) {
       const output = element('section', 'inspector-iteration-output');
@@ -976,6 +979,18 @@ export function createExecutionView(options) {
     return summary;
   }
 
+  function renderParallelChildSummary(trace) {
+    if (selectedParallelGroupKey === null || selectedOccurrenceId === null) return null;
+    const group = trace.parallelGroups?.find((candidate) => candidate.key === selectedParallelGroupKey);
+    const selected = findOccurrence(trace, selectedOccurrenceId);
+    if (group === undefined || selected === null
+      || selected.occurrence.parallelGroupKey !== selectedParallelGroupKey) return null;
+    return renderIterationSummary(trace, {
+      ...group,
+      ordinal: parallelGroupPresentationOrdinal(trace, selectedParallelGroupKey) ?? group.ordinal,
+    });
+  }
+
   function renderInspector(detail, trace) {
     const inspector = element('section', 'inspector-content');
     const back = element('button', 'mobile-inspector-back', t('viewer.backToGraph'));
@@ -984,8 +999,14 @@ export function createExecutionView(options) {
       const screen = options.inspector?.closest?.('.viewer-screen');
       if (screen !== null && screen !== undefined) screen.dataset.mobileView = 'detail';
     });
-    if (selectedParallelGroupKey !== null && selectedOccurrenceId === null) {
-      inspector.append(back, renderParallelGroupSummary(trace) ?? renderRunSummary(detail));
+    if (selectedParallelGroupKey !== null) {
+      if (selectedOccurrenceId !== null) {
+        const childSummary = renderParallelChildSummary(trace);
+        inspector.append(back, childSummary ?? renderParallelGroupSummary(trace) ?? renderRunSummary(detail));
+        if (childSummary !== null) inspector.append(renderTabs(detail, trace));
+      } else {
+        inspector.append(back, renderParallelGroupSummary(trace) ?? renderRunSummary(detail));
+      }
       return inspector;
     }
     if (selectedStepId !== null && selectedOccurrenceId === null) {
@@ -1044,6 +1065,11 @@ export function createExecutionView(options) {
   }
 
   function selectOccurrence(node, occurrence) {
+    if (occurrence?.parallelGroupKey !== undefined
+      && selectedParallelGroupKey === occurrence.parallelGroupKey) {
+      selectParallelChild(node, occurrence);
+      return;
+    }
     const nextOccurrenceId = occurrence?.id ?? null;
     const changed = selectedOccurrenceId !== nextOccurrenceId || selectedStepId !== (node?.id ?? null);
     selectedStepId = node?.id ?? null;
@@ -1066,6 +1092,51 @@ export function createExecutionView(options) {
       renderDetailPanel();
     }
     if (selectedOccurrenceId !== null) requestOccurrenceArtifacts();
+  }
+
+  function selectParallelChild(_node, occurrence) {
+    if (selectedParallelGroupKey === null
+      || occurrence?.parallelGroupKey !== selectedParallelGroupKey) return;
+    const nextOccurrenceId = occurrence.id;
+    const changed = selectedOccurrenceId !== nextOccurrenceId || selectedStepId !== null;
+    selectedStepId = null;
+    selectedOccurrenceId = nextOccurrenceId;
+    parallelSelectionInitialized = true;
+    if (changed) resetOccurrenceArtifacts();
+    activeTab = 'live';
+    const map = options.runDetail.querySelector('.execution-map');
+    if (map !== null) {
+      updateExecutionMapSelection(map, selectedOccurrenceId, null, selectedParallelGroupKey);
+    }
+    if (currentDetail !== null && currentTrace !== null && options.inspector !== undefined) {
+      const state = captureViewState();
+      const focus = captureFocusState();
+      options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
+      restoreViewState({ ...state, inspectorScrollTop: 0 });
+      restoreFocusState(focus);
+    } else {
+      renderDetailPanel();
+    }
+    requestOccurrenceArtifacts();
+  }
+
+  function clearParallelChildSelection() {
+    selectedOccurrenceId = null;
+    selectedStepId = null;
+    parallelSelectionInitialized = true;
+    resetOccurrenceArtifacts();
+    activeTab = 'live';
+    const map = options.runDetail.querySelector('.execution-map');
+    if (map !== null) updateExecutionMapSelection(map, null, null, selectedParallelGroupKey);
+    if (currentDetail !== null && currentTrace !== null && options.inspector !== undefined) {
+      const state = captureViewState();
+      const focus = captureFocusState();
+      options.inspector.replaceChildren(renderInspector(currentDetail, currentTrace));
+      restoreViewState({ ...state, inspectorScrollTop: 0 });
+      restoreFocusState(focus);
+    } else {
+      renderDetailPanel();
+    }
   }
 
   function selectParallelGroup(_group, iteration) {
@@ -1182,7 +1253,7 @@ export function createExecutionView(options) {
         parallelSelectionInitialized = true;
       }
     }
-    if (selectedOccurrenceId !== null && selectedStepId === null) {
+    if (selectedOccurrenceId !== null && selectedStepId === null && selectedParallelGroupKey === null) {
       selectedStepId = findOccurrence(trace, selectedOccurrenceId)?.node.id ?? null;
     }
     currentTrace = trace;
