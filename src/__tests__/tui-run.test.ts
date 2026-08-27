@@ -19,6 +19,7 @@ import {
   type SessionState,
 } from '../infra/config/project/sessionState.js';
 import type { ImageAttachmentStore } from '../features/interactive/imageAttachments.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 const {
   mockRender,
@@ -1866,12 +1867,21 @@ describe('runTui', () => {
   describe('startup session state', () => {
     it('should consume a saved result without adding it to either Ink startup transcript', async () => {
       const projectDir = mkdtempSync(join(tmpdir(), 'takt-tui-stale-state-'));
+      const lang = 'en' as const;
       const staleState = {
         status: 'success',
         workflowName: 'stale-workflow',
         taskResult: 'stale result that must not be rendered',
         timestamp: '2026-08-26T00:00:00.000Z',
       } satisfies SessionState;
+      const staleSuccessNotice = getLabel('interactive.previousTask.success', lang);
+      const cancelExit = {
+        kind: 'result',
+        result: { action: 'cancel', task: '' },
+      } as const;
+      const emptyCarry = { history: [], queue: [] } as const;
+      const startedTrees: MountedTree[] = [];
+      const startedRuns: Array<ReturnType<typeof startRun>> = [];
 
       try {
         saveSessionState(projectDir, 'stale-publication', staleState);
@@ -1880,12 +1890,15 @@ describe('runTui', () => {
         );
 
         const firstTree = scriptRender();
-        const firstRun = startRun({ cwd: projectDir });
+        startedTrees.push(firstTree);
+        const firstRun = startRun({ cwd: projectDir, lang });
+        startedRuns.push(firstRun);
         await waitForMount(firstTree, 1);
 
         const firstTranscript = firstTree.conversationProps().initialEntries
           .map((entry) => entry.content)
           .join('\n');
+        expect(firstTranscript).not.toContain(staleSuccessNotice);
         expect(firstTranscript).not.toContain(staleState.workflowName);
         expect(firstTranscript).not.toContain(staleState.taskResult);
         expect(firstTranscript).not.toContain(staleState.timestamp);
@@ -1895,18 +1908,21 @@ describe('runTui', () => {
         expect(consumedEnvelope.status).toBe('consumed');
 
         firstTree.conversationProps().onExit(
-          { kind: 'result', result: { action: 'cancel', task: '' } },
-          { history: [], queue: [] },
+          cancelExit,
+          emptyCarry,
         );
         await firstRun;
 
         const secondTree = scriptRender();
-        const secondRun = startRun({ cwd: projectDir });
+        startedTrees.push(secondTree);
+        const secondRun = startRun({ cwd: projectDir, lang });
+        startedRuns.push(secondRun);
         await waitForMount(secondTree, 1);
 
         const secondTranscript = secondTree.conversationProps().initialEntries
           .map((entry) => entry.content)
           .join('\n');
+        expect(secondTranscript).not.toContain(staleSuccessNotice);
         expect(secondTranscript).not.toContain(staleState.workflowName);
         expect(secondTranscript).not.toContain(staleState.taskResult);
         expect(secondTranscript).not.toContain(staleState.timestamp);
@@ -1917,11 +1933,17 @@ describe('runTui', () => {
           .toEqual([staleState, null]);
 
         secondTree.conversationProps().onExit(
-          { kind: 'result', result: { action: 'cancel', task: '' } },
-          { history: [], queue: [] },
+          cancelExit,
+          emptyCarry,
         );
         await secondRun;
       } finally {
+        for (const tree of startedTrees) {
+          if (tree.mounts.count > tree.unmount.mock.calls.length) {
+            tree.conversationProps().onExit(cancelExit, emptyCarry);
+          }
+        }
+        await Promise.allSettled(startedRuns);
         rmSync(projectDir, { recursive: true, force: true });
       }
     });
