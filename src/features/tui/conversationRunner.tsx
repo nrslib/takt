@@ -9,7 +9,8 @@
  * a finished summary, and what to do with the decision.
  */
 
-import { renderToString } from 'ink';
+import { useEffect, useRef } from 'react';
+import { renderToString, Text, useInput } from 'ink';
 import { getLabel } from '../../shared/i18n/index.js';
 import { info } from '../../shared/ui/index.js';
 import type { PostSummaryAction } from '../interactive/interactive-summary.js';
@@ -59,6 +60,8 @@ export interface TuiConversationRunOptions {
    * instead — the run then ends there.
    */
   readonly dispatch?: (result: InteractiveModeResult) => Promise<string | null>;
+  /** Shown while dispatch runs; all input received by this view is discarded. */
+  readonly dispatchPlaceholder?: string;
   /**
    * Runs what a `handoff` command asked for, with Ink unmounted, together with
    * whatever was typed alongside the command. It answers with the line to greet
@@ -72,6 +75,26 @@ export type TuiHandoffOutcome =
   | { readonly kind: 'continue'; readonly notice?: string }
   /** The run is over and this is what the caller asked for. */
   | { readonly kind: 'finished'; readonly result: InteractiveModeResult };
+
+interface DispatchViewProps {
+  readonly placeholder: string;
+  readonly dispatch: () => Promise<string | null>;
+  readonly settle: (notice: string | null) => void;
+  readonly fail: (error: unknown) => void;
+}
+
+function DispatchView({ placeholder, dispatch, settle, fail }: DispatchViewProps) {
+  const started = useRef(false);
+  useInput(() => {
+    // Dispatch owns neither commands nor drafts. Input is intentionally consumed.
+  });
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void dispatch().then(settle, fail);
+  }, [dispatch, fail, settle]);
+  return <Text>{placeholder}</Text>;
+}
 
 export async function runTuiConversation(
   options: TuiConversationRunOptions,
@@ -117,7 +140,16 @@ export async function runTuiConversation(
     if (dispatch === undefined || result.action === 'cancel') {
       return result;
     }
-    const notice = await dispatch(result);
+    const notice = options.dispatchPlaceholder === undefined
+      ? await dispatch(result)
+      : await mountInk<string | null>(({ settle, fail }) => (
+        <DispatchView
+          placeholder={options.dispatchPlaceholder!}
+          dispatch={() => dispatch(result)}
+          settle={settle}
+          fail={fail}
+        />
+      ), exitedEarly);
     initialEntries = notice === null ? [] : [{ role: 'system', content: notice }];
     return undefined;
   };

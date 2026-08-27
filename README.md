@@ -272,6 +272,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 |---------|-------------|
 | `takt` | Talk to AI, refine requirements, execute or queue tasks |
 | `takt exec` | Start instant Assistant/Worker/Review agent mode without writing workflow YAML |
+| `takt make` | Start Workflow Maker to create or revise an isolated workflow bundle interactively |
 | `takt add` | Refine a task through AI conversation and queue it (also from GitHub Issues) |
 | `takt run` | Execute all pending tasks |
 | `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |

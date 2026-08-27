@@ -19,6 +19,8 @@ interface MockCallRecord {
   readonly provider: 'mock';
   readonly personaName: string;
   readonly model?: string;
+  readonly permissionMode?: string;
+  readonly allowedTools?: string[];
   readonly status?: string;
   readonly aborted?: boolean;
   readonly sessionId?: string;
@@ -62,6 +64,8 @@ describe('mock call log private artifact contract', () => {
     await callMock('selector', sensitivePrompt, {
       cwd: directory,
       model: 'mock-selector-model',
+      permissionMode: 'full',
+      allowedTools: ['Read', 'Write'],
       sessionId: 'sensitive-session-id',
     });
 
@@ -73,6 +77,8 @@ describe('mock call log private artifact contract', () => {
         provider: 'mock',
         personaName: 'selector',
         model: 'mock-selector-model',
+        permissionMode: 'full',
+        allowedTools: ['Read', 'Write'],
       }),
       expect.objectContaining({
         event: 'complete',

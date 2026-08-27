@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
@@ -53,6 +55,18 @@ describe('E2E: Help command (takt --help)', () => {
     expect(result.stdout.trim()).toBe(packageVersion);
   });
 
+  it('should advertise Workflow Maker in the root help', () => {
+    const result = runTakt({
+      args: ['--help'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/\bmake\b.*Workflow Maker/i);
+    expect(result.stdout).not.toContain('Workflow Builder');
+  });
+
   it('should fail with unknown command for removed switch subcommand', () => {
     // Given: a local repo with isolated env
 
@@ -65,5 +79,17 @@ describe('E2E: Help command (takt --help)', () => {
 
     // Then: the removed command is rejected
     expect(result.exitCode).not.toBe(0);
+  });
+
+  it('should reject Workflow Maker without a terminal before creating artifacts', () => {
+    const result = runTakt({
+      args: ['make'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/interactive terminal|TTY/i);
+    expect(existsSync(join(repo.path, '.takt', 'make'))).toBe(false);
   });
 });

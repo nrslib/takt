@@ -6,7 +6,11 @@ import {
   getRepertoireProviderOptionsDir,
 } from '../paths.js';
 import type { FacetResolutionContext } from './workflowPackageScope.js';
-import { getPackageFromWorkflowDir, getWorkflowBaseDir } from './workflowPackageScope.js';
+import {
+  getIsolatedWorkflowResourceDir,
+  getPackageFromWorkflowDir,
+  getWorkflowBaseDir,
+} from './workflowPackageScope.js';
 import { resolveNamedResourceWithSource, type NamedResourceFileAccess } from './namedResourceResolver.js';
 
 const PROVIDER_OPTIONS_EXTENSIONS = ['.yaml', '.yml'] as const;
@@ -26,6 +30,11 @@ export function getScopedProviderOptionsCandidateKey(owner: string, repo: string
 export function buildProviderOptionsLookupDirs(context: FacetResolutionContext): string[] {
   const dirs: string[] = [];
   const builtinProviderOptionsDir = getBuiltinProviderOptionsDir(context.lang);
+
+  const artifactProviderOptionsDir = getIsolatedWorkflowResourceDir(context, 'provider-options');
+  if (artifactProviderOptionsDir) {
+    dirs.push(artifactProviderOptionsDir);
+  }
 
   if (context.workflowDir && context.repertoireDir) {
     const pkg = getPackageFromWorkflowDir(getWorkflowBaseDir(context.workflowDir), context.repertoireDir);

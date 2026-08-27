@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { getProjectFacetDir, getRepertoireFacetDir, type FacetType } from '../paths.js';
 import { assertPathSegmentsAreSafe } from '../../../shared/utils/pathBoundary.js';
 import {
@@ -467,7 +467,7 @@ function resolveFacetFromCandidateDirs(
     if (excludeSourcePath && samePath(filePath, excludeSourcePath)) {
       continue;
     }
-    if (existsSync(filePath)) {
+    if (existsSync(filePath) && readdirSync(dirname(filePath)).includes(basename(filePath))) {
       if (selectorInstruction) {
         assertSelectorInstructionFileIsSafe(filePath, context);
       }
@@ -569,6 +569,9 @@ export function resolveFacetPath(
   }
   const filePath = resolveFacetPathGeneric(name, buildCandidateDirsWithPackage(facetType, context));
   if (filePath) {
+    if (!readdirSync(dirname(filePath)).includes(basename(filePath))) {
+      return undefined;
+    }
     assertFacetFileIsSafe(filePath, facetType, context);
   }
   return filePath;

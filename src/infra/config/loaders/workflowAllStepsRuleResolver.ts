@@ -135,16 +135,18 @@ export function resolveWorkflowWideRules(
   entries: readonly RawWorkflowWideRule[] | undefined,
   projectCwd: string,
   language: Language,
+  workflowDir?: string,
 ): readonly WorkflowWideRule[] | undefined {
   if (entries === undefined) {
     return undefined;
   }
 
   const roots = [
+    ...(workflowDir === undefined ? [] : [workflowDir]),
     getProjectWorkflowsDir(projectCwd),
     getGlobalWorkflowsDir(),
     getBuiltinWorkflowsDir(language),
-  ];
+  ].filter((root, index, all) => all.indexOf(root) === index);
 
   return entries.map((entry, index) => {
     const normalized = normalizeRuleEntry(entry);

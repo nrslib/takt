@@ -7,7 +7,12 @@ import {
   getRepertoireFacetPoolsDir,
 } from '../paths.js';
 import { resolveNamedResourceWithSource } from './namedResourceResolver.js';
-import { getPackageFromWorkflowDir, getWorkflowBaseDir, type FacetResolutionContext } from './workflowPackageScope.js';
+import {
+  getPackageFromWorkflowDir,
+  getWorkflowBaseDir,
+  getIsolatedWorkflowResourceDir,
+  type FacetResolutionContext,
+} from './workflowPackageScope.js';
 
 const FACET_POOL_EXTENSIONS = ['.yaml', '.yml'] as const;
 
@@ -19,6 +24,10 @@ export interface ResolvedFacetPoolResource {
 
 export function buildFacetPoolLookupDirs(context: FacetResolutionContext): string[] {
   const dirs: string[] = [];
+  const artifactFacetPoolsDir = getIsolatedWorkflowResourceDir(context, 'facet-pools');
+  if (artifactFacetPoolsDir) {
+    dirs.push(artifactFacetPoolsDir);
+  }
   if (context.workflowDir && context.repertoireDir) {
     const pkg = getPackageFromWorkflowDir(getWorkflowBaseDir(context.workflowDir), context.repertoireDir);
     if (pkg) {

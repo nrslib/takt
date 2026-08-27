@@ -10,10 +10,17 @@ import {
   getRepertoirePackageDir,
   isPathSafe,
 } from '../paths.js';
-import { getPackageFromWorkflowDir, getWorkflowBaseDir, type FacetResolutionContext } from './workflowPackageScope.js';
+import {
+  getPackageFromWorkflowDir,
+  getWorkflowBaseDir,
+  getIsolatedWorkflowResourceDir,
+  type FacetResolutionContext,
+} from './workflowPackageScope.js';
 
 function getWorkflowPersonaBases(context: FacetResolutionContext): string[] {
+  const artifactFacetsDir = getIsolatedWorkflowResourceDir(context, 'facets');
   const bases = [
+    ...(artifactFacetsDir === undefined ? [] : [join(artifactFacetsDir, 'personas')]),
     getBuiltinFacetDir(context.lang, 'personas'),
     getGlobalFacetDir('personas'),
     join(getGlobalConfigDir(), 'personas'),

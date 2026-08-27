@@ -39,6 +39,7 @@ interface LoadWorkflowsOptions {
 export interface WorkflowLookupOptions {
   basePath?: string;
   lookupCwd?: string;
+  resourceRoot?: string;
 }
 
 interface InternalWorkflowLookupOptions extends WorkflowLookupOptions {
@@ -73,6 +74,7 @@ function loadWorkflowFromLookupDirs(
   lookupCwd: string,
   callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
+  resourceRoot?: string,
 ): WorkflowConfig | null {
   const match = findWorkflowInLookupDirs(name, lookupDirs);
   if (!match) {
@@ -85,6 +87,7 @@ function loadWorkflowFromLookupDirs(
     source: match.source,
     callableArgs,
     parentTrustInfo,
+    resourceRoot,
   });
 }
 
@@ -112,9 +115,17 @@ function loadWorkflowFromPath(
   lookupCwd: string,
   callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
+  resourceRoot?: string,
 ): WorkflowConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
-  return loadWorkflowFromResolvedPath(resolvedPath, projectCwd, lookupCwd, callableArgs, parentTrustInfo);
+  return loadWorkflowFromResolvedPath(
+    resolvedPath,
+    projectCwd,
+    lookupCwd,
+    callableArgs,
+    parentTrustInfo,
+    resourceRoot,
+  );
 }
 
 function loadWorkflowFromResolvedPath(
@@ -123,6 +134,7 @@ function loadWorkflowFromResolvedPath(
   lookupCwd = projectCwd,
   callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
+  resourceRoot?: string,
 ): WorkflowConfig | null {
   if (!existsSync(resolvedPath)) {
     return null;
@@ -133,6 +145,7 @@ function loadWorkflowFromResolvedPath(
     lookupCwd,
     callableArgs,
     parentTrustInfo,
+    resourceRoot,
   });
 }
 
@@ -142,12 +155,13 @@ function finalizeLoadedWorkflow(
   lookupCwd: string,
   skipWorkflowCallContractValidation = false,
   allowPathBasedCalls = true,
+  resourceRoot?: string,
 ): WorkflowConfig | null {
   if (!workflow || skipWorkflowCallContractValidation) {
     return workflow;
   }
 
-  validateWorkflowCallContracts(workflow, projectCwd, lookupCwd, { allowPathBasedCalls });
+  validateWorkflowCallContracts(workflow, projectCwd, lookupCwd, { allowPathBasedCalls, resourceRoot });
   return workflow;
 }
 
@@ -228,6 +242,7 @@ function loadRepertoireWorkflowByRef(
   projectCwd: string,
   callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
+  resourceRoot?: string,
 ): WorkflowConfig | null {
   const scopeRef = parseScopeRef(identifier);
   const workflowsDir = join(getRepertoireDir(), `@${scopeRef.owner}`, scopeRef.repo, 'workflows');
@@ -239,6 +254,7 @@ function loadRepertoireWorkflowByRef(
       source: 'repertoire',
       callableArgs,
       parentTrustInfo,
+      resourceRoot,
     })
     : null;
 }
@@ -249,6 +265,7 @@ export function validateWorkflowCallContracts(
   lookupCwd = projectCwd,
   options?: {
     allowPathBasedCalls?: boolean;
+    resourceRoot?: string;
   },
 ): void {
   validateWorkflowCallContractsImpl(workflow, projectCwd, {
@@ -257,6 +274,7 @@ export function validateWorkflowCallContracts(
   }, {
     lookupCwd,
     allowPathBasedCalls: options?.allowPathBasedCalls,
+    resourceRoot: options?.resourceRoot,
   });
 }
 
@@ -268,7 +286,13 @@ function loadWorkflowByIdentifierInternal(
   const lookupCwd = options?.lookupCwd ?? projectCwd;
   const basePath = options?.basePath ?? lookupCwd;
   const workflow = isScopeRef(identifier)
-    ? loadRepertoireWorkflowByRef(identifier, projectCwd, options?.callableArgs, options?.parentTrustInfo)
+    ? loadRepertoireWorkflowByRef(
+      identifier,
+      projectCwd,
+      options?.callableArgs,
+      options?.parentTrustInfo,
+      options?.resourceRoot,
+    )
     : isWorkflowPath(identifier)
       ? loadWorkflowFromPath(
         identifier,
@@ -277,6 +301,7 @@ function loadWorkflowByIdentifierInternal(
         lookupCwd,
         options?.callableArgs,
         options?.parentTrustInfo,
+        options?.resourceRoot,
       )
       : loadWorkflowFromLookupDirs(
         identifier,
@@ -285,6 +310,7 @@ function loadWorkflowByIdentifierInternal(
         lookupCwd,
         options?.callableArgs,
         options?.parentTrustInfo,
+        options?.resourceRoot,
       );
 
   return finalizeLoadedWorkflow(
@@ -292,6 +318,8 @@ function loadWorkflowByIdentifierInternal(
     projectCwd,
     lookupCwd,
     options?.skipWorkflowCallContractValidation === true,
+    true,
+    options?.resourceRoot,
   );
 }
 

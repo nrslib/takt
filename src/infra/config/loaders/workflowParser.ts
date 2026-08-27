@@ -2,6 +2,7 @@
  * Workflow YAML parsing and normalization.
  */
 
+import { join } from 'node:path';
 import type { WorkflowArpeggioConfig, WorkflowCommandGatesConfig, WorkflowMcpServersConfig, WorkflowOverrides, WorkflowRuntimePrepareConfig } from '../../../core/models/config-types.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type {
@@ -147,6 +148,7 @@ export function normalizeWorkflowConfig(
     parsed.all_steps?.rules,
     context?.projectDir ?? workflowDir,
     context?.lang ?? 'en',
+    context?.resourceRoot === undefined ? undefined : join(context.resourceRoot, 'workflows'),
   );
   const selectorInstructionRefs = collectSelectorInstructionRefs(parsed.steps);
   const resolvedPoliciesWithSource = resolveSectionMapWithSource(parsed.policies, workflowDir, 'policies', context);

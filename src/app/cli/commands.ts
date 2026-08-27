@@ -120,6 +120,17 @@ program
   });
 
 program
+  .command('make')
+  .description('Start interactive Workflow Maker')
+  .action(async () => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { runWorkflowMakerCommand } = await import('../../features/workflowMaker/index.js');
+    await runWorkflowMakerCommand(getCliExecutionContext().cwd, {
+      agentOverrides: resolveAgentOverrides(program),
+    });
+  });
+
+program
   .command('clear')
   .description('Clear agent conversation sessions')
   .action(async () => {

@@ -90,17 +90,32 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `gh pr list --repo <owner>/<repo>` でPR一覧にIssueタイトルがあることを確認する。
 - Direct task execution（`e2e/specs/direct-task.e2e.ts`）
   - 目的: `--task` の直接実行が、プロンプトなしで完了することを確認。
-  - LLM: 呼び出さない（`--provider mock` 固定）
+  - LLM: 呼び出さない（mock providerと固定scenarioを使用。runtime設定の由来を検証するケースだけはCLI provider overrideを注入しない）
   - 手順（ユーザー行動/コマンド）:
     - `takt --task 'Create a file called noop.txt' --workflow e2e/fixtures/workflows/mock-single-step.yaml --provider mock` を実行する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/execute-done.json` を設定する。
     - 出力に `Workflow completed` が含まれることを確認する。
 - Ink TUI（`e2e/specs/tui.e2e.ts`）
   - 目的: 実 PTY 上で TUI が既定起動し、既存 readline セレクタ（ワークフロー選択・モード選択・`/go` 後のアクション選択）と Ink 会話の往復、Ctrl+C、前提条件違反が期待どおり動作することを確認。
-  - LLM: 呼び出さない（`--provider mock` 固定）
+  - LLM: 呼び出さない（mock providerと固定scenarioを使用。runtime設定の由来を検証するケースだけはCLI provider overrideを注入しない）
   - 備考: PTY が必要なため `e2e/helpers/takt-pty-runner.ts`（node-pty）を使う。固定 sleep は使わず、出力ポーリングで同期する。
   - 備考: 生の出力は消去済みフレームも含むため、画面に実際に残る内容は `@xterm/headless` に食わせた `visibleTranscript()` / `visibleScreen()` で検証する。
   - 手順（ユーザー行動/コマンド）:
+    - `takt make` の初期セレクターで project、global、builtin、repertoire の各 source を実際に選択し、選択したファイルパス、YAML `name`、本文がMakerのprovider promptへ渡ることを確認する。
+    - 制御文字を含むworkflowファイル名は選択画面で16進表記へ可視化され、選択後のMaker provider promptには制御文字を含む元の実pathが渡ることを確認する。
+    - New workflow で名前を入力し、会話後の `/go` で timestamp 付き生成予定パスと、順序を含めて Execute / Continue editing / Cancel の3操作だけが表示されることを確認する。
+    - Continue editing を選んだ場合は `.takt/make` を作成せず、同じ会話が重複表示なしで続くことを確認する。
+    - Cancel を実際に選択し、provider実行と `.takt/make` の作成が発生しないことを確認する。
+    - `/workflow` で異なる本文のproject baseへ変更し、同じPTYの次回provider promptに新baseのsource、制御文字を含む元の絶対path、YAML名、本文が渡り、旧base本文へ戻らないこと、base変更通知では制御文字が16進表記へ可視化されること、会話履歴が保持され、承認前には成果物が作成されないことを確認する。
+    - `/go` の実装指示と予定保存先にBELを含め、確認画面では16進表記へ可視化される一方、承認後のtaskとartifact cwdには元の値が渡ることを確認する。
+    - Execute中は英語・日本語それぞれで末尾の省略記号を含む待機placeholder全文が現在画面の1行に表示され、入力が破棄されることを確認する。成功・失敗後は同じPTYで通常入力を送信し、既知のinteractive応答を受信できることを確認する。
+    - Makerの承認操作から元projectのprovider、model、permission、provider optionsが実行へ伝播し、成果物の同名`edit` capabilityがMaker制御workflowへ混入しない一方、成果物側にはそのcapabilityが保持されることをsession recordとmock call logで確認する。
+    - readableなPASS Doctor reportではreviewが`approved`を選択し、FAIL、欠落、読取不能では`needs_fix`を選択することを、実report内容とruntime遷移で確認する。
+    - 成功・失敗画面にはfilesystem上のregular fileかつ非symlinkである実Doctor report pathが表示され、失敗画面には具体的な`rule_no_match`理由も表示されることを確認する。Doctor report pathがdirectoryまたはsymlinkの場合はreportなし表示となることも確認する。materialization前に予定rootを占有した失敗では、artifact pathと`EEXIST`理由だけが表示され、Doctor report表記と推測した`.takt/runs` pathが表示されないことを確認する。
+    - 専用fixtureで初回reviewの`needs_fix`からfixへ進み、更新Doctor report後の再reviewが`approved`となってCOMPLETEへ到達することを、step開始順、最終Doctor report、review report、完了画面で確認する。
+    - 同じTUIから再実行したときに別timestampの成果物rootが作成され、1回目root配下の相対directory/file一覧と全file byte内容が完全に維持されることを確認する。
+    - 実行後も `.takt/tasks.yaml` とworktreeが作成されず、Git branchとHEADが変化しないことを確認する。
+    - 日本語設定ではbase、action、待機、完了、失敗の各runtime表示が日本語になり、承認画面の選択可能行が順に「実行」「編集を続ける」「キャンセル」と完全一致することを確認する。
     - PTY 上でフラグなしに `takt --workflow e2e/fixtures/workflows/mock-single-step.yaml` を起動し、モード選択が従来の readline セレクタ（`(default)` 表記）で出たあと、会話だけが Ink（枠付き入力ボックス）になることを確認する。
     - モード選択に Assistant / Grill Me / Persona が表示され、Cancel 行を選ぶと Ink を起動せず exit 0 になることを確認する。
     - `--workflow` を省略して起動し、従来のカテゴリ付きワークフローセレクタでカテゴリ → ワークフローと選べること、セレクタ上の Ctrl+C は従来どおり exit 130 になることを確認する。

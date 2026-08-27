@@ -15,14 +15,15 @@ import {
   type ScopedProviderOptionsCandidateDirs,
 } from './providerOptionsLookupDirectories.js';
 
-type RawWorkflowProviderOptions = Record<string, unknown> & {
+export type RawWorkflowProviderOptions = Record<string, unknown> & {
   extends?: string;
 };
 
-interface ResolvedProviderOptionsExtendsPath {
+export interface ResolvedProviderOptionsExtendsResource {
   path: string;
   realPath: string;
-  kind: 'path' | 'name' | 'scope';
+  allowedRoot: string;
+  nextRootDir: string;
   candidateDirs?: readonly string[];
 }
 
@@ -88,7 +89,7 @@ function resolvePathLikeProviderOptionsExtends(
   currentDir: string,
   rootDir: string,
   fileAccess: ProviderOptionsFileAccess,
-): ResolvedProviderOptionsExtendsPath {
+): ResolvedProviderOptionsExtendsResource {
   if (isAbsolute(ref)) {
     throw new Error(`Configuration error: provider_options.extends must be a relative path inside the workflow directory: ${ref}`);
   }
@@ -109,7 +110,12 @@ function resolvePathLikeProviderOptionsExtends(
     throw new Error(`Configuration error: provider_options.extends must stay inside the workflow directory: ${ref}`);
   }
 
-  return { path: refPath, realPath: realRefPath, kind: 'path' };
+  return {
+    path: refPath,
+    realPath: realRefPath,
+    allowedRoot: rootDir,
+    nextRootDir: rootDir,
+  };
 }
 
 function getProviderOptionsCandidateDirs(scope: ProviderOptionsResolutionScope, ref: string): readonly string[] {
@@ -124,13 +130,14 @@ function resolveProviderOptionsByNameExtends(
   name: string,
   candidateDirs: readonly string[],
   fileAccess: ProviderOptionsFileAccess,
-): ResolvedProviderOptionsExtendsPath | undefined {
+): ResolvedProviderOptionsExtendsResource | undefined {
   const resolved = resolveProviderOptionsByName(name, candidateDirs, fileAccess);
   return resolved
     ? {
         path: resolved.path,
         realPath: fileAccess.realpath(resolved.path),
-        kind: 'name',
+        allowedRoot: resolved.candidateDir,
+        nextRootDir: dirname(resolved.path),
         candidateDirs: candidateDirs.slice(resolved.sourceLayerIndex),
       }
     : undefined;
@@ -141,31 +148,31 @@ function resolveProviderOptionsScopeRefPath(
   context: FacetResolutionContext,
   fileAccess: ProviderOptionsFileAccess,
   scopedCandidateDirs: ScopedProviderOptionsCandidateDirs | undefined,
-): ResolvedProviderOptionsExtendsPath | undefined {
+): ResolvedProviderOptionsExtendsResource | undefined {
   const resolved = resolveProviderOptionsScopeRef(ref, context, fileAccess, scopedCandidateDirs);
   return resolved
     ? {
         path: resolved.path,
         realPath: fileAccess.realpath(resolved.path),
-        kind: 'scope',
+        allowedRoot: resolved.candidateDir,
+        nextRootDir: dirname(resolved.path),
         candidateDirs: [resolved.candidateDir],
       }
     : undefined;
 }
 
-function resolveProviderOptionsExtendsPath(
+export function resolveProviderOptionsExtendsResource(
   ref: string,
   currentDir: string,
-  rootDir: string,
-  scope: ProviderOptionsResolutionScope,
-  fileAccess: ProviderOptionsFileAccess,
-): ResolvedProviderOptionsExtendsPath {
+  host: WorkflowProviderOptionsResolutionHost,
+): ResolvedProviderOptionsExtendsResource {
+  const fileAccess = host.fileAccess ?? nodeFileAccess;
   if (isScopeRef(ref)) {
     const resolved = resolveProviderOptionsScopeRefPath(
       ref,
-      requireProviderOptionsContext(ref, scope.context),
+      requireProviderOptionsContext(ref, host.context),
       fileAccess,
-      scope.scopedCandidateDirs,
+      host.scopedCandidateDirs,
     );
     if (!resolved) {
       throw new Error(`Configuration error: provider_options.extends not found: ${ref}`);
@@ -174,15 +181,23 @@ function resolveProviderOptionsExtendsPath(
   }
 
   if (isProviderOptionsExtendsPath(ref)) {
-    return resolvePathLikeProviderOptionsExtends(ref, currentDir, rootDir, fileAccess);
+    return resolvePathLikeProviderOptionsExtends(ref, currentDir, host.rootDir, fileAccess);
   }
 
-  const candidateDirs = getProviderOptionsCandidateDirs(scope, ref);
+  const candidateDirs = getProviderOptionsCandidateDirs(host, ref);
   const resolved = resolveProviderOptionsByNameExtends(ref, candidateDirs, fileAccess);
   if (!resolved) {
     throw new Error(`Configuration error: provider_options.extends not found: ${ref}`);
   }
   return resolved;
+}
+
+export function parseProviderOptionsDocument(content: string, ref: string): RawWorkflowProviderOptions {
+  const parsed = parseYaml(content);
+  if (!isRecord(parsed)) {
+    throw new Error(`Configuration error: provider_options.extends must point to a YAML object: ${ref}`);
+  }
+  return ProviderOptionsWithExtendsSchema.parse(parsed) as RawWorkflowProviderOptions;
 }
 
 export function resolveWorkflowProviderOptions(
@@ -239,23 +254,25 @@ function resolveWorkflowProviderOptionsFromDir(
     });
   }
 
-  const refPath = resolveProviderOptionsExtendsPath(ref, currentDir, rootDir, scope, fileAccess);
+  const refPath = resolveProviderOptionsExtendsResource(ref, currentDir, {
+    rootDir,
+    context: scope.context,
+    candidateDirs: scope.candidateDirs,
+    scopedCandidateDirs: scope.scopedCandidateDirs,
+    fileAccess,
+  });
   if (seenRefs.has(refPath.realPath)) {
     throw new Error(`Configuration error: provider_options.extends contains a circular reference: ${ref}`);
   }
 
-  const referencedRaw = parseYaml(fileAccess.readText(refPath.path));
-  if (!isRecord(referencedRaw)) {
-    throw new Error(`Configuration error: provider_options.extends must point to a YAML object: ${ref}`);
-  }
-  const parsedReferencedRaw = ProviderOptionsWithExtendsSchema.parse(referencedRaw) as RawWorkflowProviderOptions;
+  const parsedReferencedRaw = parseProviderOptionsDocument(fileAccess.readText(refPath.path), ref);
 
   const nextSeenRefs = new Set(seenRefs);
   nextSeenRefs.add(refPath.realPath);
   const referencedOptions = resolveWorkflowProviderOptionsFromDir(
     parsedReferencedRaw,
     dirname(refPath.path),
-    refPath.kind === 'path' ? rootDir : dirname(refPath.path),
+    refPath.nextRootDir,
     {
       context: scope.context,
       candidateDirs: refPath.candidateDirs ?? scope.candidateDirs,

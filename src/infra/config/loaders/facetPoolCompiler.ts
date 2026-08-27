@@ -1,4 +1,4 @@
-import { dirname } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { resolveSectionMapWithSource, type FacetResolutionContext, type ResolvedSectionMap, type WorkflowSections } from './resource-resolver.js';
 import { resolveRefToContentWithSource } from './resource-resolver.js';
 import type { ResolvedFacetPool, ResolvedFacetPoolCandidate, ResolvedFacetContent } from '../../../core/models/workflow-types.js';
@@ -148,9 +148,23 @@ function compileExternalPool(
   const resource: ResolvedExternalFacetPoolResource = loadExternalFacetPoolFile(input.ref, context, options);
   const pool = resource.raw;
   const trustedRoot = dirname(resource.candidateDir);
-  const sections = buildResolvedSections(pool.policies, pool.knowledge, resource.sourceDir, undefined, trustedRoot);
+  const artifactContext = context.resourceRoot !== undefined
+    && resolve(resource.candidateDir) === resolve(join(context.resourceRoot, 'facet-pools'))
+    ? context
+    : undefined;
+  const sections = buildResolvedSections(
+    pool.policies,
+    pool.knowledge,
+    resource.sourceDir,
+    artifactContext,
+    trustedRoot,
+  );
   const candidates = pool.candidates.map((candidate) =>
-    resolveCandidate(candidate, sections, resource.sourceDir, undefined, { strictBareName: true, trustedRoot, requireFile: true }),
+    resolveCandidate(candidate, sections, resource.sourceDir, artifactContext, {
+      strictBareName: true,
+      trustedRoot,
+      requireFile: true,
+    }),
   );
   return {
     name: input.name,

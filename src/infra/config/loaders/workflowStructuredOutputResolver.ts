@@ -19,6 +19,7 @@ function validateSchemaName(schemaName: string, field: string): string {
 
 interface StructuredOutputResolutionOptions {
   readonly projectDir: string;
+  readonly resourceRoot?: string;
 }
 
 export function resolveStructuredOutput(
@@ -33,6 +34,7 @@ export function resolveStructuredOutput(
 
   const schemaName = validateSchemaName(workflowSchemas?.[schemaRef] ?? schemaRef, 'schema_ref');
   const candidateDirs = [
+    ...(options.resourceRoot === undefined ? [] : [join(options.resourceRoot, 'schemas')]),
     getProjectSchemasDir(options.projectDir),
     getGlobalSchemasDir(),
     join(getResourcesDir(), 'schemas'),

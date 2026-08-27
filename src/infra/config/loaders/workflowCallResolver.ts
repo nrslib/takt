@@ -13,6 +13,7 @@ import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-l
 export interface WorkflowCallParentContext {
   sourcePath?: string;
   trustInfo?: WorkflowTrustInfo;
+  resourceRoot?: string;
 }
 
 function hasUnsafeNamedWorkflowSegments(identifier: string): boolean {
@@ -59,6 +60,7 @@ export function resolveWorkflowCallTarget(
     callableArgs: parentStep.args,
     parentTrustInfo,
     skipWorkflowCallContractValidation: true,
+    resourceRoot: parentContext?.resourceRoot,
   });
 
   if (!childWorkflow) return null;

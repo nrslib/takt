@@ -18,6 +18,16 @@ export interface FacetResolutionContext {
   lang: Language;
   workflowDir?: string;
   repertoireDir?: string;
+  resourceRoot?: string;
+}
+
+export function getIsolatedWorkflowResourceDir(
+  context: FacetResolutionContext,
+  siblingName: 'companions' | 'facets' | 'facet-pools' | 'provider-options' | 'steps' | 'workflows',
+): string | undefined {
+  return context.resourceRoot === undefined
+    ? undefined
+    : path.join(context.resourceRoot, siblingName);
 }
 
 function normalizeWorkflowBaseDir(workflowDir: string): string {
@@ -72,6 +82,11 @@ export function buildCandidateDirsWithPackage(
 ): string[] {
   const dirs: string[] = [];
 
+  const artifactFacetsDir = getIsolatedWorkflowResourceDir(context, 'facets');
+  if (artifactFacetsDir) {
+    dirs.push(path.join(artifactFacetsDir, facetType));
+  }
+
   if (context.workflowDir && context.repertoireDir) {
     const workflowBaseDir = normalizeWorkflowBaseDir(context.workflowDir);
     const pkg = getPackageFromWorkflowDir(workflowBaseDir, context.repertoireDir);
@@ -91,6 +106,11 @@ export function buildCandidateDirsWithPackage(
 
 export function buildFacetsRoots(context: FacetResolutionContext): string[] {
   const roots: string[] = [];
+
+  const artifactFacetsDir = getIsolatedWorkflowResourceDir(context, 'facets');
+  if (artifactFacetsDir) {
+    roots.push(artifactFacetsDir);
+  }
 
   if (context.workflowDir && context.repertoireDir) {
     const workflowBaseDir = normalizeWorkflowBaseDir(context.workflowDir);

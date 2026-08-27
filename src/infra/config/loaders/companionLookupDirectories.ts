@@ -21,8 +21,10 @@ export function buildCompanionLookupDirs(input: {
 export function buildConfiguredCompanionLookupDirs(
   projectDir: string,
   language: Language,
+  resourceRoot?: string,
 ): string[] {
   return [
+    ...(resourceRoot === undefined ? [] : [join(resourceRoot, 'companions')]),
     getProjectCompanionsDir(projectDir),
     getGlobalCompanionsDir(),
     getBuiltinCompanionsDir(language),

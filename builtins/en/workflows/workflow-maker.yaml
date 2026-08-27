@@ -1,0 +1,69 @@
+name: workflow-maker
+description: Workflow Maker creates or revises an isolated TAKT workflow bundle and reviews it before completion.
+max_steps: 12
+initial_step: create
+
+personas:
+  maker: ../facets/personas/coder.md
+  reviewer: ../facets/personas/architecture-reviewer.md
+policies:
+  takt: ../facets/policies/takt.md
+knowledge:
+  takt: ../facets/knowledge/takt.md
+instructions:
+  create: ../facets/instructions/workflow-maker-create.md
+  review: ../facets/instructions/workflow-maker-review.md
+  fix: ../facets/instructions/workflow-maker-fix.md
+report_formats:
+  doctor: ../facets/output-contracts/workflow-maker-doctor.md
+  review: ../facets/output-contracts/workflow-maker-review.md
+
+steps:
+  - name: create
+    capabilities: edit
+    edit: true
+    persona: maker
+    policy: takt
+    knowledge: takt
+    instruction: create
+    output_contracts:
+      report:
+        - name: workflow-maker-doctor.md
+          format: doctor
+    rules:
+      - condition: completed
+        next: review
+
+  - name: review
+    capabilities: readonly
+    edit: false
+    persona: reviewer
+    policy: takt
+    knowledge: takt
+    instruction: review
+    pass_previous_response: false
+    output_contracts:
+      report:
+        - name: workflow-maker-review.md
+          format: review
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+
+  - name: fix
+    capabilities: edit
+    edit: true
+    persona: maker
+    policy: takt
+    knowledge: takt
+    instruction: fix
+    pass_previous_response: false
+    output_contracts:
+      report:
+        - name: workflow-maker-doctor.md
+          format: doctor
+    rules:
+      - condition: completed
+        next: review

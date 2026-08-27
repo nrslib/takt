@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -52,6 +52,7 @@ describe('runWorkflowExecution', () => {
         request.cwd,
         {
           projectCwd: request.projectCwd,
+          workflowResourceRoot: request.workflowResourceRoot,
           outputMode: request.outputMode,
           eventSink: request.eventSink,
           abortSignal: request.abortSignal,
@@ -185,6 +186,45 @@ describe('runWorkflowExecution', () => {
 
     expect(mockExecuteTaskWorkflow).not.toHaveBeenCalled();
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+  });
+
+  it('should preserve separate working, project config, and workflow resource roots', async () => {
+    await runWorkflowExecution({
+      task: 'Run an isolated artifact',
+      cwd: '/repo/.takt/make/run-1',
+      projectCwd: '/repo',
+      workflowResourceRoot: '/repo/.takt/make/run-1',
+      workflowIdentifier: '/builtins/workflow-maker.yaml',
+      outputMode: 'silent',
+    });
+
+    expect(mockExecuteTaskWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/repo/.takt/make/run-1',
+      projectCwd: '/repo',
+      workflowResourceRoot: '/repo/.takt/make/run-1',
+    }), expect.any(Function));
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.anything(),
+      'Run an isolated artifact',
+      '/repo/.takt/make/run-1',
+      expect.objectContaining({
+        projectCwd: '/repo',
+        workflowResourceRoot: '/repo/.takt/make/run-1',
+      }),
+    );
+  });
+
+  it('should reject a relative workflow resource root before execution', async () => {
+    await expect(runWorkflowExecution({
+      task: 'Run an isolated artifact',
+      cwd: '/repo/.takt/make/run-1',
+      projectCwd: '/repo',
+      workflowResourceRoot: '.takt/make/run-1',
+      workflowIdentifier: '/builtins/workflow-maker.yaml',
+      outputMode: 'silent',
+    })).rejects.toThrow(/workflowResourceRoot must be an absolute path/i);
+
+    expect(mockExecuteTaskWorkflow).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -500,6 +540,79 @@ describe('runWorkflowExecution silent output', () => {
       reason: 'Workflow file not found: ./custom-workflow.yaml',
     });
     expectNoCliOutput(cliOutput);
+  });
+
+  it('should resolve provider routing, options, and permissions from projectCwd for an isolated workflow', async () => {
+    const projectCwd = await createProjectDirectory();
+    const artifactRoot = path.join(projectCwd, '.takt', 'make', 'isolated-run');
+    const workflowPath = path.join(artifactRoot, 'workflows', 'isolated.yaml');
+    await mkdir(path.dirname(workflowPath), { recursive: true });
+    await writeFile(path.join(projectCwd, '.takt', 'config.yaml'), `language: ja
+provider: codex
+model: project-model
+provider_options:
+  codex:
+    network_access: false
+provider_routing:
+  personas:
+    coder:
+      provider: codex
+      model: routed-model
+provider_profiles:
+  codex:
+    default_permission_mode: full
+    step_permission_overrides:
+      create: edit
+`);
+    await mkdir(path.join(artifactRoot, '.takt'), { recursive: true });
+    await writeFile(path.join(artifactRoot, '.takt', 'config.yaml'), `language: en
+provider: opencode
+provider_profiles:
+  codex:
+    default_permission_mode: readonly
+`);
+    await writeFile(workflowPath, `name: isolated
+initial_step: create
+max_steps: 1
+steps:
+  - name: create
+    persona: coder
+    instruction: Create directly.
+`);
+
+    await runWorkflowExecution({
+      task: 'Run isolated workflow',
+      cwd: artifactRoot,
+      projectCwd,
+      workflowResourceRoot: artifactRoot,
+      workflowIdentifier: workflowPath,
+      outputMode: 'silent',
+    });
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'isolated' }),
+      'Run isolated workflow',
+      artifactRoot,
+      expect.objectContaining({
+        projectCwd,
+        workflowResourceRoot: artifactRoot,
+        language: 'ja',
+        providerOptions: expect.objectContaining({
+          codex: expect.objectContaining({ networkAccess: false }),
+        }),
+        providerRouting: expect.objectContaining({
+          personas: expect.objectContaining({
+            coder: expect.objectContaining({ provider: 'codex', model: 'routed-model' }),
+          }),
+        }),
+        providerProfiles: expect.objectContaining({
+          codex: {
+            defaultPermissionMode: 'full',
+            stepPermissionOverrides: { create: 'edit' },
+          },
+        }),
+      }),
+    );
   });
 
   it('Given a publication coordinator, When the actual task workflow adapter resolves a workflow, Then the scheduler receives that coordinator', async () => {

@@ -120,6 +120,7 @@ export async function executeTaskWorkflow(
     cwd,
     workflowIdentifier,
     projectCwd,
+    workflowResourceRoot,
     agentOverrides,
     outputMode,
     eventSink,
@@ -148,7 +149,7 @@ export async function executeTaskWorkflow(
   const workflowConfig = loadWorkflowByIdentifier(
     workflowIdentifier,
     projectCwd,
-    { lookupCwd: cwd },
+    { lookupCwd: cwd, resourceRoot: workflowResourceRoot },
   );
   const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
 
@@ -176,6 +177,7 @@ export async function executeTaskWorkflow(
   const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
   return workflowExecutor(workflowConfig, task, cwd, {
     projectCwd,
+    workflowResourceRoot,
     language: config.language,
     provider: agentOverrides?.provider,
     providerSource: agentOverrides?.providerSource,

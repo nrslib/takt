@@ -205,7 +205,11 @@ async function executeWorkflowInternal(
     : { ...options, prContext };
   const parentRunPid = process.pid;
   const liveWorkflowCallResolver = createWorkflowCallResolver(
-    createWorkflowExecutionContext(workflowConfig, options.projectCwd),
+    createWorkflowExecutionContext(
+      workflowConfig,
+      options.projectCwd,
+      options.workflowResourceRoot,
+    ),
   );
   const preparedBundle = prepareWorkflowExecutionBundle({
     rootWorkflow: workflowConfig,

@@ -47,6 +47,9 @@ async function runWorkflowExecutionInternal(
 ): Promise<WorkflowExecutionResult> {
   requireAbsolutePath(request.cwd, 'cwd');
   requireAbsolutePath(request.projectCwd, 'projectCwd');
+  if (request.workflowResourceRoot !== undefined) {
+    requireAbsolutePath(request.workflowResourceRoot, 'workflowResourceRoot');
+  }
   requireNonEmpty(request.workflowIdentifier, 'workflowIdentifier');
   requireNonEmpty(request.task, 'task');
 

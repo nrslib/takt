@@ -7,7 +7,12 @@ import {
   getRepertoireStepsDir,
 } from '../paths.js';
 import { resolveNamedResourceWithSource } from './namedResourceResolver.js';
-import { getPackageFromWorkflowDir, getWorkflowBaseDir, type FacetResolutionContext } from './workflowPackageScope.js';
+import {
+  getPackageFromWorkflowDir,
+  getWorkflowBaseDir,
+  getIsolatedWorkflowResourceDir,
+  type FacetResolutionContext,
+} from './workflowPackageScope.js';
 
 const STEP_FRAGMENT_EXTENSIONS = ['.yaml', '.yml'] as const;
 
@@ -38,6 +43,10 @@ function requireContext(ref: string, context: FacetResolutionContext | undefined
 
 export function buildStepFragmentLookupDirs(context: FacetResolutionContext): string[] {
   const dirs: string[] = [];
+  const artifactStepsDir = getIsolatedWorkflowResourceDir(context, 'steps');
+  if (artifactStepsDir) {
+    dirs.push(artifactStepsDir);
+  }
   if (context.workflowDir && context.repertoireDir) {
     const pkg = getPackageFromWorkflowDir(getWorkflowBaseDir(context.workflowDir), context.repertoireDir);
     if (pkg) {

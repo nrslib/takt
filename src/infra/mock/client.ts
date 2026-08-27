@@ -6,7 +6,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { PreparedProviderMcp } from '../providers/mcp/types.js';
@@ -70,6 +70,8 @@ function recordMockCall(
   personaName: string,
   details?: {
     model?: string;
+    permissionMode?: MockCallOptions['permissionMode'];
+    allowedTools?: readonly string[];
     status?: AgentResponse['status'];
     aborted?: boolean;
     mcpServers?: Record<string, { transport: string }>;
@@ -255,6 +257,76 @@ function applyScenarioFileWrites(entry: ScenarioEntry | undefined, cwd: string):
   }
 }
 
+function findScenarioFiles(root: string, filename: string): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = resolve(root, entry.name);
+    if (entry.isDirectory()) {
+      return findScenarioFiles(entryPath, filename);
+    }
+    return entry.isFile() && entry.name === filename ? [entryPath] : [];
+  });
+}
+
+type ScenarioFileConditionEvaluation =
+  | { readonly matches: true }
+  | { readonly matches: false; readonly mismatchError: Error };
+
+function evaluateScenarioFileCondition(
+  condition: ScenarioEntry['fileCondition'],
+  cwd: string,
+): ScenarioFileConditionEvaluation {
+  if (condition === undefined) return { matches: true };
+  const matches = findScenarioFiles(cwd, condition.filename);
+  if (condition.state === 'missing') {
+    return matches.length === 0
+      ? { matches: true }
+      : {
+        matches: false,
+        mismatchError: new Error(`Mock scenario expected ${condition.filename} to be missing`),
+      };
+  }
+  if (matches.length !== 1) {
+    return {
+      matches: false,
+      mismatchError: new Error(
+        `Mock scenario expected exactly one ${condition.filename}, found ${matches.length}`,
+      ),
+    };
+  }
+  if (condition.state === 'unreadable') {
+    try {
+      readFileSync(matches[0]!, 'utf-8');
+    } catch {
+      return { matches: true };
+    }
+    return {
+      matches: false,
+      mismatchError: new Error(`Mock scenario expected ${condition.filename} to be unreadable`),
+    };
+  }
+  let content: string;
+  try {
+    content = readFileSync(matches[0]!, 'utf-8');
+  } catch (error) {
+    return {
+      matches: false,
+      mismatchError: new Error(
+        `Mock scenario expected ${condition.filename} to be readable`,
+        { cause: error },
+      ),
+    };
+  }
+  if (!content.includes(condition.includes)) {
+    return {
+      matches: false,
+      mismatchError: new Error(
+        `Mock scenario expected ${condition.filename} to contain the required text`,
+      ),
+    };
+  }
+  return { matches: true };
+}
+
 /**
  * Call mock agent - returns immediate fixed response
  */
@@ -270,6 +342,8 @@ export async function callMock(
   const scenarioEntry = getScenarioQueue()?.consume(personaName);
   recordMockCall('start', personaName, {
     model: options.model,
+    permissionMode: options.permissionMode,
+    allowedTools: options.allowedTools,
     mcpServers: buildMcpServerSummary(options.preparedMcp),
     inputSessionId: options.sessionId,
   });
@@ -291,12 +365,20 @@ export async function callMock(
     }
   }
 
+  const fileCondition = evaluateScenarioFileCondition(scenarioEntry?.fileCondition, options.cwd);
+  if (!fileCondition.matches && scenarioEntry?.mismatchContent === undefined) {
+    throw fileCondition.mismatchError;
+  }
+
   const status = scenarioEntry?.status ?? options.mockStatus ?? 'done';
   const statusMarker = `[MOCK:${status.toUpperCase()}]`;
   const allowedToolsSuffix = options.allowedTools && options.allowedTools.length > 0
     ? `\nAllowed tools: ${options.allowedTools.join(', ')}`
     : '';
-  const content = scenarioEntry?.content ?? options.mockResponse ??
+  const scenarioContent = fileCondition.matches
+    ? scenarioEntry?.content
+    : scenarioEntry?.mismatchContent;
+  const content = scenarioContent ?? options.mockResponse ??
     `${statusMarker}\n\nMock response for persona "${personaName}".\nPrompt: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}${allowedToolsSuffix}`;
 
   applyScenarioFileWrites(scenarioEntry, options.cwd);
