@@ -142,6 +142,12 @@ steps:
     expect(() => loadWorkflowFromFile(workflowPath, projectDir, { resourceRoot: isolatedRoot })).toThrow(
       /project-only/,
     );
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir, { resourceRoot: isolatedRoot })).toThrow(
+      new RegExp(`isolated workflow rules under "${isolatedWorkflowsDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`),
+    );
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir, { resourceRoot: isolatedRoot })).not.toThrow(
+      /project, global, or builtin/,
+    );
   });
 
   it('fails at workflow load when a declared rule cannot be resolved', () => {

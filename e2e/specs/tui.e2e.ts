@@ -241,6 +241,20 @@ describe('E2E: Ink TUI', () => {
     ));
   }
 
+  /**
+   * Match only inside the prompt box (the last `╭` frame). Submitted lines stay
+   * in the transcript with the same `❯ ` prefix, so a repeated command such as
+   * /go would otherwise match an earlier entry before the new draft is drawn.
+   */
+  function hasCurrentPromptLine(screen: string, expected: string): boolean {
+    const lines = screen.split('\n');
+    const promptTop = lines.findLastIndex((line) => line.includes('╭'));
+    if (promptTop < 0) return false;
+    const promptBottom = lines.findIndex((line, index) => index > promptTop && line.includes('╰'));
+    const promptLines = lines.slice(promptTop + 1, promptBottom < 0 ? undefined : promptBottom);
+    return hasExactVisibleLine(promptLines.join('\n'), expected);
+  }
+
   function selectableRows(screen: string): string[] {
     return screen.split('\n').flatMap((line) => {
       const match = /^(?:  ❯ |    )(\S.*)$/.exec(line);
@@ -308,7 +322,7 @@ describe('E2E: Ink TUI', () => {
     await waitForNewOutput(tui, outputOffset, `❯ ${text}`);
     await tui.waitForScreen(
       `the current draft ${JSON.stringify(text)}`,
-      (screen) => hasExactVisibleLine(screen, `❯ ${text}`),
+      (screen) => hasCurrentPromptLine(screen, `❯ ${text}`),
       10_000,
     );
     tui.write(ENTER);

@@ -149,7 +149,7 @@ describe('loadScenarioFile', () => {
 
     const entries = loadScenarioFile(filePath);
 
-    expect(entries[0].status).toBe('done');
+    expect(entries[0]?.status).toBe('done');
   });
 
   it('should throw for non-existent file', () => {
@@ -251,7 +251,7 @@ describe('loadScenarioFile', () => {
 
     const entries = loadScenarioFile(filePath);
 
-    expect(entries[0].delayMs).toBe(100);
+    expect(entries[0]?.delayMs).toBe(100);
   });
 
   it('should accept wait_for_abort and expose it as waitForAbort', () => {
@@ -260,7 +260,7 @@ describe('loadScenarioFile', () => {
 
     const entries = loadScenarioFile(filePath);
 
-    expect(entries[0].waitForAbort).toBe(true);
+    expect(entries[0]?.waitForAbort).toBe(true);
   });
 
   it('should reject a non-boolean wait_for_abort', () => {
@@ -370,7 +370,7 @@ describe('scenario file conditions', () => {
       .resolves.toEqual(expect.objectContaining({ content: '[REVIEW:2]' }));
   });
 
-  itPosix.each(['fail', 'missing', 'unreadable'] as const)(
+  itPosix.for(['fail', 'missing', 'unreadable'] as const)(
     'should return mismatch content when the Doctor report is %s',
     async (doctorState, context) => {
       const reportPath = join(tempDir, 'workflow-maker-doctor.md');
