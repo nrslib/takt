@@ -1,8 +1,9 @@
 import { t } from './i18n.js';
-import { parallelGroupFamilyKey } from './execution-model.js';
+import { encodeIdPart, parallelGroupDescriptors } from './execution-model.js';
 
 const executionMapDisposers = new WeakMap();
 const executionMapHeaders = new WeakMap();
+const executionMapGeometryUpdaters = new WeakMap();
 const PAN_THRESHOLD = 4;
 const NODE_MARGIN = 16;
 const PARALLEL_GROUP_PADDING = 14;
@@ -57,7 +58,60 @@ function occurrenceCallValue(occurrence) {
 function occurrenceLabel(occurrence, index) {
   const callValue = occurrenceCallValue(occurrence);
   const callLabel = callValue === undefined ? '' : ` · ${t('map.call', { value: callValue })}`;
-  return `${t('map.iter', { number: occurrence.ordinal ?? index + 1 })}${callLabel}`;
+  return `${t('map.iter', { number: occurrence.presentationOrdinal ?? index + 1 })}${callLabel}`;
+}
+
+function renderPort(side, extraClass = '') {
+  const classes = ['execution-port', `execution-port-${side}`];
+  if (extraClass !== '') classes.push(extraClass);
+  const port = element('span', classes.join(' '));
+  port.dataset.port = side === 'prev' ? 'PREV' : 'NEXT';
+  port.setAttribute('aria-hidden', 'true');
+  const anchor = element('span', 'execution-port-anchor');
+  anchor.dataset.port = port.dataset.port;
+  anchor.setAttribute('aria-hidden', 'true');
+  const label = element('span', 'execution-port-label', port.dataset.port);
+  label.setAttribute('aria-hidden', 'true');
+  port.append(anchor, label);
+  return port;
+}
+
+function renderParallelCallParticipant(
+  participant,
+  parallelGroupKey,
+  selectedOccurrenceId,
+  onSelectOccurrence,
+) {
+  const anchor = element('span', 'execution-parallel-call-participant');
+  anchor.dataset.occurrenceId = participant.occurrenceId;
+  anchor.dataset.parallelGroupKey = parallelGroupKey;
+  anchor.dataset.kind = 'parallel-call-participant';
+  anchor.dataset.interactive = 'true';
+  anchor.setAttribute('role', 'button');
+  anchor.setAttribute('tabindex', '0');
+  const selected = participant.occurrenceId === selectedOccurrenceId;
+  anchor.dataset.selected = String(selected);
+  anchor.setAttribute('aria-pressed', String(selected));
+  const label = t('map.call', { value: participant.label });
+  anchor.setAttribute('aria-label', label);
+  anchor.title = label;
+  anchor.addEventListener('pointerdown', (event) => event.stopPropagation?.());
+  anchor.addEventListener('click', (event) => {
+    event.stopPropagation?.();
+    onSelectOccurrence?.(participant.occurrenceId);
+  });
+  anchor.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    onSelectOccurrence?.(participant.occurrenceId);
+  });
+  anchor.append(
+    element('span', 'execution-parallel-call-label', label),
+    renderPort('prev'),
+    renderPort('next'),
+  );
+  return anchor;
 }
 
 function occurrenceOutcomeLabel(occurrence) {
@@ -83,6 +137,9 @@ function renderIterationChip(
   button.dataset.kind = 'iteration';
   const isParallelChild = occurrence.parallelGroupKey !== undefined
     && occurrence.parallelGroupAmbiguous !== true;
+  const isParallelParent = isParallelChild
+    && occurrence.stack?.at(-1)?.kind === 'parallel'
+    && node.label === occurrence.stack.at(-1)?.step;
   const groupSelected = selectedOccurrenceId === null
     && isParallelChild
     && occurrence.parallelGroupKey === selectedParallelGroupKey;
@@ -90,7 +147,7 @@ function renderIterationChip(
   button.dataset.parallelGroupKey = occurrence.parallelGroupKey ?? '';
   button.dataset.selected = String(selected);
   button.setAttribute('aria-pressed', String(selected));
-  const ordinal = occurrence.ordinal ?? index + 1;
+  const ordinal = occurrence.presentationOrdinal ?? index + 1;
   const callValue = occurrenceCallValue(occurrence);
   const outcomeLabel = occurrenceOutcomeLabel(occurrence);
   const groupOrdinal = isParallelChild
@@ -99,6 +156,9 @@ function renderIterationChip(
   const groupLabel = groupOrdinal === undefined
     ? t('map.parallelMember')
     : t('map.parallelIteration', { number: groupOrdinal });
+  const evidenceLabel = isParallelChild
+    ? t(isParallelParent ? 'map.observedBoundary' : 'map.observedParticipant')
+    : null;
   const visibleLabel = isParallelChild
     ? outcomeLabel ?? statusLabel(occurrence.status)
     : occurrenceLabel(occurrence, index);
@@ -114,6 +174,9 @@ function renderIterationChip(
     callValue === undefined ? '' : t('map.call', { value: callValue }),
     occurrence.phases.join(' / '),
     occurrence.personas.join(' / '),
+    t('map.prevPort'),
+    t('map.nextPort'),
+    evidenceLabel,
     outcomeLabel ?? statusLabel(occurrence.status),
   ].filter(Boolean).join(' · ');
   button.setAttribute('aria-label', accessibleLabel);
@@ -129,6 +192,11 @@ function renderIterationChip(
         : 'iteration-chip-result',
       visibleDetail,
     ),
+    ...(evidenceLabel === null ? [] : [
+      element('span', 'iteration-chip-evidence', evidenceLabel),
+    ]),
+    renderPort('prev'),
+    renderPort('next'),
   );
   button.addEventListener('click', () => onSelectOccurrence(node, occurrence));
   return button;
@@ -218,27 +286,35 @@ function renderStep(
 }
 
 function parallelContexts(node) {
-  const candidates = node.occurrences
-    .map((occurrence) => ({ occurrence, stack: occurrence.stack }))
-    .filter(({ stack }) => Array.isArray(stack))
-    .map(({ occurrence, stack }) => {
-      const frameIndex = [...stack].findLastIndex((frame) => frame?.kind === 'parallel');
-      if (frameIndex < 0) return null;
-      const frame = stack[frameIndex];
-      const familyKey = occurrence.parallelGroupFamilyKey ?? parallelGroupFamilyKey(stack);
-      const presentationKey = parallelGroupFamilyKey(stack);
-      if (familyKey === undefined || presentationKey === undefined) return null;
-      return {
-        frame,
-        familyKey,
-        presentationKey,
-      };
-    })
-    .filter(Boolean);
+  const candidates = [];
+  for (const occurrence of node.occurrences) {
+    const stack = occurrence.stack;
+    if (!Array.isArray(stack)) continue;
+    const descriptors = occurrence.parallelGroupDescriptors
+      ?? parallelGroupDescriptors(stack, occurrence.iteration);
+    const presentationDescriptors = parallelGroupDescriptors(
+      stack,
+      occurrence.iteration,
+    );
+    for (const descriptor of descriptors) {
+      // Only the parallel boundary itself and its direct child belong to a
+      // group. Deeper workflow_call child steps are represented by the
+      // direct call participant (or its normalized branch anchor).
+      if (stack.length > descriptor.frameIndex + 2) continue;
+      const presentationDescriptor = presentationDescriptors.find(
+        (candidate) => candidate.frameIndex === descriptor.frameIndex,
+      );
+      candidates.push({
+        frame: stack[descriptor.frameIndex],
+        familyKey: descriptor.familyKey,
+        presentationKey: presentationDescriptor?.familyKey ?? descriptor.familyKey,
+      });
+    }
+  }
   return candidates;
 }
 
-function parallelGroups(nodes, traceGroups = []) {
+function parallelGroups(nodes, traceGroups = [], trace) {
   const groups = new Map();
   const presentationByFamily = new Map();
   for (const node of nodes) {
@@ -255,6 +331,24 @@ function parallelGroups(nodes, traceGroups = []) {
         : { ...previous, nodeIds: [...new Set([...previous.nodeIds, node.id])] });
     }
   }
+  // A presentation family may contain multiple recorded ITER batches. The
+  // visual frame and its group-drag handle must cover every occurrence-derived
+  // member across those batches. Do not fall back to the raw context union:
+  // traceGroup.nodeIds has already applied nearest-parallel membership and
+  // therefore excludes nested direct participants from the outer group.
+  const resolvedNodeIdsByPresentation = new Map();
+  for (const traceGroup of traceGroups) {
+    if (traceGroup?.familyKey === undefined) continue;
+    const presentationKey = presentationByFamily.get(traceGroup.familyKey);
+    if (presentationKey === undefined) continue;
+    const traceNodeIds = traceGroup.nodeIds ?? [];
+    if (traceNodeIds.length === 0) continue;
+    const previous = resolvedNodeIdsByPresentation.get(presentationKey) ?? [];
+    resolvedNodeIdsByPresentation.set(
+      presentationKey,
+      [...new Set([...previous, ...traceNodeIds])],
+    );
+  }
   for (const traceGroup of traceGroups) {
     if (traceGroup?.familyKey === undefined) continue;
     const presentationKey = presentationByFamily.get(traceGroup.familyKey);
@@ -262,13 +356,33 @@ function parallelGroups(nodes, traceGroups = []) {
     const context = groups.get(presentationKey);
     if (context === undefined) continue;
     const previous = context.iterations.find((candidate) => candidate.key === traceGroup.key);
+    const callParticipants = trace === undefined
+      ? []
+      : (traceGroup.participantOccurrenceIds ?? [])
+        .map((occurrenceId) => {
+          const found = findOccurrence(trace, occurrenceId);
+          if (found?.node.kind !== 'workflow') return null;
+          const call = trace.calls.find((candidate) => candidate.occurrenceId === occurrenceId);
+          const target = call?.targetOccurrenceId === undefined
+            ? undefined
+            : findOccurrence(trace, call.targetOccurrenceId);
+          return {
+            occurrenceId,
+            label: call?.displayChildWorkflow ?? found.node.displayLabel ?? found.node.label,
+            targetOccurrenceId: target?.node.kind === 'step' ? call?.targetOccurrenceId : undefined,
+          };
+        })
+        .filter(Boolean);
     groups.set(presentationKey, {
       ...context,
-      nodeIds: [...new Set([...context.nodeIds, ...(traceGroup.nodeIds ?? [])])],
+      // The execution model has already resolved nearest-parallel membership;
+      // retain that occurrence-derived node set so nested direct participants
+      // do not leak into their outer group's visual frame.
+      nodeIds: resolvedNodeIdsByPresentation.get(presentationKey) ?? [],
       iterations: previous === undefined
-        ? [...context.iterations, traceGroup]
+        ? [...context.iterations, { ...traceGroup, callParticipants }]
         : context.iterations.map((candidate) => candidate.key === traceGroup.key
-          ? { ...candidate, ...traceGroup }
+          ? { ...candidate, ...traceGroup, callParticipants }
           : candidate),
     });
   }
@@ -284,7 +398,7 @@ function parallelGroups(nodes, traceGroups = []) {
 
 export function parallelGroupPresentationOrdinal(trace, groupKey) {
   if (typeof groupKey !== 'string' || groupKey === '') return undefined;
-  return parallelGroups(stepNodes(trace), trace.parallelGroups ?? [])
+  return parallelGroups(stepNodes(trace), trace.parallelGroups ?? [], trace)
     .flatMap((group) => group.iterations)
     .find((iteration) => iteration.key === groupKey)?.ordinal;
 }
@@ -379,7 +493,7 @@ function layoutSteps(trace, customNodePositions) {
     maxX = Math.max(maxX, x + 220);
     maxY = Math.max(maxY, y + 136);
   });
-  for (const group of parallelGroups(nodes, trace.parallelGroups ?? [])) {
+  for (const group of parallelGroups(nodes, trace.parallelGroups ?? [], trace)) {
     const groupedNodes = group.nodeIds
       .map((nodeId) => nodeByLogicalId.get(nodeId))
       .filter(Boolean)
@@ -428,7 +542,13 @@ function updateParallelGroups(groups, canvas) {
   groups.forEach((group) => positionParallelGroup(group, canvas));
 }
 
-function renderParallelGroup(group, selectedParallelGroupKey, onSelectParallelGroup) {
+function renderParallelGroup(
+  group,
+  selectedParallelGroupKey,
+  selectedOccurrenceId,
+  onSelectParallelGroup,
+  onSelectOccurrence,
+) {
   const container = element('section', 'execution-parallel-group');
   container.dataset.parallelGroupId = group.id;
   container.dataset.selected = String(group.iterations.some(
@@ -439,7 +559,9 @@ function renderParallelGroup(group, selectedParallelGroupKey, onSelectParallelGr
   header.type = 'button';
   header.dataset.interactive = 'true';
   header.setAttribute('aria-label', t('map.moveParallelGroup', { step: group.label }));
+  header.setAttribute('aria-description', t('map.observedParticipants'));
   header.title = t('map.moveParallelGroup', { step: group.label });
+  header.append(element('span', 'execution-parallel-evidence', t('map.observedParticipants')));
   container.append(header);
   if (group.iterations.length > 0) {
     const iterationList = element('div', 'execution-parallel-iterations');
@@ -462,6 +584,10 @@ function renderParallelGroup(group, selectedParallelGroupKey, onSelectParallelGr
         step: group.label,
         number: iteration.ordinal,
       }));
+      button.setAttribute(
+        'aria-description',
+        `${t('map.prevPort')} / ${t('map.nextPort')}`,
+      );
       button.title = t('map.selectParallelIteration', {
         step: group.label,
         number: iteration.ordinal,
@@ -492,6 +618,17 @@ function renderParallelGroup(group, selectedParallelGroupKey, onSelectParallelGr
         buttons[nextIndex]?.focus?.();
         if (next !== undefined) onSelectParallelGroup?.(group, next);
       });
+      button.append(
+        ...(iteration.callParticipants ?? [])
+          .map((participant) => renderParallelCallParticipant(
+            participant,
+            iteration.key,
+            selectedOccurrenceId,
+            onSelectOccurrence,
+          )),
+        renderPort('prev', 'execution-port-boundary'),
+        renderPort('next', 'execution-port-boundary'),
+      );
       iterationList.append(button);
     }
     container.append(iterationList);
@@ -678,7 +815,7 @@ function attachParallelGroupDrag(group, container, canvas, groups, onMoveNode) {
   };
 }
 
-function visibleTransitionRelations(trace) {
+function observedTransitionRelations(trace) {
   const callPairs = new Set(visibleCallRelations(trace).map((call) => `${call.sourceOccurrenceId}->${call.targetOccurrenceId}`));
   return trace.transitions.filter((transition) => {
     const source = findOccurrence(trace, transition.source);
@@ -691,6 +828,272 @@ function visibleTransitionRelations(trace) {
     sourceParallelGroupKey: findOccurrence(trace, transition.source)?.occurrence.parallelGroupKey,
     targetParallelGroupKey: findOccurrence(trace, transition.target)?.occurrence.parallelGroupKey,
   }));
+}
+
+function isParallelParentOccurrence(node, occurrence, groupKey) {
+  if (occurrence.parallel?.role === 'parent') {
+    const parentIndex = occurrence.stack === undefined ? -1 : [...occurrence.stack]
+      .findLastIndex((frame) => frame?.kind === 'parallel');
+    return parentIndex >= 0 && occurrence.stack?.length === parentIndex + 1;
+  }
+  if (occurrence.parallel !== undefined || occurrence.parallelLegacyAmbiguous === true) return false;
+  const descriptor = groupKey === undefined
+    ? undefined
+    : parallelGroupDescriptorForOccurrence(occurrence, groupKey);
+  if (descriptor !== undefined) {
+    return (occurrence.stack?.length ?? 0) === descriptor.frameIndex + 1;
+  }
+  const frame = occurrence.stack?.at(-1);
+  return frame?.kind === 'parallel' && node.label === frame.step;
+}
+
+function parallelGroupMembers(trace, group) {
+  const occurrences = (group.occurrenceIds ?? [])
+    .map((occurrenceId) => findOccurrence(trace, occurrenceId))
+    .filter(Boolean);
+  const parentIds = new Set(
+    group.parentOccurrenceIds
+      ?? occurrences
+        .filter(({ node, occurrence }) => isParallelParentOccurrence(node, occurrence, group.key))
+        .map(({ occurrence }) => occurrence.id),
+  );
+  const participantIds = group.participantOccurrenceIds === undefined
+    ? occurrences
+      .filter(({ occurrence }) => {
+        const descriptor = parallelGroupDescriptorForOccurrence(occurrence, group.key);
+        return descriptor === undefined
+          ? !parentIds.has(occurrence.id)
+          : (occurrence.stack?.length ?? 0) === descriptor.frameIndex + 2;
+      })
+      .map(({ occurrence }) => occurrence.id)
+    : [...group.participantOccurrenceIds];
+  return {
+    parentIds,
+    participantIds: [...new Set(participantIds)],
+  };
+}
+
+function parallelGroupDescriptorForOccurrence(occurrence, groupKey) {
+  return (occurrence.parallelGroupDescriptors
+    ?? parallelGroupDescriptors(occurrence.stack, occurrence.iteration))
+    .find((descriptor) => descriptor.key === groupKey);
+}
+
+function parallelParticipantAnchor(trace, groupKey, occurrenceId) {
+  const participant = findOccurrence(trace, occurrenceId);
+  if (participant === null) return {};
+  const descriptor = parallelGroupDescriptorForOccurrence(participant.occurrence, groupKey);
+  if (descriptor !== undefined && Array.isArray(participant.occurrence.stack)) {
+    const nestedFrame = participant.occurrence.stack[descriptor.frameIndex + 1];
+    const nestedDescriptor = (participant.occurrence.parallelGroupDescriptors
+      ?? parallelGroupDescriptors(
+        participant.occurrence.stack,
+        participant.occurrence.iteration,
+      )).find((candidate) => candidate.frameIndex === descriptor.frameIndex + 1);
+    if (nestedFrame?.kind === 'parallel' && nestedDescriptor !== undefined) {
+      return { boundaryKey: nestedDescriptor.key };
+    }
+  }
+  if (participant.node.kind === 'workflow') {
+    // The call occurrence is the participant boundary. Child workflow steps
+    // remain detail data and must never replace the visible PREV/NEXT anchor.
+    return { occurrenceId };
+  }
+  return { occurrenceId };
+}
+
+function isNestedParallelGroupTransition(trace, sourceOccurrenceId, targetOccurrenceId) {
+  const source = findOccurrence(trace, sourceOccurrenceId);
+  const target = findOccurrence(trace, targetOccurrenceId);
+  const sourceStack = source?.occurrence.stack;
+  const targetStack = target?.occurrence.stack;
+  if (!Array.isArray(sourceStack) || !Array.isArray(targetStack)) return false;
+  return (sourceStack.length < targetStack.length && isStackPrefix(sourceStack, targetStack))
+    || (targetStack.length < sourceStack.length && isStackPrefix(targetStack, sourceStack));
+}
+
+function parallelBoundaryRelation(
+  transition,
+  sourceBoundaryKey,
+  targetBoundaryKey,
+  trace,
+) {
+  const source = sourceBoundaryKey === undefined ? findOccurrence(trace, transition.source) : null;
+  const target = targetBoundaryKey === undefined ? findOccurrence(trace, transition.target) : null;
+  return {
+    ...transition,
+    source: sourceBoundaryKey === undefined ? transition.source : undefined,
+    target: targetBoundaryKey === undefined ? transition.target : undefined,
+    sourceStepId: source?.node.id,
+    targetStepId: target?.node.id,
+    sourceParallelGroupKey: sourceBoundaryKey,
+    targetParallelGroupKey: targetBoundaryKey,
+    ...(sourceBoundaryKey === undefined ? {} : {
+      sourceBoundaryKey,
+      sourceBoundary: true,
+      sourceBoundaryPort: 'next',
+    }),
+    ...(targetBoundaryKey === undefined ? {} : {
+      targetBoundaryKey,
+      targetBoundary: true,
+      targetBoundaryPort: 'prev',
+    }),
+  };
+}
+
+function parallelRelationTopology(trace) {
+  const groups = (trace.parallelGroups ?? [])
+    .filter((group) => (group.nodeIds?.length ?? 0) > 1)
+    .map((group) => ({
+      ...group,
+      members: parallelGroupMembers(trace, group),
+    }));
+  if (groups.length === 0) return observedTransitionRelations(trace);
+
+  const groupByKey = new Map(groups.map((group) => [group.key, group]));
+  const occurrenceGroupKey = (occurrenceId) => {
+    if (occurrenceId === undefined) return undefined;
+    const groupKey = findOccurrence(trace, occurrenceId)?.occurrence.parallelGroupKey;
+    return groupByKey.has(groupKey) ? groupKey : undefined;
+  };
+  const relations = [];
+  const incomingBoundaryKeys = new Set();
+  const outgoingBoundaryKeys = new Set();
+  const groupBoundaryPairs = new Set();
+
+  for (const transition of observedTransitionRelations(trace)) {
+    const sourceGroupKey = occurrenceGroupKey(transition.source);
+    const targetGroupKey = occurrenceGroupKey(transition.target);
+    if (sourceGroupKey === undefined && targetGroupKey === undefined) {
+      relations.push(transition);
+      continue;
+    }
+    // The observed parent -> child -> child -> parent sequence is an
+    // implementation detail of a parallel invocation. It must not become a
+    // direct child-to-child edge in the presentation graph.
+    if (sourceGroupKey !== undefined && sourceGroupKey === targetGroupKey) continue;
+    if (sourceGroupKey === undefined && targetGroupKey !== undefined) {
+      if (incomingBoundaryKeys.has(targetGroupKey)) continue;
+      incomingBoundaryKeys.add(targetGroupKey);
+      relations.push(parallelBoundaryRelation(
+        transition,
+        undefined,
+        targetGroupKey,
+        trace,
+      ));
+      continue;
+    }
+    if (sourceGroupKey !== undefined && targetGroupKey === undefined) {
+      if (outgoingBoundaryKeys.has(sourceGroupKey)) continue;
+      outgoingBoundaryKeys.add(sourceGroupKey);
+      relations.push(parallelBoundaryRelation(
+        transition,
+        sourceGroupKey,
+        undefined,
+        trace,
+      ));
+      continue;
+    }
+    if (sourceGroupKey !== undefined && targetGroupKey !== undefined) {
+      if (sourceGroupKey !== targetGroupKey
+        && isNestedParallelGroupTransition(trace, transition.source, transition.target)) {
+        // A nested group is the direct participant of its parent. Its own
+        // PREV/NEXT boundary is connected by the branch relations below;
+        // this observed lifecycle hop must not bypass that fork/join rail.
+        continue;
+      }
+      const pair = `${sourceGroupKey}->${targetGroupKey}`;
+      if (groupBoundaryPairs.has(pair)) continue;
+      groupBoundaryPairs.add(pair);
+      relations.push(parallelBoundaryRelation(
+        transition,
+        sourceGroupKey,
+        targetGroupKey,
+        trace,
+      ));
+    }
+  }
+
+  // Add the actual fork and join branches once per observed participant. The
+  // boundary chip is the sole source/target for these relations, so no line
+  // can accidentally connect two parallel children directly.
+  for (const group of groups) {
+    for (const occurrenceId of group.members.participantIds) {
+      const participant = findOccurrence(trace, occurrenceId);
+      if (participant === null) continue;
+      const base = {
+        kind: 'parallel',
+        sourceParallelGroupKey: group.key,
+        targetParallelGroupKey: group.key,
+      };
+      const participantAnchor = parallelParticipantAnchor(trace, group.key, occurrenceId);
+      if (participantAnchor.boundaryKey !== undefined) {
+        relations.push({
+          ...base,
+          id: `parallel:fork:${encodeIdPart(group.key)}:${encodeIdPart(occurrenceId)}`,
+          source: undefined,
+          target: undefined,
+          targetParallelGroupKey: participantAnchor.boundaryKey,
+          sourceBoundaryKey: group.key,
+          targetBoundaryKey: participantAnchor.boundaryKey,
+          sourceBoundary: true,
+          targetBoundary: true,
+          sourceBoundaryPort: 'prev',
+          targetBoundaryPort: 'prev',
+        });
+        relations.push({
+          ...base,
+          id: `parallel:join:${encodeIdPart(occurrenceId)}:${encodeIdPart(group.key)}`,
+          source: undefined,
+          target: undefined,
+          sourceParallelGroupKey: participantAnchor.boundaryKey,
+          targetParallelGroupKey: group.key,
+          sourceBoundaryKey: participantAnchor.boundaryKey,
+          targetBoundaryKey: group.key,
+          sourceBoundary: true,
+          targetBoundary: true,
+          sourceBoundaryPort: 'next',
+          targetBoundaryPort: 'next',
+        });
+        continue;
+      }
+      const participantOccurrenceId = participantAnchor.occurrenceId ?? occurrenceId;
+      const participantAnchorOccurrence = findOccurrence(trace, participantOccurrenceId);
+      relations.push({
+        ...base,
+        id: `parallel:fork:${encodeIdPart(group.key)}:${encodeIdPart(occurrenceId)}`,
+        source: undefined,
+        target: participantOccurrenceId,
+        ...(participantOccurrenceId === occurrenceId
+          ? {}
+          : { targetAnchorOccurrenceId: participantOccurrenceId }),
+        targetParticipantOccurrenceId: occurrenceId,
+        targetStepId: participantAnchorOccurrence?.node.id,
+        sourceBoundaryKey: group.key,
+        sourceBoundary: true,
+        sourceBoundaryPort: 'prev',
+      });
+      relations.push({
+        ...base,
+        id: `parallel:join:${encodeIdPart(occurrenceId)}:${encodeIdPart(group.key)}`,
+        source: participantOccurrenceId,
+        target: undefined,
+        ...(participantOccurrenceId === occurrenceId
+          ? {}
+          : { sourceAnchorOccurrenceId: participantOccurrenceId }),
+        sourceParticipantOccurrenceId: occurrenceId,
+        sourceStepId: participantAnchorOccurrence?.node.id,
+        targetBoundaryKey: group.key,
+        targetBoundary: true,
+        targetBoundaryPort: 'next',
+      });
+    }
+  }
+  return relations;
+}
+
+function visibleTransitionRelations(trace) {
+  return parallelRelationTopology(trace);
 }
 
 function findCallSource(trace, call) {
@@ -717,28 +1120,45 @@ function visibleCallRelations(trace) {
   }).filter((call) => call.sourceOccurrenceId !== undefined && call.targetObserved);
 }
 
+function isParallelCallBoundary(trace, call) {
+  const callOccurrence = findOccurrence(trace, call.occurrenceId);
+  const stack = Array.isArray(call.stack)
+    ? call.stack
+    : callOccurrence?.occurrence.stack;
+  if (!Array.isArray(stack) || stack.length === 0) return false;
+  const parallelIndex = [...stack].findLastIndex((frame) => frame?.kind === 'parallel');
+  if (parallelIndex < 0 || stack.length !== parallelIndex + 2) return false;
+  if (stack[parallelIndex + 1]?.kind !== 'workflow_call') return false;
+  const metadata = callOccurrence?.occurrence.parallel;
+  return metadata === undefined || metadata.role === 'workflow_call_participant';
+}
+
+function callRelation(trace, call) {
+  const source = findOccurrence(trace, call.sourceOccurrenceId);
+  const target = findOccurrence(trace, call.targetOccurrenceId);
+  return {
+    id: call.id,
+    kind: 'call',
+    source: call.sourceOccurrenceId,
+    target: call.targetOccurrenceId,
+    sourceStepId: source?.node.id,
+    targetStepId: target?.node.id,
+    targetWorkflow: call.childWorkflow,
+    sourceParallelGroupKey: source?.occurrence.parallelGroupKey,
+    targetParallelGroupKey: target?.occurrence.parallelGroupKey,
+  };
+}
+
+function normalizedCallRelations(trace) {
+  return visibleCallRelations(trace)
+    .filter((call) => !isParallelCallBoundary(trace, call))
+    .filter((call) => call.targetOccurrenceId !== undefined)
+    .map((call) => callRelation(trace, call));
+}
+
 function visibleEdgeRelations(trace) {
   const transitions = visibleTransitionRelations(trace);
-  const calls = visibleCallRelations(trace)
-    .filter((call) => call.targetOccurrenceId !== undefined)
-    .map((call) => {
-      const source = findOccurrence(trace, call.sourceOccurrenceId);
-      const target = findOccurrence(trace, call.targetOccurrenceId);
-      return {
-        id: call.id,
-        kind: 'call',
-        source: call.sourceOccurrenceId,
-        target: call.targetOccurrenceId,
-        sourceStepId: source?.node.id,
-        targetStepId: target?.node.id,
-        targetWorkflow: call.childWorkflow,
-        sourceParallelGroupKey: source?.occurrence.parallelGroupKey,
-        targetParallelGroupKey: target?.occurrence.parallelGroupKey,
-        sourceParallelGroupKey: source?.occurrence.parallelGroupKey,
-        targetParallelGroupKey: target?.occurrence.parallelGroupKey,
-      };
-    });
-  return [...transitions, ...calls];
+  return [...transitions, ...normalizedCallRelations(trace)];
 }
 
 function edgeRole(
@@ -751,14 +1171,30 @@ function edgeRole(
   selectedParallelGroupKey = null,
   sourceParallelGroupKey,
   targetParallelGroupKey,
+  sourceBoundary = false,
+  targetBoundary = false,
+  sourceParticipantOccurrenceId,
+  targetParticipantOccurrenceId,
 ) {
+  const targetMatches = target === selectedOccurrenceId
+    || targetParticipantOccurrenceId === selectedOccurrenceId;
+  const sourceMatches = source === selectedOccurrenceId
+    || sourceParticipantOccurrenceId === selectedOccurrenceId;
   const incoming = selectedOccurrenceId !== null
-    ? target === selectedOccurrenceId
+    ? targetMatches
+      || source !== selectedOccurrenceId
+        && targetBoundary
+        && targetParallelGroupKey === selectedParallelGroupKey
+        && sourceParallelGroupKey !== selectedParallelGroupKey
     : selectedStepId !== null
       ? targetStepId === selectedStepId
       : selectedParallelGroupKey !== null && targetParallelGroupKey === selectedParallelGroupKey;
   const outgoing = selectedOccurrenceId !== null
-    ? source === selectedOccurrenceId
+    ? sourceMatches
+      || target !== selectedOccurrenceId
+        && sourceBoundary
+        && sourceParallelGroupKey === selectedParallelGroupKey
+        && targetParallelGroupKey !== selectedParallelGroupKey
     : selectedStepId !== null
       ? sourceStepId === selectedStepId
       : selectedParallelGroupKey !== null && sourceParallelGroupKey === selectedParallelGroupKey;
@@ -812,6 +1248,10 @@ function applyEdgeSelection(svg, selectedOccurrenceId, selectedStepId = null, se
       selectedParallelGroupKey,
       path.getAttribute('data-source-parallel-group-key'),
       path.getAttribute('data-target-parallel-group-key'),
+      path.getAttribute('data-source-boundary') === 'true',
+      path.getAttribute('data-target-boundary') === 'true',
+      path.getAttribute('data-source-participant-occurrence-id'),
+      path.getAttribute('data-target-participant-occurrence-id'),
     );
     const baseClass = path.getAttribute('data-edge-base-class') ?? path.getAttribute('class') ?? '';
     const roleClasses = edgeRoleParts(role).map((part) => `execution-edge-emphasis-${part}`);
@@ -891,6 +1331,10 @@ function selectionRolesFromRelations(
       selectedParallelGroupKey,
       relation.sourceParallelGroupKey,
       relation.targetParallelGroupKey,
+      relation.sourceBoundary === true,
+      relation.targetBoundary === true,
+      relation.sourceParticipantOccurrenceId,
+      relation.targetParticipantOccurrenceId,
     );
     for (const part of edgeRoleParts(role)) roles.add(part);
   }
@@ -916,6 +1360,10 @@ function selectionRolesFromEdges(
       selectedParallelGroupKey,
       edge.getAttribute('data-source-parallel-group-key'),
       edge.getAttribute('data-target-parallel-group-key'),
+      edge.getAttribute('data-source-boundary') === 'true',
+      edge.getAttribute('data-target-boundary') === 'true',
+      edge.getAttribute('data-source-participant-occurrence-id'),
+      edge.getAttribute('data-target-participant-occurrence-id'),
     );
     for (const part of edgeRoleParts(role)) roles.add(part);
   }
@@ -980,6 +1428,34 @@ function findOccurrenceAnchor(container, occurrenceId) {
     .find((candidate) => candidate.dataset.occurrenceId === occurrenceId) ?? null;
 }
 
+function findParallelBoundaryAnchor(container, groupKey, side) {
+  if (typeof groupKey !== 'string' || groupKey === '') return null;
+  const button = [...container.querySelectorAll('.execution-parallel-iteration')]
+    .find((candidate) => candidate.dataset.parallelGroupKey === groupKey);
+  const port = [...(button?.querySelectorAll?.('.execution-port-boundary') ?? [])]
+    .find((candidate) => candidate.dataset.port === (side === 'prev' ? 'PREV' : 'NEXT'));
+  return port?.querySelector?.('.execution-port-anchor') ?? port ?? button ?? null;
+}
+
+function findParallelCallParticipantAnchor(container, occurrenceId, side) {
+  if (occurrenceId === undefined) return null;
+  const participant = [...container.querySelectorAll('.execution-parallel-call-participant')]
+    .find((candidate) => candidate.dataset.occurrenceId === occurrenceId);
+  const port = participant?.querySelector?.(`.execution-port-${side}`);
+  return port?.querySelector?.('.execution-port-anchor') ?? port ?? participant ?? null;
+}
+
+function findRelationAnchor(container, occurrenceId, boundaryKey, side, participantOccurrenceId) {
+  if (boundaryKey !== undefined) return findParallelBoundaryAnchor(container, boundaryKey, side);
+  const participantAnchor = findParallelCallParticipantAnchor(container, participantOccurrenceId, side);
+  return participantAnchor ?? findOccurrenceAnchor(container, occurrenceId);
+}
+
+function relationAnchorSide(relation, endpoint) {
+  if (endpoint === 'source') return relation.sourceBoundaryPort ?? 'next';
+  return relation.targetBoundaryPort ?? 'prev';
+}
+
 function directionForSide(side) {
   return {
     left: { x: -1, y: 0 },
@@ -1007,18 +1483,64 @@ function pointOnSide(anchorRect, canvasRect, scale, side, scrollLeft = 0, scroll
   };
 }
 
-export function edgeAnchorGeometry(sourceRect, targetRect, canvasRect, scale = 1, _forceLoopPorts = false) {
-  const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+function pointAtCenter(anchorRect, canvasRect, scale, side, scrollLeft = 0, scrollTop = 0) {
   return {
-    source: pointOnSide(sourceRect, canvasRect, safeScale, 'right'),
-    target: pointOnSide(targetRect, canvasRect, safeScale, 'left'),
+    x: ((anchorRect.left + anchorRect.right) / 2 - canvasRect.left) / scale + scrollLeft,
+    y: ((anchorRect.top + anchorRect.bottom) / 2 - canvasRect.top) / scale + scrollTop,
+    side,
   };
 }
 
-function anchorPoints(sourceAnchor, targetAnchor, canvas, kind) {
+export function edgeAnchorGeometry(
+  sourceRect,
+  targetRect,
+  canvasRect,
+  scale = 1,
+  _forceLoopPorts = false,
+  portRects,
+) {
+  const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  return {
+    source: portRects?.source === undefined
+      ? pointOnSide(sourceRect, canvasRect, safeScale, 'right')
+      : pointAtCenter(portRects.source, canvasRect, safeScale, 'right'),
+    target: portRects?.target === undefined
+      ? pointOnSide(targetRect, canvasRect, safeScale, 'left')
+      : pointAtCenter(portRects.target, canvasRect, safeScale, 'left'),
+  };
+}
+
+function usablePortRect(port, anchorRect, isAnchor = false) {
+  if (port === null || port === undefined) return undefined;
+  const portRect = rectFor(port);
+  // The lightweight DOM used by the model tests gives every node the same
+  // default rectangle. Treat that as an unmeasured port and retain the chip
+  // fallback; real browser port rectangles are intentionally narrower.
+  if (portRect.width <= 0 || portRect.height <= 0
+    || (!isAnchor && portRect.width === anchorRect.width && portRect.height === anchorRect.height)) {
+    return undefined;
+  }
+  return portRect;
+}
+
+function findPort(anchor, side) {
+  const expected = side.toUpperCase();
+  if (anchor?.dataset?.port === expected) return anchor;
+  const port = anchor?.querySelector?.(`.execution-port-${side.toLowerCase()}`);
+  return port?.querySelector?.('.execution-port-anchor')
+    ?? port
+    ?? anchor?.querySelector?.('.execution-port-anchor')
+    ?? null;
+}
+
+function anchorPoints(sourceAnchor, targetAnchor, canvas, kind, sourceSide = 'next', targetSide = 'prev') {
   const sourceRect = rectFor(sourceAnchor);
   const targetRect = rectFor(targetAnchor);
   const canvasRect = rectFor(canvas);
+  const sourcePort = findPort(sourceAnchor, sourceSide);
+  const targetPort = findPort(targetAnchor, targetSide);
+  const sourcePortRect = usablePortRect(sourcePort, sourceRect, sourcePort === sourceAnchor);
+  const targetPortRect = usablePortRect(targetPort, targetRect, targetPort === targetAnchor);
   const sameStep = typeof sourceAnchor?.closest === 'function'
     && sourceAnchor.closest('.execution-step') !== null
     && sourceAnchor.closest('.execution-step') === targetAnchor?.closest?.('.execution-step');
@@ -1028,6 +1550,7 @@ function anchorPoints(sourceAnchor, targetAnchor, canvas, kind) {
     canvasRect,
     readMapScale(canvas),
     kind === 'loop' && sameStep,
+    { source: sourcePortRect, target: targetPortRect },
   );
 }
 
@@ -1057,7 +1580,16 @@ export function curvePath(source, target, kind) {
 
 function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas) {
   if (sourceAnchor === null || targetAnchor === null) return;
-  const { source, target } = anchorPoints(sourceAnchor, targetAnchor, canvas, relation.kind);
+  const sourceSide = relation.sourceBoundaryPort ?? 'next';
+  const targetSide = relation.targetBoundaryPort ?? 'prev';
+  const { source, target } = anchorPoints(
+    sourceAnchor,
+    targetAnchor,
+    canvas,
+    relation.kind,
+    sourceSide,
+    targetSide,
+  );
   const sourceStepId = relation.sourceStepId
     ?? relation.sourceLogicalId
     ?? sourceAnchor.closest?.('.execution-step')?.dataset?.stepId;
@@ -1069,7 +1601,9 @@ function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas
     ? 'map.edgeIteration'
     : relation.kind === 'call'
       ? 'map.edgeCall'
-      : 'map.edgeTransition';
+      : relation.kind === 'parallel'
+        ? 'map.edgeParallel'
+        : 'map.edgeTransition';
   const label = `${t(labelKey)} · ${t('map.edgeDirection')}`;
   path.setAttribute('class', className);
   path.setAttribute('data-edge-base-class', className);
@@ -1079,12 +1613,18 @@ function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas
   path.setAttribute('data-edge-key', `${relation.kind}:${relation.id}`);
   path.setAttribute('data-edge-base-label', label);
   path.setAttribute('data-edge-kind', relation.kind);
-  path.setAttribute('data-source-port', 'NEXT');
-  path.setAttribute('data-target-port', 'PREV');
+  path.setAttribute('data-source-port', relation.sourceBoundaryPort === 'prev' ? 'PREV' : 'NEXT');
+  path.setAttribute('data-target-port', relation.targetBoundaryPort === 'next' ? 'NEXT' : 'PREV');
   path.setAttribute('aria-label', label);
   path.setAttribute('data-relation-id', relation.id);
-  path.setAttribute('data-source-occurrence-id', relation.source);
-  path.setAttribute('data-target-occurrence-id', relation.target);
+  if (relation.source !== undefined) path.setAttribute('data-source-occurrence-id', relation.source);
+  if (relation.target !== undefined) path.setAttribute('data-target-occurrence-id', relation.target);
+  if (relation.sourceParticipantOccurrenceId !== undefined) {
+    path.setAttribute('data-source-participant-occurrence-id', relation.sourceParticipantOccurrenceId);
+  }
+  if (relation.targetParticipantOccurrenceId !== undefined) {
+    path.setAttribute('data-target-participant-occurrence-id', relation.targetParticipantOccurrenceId);
+  }
   if (sourceStepId !== undefined) path.setAttribute('data-source-step-id', sourceStepId);
   if (targetStepId !== undefined) path.setAttribute('data-target-step-id', targetStepId);
   if (relation.sourceParallelGroupKey !== undefined) {
@@ -1093,6 +1633,8 @@ function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas
   if (relation.targetParallelGroupKey !== undefined) {
     path.setAttribute('data-target-parallel-group-key', relation.targetParallelGroupKey);
   }
+  if (relation.sourceBoundary === true) path.setAttribute('data-source-boundary', 'true');
+  if (relation.targetBoundary === true) path.setAttribute('data-target-boundary', 'true');
   if (relation.targetWorkflow !== undefined) path.setAttribute('data-target-workflow', relation.targetWorkflow);
   const markers = markersForEdgeRole('none');
   path.setAttribute('marker-start', markers.start);
@@ -1101,6 +1643,15 @@ function appendEdge(svg, className, relation, sourceAnchor, targetAnchor, canvas
   title.textContent = label;
   path.append(title);
   svg.append(path);
+}
+
+function relationVisibleForParallelSelection(relation, selectedParallelGroupKey) {
+  if (selectedParallelGroupKey === null || selectedParallelGroupKey === '') return true;
+  const sourceGroupKey = relation.sourceParallelGroupKey;
+  const targetGroupKey = relation.targetParallelGroupKey;
+  return (sourceGroupKey === undefined && targetGroupKey === undefined)
+    || sourceGroupKey === selectedParallelGroupKey
+    || targetGroupKey === selectedParallelGroupKey;
 }
 
 function updateExecutionMapGeometry(svg, canvas, trace) {
@@ -1131,36 +1682,34 @@ function updateExecutionMapGeometry(svg, canvas, trace) {
   }
   svg.append(defs);
 
-  for (const transition of visibleTransitionRelations(trace)) {
+  const selectedParallelGroupKey = canvas.dataset.selectedParallelGroupKey || null;
+  for (const relation of visibleEdgeRelations(trace)) {
+    if (!relationVisibleForParallelSelection(relation, selectedParallelGroupKey)) continue;
+    const className = relation.kind === 'loop'
+      ? 'execution-edge execution-edge-loop'
+      : relation.kind === 'parallel'
+        ? 'execution-edge execution-edge-parallel'
+        : relation.kind === 'call'
+          ? 'execution-edge execution-edge-call'
+          : 'execution-edge execution-edge-transition';
     appendEdge(
       svg,
-      transition.kind === 'loop'
-        ? 'execution-edge execution-edge-loop'
-        : 'execution-edge execution-edge-transition',
-      transition,
-      findOccurrenceAnchor(canvas, transition.source),
-      findOccurrenceAnchor(canvas, transition.target),
-      canvas,
-    );
-  }
-  for (const call of visibleCallRelations(trace)) {
-    if (!call.targetObserved || call.targetOccurrenceId === undefined) continue;
-    const source = findOccurrence(trace, call.sourceOccurrenceId);
-    const target = findOccurrence(trace, call.targetOccurrenceId);
-    appendEdge(
-      svg,
-      'execution-edge execution-edge-call',
-      {
-        id: call.id,
-        kind: 'call',
-        source: call.sourceOccurrenceId,
-        target: call.targetOccurrenceId,
-        sourceStepId: source?.node.id,
-        targetStepId: target?.node.id,
-        targetWorkflow: call.childWorkflow,
-      },
-      findOccurrenceAnchor(canvas, call.sourceOccurrenceId),
-      findOccurrenceAnchor(canvas, call.targetOccurrenceId),
+      className,
+      relation,
+      findRelationAnchor(
+        canvas,
+        relation.sourceAnchorOccurrenceId ?? relation.source,
+        relation.sourceBoundaryKey,
+        relationAnchorSide(relation, 'source'),
+        relation.sourceParticipantOccurrenceId,
+      ),
+      findRelationAnchor(
+        canvas,
+        relation.targetAnchorOccurrenceId ?? relation.target,
+        relation.targetBoundaryKey,
+        relationAnchorSide(relation, 'target'),
+        relation.targetParticipantOccurrenceId,
+      ),
       canvas,
     );
   }
@@ -1204,6 +1753,7 @@ function renderRelationOverlay(section, map, canvas, trace, groups, onMoveNode, 
       updateExecutionMapGeometry(svg, canvas, trace);
     }
   };
+  executionMapGeometryUpdaters.set(canvas, update);
   // renderExecutionMap returns a detached section and the caller attaches it
   // afterwards. Re-measure on the next frame so the first visible paths use
   // the browser's transformed DOM rectangles, not the detached zero rects.
@@ -1303,6 +1853,7 @@ function renderRelationOverlay(section, map, canvas, trace, groups, onMoveNode, 
   executionMapDisposers.set(section, () => {
     if (disposed) return;
     disposed = true;
+    executionMapGeometryUpdaters.delete(canvas);
     map.removeEventListener('scroll', update);
     canvas.removeEventListener('execution-map-node-moved', update);
     map.removeEventListener('pointerdown', pointerDown);
@@ -1337,7 +1888,7 @@ export function renderExecutionMap(trace, options) {
 
   const customNodePositions = options.customNodePositions ?? new Map();
   const layout = layoutSteps(trace, customNodePositions);
-  const groups = parallelGroups(nodes, trace.parallelGroups ?? []);
+  const groups = parallelGroups(nodes, trace.parallelGroups ?? [], trace);
   const presentationParallelGroupOrdinals = new Map(
     groups.flatMap((group) => group.iterations.map((iteration) => [iteration.key, iteration.ordinal])),
   );
@@ -1389,11 +1940,17 @@ export function renderExecutionMap(trace, options) {
   canvas.style.setProperty('height', `${layout.height}px`);
   canvas.style.setProperty('transform', `scale(${scale})`);
   canvas.style.setProperty('transform-origin', '0 0');
+  const onSelectParallelOccurrence = (occurrenceId) => {
+    const selected = findOccurrence(trace, occurrenceId);
+    if (selected !== null) options.onSelectOccurrence(selected.node, selected.occurrence);
+  };
   for (const group of groups) {
     canvas.append(renderParallelGroup(
       group,
       options.selectedParallelGroupKey ?? null,
+      options.selectedOccurrenceId ?? null,
       options.onSelectParallelGroup,
+      onSelectParallelOccurrence,
     ));
   }
   for (const node of nodes) {
@@ -1502,6 +2059,12 @@ export function updateExecutionMapSelection(
     chip.dataset.selected = String(selected);
     chip.setAttribute('aria-pressed', String(selected));
   }
+  for (const anchor of container.querySelectorAll('.execution-parallel-call-participant')) {
+    const selected = anchor.dataset.occurrenceId === selectedOccurrenceId;
+    anchor.dataset.selected = String(selected);
+    anchor.setAttribute('aria-pressed', String(selected));
+  }
+  executionMapGeometryUpdaters.get(canvas)?.();
   for (const button of container.querySelectorAll('.execution-parallel-iteration')) {
     const selected = button.dataset.parallelGroupKey === selectedParallelGroupKey;
     button.dataset.selected = String(selected);

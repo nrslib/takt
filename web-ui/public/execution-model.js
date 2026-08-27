@@ -82,6 +82,58 @@ function parallelFrameIndex(stack) {
   return [...stack].findLastIndex((frame) => frame?.kind === 'parallel');
 }
 
+function validParallelMetadata(value) {
+  if (value === null || typeof value !== 'object') return undefined;
+  if (value.role !== 'parent'
+    && value.role !== 'direct_participant'
+    && value.role !== 'workflow_call_participant') return undefined;
+  if (typeof value.participationId !== 'string' || value.participationId.length === 0) {
+    return undefined;
+  }
+  if (value.parentParticipationId !== undefined
+    && (typeof value.parentParticipationId !== 'string' || value.parentParticipationId.length === 0)) {
+    return undefined;
+  }
+  return value;
+}
+
+function parallelMetadataIdentity(parallel) {
+  const metadata = validParallelMetadata(parallel);
+  if (metadata === undefined) return undefined;
+  return [
+    metadata.role,
+    metadata.participationId,
+    metadata.parentParticipationId ?? null,
+  ];
+}
+
+function legacyParallelRole(event, nodeLabel) {
+  if (!Array.isArray(event.stack) || event.stack.length === 0) return undefined;
+  const frameIndex = parallelFrameIndex(event.stack);
+  if (frameIndex < 0) return undefined;
+  const frame = event.stack[frameIndex];
+  const eventStep = event.step;
+  if (frame === undefined || eventStep === undefined) return undefined;
+  if (event.stack.length === frameIndex + 2) {
+    return event.stack[frameIndex + 1]?.kind === 'workflow_call'
+      ? 'workflow_call_participant'
+      : event.stack[frameIndex + 1]?.kind === 'agent'
+        || event.stack[frameIndex + 1]?.kind === 'system'
+        ? 'direct_participant'
+        : undefined;
+  }
+  if (event.stack.length !== frameIndex + 1) return undefined;
+  if (eventStep !== frame.step || nodeLabel !== frame.step) return 'direct_participant';
+  // Parallel parents have a step lifecycle, while direct agent participants
+  // historically emitted only phase records. This is a fallback for legacy
+  // logs; canonical `parallel.role` always takes precedence.
+  if (event.type === 'step_start' || event.type === 'step_complete') return 'parent';
+  // A phase-only same-name event can be either the parent or a direct agent
+  // in legacy logs. Keep it explicitly ambiguous instead of guessing.
+  if (event.type.startsWith('phase_')) return 'ambiguous';
+  return undefined;
+}
+
 function workflowCallInvocationIdentity(stack, frameIndex) {
   const frame = stack[frameIndex];
   if (frame?.kind !== 'workflow_call') return undefined;
@@ -166,26 +218,68 @@ function parallelInvocationPathKey(stack, frameIndex) {
   ]));
 }
 
-function parallelGroupDescriptor(event, meta) {
-  if (!Array.isArray(event.stack) || event.stack.length === 0) return null;
-  const frameIndex = parallelFrameIndex(event.stack);
-  if (frameIndex < 0) return null;
-  const frame = event.stack[frameIndex];
-  if (!Number.isSafeInteger(event.iteration) || event.iteration < 0) {
+function parallelGroupDescriptorAt(stack, iteration, frameIndex, evidence) {
+  const frame = stack[frameIndex];
+  if (frame === undefined || !Number.isSafeInteger(iteration) || iteration < 0) {
     return { ambiguous: true };
   }
-  const familyKey = parallelGroupFamilyKey(event.stack, meta);
+  const familyKey = JSON.stringify(stack.slice(0, frameIndex + 1).map((entry, index) => (
+    parallelFamilyFrame(
+      entry,
+      index === frameIndex,
+      stack,
+      index,
+      evidence,
+    )
+  )));
   if (familyKey === undefined) return { ambiguous: true };
   return {
     key: JSON.stringify({
       familyKey,
-      iteration: event.iteration,
-      invocationPath: parallelInvocationPathKey(event.stack, frameIndex),
+      iteration,
+      invocationPath: parallelInvocationPathKey(stack, frameIndex),
     }),
     familyKey,
     label: frame.step,
-    iteration: event.iteration,
+    iteration,
+    frameIndex,
   };
+}
+
+export function parallelGroupDescriptors(stack, iteration, evidence) {
+  if (!Array.isArray(stack) || stack.length === 0) return [];
+  return [...stack]
+    .map((frame, index) => frame?.kind === 'parallel' ? index : -1)
+    .filter((index) => index >= 0)
+    .map((frameIndex) => parallelGroupDescriptorAt(stack, iteration, frameIndex, evidence))
+    .filter((descriptor) => descriptor.ambiguous !== true);
+}
+
+function parallelGroupDescriptor(event, meta) {
+  if (!Array.isArray(event.stack) || event.stack.length === 0) return null;
+  const frameIndex = parallelFrameIndex(event.stack);
+  if (frameIndex < 0) return null;
+  const descriptors = parallelGroupDescriptors(event.stack, event.iteration, meta);
+  return descriptors.find((descriptor) => descriptor.frameIndex === frameIndex)
+    ?? { ambiguous: true };
+}
+
+function logicalFrameIdentity(frame) {
+  return [frame.workflow, frame.workflow_ref, frame.step, frame.kind];
+}
+
+function parallelLogicalScopeKey(stack) {
+  if (!Array.isArray(stack) || stack.length === 0) return undefined;
+  const frameIndexes = [...stack]
+    .map((frame, index) => frame?.kind === 'parallel' ? index : -1)
+    .filter((index) => index >= 0);
+  if (frameIndexes.length === 0) return undefined;
+  return JSON.stringify(frameIndexes.map((frameIndex) => ({
+    boundary: stack.slice(0, frameIndex + 1).map(logicalFrameIdentity),
+    direct: stack[frameIndex + 1] === undefined
+      ? null
+      : logicalFrameIdentity(stack[frameIndex + 1]),
+  })));
 }
 
 function parallelGroupFields(event, previous = {}, meta) {
@@ -196,10 +290,12 @@ function parallelGroupFields(event, previous = {}, meta) {
       parallelGroupIteration: undefined,
       parallelGroupLabel: undefined,
       parallelGroupAmbiguous: true,
+      parallelGroupDescriptors: [],
     };
   }
   const descriptor = parallelGroupDescriptor(event, meta);
   if (descriptor === null || descriptor.parent === true) return {};
+  if (event.iteration === undefined && previous.parallelGroupKey !== undefined) return {};
   if (descriptor.ambiguous === true) {
     return {
       parallelGroupKey: undefined,
@@ -207,6 +303,7 @@ function parallelGroupFields(event, previous = {}, meta) {
       parallelGroupIteration: undefined,
       parallelGroupLabel: undefined,
       parallelGroupAmbiguous: true,
+      parallelGroupDescriptors: [],
     };
   }
   if (previous.parallelGroupKey !== undefined && previous.parallelGroupKey !== descriptor.key) {
@@ -216,13 +313,16 @@ function parallelGroupFields(event, previous = {}, meta) {
       parallelGroupIteration: undefined,
       parallelGroupLabel: undefined,
       parallelGroupAmbiguous: true,
+      parallelGroupDescriptors: [],
     };
   }
+  const descriptors = parallelGroupDescriptors(event.stack, event.iteration, meta);
   return {
     parallelGroupKey: descriptor.key,
     parallelGroupFamilyKey: descriptor.familyKey,
     parallelGroupIteration: descriptor.iteration,
     parallelGroupLabel: descriptor.label,
+    parallelGroupDescriptors: descriptors,
   };
 }
 
@@ -234,9 +334,20 @@ function statusFromEvent(event) {
   return TERMINAL_EVENT_TYPES.has(event.type) ? 'completed' : 'running';
 }
 
-function logicalStepId(workflow, step, kind, childWorkflow) {
+function logicalStepId(workflow, step, kind, childWorkflow, stack, parallel, legacyRole) {
   const target = kind === 'workflow' ? childWorkflow ?? step : step;
-  return `step:${encodeIdPart(workflow)}:${kind}:${encodeIdPart(target)}`;
+  const base = `step:${encodeIdPart(workflow)}:${kind}:${encodeIdPart(target)}`;
+  const parallelScope = parallelLogicalScopeKey(stack);
+  const withScope = parallelScope === undefined
+    ? base
+    : `${base}:parallel:${encodeIdPart(parallelScope)}`;
+  const parallelIdentity = parallelMetadataIdentity(parallel);
+  const withParticipation = parallelIdentity === undefined
+    ? withScope
+    : `${withScope}:participation:${encodeIdPart(JSON.stringify(parallelIdentity))}`;
+  return parallelIdentity === undefined && legacyRole !== undefined
+    ? `${withParticipation}:legacy-role:${legacyRole}`
+    : withParticipation;
 }
 
 function eventDescriptor(event, meta) {
@@ -244,7 +355,18 @@ function eventDescriptor(event, meta) {
   const workflow = eventWorkflow(event, meta.workflow);
   const kind = isWorkflowCall(event) ? 'workflow' : 'step';
   const childWorkflow = kind === 'workflow' ? event.childWorkflow : undefined;
-  const logicalId = logicalStepId(workflow, event.step, kind, childWorkflow);
+  const legacyRole = event.parallel === undefined
+    ? legacyParallelRole(event, event.step)
+    : undefined;
+  const logicalId = logicalStepId(
+    workflow,
+    event.step,
+    kind,
+    childWorkflow,
+    event.stack,
+    event.parallel,
+    legacyRole,
+  );
   const baseKey = `${logicalId}:scope:${stackPathKey(event.stack)}`;
   return {
     workflow,
@@ -327,6 +449,32 @@ function occurrenceMetadata(event, previous = {}) {
   return metadata;
 }
 
+function parallelOccurrenceFields(event, previous = {}) {
+  const metadata = validParallelMetadata(event.parallel) ?? previous.parallel;
+  const legacyRole = legacyParallelRole(event, event.step);
+  const role = metadata?.role ?? previous.parallelRole
+    ?? (legacyRole === 'ambiguous' ? undefined : legacyRole);
+  return {
+    ...(metadata === undefined ? {} : { parallel: metadata }),
+    ...(role === undefined ? {} : { parallelRole: role }),
+    ...(metadata?.participationId === undefined
+      ? previous.parallelParticipationId === undefined
+        ? {}
+        : { parallelParticipationId: previous.parallelParticipationId }
+      : { parallelParticipationId: metadata.participationId }),
+    ...(metadata?.parentParticipationId === undefined
+      ? previous.parallelParentParticipationId === undefined
+        ? {}
+        : { parallelParentParticipationId: previous.parallelParentParticipationId }
+      : { parallelParentParticipationId: metadata.parentParticipationId }),
+    ...(metadata !== undefined
+      ? { parallelLegacyAmbiguous: undefined }
+      : previous.parallelLegacyAmbiguous === true || legacyRole === 'ambiguous'
+        ? { parallelLegacyAmbiguous: true }
+        : {}),
+  };
+}
+
 function createOccurrence(event, descriptor, firstEventIndex, recordEventIndexes, meta) {
   const preview = event.preview ?? event.error ?? event.reason ?? event.content?.slice(0, 2_000);
   return {
@@ -338,6 +486,7 @@ function createOccurrence(event, descriptor, firstEventIndex, recordEventIndexes
     iteration: eventIteration(event),
     callInstance: event.callInstance,
     stack: event.stack,
+    ...parallelOccurrenceFields(event),
     status: statusFromEvent(event),
     phases: event.phaseName === undefined ? [] : [event.phaseName],
     personas: event.persona === undefined ? [] : [event.persona],
@@ -374,6 +523,7 @@ function updateOccurrence(occurrence, event, eventIndex, recordEventIndexes, met
     phases,
     personas,
     stack: event.stack ?? occurrence.stack,
+    ...parallelOccurrenceFields(event, occurrence),
     ...(preview === undefined ? {} : {
       preview,
       previewTruncated: event.previewTruncated === true || event.content?.length > 2_000,
@@ -406,8 +556,48 @@ function isOccurrenceTerminal(event) {
   return TERMINAL_EVENT_TYPES.has(event.type);
 }
 
+function inheritedParallelIteration(event, graph, eventIndex) {
+  if (!Array.isArray(event.stack) || event.stack.length === 0) return undefined;
+  const candidates = [...graph.occurrencesById.values()]
+    .filter((occurrence) => occurrence.iteration !== undefined)
+    .filter((occurrence) => occurrence.firstEventIndex < eventIndex)
+    .sort((left, right) => right.firstEventIndex - left.firstEventIndex);
+  const parallelIndexes = [...event.stack]
+    .map((frame, index) => frame?.kind === 'parallel' ? index : -1)
+    .filter((index) => index >= 0)
+    .reverse();
+  for (const frameIndex of parallelIndexes) {
+    const prefixKey = stackPathKey(event.stack.slice(0, frameIndex + 1));
+    const candidate = candidates.find((occurrence) => (
+      stackPathKey(occurrence.stack) === prefixKey
+    ));
+    if (candidate?.iteration !== undefined) return candidate.iteration;
+  }
+  return undefined;
+}
+
+function inheritEventIteration(event, meta, graph, eventIndex) {
+  if (event.iteration !== undefined || !isWorkflowCall(event)) return event;
+  const workflow = eventWorkflow(event, meta.workflow);
+  const stackKey = stackPathKey(event.stack);
+  for (const node of graph.nodesByLogicalId.values()) {
+    if (node.kind !== 'step' || node.workflow !== workflow || node.label !== event.step) continue;
+    const occurrence = [...node.occurrences].reverse().find((candidate) => (
+      stackPathKey(candidate.stack) === stackKey
+        && candidate.iteration !== undefined
+    ));
+    if (occurrence?.iteration !== undefined) {
+      return { ...event, iteration: occurrence.iteration };
+    }
+  }
+  const parallelIteration = inheritedParallelIteration(event, graph, eventIndex);
+  if (parallelIteration !== undefined) return { ...event, iteration: parallelIteration };
+  return event;
+}
+
 function addGraphEvent(event, index, meta, graph) {
-  const initialDescriptor = eventDescriptor(event, meta);
+  const effectiveEvent = inheritEventIteration(event, meta, graph, index);
+  const initialDescriptor = eventDescriptor(effectiveEvent, meta);
   if (initialDescriptor === null) return;
   const existingId = initialDescriptor.occurrenceId
     ?? (!isOccurrenceStart(event) ? graph.activeOccurrenceIds.get(initialDescriptor.baseKey) : undefined);
@@ -420,8 +610,8 @@ function addGraphEvent(event, index, meta, graph) {
   }
   const descriptor = { ...initialDescriptor, occurrenceId };
   const occurrence = previous === undefined
-    ? createOccurrence(event, descriptor, index, graph.recordEventIndexes, meta)
-    : updateOccurrence(previous, event, index, graph.recordEventIndexes, meta);
+    ? createOccurrence(effectiveEvent, descriptor, index, graph.recordEventIndexes, meta)
+    : updateOccurrence(previous, effectiveEvent, index, graph.recordEventIndexes, meta);
   graph.occurrencesById.set(occurrence.id, occurrence);
   graph.occurrenceByEventIndex.set(index, occurrence);
   replaceOccurrence(graph.nodesByLogicalId, occurrence);
@@ -431,8 +621,8 @@ function addGraphEvent(event, index, meta, graph) {
       workflow: descriptor.workflow,
       kind: descriptor.kind,
       label: descriptor.kind === 'workflow'
-        ? descriptor.childWorkflow ?? event.step
-        : event.step,
+        ? descriptor.childWorkflow ?? effectiveEvent.step
+        : effectiveEvent.step,
       childWorkflow: descriptor.childWorkflow,
       firstEventIndex: index,
       occurrences: [occurrence],
@@ -460,6 +650,70 @@ function addGraphEvent(event, index, meta, graph) {
       startObserved: event.type === 'workflow_call_start'
         || previousCall?.startObserved === true,
     });
+  }
+}
+
+function inheritedIterationForCallOccurrence(occurrence, candidates) {
+  const sameStack = candidates
+    .filter((candidate) => candidate !== occurrence)
+    .filter((candidate) => candidate.iteration !== undefined)
+    .filter((candidate) => stackPathKey(candidate.stack) === stackPathKey(occurrence.stack))
+    .sort((left, right) => (
+      Math.abs(left.firstEventIndex - occurrence.firstEventIndex)
+        - Math.abs(right.firstEventIndex - occurrence.firstEventIndex)
+      || left.firstEventIndex - right.firstEventIndex
+    ));
+  if (sameStack[0]?.iteration !== undefined) return sameStack[0].iteration;
+
+  if (!Array.isArray(occurrence.stack)) return undefined;
+  const parallelIndexes = [...occurrence.stack]
+    .map((frame, index) => frame?.kind === 'parallel' ? index : -1)
+    .filter((index) => index >= 0)
+    .reverse();
+  for (const frameIndex of parallelIndexes) {
+    const prefixKey = stackPathKey(occurrence.stack.slice(0, frameIndex + 1));
+    const candidate = candidates
+      .filter((entry) => entry !== occurrence)
+      .filter((entry) => entry.iteration !== undefined)
+      .filter((entry) => stackPathKey(entry.stack) === prefixKey)
+      .sort((left, right) => (
+        Math.abs(left.firstEventIndex - occurrence.firstEventIndex)
+          - Math.abs(right.firstEventIndex - occurrence.firstEventIndex)
+        || left.firstEventIndex - right.firstEventIndex
+      ))[0];
+    if (candidate?.iteration !== undefined) return candidate.iteration;
+  }
+  return undefined;
+}
+
+function applyInheritedCallIterations(graph, meta) {
+  const candidates = [...graph.occurrencesById.values()];
+  for (const occurrence of candidates) {
+    if (occurrence.kind !== 'workflow' || occurrence.iteration !== undefined) continue;
+    const iteration = inheritedIterationForCallOccurrence(occurrence, candidates);
+    if (iteration === undefined) continue;
+    const descriptors = parallelGroupDescriptors(occurrence.stack, iteration, meta);
+    const descriptor = descriptors.at(-1);
+    const membership = descriptor === undefined
+      ? undefined
+      : parallelMembership(occurrence, descriptor, new Set());
+    const updated = descriptor === undefined || membership === undefined
+      ? { ...occurrence, iteration }
+      : {
+          ...occurrence,
+          iteration,
+          parallelGroupKey: descriptor.key,
+          parallelGroupFamilyKey: descriptor.familyKey,
+          parallelGroupIteration: descriptor.iteration,
+          parallelGroupLabel: descriptor.label,
+          parallelGroupAmbiguous: undefined,
+          parallelGroupDescriptors: descriptors,
+        };
+    graph.occurrencesById.set(occurrence.id, updated);
+    replaceOccurrence(graph.nodesByLogicalId, updated);
+    for (const [eventIndex, eventOccurrence] of graph.occurrenceByEventIndex) {
+      if (eventOccurrence.id === occurrence.id) graph.occurrenceByEventIndex.set(eventIndex, updated);
+    }
   }
 }
 
@@ -524,6 +778,7 @@ function createGraph(events, meta, recordEventIndexes) {
     recordEventIndexes,
   };
   events.forEach((event, index) => addGraphEvent(event, index, meta, graph));
+  applyInheritedCallIterations(graph, meta);
   createCurrentOccurrence(meta, graph, events.length);
   return graph;
 }
@@ -600,52 +855,205 @@ function assignOccurrenceOrdinals(nodes) {
       || left.occurrence.id.localeCompare(right.occurrence.id)
     ));
   const ordinals = new Map(ordered.map(({ occurrence }, index) => [occurrence.id, index + 1]));
+  const presentationOrdinals = new Map();
+  for (const node of nodes) {
+    const orderedOccurrences = [...node.occurrences].sort((left, right) => (
+      left.firstEventIndex - right.firstEventIndex
+      || left.id.localeCompare(right.id)
+    ));
+    orderedOccurrences.forEach((occurrence, index) => {
+      presentationOrdinals.set(occurrence.id, index + 1);
+    });
+  }
   return nodes.map((node) => ({
     ...node,
     occurrences: node.occurrences.map((occurrence) => ({
       ...occurrence,
       ordinal: ordinals.get(occurrence.id),
+      presentationOrdinal: presentationOrdinals.get(occurrence.id),
     })),
   }));
 }
 
-function assignParallelGroupOrdinals(nodes) {
+function parallelMembership(occurrence, descriptor, ambiguousIds) {
+  const stack = occurrence.stack;
+  if (!Array.isArray(stack)) {
+    return undefined;
+  }
+  const nearestParallelIndex = parallelFrameIndex(stack);
+  if (nearestParallelIndex > descriptor.frameIndex
+    && stack.length === descriptor.frameIndex + 2
+    && stack[descriptor.frameIndex + 1]?.kind === 'parallel') {
+    // A nested parallel boundary is one direct participant of its parent;
+    // its own direct participants can share the same legacy [outer, inner]
+    // stack and must remain in the inner group only.
+    const metadata = validParallelMetadata(occurrence.parallel);
+    if (metadata !== undefined) {
+      return metadata.role === 'parent' ? 'participant' : undefined;
+    }
+    return occurrence.parallelRole === 'parent' ? 'participant' : undefined;
+  }
+  if (nearestParallelIndex !== descriptor.frameIndex) return undefined;
+  const metadata = validParallelMetadata(occurrence.parallel);
+  if (metadata !== undefined) {
+    if (metadata.role === 'parent' && stack.length === descriptor.frameIndex + 1) {
+      return 'parent';
+    }
+    if (metadata.role === 'direct_participant'
+      && stack.length === descriptor.frameIndex + 1) {
+      return 'participant';
+    }
+    if (metadata.role === 'workflow_call_participant'
+      && stack.length === descriptor.frameIndex + 2
+      && stack[descriptor.frameIndex + 1]?.kind === 'workflow_call') {
+      return 'participant';
+    }
+    // Child events inherit the call participant identity, but remain internal
+    // to the call branch and must not become a second fork/join branch.
+    return undefined;
+  }
+  if (occurrence.parallelLegacyAmbiguous === true || ambiguousIds.has(occurrence.id)) {
+    return 'ambiguous';
+  }
+  if (occurrence.parallelRole === 'parent'
+    && stack.length === descriptor.frameIndex + 1) return 'parent';
+  if (occurrence.parallelRole === 'direct_participant'
+    && stack.length === descriptor.frameIndex + 1) return 'participant';
+  if (occurrence.parallelRole === 'workflow_call_participant'
+    && stack.length === descriptor.frameIndex + 2
+    && stack[descriptor.frameIndex + 1]?.kind === 'workflow_call') return 'participant';
+  if (occurrence.parallelRole === 'direct_participant'
+    && stack.length === descriptor.frameIndex + 2
+    && (stack[descriptor.frameIndex + 1]?.kind === 'agent'
+      || stack[descriptor.frameIndex + 1]?.kind === 'system')) return 'participant';
+  return undefined;
+}
+
+function assignParallelGroupOrdinals(nodes, meta) {
   const groupsByFamily = new Map();
+  const legacyCandidatesByGroup = new Map();
   for (const node of nodes) {
     for (const occurrence of node.occurrences) {
-      if (occurrence.parallelGroupKey === undefined
-        || occurrence.parallelGroupFamilyKey === undefined
-        || occurrence.parallelGroupAmbiguous === true) continue;
-      const family = groupsByFamily.get(occurrence.parallelGroupFamilyKey) ?? new Map();
-      const previous = family.get(occurrence.parallelGroupKey);
-      family.set(occurrence.parallelGroupKey, {
-        key: occurrence.parallelGroupKey,
-        familyKey: occurrence.parallelGroupFamilyKey,
-        label: occurrence.parallelGroupLabel,
-        iteration: occurrence.parallelGroupIteration,
-        firstEventIndex: Math.min(previous?.firstEventIndex ?? occurrence.firstEventIndex, occurrence.firstEventIndex),
-        nodeIds: [...new Set([...(previous?.nodeIds ?? []), node.id])],
-        occurrenceIds: [...new Set([...(previous?.occurrenceIds ?? []), occurrence.id])],
-      });
-      groupsByFamily.set(occurrence.parallelGroupFamilyKey, family);
+      if (validParallelMetadata(occurrence.parallel) !== undefined
+        || occurrence.parallelLegacyAmbiguous === true
+        || occurrence.parallelRole !== 'parent') continue;
+      const descriptors = occurrence.parallelGroupDescriptors
+        ?? parallelGroupDescriptors(occurrence.stack, occurrence.iteration, meta);
+      for (const descriptor of descriptors) {
+        const stack = occurrence.stack;
+        if (!Array.isArray(stack)
+          || parallelFrameIndex(stack) !== descriptor.frameIndex
+          || stack.length !== descriptor.frameIndex + 1
+          || node.label !== descriptor.label) continue;
+        const candidates = legacyCandidatesByGroup.get(descriptor.key) ?? new Set();
+        candidates.add(occurrence.id);
+        legacyCandidatesByGroup.set(descriptor.key, candidates);
+      }
+    }
+  }
+  const legacyAmbiguousIds = new Set(
+    [...legacyCandidatesByGroup.values()]
+      .filter((candidates) => candidates.size > 1)
+      .flatMap((candidates) => [...candidates]),
+  );
+  for (const node of nodes) {
+    for (const occurrence of node.occurrences) {
+      const descriptors = occurrence.parallelGroupDescriptors
+        ?? parallelGroupDescriptors(occurrence.stack, occurrence.iteration, meta);
+      for (const descriptor of descriptors) {
+        const family = groupsByFamily.get(descriptor.familyKey) ?? new Map();
+        const previous = family.get(descriptor.key);
+        const membership = parallelMembership(
+          occurrence,
+          descriptor,
+          legacyAmbiguousIds,
+        );
+        const isParent = membership === 'parent';
+        const isDirectParticipant = membership === 'participant';
+        if (!isParent && !isDirectParticipant) continue;
+        const parentOccurrenceIds = isParent
+          ? [...new Set([...(previous?.parentOccurrenceIds ?? []), occurrence.id])]
+          : previous?.parentOccurrenceIds ?? [];
+        const participantOccurrenceIds = isDirectParticipant
+          ? [...new Set([...(previous?.participantOccurrenceIds ?? []), occurrence.id])]
+          : previous?.participantOccurrenceIds ?? [];
+        family.set(descriptor.key, {
+          key: descriptor.key,
+          familyKey: descriptor.familyKey,
+          label: descriptor.label,
+          iteration: descriptor.iteration,
+          firstEventIndex: Math.min(previous?.firstEventIndex ?? occurrence.firstEventIndex, occurrence.firstEventIndex),
+          nodeIds: [...new Set([...(previous?.nodeIds ?? []), node.id])],
+          occurrenceIds: [...new Set([...(previous?.occurrenceIds ?? []), occurrence.id])],
+          parentOccurrenceIds,
+          participantOccurrenceIds,
+        });
+        groupsByFamily.set(descriptor.familyKey, family);
+      }
     }
   }
   const ordinalByKey = new Map();
   const groups = [];
+  const occurrencesById = new Map(
+    nodes.flatMap((node) => node.occurrences.map((occurrence) => [occurrence.id, { node, occurrence }])),
+  );
   for (const family of groupsByFamily.values()) {
     const ordered = [...family.values()].sort((left, right) => (
       left.firstEventIndex - right.firstEventIndex || left.key.localeCompare(right.key)
     ));
     ordered.forEach((group, index) => {
       ordinalByKey.set(group.key, index + 1);
-      groups.push({ ...group, ordinal: index + 1 });
+      const selectedParticipants = new Map();
+      for (const occurrenceId of group.participantOccurrenceIds ?? []) {
+        const candidate = occurrencesById.get(occurrenceId);
+        if (candidate === undefined) continue;
+        const participantKey = parallelParticipantDeduplicationKey(candidate);
+        const previousId = selectedParticipants.get(participantKey);
+        const previous = previousId === undefined ? undefined : occurrencesById.get(previousId);
+        // A workflow_call emits both its step lifecycle and its dedicated
+        // call lifecycle at the same participation identity. Keep one
+        // participant, preferring the call occurrence because it carries the
+        // workflow boundary metadata. Distinct canonical participation IDs
+        // and legacy participant step identities must remain separate even
+        // when they share the same [parallel] stack.
+        if (previous === undefined
+          || (candidate.node.kind === 'workflow' && previous.node.kind !== 'workflow')) {
+          selectedParticipants.set(participantKey, occurrenceId);
+        }
+      }
+      const participantOccurrenceIds = [...selectedParticipants.values()];
+      const parentOccurrenceIds = [...new Set(group.parentOccurrenceIds ?? [])];
+      const occurrenceIds = [...new Set([...parentOccurrenceIds, ...participantOccurrenceIds])];
+      const selectedIds = new Set(occurrenceIds);
+      const nodeIds = [...new Set(nodes
+        .filter((node) => node.occurrences.some((occurrence) => selectedIds.has(occurrence.id)))
+        .map((node) => node.id))];
+      groups.push({
+        ...group,
+        nodeIds,
+        occurrenceIds,
+        parentOccurrenceIds,
+        participantOccurrenceIds,
+        ordinal: index + 1,
+      });
     });
   }
   return {
     nodes: nodes.map((node) => ({
       ...node,
       occurrences: node.occurrences.map((occurrence) => (
-        occurrence.parallelGroupKey === undefined
+        legacyAmbiguousIds.has(occurrence.id) || occurrence.parallelLegacyAmbiguous === true
+          ? {
+              ...occurrence,
+              parallelGroupKey: undefined,
+              parallelGroupFamilyKey: undefined,
+              parallelGroupIteration: undefined,
+              parallelGroupOrdinal: undefined,
+              parallelGroupAmbiguous: true,
+              parallelLegacyAmbiguous: true,
+              parallelGroupDescriptors: [],
+            }
+          : occurrence.parallelGroupKey === undefined
           ? occurrence
           : {
               ...occurrence,
@@ -655,6 +1063,25 @@ function assignParallelGroupOrdinals(nodes) {
     })),
     groups,
   };
+}
+
+function parallelParticipantDeduplicationKey(candidate) {
+  const metadata = validParallelMetadata(candidate.occurrence.parallel);
+  if (metadata !== undefined) {
+    return JSON.stringify([
+      'canonical',
+      metadata.role,
+      metadata.participationId,
+    ]);
+  }
+  const stack = stackPathKey(candidate.occurrence.stack);
+  if (candidate.occurrence.parallelRole === 'workflow_call_participant') {
+    // Legacy step and workflow_call lifecycle records share this stack.
+    return JSON.stringify(['legacy-call', stack]);
+  }
+  // Legacy direct participants have no participant frame in the [parallel]
+  // shape; the logical node identity retains the observed step label.
+  return JSON.stringify(['legacy-step', candidate.node.id, stack]);
 }
 
 function applyTerminalRunStatus(meta, nodes) {
@@ -681,8 +1108,15 @@ function applyTerminalRunStatus(meta, nodes) {
 }
 
 function isParallelParentOccurrence(node, occurrence) {
+  if (occurrence.parallel?.role === 'parent') {
+    const parentIndex = parallelFrameIndex(occurrence.stack ?? []);
+    return parentIndex >= 0 && occurrence.stack?.length === parentIndex + 1;
+  }
   const frame = occurrence.stack?.at(-1);
-  return frame?.kind === 'parallel' && node.label === frame.step;
+  return occurrence.parallel === undefined
+    && frame?.kind === 'parallel'
+    && node.label === frame.step
+    && occurrence.parallelLegacyAmbiguous !== true;
 }
 
 function projectParallelChildStatuses(nodes) {
@@ -880,7 +1314,7 @@ export function buildExecutionTrace(meta, newestFirstEvents, newestFirstHistory,
   nodes = applyTerminalRunStatus(meta, nodes);
   nodes = projectParallelChildStatuses(nodes);
   nodes = assignOccurrenceOrdinals(nodes);
-  const parallelGroupResult = assignParallelGroupOrdinals(nodes);
+  const parallelGroupResult = assignParallelGroupOrdinals(nodes, meta);
   nodes = parallelGroupResult.nodes;
   const callObservations = collectCallObservations(newestFirstEvents, newestFirstHistory, meta);
   const calls = attachCallTargets([...graph.callsByOccurrenceId.values()].map((call) => {

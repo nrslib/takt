@@ -1068,6 +1068,15 @@ body[data-screen="task"] .viewer-screen {
   color: var(--text);
 }
 
+.execution-parallel-evidence {
+  margin-left: 6px;
+  color: var(--faint);
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .execution-parallel-iterations {
   position: absolute;
   inset: 34px 8px auto;
@@ -1089,7 +1098,8 @@ body[data-screen="task"] .viewer-screen {
   position: relative;
   z-index: 1;
   flex: 0 0 auto;
-  padding: 3px 5px;
+  min-width: 112px;
+  padding: 3px 28px;
   border: 1px solid rgb(216 171 103 / 34%);
   color: var(--muted);
   background: var(--chrome);
@@ -1103,6 +1113,37 @@ body[data-screen="task"] .viewer-screen {
   border-color: var(--warning);
   color: var(--text);
   background: rgb(216 171 103 / 15%);
+}
+
+.execution-parallel-call-participant {
+  position: relative;
+  display: inline-flex;
+  min-width: 118px;
+  align-items: center;
+  margin: 2px 4px;
+  padding: 2px 28px;
+  border: 1px dashed rgb(216 171 103 / 42%);
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+.execution-parallel-call-participant[role="button"] {
+  cursor: pointer;
+  text-align: left;
+}
+
+.execution-parallel-call-participant[data-selected="true"],
+.execution-parallel-call-participant:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.execution-parallel-call-participant .execution-port {
+  color: var(--warning);
 }
 
 .execution-parallel-group[data-moving="true"] .execution-parallel-group-header {
@@ -1126,6 +1167,12 @@ body[data-screen="task"] .viewer-screen {
 .execution-edge-transition {
   stroke: var(--border-strong);
   opacity: .8;
+}
+
+.execution-edge-parallel {
+  stroke: var(--warning);
+  stroke-dasharray: 3 3;
+  opacity: .72;
 }
 
 .execution-edge-loop {
@@ -1280,15 +1327,78 @@ body[data-screen="task"] .viewer-screen {
 }
 
 .iteration-chip {
+  position: relative;
   display: inline-flex;
   gap: 5px;
   align-items: center;
-  padding: 5px 6px;
+  padding: 5px 34px;
   border: 1px solid var(--border);
   color: var(--muted);
   background: var(--chrome);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+/* Keep the visible label and the real measured anchor in one fixed-width
+ * wrapper so the SVG endpoint remains invariant under zoom, scrolling, and
+ * card movement. */
+.execution-port {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  display: inline-flex;
+  width: 28px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 650;
+  letter-spacing: .02em;
+  line-height: 1;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.execution-port-prev {
+  left: 3px;
+}
+
+.execution-port-next {
+  right: 3px;
+}
+
+.execution-port-anchor {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  box-sizing: border-box;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.execution-port-next .execution-port-anchor {
+  background: currentColor;
+}
+
+.execution-port-label {
+  display: inline-block;
+}
+
+.execution-parallel-iteration .execution-port {
+  color: var(--warning);
+}
+
+.iteration-chip-evidence {
+  padding: 1px 3px;
+  border: 1px solid rgb(216 171 103 / 32%);
+  color: var(--faint);
+  font-size: 8px;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .iteration-chip:hover,

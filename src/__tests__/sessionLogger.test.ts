@@ -376,6 +376,136 @@ describe('SessionLogger', () => {
     }
   });
 
+  it('parallel の canonical role と participation identity を全 lifecycle に付与する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-metadata', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const parallelFrame = {
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    };
+    const callFrame = {
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'workflow_call' as const,
+      occurrence: 1,
+    };
+    const childFrame = {
+      workflow: 'child',
+      workflow_ref: 'project:sha256:child',
+      step: 'work',
+      kind: 'agent' as const,
+      occurrence: 1,
+    };
+    const parentStep = {
+      name: 'reviewers',
+      kind: 'agent' as const,
+      personaDisplayName: 'parent',
+      instruction: 'Run reviewers',
+      parallel: [{
+        name: 'reviewers',
+        kind: 'agent' as const,
+        personaDisplayName: 'participant',
+        instruction: 'Review',
+      }],
+    };
+    const directStep = {
+      name: 'reviewers',
+      kind: 'agent' as const,
+      personaDisplayName: 'participant',
+      instruction: 'Review',
+    };
+    const childStep = {
+      name: 'work',
+      kind: 'agent' as const,
+      personaDisplayName: 'child',
+      instruction: 'Work',
+    };
+    const parentStack = [parallelFrame];
+    logger.onStepStart(parentStep, 1, 'Run reviewers', parentStack);
+    logger.onStepComplete(
+      parentStep,
+      {
+        persona: 'parent',
+        status: 'done',
+        content: 'done',
+        timestamp: new Date(),
+      },
+      'Run reviewers',
+      parentStack,
+    );
+    logger.onPhaseStart(
+      directStep,
+      1,
+      'execute',
+      'Review',
+      { systemPrompt: 'system', userInstruction: 'Review' },
+      parentStack,
+      'reviewers:1:1:1',
+      1,
+    );
+    logger.onPhaseComplete(
+      directStep,
+      1,
+      'execute',
+      'done',
+      'done',
+      undefined,
+      parentStack,
+      'reviewers:1:1:1',
+      1,
+    );
+    const lifecycle = {
+      parentWorkflow: 'parent',
+      step: 'reviewers',
+      childWorkflow: 'child',
+      callInstance: 1,
+      stack: [parallelFrame, callFrame],
+    };
+    logger.onWorkflowCallStart(lifecycle);
+    logger.onPhaseStart(
+      childStep,
+      1,
+      'execute',
+      'Work',
+      { systemPrompt: 'system', userInstruction: 'Work' },
+      [parallelFrame, callFrame, childFrame],
+      'work:1:1:1',
+      1,
+    );
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord);
+    const parent = records.find((record) => record.type === 'step_start');
+    const direct = records.find((record) => record.type === 'phase_start' && record.step === 'reviewers');
+    const call = records.find((record) => record.type === 'workflow_call_start');
+    const child = records.find((record) => record.type === 'phase_start' && record.step === 'work');
+
+    expect(parent?.parallel).toMatchObject({ role: 'parent' });
+    expect(direct?.parallel).toMatchObject({
+      role: 'direct_participant',
+      parentParticipationId: parent?.parallel?.participationId,
+    });
+    expect(direct?.parallel?.participationId).not.toBe(parent?.parallel?.participationId);
+    expect(call?.parallel).toMatchObject({ role: 'workflow_call_participant' });
+    expect(child?.parallel).toEqual(call?.parallel);
+    expect(JSON.stringify(parent?.parallel)).not.toContain('Review');
+    expect(() => parseNdjsonRecord(JSON.stringify({
+      type: 'step_start',
+      step: 'review',
+      persona: 'reviewer',
+      iteration: 1,
+      timestamp: '2026-08-27T00:00:00.000Z',
+      parallel: { role: 'unknown', participationId: 'p' },
+    }))).toThrow(/parallel.*role/i);
+  });
+
   it('subworkflow stack を step/phase records にそのまま書き出す', () => {
     const logsDir = createTempLogsDir();
     const ndjsonPath = initNdjsonLog('session-1', 'task', 'parent', { logsDir });

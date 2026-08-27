@@ -16,6 +16,7 @@ import type {
   NdjsonCompanionReviewSkipped,
   NdjsonCompanionReviewMode,
   NdjsonCompanionReviewTrigger,
+  NdjsonParallelMetadata,
 } from '../../../infra/fs/index.js';
 import type { PromptLogRecord } from './promptLog.js';
 import type {
@@ -48,6 +49,7 @@ import { truncateUtf8 } from '../../../shared/utils/utf8.js';
 import { isSensitiveKeyName } from '../../../shared/utils/sensitiveText.js';
 import { COMPANION_PROMPT_LIMITS } from '../../../core/workflow/companion/limits.js';
 import { COMPANION_OUTPUT_LIMITS } from '../../../core/workflow/companion/output-envelope.js';
+import { buildNdjsonParallelMetadata } from '../../../shared/utils/parallelMetadata.js';
 
 type SanitizeText = (text: string) => string;
 
@@ -79,6 +81,21 @@ function serializeWorkflowStack(stack: WorkflowResumePointEntry[] | undefined): 
   };
 }
 
+function parallelMetadataFields(
+  stepName: string,
+  stepKind: NdjsonWorkflowCallStart['stack'][number]['kind'],
+  stack: WorkflowResumePointEntry[] | undefined,
+  isParallelParent = false,
+): { parallel?: NdjsonParallelMetadata } {
+  const parallel = buildNdjsonParallelMetadata({
+    stack,
+    stepName,
+    stepKind,
+    isParallelParent,
+  });
+  return parallel === undefined ? {} : { parallel };
+}
+
 export function buildWorkflowCallStartRecord(
   lifecycle: WorkflowCallLifecycle,
 ): NdjsonWorkflowCallStart {
@@ -93,6 +110,11 @@ export function buildWorkflowCallStartRecord(
     childWorkflow: lifecycle.childWorkflow,
     callInstance: lifecycle.callInstance,
     stack: scope.stack,
+    ...parallelMetadataFields(
+      lifecycle.step,
+      'workflow_call',
+      lifecycle.stack,
+    ),
     timestamp: new Date().toISOString(),
   };
 }
@@ -156,6 +178,12 @@ export function buildPhaseStartRecord(
     phaseExecutionId,
     timestamp: new Date().toISOString(),
     ...serializeWorkflowStack(workflowStack),
+    ...parallelMetadataFields(
+      step.name,
+      step.parallel === undefined ? (step.kind ?? 'agent') : 'parallel',
+      workflowStack,
+      step.parallel !== undefined,
+    ),
     instruction: sanitizeText(instruction),
     systemPrompt: sanitizeText(promptParts.systemPrompt),
     userInstruction: sanitizeText(promptParts.userInstruction),
@@ -186,6 +214,12 @@ export function buildPhaseCompleteRecord(
     content: sanitizeText(content),
     timestamp: completedAt,
     ...serializeWorkflowStack(workflowStack),
+    ...parallelMetadataFields(
+      step.name,
+      step.parallel === undefined ? (step.kind ?? 'agent') : 'parallel',
+      workflowStack,
+      step.parallel !== undefined,
+    ),
     ...(phaseError ? { error: sanitizeText(phaseError) } : {}),
     ...(iteration != null ? { iteration } : {}),
   };
@@ -236,6 +270,12 @@ export function buildPhaseJudgeStageRecord(
     method: entry.method,
     status: entry.status,
     ...serializeWorkflowStack(workflowStack),
+    ...parallelMetadataFields(
+      step.name,
+      step.parallel === undefined ? (step.kind ?? 'agent') : 'parallel',
+      workflowStack,
+      step.parallel !== undefined,
+    ),
     instruction: sanitizeText(entry.instruction),
     response: sanitizeText(entry.response),
     timestamp: new Date().toISOString(),
@@ -258,6 +298,12 @@ export function buildStepStartRecord(
     iteration,
     timestamp: new Date().toISOString(),
     ...serializeWorkflowStack(workflowStack),
+    ...parallelMetadataFields(
+      step.name,
+      step.parallel === undefined ? (step.kind ?? 'agent') : 'parallel',
+      workflowStack,
+      step.parallel !== undefined,
+    ),
     ...(instruction ? { instruction: sanitizeText(instruction) } : {}),
     ...(providerInfo?.provider !== undefined ? { provider: providerInfo.provider } : {}),
     ...(providerInfo?.providerSource !== undefined ? { providerSource: providerInfo.providerSource } : {}),
@@ -286,6 +332,12 @@ export function buildStepCompleteRecord(
     content: sanitizeText(response.content),
     instruction: sanitizeText(instruction),
     ...serializeWorkflowStack(workflowStack),
+    ...parallelMetadataFields(
+      step.name,
+      step.parallel === undefined ? (step.kind ?? 'agent') : 'parallel',
+      workflowStack,
+      step.parallel !== undefined,
+    ),
     ...(response.matchedRuleIndex != null ? { matchedRuleIndex: response.matchedRuleIndex } : {}),
     ...(response.matchedRuleMethod ? { matchedRuleMethod: response.matchedRuleMethod } : {}),
     ...(matchMethod ? { matchMethod } : {}),
