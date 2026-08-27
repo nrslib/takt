@@ -927,6 +927,11 @@ implementer 成功响应完成后、workflow 继续前审查累计 diff，响应
 现有的 quiet、forced、commit、queue 和 completion drain 行为。该设置只支持 global 或
 project 层级，不支持 step 或 Companion 定义级覆盖。
 
+在 `runtime.yaml` 中使用 `companion.fix_policy` 选择 reviewer 接受 finding 后的修复方式。
+默认值 `single` 最多执行一次 advisory 修复 follow-up，且不会再次审查该 follow-up。显式设置
+`loop` 后会保留原有行为，持续审查和修复直到没有 finding。与 `review_mode` 相同，该设置只支持
+global 或 project 层级，不支持 step 或 Companion 定义级覆盖。
+
 ```yaml
 - name: implement
   persona: coder
@@ -941,9 +946,35 @@ project 层级，不支持 step 或 Companion 定义级覆盖。
 
 workflow transition rule 不能引用 `companion.*` state。companion finding 和 failure 是 advisory diagnostic；主 workflow 仍由普通 semantic condition 和 Phase 3 judgment 控制。定义文件按 `.takt/companions/` → `~/.takt/companions/` → `builtins/{language}/companions/` 查找，只能包含名称、描述、facet 引用和 `interval_ms`，不能包含 provider/tool 设置；`interval_ms` 必须是 1 到 `2,147,483,647` 的正整数。
 
-对于 Team Leader step，每个 part 都使用独立的 Companion runtime。TAKT 在 part 响应后审查当时的累计 diff，将采纳的 finding 传回同一 part session，并在 part-level loop settle 后才发布 `PartResult`；其他 part 继续并行执行。全部 part 完成且 Team Leader 判断无需新增工作后，TAKT 会在确定 aggregated response 前执行独立的 Team 完成审查。采纳的 Team finding 会作为 typed evidence 交给现有的追加 part 规划路径，修复 part 仍使用普通 part 执行路径。修复 part 完成后，TAKT 会在确定 aggregated response 前再次执行 Team 完成审查。该流程不会创建 part 专用 worktree、patch、changed-path 所有权或 Companion 专用 scheduler。
+对于 Team Leader step，每个 part 都使用独立的 Companion runtime，并遵循已配置的 fix policy。
+TAKT 在 part 响应后审查当时的累计 diff，将采纳的 finding 传回同一 part session，并在
+part-level policy settle 后才发布 `PartResult`；其他 part 继续并行执行。全部 part 完成且
+Team Leader 判断无需新增工作后，TAKT 会在确定 aggregated response 前执行独立的 Team 完成审查。
 
-在 `live` mode，TAKT 观察 mutating tool event，并在 quiet period、强制间隔或 commit 触发后审查当前累计 diff。在 `completion` mode，TAKT 等待 implementer 响应边界再审查。每个 round 使用新的 finding list；可选 moderator 按 round-local index 接受或拒绝 finding。已接受 finding 以 NDJSON 写入 `.takt/runs/{run}/companion/{step}/{companion}.jsonl`。在 implementer 每个 turn 边界，未传递的 finding 会直接嵌入 follow-up prompt，然后清空内存缓冲；implementer 决定是否处理并说明不处理原因。完成时停止新触发、排空 review round，只有 diff digest 未审查时才执行 completion review。取消通过 workflow 或 step abort signal 终止 follow-up loop；follow-up 的错误、限流或 blocked 会停止 follow-up，并继续使用最近一次成功的 implementer response。
+使用 `single` 时，采纳的 Team finding 只会作为 advisory typed evidence 传给一次追加 part
+规划，最多执行一个 correction batch。每个 correction part 仍走普通 part 执行路径，因此会
+执行该 part 自身的 part-level Companion review；但 batch settle 后不会再次执行父 Team 完成审查。
+显式使用 `loop` 时，correction part 完成后会再次执行父 Team 完成审查，并且不设轮数上限，
+持续审查和修复直到没有 finding。该流程不会创建 part 专用 worktree、patch、changed-path
+所有权或 Companion 专用 scheduler。
+
+在 `live` mode，TAKT 观察 mutating tool event，并在 quiet period、强制间隔或 commit 触发后审查
+当前累计 diff。在 `completion` mode，TAKT 等待 implementer 响应边界再审查。每个 round 使用新的
+finding list；可选 moderator 按 round-local index 接受或拒绝 finding。已接受 finding 以 NDJSON
+写入 `.takt/runs/{run}/companion/{step}/{companion}.jsonl`。
+
+完成时，TAKT 停止新触发并排空正在运行及已排队的 review round，只在 diff digest 尚未审查时
+执行 completion review。默认 `single` 下，如果没有采纳的 finding，step 立即结束；如果有，
+finding 只会作为 advisory reference information 传给一次修复 follow-up。implementer 独立判断
+哪些 finding 值得修复；轻微、琐碎或不必要的 finding 可以不处理，但应说明原因。TAKT 不会再次
+审查该 follow-up，也不会执行第二次修复。
+
+显式 `loop` 下，采纳的 finding 会传入 follow-up prompt，并在每次修复后重复完成处理，直到没有
+待传递 finding 且最新 finding 传递后 diff digest 未再变化。该循环没有轮数上限，由 workflow 或
+step abort signal 终止。两种 policy 下，follow-up 的错误、限流、blocked 或异常都不会由
+Companion 处理再次重试；step 会继续使用最近一次成功的 implementer response 和 session ID，
+同时记录 `completionSettled: false`、已尝试的 `followUpRounds` 和清理后的失败原因。AbortSignal
+取消仍会向上传播，Companion 调用在 fail-soft 前仍保留 provider 的有限重试策略。
 
 ## 最佳实践
 

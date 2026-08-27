@@ -1100,6 +1100,12 @@ follow-up prompt で配達されます。`live` を指定すると、従来の q
 queue、completion drain の動作を維持します。この設定は global または project 単位で、
 step や Companion 定義単位の上書きはできません。
 
+レビューで指摘を採用した後の修正方式は、`runtime.yaml` の
+`companion.fix_policy` で選択します。既定値の `single` は advisory な修正 follow-up を
+最大1回だけ実行し、その follow-up を再レビューしません。`loop` を明示すると、指摘が
+なくなるまでレビューと修正を繰り返す従来動作になります。`review_mode` と同様に global
+または project 単位の設定であり、step や Companion 定義単位では上書きできません。
+
 ```yaml
 - name: implement
   persona: coder
@@ -1114,13 +1120,40 @@ step や Companion 定義単位の上書きはできません。
 
 workflow の遷移ルールから `companion.*` state は参照できません。Companion の指摘と失敗は advisory な診断情報であり、主 workflow の遷移は通常の semantic condition と Phase 3 の判定だけで決まります。
 
-Team Leader step では、各 part が独立した Companion runtime を持ちます。part 応答後にその時点の累積 diff をレビューし、採用 finding を同じ part session へ渡し、part-level loop が settle してから `PartResult` を公開します。他の part は並行実行を継続します。全 part が完了し、Team Leader が追加作業なしと判断した後は、aggregated response の確定前に別の Team 完了レビューを行います。採用された Team finding は typed evidence として既存の追加 part 計画へ渡され、修正 part も通常の part 実行経路を使います。修正 part が完了した場合は、aggregated response を確定する前に Team 完了レビューを再実行します。part 専用 worktree、patch、changed-path 所有権、Companion 専用 scheduler は作成しません。
+Team Leader step では、各 part が独立した Companion runtime を持ち、設定された fix policy
+に従います。part 応答後にその時点の累積 diff をレビューし、採用 finding を同じ part
+session へ渡し、part-level policy が settle してから `PartResult` を公開します。他の part
+は並行実行を継続します。全 part が完了し、Team Leader が追加作業なしと判断した後は、
+aggregated response の確定前に別の Team 完了レビューを行います。
+
+`single` では、採用された Team finding を advisory な typed evidence として追加 part 計画へ
+1回だけ渡し、修正 batch を最大1回実行します。各 correction part は通常の part 実行経路を
+使うため、その part 自身の part-level Companion review は行いますが、batch が settle した
+後に親 Team の完了レビューは再実行しません。`loop` を明示した場合は、correction part の
+完了後に親 Team の完了レビューを再実行し、指摘がなくなるまで上限なしでレビューと修正を
+繰り返します。part 専用 worktree、patch、changed-path 所有権、Companion 専用 scheduler は
+作成しません。
 
 定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。
 
 `live` mode では TAKT は変更系 tool event を観測し、静穏時間、強制発火時間、commit 発火に応じて現在の累積差分をレビューします。`completion` mode では実装エージェントの応答完了時点まで待ちます。各レビューラウンドでは指摘一覧を新しく生成し、任意の moderator がラウンド内 index によって提出済みの全指摘を `accept` または `reject` します。指摘をラウンド間で引き継ぐことはありません。採用した指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ1行1件の NDJSON として追記します。この mailbox は監査ログ兼参考ビューであり、実装エージェントは任意のタイミングで読めます。engine は mailbox へ書き込みますが、配達や完了の判定では読み取り、解釈、保護を行いません。
 
-実装エージェントの各ターン境界で、TAKT は未配達の採用済み指摘を follow-up prompt 本文へ直接埋め込み、その後メモリ上の配達バッファを空にします。各指摘へ対応するかは実装エージェントが判断し、対応しない場合は応答で理由を説明します。完了時には新規 trigger を停止し、実行中および queue 済みのレビューラウンドを drain してから現在の diff digest を読み、未レビューの digest だけを完了レビューします。指摘が生成された場合は別の follow-up ターンへ配達し、完了処理を繰り返します。未配達の指摘がなく、最後に指摘を配達した時点から digest が変わっていない場合にだけ step を終了します。Companion の follow-up ループに上限はなく、workflow または step の AbortSignal による中断が終了手段です。follow-up が `error`、`rate_limited`、`blocked` を返すか例外を送出した場合、その follow-up を再試行せず Companion の follow-up ループを打ち切り、最後に成功した実装エージェント応答と session ID で step を続行します。Companion の診断値には `completionSettled: false`、実際に試行した `followUpRounds`、サニタイズ済みの失敗理由を記録します。AbortSignal による中断は従来どおり伝播します。Companion 呼び出しは provider に対する既定回数の retry 後に fail-soft とします。
+完了時には新規 trigger を停止し、実行中および queue 済みのレビューラウンドを drain して
+から現在の diff digest を読み、未レビューの digest だけを完了レビューします。既定の
+`single` では、採用された指摘がなければそのまま step を終了します。指摘があれば advisory
+な参考情報として1回だけ修正 follow-up へ埋め込みます。実装エージェントは各指摘の重要性を
+独立に判断し、軽微・不要な指摘は理由を説明したうえで未対応にできます。TAKT はその
+follow-up を再レビューせず、2回目の修正ターンも実行しません。
+
+`loop` を明示した場合は、採用された指摘を follow-up prompt へ配達し、修正後に完了処理を
+繰り返します。未配達の指摘がなく、最後に指摘を配達した時点から digest が変わっていない
+場合にだけ step を終了します。このループにラウンド上限はなく、workflow または step の
+AbortSignal による中断が終了手段です。どちらの policy でも、follow-up が `error`、
+`rate_limited`、`blocked` を返すか例外を送出した場合、その follow-up を Companion 処理内で
+再試行せず、最後に成功した実装エージェント応答と session ID で step を続行します。
+Companion の診断値には `completionSettled: false`、実際に試行した `followUpRounds`、
+サニタイズ済みの失敗理由を記録します。AbortSignal による中断は従来どおり伝播し、Companion
+呼び出しは provider に対する既定回数の retry 後に fail-soft とします。
 
 ## ベストプラクティス
 

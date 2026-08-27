@@ -1118,6 +1118,13 @@ the existing follow-up prompt. Set it to `live` to keep the existing quiet,
 forced, commit, queue, and completion-drain behavior. The setting is global or
 project-wide; it is not a step or Companion definition override.
 
+Set `companion.fix_policy` in `runtime.yaml` to choose what happens after a
+review accepts findings. It defaults to `single`, which allows at most one
+advisory fix follow-up and does not review that follow-up again. Set it to
+`loop` to preserve repeated review-and-fix processing until no findings remain.
+Like `review_mode`, this setting is global or project-wide and cannot be
+overridden by a step or Companion definition.
+
 ```yaml
 - name: implement
   persona: coder
@@ -1136,9 +1143,42 @@ Definitions are YAML files resolved from `.takt/companions/`, `~/.takt/companion
 
 In `live` mode, TAKT observes mutating tool events and reviews the current cumulative diff after a quiet period or forced interval, including commit-triggered reviews. In `completion` mode, it waits for the implementer response boundary instead. Each review round creates a fresh finding list, and an optional moderator accepts or rejects every submitted finding by its round-local index; findings are not carried between rounds. Accepted findings are appended as one NDJSON record per line to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. This mailbox is an audit log and reference view that the implementer may read at any time. The engine writes it but does not read, interpret, protect, or use it to decide delivery or completion.
 
-At each implementer turn boundary, TAKT embeds all undelivered accepted findings directly in the follow-up prompt and then clears the in-memory delivery buffer. The implementer decides whether to address each finding and explains any decision not to act. On completion, TAKT stops new triggers, drains running and queued review rounds, reads the current diff digest, and runs a completion review only for an unreviewed digest. If that produces findings, it delivers another follow-up turn and repeats completion processing. The step finishes only when no findings remain undelivered and the digest has not changed since the latest finding delivery. There is no Companion follow-up loop limit; cancellation through the workflow or step abort signal is the termination mechanism. If a follow-up returns `error`, `rate_limited`, or `blocked`, or throws an error, TAKT stops the Companion follow-up loop without retrying that follow-up and continues the step with the latest successful implementer response and session ID. The Companion diagnostics record `completionSettled: false`, the attempted `followUpRounds`, and a sanitized failure reason. AbortSignal cancellation still propagates. Companion calls retain their bounded provider retry policy before failing soft.
+At completion, TAKT stops new triggers, drains running and queued review rounds,
+reads the current diff digest, and runs a completion review only for an
+unreviewed digest. With the default `single` policy, no accepted findings means
+the step finishes immediately. Accepted findings are embedded once as advisory
+reference information in a single fix follow-up. The implementer independently
+decides which findings warrant a fix; minor, trivial, or unnecessary findings
+may be left unaddressed with an explanation. TAKT does not review that follow-up
+or run another fix turn.
 
-For a Team Leader step, each part receives its own Companion runtime. TAKT reviews the current cumulative diff after that part responds, delivers accepted findings back to the same part session, and publishes the `PartResult` only after the part-level loop settles. Other parts continue running. After every part is complete and the Team Leader proposes no additional work, TAKT performs a separate Team completion review before aggregating the response. Accepted Team findings are passed as typed evidence to the existing additional-part planner; any correction parts use the ordinary part execution path and are followed by another Team completion review. Team execution does not create part-specific worktrees, patches, changed-path ownership, or a separate Companion scheduler.
+With explicit `loop`, accepted findings are delivered in the follow-up prompt
+and completion processing repeats after each fix. The step finishes only when
+no findings remain undelivered and the digest has not changed since the latest
+finding delivery. This loop has no round limit; cancellation through the
+workflow or step abort signal is its termination mechanism. Under either
+policy, a follow-up that returns `error`, `rate_limited`, or `blocked`, or throws
+an error, is not retried by Companion processing. TAKT continues the step with
+the latest successful implementer response and session ID, while diagnostics
+record `completionSettled: false`, the attempted `followUpRounds`, and a
+sanitized failure reason. AbortSignal cancellation still propagates, and
+Companion calls retain their bounded provider retry policy before failing soft.
+
+For a Team Leader step, each part receives its own Companion runtime and follows
+the configured fix policy. TAKT reviews the current cumulative diff after that
+part responds, delivers accepted findings back to the same part session, and
+publishes the `PartResult` only after the part-level policy settles. Other parts
+continue running. After every part is complete and the Team Leader proposes no
+additional work, TAKT performs a separate Team completion review before
+aggregating the response. With `single`, accepted Team findings are passed as
+advisory typed evidence to one additional-part planning turn, and at most one
+correction batch runs. Each correction part uses the ordinary part execution
+path and therefore still receives its own part-level Companion review, but TAKT
+does not run the parent Team completion review again after that batch settles.
+With explicit `loop`, correction parts are followed by another parent Team
+completion review, and review and correction repeat without a round limit until
+no findings remain. Team execution does not create part-specific worktrees,
+patches, changed-path ownership, or a separate Companion scheduler.
 
 ## Best Practices
 
