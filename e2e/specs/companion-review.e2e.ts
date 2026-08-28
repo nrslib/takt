@@ -304,10 +304,10 @@ describe('E2E: companion review', () => {
       expectedReviewerStarts: 4,
     },
     {
-      name: 'should default to one Team Leader correction batch without cumulative re-review',
+      name: 'should default to one Team Leader correction batch without reviewing the correction part',
       fixPolicy: undefined,
       expectedLeaderStarts: 3,
-      expectedReviewerStarts: 3,
+      expectedReviewerStarts: 2,
     },
   ])('$name', ({
     fixPolicy,
@@ -480,14 +480,16 @@ describe('E2E: companion review', () => {
           findings: [{ action: 'accept', sourceIndex: 0 }],
         },
       },
-      {
-        persona: 'security-reviewer',
-        content: 'No findings remain for the fix part.',
-        structured_output: {
-          findings: [],
-          notes: 'The fix part is valid.',
-        },
-      },
+      ...(fixPolicy === 'loop'
+        ? [{
+            persona: 'security-reviewer',
+            content: 'No findings remain for the fix part.',
+            structured_output: {
+              findings: [],
+              notes: 'The fix part is valid.',
+            },
+          }]
+        : []),
       ...(fixPolicy === 'loop'
         ? [{
             persona: 'security-reviewer',
@@ -569,8 +571,9 @@ describe('E2E: companion review', () => {
       'team-leader:complete',
       'coder:start',
       'coder:complete',
-      'security-reviewer:start',
-      'security-reviewer:complete',
+      ...(fixPolicy === 'loop'
+        ? ['security-reviewer:start', 'security-reviewer:complete']
+        : []),
       ...(fixPolicy === 'loop'
         ? [
             'team-leader:start',
@@ -586,8 +589,12 @@ describe('E2E: companion review', () => {
     expect(reviewRounds).toEqual([
       { step: 'implement.initial', findingCount: 0 },
       { step: 'implement', findingCount: 1 },
-      { step: 'implement.fix', findingCount: 0 },
-      ...(fixPolicy === 'loop' ? [{ step: 'implement', findingCount: 0 }] : []),
+      ...(fixPolicy === 'loop'
+        ? [
+            { step: 'implement.fix', findingCount: 0 },
+            { step: 'implement', findingCount: 0 },
+          ]
+        : []),
     ]);
     expectSuccessfulParentCompanionCompletion(readJsonlDirectory(analyticsEventsDir));
     if (fixPolicy === undefined) {

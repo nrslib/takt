@@ -953,8 +953,9 @@ part-level policy settle 后才发布 `PartResult`；其他 part 继续并行执
 Team Leader 判断无需新增工作后，TAKT 会在确定 aggregated response 前执行独立的 Team 完成审查。
 
 使用 `single` 时，采纳的 Team finding 只会作为 advisory typed evidence 传给一次追加 part
-规划，最多执行一个 correction batch。每个 correction part 仍走普通 part 执行路径，因此会
-执行该 part 自身的 part-level Companion review；但 batch settle 后不会再次执行父 Team 完成审查。
+规划，最多执行一个 correction batch。每个 correction part 仍走普通 part 执行路径，但不会
+创建或执行该 part 自身的 part-level Companion review；batch settle 后不会再次执行父 Team
+完成审查。
 显式使用 `loop` 时，correction part 完成后会再次执行父 Team 完成审查，并且不设轮数上限，
 持续审查和修复，直到针对当前累计 diff 的完成处理不再产生新的已接受 Team finding。已经审查
 过的 digest 不会重复审查。该流程不会创建 part 专用 worktree、patch、changed-path 所有权或

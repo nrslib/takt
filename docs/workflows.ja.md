@@ -1129,8 +1129,8 @@ aggregated response の確定前に別の Team 完了レビューを行います
 
 `single` では、採用された Team finding を advisory な typed evidence として追加 part 計画へ
 1回だけ渡し、修正 batch を最大1回実行します。各 correction part は通常の part 実行経路を
-使うため、その part 自身の part-level Companion review は行いますが、batch が settle した
-後に親 Team の完了レビューは再実行しません。`loop` を明示した場合は、correction part の
+使いますが、part-level Companion review は作成・実行せず、batch が settle した後に親 Team
+の完了レビューは再実行しません。`loop` を明示した場合は、correction part の
 完了後に親 Team の完了レビューを再実行し、上限なしでレビューと修正を繰り返します。現在の
 累積 diff に対する完了処理で新たに採用される Team finding がなくなれば終了します。既に
 レビュー済みの digest は重複レビューしません。part 専用 worktree、patch、changed-path

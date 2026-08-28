@@ -890,6 +890,7 @@ export class TeamLeaderRunner {
               activeTeamCompanionRuntime === undefined
                 ? undefined
                 : (options) => activeTeamCompanionRuntime.composeOptions(options),
+              singleCorrectionPartIds?.includes(part.id) === true,
               instructionTransaction,
               partAbortSignal,
               publicationFence,
@@ -1150,6 +1151,7 @@ export class TeamLeaderRunner {
     providerInfo: StepProviderInfo,
     companionDiffBaseline: CompanionDiffBaseline | undefined,
     composeTeamCompanionOptions: ((options: RunAgentOptions) => RunAgentOptions) | undefined,
+    skipCompanionReview: boolean,
     instructionTransaction?: InstructionBuildTransaction,
     executionAbortSignal?: AbortSignal,
     publicationFence?: TeamLeaderExecutionPublicationFence,
@@ -1193,6 +1195,7 @@ export class TeamLeaderRunner {
       executionAbortSignal,
       {
         forceNewSession: false,
+        skipCompanionReview,
         composeOptions: composeTeamCompanionOptions,
         deadlineSignal,
         providerInfo,

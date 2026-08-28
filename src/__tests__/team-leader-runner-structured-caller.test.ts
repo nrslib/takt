@@ -989,6 +989,138 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     expect(applyPostExecutionPhases).toHaveBeenCalledOnce();
   });
 
+  it('does not create a part-level Companion runtime for a Team Leader single correction part', async () => {
+    const finding: CompanionFinding = {
+      companion: 'reviewer',
+      reviewedAt: '2026-08-17T00:00:00.000Z',
+      reviewedDigest: 'digest-1',
+      severity: 'must_fix',
+      file: 'src/value.ts',
+      line: 1,
+      finding: 'The value must be validated before it is stored.',
+    };
+    const makeRuntime = (findings: readonly CompanionFinding[]) => ({
+      beginReviewAttempt: vi.fn(),
+      beginFollowUpRound: vi.fn(),
+      composeOptions: vi.fn((options: Record<string, unknown>) => options),
+      complete: vi.fn().mockResolvedValue({ findings }),
+      completeSingleFix: vi.fn(),
+      completeFollowUpFailure: vi.fn(),
+      [Symbol.dispose]: vi.fn(),
+    });
+    const teamRuntime = makeRuntime([finding]);
+    const partRuntime = makeRuntime([]);
+    const correctionPartRuntime = makeRuntime([]);
+    const createdRuntimeStepNames: string[] = [];
+    const reviewedPartStepNames: string[] = [];
+    let executeAgentCall = 0;
+    mockExecuteAgent.mockImplementation(async () => ({
+      persona: 'coder',
+      status: 'done',
+      content: executeAgentCall++ === 0 ? 'initial part completed' : 'correction part completed',
+      timestamp: new Date(),
+    }));
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (
+        _instruction: string,
+        _maxInitialParts: number | undefined,
+        options: { onPromptResolved?: (parts: { systemPrompt: string; userInstruction: string }) => void },
+      ) => {
+        options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
+        return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement the change' }] };
+      }),
+      requestMoreParts: vi.fn()
+        .mockResolvedValueOnce({
+          done: true,
+          reasoning: 'initially complete',
+          cancelPartIds: [],
+          parts: [],
+        })
+        .mockResolvedValueOnce({
+          done: false,
+          reasoning: 'apply the typed finding',
+          cancelPartIds: [],
+          parts: [{ id: 'part-2', title: 'Correction', instruction: 'Fix the finding' }],
+        }),
+    };
+    const createCompanionRuntime = vi.fn(async (candidateStep: WorkflowStep) => {
+      createdRuntimeStepNames.push(candidateStep.name);
+      if (candidateStep.name === 'implement') return teamRuntime;
+      if (candidateStep.name === 'implement.part-1') return partRuntime;
+      return correctionPartRuntime;
+    });
+    const completeCompanionReview = vi.fn(async (input: {
+      eventStep: WorkflowStep;
+      state: WorkflowState;
+      initialResponse: AgentResponse;
+      companionRuntime: typeof partRuntime;
+    }) => {
+      reviewedPartStepNames.push(input.eventStep.name);
+      await input.companionRuntime.complete(input.state, input.initialResponse.content, {
+        followUpRound: 0,
+      });
+      return input.initialResponse;
+    });
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: 'mock-model' }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn((candidate: WorkflowStep) => candidate.name.includes('.')
+          ? candidate.instruction ?? ''
+          : 'leader instruction'),
+        createCompanionDiffBaseline: vi.fn().mockReturnValue(undefined),
+        createCompanionRuntime,
+        completeCompanionReview,
+        applyPostExecutionPhases: vi.fn(async (
+          _step: WorkflowStep,
+          _state: WorkflowState,
+          _iteration: number,
+          response: AgentResponse,
+        ) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller },
+      companionFixPolicy: 'single',
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+      observabilityEnabled: false,
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    const state = buildMinimalTeamLeaderState();
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'leader instruction',
+      passPreviousResponse: false,
+      teamLeader: {
+        maxConcurrency: 1,
+        timeoutMs: 1_000,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    };
+
+    const result = await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    expect(result.response.status).toBe('done');
+    expect(createdRuntimeStepNames).toEqual(['implement', 'implement.part-1']);
+    expect(reviewedPartStepNames).toEqual(['implement.part-1']);
+    expect(partRuntime.complete).toHaveBeenCalledOnce();
+    expect(correctionPartRuntime.complete).not.toHaveBeenCalled();
+    expect(teamRuntime.complete).toHaveBeenCalledOnce();
+    expect(teamRuntime.completeSingleFix).toHaveBeenCalledOnce();
+    expect(completeCompanionReview).toHaveBeenCalledOnce();
+    expect(result.response.content).toContain('part-2');
+  });
+
   it.each([
     { failOnPartError: true, expectedStatus: 'error', postExecutionCalls: 0 },
     { failOnPartError: false, expectedStatus: 'done', postExecutionCalls: 1 },

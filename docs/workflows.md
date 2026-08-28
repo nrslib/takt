@@ -1176,8 +1176,8 @@ additional work, TAKT performs a separate Team completion review before
 aggregating the response. With `single`, accepted Team findings are passed as
 advisory typed evidence to one additional-part planning turn, and at most one
 correction batch runs. Each correction part uses the ordinary part execution
-path and therefore still receives its own part-level Companion review, but TAKT
-does not run the parent Team completion review again after that batch settles.
+path without creating or running a part-level Companion review, and TAKT does
+not run the parent Team completion review again after that batch settles.
 With explicit `loop`, correction parts are followed by another parent Team
 completion review, and review and correction repeat without a round limit. They
 stop when completion processing for the current cumulative diff produces no

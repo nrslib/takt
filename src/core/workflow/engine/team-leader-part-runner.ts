@@ -34,6 +34,7 @@ export interface TeamLeaderPartObservability {
 
 export interface TeamLeaderPartExecutionOptions {
   readonly forceNewSession: boolean;
+  readonly skipCompanionReview?: boolean;
   readonly onDispatch?: RunAgentOptions['onDispatch'];
   readonly composeOptions?: (options: RunAgentOptions) => RunAgentOptions;
   readonly deadlineSignal?: AbortSignal;
@@ -81,11 +82,14 @@ export async function runTeamLeaderPart(
   executionOptions?: TeamLeaderPartExecutionOptions,
 ): Promise<PartResult> {
   const partStep = createPartStep(step, part);
+  const partStepForExecution = executionOptions?.skipCompanionReview === true
+    ? { ...partStep, companion: undefined }
+    : partStep;
   const partProviderInfo = executionOptions?.providerInfo
     ?? (runtime
-      ? optionsBuilder.resolveStepProviderModel(partStep, runtime)
-      : optionsBuilder.resolveStepProviderModel(partStep));
-  const resolvedBaseOptions = optionsBuilder.buildAgentOptions(partStep, {
+      ? optionsBuilder.resolveStepProviderModel(partStepForExecution, runtime)
+      : optionsBuilder.resolveStepProviderModel(partStepForExecution));
+  const resolvedBaseOptions = optionsBuilder.buildAgentOptions(partStepForExecution, {
     ...runtime,
     providerInfo: partProviderInfo,
     teamLeaderPart: {
@@ -137,17 +141,17 @@ export async function runTeamLeaderPart(
       onDispatch: executionOptions?.onDispatch,
     };
   try {
-    const companionRuntime = await executionOptions?.createCompanionRuntime?.(partStep, signal);
+    const companionRuntime = await executionOptions?.createCompanionRuntime?.(partStepForExecution, signal);
     using activeCompanionRuntime = companionRuntime;
     activeCompanionRuntime?.beginReviewAttempt();
     const teamComposedOptions = executionOptions?.composeOptions?.(baseRunOptions) ?? baseRunOptions;
     const options = activeCompanionRuntime?.composeOptions(teamComposedOptions) ?? teamComposedOptions;
-    const partInstruction = buildInstruction(partStep);
+    const partInstruction = buildInstruction(partStepForExecution);
     const initialResponse = await runWithPhaseSpan({
       enabled: observability.enabled,
       runId: observability.runId,
       workflowName: observability.workflowName,
-      step: partStep,
+      step: partStepForExecution,
       iteration: observability.iteration,
       phase: 1,
       phaseName: 'execute',
@@ -157,7 +161,7 @@ export async function runTeamLeaderPart(
       providerInfo: partProviderInfo,
     }, async () => {
       try {
-        const result = await executeAgent(partStep.persona, partInstruction, options);
+        const result = await executeAgent(partStepForExecution.persona, partInstruction, options);
         if (isTeamLeaderPartCancellation(signal.reason)) {
           throw signal.reason;
         }
@@ -191,7 +195,7 @@ export async function runTeamLeaderPart(
       : initialResponse;
     if (response.sessionId !== undefined) {
       updatePersonaSession(
-        buildPartScopedSessionKey(partStep, {
+        buildPartScopedSessionKey(partStepForExecution, {
           provider: partProviderInfo.provider,
           model: partProviderInfo.model,
         }),
@@ -203,7 +207,7 @@ export async function runTeamLeaderPart(
       providerInfo: partProviderInfo,
       response: {
         ...response,
-        persona: partStep.name,
+        persona: partStepForExecution.name,
       },
     };
   } catch (error) {
