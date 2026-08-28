@@ -40,11 +40,11 @@ tests:
         value: |
           候補の計画本文と fixture の実装だけを評価する。主ケースの語彙や表形式は要求しない。
 
-          `PATH-002` について、`buildArtifact` を実在する入口として次の独立した観測を計画へ落としている場合だけ合格とする。
+          `PATH-002` について、`buildArtifact(projectRoot, currentSettings)` を実在する入口として次の独立した観測を計画へ落としている場合だけ合格とする。
 
           - `settings.source` → `loadInput` → input値
-          - inputのdocument_id/itemsと `settings.documentPath` → `renderDocument` → document.path/content
+          - inputのdocument_id/itemsと `settings.documentLabel` → `renderDocument` → document.label/content
           - `settings.sections` → sort → sectionsの順序
           - document.content と `settings.indexPath` → `writeIndex` → 実際に書かれたindex file
 
-          各観測に、根拠となるファイルと関数、具体的な入力または設定、入口から結果までの接続、期待結果、問題が残れば失敗する具体的な検証が必要である。変更が必要な共有箇所と、変更せず確認する経路を区別すること。存在しないlocale、provider、retry、互換形式、出力先を追加する、source/render/writeを一つの抽象的な「artifact経路」で代用する、または書き込みを戻り値だけで確認する場合は不合格とする。
+          各観測に、根拠となるファイルと関数、具体的な入力または設定、入口から結果までの接続、期待結果、問題が残れば失敗する具体的な検証が必要である。設定差分は `currentSettings` として同じ入口へ渡し、helperの直接呼び出しだけで済ませないこと。変更が必要な共有箇所と、変更せず確認する経路を区別すること。存在しないlocale、provider、retry、互換形式、出力先を追加する、source/render/writeを一つの抽象的な「artifact経路」で代用する、または書き込みを戻り値だけで確認する場合は不合格とする。

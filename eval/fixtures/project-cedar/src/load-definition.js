@@ -1,5 +1,5 @@
 import { definition } from './definition.js';
 
-export function loadDefinition() {
-  return definition;
+export function loadDefinition(source = definition) {
+  return source;
 }

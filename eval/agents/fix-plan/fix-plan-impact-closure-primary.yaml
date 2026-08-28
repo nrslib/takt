@@ -43,7 +43,7 @@ tests:
           `PATH-001` の対象として、次の3経路を別々に追跡できる場合だけ合格とする。
 
           1. `buildExecutionPlan` → `loadDefinition` → `selectEntries`。`definition.selection` と input の tags/entries が、選択された IDs、role、instruction に到達する。少なくとも一致条件またはselection値を変えたときに結果の違いを観測する検証を示す。
-          2. `buildExecutionPlan` → `loadDefinition` → `findCycle`。`definition.workflow.entry/calls` が cycle または no-cycle に到達する。entryまたはcallsを変えてcycle結果の違いを観測する検証を示す。
+          2. `buildExecutionPlan` → `loadDefinition` → `findCycle`。`buildExecutionPlan` に渡す source の `workflow.entry/calls` が cycle または no-cycle に到達する。source の entry または calls を変え、同じ入口からcycle結果の違いを観測する検証を示す。
           3. `buildExecutionPlan` → `loadDefinition` → `evaluateMonitor`。`definition.monitor.limit/instruction` と input count が decision と展開済みinstructionに到達する。limit、count、instructionのいずれかを変えて結果の違いを観測する検証を示す。
 
           各経路に、正本、具体的な入力または状態、実在する入口から観測結果までの呼び出し、変更または確認の扱い、期待結果、問題が残れば失敗する具体的な検証が必要である。3経路を「関連consumer」などで一括した場合、direct consumerだけを示して入口を省いた場合、fixtureにない経路・状態を追加した場合は不合格とする。

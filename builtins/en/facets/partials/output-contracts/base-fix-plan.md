@@ -13,6 +13,11 @@
 |-------------|-------|-----------------------|----------------|---------|----------------|
 | {Name} | {Verified cause and primary alternatives ruled out} | {Externally observable condition} | {Actual paths from the defining source through consumers to output} | {Minimum necessary changes} | {Separate contracts, adjacent work, and unnecessary mechanism changes} |
 
+## Impact Paths
+| Repair Unit | Source of Truth and Input / State | Entry to Observable Result | Treatment | Successful Example | Counterexample Detecting a Violation |
+|-------------|-----------------------------------|----------------------------|-----------|--------------------|--------------------------------------|
+| {Name} | {Source defining the condition and concrete input or state} | {Real entry, processing, consumer, and observable result} | {Change / Migrate-remove / Verify only} | {Expected observable result} | {Test, reproduction, search, or code trace changing one result-controlling condition} |
+
 ## Implementation Order
 | Order | Repair Unit | Work | Dependency | Completion Criteria |
 |-------|-------------|------|------------|---------------------|

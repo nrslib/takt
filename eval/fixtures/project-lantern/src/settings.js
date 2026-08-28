@@ -1,6 +1,6 @@
 export const settings = Object.freeze({
   source: 'artifacts/source.json',
-  documentPath: 'documents/{document_id}.md',
+  documentLabel: 'document:{document_id}',
   indexPath: 'output/index.md',
   sections: Object.freeze([
     Object.freeze({ name: 'summary', order: 2 }),
