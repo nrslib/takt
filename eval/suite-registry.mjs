@@ -16,9 +16,8 @@ const CLASSIFICATIONS = [
     suites: [
       'fix-loop-convergence',
       'fix-plan-bounded-proof',
-      'fix-plan-static-path-audit-a',
-      'fix-plan-static-path-audit-b',
-      'fix-plan-static-path-audit-c',
+      'fix-plan-impact-closure-primary',
+      'fix-plan-impact-closure-heldout',
     ],
   },
   {
@@ -174,23 +173,17 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: 'キャッシュなしの3モデル反復を行う production-condition suite である',
   },
-  'fix-plan-static-path-audit-a': {
+  'fix-plan-impact-closure-primary': {
     defaultEligible: false,
     credentials: ['codex'],
     cost: 'high',
-    reason: 'Codex Luna Max の read-only isolated 実行で静的依存閉包の実行経路を監査する',
+    reason: 'Codex Luna Max の read-only isolated 実行で独立した影響経路の計画を検証する',
   },
-  'fix-plan-static-path-audit-b': {
+  'fix-plan-impact-closure-heldout': {
     defaultEligible: false,
     credentials: ['codex'],
     cost: 'high',
-    reason: 'Codex Luna Max の read-only isolated 実行で静的依存閉包の実行経路を監査する',
-  },
-  'fix-plan-static-path-audit-c': {
-    defaultEligible: false,
-    credentials: ['codex'],
-    cost: 'high',
-    reason: 'Codex Luna Max の read-only isolated 実行で静的依存閉包の実行経路を監査する',
+    reason: '主ケースと異なる構造で影響経路計画の汎化と過剰範囲を検証する',
   },
   'fix-plan-fresh-findings': {
     defaultEligible: false,

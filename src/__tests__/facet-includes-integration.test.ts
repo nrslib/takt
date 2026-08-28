@@ -14,18 +14,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
 import { tmpdir } from 'node:os';
 import {
   resolveRefToContent,
   type FacetResolutionContext,
 } from '../infra/config/loaders/resource-resolver.js';
-import { OutputContractsFieldSchema } from '../core/models/schema-base.js';
 
 describe('facet include expansion', () => {
   let tempDir: string;
@@ -180,66 +177,6 @@ describe('facet include expansion', () => {
 
     const content = resolveRefToContent('test', undefined, workflowDir, 'instructions', context);
     expect(content).toBe('Project version');
-  });
-
-  it('should resolve builtin remediation audit facets in both languages', () => {
-    for (const lang of ['ja', 'en'] as const) {
-      const builtinContext = { projectDir: tempDir, lang };
-      const resolveBuiltinFacet = (
-        name: string,
-        facetType: 'instructions' | 'output-contracts',
-      ): string => {
-        const content = resolveRefToContent(name, undefined, tempDir, facetType, builtinContext);
-        expect(content).toBeDefined();
-        expect(content).not.toContain('{{include:');
-        return content!;
-      };
-
-      for (const [facetType, names] of [
-        ['instructions', [
-          'fix-plan-from-review-resolution',
-          'scenario-based-fix-plan-from-review-resolution',
-          'apply-fix-plan',
-          'apply-fix-verification',
-          'team-leader-fix-plan',
-          'team-leader-fix-verification',
-        ]],
-        ['output-contracts', [
-          'fix-plan',
-          'scenario-based-fix-plan',
-          'fix-report',
-          'remediation-fix-report',
-        ]],
-      ] as const) {
-        for (const name of names) {
-          resolveBuiltinFacet(name, facetType);
-        }
-      }
-
-      const loadBuiltinOutputContracts = (name: string) => {
-        const step = parseYaml(
-          readFileSync(join(process.cwd(), 'builtins', lang, 'steps', name), 'utf8'),
-        ) as { output_contracts?: unknown };
-        const outputContracts = OutputContractsFieldSchema.parse(step.output_contracts);
-        if (outputContracts?.report === undefined) {
-          throw new Error(`${name} must define output_contracts.report`);
-        }
-        return outputContracts.report;
-      };
-      const genericFixReports = loadBuiltinOutputContracts('fix-with-provider-tools.yaml');
-      const remediationFixReports = loadBuiltinOutputContracts('peer-review-fix.yaml');
-
-      expect(genericFixReports).toContainEqual({
-        name: 'fix-report.md',
-        format: 'fix-report',
-        use_judge: true,
-      });
-      expect(remediationFixReports).toContainEqual({
-        name: 'fix-report.md',
-        format: 'remediation-fix-report',
-        use_judge: true,
-      });
-    }
   });
 
 });

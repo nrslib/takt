@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: fix-plan separates independently observable paths'
+
+prompts:
+  - file://../../prompts/fix-plan-impact-closure-primary.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/project-cedar
+      isolate_working_dir: true
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-5.6-luna
+        model_reasoning_effort: high
+
+evaluateOptions:
+  maxConcurrency: 1
+  repeat: 1
+
+tests:
+  - description: 'accepted finding is planned across every independent result'
+    vars:
+      task: file://../../cases/fix-plan-impact-closure-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-plan/impact-closure-primary
+        value: |
+          候補の計画本文と fixture の実装だけを評価する。見出し名や表形式の一致は要求しない。
+
+          `PATH-001` の対象として、次の3経路を別々に追跡できる場合だけ合格とする。
+
+          1. `buildExecutionPlan` → `loadDefinition` → `selectEntries`。`definition.selection` と input の tags/entries が、選択された IDs、role、instruction に到達する。少なくとも一致条件またはselection値を変えたときに結果の違いを観測する検証を示す。
+          2. `buildExecutionPlan` → `loadDefinition` → `findCycle`。`definition.workflow.entry/calls` が cycle または no-cycle に到達する。entryまたはcallsを変えてcycle結果の違いを観測する検証を示す。
+          3. `buildExecutionPlan` → `loadDefinition` → `evaluateMonitor`。`definition.monitor.limit/instruction` と input count が decision と展開済みinstructionに到達する。limit、count、instructionのいずれかを変えて結果の違いを観測する検証を示す。
+
+          各経路に、正本、具体的な入力または状態、実在する入口から観測結果までの呼び出し、変更または確認の扱い、期待結果、問題が残れば失敗する具体的な検証が必要である。3経路を「関連consumer」などで一括した場合、direct consumerだけを示して入口を省いた場合、fixtureにない経路・状態を追加した場合は不合格とする。

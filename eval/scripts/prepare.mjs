@@ -61,22 +61,18 @@ const TARGETS = [
   { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
   { id: 'fix-plan-bounded-proof', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-bounded-proof' },
   {
-    id: 'fix-plan-static-path-audit-a',
+    id: 'fix-plan-impact-closure-primary',
     workflow: 'peer-review',
     step: 'fix-plan',
-    fixture: 'eval/fixtures/fix-plan-static-path-audit-a',
+    fixture: 'eval/fixtures/project-cedar',
+    snapshotPrefix: 'workflow-context',
   },
   {
-    id: 'fix-plan-static-path-audit-b',
+    id: 'fix-plan-impact-closure-heldout',
     workflow: 'peer-review',
     step: 'fix-plan',
-    fixture: 'eval/fixtures/fix-plan-static-path-audit-b',
-  },
-  {
-    id: 'fix-plan-static-path-audit-c',
-    workflow: 'peer-review',
-    step: 'fix-plan',
-    fixture: 'eval/fixtures/fix-plan-static-path-audit-c',
+    fixture: 'eval/fixtures/project-lantern',
+    snapshotPrefix: 'workflow-context',
   },
   {
     id: 'review-impact-path-coverage',
@@ -577,6 +573,7 @@ async function main() {
     phase: requestedPhase,
     targetFile,
     dynamicFacetSelection,
+    snapshotPrefix,
   } of targets) {
     if (requestedPhase !== undefined && monitorCycle !== undefined) {
       throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
@@ -704,7 +701,7 @@ async function main() {
 
     function writeFacetSnapshot(kind, contents) {
       if (!contents || contents.length === 0) return undefined;
-      const path = join(snapshotDir, `${id}-${kind}.md`);
+      const path = join(snapshotDir, `${snapshotPrefix ?? id}-${kind}.md`);
       const text = contents.map((entry) => {
         if (entry === null || typeof entry !== 'object' || typeof entry.content !== 'string') {
           throw new Error(`Invalid ${kind} facet content for eval target "${id}"`);

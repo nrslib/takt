@@ -27,4 +27,4 @@ instruction:
 output_contracts:
   report:
     - name: fix-report.md
-      format: remediation-fix-report
+      format: fix-report
