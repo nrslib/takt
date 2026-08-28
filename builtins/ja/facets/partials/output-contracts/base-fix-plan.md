@@ -12,7 +12,7 @@
 ## 修正単位
 | 修正単位 | 原因 | 守る条件 | 関係する経路 | 変更対象 | 変更しない範囲 |
 |----------|------|----------|----------------|----------|----------------|
-| {名前} | {確認した原因と、否定した主な別原因} | {外部から観測できる条件} | {source file path、symbol/function/helper、caller → callee の実在順を含む、定義元から利用箇所・出力までの経路} | {必要な最小変更} | {別の契約、周辺作業、不要な方式変更} |
+| {名前} | {確認した原因と、否定した主な別原因} | {外部から観測できる条件} | {source file path、symbol/function/helper、caller → callee の実在順を含む、実在する top-level production entry から全ての shared/prior、値に影響する stage、effectful stage、利用箇所、出力までの経路} | {必要な最小変更} | {別の契約、周辺作業、不要な方式変更} |
 
 ## 入力・状態・経路の確認表
 影響経路監査の結果を、適用される経路ごとに1行ずつ記録してください。概要や「全consumer」「同上」で複数の経路を省略してはいけません。適用可能な各 field / member / variant（edit か verify-only かを問わない）に stable atomic element ID を付けてください。同じ path を別行にするか、同じ行の中で各 ID の反証を明示し、具体的な baseline の入力・state と、baseline からその要素だけが変わる単独の sentinel mutation を別々に記録します。他の入力・state・要素は固定し、canonical top-level production entry を通して、その ID 固有の mutated terminal / artifact の観測結果を記録してください。baseline だけの確認や preservation だけの記述、境界だけで行うテスト、複数要素を同時に変更する mutation、単なる列挙だけでは要件を満たしません。正本が要素を変更不能と定める場合は isolated copy または同じ consumer boundary への等価な入力を使い、mutation が unsupported なら正本とコードの根拠付きでのみ除外し、baseline の確認で代用してはいけません。
@@ -21,7 +21,7 @@
 
 全ての canonical row と evidence-path entry は、実在する top-level production entry から開始し、terminal より前に実行される shared / prior、値に影響する stage、effectful stage を実行順で含めてください。defining source や direct consumer から途中開始してはいけません。各 sibling terminal について entry からの完全な prefix を再記載し、「同上」などで省略しないでください。prefix stage のいずれかを省略した場合は計画を確定できず、最終 reconciliation を失敗とします。
 
-| 修正単位 | Atomic Element ID | 軸の正本・根拠 | baseline の具体的な入力・状態 | 単独要素 mutation | 入口から terminal までの経路 | 経路上の扱い | 実装上の制約 | baseline の期待結果 | mutation 後の terminal / artifact 観測 | 反証方法 |
+| 修正単位 | Atomic Element ID | 正本と根拠 | baseline の具体的な入力・状態 | 単独要素 mutation | 入口から terminal までの経路 | 経路上の扱い | 実装上の制約 | baseline の期待結果 | mutation 後の terminal / artifact 観測 | 反証方法 |
 |----------|------------------|----------------|-----------------------------|------------------|--------------------------------|--------------|--------------|-------------------|--------------------------------------|----------|
 | {修正単位} | {stable atomic element ID} | {有限集合・状態・不変条件を定める source file path、symbol/function/helper、caller → callee の根拠} | {具体的な baseline の入力または状態} | {異なる単独要素 sentinel mutation。他の入力・state・要素は固定} | {実在する top-level production entry → 全ての shared/prior、値に影響する stage、effectful stage → function/helper → consumer → terminal の実行順。各 sibling について完全な prefix を再記載} | {各箇所の edit / migrate-remove / verify-only} | {守る契約、または「なし」の根拠} | {baseline の観測可能な結果} | {mutation 後の terminal または artifact の具体的な観測} | {違反時に失敗するテスト、再現、検索、またはコード追跡} |
 

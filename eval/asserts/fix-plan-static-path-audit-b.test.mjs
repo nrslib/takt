@@ -4,12 +4,6 @@ import test from 'node:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { schema } from '../fixtures/fix-plan-static-path-audit-b/src/schema.js';
-import { loadReportInput } from '../fixtures/fix-plan-static-path-audit-b/src/loader.js';
-import {
-  expandReportTemplate,
-  mergeReportFile,
-  orderReportContracts,
-} from '../fixtures/fix-plan-static-path-audit-b/src/report-consumer.js';
 import { buildReportArtifact } from '../fixtures/fix-plan-static-path-audit-b/src/planner.js';
 
 const fixtureRoot = new URL('../fixtures/fix-plan-static-path-audit-b/', import.meta.url);
@@ -45,17 +39,33 @@ test('planner reads input, expands the template, and writes the merge terminal',
   });
 });
 
-test('source and template mutations reach the generated terminal', () => {
+test('report ID mutation reaches the generated template and artifact terminals', () => {
   withProject((projectRoot) => {
     const inputPath = join(projectRoot, 'artifacts', 'source.json');
-    writeFileSync(inputPath, JSON.stringify({ report_id: 'r-002', entries: ['changed entry'] }));
+    writeFileSync(inputPath, JSON.stringify({
+      report_id: 'r-002',
+      entries: ['first source entry', 'second source entry'],
+    }));
 
-    const loaded = loadReportInput(projectRoot, { arpeggio: schema.arpeggio });
-    const rendered = expandReportTemplate(schema, loaded.source);
-    const mergePath = mergeReportFile(projectRoot, schema, rendered);
+    const result = buildReportArtifact(projectRoot);
 
-    assert.equal(rendered.templatePath, 'reports/r-002.md');
-    assert.equal(readFileSync(mergePath, 'utf8'), '# r-002\n- changed entry');
+    assert.equal(result.templatePath, 'reports/r-002.md');
+    assert.equal(
+      readFileSync(result.mergeFile, 'utf8'),
+      '# r-002\n- first source entry\n- second source entry',
+    );
+  });
+});
+
+test('entry mutation reaches the generated artifact terminal', () => {
+  withProject((projectRoot) => {
+    const inputPath = join(projectRoot, 'artifacts', 'source.json');
+    writeFileSync(inputPath, JSON.stringify({ report_id: 'r-001', entries: ['changed entry'] }));
+
+    const result = buildReportArtifact(projectRoot);
+
+    assert.equal(result.templatePath, 'reports/r-001.md');
+    assert.equal(readFileSync(result.mergeFile, 'utf8'), '# r-001\n- changed entry');
   });
 });
 
@@ -71,49 +81,61 @@ test('template setting mutation reaches the generated terminal through the plann
   });
 });
 
-test('order mutation changes the ordered contract', () => {
-  const changed = structuredClone(schema);
-  changed.output_contracts.report[0].order = 0;
+test('order mutation changes the ordered contract through the planner entry', () => {
+  withProject((projectRoot) => {
+    const changed = structuredClone(schema);
+    changed.output_contracts.report[0].order = 0;
 
-  assert.deepEqual(orderReportContracts(changed.output_contracts).map(({ name }) => name), [
-    'summary',
-    'findings',
-  ]);
+    const result = buildReportArtifact(projectRoot, changed);
+
+    assert.deepEqual(result.orderedReports.map(({ name }) => name), ['summary', 'findings']);
+  });
 });
 
-test('report collection preserves duplicates and does not reintroduce omissions at the order terminal', () => {
-  const duplicated = structuredClone(schema);
-  duplicated.output_contracts.report.push({ name: 'findings', order: 3 });
-  const omitted = structuredClone(schema);
-  omitted.output_contracts.report = [omitted.output_contracts.report[0]];
+test('report collection preserves duplicates at the planner terminal', () => {
+  withProject((projectRoot) => {
+    const changed = structuredClone(schema);
+    changed.output_contracts.report.push({ name: 'findings', order: 3 });
 
-  const duplicateNames = orderReportContracts(duplicated.output_contracts).map(({ name }) => name);
-  const omittedNames = orderReportContracts(omitted.output_contracts).map(({ name }) => name);
+    const result = buildReportArtifact(projectRoot, changed);
+    const names = result.orderedReports.map(({ name }) => name);
 
-  assert.deepEqual(duplicateNames, [
-    'findings',
-    'summary',
-    'findings',
-  ]);
-  assert.equal(duplicateNames.filter((name) => name === 'findings').length, 2);
-  assert.deepEqual(omittedNames, ['summary']);
-  assert.equal(omittedNames.includes('findings'), false);
+    assert.deepEqual(names, ['findings', 'summary', 'findings']);
+    assert.equal(names.filter((name) => name === 'findings').length, 2);
+  });
+});
+
+test('report collection preserves omissions at the planner terminal', () => {
+  withProject((projectRoot) => {
+    const changed = structuredClone(schema);
+    changed.output_contracts.report = [changed.output_contracts.report[0]];
+
+    const result = buildReportArtifact(projectRoot, changed);
+    const names = result.orderedReports.map(({ name }) => name);
+
+    assert.deepEqual(names, ['summary']);
+    assert.equal(names.includes('findings'), false);
+  });
 });
 
 test('source path replacement and alternate input reach the same downstream consumers', () => {
   withProject((projectRoot) => {
     const alternatePath = join(projectRoot, 'artifacts', 'alternate.json');
-    writeFileSync(alternatePath, JSON.stringify({ report_id: 'r-alternate', entries: ['alternate entry'] }));
+    writeFileSync(alternatePath, JSON.stringify({
+      report_id: 'r-001',
+      entries: ['first source entry', 'second source entry'],
+    }));
     const changed = structuredClone(schema);
     changed.arpeggio.source_path = 'artifacts/alternate.json';
 
-    const loaded = loadReportInput(projectRoot, changed);
-    const rendered = expandReportTemplate(changed, loaded.source);
-    const mergePath = mergeReportFile(projectRoot, changed, rendered);
+    const result = buildReportArtifact(projectRoot, changed);
 
-    assert.equal(loaded.sourcePath, alternatePath);
-    assert.equal(rendered.templatePath, 'reports/r-alternate.md');
-    assert.equal(readFileSync(mergePath, 'utf8'), '# r-alternate\n- alternate entry');
+    assert.equal(result.sourcePath, alternatePath);
+    assert.equal(result.templatePath, 'reports/r-001.md');
+    assert.equal(
+      readFileSync(result.mergeFile, 'utf8'),
+      '# r-001\n- first source entry\n- second source entry',
+    );
     assert.equal(JSON.parse(readFileSync(join(projectRoot, 'artifacts', 'source.json'), 'utf8')).report_id, 'r-001');
   });
 });
@@ -122,12 +144,10 @@ test('merge destination mutation changes the written terminal', () => {
   withProject((projectRoot) => {
     const changed = structuredClone(schema);
     changed.arpeggio.merge.file = 'reports/changed-index.md';
-    const loaded = loadReportInput(projectRoot, changed);
-    const rendered = expandReportTemplate(changed, loaded.source);
-    const mergePath = mergeReportFile(projectRoot, changed, rendered);
+    const result = buildReportArtifact(projectRoot, changed);
 
-    assert.equal(mergePath, join(projectRoot, 'reports', 'changed-index.md'));
-    assert.equal(readFileSync(mergePath, 'utf8'), '# r-001\n- first source entry\n- second source entry');
+    assert.equal(result.mergeFile, join(projectRoot, 'reports', 'changed-index.md'));
+    assert.equal(readFileSync(result.mergeFile, 'utf8'), '# r-001\n- first source entry\n- second source entry');
   });
 });
 
@@ -137,7 +157,7 @@ test('missing source input is rejected instead of silently skipping generation',
     const changed = structuredClone(schema);
     changed.arpeggio.source_path = 'artifacts/missing.json';
 
-    assert.throws(() => loadReportInput(projectRoot, changed));
+    assert.throws(() => buildReportArtifact(projectRoot, changed));
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }

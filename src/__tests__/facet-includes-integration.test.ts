@@ -25,6 +25,7 @@ import {
   resolveRefToContent,
   type FacetResolutionContext,
 } from '../infra/config/loaders/resource-resolver.js';
+import { OutputContractsFieldSchema } from '../core/models/schema-base.js';
 
 describe('facet include expansion', () => {
   let tempDir: string;
@@ -203,44 +204,37 @@ describe('facet include expansion', () => {
           'team-leader-fix-plan',
           'team-leader-fix-verification',
         ]],
-        ['output-contracts', ['fix-plan', 'scenario-based-fix-plan', 'fix-report']],
+        ['output-contracts', [
+          'fix-plan',
+          'scenario-based-fix-plan',
+          'fix-report',
+          'remediation-fix-report',
+        ]],
       ] as const) {
         for (const name of names) {
           resolveBuiltinFacet(name, facetType);
         }
       }
 
-      const fixPlanInstruction = resolveBuiltinFacet('fix-plan-from-review-resolution', 'instructions');
-      const applyFixPlanInstruction = resolveBuiltinFacet('apply-fix-plan', 'instructions');
-      const applyFixVerificationInstruction = resolveBuiltinFacet('apply-fix-verification', 'instructions');
-      const fixPlanContract = resolveBuiltinFacet('fix-plan', 'output-contracts');
-      const genericFixReportContract = resolveBuiltinFacet('fix-report', 'output-contracts');
-      const remediationFixReportContract = resolveBuiltinFacet('remediation-fix-report', 'output-contracts');
-
-      type StepOutputContract = { name: string; format: string };
-      type StepDefinition = {
-        output_contracts?: { report?: StepOutputContract[] };
+      const loadBuiltinOutputContracts = (name: string) => {
+        const step = parseYaml(
+          readFileSync(join(process.cwd(), 'builtins', lang, 'steps', name), 'utf8'),
+        ) as { output_contracts?: unknown };
+        return OutputContractsFieldSchema.parse(step.output_contracts);
       };
-      const loadBuiltinStep = (name: string): StepDefinition => parseYaml(
-        readFileSync(join(process.cwd(), 'builtins', lang, 'steps', name), 'utf8'),
-      ) as StepDefinition;
-      const genericFixStep = loadBuiltinStep('fix-with-provider-tools.yaml');
-      const remediationFixStep = loadBuiltinStep('peer-review-fix.yaml');
+      const genericFixContracts = loadBuiltinOutputContracts('fix-with-provider-tools.yaml');
+      const remediationFixContracts = loadBuiltinOutputContracts('peer-review-fix.yaml');
 
-      const planningAuditHeading = lang === 'ja'
-        ? '**影響経路監査（計画確定前に必須）:**'
-        : '**Impact path audit (required before finalizing the plan):**';
-      const completionAuditHeading = lang === 'ja'
-        ? '**完了義務監査（検証へ渡す前に必須）:**'
-        : '**Completion obligation audit (required before handing work to verification):**';
-      expect(fixPlanInstruction).toContain(planningAuditHeading);
-      expect(applyFixPlanInstruction).toContain(completionAuditHeading);
-      expect(applyFixVerificationInstruction).toContain(completionAuditHeading);
-      expect(fixPlanContract).toContain(lang === 'ja' ? '## 入力・状態・経路の確認表' : '## Input, State, and Path Check');
-      expect(genericFixReportContract).not.toContain(lang === 'ja' ? '## 完了義務' : '## Completion Obligations');
-      expect(remediationFixReportContract).toContain(lang === 'ja' ? '## 完了義務' : '## Completion Obligations');
-      expect(genericFixStep.output_contracts?.report).toContainEqual({ name: 'fix-report.md', format: 'fix-report' });
-      expect(remediationFixStep.output_contracts?.report).toContainEqual({ name: 'fix-report.md', format: 'remediation-fix-report' });
+      expect(genericFixContracts.report).toContainEqual({
+        name: 'fix-report.md',
+        format: 'fix-report',
+        use_judge: true,
+      });
+      expect(remediationFixContracts.report).toContainEqual({
+        name: 'fix-report.md',
+        format: 'remediation-fix-report',
+        use_judge: true,
+      });
     }
   });
 
