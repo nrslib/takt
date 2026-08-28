@@ -16,7 +16,7 @@
 ## Impact Paths
 | Repair Unit / Path | Source of Truth and Input / State | Entry to Observable Result | Treatment | Successful Example | Counterexample Detecting a Violation |
 |--------------------|-----------------------------------|----------------------------|-----------|--------------------|--------------------------------------|
-| {Name and one independently observable path per row} | {Source defining the condition and concrete input or state} | {Top-level production entry, every relevant stage, and observable result} | {Change / Migrate-remove / Verify only} | {Expected observable result for this path} | {Test, reproduction, search, or code trace changing one result-controlling condition for this path} |
+| {Name and one independently observable path per row} | {Source defining the condition and concrete input or state} | {Top-level production entry, every relevant stage, and observable result} | {Change / Migrate-remove / Verify only} | {Expected observable result for this path} | {Method recording the expected result before the change, exactly one changed result-controlling condition, and the expected result after the change} |
 
 ## Implementation Order
 | Order | Repair Unit | Work | Dependency | Completion Criteria |

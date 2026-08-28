@@ -28,6 +28,25 @@ PR #1513 の長時間実行では、修正後に `fix-verifier` が計画に含�
 | 回帰 | `fix-plan-boundary-preflight` | `eval-hQ2-2026-08-28T18:44:33` | PASS | 保存境界に合わない候補を退け、実際の永続化経路を事前検証 |
 | 回帰 | `fix-plan-cause-check` | `eval-rwp-2026-08-28T18:46:35` | PASS（9/9） | provider matrix全体で、未確認原因の断定を避け、確認できた原因へ修正範囲を限定 |
 
-いずれもcache無効、repeat 1で実行した。primaryとheld-outは`gpt-5.6-luna`のreasoning effort max、boundary-preflightはsuite既定のCodex provider、cause-checkはsuite既定のprovider matrixを使用した。生成promptは15,894文字（primary）と15,322文字（held-out）で、suite名、fixtureの評価意図、rubricの必須経路一覧を含まない。
+## 経路別証拠
+
+GREEN候補（`eval-JTt-2026-08-28T18:27:16`）が記録したprimaryの経路は次のとおり。現在のfixtureで部分`source`が`TypeError`になることは契約テストでも観測する。
+
+| 経路 | 入口から結果 | 成立入力と期待結果 | 1条件を変える反例と期待結果 | 観測結果 |
+|------|--------------|--------------------|--------------------------------|----------|
+| selection | `buildExecutionPlan` → `loadDefinition` → `selectEntries` → `selection` | selection-only source、tags=`keep`、entry=`e1` → IDs=`e1`、role=`auditor`、指定instruction | sourceを省略 → role=`reviewer`、既定instruction。他のcycle/monitorは同じ | 候補が変更前後値と修正前の`findCycle`失敗を記録し、grader PASS |
+| cycle | `buildExecutionPlan` → `loadDefinition` → `findCycle` → `cycle` | workflow-only sourceの`start → finish → start` → 同じcycle配列 | sourceを省略 → `root → child → root`。selection/monitorは同じ | 候補が両cycle値と修正前の`selectEntries`失敗を記録し、grader PASS |
+| monitor | `buildExecutionPlan` → `loadDefinition` → `evaluateMonitor` → `monitor` | monitor-only sourceのlimit=`1`、count=`1` → `stop`、`Review pass 1.` | sourceを省略 → `continue`、`Inspect pass 1.`。selection/cycleは同じ | 候補がdecision・展開済みinstructionの変更前後値を記録し、grader PASS |
+
+held-out候補（`eval-QOY-2026-08-28T18:35:34`）とfixture契約テストが記録した経路は次のとおり。
+
+| 経路 | 入口から結果 | 成立入力と期待結果 | 1条件を変える反例と期待結果 | 観測結果 |
+|------|--------------|--------------------|--------------------------------|----------|
+| source | `buildArtifact` → `loadInput` → `document` / index file | `source.json` → `d-001`、`alpha`、`beta` | sourceだけを`alternate.json`へ変更 → `d-002`、`gamma` | 候補記録と実ファイルを含む契約テストが一致し、grader PASS |
+| render | `buildArtifact` → `renderDocument` → `document.label` | `document:{document_id}` → `document:d-001` | label templateだけを`note:{document_id}`へ変更 → `note:d-001` | labelだけが変わりcontent・sectionsは同じことを契約テストで観測 |
+| sort | `buildArtifact` → sections sort → `sections` | details order=`1`、summary order=`2` → `details, summary` | orderだけを入替え → `summary, details` | documentは同じで順序だけが変わることを契約テストで観測 |
+| write | `buildArtifact` → `writeIndex` → `indexFile` / file content | `output/index.md`へ`d-001`本文を書込む | indexPathだけを`output/alternate.md`へ変更 → 同じ本文を別ファイルへ書込む | 戻り値と両実ファイル内容を契約テストで観測し、grader PASS |
+
+いずれもcache無効、repeat 1で実行した。primaryとheld-outは`gpt-5.6-luna`のreasoning effort max、boundary-preflightはsuite既定のCodex provider、cause-checkはsuite既定のprovider matrixを使用した。生成promptは15,894文字（primary）と15,322文字（held-out）。漏洩テストは、生成promptにsuite ID `fix-plan-impact-closure`、旧ケース名`static-path-audit`、旧probeラベルがないことと、productionの4 facetにfixture名、PATH ID、対象関数名がないことを確認する。候補へ正当に渡す裁定内容や作業ディレクトリまで非開示とは主張しない。
 
 `fix-plan-bounded-proof` は関連候補として確認したが、production facet変更前の同一条件でも Luna (`eval-AHB-2026-08-28T17:11:45`) と Sol (`eval-aKO-2026-08-28T17:30:09`) がともにFAILしたため、今回変更の回帰判定には使用しない。これを通すためのケース固有プロンプトは追加しない。
