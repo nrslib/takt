@@ -1065,8 +1065,8 @@ body[data-screen="task"] .viewer-screen {
 
 .execution-parallel-evidence {
   margin-left: 6px;
-  color: var(--faint);
-  font-size: 8px;
+  color: var(--muted);
+  font-size: 10px;
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;

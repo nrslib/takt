@@ -427,34 +427,12 @@ describe('SessionLogger', () => {
     };
     const parentStack = [parallelFrame];
     logger.onStepStart(parentStep, 1, 'Run reviewers', parentStack);
-    logger.onStepComplete(
-      parentStep,
-      {
-        persona: 'parent',
-        status: 'done',
-        content: 'done',
-        timestamp: new Date(),
-      },
-      'Run reviewers',
-      parentStack,
-    );
     logger.onPhaseStart(
       directStep,
       1,
       'execute',
       'Review',
       { systemPrompt: 'system', userInstruction: 'Review' },
-      parentStack,
-      'reviewers:1:1:1',
-      1,
-    );
-    logger.onPhaseComplete(
-      directStep,
-      1,
-      'execute',
-      'done',
-      'done',
-      undefined,
       parentStack,
       'reviewers:1:1:1',
       1,
@@ -467,7 +445,6 @@ describe('SessionLogger', () => {
       stack: [parallelFrame, callFrame],
     };
     logger.onWorkflowCallStart(lifecycle);
-    logger.onWorkflowCallComplete({ ...lifecycle, result: { status: 'completed' } });
     logger.onPhaseStart(
       childStep,
       1,
@@ -486,9 +463,6 @@ describe('SessionLogger', () => {
     const parent = records.find((record) => record.type === 'step_start');
     const direct = records.find((record) => record.type === 'phase_start' && record.step === 'reviewers');
     const call = records.find((record) => record.type === 'workflow_call_start');
-    const parentComplete = records.find((record) => record.type === 'step_complete');
-    const directComplete = records.find((record) => record.type === 'phase_complete');
-    const callComplete = records.find((record) => record.type === 'workflow_call_complete');
     const child = records.find((record) => record.type === 'phase_start' && record.step === 'work');
 
     expect(parent?.parallel).toMatchObject({ role: 'parent' });
@@ -498,10 +472,117 @@ describe('SessionLogger', () => {
     });
     expect(direct?.parallel?.participationId).not.toBe(parent?.parallel?.participationId);
     expect(call?.parallel).toMatchObject({ role: 'workflow_call_participant' });
-    expect(parentComplete?.parallel).toEqual(parent?.parallel);
-    expect(directComplete?.parallel).toEqual(direct?.parallel);
-    expect(callComplete?.parallel).toEqual(call?.parallel);
     expect(child?.parallel).toEqual(call?.parallel);
+  });
+
+  it('step_complete に parent parallel identity を付与する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-step-complete', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const step = {
+      name: 'reviewers',
+      kind: 'agent' as const,
+      personaDisplayName: 'parent',
+      instruction: 'Run reviewers',
+      parallel: [],
+    };
+    const stack = [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    }];
+
+    logger.onStepStart(step, 1, 'Run reviewers', stack);
+    logger.onStepComplete(step, {
+      persona: 'parent',
+      status: 'done',
+      content: 'done',
+      timestamp: new Date(),
+    }, 'Run reviewers', stack);
+
+    const complete = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord)
+      .find((record) => record.type === 'step_complete');
+    expect(complete?.parallel).toMatchObject({
+      role: 'parent',
+      participationId: expect.any(String),
+    });
+    expect(complete?.parallel).not.toHaveProperty('parentParticipationId');
+  });
+
+  it('phase_complete に direct participant identity を付与する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-phase-complete', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const stack = [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    }];
+
+    logger.onPhaseComplete({
+      name: 'reviewers',
+      kind: 'agent',
+      personaDisplayName: 'participant',
+      instruction: 'Review',
+    }, 1, 'execute', 'done', 'done', undefined, stack, 'reviewers:1:1:1', 1);
+
+    const complete = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord)
+      .find((record) => record.type === 'phase_complete');
+    expect(complete?.parallel).toMatchObject({
+      role: 'direct_participant',
+      participationId: expect.any(String),
+      parentParticipationId: expect.any(String),
+    });
+  });
+
+  it('workflow_call_complete に workflow call participant identity を付与する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-call-complete', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const parallelFrame = {
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    };
+    const lifecycle = {
+      parentWorkflow: 'parent',
+      step: 'reviewers',
+      childWorkflow: 'child',
+      callInstance: 1,
+      stack: [parallelFrame, {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'reviewers',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      }],
+      result: { status: 'completed' as const },
+    };
+
+    logger.onWorkflowCallComplete(lifecycle);
+
+    const complete = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord)
+      .find((record) => record.type === 'workflow_call_complete');
+    expect(complete?.parallel).toMatchObject({
+      role: 'workflow_call_participant',
+      participationId: expect.any(String),
+      parentParticipationId: expect.any(String),
+    });
   });
 
   it('parallel metadata に prompt text を含めない', () => {
