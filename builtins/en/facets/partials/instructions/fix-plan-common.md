@@ -1,6 +1,7 @@
 {{include:instructions/repair-plan-path-check}}
 {{include:instructions/fix-root-cause-analysis}}
 {{include:instructions/fix-plan-validity}}
+{{include:instructions/planning-path-audit}}
 
 **Tasks:**
 1. Enumerate every remediation target and acceptance criterion, mapping each finding to one repair or follow-up verification without omissions

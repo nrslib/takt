@@ -1,6 +1,7 @@
 {{include:instructions/repair-plan-path-check}}
 {{include:instructions/fix-root-cause-analysis}}
 {{include:instructions/fix-plan-validity}}
+{{include:instructions/planning-path-audit}}
 
 **やること:**
 1. 全修正対象と受入条件を列挙し、各指摘を漏れなく1つの修正または後続確認へ対応付けてください

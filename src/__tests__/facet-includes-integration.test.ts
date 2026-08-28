@@ -14,10 +14,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { tmpdir } from 'node:os';
 import {
   resolveRefToContent,
@@ -177,6 +179,69 @@ describe('facet include expansion', () => {
 
     const content = resolveRefToContent('test', undefined, workflowDir, 'instructions', context);
     expect(content).toBe('Project version');
+  });
+
+  it('should resolve builtin remediation audit facets in both languages', () => {
+    for (const lang of ['ja', 'en'] as const) {
+      const builtinContext = { projectDir: tempDir, lang };
+      const resolveBuiltinFacet = (
+        name: string,
+        facetType: 'instructions' | 'output-contracts',
+      ): string => {
+        const content = resolveRefToContent(name, undefined, tempDir, facetType, builtinContext);
+        expect(content).toBeDefined();
+        expect(content).not.toContain('{{include:');
+        return content!;
+      };
+
+      for (const [facetType, names] of [
+        ['instructions', [
+          'fix-plan-from-review-resolution',
+          'scenario-based-fix-plan-from-review-resolution',
+          'apply-fix-plan',
+          'apply-fix-verification',
+          'team-leader-fix-plan',
+          'team-leader-fix-verification',
+        ]],
+        ['output-contracts', ['fix-plan', 'scenario-based-fix-plan', 'fix-report']],
+      ] as const) {
+        for (const name of names) {
+          resolveBuiltinFacet(name, facetType);
+        }
+      }
+
+      const fixPlanInstruction = resolveBuiltinFacet('fix-plan-from-review-resolution', 'instructions');
+      const applyFixPlanInstruction = resolveBuiltinFacet('apply-fix-plan', 'instructions');
+      const applyFixVerificationInstruction = resolveBuiltinFacet('apply-fix-verification', 'instructions');
+      const fixPlanContract = resolveBuiltinFacet('fix-plan', 'output-contracts');
+      const genericFixReportContract = resolveBuiltinFacet('fix-report', 'output-contracts');
+      const remediationFixReportContract = resolveBuiltinFacet('remediation-fix-report', 'output-contracts');
+
+      type StepOutputContract = { name: string; format: string };
+      type StepDefinition = {
+        output_contracts?: { report?: StepOutputContract[] };
+      };
+      const loadBuiltinStep = (name: string): StepDefinition => parseYaml(
+        readFileSync(join(process.cwd(), 'builtins', lang, 'steps', name), 'utf8'),
+      ) as StepDefinition;
+      const genericFixStep = loadBuiltinStep('fix-with-provider-tools.yaml');
+      const remediationFixStep = loadBuiltinStep('peer-review-fix.yaml');
+
+      const planningAuditHeading = lang === 'ja'
+        ? '**影響経路監査（計画確定前に必須）:**'
+        : '**Impact path audit (required before finalizing the plan):**';
+      const completionAuditHeading = lang === 'ja'
+        ? '**完了義務監査（検証へ渡す前に必須）:**'
+        : '**Completion obligation audit (required before handing work to verification):**';
+      expect(fixPlanInstruction).toContain(planningAuditHeading);
+      expect(applyFixPlanInstruction).toContain(completionAuditHeading);
+      expect(applyFixVerificationInstruction).toContain(completionAuditHeading);
+      expect(fixPlanContract).toContain(lang === 'ja' ? '## 入力・状態・経路の確認表' : '## Input, State, and Path Check');
+      expect(genericFixReportContract).not.toContain(lang === 'ja' ? '## 完了義務' : '## Completion Obligations');
+      expect(remediationFixReportContract).toContain(lang === 'ja' ? '## 完了義務' : '## Completion Obligations');
+      expect(genericFixStep.output_contracts?.report).toContainEqual({ name: 'fix-report.md', format: 'fix-report' });
+      expect(remediationFixStep.output_contracts?.report).toContainEqual({ name: 'fix-report.md', format: 'remediation-fix-report' });
+    }
   });
 
 });

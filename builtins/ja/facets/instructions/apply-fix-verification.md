@@ -9,6 +9,8 @@
 **前回の修正報告:**
 {report:fix-report.md}
 
+{{include:instructions/completion-obligation-audit}}
+
 {{include:instructions/quality-gate-causality}}
 
 **差し戻し時の手順:**

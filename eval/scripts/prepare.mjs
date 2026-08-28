@@ -61,6 +61,24 @@ const TARGETS = [
   { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
   { id: 'fix-plan-bounded-proof', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-bounded-proof' },
   {
+    id: 'fix-plan-static-path-audit-a',
+    workflow: 'peer-review',
+    step: 'fix-plan',
+    fixture: 'eval/fixtures/fix-plan-static-path-audit-a',
+  },
+  {
+    id: 'fix-plan-static-path-audit-b',
+    workflow: 'peer-review',
+    step: 'fix-plan',
+    fixture: 'eval/fixtures/fix-plan-static-path-audit-b',
+  },
+  {
+    id: 'fix-plan-static-path-audit-c',
+    workflow: 'peer-review',
+    step: 'fix-plan',
+    fixture: 'eval/fixtures/fix-plan-static-path-audit-c',
+  },
+  {
     id: 'review-impact-path-coverage',
     workflow: 'development-review',
     step: 'backend-review',

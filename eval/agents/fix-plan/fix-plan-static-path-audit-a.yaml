@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Provenance: eval/docs/pr1513-static-path-audit.md (not copied to the candidate fixture).
+description: 'TAKT ファセット評価: static dependency closure / execution path A'
+
+prompts:
+  - file://../../prompts/fix-plan-static-path-audit-a.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/fix-plan-static-path-audit-a
+      isolate_working_dir: true
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-5.6-luna
+        model_reasoning_effort: high
+
+evaluateOptions:
+  maxConcurrency: 1
+  repeat: 1
+
+tests:
+  - description: '計画監査: 実行選択・循環・反復判定の静的依存閉包'
+    vars:
+      task: file://../../cases/fix-plan-static-path-audit-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-plan-static-path-audit-a/path-closure
+        value: |
+          候補の計画本文だけを採点し、fixture 外の知識や表面的なキーワード一致は採点根拠にしない。fixture に実在し、この suite の対象である3経路を、別々の監査単位として扱うこと。存在しない path、fixture にない consumer、対象外の機能、または「全て確認する」「関連箇所を調べる」のような包括語で具体的経路を代用した場合は不合格とする。
+
+          各経路について、source path と正本定義、input/state、entry から consumer / terminal までの実呼出し順、期待結果、具体的な falsification（変更または負の入力で失敗を観測する方法）を個別に記載している場合だけ合格とする。
+
+          1. 動的選択経路: `src/schema.js` の `dynamic_facets.selector` にある persona と instruction を正本として特定し、`src/loader.js` の `loadPlannerSchema` → `src/planner.js` の `buildPlan` → `src/selector-consumer.js` の `selectDynamicFacets` を追う。`step.tags` と `facet_pool.candidates` の入力 state、タグに一致した candidate ids が terminal になること、tags・候補・persona/instruction の変更が検出される falsification をそれぞれ示す。
+          2. workflow 循環経路: `src/schema.js` の workflow entry と calls graph を正本として特定し、`buildPlan` が input の entry ではなく `config.workflow.entry` を `src/cycle-consumer.js` の `findWorkflowCycle` へ渡すことを追う。cycle path または no-cycle が terminal になること、正本 entry/graph を変えた場合と未知 node を consumer に渡した場合の反証を、期待結果付きで示す。
+          3. loop monitor 経路: 正本の cycle、threshold、`loop_monitor.judge.instruction` と入力 `cycleCount` が `src/loop-consumer.js` の `judgeLoop` に届くことを追う。threshold が単なる報告値ではなく `cycleCount >= threshold` の decision（terminal / continue）を決め、instruction の count 展開が terminal に残ることを示す。threshold、cycleCount、judge instruction を変えたときの反証を個別に示す。
+
+          3経路の source/input/entry-terminal/falsification のどれかが欠ける、または定義だけを列挙して consumer の結果を示さない計画は不合格とする。

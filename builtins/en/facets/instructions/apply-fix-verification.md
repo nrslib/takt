@@ -9,6 +9,8 @@ Correct every gap found by the latest completion verification and finish the fin
 **Previous fix report:**
 {report:fix-report.md}
 
+{{include:instructions/completion-obligation-audit}}
+
 {{include:instructions/quality-gate-causality}}
 
 **Procedure after a verifier return:**

@@ -5,6 +5,8 @@ Success means completing every fix unit and every completion obligation derived 
 **Fix plan:**
 {report:fix-plan.md}
 
+{{include:instructions/completion-obligation-audit}}
+
 **Important:**
 - Before editing, reconcile the plan's root cause, responsibility and source of truth, impact paths, methods, evidence, and completion criteria with the current code, Report Directory, and active constraints
 - For every planned acceptance criterion, inspect the relevant paths and a failure example that detects a violation. Complete behavior repair, consumer migration, obsolete-path removal, and preservation of existing conditions separately
