@@ -220,17 +220,21 @@ describe('facet include expansion', () => {
         const step = parseYaml(
           readFileSync(join(process.cwd(), 'builtins', lang, 'steps', name), 'utf8'),
         ) as { output_contracts?: unknown };
-        return OutputContractsFieldSchema.parse(step.output_contracts);
+        const outputContracts = OutputContractsFieldSchema.parse(step.output_contracts);
+        if (outputContracts?.report === undefined) {
+          throw new Error(`${name} must define output_contracts.report`);
+        }
+        return outputContracts.report;
       };
-      const genericFixContracts = loadBuiltinOutputContracts('fix-with-provider-tools.yaml');
-      const remediationFixContracts = loadBuiltinOutputContracts('peer-review-fix.yaml');
+      const genericFixReports = loadBuiltinOutputContracts('fix-with-provider-tools.yaml');
+      const remediationFixReports = loadBuiltinOutputContracts('peer-review-fix.yaml');
 
-      expect(genericFixContracts.report).toContainEqual({
+      expect(genericFixReports).toContainEqual({
         name: 'fix-report.md',
         format: 'fix-report',
         use_judge: true,
       });
-      expect(remediationFixContracts.report).toContainEqual({
+      expect(remediationFixReports).toContainEqual({
         name: 'fix-report.md',
         format: 'remediation-fix-report',
         use_judge: true,
