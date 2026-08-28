@@ -99,6 +99,12 @@ export function parseNdjsonParallelMetadata(
       metadata.parentParticipationId,
       `${path}.parentParticipationId`,
     );
+  if (metadata.role === 'parent' && parentParticipationId !== undefined) {
+    throw new Error(`${path}.parentParticipationId is not allowed for parent role`);
+  }
+  if (metadata.role !== 'parent' && parentParticipationId === undefined) {
+    throw new Error(`${path}.parentParticipationId is required for participant role`);
+  }
   return {
     role: metadata.role,
     participationId,

@@ -826,7 +826,12 @@ export function createExecutionView(options) {
       .map((occurrenceId) => findOccurrence(trace, occurrenceId))
       .filter(Boolean)
       .filter(({ node, occurrence }) => !parentOccurrenceIds.has(occurrence.id)
-        && !(occurrence.stack?.at(-1)?.kind === 'parallel' && node.label === occurrence.stack.at(-1)?.step))
+        && !(
+          occurrence.parallel === undefined
+          && occurrence.parallelRole === undefined
+          && occurrence.stack?.at(-1)?.kind === 'parallel'
+          && node.label === occurrence.stack.at(-1)?.step
+        ))
       .sort((left, right) => left.occurrence.firstEventIndex - right.occurrence.firstEventIndex);
     const summary = element('section', 'inspector-run-summary inspector-parallel-summary');
     const heading = element('div', 'inspector-run-heading');

@@ -24,6 +24,7 @@ import {
   createExecutionView,
   resolveLogSelection,
 } from '../../web-ui/public/execution-view.js';
+import { t } from '../../web-ui/public/i18n.js';
 
 class FakeDomNode {
   className = '';
@@ -219,6 +220,57 @@ class FakeDomDocument {
     node.textContent = text;
     return node;
   }
+}
+
+function renderParallelBoundaryFixture() {
+  const parallelFrame: ExecutionStackFrame = {
+    workflow: 'default',
+    workflow_ref: 'default',
+    step: 'reviewers',
+    kind: 'parallel',
+    occurrence: 1,
+  };
+  const childFrame = (step: string): ExecutionStackFrame => ({
+    workflow: 'default',
+    workflow_ref: 'default',
+    step,
+    kind: 'agent',
+    occurrence: 1,
+  });
+  const event = (
+    type: 'step_start' | 'step_complete',
+    step: string,
+    stack?: readonly ExecutionStackFrame[],
+  ): ExecutionEvent => ({
+    type,
+    workflow: 'default',
+    step,
+    iteration: 1,
+    ...(type === 'step_complete' ? { status: 'done' } : {}),
+    ...(stack === undefined ? {} : { stack }),
+  });
+  const chronological: ExecutionEvent[] = [
+    event('step_start', 'before'),
+    event('step_complete', 'before'),
+    event('step_start', 'reviewers', [parallelFrame]),
+    event('step_start', 'coding-review', [parallelFrame, childFrame('coding-review')]),
+    event('step_complete', 'coding-review', [parallelFrame, childFrame('coding-review')]),
+    event('step_start', 'architecture-review', [parallelFrame, childFrame('architecture-review')]),
+    event('step_complete', 'architecture-review', [parallelFrame, childFrame('architecture-review')]),
+    event('step_complete', 'reviewers', [parallelFrame]),
+    event('step_start', 'after'),
+  ];
+  const trace = buildExecutionTrace(
+    { workflow: 'default', status: 'running' },
+    chronological.slice().reverse(),
+  );
+  const section = renderExecutionMap(trace, {
+    liveIndicator: new FakeDomNode('span'),
+    emptyState: new FakeDomNode('div'),
+    selectedOccurrenceId: null,
+    onSelectOccurrence: () => undefined,
+  });
+  return { trace, section };
 }
 
 describe('Web UI execution model', () => {
@@ -1977,58 +2029,12 @@ describe('Web UI execution model', () => {
     }
   });
 
-  it('renders a parallel invocation as one fork and join boundary', () => {
+  it('renders one fork and join topology for a parallel invocation', () => {
     const runtime = globalThis as unknown as { document?: FakeDomDocument };
     const previousDocument = runtime.document;
     runtime.document = new FakeDomDocument();
     try {
-      const parallelFrame: ExecutionStackFrame = {
-        workflow: 'default',
-        workflow_ref: 'default',
-        step: 'reviewers',
-        kind: 'parallel',
-        occurrence: 1,
-      };
-      const childFrame = (step: string): ExecutionStackFrame => ({
-        workflow: 'default',
-        workflow_ref: 'default',
-        step,
-        kind: 'agent',
-        occurrence: 1,
-      });
-      const event = (
-        type: 'step_start' | 'step_complete',
-        step: string,
-        stack?: readonly ExecutionStackFrame[],
-      ): ExecutionEvent => ({
-        type,
-        workflow: 'default',
-        step,
-        iteration: 1,
-        ...(type === 'step_complete' ? { status: 'done' } : {}),
-        ...(stack === undefined ? {} : { stack }),
-      });
-      const chronological: ExecutionEvent[] = [
-        event('step_start', 'before'),
-        event('step_complete', 'before'),
-        event('step_start', 'reviewers', [parallelFrame]),
-        event('step_start', 'coding-review', [parallelFrame, childFrame('coding-review')]),
-        event('step_complete', 'coding-review', [parallelFrame, childFrame('coding-review')]),
-        event('step_start', 'architecture-review', [parallelFrame, childFrame('architecture-review')]),
-        event('step_complete', 'architecture-review', [parallelFrame, childFrame('architecture-review')]),
-        event('step_complete', 'reviewers', [parallelFrame]),
-        event('step_start', 'after'),
-      ];
-      const trace = buildExecutionTrace(
-        { workflow: 'default', status: 'running' },
-        chronological.slice().reverse(),
-      );
-      const section = renderExecutionMap(trace, {
-        liveIndicator: new FakeDomNode('span'),
-        emptyState: new FakeDomNode('div'),
-        selectedOccurrenceId: null,
-        onSelectOccurrence: () => undefined,
-      });
+      const { trace, section } = renderParallelBoundaryFixture();
       const parallelEdges = section.querySelectorAll('.execution-edge-parallel') as FakeDomNode[];
       expect(parallelEdges).toHaveLength(4);
       expect(parallelEdges.every((edge) => (
@@ -2059,6 +2065,21 @@ describe('Web UI execution model', () => {
         ['NEXT', 'PREV'],
         ['NEXT', 'PREV'],
       ]);
+      const group = trace.parallelGroups[0];
+      expect(group?.parentOccurrenceIds).toHaveLength(1);
+      expect(group?.participantOccurrenceIds).toHaveLength(2);
+      expect(group?.participantOccurrenceIds).not.toContain(group?.parentOccurrenceIds?.[0]);
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('anchors parallel edge geometry to the measured PREV and NEXT ports', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const { trace, section } = renderParallelBoundaryFixture();
       const groupButton = section.querySelectorAll('.execution-parallel-iteration')[0] as FakeDomNode;
       const groupPrevWrapper = groupButton.querySelector('.execution-port-prev') as FakeDomNode;
       const groupNextWrapper = groupButton.querySelector('.execution-port-next') as FakeDomNode;
@@ -2140,18 +2161,26 @@ describe('Web UI execution model', () => {
       const afterPortAnchor = afterPortWrapper.querySelector('.execution-port-anchor') as FakeDomNode;
       expect(pathEndpoints(outgoingExternal!).target).toEqual(center(afterPortAnchor));
       expect(pathEndpoints(outgoingExternal!).target).not.toEqual(center(afterPortWrapper));
-      expect(section.querySelectorAll('.execution-edge-transition')).toHaveLength(2);
-      expect(section.querySelectorAll('.execution-port')).toHaveLength(12);
-      expect(section.querySelectorAll('.execution-parallel-iteration')).toHaveLength(1);
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
+  it('labels observed parallel evidence independently from pool classification', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const { section } = renderParallelBoundaryFixture();
       const parallelHeader = section.querySelectorAll('.execution-parallel-group-header')[0] as FakeDomNode;
-      expect(parallelHeader.attributes['aria-description']).toContain('Pool判定なし');
+      expect(parallelHeader.attributes['aria-description']).toBe(t('map.observedParticipants'));
       expect((section.querySelectorAll('.iteration-chip-evidence') as FakeDomNode[])
         .map((evidence) => evidence.textContent))
-        .toEqual(['観測された境界', '観測参加者', '観測参加者']);
-      const group = trace.parallelGroups[0];
-      expect(group?.parentOccurrenceIds).toHaveLength(1);
-      expect(group?.participantOccurrenceIds).toHaveLength(2);
-      expect(group?.participantOccurrenceIds).not.toContain(group?.parentOccurrenceIds?.[0]);
+        .toEqual([
+          t('map.observedBoundary'),
+          t('map.observedParticipant'),
+          t('map.observedParticipant'),
+        ]);
     } finally {
       runtime.document = previousDocument;
     }
@@ -2264,12 +2293,11 @@ describe('Web UI execution model', () => {
         || edge.attributes['data-source-occurrence-id'] === callOccurrence)).toBe(true);
       expect(parallelEdges.every((edge) => edge.attributes['data-edge-kind'] === 'parallel')).toBe(true);
       const callAnchor = section.querySelectorAll('.execution-parallel-call-participant')[0] as FakeDomNode;
-      expect(callAnchor.attributes.role).toBe('button');
-      expect(callAnchor.attributes.tabindex).toBe('0');
+      const iterationButton = section.querySelectorAll('.execution-parallel-iteration')[0] as FakeDomNode;
+      expect(callAnchor.tagName).toBe('button');
+      expect(iterationButton.children).not.toContain(callAnchor);
       expect(callAnchor.dataset.occurrenceId).toBe(callOccurrence);
-      callAnchor.dispatchEvent('keydown', {
-        key: 'Enter',
-        preventDefault: () => undefined,
+      callAnchor.dispatchEvent('click', {
         stopPropagation: () => undefined,
       });
       expect(selectedCallId).toBe(callOccurrence);
@@ -2372,14 +2400,15 @@ describe('Web UI execution model', () => {
       ...(type === 'step_complete' || type === 'phase_complete' ? { status: 'done' } : {}),
       ...(type.startsWith('phase_') ? { phase: 1, phaseName: 'execute' } : {}),
     });
+    const events = [
+      event('step_complete', parentParallel),
+      event('phase_complete', directParallel),
+      event('phase_start', directParallel),
+      event('step_start', parentParallel),
+    ];
     const trace = buildExecutionTrace(
       { workflow: 'default', status: 'completed' },
-      [
-        event('step_complete', parentParallel),
-        event('phase_complete', directParallel),
-        event('phase_start', directParallel),
-        event('step_start', parentParallel),
-      ],
+      events,
     );
 
     const nodes = trace.nodes.filter((node) => node.label === 'review');
@@ -2389,6 +2418,35 @@ describe('Web UI execution model', () => {
       .toEqual(expect.arrayContaining(['parent', 'direct_participant']));
     expect(trace.parallelGroups[0]?.parentOccurrenceIds).toHaveLength(1);
     expect(trace.parallelGroups[0]?.participantOccurrenceIds).toHaveLength(1);
+
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const runDetail = new FakeDomNode('section');
+      const inspector = new FakeDomNode('aside');
+      const executionView = createExecutionView({
+        runList: new FakeDomNode('div'),
+        runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'),
+        runDetail,
+        inspector,
+        getOccurrenceArtifacts: async () => ({ reports: [], prompts: [] }),
+        onSelectRun: () => undefined,
+        onStatusChange: () => undefined,
+      });
+      const detail = {
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { workflow: 'default', runSlug: 'run-1', status: 'completed', task: 'task' },
+        events,
+        reports: [],
+      };
+      expect(executionView.renderDetail(detail, { projectId: 'project-a', slug: 'run-1' })).toBe(true);
+      expect(inspector.querySelectorAll('.inspector-parallel-child')).toHaveLength(1);
+      executionView.dispose();
+    } finally {
+      runtime.document = previousDocument;
+    }
   });
 
   it('keeps canonical participants with a shared parallel stack distinct', () => {

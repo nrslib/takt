@@ -4,6 +4,8 @@ import { encodeIdPart, parallelGroupDescriptors } from './execution-model.js';
 const executionMapDisposers = new WeakMap();
 const executionMapHeaders = new WeakMap();
 const executionMapGeometryUpdaters = new WeakMap();
+const occurrenceIndexes = new WeakMap();
+const visibleEdgeRelationCache = new WeakMap();
 const PAN_THRESHOLD = 4;
 const NODE_MARGIN = 16;
 const PARALLEL_GROUP_PADDING = 14;
@@ -82,13 +84,12 @@ function renderParallelCallParticipant(
   selectedOccurrenceId,
   onSelectOccurrence,
 ) {
-  const anchor = element('span', 'execution-parallel-call-participant');
+  const anchor = element('button', 'execution-parallel-call-participant');
+  anchor.type = 'button';
   anchor.dataset.occurrenceId = participant.occurrenceId;
   anchor.dataset.parallelGroupKey = parallelGroupKey;
   anchor.dataset.kind = 'parallel-call-participant';
   anchor.dataset.interactive = 'true';
-  anchor.setAttribute('role', 'button');
-  anchor.setAttribute('tabindex', '0');
   const selected = participant.occurrenceId === selectedOccurrenceId;
   anchor.dataset.selected = String(selected);
   anchor.setAttribute('aria-pressed', String(selected));
@@ -97,12 +98,6 @@ function renderParallelCallParticipant(
   anchor.title = label;
   anchor.addEventListener('pointerdown', (event) => event.stopPropagation?.());
   anchor.addEventListener('click', (event) => {
-    event.stopPropagation?.();
-    onSelectOccurrence?.(participant.occurrenceId);
-  });
-  anchor.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault?.();
     event.stopPropagation?.();
     onSelectOccurrence?.(participant.occurrenceId);
   });
@@ -404,11 +399,17 @@ export function parallelGroupPresentationOrdinal(trace, groupKey) {
 }
 
 function findOccurrence(trace, occurrenceId) {
-  for (const node of trace.nodes) {
-    const occurrence = node.occurrences.find((candidate) => candidate.id === occurrenceId);
-    if (occurrence !== undefined) return { node, occurrence };
+  let index = occurrenceIndexes.get(trace);
+  if (index === undefined) {
+    index = new Map();
+    for (const node of trace.nodes) {
+      for (const occurrence of node.occurrences) {
+        index.set(occurrence.id, { node, occurrence });
+      }
+    }
+    occurrenceIndexes.set(trace, index);
   }
-  return null;
+  return index.get(occurrenceId) ?? null;
 }
 
 function stepNodes(trace) {
@@ -564,7 +565,9 @@ function renderParallelGroup(
   header.append(element('span', 'execution-parallel-evidence', t('map.observedParticipants')));
   container.append(header);
   if (group.iterations.length > 0) {
+    const controls = element('div', 'execution-parallel-controls');
     const iterationList = element('div', 'execution-parallel-iterations');
+    const callParticipantList = element('div', 'execution-parallel-call-participants');
     iterationList.setAttribute('role', 'tablist');
     iterationList.setAttribute('aria-label', t('map.parallelIterations', { step: group.label }));
     for (const iteration of group.iterations) {
@@ -619,6 +622,11 @@ function renderParallelGroup(
         if (next !== undefined) onSelectParallelGroup?.(group, next);
       });
       button.append(
+        renderPort('prev', 'execution-port-boundary'),
+        renderPort('next', 'execution-port-boundary'),
+      );
+      iterationList.append(button);
+      callParticipantList.append(
         ...(iteration.callParticipants ?? [])
           .map((participant) => renderParallelCallParticipant(
             participant,
@@ -626,12 +634,10 @@ function renderParallelGroup(
             selectedOccurrenceId,
             onSelectOccurrence,
           )),
-        renderPort('prev', 'execution-port-boundary'),
-        renderPort('next', 'execution-port-boundary'),
       );
-      iterationList.append(button);
     }
-    container.append(iterationList);
+    controls.append(iterationList, callParticipantList);
+    container.append(controls);
   }
   return container;
 }
@@ -1157,8 +1163,12 @@ function normalizedCallRelations(trace) {
 }
 
 function visibleEdgeRelations(trace) {
+  const cached = visibleEdgeRelationCache.get(trace);
+  if (cached !== undefined) return cached;
   const transitions = visibleTransitionRelations(trace);
-  return [...transitions, ...normalizedCallRelations(trace)];
+  const relations = [...transitions, ...normalizedCallRelations(trace)];
+  visibleEdgeRelationCache.set(trace, relations);
+  return relations;
 }
 
 function edgeRole(

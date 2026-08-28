@@ -99,7 +99,7 @@ a:focus-visible {
   position: relative;
   z-index: 30;
   display: grid;
-  grid-template-columns: minmax(88px, 112px) auto minmax(280px, 1fr) auto;
+  grid-template-columns: minmax(88px, 112px) auto minmax(0, 1fr);
   gap: 16px;
   align-items: center;
   height: var(--header-height);
@@ -152,9 +152,10 @@ a:focus-visible {
 }
 
 .execution-context {
-  position: relative;
   width: 100%;
   min-width: 0;
+  margin-bottom: 14px;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -213,23 +214,17 @@ a:focus-visible {
 }
 
 .execution-context-body {
-  position: fixed;
-  z-index: 40;
-  top: calc(var(--header-height) + 9px);
-  left: 50%;
-  width: min(620px, calc(100vw - 32px));
+  width: 100%;
   padding: 18px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
+  border-top: 1px solid var(--border);
   background: var(--surface-raised);
-  box-shadow: 0 26px 80px rgb(0 0 0 / 55%);
-  transform: translateX(-50%);
 }
 
 .header-actions {
   display: flex;
   gap: 10px;
   align-items: center;
+  justify-self: end;
 }
 
 .language-toggle {
@@ -1077,7 +1072,7 @@ body[data-screen="task"] .viewer-screen {
   text-transform: none;
 }
 
-.execution-parallel-iterations {
+.execution-parallel-controls {
   position: absolute;
   inset: 34px 8px auto;
   z-index: 3;
@@ -1092,6 +1087,13 @@ body[data-screen="task"] .viewer-screen {
   -webkit-user-select: none;
   user-select: none;
   scrollbar-color: var(--border-strong) transparent;
+}
+
+.execution-parallel-iterations,
+.execution-parallel-call-participants {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 .execution-parallel-iteration {
@@ -1128,7 +1130,10 @@ body[data-screen="task"] .viewer-screen {
   line-height: 1.2;
 }
 
-.execution-parallel-call-participant[role="button"] {
+.execution-parallel-call-participant {
+  appearance: none;
+  background: transparent;
+  font-family: inherit;
   cursor: pointer;
   text-align: left;
 }
@@ -1376,12 +1381,12 @@ body[data-screen="task"] .viewer-screen {
   width: 5px;
   height: 5px;
   box-sizing: border-box;
-  border: 1px solid currentColor;
+  border: 1px solid currentcolor;
   border-radius: 50%;
 }
 
 .execution-port-next .execution-port-anchor {
-  background: currentColor;
+  background: currentcolor;
 }
 
 .execution-port-label {
@@ -1395,8 +1400,8 @@ body[data-screen="task"] .viewer-screen {
 .iteration-chip-evidence {
   padding: 1px 3px;
   border: 1px solid rgb(216 171 103 / 32%);
-  color: var(--faint);
-  font-size: 8px;
+  color: var(--muted);
+  font-size: 10px;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -2884,15 +2889,11 @@ kbd {
   }
 
   .app-header {
-    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    grid-template-columns: auto auto minmax(0, 1fr);
   }
 }
 
 @media (max-width: 760px) {
-  :root {
-    --header-height: 112px;
-  }
-
   .app-header {
     height: var(--header-height);
     grid-template-columns: auto 1fr auto;
@@ -2910,11 +2911,6 @@ kbd {
 
   .nav-button {
     padding-inline: 9px;
-  }
-
-  .execution-context {
-    grid-column: 1 / -1;
-    grid-row: 2;
   }
 
   .header-actions {

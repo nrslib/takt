@@ -556,47 +556,56 @@ function isOccurrenceTerminal(event) {
   return TERMINAL_EVENT_TYPES.has(event.type);
 }
 
-function inheritedParallelIteration(event, graph, eventIndex) {
+function iterationSourceKey(workflow, step, stack) {
+  return JSON.stringify([workflow, step, stackPathKey(stack)]);
+}
+
+function indexIterationSource(graph, occurrence, step) {
+  if (occurrence.iteration === undefined) return;
+  if (occurrence.kind === 'step') {
+    const sourceKey = iterationSourceKey(occurrence.workflow, step, occurrence.stack);
+    const previousSource = graph.latestIterationBySource.get(sourceKey);
+    if (previousSource === undefined || previousSource.firstEventIndex <= occurrence.firstEventIndex) {
+      graph.latestIterationBySource.set(sourceKey, occurrence);
+    }
+  }
+  const stackKey = stackPathKey(occurrence.stack);
+  const previousStack = graph.latestIterationByStack.get(stackKey);
+  if (previousStack === undefined || previousStack.firstEventIndex <= occurrence.firstEventIndex) {
+    graph.latestIterationByStack.set(stackKey, occurrence);
+  }
+}
+
+function inheritedParallelIteration(event, graph) {
   if (!Array.isArray(event.stack) || event.stack.length === 0) return undefined;
-  const candidates = [...graph.occurrencesById.values()]
-    .filter((occurrence) => occurrence.iteration !== undefined)
-    .filter((occurrence) => occurrence.firstEventIndex < eventIndex)
-    .sort((left, right) => right.firstEventIndex - left.firstEventIndex);
   const parallelIndexes = [...event.stack]
     .map((frame, index) => frame?.kind === 'parallel' ? index : -1)
     .filter((index) => index >= 0)
     .reverse();
   for (const frameIndex of parallelIndexes) {
     const prefixKey = stackPathKey(event.stack.slice(0, frameIndex + 1));
-    const candidate = candidates.find((occurrence) => (
-      stackPathKey(occurrence.stack) === prefixKey
-    ));
-    if (candidate?.iteration !== undefined) return candidate.iteration;
+    const occurrence = graph.latestIterationByStack.get(prefixKey);
+    if (occurrence?.iteration !== undefined) return occurrence.iteration;
   }
   return undefined;
 }
 
-function inheritEventIteration(event, meta, graph, eventIndex) {
+function inheritEventIteration(event, meta, graph) {
   if (event.iteration !== undefined || !isWorkflowCall(event)) return event;
   const workflow = eventWorkflow(event, meta.workflow);
-  const stackKey = stackPathKey(event.stack);
-  for (const node of graph.nodesByLogicalId.values()) {
-    if (node.kind !== 'step' || node.workflow !== workflow || node.label !== event.step) continue;
-    const occurrence = [...node.occurrences].reverse().find((candidate) => (
-      stackPathKey(candidate.stack) === stackKey
-        && candidate.iteration !== undefined
-    ));
-    if (occurrence?.iteration !== undefined) {
-      return { ...event, iteration: occurrence.iteration };
-    }
+  const source = graph.latestIterationBySource.get(
+    iterationSourceKey(workflow, event.step, event.stack),
+  );
+  if (source?.iteration !== undefined) {
+    return { ...event, iteration: source.iteration };
   }
-  const parallelIteration = inheritedParallelIteration(event, graph, eventIndex);
+  const parallelIteration = inheritedParallelIteration(event, graph);
   if (parallelIteration !== undefined) return { ...event, iteration: parallelIteration };
   return event;
 }
 
 function addGraphEvent(event, index, meta, graph) {
-  const effectiveEvent = inheritEventIteration(event, meta, graph, index);
+  const effectiveEvent = inheritEventIteration(event, meta, graph);
   const initialDescriptor = eventDescriptor(effectiveEvent, meta);
   if (initialDescriptor === null) return;
   const existingId = initialDescriptor.occurrenceId
@@ -613,6 +622,7 @@ function addGraphEvent(event, index, meta, graph) {
     ? createOccurrence(effectiveEvent, descriptor, index, graph.recordEventIndexes, meta)
     : updateOccurrence(previous, effectiveEvent, index, graph.recordEventIndexes, meta);
   graph.occurrencesById.set(occurrence.id, occurrence);
+  indexIterationSource(graph, occurrence, effectiveEvent.step);
   graph.occurrenceByEventIndex.set(index, occurrence);
   replaceOccurrence(graph.nodesByLogicalId, occurrence);
   if (graph.nodesByLogicalId.has(descriptor.logicalId) === false) {
@@ -653,17 +663,30 @@ function addGraphEvent(event, index, meta, graph) {
   }
 }
 
-function inheritedIterationForCallOccurrence(occurrence, candidates) {
-  const sameStack = candidates
-    .filter((candidate) => candidate !== occurrence)
-    .filter((candidate) => candidate.iteration !== undefined)
-    .filter((candidate) => stackPathKey(candidate.stack) === stackPathKey(occurrence.stack))
-    .sort((left, right) => (
-      Math.abs(left.firstEventIndex - occurrence.firstEventIndex)
-        - Math.abs(right.firstEventIndex - occurrence.firstEventIndex)
-      || left.firstEventIndex - right.firstEventIndex
-    ));
-  if (sameStack[0]?.iteration !== undefined) return sameStack[0].iteration;
+function nearestIndexedIteration(candidates, eventIndex) {
+  if (candidates === undefined || candidates.length === 0) return undefined;
+  let low = 0;
+  let high = candidates.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (candidates[middle].firstEventIndex < eventIndex) low = middle + 1;
+    else high = middle;
+  }
+  const next = candidates[low];
+  const previous = candidates[low - 1];
+  if (next === undefined) return previous?.iteration;
+  if (previous === undefined) return next.iteration;
+  return eventIndex - previous.firstEventIndex <= next.firstEventIndex - eventIndex
+    ? previous.iteration
+    : next.iteration;
+}
+
+function inheritedIterationForCallOccurrence(occurrence, candidatesByStack) {
+  const sameStack = nearestIndexedIteration(
+    candidatesByStack.get(stackPathKey(occurrence.stack)),
+    occurrence.firstEventIndex,
+  );
+  if (sameStack !== undefined) return sameStack;
 
   if (!Array.isArray(occurrence.stack)) return undefined;
   const parallelIndexes = [...occurrence.stack]
@@ -672,25 +695,37 @@ function inheritedIterationForCallOccurrence(occurrence, candidates) {
     .reverse();
   for (const frameIndex of parallelIndexes) {
     const prefixKey = stackPathKey(occurrence.stack.slice(0, frameIndex + 1));
-    const candidate = candidates
-      .filter((entry) => entry !== occurrence)
-      .filter((entry) => entry.iteration !== undefined)
-      .filter((entry) => stackPathKey(entry.stack) === prefixKey)
-      .sort((left, right) => (
-        Math.abs(left.firstEventIndex - occurrence.firstEventIndex)
-          - Math.abs(right.firstEventIndex - occurrence.firstEventIndex)
-        || left.firstEventIndex - right.firstEventIndex
-      ))[0];
-    if (candidate?.iteration !== undefined) return candidate.iteration;
+    const iteration = nearestIndexedIteration(
+      candidatesByStack.get(prefixKey),
+      occurrence.firstEventIndex,
+    );
+    if (iteration !== undefined) return iteration;
   }
   return undefined;
 }
 
 function applyInheritedCallIterations(graph, meta) {
   const candidates = [...graph.occurrencesById.values()];
+  const candidatesByStack = new Map();
+  const eventIndexesByOccurrenceId = new Map();
+  for (const candidate of candidates) {
+    if (candidate.iteration === undefined) continue;
+    const key = stackPathKey(candidate.stack);
+    const indexed = candidatesByStack.get(key) ?? [];
+    indexed.push(candidate);
+    candidatesByStack.set(key, indexed);
+  }
+  for (const indexed of candidatesByStack.values()) {
+    indexed.sort((left, right) => left.firstEventIndex - right.firstEventIndex);
+  }
+  for (const [eventIndex, occurrence] of graph.occurrenceByEventIndex) {
+    const indexes = eventIndexesByOccurrenceId.get(occurrence.id) ?? [];
+    indexes.push(eventIndex);
+    eventIndexesByOccurrenceId.set(occurrence.id, indexes);
+  }
   for (const occurrence of candidates) {
     if (occurrence.kind !== 'workflow' || occurrence.iteration !== undefined) continue;
-    const iteration = inheritedIterationForCallOccurrence(occurrence, candidates);
+    const iteration = inheritedIterationForCallOccurrence(occurrence, candidatesByStack);
     if (iteration === undefined) continue;
     const descriptors = parallelGroupDescriptors(occurrence.stack, iteration, meta);
     const descriptor = descriptors.at(-1);
@@ -711,8 +746,8 @@ function applyInheritedCallIterations(graph, meta) {
         };
     graph.occurrencesById.set(occurrence.id, updated);
     replaceOccurrence(graph.nodesByLogicalId, updated);
-    for (const [eventIndex, eventOccurrence] of graph.occurrenceByEventIndex) {
-      if (eventOccurrence.id === occurrence.id) graph.occurrenceByEventIndex.set(eventIndex, updated);
+    for (const eventIndex of eventIndexesByOccurrenceId.get(occurrence.id) ?? []) {
+      graph.occurrenceByEventIndex.set(eventIndex, updated);
     }
   }
 }
@@ -775,6 +810,8 @@ function createGraph(events, meta, recordEventIndexes) {
     callsByOccurrenceId: new Map(),
     occurrenceCounters: new Map(),
     activeOccurrenceIds: new Map(),
+    latestIterationBySource: new Map(),
+    latestIterationByStack: new Map(),
     recordEventIndexes,
   };
   events.forEach((event, index) => addGraphEvent(event, index, meta, graph));

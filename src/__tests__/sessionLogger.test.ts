@@ -467,6 +467,7 @@ describe('SessionLogger', () => {
       stack: [parallelFrame, callFrame],
     };
     logger.onWorkflowCallStart(lifecycle);
+    logger.onWorkflowCallComplete({ ...lifecycle, result: { status: 'completed' } });
     logger.onPhaseStart(
       childStep,
       1,
@@ -485,6 +486,9 @@ describe('SessionLogger', () => {
     const parent = records.find((record) => record.type === 'step_start');
     const direct = records.find((record) => record.type === 'phase_start' && record.step === 'reviewers');
     const call = records.find((record) => record.type === 'workflow_call_start');
+    const parentComplete = records.find((record) => record.type === 'step_complete');
+    const directComplete = records.find((record) => record.type === 'phase_complete');
+    const callComplete = records.find((record) => record.type === 'workflow_call_complete');
     const child = records.find((record) => record.type === 'phase_start' && record.step === 'work');
 
     expect(parent?.parallel).toMatchObject({ role: 'parent' });
@@ -494,16 +498,59 @@ describe('SessionLogger', () => {
     });
     expect(direct?.parallel?.participationId).not.toBe(parent?.parallel?.participationId);
     expect(call?.parallel).toMatchObject({ role: 'workflow_call_participant' });
+    expect(parentComplete?.parallel).toEqual(parent?.parallel);
+    expect(directComplete?.parallel).toEqual(direct?.parallel);
+    expect(callComplete?.parallel).toEqual(call?.parallel);
     expect(child?.parallel).toEqual(call?.parallel);
-    expect(JSON.stringify(parent?.parallel)).not.toContain('Review');
+  });
+
+  it('parallel metadata に prompt text を含めない', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-private', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const secretInstruction = 'Review token=super-secret';
+    logger.onStepStart({
+      name: 'reviewers',
+      kind: 'agent',
+      personaDisplayName: 'parent',
+      instruction: secretInstruction,
+      parallel: [],
+    }, 1, secretInstruction, [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel',
+      occurrence: 1,
+    }]);
+
+    const record = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord)
+      .find((candidate) => candidate.type === 'step_start');
+    expect(JSON.stringify(record?.parallel)).not.toContain(secretInstruction);
+  });
+
+  it.each([
+    ['unknown role', { role: 'unknown', participationId: 'p' }, /parallel.*role/i],
+    ['parent with parent identity', {
+      role: 'parent',
+      participationId: 'p',
+      parentParticipationId: 'parent',
+    }, /parentParticipationId.*not allowed/i],
+    ['participant without parent identity', {
+      role: 'direct_participant',
+      participationId: 'p',
+    }, /parentParticipationId.*required/i],
+  ])('rejects invalid parallel metadata: %s', (_label, parallel, expected) => {
     expect(() => parseNdjsonRecord(JSON.stringify({
       type: 'step_start',
       step: 'review',
       persona: 'reviewer',
       iteration: 1,
       timestamp: '2026-08-27T00:00:00.000Z',
-      parallel: { role: 'unknown', participationId: 'p' },
-    }))).toThrow(/parallel.*role/i);
+      parallel,
+    }))).toThrow(expected);
   });
 
   it('subworkflow stack を step/phase records にそのまま書き出す', () => {
