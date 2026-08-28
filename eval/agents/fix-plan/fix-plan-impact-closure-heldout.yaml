@@ -47,4 +47,4 @@ tests:
           - `settings.sections` → sort → sectionsの順序
           - document.content と `settings.indexPath` → `writeIndex` → 実際に書かれたindex file
 
-          各観測に、根拠となるファイルと関数、具体的な入力または設定、入口から結果までの接続、期待結果、問題が残れば失敗する具体的な検証が必要である。設定差分は `currentSettings` として同じ入口へ渡し、helperの直接呼び出しだけで済ませないこと。変更が必要な共有箇所と、変更せず確認する経路を区別すること。存在しないlocale、provider、retry、互換形式、出力先を追加する、source/render/writeを一つの抽象的な「artifact経路」で代用する、または書き込みを戻り値だけで確認する場合は不合格とする。
+          各観測に、根拠となるファイルと関数、具体的な入力または設定、入口から結果までの接続、期待結果、問題が残れば失敗する具体的な検証が必要である。4経路それぞれについて、その経路が読む source、documentLabel、sections、indexPath のいずれか1条件だけを変え、同じ `buildArtifact` 入口から対応する観測結果の違いを確認すること。helperの直接呼び出しだけで済ませず、変更が必要な共有箇所と、変更せず確認する経路を区別すること。存在しないlocale、provider、retry、互換形式、出力先を追加する、source/render/writeを一つの抽象的な「artifact経路」で代用する、または書き込みを戻り値だけで確認する場合は不合格とする。

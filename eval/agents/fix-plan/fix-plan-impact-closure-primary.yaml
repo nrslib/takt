@@ -40,10 +40,10 @@ tests:
         value: |
           候補の計画本文と fixture の実装だけを評価する。見出し名や表形式の一致は要求しない。
 
-          `PATH-001` の対象として、次の3経路を別々に追跡できる場合だけ合格とする。
+          `PATH-001` の原因を、`loadDefinition(source)` が部分 `source` を既定の `definition` と合成せず、指定していないsectionを失うことだと特定している場合だけ合格とする。修正は正本のloaderで行い、次の3経路を別々に追跡すること。
 
-          1. `buildExecutionPlan` → `loadDefinition` → `selectEntries`。`definition.selection` と input の tags/entries が、選択された IDs、role、instruction に到達する。少なくとも一致条件またはselection値を変えたときに結果の違いを観測する検証を示す。
-          2. `buildExecutionPlan` → `loadDefinition` → `findCycle`。`buildExecutionPlan` に渡す source の `workflow.entry/calls` が cycle または no-cycle に到達する。source の entry または calls を変え、同じ入口からcycle結果の違いを観測する検証を示す。
-          3. `buildExecutionPlan` → `loadDefinition` → `evaluateMonitor`。`definition.monitor.limit/instruction` と input count が decision と展開済みinstructionに到達する。limit、count、instructionのいずれかを変えて結果の違いを観測する検証を示す。
+          1. `buildExecutionPlan` → `loadDefinition` → `selectEntries`。selectionだけを上書きする具体的な `source` と tags/entries を使い、IDs、role、instructionの期待値、および既定cycle・monitorの維持を示す。
+          2. `buildExecutionPlan` → `loadDefinition` → `findCycle`。workflowだけを上書きする具体的な `entry/calls` を使い、cycleまたはno-cycleの期待値、および既定selection・monitorの維持を示す。
+          3. `buildExecutionPlan` → `loadDefinition` → `evaluateMonitor`。monitorだけを上書きする具体的な `limit/instruction` とinput countを使い、decisionと展開済みinstructionの期待値、および既定selection・cycleの維持を示す。
 
-          各経路に、正本、具体的な入力または状態、実在する入口から観測結果までの呼び出し、変更または確認の扱い、期待結果、問題が残れば失敗する具体的な検証が必要である。3経路を「関連consumer」などで一括した場合、direct consumerだけを示して入口を省いた場合、fixtureにない経路・状態を追加した場合は不合格とする。
+          各経路に、具体的な変更前後の入力または状態、実在する入口から観測結果までの呼び出し、期待結果、問題が残れば失敗する検証が必要である。既定sourceと完全なsourceの既存経路も回帰対象に含めること。3経路を「関連consumer」などで一括した場合、helperの直接呼び出しだけで入口を省いた場合、fixtureにない経路・状態を追加した場合は不合格とする。

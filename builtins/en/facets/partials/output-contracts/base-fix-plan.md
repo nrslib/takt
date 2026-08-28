@@ -11,12 +11,12 @@
 ## Repair Units
 | Repair Unit | Cause | Condition to Preserve | Relevant Paths | Changes | Excluded Scope |
 |-------------|-------|-----------------------|----------------|---------|----------------|
-| {Name} | {Verified cause and primary alternatives ruled out} | {Externally observable condition} | {Actual paths from the defining source through consumers to output} | {Minimum necessary changes} | {Separate contracts, adjacent work, and unnecessary mechanism changes} |
+| {Name} | {Verified cause and primary alternatives ruled out} | {Externally observable condition} | {Actual paths from the top-level production entry through every relevant stage to the observable result} | {Minimum necessary changes} | {Separate contracts, adjacent work, and unnecessary mechanism changes} |
 
 ## Impact Paths
-| Repair Unit | Source of Truth and Input / State | Entry to Observable Result | Treatment | Successful Example | Counterexample Detecting a Violation |
-|-------------|-----------------------------------|----------------------------|-----------|--------------------|--------------------------------------|
-| {Name} | {Source defining the condition and concrete input or state} | {Real entry, processing, consumer, and observable result} | {Change / Migrate-remove / Verify only} | {Expected observable result} | {Test, reproduction, search, or code trace changing one result-controlling condition} |
+| Repair Unit / Path | Source of Truth and Input / State | Entry to Observable Result | Treatment | Successful Example | Counterexample Detecting a Violation |
+|--------------------|-----------------------------------|----------------------------|-----------|--------------------|--------------------------------------|
+| {Name and one independently observable path per row} | {Source defining the condition and concrete input or state} | {Top-level production entry, every relevant stage, and observable result} | {Change / Migrate-remove / Verify only} | {Expected observable result for this path} | {Test, reproduction, search, or code trace changing one result-controlling condition for this path} |
 
 ## Implementation Order
 | Order | Repair Unit | Work | Dependency | Completion Criteria |
