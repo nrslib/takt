@@ -18,6 +18,7 @@ const MAX_TURNS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
 interface ProviderCapabilities {
   supportsStructuredOutput: boolean;
   supportsIsolatedStructuredExecution: boolean;
+  supportsToolFreeExecution: boolean;
   supportsNativeImageInput: boolean;
   supportsMcpServers: boolean;
   supportsStrictMcpConfig: boolean;
@@ -43,6 +44,7 @@ function resolveProviderCapabilities(
   return {
     supportsStructuredOutput: providerImpl.supportsStructuredOutput,
     supportsIsolatedStructuredExecution: providerImpl.supportsIsolatedStructuredExecution === true,
+    supportsToolFreeExecution: providerImpl.supportsToolFreeExecution === true,
     supportsNativeImageInput: providerImpl.supportsNativeImageInput,
     supportsMcpServers: mcpTransports !== undefined && mcpTransports.size > 0,
     supportsStrictMcpConfig: providerImpl.supportsStrictMcpConfig === true,
@@ -57,6 +59,12 @@ export function providerSupportsIsolatedStructuredExecution(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsIsolatedStructuredExecution;
+}
+
+export function providerSupportsToolFreeExecution(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsToolFreeExecution;
 }
 
 export function assertProviderSupportsIsolatedStructuredExecution(

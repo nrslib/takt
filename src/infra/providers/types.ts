@@ -74,6 +74,8 @@ export interface Provider {
   supportsStructuredOutput: boolean;
   /** Whether this provider has a dedicated strict structured execution path. */
   supportsIsolatedStructuredExecution?: boolean;
+  /** Whether the regular setup path can guarantee execution with no tools. */
+  supportsToolFreeExecution?: boolean;
   supportsNativeImageInput: boolean;
   /**
    * MCP transports this provider implementation actually supports. Replaces

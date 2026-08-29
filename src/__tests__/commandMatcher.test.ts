@@ -216,6 +216,25 @@ describe('edge cases', () => {
     expect(matchSlashCommand('/resume', execAvailability)).toBeNull();
   });
 
+  it('should recognize /verify for the session-level mode gate even when formal specification mode is disabled', () => {
+    expect(matchSlashCommand('/verify', { formalSpec: false })).toEqual({
+      command: SlashCommand.Verify,
+      text: '',
+    });
+    expect(matchSlashCommand('/verify', { formalSpec: true })).toEqual({
+      command: SlashCommand.Verify,
+      text: '',
+    });
+  });
+
+  it('should not recognize /verify when a guarded command allowlist excludes it', () => {
+    expect(matchSlashCommand('/verify', {
+      formalSpec: true,
+      enabledCommands: [SlashCommand.Go, SlashCommand.Cancel],
+    })).toBeNull();
+  });
+
+
   it('should not match unknown slash command at end', () => {
     expect(matchSlashCommand('text /unknown')).toBeNull();
   });

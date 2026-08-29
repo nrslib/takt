@@ -83,6 +83,12 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
 
+### Formal Specification Verification
+
+When formal specification mode is enabled for the current interactive session, run `/verify` to verify the current agreement in one shot. TAKT asks the assistant to output the current agreement as formal specifications, extracts the `quint` and `alloy` code blocks from that response, runs the verifiers, and sends the results back to the same session for the assistant to interpret.
+
+Quint `parse`, `typecheck`, and `run` always run. When Java 17 or later is available, TAKT additionally runs `quint verify` and the Alloy Analyzer. When Java is unavailable or older than 17, these additional checks are skipped; the basic Quint checks still run, and the result explicitly reports that the Alloy specification was not verified.
+
 ### Execution Example
 
 ```

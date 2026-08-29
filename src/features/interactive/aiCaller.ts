@@ -16,7 +16,7 @@ import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { InternalAgentIsolation, StreamCallback } from '../../shared/types/provider.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
@@ -55,6 +55,7 @@ interface CallAIWithRetryOptions {
   /** Receives what a terminal caller would have printed alongside the answer. */
   onNotice?: (message: string) => void;
   permissionMode?: PermissionMode;
+  internalAgentIsolation?: InternalAgentIsolation;
   outputMode?: 'terminal' | 'silent';
   abortSignal?: AbortSignal;
   /**
@@ -170,6 +171,9 @@ export async function callAIWithRetry(
       sessionId,
       ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
       ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
+      ...(options.internalAgentIsolation === undefined
+        ? {}
+        : { internalAgentIsolation: options.internalAgentIsolation }),
       providerOptions: ctx.providerOptions,
       effort: ctx.effort,
       abortSignal: abortController.signal,
@@ -192,6 +196,9 @@ export async function callAIWithRetry(
         sessionId: undefined,
         ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
         ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
+        ...(options.internalAgentIsolation === undefined
+          ? {}
+          : { internalAgentIsolation: options.internalAgentIsolation }),
         providerOptions: ctx.providerOptions,
         effort: ctx.effort,
         abortSignal: abortController.signal,

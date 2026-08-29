@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { buildSummaryPrompt } from '../features/interactive/interactive-summary.js';
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
+import {
+  buildFormalSpecGenerationPrompt,
+  buildFormalSpecGenerationSystemPrompt,
+  buildFormalSpecInterpretationSystemPrompt,
+} from '../features/interactive/formalSpecPrompts.js';
 
 const EXPECTED_INVESTIGATION_POLICIES = {
   assistant: {
@@ -33,7 +38,11 @@ function parseInvestigationPolicy(prompt: string): unknown {
   if (match === null) {
     throw new Error('interactive investigation policy metadata is missing');
   }
-  return JSON.parse(match[1]) as unknown;
+  const serializedPolicy = match[1];
+  if (serializedPolicy === undefined) {
+    throw new Error('interactive investigation policy metadata is empty');
+  }
+  return JSON.parse(serializedPolicy) as unknown;
 }
 
 function renderJapaneseSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
@@ -123,4 +132,61 @@ describe('task instruction formal specification prompt template wiring', () => {
       expect(withDefaultComments).toBe(withComments);
     },
   );
+});
+
+describe('formal specification naming guidance', () => {
+  it.each([
+    ['interactive', (lang: 'en' | 'ja') => renderInteractivePrompt(lang, true)],
+    ['task instruction', (lang: 'en' | 'ja') => lang === 'en'
+      ? renderEnglishSummaryPrompt(true)
+      : renderJapaneseSummaryPrompt(true)],
+  ] as const)('requires invariant, temporal, and Alloy check naming in the %s prompt for both languages', (_name, renderPrompt) => {
+    for (const lang of ['en', 'ja'] as const) {
+      const prompt = renderPrompt(lang);
+
+      if (lang === 'en') {
+        expect(prompt).toMatch(/Name every Quint invariant with the `inv` prefix/i);
+        expect(prompt).toMatch(/every temporal property with the `prop` prefix/i);
+        expect(prompt).toMatch(/a `check` command for every Alloy property/i);
+      } else {
+        expect(prompt).toMatch(/Quint の不変条件には `inv` プレフィックス/i);
+        expect(prompt).toMatch(/時相プロパティには `prop` プレフィックス/i);
+        expect(prompt).toMatch(/各プロパティには `check` コマンド/i);
+      }
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('requires the same naming contract in the /verify generation prompt for %s', (lang) => {
+    const prompt = buildFormalSpecGenerationPrompt(lang);
+
+    if (lang === 'en') {
+      expect(prompt).toMatch(/Prefix every Quint invariant name with inv/i);
+      expect(prompt).toMatch(/every temporal property name with prop/i);
+      expect(prompt).toMatch(/a check command for every Alloy property to verify/i);
+    } else {
+      expect(prompt).toMatch(/Quintの不変条件名はinvで始め/i);
+      expect(prompt).toMatch(/時相プロパティ名はpropで始め/i);
+      expect(prompt).toMatch(/Alloyの検証対象には必ずcheckコマンド/i);
+    }
+  });
+});
+
+describe('formal specification role prompts', () => {
+  it.each(['en', 'ja'] as const)('keeps generation and interpretation roles separate for %s', (lang) => {
+    const generationSystemPrompt = buildFormalSpecGenerationSystemPrompt(lang);
+    const interpretationSystemPrompt = buildFormalSpecInterpretationSystemPrompt(lang);
+
+    expect(generationSystemPrompt).not.toBe(interpretationSystemPrompt);
+    expect(generationSystemPrompt).toMatch(/Quint|形式仕様/i);
+    expect(interpretationSystemPrompt).toMatch(/verify|検証/i);
+    expect(interpretationSystemPrompt).not.toMatch(/ordinary task implementation|通常のタスク実装/);
+  });
+
+  it.each(['en', 'ja'] as const)('passes the initial user agreement as quoted generation data for %s', (lang) => {
+    const prompt = buildFormalSpecGenerationPrompt(lang, 'ACP対応を追加する');
+
+    expect(prompt).toContain('<initial-user-input>');
+    expect(prompt).toContain('ACP対応を追加する');
+    expect(prompt).toContain('</initial-user-input>');
+  });
 });

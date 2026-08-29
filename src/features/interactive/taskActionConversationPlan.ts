@@ -161,6 +161,7 @@ function withOrderRevision(
     normalizeSummaryTask: (task, attachments) =>
       normalizeOrderRevisionSummary(task, attachments, lang),
     initialImageAttachmentIndex: resolveMaxImageIndex(canonicalOrderContent),
+    formalSpecInitialContext: canonicalOrderContent,
     enabledCommands: [
       SlashCommand.Go,
       ...(retry ? [SlashCommand.Retry] : []),
@@ -168,6 +169,7 @@ function withOrderRevision(
       SlashCommand.Cancel,
       SlashCommand.Resume,
       SlashCommand.PasteImage,
+      ...(strategy.formalSpec ? [SlashCommand.Verify] : []),
     ],
     ...(retry ? { enableRetryCommand: true } : {}),
     ...(previousOrderContent === undefined ? {} : { previousOrderContent }),
@@ -202,6 +204,7 @@ export function createRetryConversationPlan(
       : `## Retry: ${context.failure.taskName}\n\n${retrySubjectLabel(context.subject.kind, lang)}: ${context.subject.value}\n\n${getLabel('retry.ui.intro', lang)}`,
     previousOrderContent: context.previousOrderContent ?? undefined,
     enableRetryCommand: true,
+    formalSpecInitialContext: canonicalOrderContent,
   };
   return {
     ctx,

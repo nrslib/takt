@@ -210,6 +210,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/executable-path.test.ts',
   'src/__tests__/execution-locations.test.ts',
   'src/__tests__/facet-resolution.test.ts',
+  'src/__tests__/formalSpecVerifier.test.ts',
   'src/__tests__/global-workflowCategories.test.ts',
   'src/__tests__/image-attachment-store-seal.test.ts',
   'src/__tests__/imageAttachmentReferences.test.ts',

@@ -38,6 +38,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
 export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
+  readonly supportsToolFreeExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio']);
 

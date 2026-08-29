@@ -10,6 +10,7 @@
 - In addition to Markdown, express the requirements in both Quint and Alloy. Quint and Alloy may overlap with other notations, but keep the prohibition on duplicating acceptance clauses between Markdown and Gherkin. Do not add Gherkin to non-development tasks.
 - Omit a notation only when the task genuinely cannot be expressed in that notation.
 - Use actual valid Quint and Alloy syntax instead of inventing pseudo-notation.
+- Name every Quint invariant with the `inv` prefix and every temporal property with the `prop` prefix. Include a `check` command for every Alloy property that must be verified.
 {{#if formalSpecComments}}
 - Within each Quint and Alloy code block, immediately precede every requirement-level formal construct—such as the state model, a state transition, a temporal property, an invariant, an ownership rule, or a cardinality rule—with natural-language comments that fully explain its domain meaning. A construct that covers multiple requirements must have adjacent comments that explain every one of them; multiple comment lines are allowed.
 - Treat declarations that introduce requirement-specific states or domain values as requirement-level constructs too. Immediately before each such declaration, name every value in a comment and explain what each value means in the domain; do not leave an enum, union, signature, or equivalent state declaration to be understood from syntax alone.

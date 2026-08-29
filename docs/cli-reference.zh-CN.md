@@ -71,6 +71,12 @@ takt hello
 
 这些选择只在当前会话中有效，不会持久化。workflow、mode、provider 或 model 的更改会在下一条普通消息或 `/go` 时创建新的 AI session，并只将之前的对话作为参考上下文传递一次。仅更改 effort 时，会应用到当前 session 的下一次调用。更改 provider 会清除临时 model 和 effort。在下一次输入前执行多个设置命令时，每项设置只应用最后一次选择的值。会话 override 不影响 workflow 执行。
 
+### 形式规范验证
+
+在当前交互会话中启用形式规范模式后，运行 `/verify` 可以一次性验证当前达成共识的内容。TAKT 会要求 Assistant 将当前共识输出为形式规范，从该响应中提取 `quint` 和 `alloy` 代码块并运行验证器，然后将结果返回同一会话，由 Assistant 进行解释。
+
+Quint 的 `parse`、`typecheck` 和 `run` 始终执行。如果检测到 Java 17 或更高版本，TAKT 还会执行 `quint verify` 和 Alloy Analyzer。如果未检测到 Java，或版本低于 17，则跳过这些附加检查；Quint 基本检查仍会执行，结果会明确说明 Alloy 规范未经过验证。
+
 ### 执行示例
 
 ```text

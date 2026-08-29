@@ -33,6 +33,8 @@ interactive:
     retryNoOrder: "No previous order (order.md) found. /retry is only available during retry."
     retryUnavailable: "/retry is only available in Retry mode from `takt list`."
     pasteImageUnavailable: "/paste-image is only available for image attachment during interactive input."
+    verifyUnavailable: "/verify is only available in formal specification mode."
+    verifyProviderUnavailable: "/verify requires a provider that can enforce tool-free calls."
     personaFallback: "No persona available for the first step. Falling back to assistant mode."
   modeSelection:
     prompt: "Select interactive mode:"
@@ -77,6 +79,7 @@ interactive:
     provider: "Switch provider"
     model: "Use a model for this conversation"
     effort: "Use reasoning effort for this conversation"
+    verify: "Verify the current formal specification"
 
 # ===== Exec Mode UI =====
 exec:

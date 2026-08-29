@@ -131,4 +131,18 @@ describe('filterSlashCommands', () => {
       enabledCommands: [SlashCommand.Setup],
     }).map((entry) => entry.command)).toEqual([]);
   });
+
+  it('should expose /verify only when formal specification mode is enabled', () => {
+    expect(filterSlashCommands('/ver', { formalSpec: true })).toEqual([
+      { command: '/verify', labelKey: 'interactive.commands.verify' },
+    ]);
+    expect(filterSlashCommands('/ver', { formalSpec: false })).toEqual([]);
+  });
+
+  it('should keep /verify hidden when an allowlist enables it but formal specification mode is disabled', () => {
+    expect(filterSlashCommands('/ver', {
+      formalSpec: false,
+      enabledCommands: [SlashCommand.Verify],
+    })).toEqual([]);
+  });
 });
