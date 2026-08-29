@@ -171,20 +171,27 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
   });
 
-  it('should reject Codex permission control with network access', () => {
-    expect(() => normalizeProviderOptions({
-      codex: {
-        permission_control: 'codex',
-        network_access: false,
-      },
-    })).toThrow();
-    expect(() => denormalizeProviderOptions({
-      codex: {
-        permissionControl: 'codex',
-        networkAccess: false,
-      },
-    })).toThrow();
-  });
+  it.each([true, false])(
+    'should round-trip Codex permission control with network_access=%s',
+    (networkAccess) => {
+      const rawProviderOptions = {
+        codex: {
+          permission_control: 'codex' as const,
+          network_access: networkAccess,
+        },
+      };
+
+      const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+      expect(normalizedProviderOptions).toEqual({
+        codex: {
+          permissionControl: 'codex',
+          networkAccess,
+        },
+      });
+      expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+    },
+  );
 
   it('should round-trip OpenCode guard leaves and model_profiles', () => {
     const rawProviderOptions = {
@@ -464,7 +471,7 @@ describe('buildRawTaktProvidersOrThrow', () => {
   it('should throw when assistant is empty object', () => {
     expect(() =>
       buildRawTaktProvidersOrThrow({
-        assistant: {},
+        assistant: {} as never,
       }),
     ).toThrow(/Configuration error: 'takt_providers\.assistant' must include provider or model\./);
   });

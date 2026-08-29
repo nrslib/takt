@@ -37,6 +37,8 @@ The Web UI stores its queued tasks, runs, and sessions in channel-neutral centra
 
 Viewer is focused on execution status, the observed execution path, live log, and reports. Use its “Create task” action to open the dedicated conversation surface. `/setup` configures the worktree, task branch, base branch, automatic pull-request creation, and draft status; an instruction produced by `/go` keeps a snapshot of those settings. The header language control switches between Japanese and English and persists the choice in the browser. When automatic PR creation is enabled, a successful workflow is committed, pushed, and published as a PR. A failed central task can be submitted again with the same settings from `Requeue` in its run detail.
 
+The execution map is evidence-based: “observed participant” and “observed boundary” labels come from persisted lifecycle records, while “pool” indicates scheduler classification rather than an observed edge. `PREV` and `NEXT` name the incoming and outgoing ports of a step or boundary. A parallel invocation is drawn as one fork from the boundary's `PREV` port and one join into its `NEXT` port; participants are not connected to each other merely because their events were recorded sequentially.
+
 Central workflow bundles keep ordinary MCP configuration portable. Non-credential environment variables and headers (for example `LOG_LEVEL`, `NODE_ENV`, `ENDPOINT`, and `Content-Type`) may remain literal. Credential-bearing environment/header keys and credential flags in stdio arguments must use one complete `${ENV_VAR}` reference; mixed or literal credential values are rejected. MCP URLs reject userinfo and credential-bearing query or fragment keys, while ordinary metadata such as `version=2` is allowed. Local CLI bundles keep their existing behavior.
 
 ## Interactive Mode
@@ -131,6 +133,18 @@ takt --task "Add authentication" --workflow dual
 ```
 
 **Note:** Passing a string as an argument (e.g., `takt "Add login feature"`) enters interactive mode with it as the initial message.
+
+## Workflow Maker
+
+`takt make` starts the TTY-only Workflow Maker. Before the conversation, choose New workflow or a project, global, builtin, or repertoire workflow as the base. Existing workflows are reference inputs only; Workflow Maker never edits the selected source.
+
+Use `/workflow` to replace the base during the conversation and `/go` to prepare a complete implementation instruction. The approval screen shows the planned `.takt/make/YYYYMMDD-HHmmss-SSS/` path and offers exactly Execute, Continue editing, and Cancel. No Maker artifact is written until Execute is selected.
+
+An approved run copies the statically reachable dependency closure into an isolated directory containing `workflows/`, `steps/`, `facet-pools/`, and `facets/`, rewrites references to the copies, and runs the builtin `workflow-maker` directly with that directory as its working directory. It does not create a task, worktree, commit, push, or pull request. Dynamic or unresolved dependencies fail before execution. Completed and failed runs remain at their displayed paths, including the doctor report when one was produced.
+
+```bash
+takt make
+```
 
 ## ACP Agent
 

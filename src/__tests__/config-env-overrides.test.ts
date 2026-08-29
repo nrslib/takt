@@ -155,18 +155,20 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('project config と env の解決後に競合する Codex options を拒否する', () => {
-    const projectDir = join(testRoot, 'project-codex-permission-control-conflict-env');
+  it.each([true, false])('project config の network_access=%s と env の Codex permission control を解決する', (networkAccess) => {
+    const projectDir = join(testRoot, `project-codex-permission-control-env-${networkAccess}`);
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
     writeFileSync(
       join(configDir, 'config.yaml'),
-      ['provider_options:', '  codex:', '    network_access: true'].join('\n'),
+      ['provider_options:', '  codex:', `    network_access: ${networkAccess}`].join('\n'),
       'utf-8',
     );
     process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = 'codex';
 
-    expect(() => loadProjectConfig(projectDir)).toThrow();
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      codex: { networkAccess, permissionControl: 'codex' },
+    });
   });
 
   it('project config は Codex Skill scope ごとの env override を反映する', () => {

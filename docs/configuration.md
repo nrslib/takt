@@ -9,6 +9,8 @@ For phase-level usage events and analysis, see the [Observability Guide](./obser
 
 Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatically on first run. All fields are optional.
 
+TAKT compares existing global and project configuration directories by their real paths, and directories that do not yet exist by their normalized absolute logical paths. If the global configuration directory and the current project's `.takt/` match after this resolution, TAKT exits with an error before initializing either directory. If you run from your home directory or the paths collide through a symbolic link, set `TAKT_CONFIG_DIR` to a directory different from the project's `.takt/` and run TAKT again. `--help` and `--version` are exempt from this check.
+
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI language: 'en' or 'ja'
@@ -1263,6 +1265,23 @@ provider_options:
     runtime_mode: exe                  # exe or node; node is for explicit SDK development mode
 ```
 
+The DeepSeek Harness `model` field accepts either a bare model reference such as
+`deepseek-v4-flash` or `<route>/<model>` such as `openai/gpt-5.4` and
+`my-gateway/org/custom-model`. TAKT uses the text before the first `/` as the
+provider route and preserves every later `/` in the model reference. A bare
+model uses the backward-compatible `deepseek-official` route. Routes are passed
+to the official SDK as written; TAKT does not apply a route allowlist or
+provider-specific aliases. The route and model substrings are passed as written,
+including surrounding whitespace and any `:` in the model. TAKT treats the model
+substring as an opaque model ID; for example, `ollama/qwen3.5:397b` remains a
+complete model ID for the SDK to interpret.
+Malformed references such as an empty value, `/gpt-5.4`, or `openai/` are
+rejected before the bridge starts; route and model values containing only
+whitespace are also empty. The error includes the supplied reference and the
+validation point. Unknown routes or model IDs are not validated by TAKT and are
+passed unchanged as separate provider/model fields to the bridge/SDK; an SDK
+rejection identifies the supplied reference and the bridge/SDK failure point.
+
 For credential safety, `python_path` is accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`; workflow and project-local provider options must use the default `python3` executable. `cordis` is also accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS`, because it selects executable tool composition. The example above intentionally omits both fields. The same restrictions apply to project `runtime.yaml` profiles; global runtime profiles may select trusted values. Project runtime profiles may use only loopback `base_url` values.
 
 `session_root` and `cordis` are resolved relative to the configured working directory. Sessions are reused when a workflow supplies `session_key`; one-shot calls close the bridge immediately. `request_timeout_ms` terminates the complete Python bridge request, and aborting a TAKT call terminates the bridge process tree. Stream events are converted from official `session.event` notifications into TAKT text, thinking, tool-use, tool-result, error, and result events. System prompts, TAKT `allowed_tools`, MCP server maps, image attachments, structured output, permission modes, and `maxTurns` are not part of the official SDK call and are ignored with a warning; configure system/tool composition through Cordis instead.
@@ -1331,9 +1350,14 @@ To delegate permission control to Codex, explicitly opt in:
 provider_options:
   codex:
     permission_control: codex
+    network_access: true
+    reasoning_effort: high
+    fast_mode: true
+    skills:
+      repo: true
 ```
 
-With `permission_control: codex`, TAKT omits both `sandboxMode` and `networkAccessEnabled` from every Codex call, including strict isolated structured calls. Codex's `config.toml`, `default_permissions`, and permission profile determine the effective permissions. TAKT still sets `approvalPolicy: never` for non-interactive execution. `permission_control: codex` cannot be combined with `network_access`; the resolved configuration fails fast when both remain set. This is an explicit opt-in and its permission behavior is the user's responsibility.
+With `permission_control: codex`, TAKT omits both `sandboxMode` and `networkAccessEnabled` from every Codex call, including strict isolated structured calls. Codex's `config.toml`, `default_permissions`, and permission profile determine the effective permissions. A resolved `network_access` value is accepted without a warning and ignored for these Codex permission fields, regardless of whether it came from a capability, runtime profile, routing, project or global configuration, or an environment override. TAKT still sets `approvalPolicy: never` for non-interactive execution. Non-permission options such as `reasoning_effort`, `fast_mode`, and `skills` continue to apply. This is an explicit opt-in and its permission behavior is the user's responsibility.
 
 #### Codex Skill inheritance (`skills`)
 

@@ -33,7 +33,6 @@ import {
   type ConfigProviderReference,
 } from './providerReference.js';
 import {
-  assertValidCodexProviderOptions,
   assertAllowedNormalizedProviderBaseUrls,
   normalizeProviderOptions,
   type NormalizeProviderOptionsOptions,
@@ -670,7 +669,6 @@ export function denormalizeProviderOptions(
   if (!providerOptions) {
     return undefined;
   }
-  assertValidCodexProviderOptions(providerOptions);
 
   const raw: Record<string, unknown> = {};
   if (

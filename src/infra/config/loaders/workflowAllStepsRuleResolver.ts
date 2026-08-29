@@ -104,6 +104,7 @@ function assertAllowedRuleContent(content: string, filePath: string, index: numb
 function resolveRuleFile(
   ref: string,
   roots: readonly string[],
+  searchedLocations: string,
   index: number,
 ): { filePath: string; content: string } {
   assertSafeRuleReference(ref, index);
@@ -116,8 +117,7 @@ function resolveRuleFile(
   }
 
   throw new Error(
-    `Workflow-wide rule "${ref}" referenced by all_steps.rules[${index}] was not found `
-    + 'in project, global, or builtin workflow rules',
+    `Workflow-wide rule "${ref}" referenced by all_steps.rules[${index}] was not found ${searchedLocations}`,
   );
 }
 
@@ -135,20 +135,29 @@ export function resolveWorkflowWideRules(
   entries: readonly RawWorkflowWideRule[] | undefined,
   projectCwd: string,
   language: Language,
+  workflowDir?: string,
+  resourceRoot?: string,
 ): readonly WorkflowWideRule[] | undefined {
   if (entries === undefined) {
     return undefined;
   }
 
-  const roots = [
-    getProjectWorkflowsDir(projectCwd),
-    getGlobalWorkflowsDir(),
-    getBuiltinWorkflowsDir(language),
-  ];
+  const roots = resourceRoot === undefined
+    ? [
+      ...(workflowDir === undefined ? [] : [workflowDir]),
+      getProjectWorkflowsDir(projectCwd),
+      getGlobalWorkflowsDir(),
+      getBuiltinWorkflowsDir(language),
+    ]
+    : [join(resourceRoot, 'workflows')];
+  const uniqueRoots = roots.filter((root, index, all) => all.indexOf(root) === index);
+  const searchedLocations = resourceRoot === undefined
+    ? 'in project, global, or builtin workflow rules'
+    : `in the isolated workflow rules under "${join(resourceRoot, 'workflows')}"`;
 
   return entries.map((entry, index) => {
     const normalized = normalizeRuleEntry(entry);
-    const resolved = resolveRuleFile(normalized.ref, roots, index);
+    const resolved = resolveRuleFile(normalized.ref, uniqueRoots, searchedLocations, index);
     assertAllowedRuleContent(resolved.content, resolved.filePath, index);
     return {
       ref: normalized.ref,

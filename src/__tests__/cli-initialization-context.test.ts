@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const initializationMocks = vi.hoisted(() => ({
   createLogger: vi.fn(),
+  getConfigDirCollision: vi.fn(),
   initDebugLogger: vi.fn(),
   initGitProvider: vi.fn(),
   initGlobalDirs: vi.fn(),
@@ -18,6 +19,10 @@ const initializationMocks = vi.hoisted(() => ({
 vi.mock('../infra/config/global/initialization.js', () => ({
   initGlobalDirs: initializationMocks.initGlobalDirs,
   initProjectDirs: initializationMocks.initProjectDirs,
+}));
+
+vi.mock('../infra/config/paths.js', () => ({
+  getConfigDirCollision: initializationMocks.getConfigDirCollision,
 }));
 
 vi.mock('../infra/config/project/resolvedSettings.js', () => ({
@@ -66,6 +71,26 @@ describe('CLI execution context', () => {
     const { getCliExecutionContext } = await import('../app/cli/initialization.js');
 
     expect(() => getCliExecutionContext()).toThrow(/not initialized/i);
+  });
+
+  it('should explain a global and project configuration directory collision', async () => {
+    const projectDir = '/test/project';
+    initializationMocks.getConfigDirCollision.mockReturnValue(`${projectDir}/.takt`);
+    const { assertConfigDirsDoNotCollide } = await import('../app/cli/initialization.js');
+
+    let caughtError: unknown;
+    try {
+      assertConfigDirsDoNotCollide(projectDir);
+    } catch (error) {
+      caughtError = error;
+    }
+
+    expect(caughtError).toBeInstanceOf(Error);
+    expect(initializationMocks.getConfigDirCollision).toHaveBeenCalledWith(projectDir);
+    const message = (caughtError as Error).message;
+    expect(message).toContain('/test/project/.takt');
+    expect(message).toMatch(/global.*project|project.*global/i);
+    expect(message).toMatch(/TAKT_CONFIG_DIR|different|another/i);
   });
 
   it.each([

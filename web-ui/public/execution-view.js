@@ -135,9 +135,9 @@ function observedTransitionLabel(trace, occurrence) {
   if (relation === undefined) return undefined;
   const target = findOccurrence(trace, relation.target);
   if (target === null) return undefined;
-  const targetOrdinal = target.occurrence.ordinal === undefined
+  const targetOrdinal = target.occurrence.presentationOrdinal === undefined
     ? ''
-    : ` · ${t('map.iter', { number: target.occurrence.ordinal })}`;
+    : ` · ${t('map.iter', { number: target.occurrence.presentationOrdinal })}`;
   return `${target.node.displayLabel ?? target.node.label}${targetOrdinal}`;
 }
 
@@ -786,7 +786,7 @@ export function createExecutionView(options) {
     const iterationList = element('div', 'inspector-iteration-list');
     iterationList.append(element('h4', 'inspector-iteration-list-heading', t('viewer.stepIterations')));
     for (const [index, occurrence] of selected.occurrences.entries()) {
-      const ordinal = occurrence.ordinal ?? index + 1;
+      const ordinal = occurrence.presentationOrdinal ?? index + 1;
       const item = element('button', 'inspector-iteration-item');
       item.type = 'button';
       item.dataset.kind = 'iteration';
@@ -821,9 +821,17 @@ export function createExecutionView(options) {
       (group) => group.key === selectedParallelGroupKey,
     );
     if (selectedGroup === undefined) return null;
-    const children = selectedGroup.occurrenceIds
+    const parentOccurrenceIds = new Set(selectedGroup.parentOccurrenceIds ?? []);
+    const children = (selectedGroup.participantOccurrenceIds ?? selectedGroup.occurrenceIds)
       .map((occurrenceId) => findOccurrence(trace, occurrenceId))
       .filter(Boolean)
+      .filter(({ node, occurrence }) => !parentOccurrenceIds.has(occurrence.id)
+        && !(
+          occurrence.parallel === undefined
+          && occurrence.parallelRole === undefined
+          && occurrence.stack?.at(-1)?.kind === 'parallel'
+          && node.label === occurrence.stack.at(-1)?.step
+        ))
       .sort((left, right) => left.occurrence.firstEventIndex - right.occurrence.firstEventIndex);
     const summary = element('section', 'inspector-run-summary inspector-parallel-summary');
     const heading = element('div', 'inspector-run-heading');
@@ -881,7 +889,7 @@ export function createExecutionView(options) {
     const occurrenceIndex = selected.node.occurrences.findIndex(
       (candidate) => candidate.id === selected.occurrence.id,
     );
-    const ordinal = selected.occurrence.ordinal ?? occurrenceIndex + 1;
+    const ordinal = selected.occurrence.presentationOrdinal ?? occurrenceIndex + 1;
     const summary = element('section', 'inspector-run-summary inspector-iteration-summary');
     const heading = element('div', 'inspector-run-heading');
     heading.append(

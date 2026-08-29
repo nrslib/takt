@@ -132,6 +132,18 @@ takt --task "Add authentication" --workflow dual
 
 **注意:** 引数として文字列を渡す場合（例: `takt "Add login feature"`）は初期メッセージとしてインタラクティブモードに入ります。
 
+## Workflow Maker
+
+`takt make` は TTY 専用の Workflow Maker を起動します。会話の前に New workflow、project、global、builtin、repertoire のいずれから base workflow を選びます。既存 workflow は参考入力としてだけ使用され、選択元のファイルは編集されません。
+
+会話中は `/workflow` で base を変更し、`/go` で完全な実装指示を準備します。承認画面には `.takt/make/YYYYMMDD-HHmmss-SSS/` 形式の生成予定パスと、Execute、Continue editing、Cancel の3選択肢が表示されます。Execute を選ぶまで Maker 成果物は書き込まれません。
+
+承認後は、静的に到達可能な依存関係を `workflows/`、`steps/`、`facet-pools/`、`facets/` で構成される分離ディレクトリへ複製し、参照を複製先へ書き換えます。そのディレクトリを作業ディレクトリとして builtin `workflow-maker` を直接実行し、task、worktree、commit、push、PR は作成しません。動的または未解決の依存関係は実行前に失敗します。成功・失敗のどちらでも、作成済みの成果物と生成された doctor レポートは表示パスに保存されます。
+
+```bash
+takt make
+```
+
 ## ACP Agent
 
 `takt-acp` は TAKT を Agent Client Protocol agent として stdio JSON-RPC で起動します。ACP 対応クライアントから agent コマンドとして起動してください。

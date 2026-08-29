@@ -10,7 +10,7 @@ const CAPABILITY_LEAF_KEYS: ReadonlySet<string> = new Set([
   'skills',
 ]);
 
-function assertCapabilityLeavesOnly(name: string, options: StepProviderOptions): void {
+export function assertCapabilitySetOptions(name: string, options: StepProviderOptions): void {
   for (const [providerKey, providerOptions] of Object.entries(options)) {
     if (providerOptions === undefined) {
       continue;
@@ -61,6 +61,6 @@ function resolveCapabilitySet(
   if (resolved === undefined) {
     throw new Error(`Configuration error: capabilities "${name}" resolved to no capability options`);
   }
-  assertCapabilityLeavesOnly(name, resolved);
+  assertCapabilitySetOptions(name, resolved);
   return resolved;
 }

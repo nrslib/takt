@@ -18,6 +18,16 @@ export interface FacetResolutionContext {
   lang: Language;
   workflowDir?: string;
   repertoireDir?: string;
+  resourceRoot?: string;
+}
+
+export function getIsolatedWorkflowResourceDir(
+  context: FacetResolutionContext,
+  siblingName: 'companions' | 'facets' | 'facet-pools' | 'provider-options' | 'steps' | 'workflows',
+): string | undefined {
+  return context.resourceRoot === undefined
+    ? undefined
+    : path.join(context.resourceRoot, siblingName);
 }
 
 function normalizeWorkflowBaseDir(workflowDir: string): string {
@@ -70,6 +80,11 @@ export function buildCandidateDirsWithPackage(
   facetType: FacetType,
   context: FacetResolutionContext,
 ): string[] {
+  const artifactFacetsDir = getIsolatedWorkflowResourceDir(context, 'facets');
+  if (artifactFacetsDir !== undefined) {
+    return [path.join(artifactFacetsDir, facetType)];
+  }
+
   const dirs: string[] = [];
 
   if (context.workflowDir && context.repertoireDir) {
@@ -90,6 +105,11 @@ export function buildCandidateDirsWithPackage(
 }
 
 export function buildFacetsRoots(context: FacetResolutionContext): string[] {
+  const artifactFacetsDir = getIsolatedWorkflowResourceDir(context, 'facets');
+  if (artifactFacetsDir !== undefined) {
+    return [artifactFacetsDir];
+  }
+
   const roots: string[] = [];
 
   if (context.workflowDir && context.repertoireDir) {

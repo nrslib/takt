@@ -22,6 +22,7 @@ import {
   assertPathSegmentsAreSafe,
   getErrorMessage,
   isAbsolutePathLike,
+  sanitizeTerminalText,
   spawnManagedProcess,
   type ManagedProcess,
 } from '../../shared/utils/index.js';
@@ -32,6 +33,7 @@ import {
 } from '../../shared/utils/sensitiveText.js';
 import type { DeepSeekHarnessProviderOptions } from '../../core/models/workflow-types.js';
 import { DEEPSEEK_HARNESS_DEFAULT_MODEL } from './constants.js';
+import { parseDeepSeekHarnessModelReference } from './model-reference.js';
 import type { DeepSeekHarnessCallOptions } from './types.js';
 const DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS = 30_000;
 const DEEPSEEK_HARNESS_CALL_TIMEOUT_MS = 3_600_000;
@@ -92,7 +94,10 @@ class DeepSeekHarnessProtocolError extends Error {
 }
 
 class DeepSeekHarnessTransportError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly bridgeCode?: string,
+  ) {
     super(message);
     this.name = 'DeepSeekHarnessTransportError';
   }
@@ -112,6 +117,13 @@ class DeepSeekHarnessTurnEndError extends Error {
   ) {
     super(message);
     this.name = 'DeepSeekHarnessTurnEndError';
+  }
+}
+
+class DeepSeekHarnessProviderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeepSeekHarnessProviderError';
   }
 }
 
@@ -284,12 +296,8 @@ function resolveBridgeConfiguration(
   options: DeepSeekHarnessCallOptions,
   providerOptions: DeepSeekHarnessProviderOptions | undefined,
 ): ResolvedBridgeConfiguration {
-  const model = options.model === undefined
-    ? DEEPSEEK_HARNESS_DEFAULT_MODEL
-    : options.model.trim();
-  if (model.length === 0) {
-    throw new Error('DeepSeek Harness model must not be empty');
-  }
+  const modelReference = options.model ?? DEEPSEEK_HARNESS_DEFAULT_MODEL;
+  const { provider, model } = parseDeepSeekHarnessModelReference(modelReference);
   assertSafeSessionId(options.sessionId);
   const cwd = canonicalizePathWithMissingTail(path.resolve(options.cwd));
   const maxTokens = requirePositiveSafeInteger(providerOptions?.maxTokens, 'maxTokens');
@@ -328,7 +336,7 @@ function resolveBridgeConfiguration(
     ? undefined
     : canonicalizePathWithMissingTail(resolvedCordis);
   return {
-    provider: 'deepseek-official',
+    provider,
     model,
     cwd,
     ...(sessionRoot === undefined ? {} : { sessionRoot }),
@@ -500,7 +508,9 @@ function sanitizeKnownSecrets(text: string, knownSecrets: Record<string, string>
 }
 
 function safeMessage(value: unknown, knownSecrets: Record<string, string>): string {
-  const sanitized = sanitizeKnownSecrets(getErrorMessage(value), knownSecrets);
+  const sanitized = sanitizeTerminalText(
+    sanitizeKnownSecrets(getErrorMessage(value), knownSecrets),
+  );
   if (Buffer.byteLength(sanitized, 'utf8') <= DEEPSEEK_HARNESS_MAX_ERROR_BYTES) {
     return sanitized;
   }
@@ -521,7 +531,17 @@ function bridgeError(error: BridgeErrorPayload | undefined, knownSecrets: Record
   if (code === 'malformed-response' || code === 'protocol-error') {
     return new DeepSeekHarnessProtocolError(formatted);
   }
-  return new DeepSeekHarnessTransportError(formatted);
+  return new DeepSeekHarnessTransportError(formatted, code);
+}
+
+function isRuntimeSetupFailure(error: unknown, diagnostic: string): boolean {
+  if (error instanceof DeepSeekHarnessTransportError) {
+    return error.bridgeCode === 'runtime-unavailable';
+  }
+  return (
+    diagnostic.includes('ENOENT')
+    || diagnostic.toLowerCase().includes('no such file or directory')
+  );
 }
 
 function abortError(reason: unknown): Error {
@@ -888,7 +908,7 @@ class DeepSeekHarnessProcess {
     } catch (error) {
       await this.terminate();
       const diagnostic = safeMessage(error, this.knownSecrets);
-      if (diagnostic.includes('ENOENT') || diagnostic.toLowerCase().includes('not found')) {
+      if (isRuntimeSetupFailure(error, diagnostic)) {
         throw new Error(
           `Unable to start DeepSeek Harness Python bridge with "${this.pythonPath}". `
           + 'Install Python 3.10+ and deepseek-harness-sdk with its matching runtime wheel, '
@@ -1468,6 +1488,19 @@ function getOrCreateProcess(options: DeepSeekHarnessCallOptions): DeepSeekHarnes
   return processRecord;
 }
 
+function formatProviderBridgeFailure(
+  error: Error,
+  options: DeepSeekHarnessCallOptions,
+  knownSecrets: Record<string, string>,
+): AgentFailureDetail {
+  const modelReference = options.model ?? DEEPSEEK_HARNESS_DEFAULT_MODEL;
+  const reason = `DeepSeek Harness model reference ${JSON.stringify(modelReference)} `
+    + `failed at the provider bridge/SDK: ${getErrorMessage(error)}`;
+  return createProviderErrorFailure(
+    safeMessage(reason, knownSecrets),
+  );
+}
+
 function failureDetail(
   error: unknown,
   options: DeepSeekHarnessCallOptions,
@@ -1483,7 +1516,11 @@ function failureDetail(
   if (error instanceof DeepSeekHarnessProtocolError) {
     return createProviderStreamParseFailure(safeMessage(error, knownSecrets));
   }
-  return createProviderErrorFailure(safeMessage(error, knownSecrets));
+  if (error instanceof DeepSeekHarnessTransportError || error instanceof DeepSeekHarnessProviderError) {
+    return formatProviderBridgeFailure(error, options, knownSecrets);
+  }
+  const reason = safeMessage(error, knownSecrets);
+  return createProviderErrorFailure(reason);
 }
 
 function emitFailure(
@@ -1510,7 +1547,7 @@ function emitFailure(
 
 function finishReasonFailure(state: HarnessStreamState): Error {
   const reason = state.failureReason ?? 'DeepSeek Harness turn ended with an error';
-  return new Error(reason);
+  return new DeepSeekHarnessProviderError(reason);
 }
 
 function createSuccessResponse(

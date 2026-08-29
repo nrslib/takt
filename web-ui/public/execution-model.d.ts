@@ -11,6 +11,8 @@ export interface ExecutionEvent {
   readonly childWorkflow?: string;
   readonly callInstance?: string;
   readonly stack?: readonly ExecutionStackFrame[];
+  /** Optional canonical runtime identity for parallel participation. */
+  readonly parallel?: ExecutionParallelMetadata;
   readonly status?: string;
   readonly provider?: string;
   readonly providerSource?: string;
@@ -32,6 +34,17 @@ export interface ExecutionEvent {
   readonly previewTruncated?: boolean;
   /** Stable identity emitted by the server's chronological graph cache. */
   readonly occurrenceId?: string;
+}
+
+export type ExecutionParallelRole =
+  | 'parent'
+  | 'direct_participant'
+  | 'workflow_call_participant';
+
+export interface ExecutionParallelMetadata {
+  readonly role: ExecutionParallelRole;
+  readonly participationId: string;
+  readonly parentParticipationId?: string;
 }
 
 export interface ExecutionJudgeStage {
@@ -57,6 +70,20 @@ export function parallelGroupFamilyKey(
   stack: readonly ExecutionStackFrame[],
   evidence?: ExecutionMeta,
 ): string | undefined;
+
+export interface ExecutionParallelGroupDescriptor {
+  readonly key: string;
+  readonly familyKey: string;
+  readonly label: string;
+  readonly iteration: number;
+  readonly frameIndex: number;
+}
+
+export function parallelGroupDescriptors(
+  stack: readonly ExecutionStackFrame[] | undefined,
+  iteration: number | undefined,
+  evidence?: ExecutionMeta,
+): readonly ExecutionParallelGroupDescriptor[];
 
 export interface ExecutionResumePointEvidence {
   readonly workflow_call_invocations?: Readonly<Record<string, {
@@ -85,6 +112,7 @@ export interface ExecutionOccurrence {
   readonly iteration?: number;
   readonly callInstance?: string;
   readonly stack?: readonly ExecutionStackFrame[];
+  readonly parallel?: ExecutionParallelMetadata;
   readonly status: string;
   /** Terminal status observed from a lifecycle boundary or terminal phase. */
   readonly terminalStatus?: 'completed' | 'failed' | 'aborted';
@@ -111,8 +139,18 @@ export interface ExecutionOccurrence {
   readonly parallelGroupLabel?: string;
   readonly parallelGroupOrdinal?: number;
   readonly parallelGroupAmbiguous?: boolean;
+  /** Canonical identities for every enclosing parallel boundary. */
+  readonly parallelGroupDescriptors?: readonly ExecutionParallelGroupDescriptor[];
+  /** Canonical runtime role and identity, when emitted by newer runs. */
+  readonly parallelRole?: ExecutionParallelRole;
+  readonly parallelParticipationId?: string;
+  readonly parallelParentParticipationId?: string;
+  /** Legacy records whose parent/participant role cannot be distinguished. */
+  readonly parallelLegacyAmbiguous?: boolean;
   /** One-based chronological ordinal across all observed step occurrences. */
   readonly ordinal?: number;
+  /** One-based ordinal within the owning STEP, used by the primary ITER label. */
+  readonly presentationOrdinal?: number;
 }
 
 export interface ExecutionNode {
@@ -162,6 +200,10 @@ export interface ExecutionParallelGroup {
   readonly firstEventIndex: number;
   readonly nodeIds: readonly string[];
   readonly occurrenceIds: readonly string[];
+  /** Parallel boundary occurrence(s), when a parent lifecycle was observed. */
+  readonly parentOccurrenceIds?: readonly string[];
+  /** Observed participant occurrence(s), excluding the parallel parent. */
+  readonly participantOccurrenceIds?: readonly string[];
 }
 
 export interface ExecutionTrace {

@@ -476,6 +476,7 @@ export function normalizeStepFromRaw(
     delayBeforeMs: step.delay_before_ms,
     structuredOutput: normalizeStepField(stepPath, ['structured_output', 'schema_ref'], () => resolveStructuredOutput(step, workflowSchemas, {
       projectDir: context?.projectDir ?? workflowDir,
+      resourceRoot: context?.resourceRoot,
     })),
     rules,
     outputContracts: step.output_contracts?.report && step.output_contracts.report.length > 0

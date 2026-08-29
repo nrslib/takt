@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import type { Command } from 'commander';
 import { initGlobalDirs, initProjectDirs } from '../../infra/config/global/initialization.js';
+import { getConfigDirCollision } from '../../infra/config/paths.js';
 import { isVerboseMode } from '../../infra/config/project/resolvedSettings.js';
 import { resolveConfigValues } from '../../infra/config/resolveConfigValue.js';
 import { initGitProvider } from '../../infra/git/index.js';
@@ -14,6 +15,16 @@ interface CliExecutionContext {
 }
 
 let executionContext: Readonly<CliExecutionContext> | undefined;
+
+export function assertConfigDirsDoNotCollide(projectDir: string): void {
+  const collisionPath = getConfigDirCollision(projectDir);
+  if (collisionPath === undefined) return;
+
+  throw new Error(
+    `Global and project configuration directories resolve to the same path: ${collisionPath}. `
+      + 'Set TAKT_CONFIG_DIR to a different directory.',
+  );
+}
 
 export async function initializeCliExecutionContext(program: Command, cliVersion: string): Promise<void> {
   const cwd = resolve(process.cwd());

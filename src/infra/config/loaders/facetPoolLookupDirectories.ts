@@ -7,7 +7,12 @@ import {
   getRepertoireFacetPoolsDir,
 } from '../paths.js';
 import { resolveNamedResourceWithSource } from './namedResourceResolver.js';
-import { getPackageFromWorkflowDir, getWorkflowBaseDir, type FacetResolutionContext } from './workflowPackageScope.js';
+import {
+  getPackageFromWorkflowDir,
+  getWorkflowBaseDir,
+  getIsolatedWorkflowResourceDir,
+  type FacetResolutionContext,
+} from './workflowPackageScope.js';
 
 const FACET_POOL_EXTENSIONS = ['.yaml', '.yml'] as const;
 
@@ -18,6 +23,11 @@ export interface ResolvedFacetPoolResource {
 }
 
 export function buildFacetPoolLookupDirs(context: FacetResolutionContext): string[] {
+  const artifactFacetPoolsDir = getIsolatedWorkflowResourceDir(context, 'facet-pools');
+  if (artifactFacetPoolsDir !== undefined) {
+    return [artifactFacetPoolsDir];
+  }
+
   const dirs: string[] = [];
   if (context.workflowDir && context.repertoireDir) {
     const pkg = getPackageFromWorkflowDir(getWorkflowBaseDir(context.workflowDir), context.repertoireDir);
@@ -48,12 +58,18 @@ export function getFacetPoolLookupDirs(
   scopedCandidateDirs?: ReadonlyMap<string, readonly string[]>,
 ): readonly string[] {
   if (!ref.startsWith('@')) {
+    if (context?.resourceRoot !== undefined) {
+      return buildFacetPoolLookupDirs(context);
+    }
     return candidateDirs ?? buildFacetPoolLookupDirs(requireContext(ref, context));
   }
   if (!isScopeRef(ref)) {
     throw new Error(`Configuration error: invalid scoped facet pool reference "${ref}"; expected @owner/repo/name`);
   }
   const resolvedContext = requireContext(ref, context);
+  if (resolvedContext.resourceRoot !== undefined) {
+    return buildFacetPoolLookupDirs(resolvedContext);
+  }
   if (!resolvedContext.repertoireDir) {
     throw new Error(`Configuration error: facet pool requires repertoireDir to resolve scoped reference "${ref}"`);
   }

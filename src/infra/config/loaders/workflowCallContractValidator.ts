@@ -17,6 +17,7 @@ interface WorkflowCallValidationLookupOptions {
   lookupCwd: string;
   parentTrustInfo?: WorkflowTrustInfo;
   skipWorkflowCallContractValidation?: boolean;
+  resourceRoot?: string;
 }
 
 interface ValidateWorkflowCallContractsDeps {
@@ -31,6 +32,7 @@ interface ValidateWorkflowCallContractsDeps {
 interface WorkflowCallContractValidationOptions {
   allowPathBasedCalls?: boolean;
   lookupCwd?: string;
+  resourceRoot?: string;
 }
 
 interface WorkflowCallContractValidationTraversal {
@@ -61,6 +63,7 @@ function validateWorkflowCallContractsRecursive(
   traversal: WorkflowCallContractValidationTraversal,
   deps: ValidateWorkflowCallContractsDeps,
   allowPathBasedCalls: boolean,
+  resourceRoot: string | undefined,
   invocationIdentity: string,
 ): void {
   const validationKey = getWorkflowCallValidationKey(workflow, lookupCwd, invocationIdentity);
@@ -91,6 +94,7 @@ function validateWorkflowCallContractsRecursive(
         callableArgs: step.args,
         parentTrustInfo,
         skipWorkflowCallContractValidation: true,
+        resourceRoot,
       });
       if (!childWorkflow) {
         continue;
@@ -103,6 +107,7 @@ function validateWorkflowCallContractsRecursive(
         traversal,
         deps,
         allowPathBasedCalls,
+        resourceRoot,
         getWorkflowCallInvocationIdentity(step.call, step.args),
       );
       try {
@@ -130,6 +135,7 @@ export function validateWorkflowCallContracts(
     { active: new Set<string>(), completed: new Set<string>() },
     deps,
     options?.allowPathBasedCalls !== false,
+    options?.resourceRoot,
     canonicalJson({ root: true }),
   );
 }

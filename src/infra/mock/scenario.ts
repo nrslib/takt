@@ -132,6 +132,12 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   if (typeof obj.content !== 'string') {
     throw new Error(`Scenario entry [${index}] must have a "content" string`);
   }
+  if (
+    obj.mismatch_content !== undefined
+    && (typeof obj.mismatch_content !== 'string' || obj.mismatch_content.length === 0)
+  ) {
+    throw new Error(`Scenario entry [${index}] "mismatch_content" must be a non-empty string if provided`);
+  }
 
   // status defaults to 'done'
   const status = obj.status ?? 'done';
@@ -169,11 +175,15 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   const streamEvents = validateStreamEvents(obj.stream_events, index);
   const textChunks = validateTextChunks(obj.text_chunks, index);
   const fileWrites = validateFileWrites(obj.file_writes, index);
+  const fileCondition = validateFileCondition(obj.file_condition, index);
 
   return {
     persona: obj.persona as string | undefined,
     status: status as ScenarioEntry['status'],
     content: obj.content as string,
+    ...(obj.mismatch_content === undefined
+      ? {}
+      : { mismatchContent: obj.mismatch_content as string }),
     structuredOutput: obj.structured_output as Record<string, unknown> | undefined,
     error: obj.error as string | undefined,
     failureCategory: obj.failure_category as ScenarioEntry['failureCategory'],
@@ -182,7 +192,44 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
     ...(streamEvents === undefined ? {} : { streamEvents }),
     ...(textChunks === undefined ? {} : { textChunks }),
     ...(fileWrites === undefined ? {} : { fileWrites }),
+    ...(fileCondition === undefined ? {} : { fileCondition }),
   };
+}
+
+function validateFileCondition(
+  value: unknown,
+  entryIndex: number,
+): ScenarioEntry['fileCondition'] {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`Scenario entry [${entryIndex}] "file_condition" must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const filename = record.filename;
+  const state = record.state;
+  if (
+    typeof filename !== 'string'
+    || filename.length === 0
+    || filename.includes('/')
+    || filename.includes('\\')
+    || (state !== 'missing' && state !== 'unreadable' && state !== 'readable')
+  ) {
+    throw new Error(`Scenario entry [${entryIndex}] "file_condition" is invalid`);
+  }
+  if (state === 'readable') {
+    if (typeof record.includes !== 'string' || record.includes.length === 0) {
+      throw new Error(
+        `Scenario entry [${entryIndex}] readable "file_condition" requires a non-empty "includes" string`,
+      );
+    }
+    return { filename, state, includes: record.includes };
+  }
+  if (record.includes !== undefined) {
+    throw new Error(
+      `Scenario entry [${entryIndex}] ${state} "file_condition" must not define "includes"`,
+    );
+  }
+  return { filename, state };
 }
 
 function validateStreamEvents(

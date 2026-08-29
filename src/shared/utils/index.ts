@@ -11,6 +11,7 @@ export * from './error.js';
 export * from './interactive-terminal.js';
 export * from './notification.js';
 export * from './pathBoundary.js';
+export * from './parallelMetadata.js';
 export * from './reportDir.js';
 export * from './runId.js';
 export * from './slackWebhook.js';

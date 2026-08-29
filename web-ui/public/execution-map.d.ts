@@ -30,12 +30,16 @@ export function edgeAnchorGeometry(
   canvasRect: { readonly left: number; readonly top: number },
   scale?: number,
   forceLoopPorts?: boolean,
+  portRects?: {
+    readonly source?: { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number };
+    readonly target?: { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number };
+  },
 ): { readonly source: EdgePoint; readonly target: EdgePoint };
 
 export function curvePath(
   source: EdgePoint,
   target: EdgePoint,
-  kind: 'transition' | 'loop' | 'call',
+  kind: 'transition' | 'loop' | 'call' | 'parallel',
 ): string;
 
 export interface ExecutionMapOptions {

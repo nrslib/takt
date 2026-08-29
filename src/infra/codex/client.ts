@@ -340,11 +340,6 @@ export class CodexClient {
     prompt: string,
     options: CodexCallOptions,
   ): Promise<AgentResponse> {
-    if (options.permissionControl === 'codex' && options.networkAccess !== undefined) {
-      throw new Error(
-        'Configuration error: provider_options.codex.permission_control=codex cannot be combined with provider_options.codex.network_access.',
-      );
-    }
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,

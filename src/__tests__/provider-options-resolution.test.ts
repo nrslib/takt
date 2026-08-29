@@ -172,19 +172,22 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
-  it('rejects permissionControl codex when network access survives merge', () => {
-    expect(() => mergeProviderOptions(
-      { codex: { networkAccess: true } },
-      { codex: { permissionControl: 'codex' } },
-    )).toThrow();
+  it.each([true, false])(
+    'keeps permissionControl=codex with networkAccess=%s across merge and effective resolution',
+    (networkAccess) => {
+      expect(mergeProviderOptions(
+        { codex: { networkAccess } },
+        { codex: { permissionControl: 'codex' } },
+      )).toEqual({ codex: { networkAccess, permissionControl: 'codex' } });
 
-    expect(() => resolveEffectiveProviderOptions(
-      'project',
-      undefined,
-      { codex: { networkAccess: true } },
-      { codex: { permissionControl: 'codex' } },
-    )).toThrow();
-  });
+      expect(resolveEffectiveProviderOptions(
+        'project',
+        undefined,
+        { codex: { networkAccess } },
+        { codex: { permissionControl: 'codex' } },
+      )).toEqual({ codex: { networkAccess, permissionControl: 'codex' } });
+    },
+  );
 
   it('Claude Skill enabled resolves false from config even when other Claude leaves come from the step', () => {
     const result = resolveEffectiveProviderOptions(
@@ -721,12 +724,12 @@ describe('resolveProviderOptionsSources (all paths)', () => {
     });
   });
 
-  it('returns workflow and provider_routing layer sources using merge precedence', () => {
+  it('returns capabilities and provider_routing layer sources using merge precedence', () => {
     const result = resolveProviderOptionsSources(
       { kiro: { agent: 'step-agent' } },
       [
         {
-          source: 'workflow',
+          source: 'capabilities',
           options: {
             claude: { sandbox: { excludedCommands: ['rm'] } },
             codex: { reasoningEffort: 'medium' },
@@ -766,7 +769,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
 
     expect(result).toEqual({
       'claude.allowedTools': 'provider_routing.tags',
-      'claude.sandbox.excludedCommands': 'workflow',
+      'claude.sandbox.excludedCommands': 'capabilities',
       'codex.networkAccess': 'persona_providers',
       'codex.reasoningEffort': 'provider_routing.personas',
       'opencode.networkAccess': 'provider_routing.tags',

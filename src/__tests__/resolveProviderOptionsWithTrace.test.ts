@@ -369,7 +369,7 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.originResolver('codex.networkAccess')).toBe('env');
   });
 
-  it('global/project provider_options の解決後に Codex permission control の競合を拒否する', () => {
+  it.each([true, false])('global の Codex permission control と project の network_access=%s を trace 付きで解決する', (networkAccess) => {
     writeFileSync(
       globalConfigPath,
       [
@@ -386,11 +386,21 @@ describe('resolveProviderOptionsWithTrace', () => {
     mkdirSync(configDir, { recursive: true });
     writeFileSync(
       join(configDir, 'config.yaml'),
-      ['provider_options:', '  codex:', '    network_access: true'].join('\n'),
+      ['provider_options:', '  codex:', `    network_access: ${networkAccess}`].join('\n'),
       'utf-8',
     );
 
-    expect(() => resolveProviderOptionsWithTrace(projectDir)).toThrow();
+    const result = resolveProviderOptionsWithTrace(projectDir);
+    if (result.value === undefined) {
+      throw new Error('Expected provider options to resolve');
+    }
+
+    expect(result.value.codex).toMatchObject({
+      permissionControl: 'codex',
+      networkAccess,
+    });
+    expect(result.originResolver('codex.permissionControl')).toBe('global');
+    expect(result.originResolver('codex.networkAccess')).toBe('local');
   });
 
   it('片方だけ指定した Codex Skill scope の未指定値を default のまま保つ', () => {
