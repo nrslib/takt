@@ -209,9 +209,13 @@ export async function selectAndExecuteTask(
   }
 
   if (!taskSuccess) {
-    if (options?.exitOnFailure === false) {
-      throw new Error('Task failed');
+    switch (options?.failureMode ?? 'exit') {
+      case 'return':
+        return;
+      case 'throw':
+        throw new Error('Task failed');
+      case 'exit':
+        process.exit(1);
     }
-    process.exit(1);
   }
 }

@@ -80,7 +80,10 @@ import type { WorkflowExecutionOptions } from './types.js';
 import {
   resolveRuntimeEnvironment,
 } from '../../../infra/config/runtime-provider/provider-environment.js';
-import type { CompanionReviewMode } from '../../../core/models/companion-types.js';
+import type {
+  CompanionFixPolicy,
+  CompanionReviewMode,
+} from '../../../core/models/companion-types.js';
 import {
   assertNoMixedWorkflowMcpConfiguration,
   collectLegacyProviderSignals,
@@ -131,6 +134,7 @@ export interface WorkflowExecutionBootstrap {
   selectorProvider: WorkflowExecutionOptions['selectorProvider'];
   companionEnabled: boolean;
   companionReviewMode: CompanionReviewMode;
+  companionFixPolicy: CompanionFixPolicy;
   companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
@@ -816,6 +820,7 @@ export async function createWorkflowExecutionBootstrap(
     selectorProvider,
     companionEnabled,
     companionReviewMode: resolvedRuntimeEnvironment.companionReviewMode,
+    companionFixPolicy: resolvedRuntimeEnvironment.companionFixPolicy,
     companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,

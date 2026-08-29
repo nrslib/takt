@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { TaskInfo, TaskResult, TaskRunner } from '../infra/task/index.js';
+import type { buildBooleanTaskResult } from '../features/tasks/execute/taskResultHandler.js';
+
+type AddTaskArgs = Parameters<TaskRunner['addTask']>;
+type BuildBooleanTaskResultArgs = Parameters<typeof buildBooleanTaskResult>;
 
 const {
   mockAddTask,
@@ -7,7 +12,10 @@ const {
   mockPersistTaskError,
   mockBuildBooleanTaskResult,
 } = vi.hoisted(() => ({
-  mockAddTask: vi.fn(() => ({
+  mockAddTask: vi.fn((
+    _content: AddTaskArgs[0],
+    _options?: AddTaskArgs[1],
+  ): TaskInfo => ({
     name: 'test-task',
     content: 'test task',
     filePath: '/project/.takt/tasks.yaml',
@@ -18,7 +26,16 @@ const {
   mockExecuteTask: vi.fn(),
   mockPersistTaskResult: vi.fn(),
   mockPersistTaskError: vi.fn(),
-  mockBuildBooleanTaskResult: vi.fn(() => ({ task: 'mock-result' })),
+  mockBuildBooleanTaskResult: vi.fn((
+    params: BuildBooleanTaskResultArgs[0],
+  ): TaskResult => ({
+    task: params.task,
+    success: params.taskSuccess,
+    response: params.taskSuccess ? params.successResponse : params.failureResponse,
+    executionLog: [],
+    startedAt: params.startedAt,
+    completedAt: params.completedAt,
+  })),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -39,7 +56,7 @@ vi.mock('../infra/task/index.js', () => ({
   resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   buildTaskInstruction: vi.fn((_taskDir: string, orderFile: string) => `Primary spec: \`${orderFile}\`.`),
   TaskRunner: vi.fn(() => ({
-    addTask: (...args: unknown[]) => mockAddTask(...args),
+    addTask: (...args: AddTaskArgs) => mockAddTask(...args),
   })),
 }));
 
@@ -73,7 +90,7 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
-  buildBooleanTaskResult: (...args: unknown[]) => mockBuildBooleanTaskResult(...args),
+  buildBooleanTaskResult: (...args: BuildBooleanTaskResultArgs) => mockBuildBooleanTaskResult(...args),
   persistTaskResult: (...args: unknown[]) => mockPersistTaskResult(...args),
   persistTaskError: (...args: unknown[]) => mockPersistTaskError(...args),
 }));
@@ -93,8 +110,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('exitOnFailure option in selectAndExecuteTask', () => {
-  it('should throw Error instead of calling process.exit(1) when exitOnFailure is false and task fails', async () => {
+describe('failureMode option in selectAndExecuteTask', () => {
+  it('should return without calling process.exit(1) when failureMode is return and task fails', async () => {
     mockExecuteTask.mockResolvedValue(false);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit:1');
@@ -104,7 +121,27 @@ describe('exitOnFailure option in selectAndExecuteTask', () => {
       await expect(
         selectAndExecuteTask('/project', 'test task', {
           workflow: 'default',
-          exitOnFailure: false,
+          failureMode: 'return',
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('should throw without calling process.exit(1) when failureMode is throw and task fails', async () => {
+    mockExecuteTask.mockResolvedValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      await expect(
+        selectAndExecuteTask('/project', 'test task', {
+          workflow: 'default',
+          failureMode: 'throw',
         }),
       ).rejects.toThrow('Task failed');
 
@@ -114,7 +151,27 @@ describe('exitOnFailure option in selectAndExecuteTask', () => {
     }
   });
 
-  it('should call process.exit(1) when exitOnFailure is not set (default) and task fails', async () => {
+  it('should call process.exit(1) when failureMode is exit and task fails', async () => {
+    mockExecuteTask.mockResolvedValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      await expect(
+        selectAndExecuteTask('/project', 'test task', {
+          workflow: 'default',
+          failureMode: 'exit',
+        }),
+      ).rejects.toThrow('process.exit:1');
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('should call process.exit(1) when failureMode is not set and task fails', async () => {
     mockExecuteTask.mockResolvedValue(false);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit:1');
@@ -133,34 +190,25 @@ describe('exitOnFailure option in selectAndExecuteTask', () => {
     }
   });
 
-  it('should call process.exit(1) when exitOnFailure is true and task fails', async () => {
-    mockExecuteTask.mockResolvedValue(false);
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
-      throw new Error('process.exit:1');
-    }) as never);
-
-    try {
-      await expect(
-        selectAndExecuteTask('/project', 'test task', {
-          workflow: 'default',
-          exitOnFailure: true,
-        }),
-      ).rejects.toThrow('process.exit:1');
-
-      expect(exitSpy).toHaveBeenCalledWith(1);
-    } finally {
-      exitSpy.mockRestore();
-    }
-  });
-
-  it('should complete normally when exitOnFailure is false and task succeeds', async () => {
+  it('should complete normally when the task succeeds', async () => {
     mockExecuteTask.mockResolvedValue(true);
 
     await expect(
       selectAndExecuteTask('/project', 'test task', {
         workflow: 'default',
-        exitOnFailure: false,
+        failureMode: 'return',
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it('should propagate unexpected execution errors in return mode', async () => {
+    mockExecuteTask.mockRejectedValue(new Error('provider unavailable'));
+
+    await expect(
+      selectAndExecuteTask('/project', 'test task', {
+        workflow: 'default',
+        failureMode: 'return',
+      }),
+    ).rejects.toThrow('provider unavailable');
   });
 });

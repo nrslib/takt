@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import type {
-  CompiledProviderEnvironment,
   ResolvedRuntimeEnvironment,
 } from '../infra/config/runtime-provider/provider-environment.js';
+import type { CompiledProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
 import { getProviderValidationErrorSource } from '../core/workflow/provider-validation-error.js';
 
 const {
@@ -36,7 +36,7 @@ const {
   mockError: vi.fn(),
   mockBlankLine: vi.fn(),
   mockInstructionBuilder: vi.fn(),
-  mockInstructionBuild: vi.fn(() => 'phase1'),
+  mockInstructionBuild: vi.fn<(output: unknown) => string>(() => 'phase1'),
   mockReportBuild: vi.fn(() => 'phase2'),
   mockJudgmentBuild: vi.fn(() => 'phase3'),
   mockNeedsStatusJudgmentPhase: vi.fn(() => false),
@@ -78,6 +78,7 @@ function compiledEnvironment(
       providerRouting: undefined,
       autoRouting: undefined,
       providerOptions: undefined,
+      permissionMode: undefined,
       tagConflictPolicy: 'last-wins',
       internalAgents: undefined,
       providerLadders: undefined,
@@ -85,6 +86,7 @@ function compiledEnvironment(
     },
     companionEnabled: true,
     companionReviewMode: 'completion',
+    companionFixPolicy: 'single',
     providerConfigMode: 'legacy',
   };
 }

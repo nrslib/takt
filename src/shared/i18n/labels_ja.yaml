@@ -81,6 +81,35 @@ interactive:
     effort: "この会話で使う推論強度を指定する"
     verify: "現在の形式仕様を検証する"
 
+# ===== Workflow Maker =====
+workflowMaker:
+  basePrompt: "Workflow Maker の base を選択してください:"
+  workflowPrompt: "ワークフローを選択してください:"
+  namePrompt: "ワークフロー名"
+  sources:
+    new: "新規ワークフロー"
+    project: "プロジェクトのワークフロー"
+    user: "グローバルのワークフロー"
+    builtin: "組み込みワークフロー"
+    repertoire: "レパートリーのワークフロー"
+  intro: "Workflow Maker - 作成したい workflow を説明してください。/workflow で base 変更、/go で生成準備、/cancel で終了します。"
+  proposed: "Workflow Maker の実装指示:"
+  plannedPath: "生成予定パス: {path}"
+  actionPrompt: "どうしますか？"
+  actions:
+    execute: "実行"
+    continue: "編集を続ける"
+  continuePrompt: "Workflow Maker の要件編集を続けます。"
+  noWorkflows: "この source で利用できる workflow はありません。"
+  baseChanged: "Workflow Maker の base を {name} へ変更しました。"
+  wait: "ワークフロー完了までお待ちください…"
+  completed: "Workflow Maker が完了しました。成果物: {path}。Doctor レポート: {report}"
+  completedWithoutReport: "Workflow Maker が完了しました。成果物: {path}。"
+  failed: "Workflow Maker が失敗しました。成果物は {path} に保存されています。理由: {reason}。Doctor レポート: {report}"
+  failedWithoutReport: "Workflow Maker が失敗しました。成果物は {path} に保存されています。理由: {reason}。"
+  planningFailed: "Workflow Maker の成果物を準備できませんでした: {reason}"
+  ttyRequired: "Workflow Maker には対話型ターミナル（TTY）が必要です。"
+
 # ===== Exec Mode UI =====
 exec:
   common:

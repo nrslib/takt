@@ -74,8 +74,9 @@ program
  * Exported for use in slash-command fallback logic.
  */
 export async function runPreActionHook(): Promise<void> {
+  const { assertConfigDirsDoNotCollide, initializeCliExecutionContext } = await import('./initialization.js');
+  assertConfigDirsDoNotCollide(process.cwd());
   await scheduleUpdateCheck();
-  const { initializeCliExecutionContext } = await import('./initialization.js');
   await initializeCliExecutionContext(program, cliVersion);
 }
 

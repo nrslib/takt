@@ -7,6 +7,7 @@ import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { GitSelectorCommandRunner } from '../infra/task/selector-git-command-runner.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowResolver.js';
 import { applyDefaultMocks, createTestTmpDir, makeResponse, mockRuleEvaluationSequence, mockRunAgentSequence } from './engine-test-helpers.js';
 
 vi.mock('../agents/runner.js', () => ({
@@ -40,6 +41,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 const MOCK_SELECTOR_PROVIDER = {
   provider: 'mock' as const,
+  model: undefined,
   providerOptions: {},
 };
 
@@ -72,6 +74,61 @@ function agentOptionsOfCall(index: number) {
 }
 
 describe('capabilities reach the final provider call', () => {
+  it.each([
+    { stepName: 'plan' },
+    { stepName: 'write_tests' },
+  ])(
+    'builtin simple の $stepName capability と Codex runtime profile を最終 provider options へ渡す',
+    async ({ stepName }) => {
+      mkdirSync(join(tmpDir, '.takt'), { recursive: true });
+      writeFileSync(join(tmpDir, '.takt', 'config.yaml'), 'language: ja\n', 'utf-8');
+      const config = loadWorkflowByIdentifier('simple', tmpDir);
+      if (!config) {
+        throw new Error('Expected builtin workflow "simple"');
+      }
+      mockRunAgentSequence([makeResponse({ persona: 'agent', content: 'done' })]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+      const engine = new WorkflowEngine(config, tmpDir, 'task', {
+        projectCwd: tmpDir,
+        provider: 'codex',
+        providerSource: 'runtime-v1',
+        providerOptionsProviderSource: 'runtime-v1',
+        providerOptions: {
+          codex: {
+            permissionControl: 'codex',
+            reasoningEffort: 'high',
+            fastMode: true,
+          },
+        },
+        startStep: stepName,
+        maxStepsOverride: 1,
+        workflowCallResolver: () => null,
+      });
+      const abortReasons: string[] = [];
+      engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+
+      const state = await engine.run();
+
+      if (vi.mocked(runAgent).mock.calls.length === 0) {
+        throw new Error(`Expected runAgent call; workflow ended with ${JSON.stringify({
+          status: state.status,
+          currentStep: state.currentStep,
+          iteration: state.iteration,
+          lastOutput: state.lastOutput,
+          abortReasons,
+        })}`);
+      }
+      expect(agentOptionsOfCall(0).providerOptions?.codex).toEqual({
+        permissionControl: 'codex',
+        networkAccess: true,
+        reasoningEffort: 'high',
+        fastMode: true,
+        skills: { repo: true, user: true },
+      });
+    },
+  );
+
   it('should pass the resolved capability options to runAgent when a step declares capabilities', async () => {
     const config = normalizeWorkflowConfig(
       {

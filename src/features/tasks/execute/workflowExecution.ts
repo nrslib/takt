@@ -206,7 +206,11 @@ async function executeWorkflowInternal(
     : { ...options, prContext };
   const parentRunPid = process.pid;
   const liveWorkflowCallResolver = createWorkflowCallResolver(
-    createWorkflowExecutionContext(workflowConfig, options.projectCwd),
+    createWorkflowExecutionContext(
+      workflowConfig,
+      options.projectCwd,
+      options.workflowResourceRoot,
+    ),
   );
   const preparedBundle = prepareWorkflowExecutionBundle({
     rootWorkflow: workflowConfig,
@@ -432,6 +436,7 @@ async function executeWorkflowInternal(
         internalAgentSeats: bootstrap.internalAgentSeats,
         companionEnabled: bootstrap.companionEnabled,
         companionReviewMode: bootstrap.companionReviewMode,
+        companionFixPolicy: bootstrap.companionFixPolicy,
         companionProviders: bootstrap.companionProviders,
         providerRoutingTagConflictPolicy: bootstrap.providerRoutingTagConflictPolicy,
         providerProfiles: options.providerProfiles,

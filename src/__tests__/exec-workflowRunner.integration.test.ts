@@ -302,8 +302,8 @@ describe('runGeneratedWorkflow integration', () => {
     }));
   });
 
-  it('should pass exitOnFailure: false to selectAndExecuteTask so REPL continues on /go failure', async () => {
-    const task = 'Executable task with exitOnFailure';
+  it('should pass failureMode: throw so /go failure reaches the exec command handler', async () => {
+    const task = 'Executable task with failureMode';
     mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
       if (!options?.reportDirName) {
         throw new Error('reportDirName is required');
@@ -314,7 +314,7 @@ describe('runGeneratedWorkflow integration', () => {
     await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
 
     const options = mockSelectAndExecuteTask.mock.calls[0]?.[2];
-    expect(options?.exitOnFailure).toBe(false);
+    expect(options?.failureMode).toBe('throw');
   });
 
   it('should build readonly permission profiles for every exec provider', () => {

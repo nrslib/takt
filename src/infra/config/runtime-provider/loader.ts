@@ -106,6 +106,10 @@ function mergeRuntimeProviderFiles(
           && global.companion?.review_mode === undefined
           ? {}
           : { review_mode: project.companion?.review_mode ?? global.companion?.review_mode }),
+        ...(project.companion?.fix_policy === undefined
+          && global.companion?.fix_policy === undefined
+          ? {}
+          : { fix_policy: project.companion?.fix_policy ?? global.companion?.fix_policy }),
       };
   return {
     version: RUNTIME_PROVIDER_VERSION,

@@ -40,7 +40,9 @@ import {
 import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import {
+  DEFAULT_COMPANION_FIX_POLICY,
   DEFAULT_COMPANION_REVIEW_MODE,
+  type CompanionFixPolicy,
   type CompanionReviewMode,
 } from '../../../core/models/companion-types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
@@ -54,6 +56,7 @@ export interface ResolvedRuntimeEnvironment {
   configProviderOptions?: StepProviderOptions;
   companionEnabled: boolean;
   companionReviewMode: CompanionReviewMode;
+  companionFixPolicy: CompanionFixPolicy;
   providerConfigMode: ProviderConfigMode;
 }
 
@@ -84,6 +87,7 @@ export function resolveRuntimeEnvironment(
   const runtimeFile = resolvedRuntimeFile.runtimeFile;
   const companionEnabled = runtimeFile?.companion?.enabled ?? DEFAULT_COMPANION_ENABLED;
   const companionReviewMode = runtimeFile?.companion?.review_mode ?? DEFAULT_COMPANION_REVIEW_MODE;
+  const companionFixPolicy = runtimeFile?.companion?.fix_policy ?? DEFAULT_COMPANION_FIX_POLICY;
   const runtimeFileForProviderResolution = getEffectiveRuntimeProviderFile(runtimeFile);
   const { mode } = determineProviderConfigMode({
     runtimeFile: runtimeFileForProviderResolution,
@@ -94,6 +98,7 @@ export function resolveRuntimeEnvironment(
       providerEnvironment: compileProviderEnvironment({ kind: 'legacy', legacy: input.legacy }),
       companionEnabled,
       companionReviewMode,
+      companionFixPolicy,
       providerConfigMode: mode,
     };
   }
@@ -117,6 +122,7 @@ export function resolveRuntimeEnvironment(
       configProviderOptions: input.legacy.providerOptions,
       companionEnabled,
       companionReviewMode,
+      companionFixPolicy,
       providerConfigMode: mode,
     };
   }
@@ -145,6 +151,7 @@ export function resolveRuntimeEnvironment(
     configProviderOptions: input.legacy.providerOptions,
     companionEnabled,
     companionReviewMode,
+    companionFixPolicy,
     providerConfigMode: mode,
   };
 }

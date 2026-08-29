@@ -22,6 +22,7 @@ export type {
   NdjsonCompanionReviewSkipped,
   NdjsonCompanionReviewMode,
   NdjsonCompanionReviewTrigger,
+  NdjsonParallelMetadata,
   NdjsonRecord,
 } from './session.js';
 

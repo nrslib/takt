@@ -6,7 +6,11 @@ import {
   getRepertoireProviderOptionsDir,
 } from '../paths.js';
 import type { FacetResolutionContext } from './workflowPackageScope.js';
-import { getPackageFromWorkflowDir, getWorkflowBaseDir } from './workflowPackageScope.js';
+import {
+  getIsolatedWorkflowResourceDir,
+  getPackageFromWorkflowDir,
+  getWorkflowBaseDir,
+} from './workflowPackageScope.js';
 import { resolveNamedResourceWithSource, type NamedResourceFileAccess } from './namedResourceResolver.js';
 
 const PROVIDER_OPTIONS_EXTENSIONS = ['.yaml', '.yml'] as const;
@@ -24,6 +28,11 @@ export function getScopedProviderOptionsCandidateKey(owner: string, repo: string
 }
 
 export function buildProviderOptionsLookupDirs(context: FacetResolutionContext): string[] {
+  const artifactProviderOptionsDir = getIsolatedWorkflowResourceDir(context, 'provider-options');
+  if (artifactProviderOptionsDir !== undefined) {
+    return [artifactProviderOptionsDir];
+  }
+
   const dirs: string[] = [];
   const builtinProviderOptionsDir = getBuiltinProviderOptionsDir(context.lang);
 
@@ -69,6 +78,14 @@ export function resolveProviderOptionsScopeRef(
   fileAccess?: NamedResourceFileAccess,
   scopedCandidateDirs?: ScopedProviderOptionsCandidateDirs,
 ): ResolvedProviderOptionsResource | undefined {
+  if (context.resourceRoot !== undefined) {
+    const artifactProviderOptionsDir = getIsolatedWorkflowResourceDir(context, 'provider-options');
+    if (artifactProviderOptionsDir === undefined) {
+      return undefined;
+    }
+    const scopeRef = parseScopeRef(ref);
+    return resolveProviderOptionsByName(scopeRef.name, [artifactProviderOptionsDir], fileAccess);
+  }
   if (!context.repertoireDir) {
     throw new Error(`Configuration error: provider_options.extends requires repertoireDir to resolve scope reference: ${ref}`);
   }

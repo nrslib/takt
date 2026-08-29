@@ -76,6 +76,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     : (resolveConfigValue(resolvedCwd, 'draftPr') ?? false);
   const selectOptions: SelectAndExecuteOptions = {
     workflow: resolvedWorkflow,
+    failureMode: 'exit',
   };
 
   if (pipelineMode) {
@@ -362,7 +363,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         if (conversationResult.attachments) {
           selectOptions.attachments = conversationResult.attachments;
         }
-        await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
+        await selectAndExecuteTask(resolvedCwd, confirmedTask, {
+          ...selectOptions,
+          failureMode: useTui ? 'return' : 'exit',
+        }, agentOverrides);
       },
       create_issue: async ({ task: confirmedTask }) => {
         const labels = await promptLabelSelection(lang);

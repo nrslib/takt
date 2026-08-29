@@ -8,7 +8,7 @@ import type {
   TeamLeaderWorkflowStep,
   WorkflowState,
 } from '../core/models/index.js';
-import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
+import type { CompanionDiff, CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { buildCompanionMailboxPath } from '../core/workflow/companion/mailbox.js';
 import { CompanionStepRuntime } from '../core/workflow/companion/step-runtime.js';
 import { CompanionStructuredCaller } from '../core/workflow/companion/structured-call.js';
@@ -75,7 +75,7 @@ function dependencies(
   diffReader: CompanionDiffReader,
   reviewMode: CompanionReviewMode = 'completion',
   intervalMs = 60_000,
-  selectorProvider?: { provider: 'mock' },
+  selectorProvider?: { provider: 'mock'; model: string },
 ) {
   return {
     cwd,
@@ -92,12 +92,14 @@ function dependencies(
         description: 'review',
         instruction: 'review',
         intervalMs,
+        instructionRef: 'reviewer',
       },
     },
     providers: { reviewer: { provider: 'mock' as const } },
     ...(selectorProvider === undefined ? {} : { selectorProvider }),
     diffReader,
     reviewMode,
+    fixPolicy: 'single' as const,
     buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
     emitEvent: vi.fn(),
     recordUsage: vi.fn(),
@@ -122,7 +124,7 @@ describe('companion runtime lifecycle', () => {
   it('rereads the latest diff for each completion review without embedding it in the prompt', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-companion-cumulative-diff-'));
     roots.push(cwd);
-    let currentSnapshot = {
+    let currentSnapshot: CompanionDiff = {
       ...snapshot,
       digest: 'part-one-digest',
       changedLines: 12,
@@ -227,11 +229,17 @@ describe('companion runtime lifecycle', () => {
     const workflowStep = teamLeaderStep();
 
     const firstRuntime = await CompanionStepRuntime.create(
-      dependencies(cwd, workflowStep, diffReader, 'completion', 60_000, { provider: 'mock' }),
+      dependencies(cwd, workflowStep, diffReader, 'completion', 60_000, {
+        provider: 'mock',
+        model: 'mock-selector',
+      }),
     );
     firstRuntime.stop();
     const secondRuntime = await CompanionStepRuntime.create(
-      dependencies(cwd, workflowStep, diffReader, 'completion', 60_000, { provider: 'mock' }),
+      dependencies(cwd, workflowStep, diffReader, 'completion', 60_000, {
+        provider: 'mock',
+        model: 'mock-selector',
+      }),
     );
     secondRuntime.stop();
 
@@ -266,7 +274,10 @@ describe('companion runtime lifecycle', () => {
       });
     const workflowStep = teamLeaderStep();
     const runtime = await CompanionStepRuntime.create(
-      dependencies(cwd, workflowStep, diffReader, 'completion', 60_000, { provider: 'mock' }),
+      dependencies(cwd, workflowStep, diffReader, 'completion', 60_000, {
+        provider: 'mock',
+        model: 'mock-selector',
+      }),
     );
     const workflowState = state();
 

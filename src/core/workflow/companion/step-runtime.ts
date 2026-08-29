@@ -9,6 +9,7 @@ import type {
   CompanionFinding,
   NormalAgentWorkflowStep,
   ResolvedCompanionDefinition,
+  CompanionFixPolicy,
   CompanionReviewMode,
   TeamLeaderWorkflowStep,
   WorkflowState,
@@ -62,6 +63,7 @@ interface CompanionStepRuntimeDeps {
   readonly language: 'en' | 'ja';
   readonly task: string;
   readonly reviewMode: CompanionReviewMode;
+  readonly fixPolicy: CompanionFixPolicy;
   readonly step: NormalAgentWorkflowStep | TeamLeaderWorkflowStep;
   readonly definitions: Readonly<Record<string, ResolvedCompanionDefinition>>;
   readonly providers: Readonly<Record<string, ProviderRoutingEntry>>;
@@ -235,6 +237,29 @@ export class CompanionStepRuntime {
     }
   }
 
+  completeSingleFix(state: WorkflowState, followUpRounds: number): void {
+    const completionFailure = state.companion?.completionFailure === true;
+    const completion = {
+      completionSettled: !completionFailure,
+      followUpRounds,
+      ...(completionFailure ? {
+        completionFailure: true,
+        ...(state.companion?.reason === undefined ? {} : { reason: state.companion.reason }),
+      } : {}),
+    } as const;
+    state.companion = completion;
+    try {
+      this.events.complete({
+        completionSettled: completion.completionSettled,
+        completionFailure,
+        followUpRounds,
+        ...(completion.reason === undefined ? {} : { reason: completion.reason }),
+      });
+    } catch (error) {
+      this.reportCompanionAuditWriteFailure('companion_complete', error);
+    }
+  }
+
   beginReviewAttempt(): void {
     this.currentFollowUpRound = 0;
     this.latestImplementerExplanation = undefined;
@@ -248,7 +273,11 @@ export class CompanionStepRuntime {
   beginFollowUpRound(sequence: number, findingCount: number): void {
     this.currentFollowUpRound = sequence - 1;
     this.events.fixRound(sequence, findingCount);
-    if (this.deps.reviewMode === 'live' && this.reviewAttemptStarted) {
+    if (
+      this.deps.reviewMode === 'live'
+      && this.deps.fixPolicy === 'loop'
+      && this.reviewAttemptStarted
+    ) {
       this.scheduler?.start();
     }
   }

@@ -4,6 +4,10 @@ export const COMPANION_REVIEW_MODE_VALUES = ['completion', 'live'] as const;
 export type CompanionReviewMode = (typeof COMPANION_REVIEW_MODE_VALUES)[number];
 export const DEFAULT_COMPANION_REVIEW_MODE: CompanionReviewMode = 'completion';
 
+export const COMPANION_FIX_POLICY_VALUES = ['single', 'loop'] as const;
+export type CompanionFixPolicy = (typeof COMPANION_FIX_POLICY_VALUES)[number];
+export const DEFAULT_COMPANION_FIX_POLICY: CompanionFixPolicy = 'single';
+
 export interface CompanionSelection {
   readonly fixed: readonly string[];
   readonly pool: readonly string[];

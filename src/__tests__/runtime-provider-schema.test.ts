@@ -289,6 +289,55 @@ describe('RuntimeProviderFileSchema', () => {
     }).success).toBe(false);
   });
 
+  it.each(['single', 'loop'] as const)('accepts companion.fix_policy %s without enabled', (fixPolicy) => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { fix_policy: fixPolicy },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.companion?.enabled).toBeUndefined();
+      expect((result.data.companion as unknown as { fix_policy?: string } | undefined)?.fix_policy)
+        .toBe(fixPolicy);
+    }
+  });
+
+  it.each([
+    ['automatic', 'unknown string'],
+    [true, 'boolean'],
+  ])('rejects companion.fix_policy %j (%s) at the field boundary', (fixPolicy, _label) => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false, fix_policy: fixPolicy },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: ['companion', 'fix_policy'] }),
+      ]));
+    }
+  });
+
+  it('rejects companion.fix_policy under provider instead of companion', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: { fix_policy: 'loop' },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unrecognized_keys',
+          path: ['provider'],
+          keys: ['fix_policy'],
+        }),
+      ]));
+    }
+  });
+
   it.each(['completion', 'live'] as const)('accepts companion.review_mode %s without enabled', (reviewMode) => {
     const result = RuntimeProviderFileSchema.safeParse({
       version: 1,

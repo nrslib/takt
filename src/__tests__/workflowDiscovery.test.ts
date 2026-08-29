@@ -3,8 +3,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { loadAllWorkflowsWithSourcesFromDirs } from '../infra/config/loaders/workflowDiscovery.js';
+import { assertAllowedPersonaPath } from '../infra/config/loaders/workflowPersonaPathPolicy.js';
 
 describe('workflowDiscovery', () => {
+  it('allows shipped personas from either language outside an isolated artifact', () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), 'takt-workflow-discovery-artifact-'));
+    try {
+      for (const [personaLanguage, contextLanguage] of [['en', 'ja'], ['ja', 'en']] as const) {
+        const personaPath = join(process.cwd(), 'builtins', personaLanguage, 'facets', 'personas', 'coder.md');
+        expect(() => assertAllowedPersonaPath(personaPath, { lang: contextLanguage })).not.toThrow();
+        expect(() => assertAllowedPersonaPath(personaPath, {
+          lang: contextLanguage,
+          resourceRoot: isolatedRoot,
+        })).toThrow('Persona prompt file path is not allowed');
+      }
+    } finally {
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it('loads every shipped English and Japanese workflow through the normalized rule schema', () => {
     const onWarning = vi.fn();
     const loadLanguageWorkflows = (language: 'en' | 'ja') => loadAllWorkflowsWithSourcesFromDirs(

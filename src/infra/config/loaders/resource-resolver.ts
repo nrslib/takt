@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { getProjectFacetDir, getRepertoireFacetDir, type FacetType } from '../paths.js';
 import { assertPathSegmentsAreSafe } from '../../../shared/utils/pathBoundary.js';
 import {
@@ -467,7 +467,7 @@ function resolveFacetFromCandidateDirs(
     if (excludeSourcePath && samePath(filePath, excludeSourcePath)) {
       continue;
     }
-    if (existsSync(filePath)) {
+    if (existsSync(filePath) && readdirSync(dirname(filePath)).includes(basename(filePath))) {
       if (selectorInstruction) {
         assertSelectorInstructionFileIsSafe(filePath, context);
       }
@@ -558,7 +558,7 @@ export function resolveFacetPath(
   facetType: FacetType,
   context: FacetResolutionContext,
 ): string | undefined {
-  if (isScopeRef(name) && context.repertoireDir) {
+  if (isScopeRef(name) && context.resourceRoot === undefined && context.repertoireDir) {
     const scopeRef = parseScopeRef(name);
     const filePath = resolveScopeRef(scopeRef, facetType, context.repertoireDir);
     if (!existsSync(filePath)) {
@@ -569,6 +569,9 @@ export function resolveFacetPath(
   }
   const filePath = resolveFacetPathGeneric(name, buildCandidateDirsWithPackage(facetType, context));
   if (filePath) {
+    if (!readdirSync(dirname(filePath)).includes(basename(filePath))) {
+      return undefined;
+    }
     assertFacetFileIsSafe(filePath, facetType, context);
   }
   return filePath;
@@ -719,7 +722,7 @@ export function resolveRefToContentWithSource(
     return applyFacetIncludes(expandFacetInheritance(resolved, facetType, context, [], options?.selectorInstruction === true), context);
   }
 
-  if (facetType && context && isScopeRef(ref) && context.repertoireDir) {
+  if (facetType && context && isScopeRef(ref) && context.resourceRoot === undefined && context.repertoireDir) {
     const scopeRef = parseScopeRef(ref);
     const filePath = resolveScopeRef(scopeRef, facetType, context.repertoireDir);
     if (options?.selectorInstruction && existsSync(filePath)) {
@@ -736,6 +739,10 @@ export function resolveRefToContentWithSource(
   }
 
   if (options?.selectorInstruction === true && isScopeRef(ref)) {
+    return undefined;
+  }
+
+  if (context?.resourceRoot !== undefined && isScopeRef(ref)) {
     return undefined;
   }
 
@@ -859,7 +866,7 @@ export function resolvePersona(
   workflowDir: string,
   context?: FacetResolutionContext,
 ): { personaSpec?: string; personaPath?: string } {
-  if (rawPersona && isScopeRef(rawPersona) && context?.repertoireDir) {
+  if (rawPersona && isScopeRef(rawPersona) && context?.resourceRoot === undefined && context?.repertoireDir) {
     const scopeRef = parseScopeRef(rawPersona);
     const personaPath = resolveScopeRef(scopeRef, 'personas', context.repertoireDir);
     if (existsSync(personaPath)) {

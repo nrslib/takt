@@ -9,6 +9,8 @@ phase 粒度の usage events と集計方法は [Observability Guide](./observab
 
 `~/.takt/config.yaml` で TAKT のデフォルト設定を行います。このファイルは初回実行時に自動作成されます。すべてのフィールドは省略可能です。
 
+TAKT は、存在するグローバル設定ディレクトリとプロジェクト設定ディレクトリを実体パスで比較し、まだ存在しないディレクトリは正規化した絶対論理パスで比較します。この解決後にグローバル設定ディレクトリと現在のプロジェクトの `.takt/` が一致する場合、TAKT はどちらの設定ディレクトリも初期化する前にエラー終了します。ホームディレクトリで実行する場合やシンボリックリンク経由で衝突する場合は、`TAKT_CONFIG_DIR` をプロジェクトの `.takt/` とは異なるディレクトリに設定してから再実行してください。`--help` と `--version` はこのチェックの対象外です。
+
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI 言語: 'en' または 'ja'
@@ -587,14 +589,16 @@ version: 1
 companion:
   enabled: true
   review_mode: completion # completion | live
+  fix_policy: single      # single | loop
 ```
 
-`companion` ポリシーには `enabled` または `review_mode` の少なくとも一方を
-指定します。`companion: { review_mode: live }` のような mode 単独指定は受理され、
+`companion` ポリシーには `enabled`、`review_mode`、`fix_policy` の少なくとも一方を
+指定します。`companion: { review_mode: live }` や
+`companion: { fix_policy: loop }` のような mode または fix policy 単独指定は受理され、
 `enabled: false` として解決されます。空の `companion: {}` は拒否されます。
 
-global と project の両方にポリシーがある場合、その値は論理積で合成されるため、global
-側で無効化した companion を project 側の `true` で再有効化することはできません。
+global と project の両方にポリシーがある場合、`enabled` の値は論理積で合成されるため、
+global 側で無効化した companion を project 側の `true` で再有効化することはできません。
 レイヤー合成時に未指定のポリシーは中立として扱い、両方とも未指定なら companion は
 無効のままです。
 
@@ -603,7 +607,13 @@ global と project の両方にポリシーがある場合、その値は論理�
 エージェントの成功応答後に累積差分をレビューし、`live` は応答中の quiet、forced、
 commit 発火を維持します。指定できる値は `completion` と `live` だけで、無効な値は
 `runtime.yaml` の読み込み時にエラーになります。`companion.enabled` が `false` でも
-mode の構造は検証されますが、Companion provider の解決と実行は行われません。
+mode と fix policy の構造は検証されますが、Companion provider の解決と実行は行われません。
+
+`companion.fix_policy` の既定値は `single` です。project に指定した値は global を
+上書きし、project で省略した場合は global の値を継承します。`single` は初回レビュー後に
+advisory な修正 follow-up を最大 1 回だけ実行し、その follow-up の再レビューは行いません。
+`loop` は従来のレビューと修正の反復動作を維持します。指定できる値は `single` と `loop`
+だけで、無効な値は `runtime.yaml` の読み込み時にエラーになります。
 
 companion の provider target（`targets.companions`）とプロバイダ能力要件が適用されるのは
 companion が有効な間だけです。無効時も companion 宣言と `targets.companions` の構造検証は
@@ -1202,6 +1212,23 @@ provider_options:
     runtime_mode: exe                  # exe または node
 ```
 
+DeepSeek Harness の `model` フィールドは、`deepseek-v4-flash` のような
+model 参照だけの形式と、`openai/gpt-5.4` や
+`my-gateway/org/custom-model` のような `<route>/<model>` 形式を受け付けます。
+最初の `/` より前を provider route として使い、それより後の `/` は model
+参照の一部として保持します。route を省略した場合は後方互換のため
+`deepseek-official` を使います。route は記述された値のまま公式 SDK に渡し、TAKT
+独自の allowlist や provider alias 変換は行いません。route と model の各部分は、
+前後の空白や model 内の `:` も含め、記述された値のまま渡します。TAKT は model
+部分を不透明な model ID として扱います。たとえば `ollama/qwen3.5:397b` は完全な
+model ID のまま SDK の解釈に委ねます。
+空文字列、`/gpt-5.4`（空の route）、`openai/`（空の model）などの形式不正は
+bridge 起動前に拒否されます。空白だけの route または model も空として扱います。
+エラーには入力された参照と検証箇所が含まれます。未知の route や model ID は TAKT
+で事前検証せず、記述された値のまま provider と model の別フィールドとして
+bridge/SDK に渡します。SDK が拒否した場合は、入力された参照と bridge/SDK で
+失敗した箇所を含むエラーになります。
+
 credential safety のため、`python_path` は信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH` からのみ設定できます。workflow と project-local provider options では既定の `python3` executable を使用してください。`cordis` も実行する tool composition を選択するため、信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` からのみ設定できます。上の例では両方の項目を意図的に省略しています。同じ制約は project の `runtime.yaml` profile にも適用されます。global runtime profile では信頼できる値を選択できます。project runtime profile の `base_url` は loopback のみ使用できます。
 
 `session_root` と `cordis` は設定された作業ディレクトリからの相対パスとして解決されます。workflow が `session_key` を指定するとセッションを再利用し、one-shot call は bridge を直ちに close します。`request_timeout_ms` は Python bridge request 全体を終了させ、TAKT call の abort は bridge の process tree を終了させます。公式 `session.event` notification は TAKT の text、thinking、tool-use、tool-result、error、result event へ変換されます。system prompt、TAKT の `allowed_tools`、MCP server map、画像添付、structured output、permission mode、`maxTurns` は公式 SDK の call に存在しないため warning とともに無視されます。system/tool composition は Cordis で設定してください。
@@ -1269,9 +1296,14 @@ Codex 側へ権限制御を委譲する場合だけ、明示的に opt-in しま
 provider_options:
   codex:
     permission_control: codex
+    network_access: true
+    reasoning_effort: high
+    fast_mode: true
+    skills:
+      repo: true
 ```
 
-`permission_control: codex` では通常の Codex 呼び出しと strict isolated structured 呼び出しの両方で TAKT は `sandboxMode` と `networkAccessEnabled` を渡しません。実効権限は Codex の `config.toml`、`default_permissions`、permission profile に委譲されます。非対話実行を成立させるため `approvalPolicy: never` は引き続き設定されます。`permission_control: codex` と `network_access` は併用できず、解決後に両方が残る設定は fail fast で拒否されます。明示的な opt-in のため、権限の結果は利用者の自己責任です。
+`permission_control: codex` では通常の Codex 呼び出しと strict isolated structured 呼び出しの両方で TAKT は `sandboxMode` と `networkAccessEnabled` を渡しません。実効権限は Codex の `config.toml`、`default_permissions`、permission profile に委譲されます。capability、runtime profile、routing、project／global 設定、環境変数 override のいずれから解決された場合も、`network_access` は警告なしで受理され、これらの Codex 権限フィールドには使用されません。非対話実行を成立させるため `approvalPolicy: never` は引き続き設定され、`reasoning_effort`、`fast_mode`、`skills` などの非権限制御 option も従来どおり適用されます。明示的な opt-in のため、権限の結果は利用者の自己責任です。
 
 #### Codex Skill の継承 (`skills`)
 

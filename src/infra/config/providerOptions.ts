@@ -125,19 +125,6 @@ export interface ProviderOptionsLayer {
   options: StepProviderOptions | undefined;
 }
 
-export function assertValidCodexProviderOptions(
-  providerOptions: StepProviderOptions | undefined,
-): void {
-  if (
-    providerOptions?.codex?.permissionControl === 'codex'
-    && providerOptions.codex.networkAccess !== undefined
-  ) {
-    throw new Error(
-      'Configuration error: provider_options.codex.permission_control=codex cannot be combined with provider_options.codex.network_access.',
-    );
-  }
-}
-
 interface StepProviderOptionsLayerContext {
   providerRouting: ProviderRoutingConfig | undefined;
   personaProviders: Record<string, PersonaProviderEntry> | undefined;
@@ -579,7 +566,6 @@ export function normalizeProviderOptions(
     };
   }
   const normalized = Object.keys(result).length > 0 ? result : undefined;
-  assertValidCodexProviderOptions(normalized);
   return normalized;
 }
 
@@ -801,7 +787,6 @@ export function mergeProviderOptions(
   }
 
   const merged = Object.keys(result).length > 0 ? result : undefined;
-  assertValidCodexProviderOptions(merged);
   return merged;
 }
 
@@ -985,7 +970,6 @@ export function resolveEffectiveProviderOptions(
     return mergeProviderOptions(personaOptions, stepOptions);
   }
   if (!personaOptions && !stepOptions) {
-    assertValidCodexProviderOptions(resolvedConfigOptions);
     return resolvedConfigOptions;
   }
 
@@ -1474,7 +1458,6 @@ export function resolveEffectiveProviderOptions(
   };
 
   const effective = Object.keys(result).length > 0 ? result : undefined;
-  assertValidCodexProviderOptions(effective);
   return effective;
 }
 

@@ -18,7 +18,7 @@ import type {
   McpServerConfig,
   PermissionMode,
 } from '../models/types.js';
-import type { CompanionReviewMode } from '../models/companion-types.js';
+import type { CompanionFixPolicy, CompanionReviewMode } from '../models/companion-types.js';
 import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
@@ -623,6 +623,7 @@ export interface WorkflowEngineOptions {
   /** runtime.yaml から解決済みの companion ごとの実行環境。 */
   companionEnabled?: boolean;
   companionReviewMode?: CompanionReviewMode;
+  companionFixPolicy?: CompanionFixPolicy;
   companionProviders?: Readonly<Record<string, ProviderRoutingEntry>>;
   companionDiffReader?: CompanionDiffReader;
   /**

@@ -230,6 +230,8 @@ export interface WorkflowExecutionOptions {
   mcpServers?: Record<string, McpServerConfig>;
   /** Project root directory (where .takt/ lives). */
   projectCwd: string;
+  /** Validated isolated root whose workflow resources take precedence. */
+  workflowResourceRoot?: string;
   /** Override maxSteps from workflow config (used when resuming exceeded tasks) */
   maxStepsOverride?: number;
   /** Override initial iteration count (used when resuming exceeded tasks) */
@@ -345,6 +347,8 @@ export interface ExecuteTaskOptions {
   workflowIdentifier: string;
   /** Project root (where .takt/ lives) */
   projectCwd: string;
+  /** Isolated root used only for workflow resource lookup. */
+  workflowResourceRoot?: string;
   /** Agent provider/model overrides */
   agentOverrides?: TaskExecutionOptions;
   /** Controls terminal-oriented output side effects. */
@@ -459,6 +463,6 @@ export interface SelectAndExecuteOptions {
   reportDirName?: string;
   /** Provider permission profile overrides supplied by a trusted runtime boundary. */
   providerProfileOverrides?: ProviderPermissionProfiles;
-  /** When false, throw an error instead of calling process.exit(1) on task failure (default: true). */
-  exitOnFailure?: boolean;
+  /** How to complete when task execution reports failure (default: exit). */
+  failureMode?: 'exit' | 'throw' | 'return';
 }

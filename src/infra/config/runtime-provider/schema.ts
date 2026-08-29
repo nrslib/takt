@@ -11,7 +11,10 @@
 import { z } from 'zod';
 import { PROVIDER_TYPES } from '../../../shared/types/provider.js';
 import { PermissionModeSchema } from '../../../core/models/schema-base.js';
-import { COMPANION_REVIEW_MODE_VALUES } from '../../../core/models/companion-types.js';
+import {
+  COMPANION_FIX_POLICY_VALUES,
+  COMPANION_REVIEW_MODE_VALUES,
+} from '../../../core/models/companion-types.js';
 import { RUNTIME_PROVIDER_VERSION } from './constants.js';
 import { McpSectionSchema } from './mcp-schema.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
@@ -84,13 +87,18 @@ const RuntimeCompanionPolicySchema = z
   .object({
     enabled: z.boolean().optional(),
     review_mode: z.enum(COMPANION_REVIEW_MODE_VALUES).optional(),
+    fix_policy: z.enum(COMPANION_FIX_POLICY_VALUES).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.enabled === undefined && value.review_mode === undefined) {
+    if (
+      value.enabled === undefined
+      && value.review_mode === undefined
+      && value.fix_policy === undefined
+    ) {
       ctx.addIssue({
         code: 'custom',
-        message: 'companion policy must specify at least one of `enabled` or `review_mode`',
+        message: 'companion policy must specify at least one of `enabled`, `review_mode`, or `fix_policy`',
       });
     }
   });

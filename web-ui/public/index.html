@@ -19,42 +19,6 @@
         <button id="new-task-button" class="nav-button" type="button" data-i18n="app.createTask">タスクを作成</button>
       </nav>
 
-      <details id="execution-context" class="execution-context" open>
-        <summary>
-          <span class="execution-context-label" data-i18n="app.workspace">WORKSPACE</span>
-          <span id="execution-context-summary" data-i18n="app.chooseContext">ディレクトリと Workflow を選択</span>
-        </summary>
-        <div class="execution-context-body">
-          <div class="project-selection">
-            <label for="project" data-i18n="app.executionDirectory">実行ディレクトリ</label>
-            <div class="project-control">
-              <select id="project" name="project" required></select>
-              <button id="directory-picker-button" class="secondary-button" type="button" disabled data-i18n="app.add">追加</button>
-            </div>
-            <p id="project-help" data-i18n="app.directoryHelp">登録済みの実行先を選ぶか、新しいディレクトリを追加します。</p>
-          </div>
-
-          <div class="workflow-selection">
-            <div>
-              <label for="category" data-i18n="app.category">カテゴリ</label>
-              <select id="category" name="category" required></select>
-            </div>
-            <div>
-              <label for="workflow" data-i18n="app.workflow">Workflow</label>
-              <select id="workflow" name="workflow" required></select>
-            </div>
-            <div>
-              <label for="chat-mode" data-i18n="app.chatMode">会話モード</label>
-              <select id="chat-mode" name="chat-mode">
-                <option value="assistant" data-i18n="app.assistant">Assistant</option>
-                <option value="grill-me" data-i18n="app.grillMe">Grill Me</option>
-                <option value="persona" data-i18n="app.persona">Persona</option>
-              </select>
-            </div>
-          </div>
-        </div>
-      </details>
-
       <div class="header-actions">
         <button id="language-toggle" class="language-toggle" type="button" aria-label="表示言語を英語に切り替え" title="表示言語を英語に切り替え">EN</button>
         <div class="connection" aria-live="polite">
@@ -171,6 +135,41 @@
               >閉じる</button>
             </div>
           </header>
+          <details id="execution-context" class="execution-context" open>
+            <summary>
+              <span class="execution-context-label" data-i18n="app.workspace">WORKSPACE</span>
+              <span id="execution-context-summary" data-i18n="app.chooseContext">ディレクトリと Workflow を選択</span>
+            </summary>
+            <div class="execution-context-body">
+              <div class="project-selection">
+                <label for="project" data-i18n="app.executionDirectory">実行ディレクトリ</label>
+                <div class="project-control">
+                  <select id="project" name="project" required></select>
+                  <button id="directory-picker-button" class="secondary-button" type="button" disabled data-i18n="app.add">追加</button>
+                </div>
+                <p id="project-help" data-i18n="app.directoryHelp">登録済みの実行先を選ぶか、新しいディレクトリを追加します。</p>
+              </div>
+
+              <div class="workflow-selection">
+                <div>
+                  <label for="category" data-i18n="app.category">カテゴリ</label>
+                  <select id="category" name="category" required></select>
+                </div>
+                <div>
+                  <label for="workflow" data-i18n="app.workflow">Workflow</label>
+                  <select id="workflow" name="workflow" required></select>
+                </div>
+                <div>
+                  <label for="chat-mode" data-i18n="app.chatMode">会話モード</label>
+                  <select id="chat-mode" name="chat-mode">
+                    <option value="assistant" data-i18n="app.assistant">Assistant</option>
+                    <option value="grill-me" data-i18n="app.grillMe">Grill Me</option>
+                    <option value="persona" data-i18n="app.persona">Persona</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </details>
           <details id="chat-thinking" class="chat-thinking" hidden>
             <summary>
               <span class="chat-thinking-heading">

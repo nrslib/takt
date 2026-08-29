@@ -376,6 +376,264 @@ describe('SessionLogger', () => {
     }
   });
 
+  it('parallel の canonical role と participation identity を全 lifecycle に付与する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-metadata', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const parallelFrame = {
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    };
+    const callFrame = {
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'workflow_call' as const,
+      occurrence: 1,
+    };
+    const childFrame = {
+      workflow: 'child',
+      workflow_ref: 'project:sha256:child',
+      step: 'work',
+      kind: 'agent' as const,
+      occurrence: 1,
+    };
+    const parentStep = {
+      name: 'reviewers',
+      kind: 'agent' as const,
+      personaDisplayName: 'parent',
+      instruction: 'Run reviewers',
+      parallel: [{
+        name: 'reviewers',
+        kind: 'agent' as const,
+        personaDisplayName: 'participant',
+        instruction: 'Review',
+      }],
+    };
+    const directStep = {
+      name: 'reviewers',
+      kind: 'agent' as const,
+      personaDisplayName: 'participant',
+      instruction: 'Review',
+    };
+    const childStep = {
+      name: 'work',
+      kind: 'agent' as const,
+      personaDisplayName: 'child',
+      instruction: 'Work',
+    };
+    const parentStack = [parallelFrame];
+    logger.onStepStart(parentStep, 1, 'Run reviewers', parentStack);
+    logger.onPhaseStart(
+      directStep,
+      1,
+      'execute',
+      'Review',
+      { systemPrompt: 'system', userInstruction: 'Review' },
+      parentStack,
+      'reviewers:1:1:1',
+      1,
+    );
+    const lifecycle = {
+      parentWorkflow: 'parent',
+      step: 'reviewers',
+      childWorkflow: 'child',
+      callInstance: 1,
+      stack: [parallelFrame, callFrame],
+    };
+    logger.onWorkflowCallStart(lifecycle);
+    logger.onPhaseStart(
+      childStep,
+      1,
+      'execute',
+      'Work',
+      { systemPrompt: 'system', userInstruction: 'Work' },
+      [parallelFrame, callFrame, childFrame],
+      'work:1:1:1',
+      1,
+    );
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord);
+    const parent = records.find((record) => record.type === 'step_start');
+    const direct = records.find((record) => record.type === 'phase_start' && record.step === 'reviewers');
+    const call = records.find((record) => record.type === 'workflow_call_start');
+    const child = records.find((record) => record.type === 'phase_start' && record.step === 'work');
+
+    expect(parent?.parallel).toMatchObject({ role: 'parent' });
+    expect(direct?.parallel).toMatchObject({
+      role: 'direct_participant',
+      parentParticipationId: parent?.parallel?.participationId,
+    });
+    expect(direct?.parallel?.participationId).not.toBe(parent?.parallel?.participationId);
+    expect(call?.parallel).toMatchObject({ role: 'workflow_call_participant' });
+    expect(child?.parallel).toEqual(call?.parallel);
+  });
+
+  it('step_complete に parent parallel identity を付与する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-step-complete', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const step = {
+      name: 'reviewers',
+      kind: 'agent' as const,
+      personaDisplayName: 'parent',
+      instruction: 'Run reviewers',
+      parallel: [],
+    };
+    const stack = [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    }];
+
+    logger.onStepStart(step, 1, 'Run reviewers', stack);
+    logger.onStepComplete(step, {
+      persona: 'parent',
+      status: 'done',
+      content: 'done',
+      timestamp: new Date(),
+    }, 'Run reviewers', stack);
+
+    const complete = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord)
+      .find((record) => record.type === 'step_complete');
+    expect(complete?.parallel).toMatchObject({
+      role: 'parent',
+      participationId: expect.any(String),
+    });
+    expect(complete?.parallel).not.toHaveProperty('parentParticipationId');
+  });
+
+  it('phase_complete に direct participant identity を付与する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-phase-complete', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const stack = [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    }];
+
+    logger.onPhaseComplete({
+      name: 'reviewers',
+      kind: 'agent',
+      personaDisplayName: 'participant',
+      instruction: 'Review',
+    }, 1, 'execute', 'done', 'done', undefined, stack, 'reviewers:1:1:1', 1);
+
+    const complete = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord)
+      .find((record) => record.type === 'phase_complete');
+    expect(complete?.parallel).toMatchObject({
+      role: 'direct_participant',
+      participationId: expect.any(String),
+      parentParticipationId: expect.any(String),
+    });
+  });
+
+  it('workflow_call_complete に workflow call participant identity を付与する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-call-complete', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const parallelFrame = {
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    };
+    const lifecycle = {
+      parentWorkflow: 'parent',
+      step: 'reviewers',
+      childWorkflow: 'child',
+      callInstance: 1,
+      stack: [parallelFrame, {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'reviewers',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      }],
+      result: { status: 'completed' as const },
+    };
+
+    logger.onWorkflowCallComplete(lifecycle);
+
+    const complete = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord)
+      .find((record) => record.type === 'workflow_call_complete');
+    expect(complete?.parallel).toMatchObject({
+      role: 'workflow_call_participant',
+      participationId: expect.any(String),
+      parentParticipationId: expect.any(String),
+    });
+  });
+
+  it('parallel metadata に prompt text を含めない', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-parallel-private', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const secretInstruction = 'Review token=super-secret';
+    logger.onStepStart({
+      name: 'reviewers',
+      kind: 'agent',
+      personaDisplayName: 'parent',
+      instruction: secretInstruction,
+      parallel: [],
+    }, 1, secretInstruction, [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel',
+      occurrence: 1,
+    }]);
+
+    const record = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord)
+      .find((candidate) => candidate.type === 'step_start');
+    expect(JSON.stringify(record?.parallel)).not.toContain(secretInstruction);
+  });
+
+  it.each([
+    ['unknown role', { role: 'unknown', participationId: 'p' }, /parallel.*role/i],
+    ['parent with parent identity', {
+      role: 'parent',
+      participationId: 'p',
+      parentParticipationId: 'parent',
+    }, /parentParticipationId.*not allowed/i],
+    ['participant without parent identity', {
+      role: 'direct_participant',
+      participationId: 'p',
+    }, /parentParticipationId.*required/i],
+  ])('rejects invalid parallel metadata: %s', (_label, parallel, expected) => {
+    expect(() => parseNdjsonRecord(JSON.stringify({
+      type: 'step_start',
+      step: 'review',
+      persona: 'reviewer',
+      iteration: 1,
+      timestamp: '2026-08-27T00:00:00.000Z',
+      parallel,
+    }))).toThrow(expected);
+  });
+
   it('subworkflow stack を step/phase records にそのまま書き出す', () => {
     const logsDir = createTempLogsDir();
     const ndjsonPath = initNdjsonLog('session-1', 'task', 'parent', { logsDir });

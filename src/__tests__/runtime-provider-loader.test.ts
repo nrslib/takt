@@ -41,6 +41,10 @@ function companionReviewMode(value: unknown): string | undefined {
   return (value as { review_mode?: string } | undefined)?.review_mode;
 }
 
+function companionFixPolicy(value: unknown): string | undefined {
+  return (value as { fix_policy?: string } | undefined)?.fix_policy;
+}
+
 describe('runtime-provider loader', () => {
   beforeEach(() => {
     // Unique per-run directory: a fixed tmpdir path would let two concurrent runs of this
@@ -652,6 +656,47 @@ describe('runtime-provider loader', () => {
     expect(companionReviewMode(resolved?.companion)).toBe('live');
   });
 
+  it('Given global loop and project single policies, When resolving, Then project policy wins without changing existing fields', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: false',
+      '  review_mode: live',
+      '  fix_policy: loop',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+      '  review_mode: completion',
+      '  fix_policy: single',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.companion?.enabled).toBe(false);
+    expect(companionReviewMode(resolved?.companion)).toBe('completion');
+    expect(companionFixPolicy(resolved?.companion)).toBe('single');
+  });
+
+  it('Given a global loop policy and a project policy without fix_policy, When resolving, Then the global policy is inherited', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+      '  fix_policy: loop',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(companionFixPolicy(resolved?.companion)).toBe('loop');
+  });
+
   it('Given mode-only companion policies in both layers, When resolving, Then mode is inherited without synthesizing enabled', () => {
     writeRuntimeYaml(globalDir, [
       'version: 1',
@@ -680,6 +725,18 @@ describe('runtime-provider loader', () => {
     const filePath = join(globalDir, RUNTIME_PROVIDER_FILENAME);
 
     expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(new RegExp(`${filePath}.*review_mode`, 's'));
+  });
+
+  it('Given an invalid companion.fix_policy, When loading, Then the file and field are named in the error', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: false',
+      '  fix_policy: automatic',
+    ]);
+    const filePath = join(globalDir, RUNTIME_PROVIDER_FILENAME);
+
+    expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(new RegExp(`${filePath}.*fix_policy`, 's'));
   });
 
   it('Given both files omit companion, When resolving, Then companion remains undefined', () => {

@@ -23,7 +23,7 @@
 | `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
 | `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
-| `--tui` | 端末ではこれが既定の姿で、stdin と stdout が TTY ならフラグの有無にかかわらずタスク会話は Ink が描画し、パイプ入力では従来のリーダーが使われる。このフラグはその前提を明示するだけで、TTY がない場合はフォールバックせず `--tui requires an interactive terminal` で失敗する。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断（キューに残っている行はそのまま次のターンとして送信される）。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する |
+| `--tui` | 端末ではこれが既定の姿で、stdin と stdout が TTY ならフラグの有無にかかわらずタスク会話は Ink が描画し、パイプ入力では従来のリーダーが使われる。このフラグはその前提を明示するだけで、TTY がない場合はフォールバックせず `--tui requires an interactive terminal` で失敗する。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断（キューに残っている行はそのまま次のターンとして送信される）。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する。別の実行（たとえば他の端末で完了した `takt run`）が保存した結果は TUI 起動時には表示せずに破棄し、従来のリーダーだけが起動時に一度表示する。TUI セッション内で開始したワークフローの完了通知は従来どおり表示される |
 
 正式オプションは `--workflow` です。
 
@@ -137,6 +137,18 @@ takt --task "Add authentication" --workflow dual
 ```
 
 **注意:** 引数として文字列を渡す場合（例: `takt "Add login feature"`）は初期メッセージとしてインタラクティブモードに入ります。
+
+## Workflow Maker
+
+`takt make` は TTY 専用の Workflow Maker を起動します。会話の前に New workflow、project、global、builtin、repertoire のいずれから base workflow を選びます。既存 workflow は参考入力としてだけ使用され、選択元のファイルは編集されません。
+
+会話中は `/workflow` で base を変更し、`/go` で完全な実装指示を準備します。承認画面には `.takt/make/YYYYMMDD-HHmmss-SSS/` 形式の生成予定パスと、Execute、Continue editing、Cancel の3選択肢が表示されます。Execute を選ぶまで Maker 成果物は書き込まれません。
+
+承認後は、静的に到達可能な依存関係を `workflows/`、`steps/`、`facet-pools/`、`facets/` で構成される分離ディレクトリへ複製し、参照を複製先へ書き換えます。そのディレクトリを作業ディレクトリとして builtin `workflow-maker` を直接実行し、task、worktree、commit、push、PR は作成しません。動的または未解決の依存関係は実行前に失敗します。成功・失敗のどちらでも、作成済みの成果物と生成された doctor レポートは表示パスに保存されます。
+
+```bash
+takt make
+```
 
 ## ACP Agent
 

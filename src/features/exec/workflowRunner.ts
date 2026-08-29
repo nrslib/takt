@@ -120,7 +120,7 @@ export async function runGeneratedWorkflow(
     interactiveMetadata: { confirmed: true, task },
     reportDirName: runSlug,
     providerProfileOverrides: buildExecReadonlyProviderProfileOverrides(runtimeConfig),
-    exitOnFailure: false,
+    failureMode: 'throw',
     ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
   }, agentOverrides);
   const context = loadCompletedExecRun(cwd, runSlug, runtimeConfig.reviews.map((review) => buildReviewReportName(review.name)));

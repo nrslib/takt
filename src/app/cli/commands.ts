@@ -138,6 +138,17 @@ program
   });
 
 program
+  .command('make')
+  .description('Start interactive Workflow Maker')
+  .action(async () => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { runWorkflowMakerCommand } = await import('../../features/workflowMaker/index.js');
+    await runWorkflowMakerCommand(getCliExecutionContext().cwd, {
+      agentOverrides: resolveAgentOverrides(program),
+    });
+  });
+
+program
   .command('ui')
   .description('Start, stop, or restart the local TAKT Web UI')
   .argument('[action]', 'UI action (start|stop|restart)', parseUiAction, 'start')

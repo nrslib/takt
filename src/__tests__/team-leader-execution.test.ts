@@ -546,6 +546,89 @@ describe('runTeamLeaderExecution', () => {
     expect(completionEvents).toEqual(['review', 'planning-complete']);
   });
 
+  it('terminal correction part の settle 後に通常 planning を再開しない', async () => {
+    const initialPart = makePart('p1');
+    const correctionPart = makePart('p2');
+    let markCorrectionStarted: (() => void) | undefined;
+    const correctionStarted = new Promise<void>((resolve) => {
+      markCorrectionStarted = resolve;
+    });
+    let releaseCorrection: (() => void) | undefined;
+    const correctionGate = new Promise<void>((resolve) => {
+      releaseCorrection = resolve;
+    });
+    const runPart = vi.fn(async (part: PartDefinition) => {
+      if (part.id === correctionPart.id) {
+        markCorrectionStarted?.();
+        await correctionGate;
+      }
+      return makeResult(part);
+    });
+    const requestMoreParts = vi.fn().mockResolvedValue({
+      done: true,
+      reasoning: 'initial planning complete',
+      cancelPartIds: [],
+      parts: [],
+    });
+    const onExecutionTerminal = vi.fn().mockResolvedValue({
+      done: false,
+      reasoning: 'run the single correction batch',
+      cancelPartIds: [],
+      parts: [correctionPart],
+    });
+
+    const execution = runTeamLeaderExecution({
+      initialParts: [initialPart],
+      maxConcurrency: 1,
+      runPart,
+      requestMoreParts,
+      onExecutionTerminal,
+    });
+
+    await correctionStarted;
+    expect(requestMoreParts).toHaveBeenCalledOnce();
+    releaseCorrection?.();
+    const result = await execution;
+
+    expect(result.partResults.map((partResult) => partResult.part.id)).toEqual(['p1', 'p2']);
+    expect(runPart).toHaveBeenCalledTimes(2);
+    expect(requestMoreParts).toHaveBeenCalledOnce();
+    expect(onExecutionTerminal).toHaveBeenCalledOnce();
+  });
+
+  it('Given execution terminal callback is interrupted, When it returns no continuation, Then execution rejects with the abort reason', async () => {
+    const controller = new AbortController();
+    const abortReason = new Error('execution aborted');
+    let releaseCallback: (() => void) | undefined;
+    const callbackGate = new Promise<void>((resolve) => {
+      releaseCallback = resolve;
+    });
+    const onExecutionTerminal = vi.fn(async () => {
+      await callbackGate;
+      return undefined;
+    });
+
+    const execution = runTeamLeaderExecution({
+      initialParts: [makePart('p1')],
+      maxConcurrency: 1,
+      abortSignal: controller.signal,
+      runPart: vi.fn(async (part: PartDefinition) => makeResult(part)),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'initial planning complete',
+        cancelPartIds: [],
+        parts: [],
+      }),
+      onExecutionTerminal,
+    });
+
+    await vi.waitFor(() => expect(onExecutionTerminal).toHaveBeenCalledOnce());
+    controller.abort(abortReason);
+    releaseCallback?.();
+
+    await expect(execution).rejects.toBe(abortReason);
+  });
+
   it('latches a terminal part failure, aborts siblings, and waits for their settlement', async () => {
     const controller = new AbortController();
     const started: string[] = [];

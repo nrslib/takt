@@ -10,43 +10,62 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { CodexCallOptions } from '../infra/codex/types.js';
 
-const { mockBuildCodexSkillConfig } = vi.hoisted(() => ({
+const {
+  mockBuildCodexSkillConfig,
+  mockLogger,
+  mockStartThread,
+  mockResumeThread,
+} = vi.hoisted(() => ({
   mockBuildCodexSkillConfig: vi.fn(),
+  mockLogger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+  mockStartThread: vi.fn(),
+  mockResumeThread: vi.fn(),
 }));
 
 // ===== Codex SDK mock =====
 
 let mockEvents: Array<Record<string, unknown>> = [];
-let lastThreadOptions: Record<string, unknown> | undefined;
-let lastTurnOptions: Record<string, unknown> | undefined;
-let lastCodexConstructorOptions: Record<string, unknown> | undefined;
+let lastThreadOptions: ThreadOptions | undefined;
+let lastTurnOptions: TurnOptions | undefined;
+let lastCodexConstructorOptions: CodexOptions | undefined;
 
 vi.mock('@openai/codex-sdk', () => {
+  const createMockThread = () => ({
+    id: 'thread-mock',
+    runStreamed: async (_input: unknown, options?: TurnOptions) => {
+      lastTurnOptions = options;
+      return {
+        events: (async function* () {
+          for (const event of mockEvents) {
+            yield event;
+          }
+        })(),
+      };
+    },
+  });
+
   return {
     Codex: class MockCodex {
-      constructor(options?: Record<string, unknown>) {
+      constructor(options?: CodexOptions) {
         lastCodexConstructorOptions = options;
       }
-      async startThread(options?: Record<string, unknown>) {
+      async startThread(options?: ThreadOptions) {
+        mockStartThread(options);
         lastThreadOptions = options;
-        return {
-          id: 'thread-mock',
-          runStreamed: async (_input: unknown, options?: Record<string, unknown>) => {
-            lastTurnOptions = options;
-            return {
-            events: (async function* () {
-              for (const event of mockEvents) {
-                yield event;
-              }
-            })(),
-            };
-          },
-        };
+        return createMockThread();
       }
-      async resumeThread() {
-        return this.startThread();
+      async resumeThread(threadId: string, options?: ThreadOptions) {
+        mockResumeThread(threadId, options);
+        lastThreadOptions = options;
+        return createMockThread();
       }
     },
   };
@@ -54,6 +73,11 @@ vi.mock('@openai/codex-sdk', () => {
 
 vi.mock('../infra/codex/skill-config.js', () => ({
   buildCodexSkillConfig: mockBuildCodexSkillConfig,
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/utils/index.js')>()),
+  createLogger: vi.fn(() => mockLogger),
 }));
 
 // CodexClient は @openai/codex-sdk をインポートするため、mock 後にインポート
@@ -339,15 +363,47 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
   });
 
-  it('permission_control=codex と network_access の直接指定も fail fast する', async () => {
-    const client = new CodexClient();
+  it.each([
+    { networkAccess: true, sessionId: undefined },
+    { networkAccess: false, sessionId: undefined },
+    { networkAccess: true, sessionId: 'existing-thread' },
+    { networkAccess: false, sessionId: 'existing-thread' },
+  ])(
+    'permission_control=codex は network_access=$networkAccess の権限値を新規・再開 thread に渡さない (sessionId=$sessionId)',
+    async ({ networkAccess, sessionId }) => {
+      mockEvents = [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+      ];
+      const client = new CodexClient();
 
-    await expect(client.call('coder', 'prompt', {
-      cwd: '/tmp',
-      permissionControl: 'codex',
-      networkAccess: false,
-    })).rejects.toThrow();
-  });
+      await client.call('coder', 'prompt', {
+        cwd: '/tmp',
+        permissionMode: 'readonly',
+        permissionControl: 'codex',
+        networkAccess,
+        sessionId,
+      });
+
+      const expectedThreadOptions = expect.objectContaining({
+        workingDirectory: '/tmp',
+        approvalPolicy: 'never',
+      });
+      if (sessionId === undefined) {
+        expect(mockStartThread).toHaveBeenCalledTimes(1);
+        expect(mockStartThread).toHaveBeenCalledWith(expectedThreadOptions);
+        expect(mockResumeThread).not.toHaveBeenCalled();
+      } else {
+        expect(mockResumeThread).toHaveBeenCalledTimes(1);
+        expect(mockResumeThread).toHaveBeenCalledWith('existing-thread', expectedThreadOptions);
+        expect(mockStartThread).not.toHaveBeenCalled();
+      }
+      expect(lastThreadOptions).toMatchObject({ approvalPolicy: 'never' });
+      expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+      expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    },
+  );
 
   it('provider_options.codex.network_access が ThreadOptions に反映される', async () => {
     mockEvents = [
@@ -400,6 +456,63 @@ describe('CodexClient — structuredOutput 抽出', () => {
       sandboxMode: 'read-only',
       networkAccessEnabled: true,
       approvalPolicy: 'never',
+    });
+  });
+
+  it('permission_control 省略時も network_access=false を ThreadOptions に反映する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionMode: 'edit',
+      networkAccess: false,
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'workspace-write',
+      networkAccessEnabled: false,
+      approvalPolicy: 'never',
+    });
+  });
+
+  it('Codex への権限制御委譲時も非権限制御 option を適用する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: true }],
+      },
+    });
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      networkAccess: true,
+      reasoningEffort: 'high',
+      fastMode: true,
+      skills: { repo: true, user: true },
+    });
+
+    expect(mockBuildCodexSkillConfig).toHaveBeenCalledWith({
+      cwd: '/tmp',
+      env: expect.any(Object),
+      inheritance: { repo: true, user: true },
+    });
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: true }],
+        },
+        model_reasoning_effort: 'high',
+        features: { fast_mode: true },
+      },
     });
   });
 

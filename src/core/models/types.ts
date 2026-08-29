@@ -121,6 +121,7 @@ export {
 export type {
   CompanionSelection,
   CompanionReviewMode,
+  CompanionFixPolicy,
   ResolvedCompanionDefinition,
   CompanionFindingSeverity,
   CompanionFinding,

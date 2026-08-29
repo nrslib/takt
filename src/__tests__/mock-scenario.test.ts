@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -14,6 +14,7 @@ import {
   resetScenario,
   type ScenarioEntry,
 } from '../infra/mock/index.js';
+import { callMock } from '../infra/mock/client.js';
 import { STATUS_VALUES } from '../core/models/status.js';
 
 describe('ScenarioQueue', () => {
@@ -148,7 +149,7 @@ describe('loadScenarioFile', () => {
 
     const entries = loadScenarioFile(filePath);
 
-    expect(entries[0].status).toBe('done');
+    expect(entries[0]?.status).toBe('done');
   });
 
   it('should throw for non-existent file', () => {
@@ -188,6 +189,55 @@ describe('loadScenarioFile', () => {
     );
   });
 
+  it('should load a readable file condition', () => {
+    const filePath = join(tempDir, 'file-condition.json');
+    writeFileSync(filePath, JSON.stringify([{
+      content: '[REVIEW:1]',
+      mismatch_content: '[REVIEW:2]',
+      file_condition: {
+        filename: 'workflow-maker-doctor.md',
+        state: 'readable',
+        includes: 'Result: PASS',
+      },
+    }]));
+
+    const entries = loadScenarioFile(filePath);
+
+    expect(entries[0]?.fileCondition).toEqual({
+      filename: 'workflow-maker-doctor.md',
+      state: 'readable',
+      includes: 'Result: PASS',
+    });
+    expect(entries[0]?.mismatchContent).toBe('[REVIEW:2]');
+  });
+
+  it.each(['', 1, {}])(
+    'should reject invalid mismatch_content %j',
+    (mismatchContent) => {
+      const filePath = join(tempDir, 'invalid-mismatch-content.json');
+      writeFileSync(filePath, JSON.stringify([{
+        content: '[REVIEW:1]',
+        mismatch_content: mismatchContent,
+      }]));
+
+      expect(() => loadScenarioFile(filePath)).toThrow(
+        '"mismatch_content" must be a non-empty string if provided',
+      );
+    },
+  );
+
+  it('should reject a readable file condition without required content', () => {
+    const filePath = join(tempDir, 'invalid-file-condition.json');
+    writeFileSync(filePath, JSON.stringify([{
+      content: '[REVIEW:1]',
+      file_condition: { filename: 'workflow-maker-doctor.md', state: 'readable' },
+    }]));
+
+    expect(() => loadScenarioFile(filePath)).toThrow(
+      'readable "file_condition" requires a non-empty "includes" string',
+    );
+  });
+
   it('should throw when delay_ms is a string instead of a number', () => {
     const filePath = join(tempDir, 'bad-delay-ms.json');
     writeFileSync(filePath, '[{"content": "test", "delay_ms": "30000"}]');
@@ -201,7 +251,7 @@ describe('loadScenarioFile', () => {
 
     const entries = loadScenarioFile(filePath);
 
-    expect(entries[0].delayMs).toBe(100);
+    expect(entries[0]?.delayMs).toBe(100);
   });
 
   it('should accept wait_for_abort and expose it as waitForAbort', () => {
@@ -210,7 +260,7 @@ describe('loadScenarioFile', () => {
 
     const entries = loadScenarioFile(filePath);
 
-    expect(entries[0].waitForAbort).toBe(true);
+    expect(entries[0]?.waitForAbort).toBe(true);
   });
 
   it('should reject a non-boolean wait_for_abort', () => {
@@ -274,6 +324,132 @@ describe('loadScenarioFile', () => {
     writeFileSync(filePath, '[{"content": "test", "status": "improve"}]');
 
     expect(() => loadScenarioFile(filePath)).toThrow('invalid status');
+  });
+});
+
+describe('scenario file conditions', () => {
+  let tempDir: string;
+  const itPosix = process.platform === 'win32' ? it.skip : it;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-scenario-condition-'));
+  });
+
+  afterEach(() => {
+    resetScenario();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('should return a response only when the readable file contains the required text', async () => {
+    writeFileSync(join(tempDir, 'workflow-maker-doctor.md'), 'Result: PASS\n');
+    setMockScenario([{
+      status: 'done',
+      content: '[REVIEW:1]',
+      mismatchContent: '[REVIEW:2]',
+      fileCondition: {
+        filename: 'workflow-maker-doctor.md',
+        state: 'readable',
+        includes: 'Result: PASS',
+      },
+    }]);
+
+    await expect(callMock('conductor', 'select status', { cwd: tempDir }))
+      .resolves.toEqual(expect.objectContaining({ content: '[REVIEW:1]' }));
+
+    setMockScenario([{
+      status: 'done',
+      content: '[REVIEW:1]',
+      mismatchContent: '[REVIEW:2]',
+      fileCondition: {
+        filename: 'workflow-maker-doctor.md',
+        state: 'readable',
+        includes: 'Result: FAIL',
+      },
+    }]);
+    await expect(callMock('conductor', 'select status', { cwd: tempDir }))
+      .resolves.toEqual(expect.objectContaining({ content: '[REVIEW:2]' }));
+  });
+
+  itPosix.for(['fail', 'missing', 'unreadable'] as const)(
+    'should return mismatch content when the Doctor report is %s',
+    async (doctorState, context) => {
+      const reportPath = join(tempDir, 'workflow-maker-doctor.md');
+      if (doctorState !== 'missing') {
+        writeFileSync(reportPath, 'Result: FAIL\n');
+      }
+      if (doctorState === 'unreadable') {
+        chmodSync(reportPath, 0o000);
+        let readable = true;
+        try {
+          readFileSync(reportPath, 'utf-8');
+        } catch {
+          readable = false;
+        }
+        if (readable) {
+          chmodSync(reportPath, 0o644);
+          context.skip();
+          return;
+        }
+      }
+      setMockScenario([{
+        status: 'done',
+        content: '[REVIEW:1]',
+        mismatchContent: '[REVIEW:2]',
+        fileCondition: {
+          filename: 'workflow-maker-doctor.md',
+          state: 'readable',
+          includes: 'Result: PASS',
+        },
+      }]);
+
+      await expect(callMock('conductor', 'select status', { cwd: tempDir }))
+        .resolves.toEqual(expect.objectContaining({ content: '[REVIEW:2]' }));
+    },
+  );
+
+  it('should distinguish a missing file from a present file', async () => {
+    setMockScenario([{
+      status: 'done',
+      content: '[REVIEW:2]',
+      fileCondition: { filename: 'workflow-maker-doctor.md', state: 'missing' },
+    }]);
+
+    await expect(callMock('conductor', 'select status', { cwd: tempDir }))
+      .resolves.toEqual(expect.objectContaining({ content: '[REVIEW:2]' }));
+
+    writeFileSync(join(tempDir, 'workflow-maker-doctor.md'), 'Result: PASS\n');
+    setMockScenario([{
+      status: 'done',
+      content: '[REVIEW:2]',
+      fileCondition: { filename: 'workflow-maker-doctor.md', state: 'missing' },
+    }]);
+    await expect(callMock('conductor', 'select status', { cwd: tempDir }))
+      .rejects.toThrow('to be missing');
+  });
+
+  itPosix('should require an unreadable file before returning its response', async (context) => {
+    const doctorReport = join(tempDir, 'workflow-maker-doctor.md');
+    writeFileSync(doctorReport, 'Result: PASS\n');
+    chmodSync(doctorReport, 0o000);
+    let readable = true;
+    try {
+      readFileSync(doctorReport, 'utf-8');
+    } catch {
+      readable = false;
+    }
+    if (readable) {
+      chmodSync(doctorReport, 0o644);
+      context.skip();
+      return;
+    }
+    setMockScenario([{
+      status: 'done',
+      content: '[REVIEW:2]',
+      fileCondition: { filename: 'workflow-maker-doctor.md', state: 'unreadable' },
+    }]);
+
+    await expect(callMock('conductor', 'select status', { cwd: tempDir }))
+      .resolves.toEqual(expect.objectContaining({ content: '[REVIEW:2]' }));
   });
 });
 

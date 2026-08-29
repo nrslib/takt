@@ -26,6 +26,12 @@ interface TeamLeaderFeedbackArgs {
   readonly companionFindings?: readonly DeepReadonly<CompanionFinding>[];
 }
 
+interface TeamLeaderExecutionTerminalArgs {
+  readonly partResults: readonly DeepReadonly<PartResult>[];
+  readonly plannedParts: readonly DeepReadonly<PartDefinition>[];
+  readonly scheduledIds: readonly string[];
+}
+
 export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
   maxConcurrency: number;
@@ -52,6 +58,9 @@ export interface TeamLeaderExecutionOptions {
   onPlanningError?: (error: unknown) => void;
   onCompletionPlanningFailure?: (error: unknown) => void;
   onTerminalError?: (error: unknown) => void;
+  onExecutionTerminal?: (
+    args: TeamLeaderExecutionTerminalArgs,
+  ) => Promise<MorePartsResponse | undefined>;
 }
 
 interface RunningPart {
@@ -95,6 +104,7 @@ export async function runTeamLeaderExecution(
   let completionReviewAfterPlanningFailure = false;
   let planningFailure: unknown;
   let latestBatchStart = 0;
+  let executionTerminalRequested = false;
   let pendingTerminalFeedback: MorePartsResponse | undefined;
 
   const cancellablePartIds = (): string[] => [
@@ -155,6 +165,42 @@ export async function runTeamLeaderExecution(
     for (const partId of runningCancellationIds) {
       running.get(partId)?.abortScope.abort(createTeamLeaderPartCancellation(partId));
     }
+  };
+
+  const applyTerminalContinuation = (feedback: MorePartsResponse): void => {
+    terminalGate.assertRunning('feedback.provider_result');
+    if (feedback.done) {
+      throw new Error('Team leader terminal continuation must schedule a correction part');
+    }
+
+    const knownPartIds = new Set(scheduledIds);
+    const newParts: PartDefinition[] = [];
+    for (const newPart of feedback.parts) {
+      if (knownPartIds.has(newPart.id)) {
+        continue;
+      }
+      knownPartIds.add(newPart.id);
+      newParts.push(structuredClone(newPart));
+    }
+
+    if (newParts.length === 0) {
+      throw new Error('Team leader terminal continuation did not schedule a new correction part');
+    }
+
+    applyCancellations(feedback.cancelPartIds);
+    for (const newPart of newParts) {
+      scheduledIds.add(newPart.id);
+    }
+    terminalGate.assertRunning('feedback.parts_added');
+    plannedParts.push(...newParts);
+    queue.push(...newParts);
+    options.onPartsAdded?.({
+      parts: structuredClone(newParts),
+      reason: feedback.reasoning,
+      totalPlanned: plannedParts.length,
+    });
+    latestBatchStart = partResults.length;
+    leaderDone = true;
   };
 
   const tryPlanMoreParts = async (): Promise<void> => {
@@ -326,7 +372,12 @@ export async function runTeamLeaderExecution(
   };
 
   try {
-    while (queue.length > 0 || running.size > 0 || !leaderDone) {
+    while (
+      queue.length > 0
+      || running.size > 0
+      || !leaderDone
+      || (options.onExecutionTerminal !== undefined && !executionTerminalRequested)
+    ) {
       while (queue.length > 0 && running.size < options.maxConcurrency) {
         terminalGate.assertRunning('part.dequeue');
         options.abortSignal?.throwIfAborted();
@@ -392,6 +443,25 @@ export async function runTeamLeaderExecution(
       }
 
       if (leaderDone) {
+        if (options.onExecutionTerminal === undefined || executionTerminalRequested) {
+          break;
+        }
+        executionTerminalRequested = true;
+        const continuation = await options.onExecutionTerminal({
+          partResults: structuredClone(partResults),
+          plannedParts: structuredClone(plannedParts),
+          scheduledIds: [...scheduledIds],
+        });
+        // The callback awaited a provider: an abort or a latched terminal error
+        // raised meanwhile must end the run even when nothing is continued.
+        options.abortSignal?.throwIfAborted();
+        terminalGate.assertRunning('feedback.execution_terminal');
+        if (continuation !== undefined) {
+          applyTerminalContinuation(continuation);
+        }
+        if (queue.length > 0 || running.size > 0 || !leaderDone) {
+          continue;
+        }
         break;
       }
 

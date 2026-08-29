@@ -315,6 +315,7 @@ npm run eval:prompts:fix-closure
 npm run eval:prompts:fix-plan-fresh-findings
 npm run eval:prompts:fix-plan-boundary-preflight
 npm run eval:prompts:fix-plan-bounded-proof
+npm run eval:prompts:fix-plan-impact-closure
 npm run eval:prompts:review-impact-path-coverage
 npm run eval:prompts:initial-review-contract-discovery
 npm run eval:prompts:initial-review-external-identity-wiring

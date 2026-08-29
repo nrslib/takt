@@ -184,6 +184,33 @@ describe('TUI / classic selection', () => {
     expect(mockSelectInteractiveMode).toHaveBeenCalled();
   });
 
+  it('should use exit failure mode for a workflow started by the classic conversation', async () => {
+    setTerminal(false);
+    mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'classic task' });
+
+    await executeDefaultAction();
+
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+      '/test/cwd',
+      'classic task',
+      expect.objectContaining({ failureMode: 'exit' }),
+      undefined,
+    );
+  });
+
+  it('should use exit failure mode for a direct task option', async () => {
+    mockOpts.task = 'direct task';
+
+    await executeDefaultAction();
+
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+      '/test/cwd',
+      'direct task',
+      expect.objectContaining({ failureMode: 'exit' }),
+      undefined,
+    );
+  });
+
   it('should fail fast when --tui is forced without a terminal', async () => {
     mockOpts.tui = true;
     setTerminal(false);
@@ -292,6 +319,7 @@ describe('TUI routing', () => {
         workflow: 'picked-in-tui',
         interactiveUserInput: true,
         interactiveMetadata: { confirmed: true, task: 'tui task' },
+        failureMode: 'return',
       }),
       undefined,
     );
@@ -338,7 +366,10 @@ describe('TUI routing', () => {
     expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
       '/test/cwd',
       'run it',
-      expect.objectContaining({ attachments: result.attachments }),
+      expect.objectContaining({
+        attachments: result.attachments,
+        failureMode: 'return',
+      }),
       undefined,
     );
     // The store belongs to the open session, so the dispatch leaves it alone.

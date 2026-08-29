@@ -4,7 +4,13 @@ import type { FileHandle } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { TextDecoder } from 'node:util';
 import { parseCanonicalWorkflowResumeFrame } from '../../shared/types/workflow-resume.js';
-import type { NdjsonWorkflowStackEntry } from '../../shared/utils/types.js';
+import {
+  parseNdjsonParallelMetadata,
+} from '../../shared/utils/parallelMetadata.js';
+import type {
+  NdjsonParallelMetadata,
+  NdjsonWorkflowStackEntry,
+} from '../../shared/utils/types.js';
 
 const MAX_LOG_EVENTS = 100;
 const MAX_HISTORY_EVENTS = 10_000;
@@ -50,6 +56,7 @@ export interface RunLogEvent {
   readonly childWorkflow?: string;
   readonly callInstance?: string;
   readonly stack?: readonly NdjsonWorkflowStackEntry[];
+  readonly parallel?: NdjsonParallelMetadata;
   readonly status?: string;
   readonly provider?: string;
   readonly providerSource?: string;
@@ -261,6 +268,7 @@ function parseLogEvent(value: unknown): RunLogEvent | null {
         ? String(raw.callInstance)
         : undefined,
     stack: optionalWorkflowStack(raw.stack),
+    parallel: parseNdjsonParallelMetadata(raw.parallel, 'Session log parallel'),
     status: typeof raw.status === 'string' ? raw.status : undefined,
     provider: typeof raw.provider === 'string' ? raw.provider : undefined,
     providerSource: typeof raw.providerSource === 'string' ? raw.providerSource : undefined,
@@ -341,6 +349,7 @@ function toHistoryEvent(event: RunLogEvent): RunLogEvent {
     ...(event.childWorkflow === undefined ? {} : { childWorkflow: event.childWorkflow }),
     ...(event.callInstance === undefined ? {} : { callInstance: event.callInstance }),
     ...(event.stack === undefined ? {} : { stack: event.stack }),
+    ...(event.parallel === undefined ? {} : { parallel: event.parallel }),
     ...(event.status === undefined ? {} : { status: event.status }),
     ...(event.provider === undefined ? {} : { provider: event.provider }),
     ...(event.providerSource === undefined ? {} : { providerSource: event.providerSource }),
@@ -375,12 +384,19 @@ function graphOccurrenceBaseKey(event: RunLogEvent): string | null {
     event.childWorkflow,
     event.callInstance,
     stack,
+    event.parallel === undefined
+      ? undefined
+      : [
+          event.parallel.role,
+          event.parallel.participationId,
+          event.parallel.parentParticipationId,
+        ],
   ]);
 }
 
 type OccurrenceIdentity = Pick<
   RunLogEvent,
-  'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack'
+  'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack' | 'parallel'
 >;
 
 function optionalIdentityMatches<T>(left: T | undefined, right: T | undefined): boolean {
@@ -398,6 +414,13 @@ function occurrenceIdentityMatches(
     && optionalIdentityMatches(candidate.childWorkflow, event.childWorkflow)
     && optionalIdentityMatches(candidate.callInstance, event.callInstance)
     && optionalIdentityMatches(candidate.iteration, event.iteration)
+    && (candidate.parallel === undefined
+      || event.parallel === undefined
+      || (
+        candidate.parallel.role === event.parallel.role
+        && candidate.parallel.participationId === event.parallel.participationId
+        && candidate.parallel.parentParticipationId === event.parallel.parentParticipationId
+      ))
     && (candidate.stack === undefined
       || event.stack === undefined
       || workflowStacksMatch(candidate.stack, event.stack));
@@ -1048,7 +1071,7 @@ function workflowStacksMatch(
 
 function promptBelongsToOccurrence(
   event: RunLogEvent,
-  occurrence: Pick<RunLogEvent, 'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack'>,
+  occurrence: Pick<RunLogEvent, 'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack' | 'parallel'>,
 ): boolean {
   // A phase_start is emitted from the same lifecycle, but older/canonical
   // records do not always repeat every scope field. The lifecycle line range
@@ -1069,6 +1092,13 @@ function promptBelongsToOccurrence(
     && (event.iteration === undefined
       || occurrence.iteration === undefined
       || event.iteration === occurrence.iteration)
+    && (event.parallel === undefined
+      || occurrence.parallel === undefined
+      || (
+        event.parallel.role === occurrence.parallel.role
+        && event.parallel.participationId === occurrence.parallel.participationId
+        && event.parallel.parentParticipationId === occurrence.parallel.parentParticipationId
+      ))
     && (event.stack === undefined
       || occurrence.stack === undefined
       || workflowStacksMatch(event.stack, occurrence.stack));
@@ -1103,7 +1133,7 @@ function appendBoundedPrompt(accumulator: PromptReadAccumulator, prompt: RunProm
 
 async function readPromptLogFile(
   path: string,
-  occurrence: Pick<RunLogEvent, 'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack'>,
+  occurrence: Pick<RunLogEvent, 'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack' | 'parallel'>,
   verifySnapshot: () => Promise<void>,
   accumulator: PromptReadAccumulator,
   lifecycle: RunOccurrenceLifecycle,
@@ -1199,7 +1229,7 @@ async function readPromptLogFile(
  */
 export async function readRunOccurrencePrompts(
   paths: readonly string[],
-  occurrence: Pick<RunLogEvent, 'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack'>,
+  occurrence: Pick<RunLogEvent, 'step' | 'workflow' | 'childWorkflow' | 'callInstance' | 'iteration' | 'stack' | 'parallel'>,
   verifySnapshot: () => Promise<void>,
   lifecycle?: RunOccurrenceLifecycle,
 ): Promise<RunPromptReadResult> {

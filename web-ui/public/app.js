@@ -350,6 +350,7 @@ function taskActionTitleKey(action) {
 }
 
 function updateChatSurfaceHeader() {
+  elements.executionContext.hidden = taskActionSurface !== null;
   if (taskActionSurface === null) {
     elements.chatSurfaceLabel.textContent = t('app.newTask');
     elements.chatTitle.textContent = t('app.createTask');
@@ -1187,6 +1188,7 @@ function closeTaskSurface() {
 
 function openNewTaskSurface() {
   if (taskActionSurface !== null) resetChatSession();
+  elements.executionContext.open = true;
   setScreen('task');
 }
 
@@ -1783,7 +1785,8 @@ function closeExecutionContext() {
 }
 
 function closeExecutionContextFromOutside(event) {
-  if (elements.executionContext.open && shouldCloseExecutionContext(
+  if (screenMode === 'task' && taskActionSurface === null
+    && elements.executionContext.open && shouldCloseExecutionContext(
     event,
     elements.executionContext,
     elements.directoryDialog,
@@ -1792,8 +1795,6 @@ function closeExecutionContextFromOutside(event) {
   }
 }
 
-// Capture outside interactions before viewer controls can stop propagation.
-// Events owned by the context or directory dialog are rejected by the pure boundary check.
 document.addEventListener('pointerdown', closeExecutionContextFromOutside, true);
 document.addEventListener('click', closeExecutionContextFromOutside, true);
 

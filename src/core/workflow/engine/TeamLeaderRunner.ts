@@ -21,7 +21,7 @@ import {
   createProviderStreamParseError,
   isProviderStreamParseError,
 } from '../../../shared/types/agent-failure.js';
-import { runTeamLeaderExecution } from './team-leader-execution.js';
+import { runTeamLeaderExecution, type TeamLeaderExecutionOptions } from './team-leader-execution.js';
 import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
 import { createPartStep, createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
 import {
@@ -38,6 +38,7 @@ import {
 import type { RunAgentOptions } from '../../../agents/types.js';
 import type {
   MorePartsResponse,
+  TeamLeaderPartFeedbackResult,
 } from '../../../agents/decompose-task-usecase.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
@@ -48,6 +49,8 @@ import type {
   PhasePromptParts,
 } from '../types.js';
 import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
+import type { CompanionFixPolicy } from '../../models/companion-types.js';
+import { buildCompanionSingleFixInstruction } from '../companion/evidence.js';
 import {
   buildTeamLeaderErrorPartResult,
   runTeamLeaderPart,
@@ -97,6 +100,14 @@ function combineAbortSignals(signals: readonly (AbortSignal | undefined)[]): Abo
     return activeSignals[0];
   }
   return AbortSignal.any(activeSignals);
+}
+
+interface SingleCompanionCompletionContext {
+  readonly abortSignal?: AbortSignal;
+  readonly requestFollowUp: (
+    instruction: string,
+    abortSignal: AbortSignal | undefined,
+  ) => Promise<MorePartsResponse>;
 }
 
 function truncateTeamLeaderFailureContent(text: string): string {
@@ -158,6 +169,7 @@ export interface TeamLeaderRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
+  readonly companionFixPolicy: CompanionFixPolicy;
   readonly getAbortSignal?: () => AbortSignal | undefined;
   readonly getCwd: () => string;
   readonly getTask: () => string;
@@ -273,6 +285,7 @@ export class TeamLeaderRunner {
       undefined,
       leaderRuntime,
     );
+    const parentAbortSignal = leaderBaseOptions.abortSignal;
     const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
       leaderBaseOptions.workflowMeta,
     );
@@ -308,6 +321,7 @@ export class TeamLeaderRunner {
       ?? leaderBaseOptions;
     activeTeamCompanionRuntime?.beginReviewAttempt();
     let teamCompanionFollowUpRound = 0;
+    let singleCorrectionPartIds: readonly string[] | undefined;
     const completeTeamCompanionReview = async (
       implementerResponse: string,
     ): Promise<readonly CompanionFinding[]> => {
@@ -318,6 +332,95 @@ export class TeamLeaderRunner {
         { followUpRound: teamCompanionFollowUpRound },
       );
       return review.findings;
+    };
+    const buildFeedbackResults = (results: PartResult[]): TeamLeaderPartFeedbackResult[] => results.map((result) => {
+      const fullContent = result.response.status === 'error'
+        ? `[ERROR] ${resolvePartErrorDetail(result)}`
+        : result.response.content;
+      const reportPath = buildTeamLeaderPartReportPath({
+        runPaths: this.deps.getRunPaths(),
+        stepName: step.name,
+        partId: result.part.id,
+      });
+      const summary = summarizePartResultForFeedback(fullContent);
+      return {
+        id: result.part.id,
+        title: result.part.title,
+        status: result.response.status,
+        content: `${summary}\n\n[full report: ${reportPath.absolutePath}]`,
+      };
+    });
+    const runSingleCompanionCompletion = async (
+      implementerResponse: string,
+      context: SingleCompanionCompletionContext,
+    ): Promise<MorePartsResponse | undefined> => {
+      context.abortSignal?.throwIfAborted();
+      const review = await activeTeamCompanionRuntime!.complete(
+        state,
+        implementerResponse,
+        { followUpRound: 0 },
+      );
+      context.abortSignal?.throwIfAborted();
+      if (review.findings.length === 0) {
+        return undefined;
+      }
+
+      activeTeamCompanionRuntime!.beginFollowUpRound(2, review.findings.length);
+      try {
+        const followUpResponse = await context.requestFollowUp(
+          buildCompanionSingleFixInstruction(review.findings),
+          context.abortSignal,
+        );
+        context.abortSignal?.throwIfAborted();
+        return followUpResponse;
+      } catch (error) {
+        context.abortSignal?.throwIfAborted();
+        activeTeamCompanionRuntime!.completeFollowUpFailure(
+          state,
+          1,
+          getErrorMessage(error),
+        );
+        return undefined;
+      }
+    };
+    const settleSingleCompanionCorrection = (
+      results: readonly PartResult[],
+    ): ReadonlySet<string> | undefined => {
+      if (singleCorrectionPartIds === undefined) {
+        return undefined;
+      }
+
+      const resultsByPartId = new Map(results.map((result) => [result.part.id, result]));
+      const missingPartIds = singleCorrectionPartIds.filter((partId) => !resultsByPartId.has(partId));
+      const correctionResults = singleCorrectionPartIds
+        .map((partId) => resultsByPartId.get(partId))
+        .filter((result): result is PartResult => result !== undefined);
+      const failedResults = correctionResults.filter((result) => result.response.status !== 'done');
+      if (missingPartIds.length > 0 || failedResults.length > 0) {
+        const failedDetails = failedResults.map((result) => {
+          const detail = (result.response.error ?? result.response.content).trim();
+          const status = result.response.status;
+          return detail.length === 0
+            ? `${result.part.id} (${status})`
+            : `${result.part.id} (${status}): ${detail}`;
+        });
+        const reason = missingPartIds.length > 0
+          ? `Team leader correction did not settle: missing results for ${missingPartIds.join(', ')}`
+            + (failedDetails.length > 0 ? `; failed: ${failedDetails.join('; ')}` : '')
+          : `Team leader correction failed: ${failedDetails.join('; ')}`;
+        activeTeamCompanionRuntime!.completeFollowUpFailure(
+          state,
+          1,
+          reason,
+        );
+        return new Set([
+          ...missingPartIds,
+          ...failedResults.map((result) => result.part.id),
+        ]);
+      }
+
+      activeTeamCompanionRuntime!.completeSingleFix(state, 1);
+      return undefined;
     };
     const leaderStream = composedLeaderOptions.onStream;
     const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
@@ -337,6 +440,54 @@ export class TeamLeaderRunner {
     if (!structuredCaller) {
       throw new Error('structuredCaller is required for team leader execution');
     }
+    const buildFeedbackOptions = (
+      abortSignal: AbortSignal | undefined,
+      cancellablePartIds: readonly string[],
+      companionFindings?: readonly CompanionFinding[],
+      ignoredCancelPartIds?: readonly string[],
+    ) => ({
+      cwd: this.deps.getCwd(),
+      persona: leaderStep.persona,
+      personaPath: leaderStep.personaPath,
+      workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
+      language: this.deps.engineOptions.language,
+      model: leaderModel,
+      provider: leaderProvider,
+      resolvedModel: leaderModel,
+      resolvedProvider: leaderProvider,
+      resolvedProviderOptions: leaderProviderInfo.providerOptions,
+      permissionMode: leaderProviderInfo.permissionMode,
+      projectCwd: this.deps.engineOptions.projectCwd,
+      mcpServers: leaderMcpServers,
+      mcpAssignment: leaderBaseOptions.mcpAssignment,
+      mcpServerIdentity: leaderBaseOptions.mcpServerIdentity,
+      workflowMeta: leaderWorkflowMeta,
+      childProcessEnv: this.deps.engineOptions.childProcessEnv,
+      failureDir: leaderBaseOptions.failureDir,
+      cancellablePartIds,
+      ...(ignoredCancelPartIds === undefined
+        ? {}
+        : { ignoredCancelPartIds }),
+      ...(companionFindings === undefined
+        ? {}
+        : { companionFindings: structuredClone(companionFindings) }),
+      inspectTools,
+      inspectGuidance,
+      abortSignal,
+      onStream: leaderStream,
+      onActivity: leaderBaseOptions.onActivity,
+      onAgentResponse: (response: AgentResponse) => {
+        this.recordUsage(
+          leaderStep.name,
+          leaderProviderInfo,
+          response.status === 'done' && abortSignal?.aborted !== true,
+          response.providerUsage,
+        );
+      },
+      onAgentError: () => {
+        this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+      },
+    });
     const leaderStartedAt = Date.now();
     const buildDecompositionOptions = () => ({
       cwd: this.deps.getCwd(),
@@ -478,6 +629,82 @@ export class TeamLeaderRunner {
       () => this.resolvePartAutoRouting(executableStep, parts, runtime),
     );
 
+    const requestSingleCompanionCompletionAtExecutionTerminal: NonNullable<
+      TeamLeaderExecutionOptions['onExecutionTerminal']
+    > = async ({
+      partResults: terminalPartResults,
+      plannedParts: terminalPlannedParts,
+      scheduledIds,
+    }) => {
+      if (activeTeamCompanionRuntime === undefined) {
+        return undefined;
+      }
+      const currentPartResults = structuredClone(terminalPartResults) as PartResult[];
+      const currentPlannedParts = structuredClone(terminalPlannedParts) as PartDefinition[];
+      const rateLimitedResult = currentPartResults.find(
+        (result) => result.response.status === 'rate_limited',
+      );
+      const failedResults = currentPartResults.filter((result) => result.response.status === 'error');
+      const allFailed = failedResults.length === currentPartResults.length;
+      const timeoutContinuationFailed = hasFailedTimeoutContinuationResult(currentPartResults);
+      const failClosedPartError = teamLeaderConfig.failOnPartError === true && failedResults.length > 0;
+      if (rateLimitedResult !== undefined || allFailed || timeoutContinuationFailed || failClosedPartError) {
+        return undefined;
+      }
+
+      const aggregatedContent = buildTeamLeaderAggregatedContent(
+        currentPlannedParts,
+        currentPartResults,
+      );
+      const finalCompletionContext: SingleCompanionCompletionContext = {
+        abortSignal: leaderAbortSignal,
+        requestFollowUp: async (followUpInstruction, abortSignal) => {
+          const response = await structuredCaller.requestMoreParts(
+            followUpInstruction,
+            buildFeedbackResults(currentPartResults),
+            [...scheduledIds],
+            buildFeedbackOptions(
+              abortSignal,
+              [],
+              undefined,
+              currentPartResults.map((result) => result.part.id),
+            ),
+          );
+          const knownPartIds = new Set(scheduledIds);
+          const correctionParts = response.parts.filter((part) => {
+            if (knownPartIds.has(part.id)) {
+              return false;
+            }
+            knownPartIds.add(part.id);
+            return true;
+          });
+          if (response.done || correctionParts.length === 0) {
+            throw new Error('Team Companion correction planning did not schedule a correction part');
+          }
+          await this.addPartAutoRouting(
+            routedProviderInfoByPart,
+            executableStep,
+            correctionParts,
+            runtime,
+          );
+          return {
+            ...response,
+            cancelPartIds: [],
+            parts: correctionParts,
+          };
+        },
+      };
+      const followUpResponse = await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => runSingleCompanionCompletion(aggregatedContent, finalCompletionContext),
+      );
+      if (followUpResponse !== undefined) {
+        singleCorrectionPartIds = followUpResponse.parts.map((part) => part.id);
+      }
+      return followUpResponse;
+    };
+
     const executionAbortScope = createAbortScope(leaderBaseOptions.abortSignal);
     let executionResult: Awaited<ReturnType<typeof runTeamLeaderExecution>>;
     try {
@@ -491,6 +718,10 @@ export class TeamLeaderRunner {
         onTerminalError: (error) => {
           executionAbortScope.abort(error);
         },
+        onExecutionTerminal: this.deps.companionFixPolicy === 'single'
+          && activeTeamCompanionRuntime !== undefined
+          ? requestSingleCompanionCompletionAtExecutionTerminal
+          : undefined,
       onPartQueued: (part) => {
         parallelLogger?.addSubStep(part.id);
       },
@@ -541,7 +772,8 @@ export class TeamLeaderRunner {
           getErrorMessage(error),
         );
       },
-      reviewCompletion: activeTeamCompanionRuntime === undefined
+      reviewCompletion: this.deps.companionFixPolicy !== 'loop'
+        || activeTeamCompanionRuntime === undefined
         ? undefined
         : ({ partResults: currentResults, plannedParts: currentPlannedParts }) => {
             const currentResultsCopy = structuredClone(currentResults) as PartResult[];
@@ -570,27 +802,12 @@ export class TeamLeaderRunner {
         const scheduledIdsCopy = [...scheduledIds];
         const cancellablePartIdsCopy = [...cancellablePartIds];
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
-        const feedbackResults = currentResultsCopy.map((result) => {
-          const fullContent = result.response.status === 'error'
-            ? `[ERROR] ${resolvePartErrorDetail(result)}`
-            : result.response.content;
-          const reportPath = buildTeamLeaderPartReportPath({
-            runPaths: this.deps.getRunPaths(),
-            stepName: step.name,
-            partId: result.part.id,
-          });
-          const summary = summarizePartResultForFeedback(fullContent);
-          return {
-            id: result.part.id,
-            title: result.part.title,
-            status: result.response.status,
-            content: `${summary}\n\n[full report: ${reportPath.absolutePath}]`,
-          };
-        });
+        const feedbackResults = buildFeedbackResults(currentResultsCopy);
         const feedbackSignal = leaderDeadline?.signal === undefined
           ? feedbackAbortSignal
           : AbortSignal.any([feedbackAbortSignal, leaderDeadline.signal]);
         try {
+          const feedbackInstruction = instruction;
           if (companionFindings !== undefined && companionFindings.length > 0) {
             if (activeTeamCompanionRuntime === undefined) {
               throw new Error('Team Companion findings require an active Companion runtime');
@@ -601,55 +818,18 @@ export class TeamLeaderRunner {
             );
             teamCompanionFollowUpRound += 1;
           }
-          const buildFeedbackOptions = (abortSignal: AbortSignal) => ({
-            cwd: this.deps.getCwd(),
-            persona: leaderStep.persona,
-            personaPath: leaderStep.personaPath,
-            workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
-            language: this.deps.engineOptions.language,
-            model: leaderModel,
-            provider: leaderProvider,
-            resolvedModel: leaderModel,
-            resolvedProvider: leaderProvider,
-            resolvedProviderOptions: leaderProviderInfo.providerOptions,
-            permissionMode: leaderProviderInfo.permissionMode,
-            projectCwd: this.deps.engineOptions.projectCwd,
-            mcpServers: leaderMcpServers,
-            mcpAssignment: leaderBaseOptions.mcpAssignment,
-            mcpServerIdentity: leaderBaseOptions.mcpServerIdentity,
-            workflowMeta: leaderWorkflowMeta,
-            childProcessEnv: this.deps.engineOptions.childProcessEnv,
-            failureDir: leaderBaseOptions.failureDir,
-            cancellablePartIds: cancellablePartIdsCopy,
-            ...(companionFindings === undefined
-              ? {}
-              : { companionFindings: structuredClone(companionFindings) }),
-            inspectTools,
-            inspectGuidance,
-            abortSignal,
-            onStream: leaderStream,
-            onActivity: leaderBaseOptions.onActivity,
-            onAgentResponse: (response: AgentResponse) => {
-              this.recordUsage(
-                leaderStep.name,
-                leaderProviderInfo,
-                response.status === 'done' && !abortSignal.aborted,
-                response.providerUsage,
-              );
-            },
-            onAgentError: () => {
-              this.recordUsage(leaderStep.name, leaderProviderInfo, false);
-            },
-          });
-          const feedbackInstruction = instruction;
-          const requestFeedback = async (abortSignal: AbortSignal) => structuredCaller.requestMoreParts(
+          const moreParts = await structuredCaller.requestMoreParts(
             feedbackInstruction,
             feedbackResults,
             scheduledIdsCopy,
-            buildFeedbackOptions(abortSignal),
+            buildFeedbackOptions(feedbackSignal, cancellablePartIdsCopy, companionFindings),
           );
-          const moreParts: MorePartsResponse = await requestFeedback(feedbackSignal);
-          await this.addPartAutoRouting(routedProviderInfoByPart, executableStep, moreParts.parts, runtime);
+          await this.addPartAutoRouting(
+            routedProviderInfoByPart,
+            executableStep,
+            moreParts.parts,
+            runtime,
+          );
           return moreParts;
         } catch (error) {
           if (feedbackSignal.aborted) {
@@ -707,6 +887,10 @@ export class TeamLeaderRunner {
               partRuntime,
               partProviderInfo,
               teamCompanionDiffBaseline,
+              activeTeamCompanionRuntime === undefined
+                ? undefined
+                : (options) => activeTeamCompanionRuntime.composeOptions(options),
+              singleCorrectionPartIds?.includes(part.id) === true,
               instructionTransaction,
               partAbortSignal,
               publicationFence,
@@ -720,15 +904,37 @@ export class TeamLeaderRunner {
         },
         }),
       );
+    } catch (error) {
+      if (singleCorrectionPartIds !== undefined) {
+        parentAbortSignal?.throwIfAborted();
+        activeTeamCompanionRuntime!.completeFollowUpFailure(
+          state,
+          1,
+          `Team leader correction execution failed: ${getErrorMessage(error)}`,
+        );
+      }
+      throw error;
     } finally {
       executionAbortScope.dispose();
     }
     const { plannedParts, partResults } = executionResult;
-    const retryCount = sumRetryCounts(partResults.map((result) => result.response));
+    if (singleCorrectionPartIds !== undefined) {
+      parentAbortSignal?.throwIfAborted();
+    }
+    const failedCorrectionPartIds = settleSingleCompanionCorrection(partResults);
+    const teamOutcomePartResults = failedCorrectionPartIds === undefined
+      ? partResults
+      : partResults.filter((result) => !failedCorrectionPartIds.has(result.part.id));
+    const teamOutcomePlannedParts = failedCorrectionPartIds === undefined
+      ? plannedParts
+      : plannedParts.filter((part) => !failedCorrectionPartIds.has(part.id));
+    const retryCount = sumRetryCounts(teamOutcomePartResults.map((result) => result.response));
     this.recordPartRoutingResults(executableStep, partResults, routedProviderInfoByPart);
     this.emitPartRoutingDecisionEvents(executableStep, partResults, routedProviderInfoByPart, parentIteration);
 
-    const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
+    const rateLimitedResult = teamOutcomePartResults.find(
+      (result) => result.response.status === 'rate_limited',
+    );
     if (rateLimitedResult) {
       const rateLimitedResponse: AgentResponse = {
         ...rateLimitedResult.response,
@@ -745,7 +951,7 @@ export class TeamLeaderRunner {
     }
 
     const failureClassification = classifyTeamLeaderPartFailures(
-      partResults,
+      teamOutcomePartResults,
       teamLeaderConfig.failOnPartError === true,
     );
     if (failureClassification.terminal) {
@@ -786,7 +992,10 @@ export class TeamLeaderRunner {
       };
     }
 
-    const aggregatedContent = buildTeamLeaderAggregatedContent(plannedParts, partResults);
+    const aggregatedContent = buildTeamLeaderAggregatedContent(
+      teamOutcomePlannedParts,
+      teamOutcomePartResults,
+    );
 
     if (parallelLogger) {
       parallelLogger.printSummary(
@@ -941,6 +1150,8 @@ export class TeamLeaderRunner {
     runtime: RuntimeStepResolution | undefined,
     providerInfo: StepProviderInfo,
     companionDiffBaseline: CompanionDiffBaseline | undefined,
+    composeTeamCompanionOptions: ((options: RunAgentOptions) => RunAgentOptions) | undefined,
+    skipCompanionReview: boolean,
     instructionTransaction?: InstructionBuildTransaction,
     executionAbortSignal?: AbortSignal,
     publicationFence?: TeamLeaderExecutionPublicationFence,
@@ -984,6 +1195,8 @@ export class TeamLeaderRunner {
       executionAbortSignal,
       {
         forceNewSession: false,
+        skipCompanionReview,
+        composeOptions: composeTeamCompanionOptions,
         deadlineSignal,
         providerInfo,
         createCompanionRuntime: async (partStep, abortSignal) => {

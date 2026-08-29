@@ -13,7 +13,12 @@ const CLASSIFICATIONS = [
   {
     tier: 'active',
     reason: '現在の remediation 設計である有界計画と再発収束の意味契約を測る',
-    suites: ['fix-loop-convergence', 'fix-plan-bounded-proof'],
+    suites: [
+      'fix-loop-convergence',
+      'fix-plan-bounded-proof',
+      'fix-plan-impact-closure-primary',
+      'fix-plan-impact-closure-heldout',
+    ],
   },
   {
     tier: 'active',
@@ -167,6 +172,18 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: 'キャッシュなしの3モデル反復を行う production-condition suite である',
+  },
+  'fix-plan-impact-closure-primary': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: 'Codex Luna Max の read-only isolated 実行で独立した影響経路の計画を検証する',
+  },
+  'fix-plan-impact-closure-heldout': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '主ケースと異なる構造で影響経路計画の汎化と過剰範囲を検証する',
   },
   'fix-plan-fresh-findings': {
     defaultEligible: false,

@@ -6,6 +6,56 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
+import { readSessionRecords } from '../helpers/session-log';
+
+type JsonRecord = Record<string, unknown>;
+
+function readJsonl(path: string): JsonRecord[] {
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as JsonRecord);
+}
+
+function readJsonlDirectory(path: string): JsonRecord[] {
+  return readdirSync(path)
+    .filter((file) => file.endsWith('.jsonl'))
+    .sort()
+    .flatMap((file) => readJsonl(join(path, file)));
+}
+
+function expectSuccessfulParentCompanionCompletion(events: readonly JsonRecord[]): void {
+  const completionEvents = events.filter((event) => (
+    event.type === 'companion'
+    && event.action === 'complete'
+    && event.step === 'implement'
+  ));
+  expect(completionEvents).toEqual([
+    expect.objectContaining({
+      type: 'companion',
+      action: 'complete',
+      step: 'implement',
+      completionSettled: true,
+      completionFailure: false,
+      followUpRounds: 1,
+    }),
+  ]);
+}
+
+function expectSingleFixPrompt(
+  records: readonly JsonRecord[],
+  personaName: string,
+  promptNumber: number,
+): void {
+  const prompts = records.filter((record) => record.personaName === personaName);
+  expect(prompts).toHaveLength(promptNumber);
+  const prompt = prompts[promptNumber - 1]?.prompt;
+  expect(prompt).toEqual(expect.any(String));
+  expect(prompt).toContain('The exported value must not be negative.');
+  expect(prompt).toContain('advisory reference information');
+  expect(prompt).toContain('decide independently');
+  expect(prompt).toContain('Minor, trivial, or unnecessary findings may be left unaddressed');
+}
 
 describe('E2E: companion review', () => {
   let isolatedEnv: IsolatedEnv;
@@ -26,9 +76,21 @@ describe('E2E: companion review', () => {
     isolatedEnv.cleanup();
   });
 
-  it('should review a mock tool change, run a same-session fix, and resolve the mailbox finding', () => {
+  it.each([
+    {
+      name: 'should explicitly loop to re-review a same-session fix and resolve the mailbox finding',
+      fixPolicy: 'loop' as const,
+      expectedReviewerStarts: 2,
+    },
+    {
+      name: 'should default to one same-session fix without re-reviewing it',
+      fixPolicy: undefined,
+      expectedReviewerStarts: 1,
+    },
+  ])('$name', ({ fixPolicy, expectedReviewerStarts }) => {
     const workflowDir = join(repo.path, '.takt', 'workflows');
     const companionDir = join(repo.path, '.takt', 'companions');
+    const analyticsEventsDir = join(isolatedEnv.taktDir, 'companion-analytics');
     mkdirSync(workflowDir, { recursive: true });
     mkdirSync(companionDir, { recursive: true });
     mkdirSync(join(repo.path, 'src'), { recursive: true });
@@ -59,12 +121,16 @@ describe('E2E: companion review', () => {
     writeFileSync(join(isolatedEnv.taktDir, 'config.yaml'), [
       'language: en',
       'notification_sound: false',
+      'analytics:',
+      '  enabled: true',
+      `  events_path: ${JSON.stringify(analyticsEventsDir)}`,
       '',
     ].join('\n'), 'utf8');
     writeFileSync(join(repo.path, '.takt', 'runtime.yaml'), [
       'version: 1',
       'companion:',
       '  enabled: true',
+      ...(fixPolicy === undefined ? [] : [`  fix_policy: ${fixPolicy}`]),
       'provider:',
       '  profiles:',
       '    mock:',
@@ -119,16 +185,19 @@ describe('E2E: companion review', () => {
         }],
         file_writes: [{ path: 'src/value.ts', content: 'export const value = 1;\n' }],
       },
-      {
-        persona: 'security-reviewer',
-        content: 'No findings remain.',
-        structured_output: {
-          findings: [],
-          notes: 'No findings.',
-        },
-      },
+      ...(fixPolicy === 'loop'
+        ? [{
+            persona: 'security-reviewer',
+            content: 'No findings remain.',
+            structured_output: {
+              findings: [],
+              notes: 'No findings.',
+            },
+          }]
+        : []),
     ]), 'utf8');
     const callLogPath = join(isolatedEnv.taktDir, 'companion-calls.jsonl');
+    const promptLogPath = join(isolatedEnv.taktDir, 'companion-prompts.jsonl');
 
     const result = runTakt({
       args: ['--task', 'Implement a valid exported value', '--workflow', workflowPath],
@@ -137,6 +206,7 @@ describe('E2E: companion review', () => {
         ...isolatedEnv.env,
         TAKT_MOCK_SCENARIO: scenarioPath,
         TAKT_MOCK_CALL_LOG: callLogPath,
+        TAKT_MOCK_PROMPT_LOG: promptLogPath,
       },
       timeout: 180_000,
       injectProvider: false,
@@ -175,10 +245,32 @@ describe('E2E: companion review', () => {
       });
     expect(calls.filter(({ event, personaName }) => (
       event === 'start' && personaName === 'security-reviewer'
-    ))).toHaveLength(2);
+    ))).toHaveLength(expectedReviewerStarts);
     expect(calls.filter(({ event, personaName }) => (
       event === 'start' && personaName === 'coder'
     ))).toHaveLength(2);
+    expect(calls.map(({ event, personaName }) => `${personaName}:${event}`)).toEqual([
+      'coder:start',
+      'coder:complete',
+      'security-reviewer:start',
+      'security-reviewer:complete',
+      'coder:start',
+      'coder:complete',
+      ...(fixPolicy === 'loop'
+        ? ['security-reviewer:start', 'security-reviewer:complete']
+        : []),
+    ]);
+    const reviewRounds = readSessionRecords(cloneDir)
+      .filter((record) => record.type === 'companion_review_round')
+      .map((record) => ({ step: record.step, findingCount: record.findingCount }));
+    expect(reviewRounds).toEqual([
+      { step: 'implement', findingCount: 1 },
+      ...(fixPolicy === 'loop' ? [{ step: 'implement', findingCount: 0 }] : []),
+    ]);
+    expectSuccessfulParentCompanionCompletion(readJsonlDirectory(analyticsEventsDir));
+    if (fixPolicy === undefined) {
+      expectSingleFixPrompt(readJsonl(promptLogPath), 'coder', 2);
+    }
     const coderStarts = calls.filter(({ event, personaName }) => (
       event === 'start' && personaName === 'coder'
     ));
@@ -204,9 +296,27 @@ describe('E2E: companion review', () => {
     }).trim()).toBe(mailboxPath);
   });
 
-  it('should let a Team Leader pull a moderated mailbox finding into a new part and re-review the cumulative change', () => {
+  it.each([
+    {
+      name: 'should explicitly loop after a Team Leader pulls a moderated finding into a new part',
+      fixPolicy: 'loop' as const,
+      expectedLeaderStarts: 4,
+      expectedReviewerStarts: 4,
+    },
+    {
+      name: 'should default to one Team Leader correction batch without reviewing the correction part',
+      fixPolicy: undefined,
+      expectedLeaderStarts: 3,
+      expectedReviewerStarts: 2,
+    },
+  ])('$name', ({
+    fixPolicy,
+    expectedLeaderStarts,
+    expectedReviewerStarts,
+  }) => {
     const workflowDir = join(repo.path, '.takt', 'workflows');
     const companionDir = join(repo.path, '.takt', 'companions');
+    const analyticsEventsDir = join(isolatedEnv.taktDir, 'team-leader-companion-analytics');
     mkdirSync(workflowDir, { recursive: true });
     mkdirSync(companionDir, { recursive: true });
     mkdirSync(join(repo.path, 'src'), { recursive: true });
@@ -250,12 +360,16 @@ describe('E2E: companion review', () => {
     writeFileSync(join(isolatedEnv.taktDir, 'config.yaml'), [
       'language: en',
       'notification_sound: false',
+      'analytics:',
+      '  enabled: true',
+      `  events_path: ${JSON.stringify(analyticsEventsDir)}`,
       '',
     ].join('\n'), 'utf8');
     writeFileSync(join(repo.path, '.takt', 'runtime.yaml'), [
       'version: 1',
       'companion:',
       '  enabled: true',
+      ...(fixPolicy === undefined ? [] : [`  fix_policy: ${fixPolicy}`]),
       'provider:',
       '  profiles:',
       '    mock:',
@@ -304,16 +418,18 @@ describe('E2E: companion review', () => {
           parts: [{ id: 'fix', title: 'Fix value', instruction: 'Fix the value.' }],
         },
       },
-      {
-        persona: 'team-leader',
-        content: 'The implementation is complete.',
-        structured_output: {
-          done: true,
-          reasoning: 'The corrected value is ready.',
-          cancelPartIds: [],
-          parts: [],
-        },
-      },
+      ...(fixPolicy === 'loop'
+        ? [{
+            persona: 'team-leader',
+            content: 'The implementation is complete.',
+            structured_output: {
+              done: true,
+              reasoning: 'The corrected value is ready.',
+              cancelPartIds: [],
+              parts: [],
+            },
+          }]
+        : []),
       {
         persona: 'coder',
         content: 'Initial implementation complete.',
@@ -364,24 +480,29 @@ describe('E2E: companion review', () => {
           findings: [{ action: 'accept', sourceIndex: 0 }],
         },
       },
-      {
-        persona: 'security-reviewer',
-        content: 'No findings remain for the fix part.',
-        structured_output: {
-          findings: [],
-          notes: 'The fix part is valid.',
-        },
-      },
-      {
-        persona: 'security-reviewer',
-        content: 'No findings remain.',
-        structured_output: {
-          findings: [],
-          notes: 'The cumulative change is valid.',
-        },
-      },
+      ...(fixPolicy === 'loop'
+        ? [{
+            persona: 'security-reviewer',
+            content: 'No findings remain for the fix part.',
+            structured_output: {
+              findings: [],
+              notes: 'The fix part is valid.',
+            },
+          }]
+        : []),
+      ...(fixPolicy === 'loop'
+        ? [{
+            persona: 'security-reviewer',
+            content: 'No findings remain.',
+            structured_output: {
+              findings: [],
+              notes: 'The cumulative change is valid.',
+            },
+          }]
+        : []),
     ]), 'utf8');
     const callLogPath = join(isolatedEnv.taktDir, 'team-leader-companion-calls.jsonl');
+    const promptLogPath = join(isolatedEnv.taktDir, 'team-leader-companion-prompts.jsonl');
 
     const result = runTakt({
       args: ['--task', 'Implement a valid exported value with a Team Leader', '--workflow', workflowPath],
@@ -390,6 +511,7 @@ describe('E2E: companion review', () => {
         ...isolatedEnv.env,
         TAKT_MOCK_SCENARIO: scenarioPath,
         TAKT_MOCK_CALL_LOG: callLogPath,
+        TAKT_MOCK_PROMPT_LOG: promptLogPath,
       },
       timeout: 180_000,
       injectProvider: false,
@@ -422,15 +544,61 @@ describe('E2E: companion review', () => {
       .map((line) => JSON.parse(line) as { event: string; personaName: string });
     expect(calls.filter(({ event, personaName }) => (
       event === 'start' && personaName === 'team-leader'
-    ))).toHaveLength(4);
+    ))).toHaveLength(expectedLeaderStarts);
     expect(calls.filter(({ event, personaName }) => (
       event === 'start' && personaName === 'coder'
     ))).toHaveLength(2);
     expect(calls.filter(({ event, personaName }) => (
       event === 'start' && personaName === 'security-reviewer'
-    ))).toHaveLength(4);
+    ))).toHaveLength(expectedReviewerStarts);
     expect(calls.filter(({ event, personaName }) => (
       event === 'start' && personaName === 'adjudicator'
     ))).toHaveLength(1);
+    expect(calls.map(({ event, personaName }) => `${personaName}:${event}`)).toEqual([
+      'team-leader:start',
+      'team-leader:complete',
+      'coder:start',
+      'coder:complete',
+      'security-reviewer:start',
+      'security-reviewer:complete',
+      'team-leader:start',
+      'team-leader:complete',
+      'security-reviewer:start',
+      'security-reviewer:complete',
+      'adjudicator:start',
+      'adjudicator:complete',
+      'team-leader:start',
+      'team-leader:complete',
+      'coder:start',
+      'coder:complete',
+      ...(fixPolicy === 'loop'
+        ? ['security-reviewer:start', 'security-reviewer:complete']
+        : []),
+      ...(fixPolicy === 'loop'
+        ? [
+            'team-leader:start',
+            'team-leader:complete',
+            'security-reviewer:start',
+            'security-reviewer:complete',
+          ]
+        : []),
+    ]);
+    const reviewRounds = readSessionRecords(cloneDir)
+      .filter((record) => record.type === 'companion_review_round')
+      .map((record) => ({ step: record.step, findingCount: record.findingCount }));
+    expect(reviewRounds).toEqual([
+      { step: 'implement.initial', findingCount: 0 },
+      { step: 'implement', findingCount: 1 },
+      ...(fixPolicy === 'loop'
+        ? [
+            { step: 'implement.fix', findingCount: 0 },
+            { step: 'implement', findingCount: 0 },
+          ]
+        : []),
+    ]);
+    expectSuccessfulParentCompanionCompletion(readJsonlDirectory(analyticsEventsDir));
+    if (fixPolicy === undefined) {
+      expectSingleFixPrompt(readJsonl(promptLogPath), 'team-leader', 3);
+    }
   });
 });

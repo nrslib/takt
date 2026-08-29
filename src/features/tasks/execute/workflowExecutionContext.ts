@@ -4,10 +4,15 @@ import { resolveWorkflowCallTarget } from '../../../infra/config/index.js';
 import { getWorkflowSourcePath } from '../../../infra/config/loaders/workflowSourceMetadata.js';
 import { getWorkflowTrustInfo } from '../../../infra/config/loaders/workflowTrustSource.js';
 
-export function createWorkflowExecutionContext(workflowConfig: WorkflowConfig, projectCwd: string) {
+export function createWorkflowExecutionContext(
+  workflowConfig: WorkflowConfig,
+  projectCwd: string,
+  resourceRoot?: string,
+) {
   return {
     sourcePath: getWorkflowSourcePath(workflowConfig),
     trustInfo: getWorkflowTrustInfo(workflowConfig, projectCwd),
+    resourceRoot,
   };
 }
 

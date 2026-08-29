@@ -4,7 +4,9 @@ import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 import {
+  DEFAULT_COMPANION_FIX_POLICY,
   DEFAULT_COMPANION_REVIEW_MODE,
+  type CompanionFixPolicy,
   type CompanionReviewMode,
 } from '../../models/companion-types.js';
 import type {
@@ -261,6 +263,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const companionEnabled = params.options.companionEnabled ?? DEFAULT_COMPANION_ENABLED;
   const companionReviewMode: CompanionReviewMode =
     params.options.companionReviewMode ?? DEFAULT_COMPANION_REVIEW_MODE;
+  const companionFixPolicy: CompanionFixPolicy =
+    params.options.companionFixPolicy ?? DEFAULT_COMPANION_FIX_POLICY;
   const workflowRules: readonly WorkflowWideRule[] = mergeWorkflowWideRules(
     params.options.inheritedWorkflowRules,
     params.config.allStepsRules,
@@ -301,6 +305,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getRunPathNamespace: () => params.options.runPathNamespace ?? [],
     companionEnabled,
     companionReviewMode,
+    companionFixPolicy,
     companionDefinitions: params.config.companions,
     companionProviders: params.options.companionProviders,
     companionSelectorProvider: params.options.selectorProvider,
@@ -424,6 +429,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     optionsBuilder,
     stepExecutor,
     engineOptions: params.options,
+    companionFixPolicy,
     getAbortSignal: stepAbortSignalContext.getAbortSignal,
     getCwd: params.getCwd,
     getTask: () => params.task,

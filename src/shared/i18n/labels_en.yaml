@@ -81,6 +81,35 @@ interactive:
     effort: "Use reasoning effort for this conversation"
     verify: "Verify the current formal specification"
 
+# ===== Workflow Maker =====
+workflowMaker:
+  basePrompt: "Select a Workflow Maker base:"
+  workflowPrompt: "Select a workflow:"
+  namePrompt: "Workflow name"
+  sources:
+    new: "New workflow"
+    project: "Project workflows"
+    user: "Global workflows"
+    builtin: "Builtin workflows"
+    repertoire: "Repertoire workflows"
+  intro: "Workflow Maker - describe the workflow you want. Use /workflow to change the base, /go to prepare it, or /cancel to exit."
+  proposed: "Proposed Workflow Maker instruction:"
+  plannedPath: "Planned artifact path: {path}"
+  actionPrompt: "What would you like to do?"
+  actions:
+    execute: "Execute"
+    continue: "Continue editing"
+  continuePrompt: "Continue editing the Workflow Maker request."
+  noWorkflows: "No workflows are available from that source."
+  baseChanged: "Workflow Maker base changed to {name}."
+  wait: "Please wait until the workflow completes…"
+  completed: "Workflow Maker completed. Artifact: {path}. Doctor report: {report}"
+  completedWithoutReport: "Workflow Maker completed. Artifact: {path}."
+  failed: "Workflow Maker failed. Artifact preserved at {path}. Reason: {reason}. Doctor report: {report}"
+  failedWithoutReport: "Workflow Maker failed. Artifact preserved at {path}. Reason: {reason}."
+  planningFailed: "Workflow Maker could not prepare the artifact: {reason}"
+  ttyRequired: "Workflow Maker requires an interactive terminal (TTY)."
+
 # ===== Exec Mode UI =====
 exec:
   common:

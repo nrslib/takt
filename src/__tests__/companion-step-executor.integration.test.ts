@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CompanionFixPolicy } from '../core/models/companion-types.js';
 import type { CompanionReviewMode, WorkflowState } from '../core/models/types.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { CompanionReviewQueue } from '../core/workflow/companion/review-queue.js';
@@ -13,7 +14,7 @@ import {
   recordWorkflowStepProviderEventActivity,
 } from '../core/workflow/engine/step-deadline.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import type { RunPaths } from '../core/workflow/run/run-paths.js';
+import { buildRunPaths, type RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
 import { callMock, resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
@@ -46,26 +47,7 @@ function state(): WorkflowState {
 }
 
 function runPaths(cwd: string): RunPaths {
-  const runRootAbs = join(cwd, '.takt/runs/test-run');
-  return {
-    slug: 'test-run',
-    runRootRel: '.takt/runs/test-run',
-    reportsRel: '.takt/runs/test-run/reports',
-    contextRel: '.takt/runs/test-run/context',
-    contextKnowledgeRel: '.takt/runs/test-run/context/knowledge',
-    contextPolicyRel: '.takt/runs/test-run/context/policy',
-    contextPreviousResponsesRel: '.takt/runs/test-run/context/previous_responses',
-    logsRel: '.takt/runs/test-run/logs',
-    metaRel: '.takt/runs/test-run/meta.json',
-    runRootAbs,
-    reportsAbs: join(runRootAbs, 'reports'),
-    contextAbs: join(runRootAbs, 'context'),
-    contextKnowledgeAbs: join(runRootAbs, 'context/knowledge'),
-    contextPolicyAbs: join(runRootAbs, 'context/policy'),
-    contextPreviousResponsesAbs: join(runRootAbs, 'context/previous_responses'),
-    logsAbs: join(runRootAbs, 'logs'),
-    metaAbs: join(runRootAbs, 'meta.json'),
-  };
+  return buildRunPaths(cwd, 'test-run');
 }
 
 function diffReader(): CompanionDiffReader {
@@ -111,6 +93,7 @@ function deps(input: {
   paths: RunPaths;
   companionEnabled: boolean;
   companionReviewMode?: CompanionReviewMode;
+  companionFixPolicy?: CompanionFixPolicy;
   companionDiffReader: CompanionDiffReader;
   emitEvent: StepExecutorDeps['emitEvent'];
 }): StepExecutorDeps {
@@ -151,6 +134,7 @@ function deps(input: {
     getRunPathNamespace: () => [],
     companionEnabled: input.companionEnabled,
     companionReviewMode: input.companionReviewMode ?? 'completion',
+    companionFixPolicy: input.companionFixPolicy ?? 'single',
     companionDefinitions: {
       reviewer: {
         name: 'reviewer',
@@ -374,17 +358,340 @@ describe('companion StepExecutor lifecycle', () => {
     }
   });
 
-  it('delivers moderator-accepted findings in a follow-up prompt after draining reviews', async () => {
-    const finding = 'Remove the unsafe assignment.';
+  it.each([
+    {
+      label: 'explicit loop policy',
+      fixPolicyYaml: '  fix_policy: loop\n',
+      expectedRoundsPerStep: 2,
+    },
+    {
+      label: 'default single policy',
+      fixPolicyYaml: '',
+      expectedRoundsPerStep: 1,
+    },
+  ])('propagates runtime.yaml companion policy through the main and child workflow execution path ($label)', async ({
+    fixPolicyYaml,
+    expectedRoundsPerStep,
+  }) => {
+    mkdirSync(join(cwd, 'src'), { recursive: true });
+    writeFileSync(join(cwd, 'src', 'root.ts'), 'export const root = 0;\n', 'utf8');
+    writeFileSync(join(cwd, 'src', 'child.ts'), 'export const child = 0;\n', 'utf8');
+    initializeGitFixture(cwd, ['src/root.ts', 'src/child.ts']);
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    mkdirSync(join(cwd, '.takt', 'companions'), { recursive: true });
+    writeFileSync(join(cwd, '.takt', 'companions', 'reviewer.yaml'), [
+      'name: reviewer',
+      'description: Review implementation changes',
+      'interval_ms: 60000',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+      '  review_mode: completion',
+      fixPolicyYaml.trimEnd(),
+      'provider:',
+      '  defaults:',
+      '    profile: default',
+      '  profiles:',
+      '    default:',
+      '      provider: mock',
+      '      model: mock-model',
+      '    reviewer:',
+      '      provider: mock',
+      '      model: mock-model',
+      '  targets:',
+      '    companions:',
+      '      reviewer:',
+      '        profile: reviewer',
+    ].filter((line) => line.length > 0).join('\n'), 'utf8');
+    writeFileSync(join(cwd, '.takt', 'workflows', 'runtime-main-child.yaml'), [
+      'name: runtime-main-child',
+      'initial_step: implement',
+      'max_steps: 3',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: Implement the main workflow change.',
+      '    edit: true',
+      '    companion: [reviewer]',
+      '    rules:',
+      '      - condition: when(true)',
+      '        next: delegate',
+      '  - name: delegate',
+      '    kind: workflow_call',
+      '    call: child',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(cwd, '.takt', 'workflows', 'child.yaml'), [
+      'name: child',
+      'subworkflow:',
+      '  callable: true',
+      'initial_step: implement',
+      'max_steps: 1',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: Implement the child workflow change.',
+      '    edit: true',
+      '    companion: [reviewer]',
+      '    rules:',
+      '      - condition: when(true)',
+      '        next: COMPLETE',
+    ].join('\n'), 'utf8');
+
+    const reviewerFinding = (file: string) => ({
+      severity: 'should_fix' as const,
+      file,
+      line: 1,
+      finding: 'Fix the changed implementation.',
+    });
+    const reviewerEntries = expectedRoundsPerStep === 2
+      ? [
+          { persona: 'reviewer', status: 'done' as const, content: 'root finding', structuredOutput: { findings: [reviewerFinding('src/root.ts')], notes: null } },
+          { persona: 'reviewer', status: 'done' as const, content: 'root clean', structuredOutput: { findings: [], notes: null } },
+          { persona: 'reviewer', status: 'done' as const, content: 'child finding', structuredOutput: { findings: [reviewerFinding('src/child.ts')], notes: null } },
+          { persona: 'reviewer', status: 'done' as const, content: 'child clean', structuredOutput: { findings: [], notes: null } },
+        ]
+      : [
+          { persona: 'reviewer', status: 'done' as const, content: 'root finding', structuredOutput: { findings: [reviewerFinding('src/root.ts')], notes: null } },
+          { persona: 'reviewer', status: 'done' as const, content: 'child finding', structuredOutput: { findings: [reviewerFinding('src/child.ts')], notes: null } },
+        ];
+    setMockScenario([
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'root implementation',
+        fileWrites: [{ path: 'src/root.ts', content: 'export const root = 1;\n' }],
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'root follow-up',
+        fileWrites: [{ path: 'src/root.ts', content: 'export const root = 2;\n' }],
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'child implementation',
+        fileWrites: [{ path: 'src/child.ts', content: 'export const child = 1;\n' }],
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'child follow-up',
+        fileWrites: [{ path: 'src/child.ts', content: 'export const child = 2;\n' }],
+      },
+      ...reviewerEntries,
+    ]);
+
+    const events: WorkflowExecutionEvent[] = [];
+    const result = await executeTaskWithResult({
+      task: 'Implement the main and child changes.',
+      cwd,
+      projectCwd: cwd,
+      workflowIdentifier: 'runtime-main-child',
+      outputMode: 'silent',
+      eventSink: (event) => { events.push(event); },
+    });
+
+    expect(result.success).toBe(true);
+    const reviewRounds = events.filter((event) => (
+      event.type === 'companion' && event.action === 'review_round'
+    ));
+    const rootReviewRounds = reviewRounds.filter((event) => (
+      (event as { runPathNamespace?: string[] }).runPathNamespace === undefined
+    ));
+    const childReviewRounds = reviewRounds.filter((event) => (
+      (event as { runPathNamespace?: string[] }).runPathNamespace !== undefined
+    ));
+    expect(rootReviewRounds).toHaveLength(expectedRoundsPerStep);
+    expect(childReviewRounds).toHaveLength(expectedRoundsPerStep);
+    expect(reviewRounds.filter((event) => event.type === 'companion' && event.findingCount === 0))
+      .toHaveLength(expectedRoundsPerStep === 2 ? 2 : 0);
+    expect(events.filter((event) => event.type === 'companion' && event.action === 'fix_round'))
+      .toHaveLength(2);
+    expect(events.filter((event) => event.type === 'companion' && event.action === 'complete'))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ completionSettled: true, followUpRounds: 1 }),
+      ]));
+  });
+
+  it.each(['completion', 'live'] as const)(
+    'delivers moderator-accepted findings in one advisory follow-up without re-review in %s mode',
+    async (reviewMode) => {
+      const finding = 'Remove the unsafe assignment.';
+      setMockScenario([
+        { persona: 'coder', status: 'done', content: 'implemented' },
+        {
+          persona: 'reviewer',
+          status: 'done',
+          content: 'reviewed',
+          structuredOutput: {
+            findings: [{
+              severity: 'must_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding,
+            }],
+            notes: null,
+          },
+        },
+        {
+          persona: 'moderator',
+          status: 'done',
+          content: 'moderated',
+          structuredOutput: {
+            findings: [{ action: 'accept', sourceIndex: 0 }],
+          },
+        },
+        { persona: 'coder', status: 'done', content: 'fixed' },
+      ]);
+      if (reviewMode === 'live') {
+        vi.mocked(executeAgent).mockImplementation(async (persona, prompt, options) => {
+          options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+          if (persona === 'coder' && prompt.includes(finding)) {
+            options?.onStream?.({
+              type: 'tool_use',
+              data: {
+                tool: 'Write',
+                id: 'follow-up-write',
+                input: { path: 'src/a.ts', content: 'fixed' },
+              },
+            });
+            await new Promise<void>((resolve) => setTimeout(resolve, 350));
+          }
+          return callMock(options?.internalAgentName ?? persona ?? 'default', prompt, options);
+        });
+      }
+      const drain = vi.spyOn(CompanionReviewQueue.prototype, 'drain');
+      const workflowState = state();
+      const step = makeStep({
+        name: 'implement',
+        persona: 'coder',
+        instruction: 'Implement.',
+        companion: { fixed: ['reviewer'], pool: [], moderator: 'moderator' },
+        rules: [],
+      });
+      const emitEvent = vi.fn();
+
+      const executorDeps = deps({
+        cwd,
+        paths,
+        companionEnabled: true,
+        companionReviewMode: reviewMode,
+        companionFixPolicy: 'single',
+        companionDiffReader: reviewableDiffReader(),
+        emitEvent,
+      });
+      const onStream = vi.fn();
+      const onActivity = vi.fn();
+      const companionCallbackPairs: Array<{
+        onStream: ReturnType<typeof vi.fn>;
+        onActivity: ReturnType<typeof vi.fn>;
+      }> = [];
+      vi.mocked(executorDeps.optionsBuilder.buildAgentOptions).mockReturnValue({
+        cwd,
+        onStream,
+        onActivity,
+        resolvedExecution: {
+          provider: 'mock',
+          model: undefined,
+          providerOptions: undefined,
+          permissionMode: 'edit',
+        },
+      });
+      vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)
+        .mockImplementation(() => {
+          const callbacks = { onStream: vi.fn(), onActivity: vi.fn() };
+          companionCallbackPairs.push(callbacks);
+          return { ...callbacks, finish: vi.fn() };
+        });
+      const createRuntime = vi.spyOn(CompanionStepRuntime, 'create');
+
+      const result = await new StepExecutor(executorDeps)
+        .runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
+
+      expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
+        buildProviderCallCallbacks: expect.any(Function),
+      }));
+      expect(vi.mocked(executorDeps.optionsBuilder.buildAgentOptions).mock.invocationCallOrder[0])
+        .toBeLessThan(createRuntime.mock.invocationCallOrder[0]!);
+      const runtimeInput = createRuntime.mock.calls[0]?.[0];
+      expect(runtimeInput).toMatchObject({ reviewMode });
+      expect(runtimeInput).not.toHaveProperty('onStream');
+      expect(runtimeInput).not.toHaveProperty('onActivity');
+      const executionUnitKeys = vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)
+        .mock.calls.map((call) => call[3]);
+      expect(executionUnitKeys).toHaveLength(2);
+      expect(new Set(executionUnitKeys).size).toBe(2);
+      for (const key of executionUnitKeys) {
+        expect(JSON.parse(key)).toEqual([
+          'companion',
+          'implement',
+          expect.any(String),
+          expect.stringMatching(/^(reviewer|moderator)$/),
+          expect.any(Number),
+        ]);
+      }
+      expect(companionCallbackPairs).toHaveLength(2);
+      expect(companionCallbackPairs.every((callbacks) => callbacks.onStream !== onStream)).toBe(true);
+      expect(companionCallbackPairs.every((callbacks) => callbacks.onActivity !== onActivity)).toBe(true);
+      createRuntime.mockRestore();
+
+      const executeAgentMock = vi.mocked(executeAgent);
+      const coderCallIndices = executeAgentMock.mock.calls
+        .flatMap(([persona], index) => persona === 'coder' ? [index] : []);
+      const coderPrompts = coderCallIndices.map((index) => executeAgentMock.mock.calls[index]![1]);
+      expect(drain).toHaveBeenCalledOnce();
+      expect(coderPrompts).toHaveLength(2);
+      expect(drain.mock.invocationCallOrder[0]).toBeLessThan(
+        executeAgentMock.mock.invocationCallOrder[coderCallIndices[1]!]!,
+      );
+      expect(coderPrompts[1]).toContain(finding);
+      expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
+      expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'moderator')).toHaveLength(1);
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round')).toHaveLength(1);
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_skipped')).toHaveLength(0);
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:complete')).toHaveLength(1);
+      expect(result.response).toMatchObject({ status: 'done', content: 'fixed' });
+      expect(workflowState.companion).toEqual({
+        completionSettled: true,
+        followUpRounds: 1,
+      });
+    },
+  );
+
+  it('resumes live loop scheduling during a follow-up and completes the next zero-finding review', async () => {
+    const finding = 'Fix the changed implementation.';
+    let currentSnapshot = {
+      digest: 'digest-1',
+      changedLines: 12,
+      content: '+const unsafe = true;\n',
+      changedFiles: ['src/a.ts'],
+      fileFingerprints: { 'src/a.ts': 'file-1' },
+      hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+      omittedBytes: 0,
+      truncated: false,
+    };
+    const companionDiffReader: CompanionDiffReader = {
+      readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+      readDiff: vi.fn().mockImplementation(async () => ({
+        status: 'ok' as const,
+        snapshot: currentSnapshot,
+      })),
+    };
     setMockScenario([
       { persona: 'coder', status: 'done', content: 'implemented' },
       {
         persona: 'reviewer',
         status: 'done',
-        content: 'reviewed',
+        content: 'reviewed initial change',
         structuredOutput: {
           findings: [{
-            severity: 'must_fix',
+            severity: 'should_fix',
             file: 'src/a.ts',
             line: 1,
             finding,
@@ -392,104 +699,82 @@ describe('companion StepExecutor lifecycle', () => {
           notes: null,
         },
       },
+      { persona: 'coder', status: 'done', content: 'fixed and changed the file' },
       {
-        persona: 'moderator',
+        persona: 'reviewer',
         status: 'done',
-        content: 'moderated',
-        structuredOutput: {
-          findings: [{ action: 'accept', sourceIndex: 0 }],
-        },
+        content: 'reviewed follow-up change',
+        structuredOutput: { findings: [], notes: null },
       },
-      { persona: 'coder', status: 'done', content: 'fixed' },
     ]);
-    const drain = vi.spyOn(CompanionReviewQueue.prototype, 'drain');
+
+    let followUpReleased!: () => void;
+    const followUpGate = new Promise<void>((resolve) => { followUpReleased = resolve; });
+    vi.mocked(executeAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+      if (persona === 'coder' && prompt.includes(finding)) {
+        currentSnapshot = {
+          ...currentSnapshot,
+          digest: 'digest-2',
+          content: '+const safe = true;\n',
+          fileFingerprints: { 'src/a.ts': 'file-2' },
+          hunkFingerprints: { 'src/a.ts:1-1': 'hunk-2' },
+        };
+        options?.onStream?.({
+          type: 'tool_use',
+          data: {
+            tool: 'Write',
+            id: 'follow-up-write',
+            input: { path: 'src/a.ts', content: 'const safe = true;\n' },
+          },
+        });
+        await followUpGate;
+      }
+      return callMock(options?.internalAgentName ?? persona ?? 'default', prompt, options);
+    });
+
     const workflowState = state();
+    const emitEvent = vi.fn();
     const step = makeStep({
       name: 'implement',
       persona: 'coder',
       instruction: 'Implement.',
-      companion: { fixed: ['reviewer'], pool: [], moderator: 'moderator' },
+      companion: { fixed: ['reviewer'], pool: [] },
       rules: [],
     });
-
-    const executorDeps = deps({
+    const runPromise = new StepExecutor(deps({
       cwd,
       paths,
       companionEnabled: true,
-      companionReviewMode: 'completion',
-      companionDiffReader: reviewableDiffReader(),
-      emitEvent: vi.fn(),
-    });
-    const onStream = vi.fn();
-    const onActivity = vi.fn();
-    const companionCallbackPairs: Array<{
-      onStream: ReturnType<typeof vi.fn>;
-      onActivity: ReturnType<typeof vi.fn>;
-    }> = [];
-    vi.mocked(executorDeps.optionsBuilder.buildAgentOptions).mockReturnValue({
-      cwd,
-      onStream,
-      onActivity,
-      resolvedExecution: {
-        provider: 'mock',
-        model: undefined,
-        providerOptions: undefined,
-        permissionMode: 'edit',
-      },
-    });
-    vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)
-      .mockImplementation(() => {
-        const callbacks = { onStream: vi.fn(), onActivity: vi.fn() };
-        companionCallbackPairs.push(callbacks);
-        return { ...callbacks, finish: vi.fn() };
+      companionReviewMode: 'live',
+      companionFixPolicy: 'loop',
+      companionDiffReader,
+      emitEvent,
+    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
+
+    try {
+      await vi.waitFor(() => {
+        expect(vi.mocked(executeAgent).mock.calls.filter(([persona]) => persona === 'reviewer'))
+          .toHaveLength(2);
+      }, { timeout: 10_000 });
+      followUpReleased();
+      const result = await runPromise;
+
+      expect(result.response).toMatchObject({ status: 'done', content: 'fixed and changed the file' });
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round'))
+        .toHaveLength(2);
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round')[1]?.[1])
+        .toEqual(expect.objectContaining({ trigger: 'quiet', findingCount: 0 }));
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:fix_round'))
+        .toEqual([['companion:fix_round', { step: 'implement', sequence: 2, findingCount: 1 }]]);
+      expect(workflowState.companion).toEqual({
+        completionSettled: true,
+        followUpRounds: 1,
       });
-    const createRuntime = vi.spyOn(CompanionStepRuntime, 'create');
-
-    const result = await new StepExecutor(executorDeps)
-      .runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
-
-    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
-      buildProviderCallCallbacks: expect.any(Function),
-    }));
-    expect(vi.mocked(executorDeps.optionsBuilder.buildAgentOptions).mock.invocationCallOrder[0])
-      .toBeLessThan(createRuntime.mock.invocationCallOrder[0]!);
-    const runtimeInput = createRuntime.mock.calls[0]?.[0];
-    expect(runtimeInput).toMatchObject({ reviewMode: 'completion' });
-    expect(runtimeInput).not.toHaveProperty('onStream');
-    expect(runtimeInput).not.toHaveProperty('onActivity');
-    const executionUnitKeys = vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)
-      .mock.calls.map((call) => call[3]);
-    expect(executionUnitKeys).toHaveLength(2);
-    expect(new Set(executionUnitKeys).size).toBe(2);
-    for (const key of executionUnitKeys) {
-      expect(JSON.parse(key)).toEqual([
-        'companion',
-        'implement',
-        expect.any(String),
-        expect.stringMatching(/^(reviewer|moderator)$/),
-        expect.any(Number),
-      ]);
+    } finally {
+      followUpReleased();
+      await runPromise.catch(() => undefined);
     }
-    expect(companionCallbackPairs).toHaveLength(2);
-    expect(companionCallbackPairs.every((callbacks) => callbacks.onStream !== onStream)).toBe(true);
-    expect(companionCallbackPairs.every((callbacks) => callbacks.onActivity !== onActivity)).toBe(true);
-    createRuntime.mockRestore();
-
-    const executeAgentMock = vi.mocked(executeAgent);
-    const coderCallIndices = executeAgentMock.mock.calls
-      .flatMap(([persona], index) => persona === 'coder' ? [index] : []);
-    const coderPrompts = coderCallIndices.map((index) => executeAgentMock.mock.calls[index]![1]);
-    expect(drain).toHaveBeenCalled();
-    expect(coderPrompts).toHaveLength(2);
-    expect(drain.mock.invocationCallOrder[0]).toBeLessThan(
-      executeAgentMock.mock.invocationCallOrder[coderCallIndices[1]!]!,
-    );
-    expect(coderPrompts[1]).toContain(finding);
-    expect(result.response).toMatchObject({ status: 'done', content: 'fixed' });
-    expect(workflowState.companion).toEqual({
-      completionSettled: true,
-      followUpRounds: 1,
-    });
   });
 
   it('discards a failed queue attempt unfinished tool before retrying with a new execution unit', async () => {
@@ -678,7 +963,7 @@ describe('companion StepExecutor lifecycle', () => {
     },
   );
 
-  it('continues completion retry when the fail-soft companion completion event throws', async () => {
+  it('continues completion retry after a failed single follow-up without re-entering Companion', async () => {
     setMockScenario([
       { persona: 'coder', status: 'done', content: 'initial review' },
       {
@@ -762,11 +1047,17 @@ describe('companion StepExecutor lifecycle', () => {
       emitEvent,
     })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
 
+    const executeAgentMock = vi.mocked(executeAgent);
     expect(result.response).toMatchObject({ status: 'done', content: 'retry review complete' });
     expect(workflowState.companion).toEqual({
-      completionSettled: true,
-      followUpRounds: 0,
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds: 1,
+      reason: 'follow-up failed',
     });
+    expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'coder')).toHaveLength(3);
+    expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
+    expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'moderator')).toHaveLength(1);
     const terminalEvents = emitEvent.mock.calls.filter(([event]) => event === 'companion:complete');
     expect(terminalEvents).toEqual([
       ['companion:complete', {
@@ -776,12 +1067,6 @@ describe('companion StepExecutor lifecycle', () => {
         followUpRounds: 1,
         reason: 'follow-up failed',
       }],
-      ['companion:complete', {
-        step: 'implement',
-        completionSettled: true,
-        completionFailure: false,
-        followUpRounds: 0,
-      }],
     ]);
     const firstCompleteOrder = emitEvent.mock.invocationCallOrder[
       emitEvent.mock.calls.findIndex(([event]) => event === 'companion:complete')
@@ -789,10 +1074,104 @@ describe('companion StepExecutor lifecycle', () => {
     const retryStartOrder = emitEvent.mock.invocationCallOrder[
       emitEvent.mock.calls.findIndex(([event]) => event === 'review_completion:retry:start')
     ]!;
-    const lastCompleteIndex = emitEvent.mock.calls.findLastIndex(
-      ([event]) => event === 'companion:complete',
-    );
+    const lastCompleteIndex = emitEvent.mock.calls
+      .map(([event]) => event)
+      .lastIndexOf('companion:complete');
+    expect(lastCompleteIndex).toBeGreaterThanOrEqual(0);
     expect(firstCompleteOrder).toBeLessThan(retryStartOrder);
-    expect(retryStartOrder).toBeLessThan(emitEvent.mock.invocationCallOrder[lastCompleteIndex]!);
+    expect(lastCompleteIndex).toBe(
+      emitEvent.mock.calls.findIndex(([event]) => event === 'companion:complete'),
+    );
+  });
+
+  it('does not re-enter Companion after a successful single follow-up during completion retry', async () => {
+    const finding = 'Fix the accepted defect.';
+    setMockScenario([
+      { persona: 'coder', status: 'done', content: 'initial review' },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'reviewed',
+        structuredOutput: {
+          findings: [{
+            severity: 'should_fix',
+            file: 'src/a.ts',
+            line: 1,
+            finding,
+          }],
+          notes: null,
+        },
+      },
+      {
+        persona: 'moderator',
+        status: 'done',
+        content: 'moderated',
+        structuredOutput: {
+          findings: [{ action: 'accept', sourceIndex: 0 }],
+        },
+      },
+      { persona: 'coder', status: 'done', content: 'single follow-up fixed' },
+      {
+        persona: 'review-completion-judge',
+        status: 'done',
+        content: 'incomplete',
+        structuredOutput: {
+          complete: false,
+          reason: 'consumer not checked',
+          missing_paths: [{ path: 'src/a.ts', reason: 'retry the review' }],
+        },
+      },
+      { persona: 'coder', status: 'done', content: 'completion retry complete' },
+      {
+        persona: 'review-completion-judge',
+        status: 'done',
+        content: 'complete',
+        structuredOutput: {
+          complete: true,
+          reason: 'closed',
+          missing_paths: [],
+        },
+      },
+    ]);
+    const emitEvent = vi.fn();
+    const workflowState = state();
+    const step = makeStep({
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement.',
+      companion: { fixed: ['reviewer'], pool: [], moderator: 'moderator' },
+      completionRetry: {
+        minRetry: 0,
+        maxRetry: 1,
+        retryInstruction: 'Recheck the identified gaps.',
+      },
+      rules: [],
+    });
+
+    const result = await new StepExecutor(deps({
+      cwd,
+      paths,
+      companionEnabled: true,
+      companionDiffReader: reviewableDiffReader(),
+      emitEvent,
+    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
+
+    expect(result.response).toMatchObject({ status: 'done', content: 'completion retry complete' });
+    expect(vi.mocked(executeAgent).mock.calls.filter(([persona]) => persona === 'coder'))
+      .toHaveLength(3);
+    expect(vi.mocked(executeAgent).mock.calls.filter(([persona]) => persona === 'reviewer'))
+      .toHaveLength(1);
+    expect(vi.mocked(executeAgent).mock.calls.filter(([persona]) => persona === 'moderator'))
+      .toHaveLength(1);
+    expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:review_round'))
+      .toHaveLength(1);
+    expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:fix_round'))
+      .toEqual([['companion:fix_round', { step: 'implement', sequence: 2, findingCount: 1 }]]);
+    expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:complete'))
+      .toHaveLength(1);
+    expect(workflowState.companion).toEqual({
+      completionSettled: true,
+      followUpRounds: 1,
+    });
   });
 });

@@ -98,6 +98,21 @@ class DeepSeekHarness:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.closed = False
+        config_file = os.path.join(kwargs['cwd'], 'bridge-start-configs.jsonl')
+        with open(config_file, 'a', encoding='utf-8') as config:
+            config.write(json.dumps(kwargs, sort_keys=True) + '\\n')
+        if kwargs.get('provider') == 'unknown-route':
+            raise RuntimeError('SDK rejected unknown provider route "unknown-route"')
+        if kwargs.get('model') == 'unknown-model':
+            raise RuntimeError('SDK rejected unknown model "unknown-model"')
+        if kwargs.get('provider') == 'not-found-route':
+            raise RuntimeError('SDK provider route not found "not-found-route"')
+        if kwargs.get('model') == 'enoent-model':
+            raise RuntimeError('ENOENT: SDK model not found "enoent-model"')
+        if kwargs.get('model') == 'runtime-unavailable-model':
+            raise FileNotFoundError('missing DeepSeek Harness runtime wheel')
+        if kwargs.get('model') == 'terminal-diagnostic-model':
+            raise RuntimeError('SDK diagnostic \\x1b]52;clipboard\\x07\\x1b[31mraw\\x1b[0m\\x01')
         counter_file = kwargs.get('session_root')
         if counter_file:
             with open(counter_file, 'a', encoding='utf-8') as counter:
@@ -229,6 +244,160 @@ class DeepSeekHarness:
       .filter((event) => event.type === 'init' || event.type === 'result')
       .map((event) => event.data.sessionId))
       .toEqual([response.sessionId, response.sessionId]);
+
+    const [configuration] = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(configuration).toMatchObject({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+    });
+  });
+
+  it.each([
+    ['openai/gpt-5.4', 'openai', 'gpt-5.4'],
+    ['my-gateway/org/custom-model', 'my-gateway', 'org/custom-model'],
+    ['my-gateway/ollama/qwen3.5:397b', 'my-gateway', 'ollama/qwen3.5:397b'],
+    ['route//model', 'route', '/model'],
+    [' unknown-route / unknown-model ', ' unknown-route ', ' unknown-model '],
+    ['deepseek-v4-flash', 'deepseek-official', 'deepseek-v4-flash'],
+    [' deepseek-v4-flash ', 'deepseek-official', ' deepseek-v4-flash '],
+  ] as const)('passes the effective route and model separately to the SDK for %s', async (model, provider, modelId) => {
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      model,
+      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+    });
+    const [configuration] = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(response.status).toBe('done');
+    expect(configuration).toMatchObject({ provider, model: modelId });
+  });
+
+  it.each([
+    ['', '""'],
+    ['   ', '   '],
+    ['/model', '/model'],
+    ['route/', 'route/'],
+  ] as const)('rejects malformed model reference %s before starting the bridge', async (model, referenceContext) => {
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      model,
+      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.content).toContain(referenceContext);
+    expect(response.content).toMatch(/empty|route|model/iu);
+    await expect(readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([
+    [
+      'unknown-route/known-model',
+      'unknown-route',
+      'known-model',
+      'SDK rejected unknown provider route "unknown-route"',
+    ],
+    [
+      'known-route/unknown-model',
+      'known-route',
+      'unknown-model',
+      'SDK rejected unknown model "unknown-model"',
+    ],
+    [
+      'not-found-route/known-model',
+      'not-found-route',
+      'known-model',
+      'SDK provider route not found "not-found-route"',
+    ],
+    [
+      'known-route/enoent-model',
+      'known-route',
+      'enoent-model',
+      'ENOENT: SDK model not found "enoent-model"',
+    ],
+  ] as const)('reports the original reference and bridge/SDK failure for %s', async (reference, provider, modelId, sdkFailure) => {
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      model: reference,
+      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+    });
+    const [configuration] = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(response.status).toBe('error');
+    expect(configuration).toMatchObject({ provider, model: modelId });
+    expect(response.content).toContain(reference);
+    expect(response.content).toContain(provider);
+    expect(response.content).toContain(modelId);
+    expect(response.content).toContain(sdkFailure);
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'error', data: { message: response.content, raw: response.content } },
+      expect.objectContaining({
+        type: 'result',
+        data: expect.objectContaining({
+          error: response.content,
+          success: false,
+          failureCategory: 'provider_error',
+        }),
+      }),
+    ]));
+    expect(events.some((event) => event.type === 'result' && event.data.success === true)).toBe(false);
+  });
+
+  it('sanitizes terminal control sequences in provider errors and stream events', async () => {
+    const reference = '\u009d52;c;X\u007fterminal-route/terminal-diagnostic-model';
+    const sanitizedReference = `DeepSeek Harness model reference ${JSON.stringify(reference)}`
+      .replace('\u009d', '\\x9d')
+      .replace('\u007f', '\\x7f');
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      model: reference,
+      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.content).toContain(sanitizedReference);
+    expect(response.content).toContain('SDK diagnostic');
+    expect(response.content).toContain('raw');
+    expect(response.content).toContain('\\x01');
+    expect(response.content).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+
+    const streamedFailureEvents = events.filter((event) => event.type === 'error' || event.type === 'result');
+    expect(streamedFailureEvents).toHaveLength(2);
+    const streamedMessages = streamedFailureEvents.flatMap((event) => Object.values(event.data)
+      .filter((value): value is string => typeof value === 'string'));
+    expect(streamedMessages).not.toHaveLength(0);
+    for (const message of streamedMessages) {
+      expect(message).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+    }
+    expect(streamedMessages.some((message) => message.includes(sanitizedReference))).toBe(true);
+    expect(streamedMessages.some((message) => message.includes('SDK diagnostic'))).toBe(true);
+  });
+
+  it('preserves runtime setup diagnostics for a routed model', async () => {
+    const reference = 'known-route/runtime-unavailable-model';
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      model: reference,
+      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.content).toContain('Unable to start DeepSeek Harness Python bridge');
+    expect(response.content).toContain('Install Python 3.10+ and deepseek-harness-sdk');
   });
 
   it('preserves multiple assistant messages when the SDK omits chunk events', async () => {
@@ -371,6 +540,69 @@ class DeepSeekHarness:
     expect(response.status).toBe(status);
     expect(response.content).toContain(message);
     expect(response.status).not.toBe('done');
+  });
+
+  it('maps an SDK aborted finish reason to external_abort without reporting success', async () => {
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const response = await callDeepSeekHarness('worker', 'reason:aborted', {
+      cwd: root,
+      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+    });
+
+    expect(response).toMatchObject({
+      status: 'error',
+      failureCategory: 'external_abort',
+      error: response.content,
+    });
+    expect(response.content).toContain('DeepSeek Harness execution aborted');
+    expect(response.content).not.toContain('provider bridge/SDK');
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'error', data: { message: response.content, raw: response.content } },
+      expect.objectContaining({
+        type: 'result',
+        data: expect.objectContaining({
+          error: response.content,
+          success: false,
+          failureCategory: 'external_abort',
+        }),
+      }),
+    ]));
+    expect(events.some((event) => event.type === 'result' && event.data.success === true)).toBe(false);
+  });
+
+  it.each([
+    ['my-gateway/org/custom-model', 'my-gateway/org/custom-model'],
+    [undefined, 'deepseek-v4-flash'],
+  ] as const)('preserves structured provider error context for model %s', async (model, modelReference) => {
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const response = await callDeepSeekHarness('worker', 'reason:error', {
+      cwd: root,
+      ...(model === undefined ? {} : { model }),
+      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+    });
+
+    expect(response).toMatchObject({
+      status: 'error',
+      failureCategory: 'provider_error',
+      error: response.content,
+    });
+    expect(response.content).toContain(modelReference);
+    expect(response.content).toContain('provider bridge/SDK');
+    expect(response.content).toContain('FAKE: provider failure');
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'error', data: { message: response.content, raw: response.content } },
+      expect.objectContaining({
+        type: 'result',
+        data: expect.objectContaining({
+          error: response.content,
+          success: false,
+          failureCategory: 'provider_error',
+        }),
+      }),
+    ]));
+    expect(events.some((event) => event.type === 'result' && event.data.success === true)).toBe(false);
   });
 
   it('rejects an unknown finish reason as a provider stream protocol error', async () => {
@@ -542,6 +774,51 @@ class DeepSeekHarness:
     expect(first).toMatchObject({ status: 'done', sessionId: 'persistent-session' });
     expect(second).toMatchObject({ status: 'done', sessionId: 'persistent-session' });
     expect((await readFile(counterFile, 'utf8')).trim().split('\n')).toEqual(['initialized']);
+  });
+
+  it('reuses one process when bare and explicit default routes have the same effective identity', async () => {
+    const counterFile = path.join(root, 'default-route-starts.txt');
+    const first = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      model: 'deepseek-v4-flash',
+      sessionId: 'default-route-session',
+      providerOptions: { pythonPath, sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+    });
+    const second = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      model: 'deepseek-official/deepseek-v4-flash',
+      sessionId: 'default-route-session',
+      providerOptions: { pythonPath, sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+    });
+
+    expect(first.status).toBe('done');
+    expect(second.status).toBe('done');
+    expect((await readFile(counterFile, 'utf8')).trim().split('\n')).toEqual(['initialized']);
+  });
+
+  it('does not share a process when the effective route or model changes', async () => {
+    const counterFile = path.join(root, 'routing-starts.txt');
+    const calls = [
+      ['route-a-session', 'openai/gpt-5.4'],
+      ['model-b-session', 'openai/gpt-5.5'],
+      ['route-b-session', 'anthropic/gpt-5.4'],
+    ] as const;
+
+    for (const [sessionId, model] of calls) {
+      const response = await callDeepSeekHarness('worker', 'hello', {
+        cwd: root,
+        model,
+        sessionId,
+        providerOptions: { pythonPath, sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+      });
+      expect(response.status).toBe('done');
+    }
+
+    expect((await readFile(counterFile, 'utf8')).trim().split('\n')).toEqual([
+      'initialized',
+      'initialized',
+      'initialized',
+    ]);
   });
 
   it('rejects a relative session root that traverses a symlink outside the project', async () => {

@@ -12,7 +12,11 @@ import {
   takeSessionState,
   updatePersonaSession,
 } from '../../infra/config/index.js';
-import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
+import {
+  createLogger,
+  hasInteractiveTerminal,
+  sanitizeTerminalText,
+} from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readPipedLine } from './lineEditor.js';
@@ -91,16 +95,19 @@ function findLatestAssistantMessage(history: ConversationMessage[]): Conversatio
   return undefined;
 }
 
-/**
- * Display and clear previous session state if present.
- */
 export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): void {
-  const sessionState = takeSessionState(cwd);
-  if (sessionState) {
-    const statusLabel = formatSessionStatus(sessionState, lang);
-    info(statusLabel);
-    blankLine();
+  if (hasInteractiveTerminal()) {
+    return;
   }
+
+  const sessionState = takeSessionState(cwd);
+  if (!sessionState) {
+    return;
+  }
+
+  const statusLabel = formatSessionStatus(sessionState, lang);
+  info(statusLabel);
+  blankLine();
 }
 
 export type { PostSummaryAction } from './interactive.js';

@@ -4,7 +4,7 @@
  * each of them, and the conversation result reaches the caller.
  */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,8 +12,14 @@ import type { TaskHistorySummaryItem } from '../features/interactive/interactive
 import type { ConversationViewProps } from '../features/tui/ConversationView.js';
 import type { RunTuiOptions } from '../features/tui/runTui.js';
 import type { TuiConversation } from '../features/tui/tuiConversation.js';
-import type { SessionState } from '../infra/config/project/sessionState.js';
+import {
+  getSessionStatePath,
+  saveSessionState,
+  takeSessionState as takeStoredSessionState,
+  type SessionState,
+} from '../infra/config/project/sessionState.js';
 import type { ImageAttachmentStore } from '../features/interactive/imageAttachments.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 const {
   mockRender,
@@ -1858,6 +1864,91 @@ describe('runTui', () => {
     });
   });
 
+  describe('startup session state', () => {
+    it('should consume a saved result without adding it to either Ink startup transcript', async () => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-tui-stale-state-'));
+      const lang = 'en' as const;
+      const staleState = {
+        status: 'success',
+        workflowName: 'stale-workflow',
+        taskResult: 'stale result that must not be rendered',
+        timestamp: '2026-08-26T00:00:00.000Z',
+      } satisfies SessionState;
+      const staleSuccessNotice = getLabel('interactive.previousTask.success', lang);
+      const cancelExit = {
+        kind: 'result',
+        result: { action: 'cancel', task: '' },
+      } as const;
+      const emptyCarry = { history: [], queue: [] } as const;
+      const startedTrees: MountedTree[] = [];
+      const startedRuns: Array<ReturnType<typeof startRun>> = [];
+
+      try {
+        saveSessionState(projectDir, 'stale-publication', staleState);
+        mockTakeSessionState.mockImplementation(
+          (cwd: string) => takeStoredSessionState(cwd),
+        );
+
+        const firstTree = scriptRender();
+        startedTrees.push(firstTree);
+        const firstRun = startRun({ cwd: projectDir, lang });
+        startedRuns.push(firstRun);
+        await waitForMount(firstTree, 1);
+
+        const firstTranscript = firstTree.conversationProps().initialEntries
+          .map((entry) => entry.content)
+          .join('\n');
+        expect(firstTranscript).not.toContain(staleSuccessNotice);
+        expect(firstTranscript).not.toContain(staleState.workflowName);
+        expect(firstTranscript).not.toContain(staleState.taskResult);
+        expect(firstTranscript).not.toContain(staleState.timestamp);
+        const consumedEnvelope = JSON.parse(
+          readFileSync(getSessionStatePath(projectDir), 'utf8'),
+        ) as { readonly status: unknown };
+        expect(consumedEnvelope.status).toBe('consumed');
+
+        firstTree.conversationProps().onExit(
+          cancelExit,
+          emptyCarry,
+        );
+        await firstRun;
+
+        const secondTree = scriptRender();
+        startedTrees.push(secondTree);
+        const secondRun = startRun({ cwd: projectDir, lang });
+        startedRuns.push(secondRun);
+        await waitForMount(secondTree, 1);
+
+        const secondTranscript = secondTree.conversationProps().initialEntries
+          .map((entry) => entry.content)
+          .join('\n');
+        expect(secondTranscript).not.toContain(staleSuccessNotice);
+        expect(secondTranscript).not.toContain(staleState.workflowName);
+        expect(secondTranscript).not.toContain(staleState.taskResult);
+        expect(secondTranscript).not.toContain(staleState.timestamp);
+        expect(mockTakeSessionState).toHaveBeenCalledTimes(2);
+        expect(mockTakeSessionState).toHaveBeenNthCalledWith(1, projectDir);
+        expect(mockTakeSessionState).toHaveBeenNthCalledWith(2, projectDir);
+        expect(mockTakeSessionState.mock.results.map((result) => result.value))
+          .toEqual([staleState, null]);
+
+        secondTree.conversationProps().onExit(
+          cancelExit,
+          emptyCarry,
+        );
+        await secondRun;
+      } finally {
+        for (const tree of startedTrees) {
+          if (tree.mounts.count > tree.unmount.mock.calls.length) {
+            tree.conversationProps().onExit(cancelExit, emptyCarry);
+          }
+        }
+        await Promise.allSettled(startedRuns);
+        rmSync(projectDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('resident session', () => {
     it('should dispatch with no interactive overrides after provider, model, and effort handoffs', async () => {
       const first = createConversationDouble();
@@ -1975,31 +2066,78 @@ describe('runTui', () => {
       await expect(run).resolves.toMatchObject({ result: { action: 'cancel' } });
     });
 
-    it('should report what the finished run recorded about itself', async () => {
+    it.each([
+      {
+        outcome: 'successful',
+        sessionState: {
+          status: 'success',
+          workflowName: 'review',
+          taskContent: 'ship it',
+          timestamp: '2026-01-02T03:04:05.000Z',
+        } satisfies SessionState,
+        expectedStatus: 'Previous task completed successfully',
+      },
+      {
+        outcome: 'failed',
+        sessionState: {
+          status: 'error',
+          workflowName: 'review',
+          taskContent: 'ship it',
+          errorMessage: 'provider unavailable',
+          timestamp: '2026-01-02T03:04:05.000Z',
+        } satisfies SessionState,
+        expectedStatus: 'Previous task failed: provider unavailable',
+      },
+    ])('should report a $outcome run and continue the same conversation', async ({
+      sessionState,
+      expectedStatus,
+    }) => {
       const tree = scriptRender();
-      // The shape the run actually writes (SessionState), so the greeting is
-      // built from the same fields a real run leaves behind.
-      const sessionState: SessionState = {
-        status: 'success',
-        workflowName: 'review',
-        taskContent: 'ship it',
-        timestamp: '2026-01-02T03:04:05.000Z',
+      const conversation = createConversationDouble();
+      mockCreateTuiConversation.mockReturnValue(conversation);
+      const startupState: SessionState = {
+        status: 'error',
+        workflowName: 'old-workflow',
+        errorMessage: 'stale provider error',
+        timestamp: '2026-01-01T00:00:00.000Z',
       };
-      mockTakeSessionState.mockReturnValue(sessionState);
+      mockTakeSessionState
+        .mockReturnValueOnce(startupState)
+        .mockReturnValueOnce(sessionState)
+        .mockReturnValue(null);
       const run = startRun({ dispatch: vi.fn().mockResolvedValue(undefined) });
       await waitForMount(tree, 1);
 
-      tree.conversationProps()
-        .onExit({ kind: 'result', result: { action: 'save_task', task: 'ship it' } }, { history: [], queue: [] });
+      const first = tree.conversationProps();
+      const startupNotice = first.initialEntries.map((entry) => entry.content).join('\n');
+      expect(startupNotice).not.toContain(startupState.workflowName);
+      expect(startupNotice).not.toContain(startupState.errorMessage);
+      expect(startupNotice).not.toContain(startupState.timestamp);
+      first.onExit(
+        { kind: 'result', result: { action: 'execute', task: 'ship it' } },
+        { history: [], queue: [] },
+      );
       await waitForMount(tree, 2);
 
-      const notice = tree.conversationProps().initialEntries.map((entry) => entry.content).join('\n');
+      const second = tree.conversationProps();
+      const notice = second.initialEntries.map((entry) => entry.content).join('\n');
       expect(notice).toContain('review');
-      // The status and the time it finished are what the banner reports.
-      expect(notice).toContain('completed successfully');
+      expect(notice).toContain(expectedStatus);
       expect(notice).toContain(new Date(sessionState.timestamp).toLocaleString('en-US'));
+      expect(second.conversation).toBe(first.conversation);
+      expect(mockTakeSessionState).toHaveBeenCalledTimes(2);
+      expect(mockTakeSessionState).toHaveBeenNthCalledWith(1, '/repo');
+      expect(mockTakeSessionState).toHaveBeenNthCalledWith(2, '/repo');
 
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+      const nextInput = {
+        text: 'describe the next task',
+        abortSignal: new AbortController().signal,
+        onAssistantChunk: vi.fn(),
+      };
+      await second.conversation.submit(nextInput);
+      expect(conversation.submit).toHaveBeenCalledExactlyOnceWith(nextInput);
+
+      second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
     });
 
