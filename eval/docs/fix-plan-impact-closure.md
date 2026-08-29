@@ -28,6 +28,23 @@ PR #1513 の長時間実行では、修正後に `fix-verifier` が計画に含�
 | 回帰 | `fix-plan-boundary-preflight` | `eval-hQ2-2026-08-28T18:44:33` | PASS | 保存境界に合わない候補を退け、実際の永続化経路を事前検証 |
 | 回帰 | `fix-plan-cause-check` | `eval-rwp-2026-08-28T18:46:35` | PASS（9/9） | provider matrix全体で、未確認原因の断定を避け、確認できた原因へ修正範囲を限定 |
 
+## 平易化の確認
+
+長い一段落を短い箇条書きへ変え、ケース固有の名前を足さずに同じ判断ができるかを再評価した。単に文章を短くした最初の案では、具体値や独立した入力を落とす出力が発生した。その失敗を受け、次の順に読める構成へ直した。
+
+1. 結果ごとに使う入力や状態を挙げる。
+2. 単独で結果を変えられるものを別の経路として扱う。
+3. 各経路の定義元と通る関数を書く。
+4. 成立例と、入力を1つだけ変えた反例を具体値で書く。
+
+| 段階 | suite | 結果ID | 結果 | 確認内容 |
+|------|-------|--------|------|----------|
+| 最初の平易化案 | `fix-plan-impact-closure-primary` | `eval-Cre-2026-08-28T22:23:35` | FAIL（score 0.55） | 選択結果、循環、監視結果の具体値が一部省略された |
+| 最終案 | `fix-plan-impact-closure-primary` | `eval-8Rn-2026-08-28T23:48:55` | PASS（score 1） | 3経路の入力、定義元、通る関数、変更前後の結果を具体値で記録 |
+| 最終案 | `fix-plan-impact-closure-heldout` | `eval-3pv-2026-08-28T23:38:03` | PASS（score 1） | primaryとは異なる4経路を漏れなく分離し、それぞれの反例を記録 |
+| 回帰 | `fix-plan-boundary-preflight` | `eval-YoI-2026-08-28T23:56:59` | PASS | 修正候補が対象の境界に合うかを引き続き判定 |
+| 回帰 | `fix-plan-cause-check` | `eval-OLR-2026-08-28T23:59:33` | PASS（9/9） | 3モデル×3回で、未確認原因の断定や問題を避けるだけの変更を引き続き拒否 |
+
 ## 経路別証拠
 
 GREEN候補（`eval-JTt-2026-08-28T18:27:16`）が記録したprimaryの経路は次のとおり。現在のfixtureで部分`source`が`TypeError`になることは契約テストでも観測する。
@@ -47,6 +64,6 @@ held-out候補（`eval-QOY-2026-08-28T18:35:34`）とfixture契約テストが�
 | sort | `buildArtifact` → sections sort → `sections` | details order=`1`、summary order=`2` → `details, summary` | orderだけを入替え → `summary, details` | documentは同じで順序だけが変わることを契約テストで観測 |
 | write | `buildArtifact` → `writeIndex` → `indexFile` / file content | `output/index.md`へ`d-001`本文を書込む | indexPathだけを`output/alternate.md`へ変更 → 同じ本文を別ファイルへ書込む | 戻り値と両実ファイル内容を契約テストで観測し、grader PASS |
 
-いずれもcache無効、repeat 1で実行した。primaryとheld-outは`gpt-5.6-luna`のreasoning effort max、boundary-preflightはsuite既定のCodex provider、cause-checkはsuite既定のprovider matrixを使用した。生成promptは15,894文字（primary）と15,322文字（held-out）。漏洩テストは、生成promptにsuite ID `fix-plan-impact-closure`、旧ケース名`static-path-audit`、旧probeラベルがないことと、productionの4 facetにfixture名、PATH ID、対象関数名がないことを確認する。候補へ正当に渡す裁定内容や作業ディレクトリまで非開示とは主張しない。
+いずれもcache無効で実行した。primary、held-out、boundary-preflightはrepeat 1、cause-checkは3モデルをrepeat 3で実行した。primaryとheld-outは`gpt-5.6-luna`のreasoning effort max、boundary-preflightはsuite既定のCodex provider、cause-checkはsuite既定のprovider matrixを使用した。最終案の生成promptは16,001文字（primary）と15,429文字（held-out）。漏洩テストは、生成promptにsuite ID `fix-plan-impact-closure`、旧ケース名`static-path-audit`、旧probeラベルがないことと、productionの4 facetにfixture名、PATH ID、対象関数名がないことを確認する。候補へ正当に渡す裁定内容や作業ディレクトリまで非開示とは主張しない。
 
 `fix-plan-bounded-proof` は関連候補として確認したが、production facet変更前の同一条件でも Luna (`eval-AHB-2026-08-28T17:11:45`) と Sol (`eval-aKO-2026-08-28T17:30:09`) がともにFAILしたため、今回変更の回帰判定には使用しない。これを通すためのケース固有プロンプトは追加しない。
