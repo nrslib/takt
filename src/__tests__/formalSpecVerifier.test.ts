@@ -246,6 +246,22 @@ function writeVerifyRunMetadata(
   }));
 }
 
+function mockProcessLiveness(
+  missingPids: readonly number[],
+  livingGroupIds: readonly number[] = [],
+) {
+  const actualKill = process.kill.bind(process);
+  return vi.spyOn(process, 'kill').mockImplementation(((pid, signal) => {
+    if (signal === 0 && missingPids.includes(pid)) {
+      throw Object.assign(new Error('process not found'), { code: 'ESRCH' });
+    }
+    if (signal === 0 && livingGroupIds.includes(-pid)) {
+      return undefined;
+    }
+    return actualKill(pid, signal);
+  }) as typeof process.kill);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   processResponses.length = 0;
@@ -439,14 +455,7 @@ describe('runFormalSpecVerification', () => {
     mkdirSync(activeDirectory, { recursive: true, mode: 0o700 });
     writeVerifyRunMetadata(abandonedDirectory, abandonedPid);
     writeVerifyRunMetadata(activeDirectory, process.pid);
-    const actualKill = process.kill.bind(process);
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid, signal) => {
-      if (pid === abandonedPid && signal === 0) {
-        const error = Object.assign(new Error('process not found'), { code: 'ESRCH' });
-        throw error;
-      }
-      return actualKill(pid, signal);
-    }) as typeof process.kill);
+    const killSpy = mockProcessLiveness([abandonedPid]);
     processResponses.push({ error: new Error('java is unavailable') });
 
     try {
@@ -466,17 +475,14 @@ describe('runFormalSpecVerification', () => {
     const abandonedDirectory = join(runsDirectory, '.verify-staging-2147483647-abandoned');
     const activeDirectory = join(runsDirectory, `.verify-staging-${process.pid}-active`);
     const invalidDirectory = join(runsDirectory, '.verify-staging-invalid');
+    const unrelatedFile = join(runsDirectory, '0-unrelated-file');
+    const unrelatedSymlink = join(runsDirectory, '1-unrelated-symlink');
     mkdirSync(abandonedDirectory, { recursive: true, mode: 0o700 });
     mkdirSync(activeDirectory, { recursive: true, mode: 0o700 });
     mkdirSync(invalidDirectory, { recursive: true, mode: 0o700 });
-    const actualKill = process.kill.bind(process);
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid, signal) => {
-      if (pid === 2_147_483_647 && signal === 0) {
-        const error = Object.assign(new Error('process not found'), { code: 'ESRCH' });
-        throw error;
-      }
-      return actualKill(pid, signal);
-    }) as typeof process.kill);
+    writeFileSync(unrelatedFile, 'not a run');
+    symlinkSync(activeDirectory, unrelatedSymlink, 'dir');
+    const killSpy = mockProcessLiveness([2_147_483_647]);
 
     try {
       await runFormalSpecVerification('No formal specification was generated.', directory);
@@ -484,15 +490,17 @@ describe('runFormalSpecVerification', () => {
       expect(existsSync(abandonedDirectory)).toBe(false);
       expect(existsSync(activeDirectory)).toBe(true);
       expect(existsSync(invalidDirectory)).toBe(true);
+      expect(existsSync(unrelatedFile)).toBe(true);
+      expect(existsSync(unrelatedSymlink)).toBe(true);
     } finally {
       killSpy.mockRestore();
       rmSync(directory, { recursive: true, force: true });
     }
   });
 
-  it('should retain an abandoned run while its detached process group is active', async () => {
+  it('should retain an abandoned run while its detached process group is active', async (ctx) => {
     if (process.platform === 'win32') {
-      return;
+      ctx.skip();
     }
     const directory = createTestDirectory();
     const runsDirectory = join(directory, '.takt', 'runs');
@@ -501,17 +509,7 @@ describe('runFormalSpecVerification', () => {
     const processGroupId = 2_147_483_645;
     mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
     writeVerifyRunMetadata(runDirectory, ownerPid, false, [{ id: 'active-group', pid: processGroupId }]);
-    const actualKill = process.kill.bind(process);
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid, signal) => {
-      if (pid === ownerPid && signal === 0) {
-        const error = Object.assign(new Error('process not found'), { code: 'ESRCH' });
-        throw error;
-      }
-      if (pid === -processGroupId && signal === 0) {
-        return undefined;
-      }
-      return actualKill(pid, signal);
-    }) as typeof process.kill);
+    const killSpy = mockProcessLiveness([ownerPid], [processGroupId]);
 
     try {
       await runFormalSpecVerification('No formal specification was generated.', directory);
@@ -588,7 +586,6 @@ describe('runFormalSpecVerification', () => {
         { code: 0 },
         { code: 0 },
         { code: 1, stderr: 'counterexample' },
-        { code: 0, stderr: 'openjdk version "17.0.1"' },
       );
       const failed = await runFormalSpecVerification(quintResponse, directory);
       expect(failed.verdict).toBe('failed');
@@ -598,7 +595,6 @@ describe('runFormalSpecVerification', () => {
         { code: 0 },
         { code: 0 },
         { error: new Error('spawn failed') },
-        { code: 0, stderr: 'openjdk version "17.0.1"' },
       );
       const errored = await runFormalSpecVerification(quintResponse, directory);
       expect(errored.verdict).toBe('error');
@@ -608,7 +604,6 @@ describe('runFormalSpecVerification', () => {
         { code: 0 },
         { code: 0 },
         { code: null },
-        { code: 0, stderr: 'openjdk version "17.0.1"' },
       );
       const statusless = await runFormalSpecVerification(quintResponse, directory);
       expect(statusless.verdict).toBe('error');
@@ -704,6 +699,24 @@ describe('runFormalSpecVerification', () => {
       });
       expect(spawnedProcesses.some(({ args }) => args.includes('run'))).toBe(false);
       expect(spawnedProcesses.some(({ args }) => args.includes('verify'))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should not invoke Java discovery when Quint verification cannot run and Alloy is absent', async () => {
+    const directory = createTestDirectory();
+    processResponses.push({ code: 1, stderr: 'Quint parse failed' });
+
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule invalid {}\n```', directory);
+
+      expect(result.quint.verify).toMatchObject({
+        status: 'skipped',
+        message: 'Quint verification was skipped because an earlier Quint stage did not pass.',
+      });
+      expect(spawnedProcesses).toHaveLength(1);
+      expect(spawnedProcesses.some(({ command }) => command === 'java')).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

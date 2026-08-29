@@ -668,7 +668,9 @@ describe('bundled Quint CLI verification boundary', () => {
     try {
       await runFormalSpecVerification('No formal specification was generated.', directory);
 
-      expect(child.pid).toBeTypeOf('number');
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      expect(() => process.kill(child.pid!, 0)).not.toThrow();
       expect(existsSync(runDirectory)).toBe(true);
     } finally {
       if (child.exitCode === null && !child.killed) {

@@ -625,7 +625,8 @@ function finishVerifyRunLaunch(directory: string, childPid?: number, launchId?: 
 }
 
 function parseVerifyRunStagingOwnerPid(name: string): number | undefined {
-  const match = new RegExp(`^${VERIFY_RUN_STAGING_PREFIX}(\\d+)-`, 'u').exec(name);
+  if (!name.startsWith(VERIFY_RUN_STAGING_PREFIX)) return undefined;
+  const match = /^(\d+)-/u.exec(name.slice(VERIFY_RUN_STAGING_PREFIX.length));
   const pid = match ? Number.parseInt(match[1] ?? '', 10) : Number.NaN;
   return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
 }
@@ -699,7 +700,8 @@ function cleanupAbandonedVerifyRuns(cwd: string): void {
     return;
   }
   for (const entry of entries) {
-    if (!sameVerifyRunsDirectory(cwd, runs) || !entry.isDirectory() || entry.isSymbolicLink()) return;
+    if (!sameVerifyRunsDirectory(cwd, runs)) return;
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     const directory = safeRunPath(runs, join(runs.path, entry.name));
     if (directory === undefined) continue;
     const stagingPid = parseVerifyRunStagingOwnerPid(entry.name);
@@ -1091,15 +1093,21 @@ export async function runFormalSpecVerification(
       quint = quintResultFromStages(quintStageSet, targets);
     }
 
-    const detectedJavaMajorVersion = await javaVersion(runDirectory, abortSignal, runtimeState);
-    const hasJava17 = detectedJavaMajorVersion !== undefined && detectedJavaMajorVersion >= 17;
-    const javaSkipMessage = 'Java 17 or later was not detected; Quint verify and Alloy verification were skipped. Alloy specifications remain unverified.';
-
-    if (quintPath && hasJava17
+    const canRunQuintVerify = quintPath !== undefined
       && mainModule !== undefined
       && quint.parse?.status === 'passed'
       && quint.typecheck?.status === 'passed'
-      && quint.run?.status === 'passed') {
+      && quint.run?.status === 'passed';
+    const javaDetectionRan = alloyPath !== undefined || canRunQuintVerify;
+    const detectedJavaMajorVersion = javaDetectionRan
+      ? await javaVersion(runDirectory, abortSignal, runtimeState)
+      : undefined;
+    const hasJava17 = detectedJavaMajorVersion !== undefined && detectedJavaMajorVersion >= 17;
+    const javaSkipMessage = alloyPath === undefined
+      ? 'Java 17 or later was not detected; Quint verification was skipped.'
+      : 'Java 17 or later was not detected; Quint verify and Alloy verification were skipped. Alloy specifications remain unverified.';
+
+    if (canRunQuintVerify && hasJava17 && quintPath !== undefined && mainModule !== undefined) {
       const quintCli = resolveQuintCli();
       const verifyArgs = [
         'verify',
@@ -1126,9 +1134,9 @@ export async function runFormalSpecVerification(
         quint = quintResultFromStages(quintStageSet, targets);
       }
     } else if (quintPath) {
-      const message = hasJava17
-        ? 'Quint verification was skipped because an earlier Quint stage did not pass.'
-        : javaSkipMessage;
+      const message = canRunQuintVerify && javaDetectionRan
+        ? javaSkipMessage
+        : 'Quint verification was skipped because an earlier Quint stage did not pass.';
       quintStageSet = { ...quintStageSet, verify: skippedStage(message) };
       quint = quintResultFromStages(quintStageSet, targets);
     }
