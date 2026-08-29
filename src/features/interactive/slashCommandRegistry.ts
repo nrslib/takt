@@ -59,7 +59,9 @@ export function resolveFormalSpecCommandAvailability(
   delete baseAvailability.enabledCommands;
   const { enabledCommands } = availability;
   const resolvedEnabledCommands = enabledCommands === undefined
-    ? undefined
+    ? formalSpec
+      ? undefined
+      : Object.values(SlashCommand).filter((command) => command !== SlashCommand.Verify)
     : formalSpec
       ? enabledCommands.includes(SlashCommand.Verify)
         ? enabledCommands

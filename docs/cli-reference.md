@@ -142,11 +142,11 @@ takt --task "Add authentication" --workflow dual
 
 ## Workflow Maker
 
-`takt make` starts the TTY-only Workflow Maker. Before the conversation, choose New workflow or a project, global, builtin, or repertoire workflow as the base. Existing workflows are reference inputs only; Workflow Maker never edits the selected source.
+`takt make` starts the TTY-only Workflow Maker. Before the conversation, choose New workflow or a project, global, built-in, or repertoire workflow as the base. Existing workflows are reference inputs only; Workflow Maker never edits the selected source.
 
 Use `/workflow` to replace the base during the conversation and `/go` to prepare a complete implementation instruction. The approval screen shows the planned `.takt/make/YYYYMMDD-HHmmss-SSS/` path and offers exactly Execute, Continue editing, and Cancel. No Maker artifact is written until Execute is selected.
 
-An approved run copies the statically reachable dependency closure into an isolated directory containing `workflows/`, `steps/`, `facet-pools/`, and `facets/`, rewrites references to the copies, and runs the builtin `workflow-maker` directly with that directory as its working directory. It does not create a task, worktree, commit, push, or pull request. Dynamic or unresolved dependencies fail before execution. Completed and failed runs remain at their displayed paths, including the doctor report when one was produced.
+An approved run copies the statically reachable dependency closure into an isolated directory containing `workflows/`, `steps/`, `facet-pools/`, and `facets/`, rewrites references to the copies, and runs the built-in `workflow-maker` directly with that directory as its working directory. It does not create a task, worktree, commit, push, or pull request. Dynamic or unresolved dependencies fail before execution. Completed and failed runs remain at their displayed paths, including the doctor report when one was produced.
 
 ```bash
 takt make

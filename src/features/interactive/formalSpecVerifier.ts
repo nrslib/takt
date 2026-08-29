@@ -1,16 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, sep, resolve } from 'node:path';
 import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 
 const require = createRequire(import.meta.url);
@@ -23,6 +26,9 @@ const ALLOY_JAR_SHA256 = '6037cbeee0e8423c1c468447ed10f5fcf2f2743a2ffc39cb1c81f2
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
 const ALLOY_COMMAND_OUTPUT_TRUNCATED_MESSAGE = 'Alloy command enumeration output was truncated before all commands could be read.';
 const MAX_FAILURE_MESSAGE = 8_000;
+const VERIFY_RUN_METADATA_FILE = '.verify-run.json';
+const VERIFY_RUN_METADATA_VERSION = 1;
+const VERIFY_RUN_STAGING_PREFIX = '.verify-staging-';
 
 export type FormalSpecVerificationStatus = 'passed' | 'failed' | 'error' | 'skipped';
 
@@ -292,6 +298,7 @@ async function runProcess(
   cwd: string,
   timeout: number,
   abortSignal?: AbortSignal,
+  runtimeState?: VerifyRunRuntimeState,
 ): Promise<ProcessResult> {
   abortSignal?.throwIfAborted();
   const processAbortController = new AbortController();
@@ -308,23 +315,50 @@ async function runProcess(
     processAbortController.abort(abortSignal?.reason);
   };
   abortSignal?.addEventListener('abort', onAbort, { once: true });
+  let childPid: number | undefined;
+  let launchId: string | undefined;
 
   try {
-    const managedProcess = spawnManagedProcess(
-      command,
-      args,
-      {
-        cwd,
-        env: {
-          ...process.env,
-          TMPDIR: cwd,
-          TMP: cwd,
-          TEMP: cwd,
+    if (!beginVerifyRunLaunch(cwd)) {
+      throw new Error('Could not record the formal verification subprocess launch state.');
+    }
+    let managedProcess: ReturnType<typeof spawnManagedProcess>;
+    try {
+      managedProcess = spawnManagedProcess(
+        command,
+        args,
+        {
+          cwd,
+          env: {
+            ...process.env,
+            TMPDIR: cwd,
+            TMP: cwd,
+            TEMP: cwd,
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
         },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-      processAbortController.signal,
-    );
+        processAbortController.signal,
+      );
+    } catch (error) {
+      finishVerifyRunLaunch(cwd);
+      throw error;
+    }
+    childPid = managedProcess.child.pid;
+    launchId = childPid === undefined ? undefined : randomUUID();
+    if (childPid === undefined || launchId === undefined || !finishVerifyRunLaunch(cwd, childPid, launchId)) {
+      let terminated = false;
+      try {
+        await managedProcess.terminate();
+        terminated = true;
+      } catch {
+        // The launch marker remains conservative if termination also fails.
+      }
+      const childProcessGone = childPid === undefined || isVerifyRunProcessTreeGone(childPid);
+      if (terminated && childProcessGone) {
+        finishVerifyRunLaunch(cwd);
+      }
+      throw new Error('Could not record the formal verification subprocess.');
+    }
     managedProcess.child.stdout?.setEncoding('utf8');
     managedProcess.child.stdout?.on('data', (chunk: string | Buffer) => {
       const appended = appendProcessOutput(stdout, toProcessText(chunk));
@@ -339,6 +373,9 @@ async function runProcess(
     });
 
     const exit = await managedProcess.wait();
+    if (launchId !== undefined) {
+      runtimeState?.completedProcessIds.add(launchId);
+    }
     abortSignal?.throwIfAborted();
     if (timedOut) {
       return {
@@ -453,21 +490,297 @@ function aggregateStageResult(
   return stages.length > 0 ? selectPrimaryStage(stages) : skippedStage(emptyMessage);
 }
 
-function createRunDirectory(cwd: string): string {
-  const runsDirectory = join(cwd, '.takt', 'runs');
-  mkdirSync(runsDirectory, { recursive: true, mode: 0o700 });
-  const runDirectory = `${runsDirectory}/verify-`;
-  let directory: string | undefined;
+interface VerifyRunMetadata {
+  readonly version: 1;
+  readonly ownerPid: number;
+  readonly launchUncertain: boolean;
+  readonly processes: readonly VerifyRunProcess[];
+}
+
+interface VerifyRunProcess {
+  readonly id: string;
+  readonly pid: number;
+}
+
+interface VerifyRunDirectory {
+  readonly path: string;
+  readonly dev: number;
+  readonly ino: number;
+}
+
+interface VerifyRunRuntimeState {
+  readonly completedProcessIds: Set<string>;
+}
+
+function isPathContained(parent: string, candidate: string): boolean {
+  const relativePath = relative(parent, candidate);
+  return relativePath === ''
+    || (!isAbsolute(relativePath) && relativePath !== '..' && !relativePath.startsWith(`..${sep}`));
+}
+
+function readVerifyRunMetadata(directory: string): VerifyRunMetadata | undefined {
   try {
-    directory = mkdtempSync(runDirectory);
-    mkdirSync(join(directory, 'specs'), { mode: 0o700 });
-    return directory;
+    const value: unknown = JSON.parse(readFileSync(join(directory, VERIFY_RUN_METADATA_FILE), 'utf8'));
+    if (!isRecord(value)
+      || value.version !== VERIFY_RUN_METADATA_VERSION
+      || typeof value.ownerPid !== 'number'
+      || !Number.isSafeInteger(value.ownerPid)
+      || value.ownerPid <= 0
+      || typeof value.launchUncertain !== 'boolean'
+      || !Array.isArray(value.processes)
+      || !value.processes.every((process): process is Record<string, unknown> => isRecord(process)
+        && typeof process.id === 'string'
+        && process.id.length > 0
+        && typeof process.pid === 'number'
+        && Number.isSafeInteger(process.pid)
+        && process.pid > 0
+      )) {
+      return undefined;
+    }
+    return {
+      version: VERIFY_RUN_METADATA_VERSION,
+      ownerPid: value.ownerPid,
+      launchUncertain: value.launchUncertain,
+      processes: value.processes.map((process) => ({
+        id: process.id as string,
+        pid: process.pid as number,
+      })),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function isVerifyRunProcessGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
   } catch (error) {
-    if (directory !== undefined) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
+function isVerifyRunProcessGroupGone(pid: number): boolean {
+  if (process.platform === 'win32') return false;
+  try {
+    process.kill(-pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
+function areVerifyRunGroupsGone(
+  processes: readonly VerifyRunProcess[],
+  completedProcessIds?: ReadonlySet<string>,
+): boolean {
+  return processes.every(({ id, pid }) => process.platform === 'win32'
+    ? completedProcessIds?.has(id) === true
+    : isVerifyRunProcessGroupGone(pid));
+}
+
+function isVerifyRunProcessTreeGone(pid: number): boolean {
+  return isVerifyRunProcessGone(pid)
+    && (process.platform === 'win32' || isVerifyRunProcessGroupGone(pid));
+}
+
+function writeVerifyRunMetadata(directory: string, metadata: VerifyRunMetadata): void {
+  const temporaryPath = join(directory, `.${VERIFY_RUN_METADATA_FILE}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(metadata)}\n`, { encoding: 'utf8', mode: 0o600 });
+    renameSync(temporaryPath, join(directory, VERIFY_RUN_METADATA_FILE));
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
+function updateVerifyRunMetadata(
+  directory: string,
+  update: (metadata: VerifyRunMetadata) => VerifyRunMetadata,
+): boolean {
+  const metadata = readVerifyRunMetadata(directory);
+  if (metadata === undefined) return false;
+  try {
+    writeVerifyRunMetadata(directory, update(metadata));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function beginVerifyRunLaunch(directory: string): boolean {
+  const metadata = readVerifyRunMetadata(directory);
+  return metadata !== undefined && !metadata.launchUncertain
+    && updateVerifyRunMetadata(directory, (current) => ({ ...current, launchUncertain: true }));
+}
+
+function finishVerifyRunLaunch(directory: string, childPid?: number, launchId?: string): boolean {
+  return updateVerifyRunMetadata(directory, (metadata) => ({
+    ...metadata,
+    launchUncertain: false,
+    processes: childPid === undefined || launchId === undefined
+      ? metadata.processes
+      : [...metadata.processes, { id: launchId, pid: childPid }],
+  }));
+}
+
+function parseVerifyRunStagingOwnerPid(name: string): number | undefined {
+  const match = new RegExp(`^${VERIFY_RUN_STAGING_PREFIX}(\\d+)-`, 'u').exec(name);
+  const pid = match ? Number.parseInt(match[1] ?? '', 10) : Number.NaN;
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+function safeDirectoryComponent(
+  path: string,
+  parent: string,
+  create: boolean,
+): VerifyRunDirectory | undefined {
+  try {
+    if (create) {
       try {
-        rmSync(directory, { recursive: true, force: true });
-      } catch {
-        // Preserve the original creation error when cleanup itself fails.
+        mkdirSync(path, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+    }
+    const stat = lstatSync(path);
+    const realPath = realpathSync(path);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !isPathContained(parent, realPath)) {
+      return undefined;
+    }
+    return { path: realPath, dev: stat.dev, ino: stat.ino };
+  } catch (error) {
+    if (create) throw error;
+    return undefined;
+  }
+}
+
+function safeVerifyRunsDirectory(cwd: string, create = false): VerifyRunDirectory | undefined {
+  const project = realpathSync(cwd);
+  const takt = safeDirectoryComponent(join(cwd, '.takt'), project, create);
+  const runs = takt === undefined
+    ? undefined
+    : safeDirectoryComponent(join(cwd, '.takt', 'runs'), takt.path, create);
+  return runs;
+}
+
+function sameVerifyRunsDirectory(cwd: string, expected: VerifyRunDirectory): boolean {
+  const current = safeVerifyRunsDirectory(cwd);
+  return current !== undefined
+    && current.path === expected.path && current.dev === expected.dev && current.ino === expected.ino;
+}
+
+function safeRunPath(runs: VerifyRunDirectory, directory: string): string | undefined {
+  try {
+    const stat = lstatSync(directory);
+    const realPath = realpathSync(directory);
+    return stat.isDirectory() && !stat.isSymbolicLink()
+      && realPath !== runs.path && isPathContained(runs.path, realPath)
+      ? realPath
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Remove abandoned published runs and markerless staging directories safely. */
+function cleanupAbandonedVerifyRuns(cwd: string): void {
+  let runs: VerifyRunDirectory | undefined;
+  try {
+    runs = safeVerifyRunsDirectory(cwd);
+  } catch {
+    return;
+  }
+  if (runs === undefined) return;
+  let entries;
+  try {
+    entries = readdirSync(runs.path, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!sameVerifyRunsDirectory(cwd, runs) || !entry.isDirectory() || entry.isSymbolicLink()) return;
+    const directory = safeRunPath(runs, join(runs.path, entry.name));
+    if (directory === undefined) continue;
+    const stagingPid = parseVerifyRunStagingOwnerPid(entry.name);
+    if (stagingPid !== undefined) {
+      if (isVerifyRunProcessGone(stagingPid)) removeVerifyRunDirectory(directory);
+      continue;
+    }
+    if (!entry.name.startsWith('verify-')) continue;
+    const metadata = readVerifyRunMetadata(directory);
+    if (metadata !== undefined && !metadata.launchUncertain
+      && isVerifyRunProcessGone(metadata.ownerPid)
+      && areVerifyRunGroupsGone(metadata.processes)) {
+      removeVerifyRunDirectory(directory);
+    }
+  }
+}
+
+function removeVerifyRunDirectoryIfSafe(
+  cwd: string,
+  directory: string,
+  runtimeState: VerifyRunRuntimeState,
+): void {
+  let runs: VerifyRunDirectory | undefined;
+  try {
+    runs = safeVerifyRunsDirectory(cwd);
+  } catch {
+    return;
+  }
+  if (runs === undefined || !sameVerifyRunsDirectory(cwd, runs)) return;
+  const realDirectory = safeRunPath(runs, directory);
+  if (realDirectory === undefined) return;
+  const metadata = readVerifyRunMetadata(realDirectory);
+  if (metadata === undefined || metadata.launchUncertain
+    || (metadata.ownerPid !== process.pid && !isVerifyRunProcessGone(metadata.ownerPid))
+    || !areVerifyRunGroupsGone(metadata.processes, runtimeState.completedProcessIds)) return;
+  removeVerifyRunDirectory(realDirectory);
+}
+
+function removeVerifyRunDirectory(directory: string): void {
+  try {
+    rmSync(directory, { recursive: true, force: true });
+  } catch {
+    // Cleanup is best effort and must not replace the verification result.
+  }
+}
+
+function createRunDirectory(cwd: string): string {
+  const runs = safeVerifyRunsDirectory(cwd, true);
+  if (runs === undefined) throw new Error('Formal verification workspace directory is not safe.');
+  const stagingPrefix = join(runs.path, `${VERIFY_RUN_STAGING_PREFIX}${process.pid}-`);
+  let staging: string | undefined;
+  let published: string | undefined;
+  try {
+    staging = mkdtempSync(stagingPrefix);
+    if (!sameVerifyRunsDirectory(cwd, runs) || safeRunPath(runs, staging) === undefined) {
+      throw new Error('Formal verification workspace directory changed during creation.');
+    }
+    writeVerifyRunMetadata(staging, {
+      version: VERIFY_RUN_METADATA_VERSION,
+      ownerPid: process.pid,
+      launchUncertain: false,
+      processes: [],
+    });
+    mkdirSync(join(staging, 'specs'), { mode: 0o700 });
+    if (!sameVerifyRunsDirectory(cwd, runs) || safeRunPath(runs, staging) === undefined) {
+      throw new Error('Formal verification workspace directory changed during creation.');
+    }
+    published = join(runs.path, `verify-${process.pid}-${randomUUID()}`);
+    renameSync(staging, published);
+    staging = undefined;
+    if (!sameVerifyRunsDirectory(cwd, runs) || safeRunPath(runs, published) === undefined) {
+      throw new Error('Formal verification workspace directory changed during publication.');
+    }
+    return published;
+  } catch (error) {
+    if (sameVerifyRunsDirectory(cwd, runs)) {
+      for (const candidate of [staging, published]) {
+        if (candidate !== undefined) {
+          const safeCandidate = safeRunPath(runs, candidate);
+          if (safeCandidate !== undefined) removeVerifyRunDirectory(safeCandidate);
+        }
       }
     }
     throw error;
@@ -589,8 +902,12 @@ async function ensureAlloyJar(cwd: string, abortSignal?: AbortSignal): Promise<s
   }
 }
 
-async function javaVersion(cwd: string, abortSignal?: AbortSignal): Promise<number | undefined> {
-  const result = await runProcess('java', ['-version'], cwd, 10_000, abortSignal);
+async function javaVersion(
+  cwd: string,
+  abortSignal?: AbortSignal,
+  runtimeState?: VerifyRunRuntimeState,
+): Promise<number | undefined> {
+  const result = await runProcess('java', ['-version'], cwd, 10_000, abortSignal, runtimeState);
   if (!isSuccessfulProcess(result)) {
     return undefined;
   }
@@ -602,8 +919,16 @@ async function runQuintCommand(
   args: readonly string[],
   cwd: string,
   abortSignal?: AbortSignal,
+  runtimeState?: VerifyRunRuntimeState,
 ): Promise<ProcessResult> {
-  return runProcess(process.execPath, [quintCli, ...args], cwd, QUINT_TIMEOUT_MS, abortSignal);
+  return runProcess(
+    process.execPath,
+    [quintCli, ...args],
+    cwd,
+    QUINT_TIMEOUT_MS,
+    abortSignal,
+    runtimeState,
+  );
 }
 
 async function runAlloyCommand(
@@ -611,8 +936,16 @@ async function runAlloyCommand(
   args: readonly string[],
   cwd: string,
   abortSignal?: AbortSignal,
+  runtimeState?: VerifyRunRuntimeState,
 ): Promise<ProcessResult> {
-  return runProcess('java', ['-jar', jarPath, ...args], cwd, ALLOY_TIMEOUT_MS, abortSignal);
+  return runProcess(
+    'java',
+    ['-jar', jarPath, ...args],
+    cwd,
+    ALLOY_TIMEOUT_MS,
+    abortSignal,
+    runtimeState,
+  );
 }
 
 interface QuintStageSet {
@@ -651,6 +984,7 @@ export async function runFormalSpecVerification(
   abortSignal?: AbortSignal,
 ): Promise<FormalSpecVerificationResult> {
   abortSignal?.throwIfAborted();
+  cleanupAbandonedVerifyRuns(cwd);
   let blocks: FormalSpecBlocks;
   try {
     blocks = extractFormalSpecBlocks(response);
@@ -664,6 +998,7 @@ export async function runFormalSpecVerification(
 
   let runDirectory: string | undefined;
   let verificationStarted = false;
+  const runtimeState: VerifyRunRuntimeState = { completedProcessIds: new Set() };
   try {
     verificationStarted = true;
     runDirectory = createRunDirectory(cwd);
@@ -688,7 +1023,13 @@ export async function runFormalSpecVerification(
       const quintCli = resolveQuintCli();
       const parseJsonPath = join(specsDirectory, 'parse.json');
       let parse = specificationProcessStage(
-        await runQuintCommand(quintCli, ['parse', quintPath, '--out', parseJsonPath], runDirectory, abortSignal),
+        await runQuintCommand(
+          quintCli,
+          ['parse', quintPath, '--out', parseJsonPath],
+          runDirectory,
+          abortSignal,
+          runtimeState,
+        ),
       );
 
       let parseResult: unknown;
@@ -710,7 +1051,13 @@ export async function runFormalSpecVerification(
           ? undefined
           : quintTargetScopeError(targets, mainModule);
         typecheck = specificationProcessStage(
-          await runQuintCommand(quintCli, ['typecheck', quintPath], runDirectory, abortSignal),
+          await runQuintCommand(
+            quintCli,
+            ['typecheck', quintPath],
+            runDirectory,
+            abortSignal,
+            runtimeState,
+          ),
         );
       }
       if (typecheck.status === 'passed') {
@@ -736,7 +1083,7 @@ export async function runFormalSpecVerification(
             ...(invariantNames.length > 0 ? ['--invariants', ...invariantNames] : []),
           ];
           run = verificationProcessStage(
-            await runQuintCommand(quintCli, runArgs, runDirectory, abortSignal),
+            await runQuintCommand(quintCli, runArgs, runDirectory, abortSignal, runtimeState),
           );
         }
       }
@@ -744,7 +1091,7 @@ export async function runFormalSpecVerification(
       quint = quintResultFromStages(quintStageSet, targets);
     }
 
-    const detectedJavaMajorVersion = await javaVersion(runDirectory, abortSignal);
+    const detectedJavaMajorVersion = await javaVersion(runDirectory, abortSignal, runtimeState);
     const hasJava17 = detectedJavaMajorVersion !== undefined && detectedJavaMajorVersion >= 17;
     const javaSkipMessage = 'Java 17 or later was not detected; Quint verify and Alloy verification were skipped. Alloy specifications remain unverified.';
 
@@ -772,7 +1119,7 @@ export async function runFormalSpecVerification(
           : []),
       ];
       const verify = verificationProcessStage(
-        await runQuintCommand(quintCli, verifyArgs, runDirectory, abortSignal),
+        await runQuintCommand(quintCli, verifyArgs, runDirectory, abortSignal, runtimeState),
       );
       if (quintPath) {
         quintStageSet = { ...quintStageSet, verify };
@@ -810,7 +1157,13 @@ export async function runFormalSpecVerification(
       }
 
       if (jarPath !== undefined) {
-        const commandsProcess = await runAlloyCommand(jarPath, ['commands', alloyPath], runDirectory, abortSignal);
+        const commandsProcess = await runAlloyCommand(
+          jarPath,
+          ['commands', alloyPath],
+          runDirectory,
+          abortSignal,
+          runtimeState,
+        );
         if (!isSuccessfulProcess(commandsProcess)) {
           alloy = { status: 'error', message: processFailureMessage(commandsProcess) };
           stages.push(alloy);
@@ -831,6 +1184,7 @@ export async function runFormalSpecVerification(
                 ['exec', '--quiet', '--type', 'text', '--output', '-', '--command', String(commandNumber), alloyPath],
                 runDirectory,
                 abortSignal,
+                runtimeState,
               );
               const check = isSuccessfulProcess(checkProcess) && checkProcess.stdout.trim() === ''
                 ? passedStage()
@@ -868,7 +1222,7 @@ export async function runFormalSpecVerification(
     return resultForUnexpectedError(error, verificationStarted);
   } finally {
     if (runDirectory) {
-      rmSync(runDirectory, { recursive: true, force: true });
+      removeVerifyRunDirectoryIfSafe(cwd, runDirectory, runtimeState);
     }
   }
 }

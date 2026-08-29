@@ -9,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -647,6 +647,40 @@ describe('bundled Quint CLI verification boundary', () => {
       expect(readdirSync(join(directory, '.takt', 'runs')).filter((name) => name.startsWith('verify-'))).toEqual([]);
     } finally {
       restoreEnvironmentVariable('PATH', originalPath);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('retains an active child when restart observes an unconfirmed launch phase', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-launch-race-'));
+    const runDirectory = join(directory, '.takt', 'runs', 'verify-unconfirmed-launch');
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], {
+      stdio: 'ignore',
+    });
+    mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
+    writeFileSync(join(runDirectory, '.verify-run.json'), JSON.stringify({
+      version: 1,
+      ownerPid: 2_147_483_647,
+      launchUncertain: true,
+      processes: [{ id: 'detached-child', pid: child.pid! }],
+    }));
+
+    try {
+      await runFormalSpecVerification('No formal specification was generated.', directory);
+
+      expect(child.pid).toBeTypeOf('number');
+      expect(existsSync(runDirectory)).toBe(true);
+    } finally {
+      if (child.exitCode === null && !child.killed) {
+        child.kill('SIGKILL');
+      }
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null) {
+          resolve();
+        } else {
+          child.once('exit', () => resolve());
+        }
+      });
       rmSync(directory, { recursive: true, force: true });
     }
   });

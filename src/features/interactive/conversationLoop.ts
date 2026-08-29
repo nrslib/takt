@@ -99,12 +99,8 @@ function findLatestAssistantMessage(history: ConversationMessage[]): Conversatio
 }
 
 export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): void {
-  if (hasInteractiveTerminal()) {
-    return;
-  }
-
   const sessionState = takeSessionState(cwd);
-  if (!sessionState) {
+  if (hasInteractiveTerminal() || !sessionState) {
     return;
   }
 

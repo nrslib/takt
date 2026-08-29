@@ -1,5 +1,14 @@
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +41,28 @@ const { failSpecsDirectoryCreation } = vi.hoisted(() => ({
   failSpecsDirectoryCreation: { enabled: false },
 }));
 
+const {
+  failVerifyMetadataRename,
+  failVerifyRunRemoval,
+  processBoundaryControls,
+  swapRunsAfterMkdtemp,
+} = vi.hoisted(() => ({
+  failVerifyMetadataRename: { from: undefined as number | undefined, count: 0 },
+  failVerifyRunRemoval: { enabled: false },
+  processBoundaryControls: {
+    throwOnSpawn: false,
+    omitChildPid: false,
+    terminateFails: false,
+    fixedChildPid: undefined as number | undefined,
+  },
+  swapRunsAfterMkdtemp: {
+    enabled: false,
+    runsDirectory: undefined as string | undefined,
+    backupDirectory: undefined as string | undefined,
+    replacementDirectory: undefined as string | undefined,
+  },
+}));
+
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
   return {
@@ -42,6 +73,44 @@ vi.mock('node:fs', async () => {
         throw new Error('specs directory creation failed');
       }
       return actual.mkdirSync(...args);
+    },
+    mkdtempSync: (...args: Parameters<typeof actual.mkdtempSync>) => {
+      const directory = actual.mkdtempSync(...args);
+      if (swapRunsAfterMkdtemp.enabled
+        && swapRunsAfterMkdtemp.runsDirectory !== undefined
+        && swapRunsAfterMkdtemp.backupDirectory !== undefined
+        && swapRunsAfterMkdtemp.replacementDirectory !== undefined) {
+        actual.renameSync(swapRunsAfterMkdtemp.runsDirectory, swapRunsAfterMkdtemp.backupDirectory);
+        actual.symlinkSync(
+          swapRunsAfterMkdtemp.replacementDirectory,
+          swapRunsAfterMkdtemp.runsDirectory,
+          'dir',
+        );
+        swapRunsAfterMkdtemp.enabled = false;
+      }
+      return directory;
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      const target = String(args[1]);
+      if (target.endsWith('.verify-run.json')) {
+        failVerifyMetadataRename.count += 1;
+        if (failVerifyMetadataRename.from !== undefined
+          && failVerifyMetadataRename.count >= failVerifyMetadataRename.from) {
+          throw new Error('verify metadata rename failed');
+        }
+      }
+      return actual.renameSync(...args);
+    },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      const options = args[1];
+      if (failVerifyRunRemoval.enabled
+        && typeof options === 'object'
+        && options !== null
+        && 'recursive' in options
+        && options.recursive === true) {
+        throw new Error('verify run cleanup failed');
+      }
+      return actual.rmSync(...args);
     },
   };
 });
@@ -109,6 +178,9 @@ function mockProcessBoundary(): void {
     signal: AbortSignal,
   ) => {
     spawnedProcesses.push({ command, args, options });
+    if (processBoundaryControls.throwOnSpawn) {
+      throw new Error('spawn failed synchronously');
+    }
     const response = processResponses.shift() ?? { code: 0 };
     const stdout = new MockStream();
     const stderr = new MockStream();
@@ -134,10 +206,20 @@ function mockProcessBoundary(): void {
       };
     };
     return {
-      child: { stdout, stderr },
+      child: processBoundaryControls.omitChildPid
+        ? { stdout, stderr }
+        : {
+          pid: processBoundaryControls.fixedChildPid ?? 10_000 + spawnedProcesses.length,
+          stdout,
+          stderr,
+        },
       wait,
       waitForExit: wait,
-      terminate: async () => undefined,
+      terminate: async () => {
+        if (processBoundaryControls.terminateFails) {
+          throw new Error('terminate failed');
+        }
+      },
     };
   });
 }
@@ -148,6 +230,20 @@ function createTestDirectory(): string {
 
 function validAlloyResponse(): string {
   return ['```alloy', 'sig A {}', 'check Safety for 1', '```'].join('\n');
+}
+
+function writeVerifyRunMetadata(
+  directory: string,
+  ownerPid: number,
+  launchUncertain = false,
+  processes: readonly { readonly id: string; readonly pid: number }[] = [],
+): void {
+  writeFileSync(join(directory, '.verify-run.json'), JSON.stringify({
+    version: 1,
+    ownerPid,
+    launchUncertain,
+    processes,
+  }));
 }
 
 beforeEach(() => {
@@ -165,6 +261,17 @@ beforeEach(() => {
     }],
   };
   failSpecsDirectoryCreation.enabled = false;
+  failVerifyMetadataRename.from = undefined;
+  failVerifyMetadataRename.count = 0;
+  failVerifyRunRemoval.enabled = false;
+  processBoundaryControls.throwOnSpawn = false;
+  processBoundaryControls.omitChildPid = false;
+  processBoundaryControls.terminateFails = false;
+  processBoundaryControls.fixedChildPid = undefined;
+  swapRunsAfterMkdtemp.enabled = false;
+  swapRunsAfterMkdtemp.runsDirectory = undefined;
+  swapRunsAfterMkdtemp.backupDirectory = undefined;
+  swapRunsAfterMkdtemp.replacementDirectory = undefined;
   alloyJarDigestOverride.value = undefined;
   delete process.env.TAKT_ALLOY_JAR;
   mockProcessBoundary();
@@ -237,6 +344,238 @@ describe('runFormalSpecVerification', () => {
         .filter((name) => name.startsWith('verify-'))).toEqual([]);
     } finally {
       failSpecsDirectoryCreation.enabled = false;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject a valid response without writing through a symlinked .takt root', async () => {
+    const directory = createTestDirectory();
+    const outsideDirectory = createTestDirectory();
+    const outsideRunsDirectory = join(outsideDirectory, '.takt', 'runs');
+    mkdirSync(outsideRunsDirectory, { recursive: true, mode: 0o700 });
+    const outsideEntriesBefore = readdirSync(outsideRunsDirectory);
+    symlinkSync(join(outsideDirectory, '.takt'), join(directory, '.takt'), 'dir');
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+
+      expect(result).toMatchObject({ verdict: 'error', verificationStarted: true });
+      expect(mockSpawnManagedProcess).not.toHaveBeenCalled();
+      expect(readdirSync(outsideRunsDirectory)).toEqual(outsideEntriesBefore);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+      rmSync(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('should not write a run workspace when the verified runs root changes after allocation', async () => {
+    const directory = createTestDirectory();
+    const outsideDirectory = createTestDirectory();
+    const runsDirectory = join(directory, '.takt', 'runs');
+    const backupDirectory = join(directory, '.takt', 'runs-before-swap');
+    const replacementDirectory = join(outsideDirectory, 'runs');
+    mkdirSync(replacementDirectory, { recursive: true, mode: 0o700 });
+    swapRunsAfterMkdtemp.enabled = true;
+    swapRunsAfterMkdtemp.runsDirectory = runsDirectory;
+    swapRunsAfterMkdtemp.backupDirectory = backupDirectory;
+    swapRunsAfterMkdtemp.replacementDirectory = replacementDirectory;
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+
+      expect(result).toMatchObject({ verdict: 'error', verificationStarted: true });
+      expect(mockSpawnManagedProcess).not.toHaveBeenCalled();
+      expect(readdirSync(replacementDirectory)).toEqual([]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+      rmSync(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('should remove a workspace after a synchronous spawn failure with no child returned', async () => {
+    const directory = createTestDirectory();
+    processBoundaryControls.throwOnSpawn = true;
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+
+      expect(result).toMatchObject({ verdict: 'error', verificationStarted: true });
+      expect(mockSpawnManagedProcess).toHaveBeenCalledOnce();
+      expect(readdirSync(join(directory, '.takt', 'runs'))
+        .filter((name) => name.startsWith('verify-'))).toEqual([]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should retain the workspace when marker confirmation fails and termination fails', async () => {
+    const directory = createTestDirectory();
+    failVerifyMetadataRename.from = 3;
+    processBoundaryControls.terminateFails = true;
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const runDirectories = readdirSync(join(directory, '.takt', 'runs'))
+        .filter((name) => name.startsWith('verify-'));
+
+      expect(result).toMatchObject({ verdict: 'error', verificationStarted: true });
+      expect(runDirectories).toHaveLength(1);
+      expect(JSON.parse(readFileSync(
+        join(directory, '.takt', 'runs', runDirectories[0]!, '.verify-run.json'),
+        'utf8',
+      )).launchUncertain).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should remove an abandoned verify workspace on restart without removing an active one', async () => {
+    const directory = createTestDirectory();
+    const runsDirectory = join(directory, '.takt', 'runs');
+    const abandonedDirectory = join(runsDirectory, 'verify-abandoned');
+    const activeDirectory = join(runsDirectory, 'verify-active');
+    const abandonedPid = 2_147_483_647;
+    mkdirSync(abandonedDirectory, { recursive: true, mode: 0o700 });
+    mkdirSync(activeDirectory, { recursive: true, mode: 0o700 });
+    writeVerifyRunMetadata(abandonedDirectory, abandonedPid);
+    writeVerifyRunMetadata(activeDirectory, process.pid);
+    const actualKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid, signal) => {
+      if (pid === abandonedPid && signal === 0) {
+        const error = Object.assign(new Error('process not found'), { code: 'ESRCH' });
+        throw error;
+      }
+      return actualKill(pid, signal);
+    }) as typeof process.kill);
+    processResponses.push({ error: new Error('java is unavailable') });
+
+    try {
+      await runFormalSpecVerification(validAlloyResponse(), directory);
+
+      expect(existsSync(abandonedDirectory)).toBe(false);
+      expect(existsSync(activeDirectory)).toBe(true);
+    } finally {
+      killSpy.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should clean abandoned staging workspaces while retaining active and invalid staging names', async () => {
+    const directory = createTestDirectory();
+    const runsDirectory = join(directory, '.takt', 'runs');
+    const abandonedDirectory = join(runsDirectory, '.verify-staging-2147483647-abandoned');
+    const activeDirectory = join(runsDirectory, `.verify-staging-${process.pid}-active`);
+    const invalidDirectory = join(runsDirectory, '.verify-staging-invalid');
+    mkdirSync(abandonedDirectory, { recursive: true, mode: 0o700 });
+    mkdirSync(activeDirectory, { recursive: true, mode: 0o700 });
+    mkdirSync(invalidDirectory, { recursive: true, mode: 0o700 });
+    const actualKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid, signal) => {
+      if (pid === 2_147_483_647 && signal === 0) {
+        const error = Object.assign(new Error('process not found'), { code: 'ESRCH' });
+        throw error;
+      }
+      return actualKill(pid, signal);
+    }) as typeof process.kill);
+
+    try {
+      await runFormalSpecVerification('No formal specification was generated.', directory);
+
+      expect(existsSync(abandonedDirectory)).toBe(false);
+      expect(existsSync(activeDirectory)).toBe(true);
+      expect(existsSync(invalidDirectory)).toBe(true);
+    } finally {
+      killSpy.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should retain an abandoned run while its detached process group is active', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+    const directory = createTestDirectory();
+    const runsDirectory = join(directory, '.takt', 'runs');
+    const runDirectory = join(runsDirectory, 'verify-active-group');
+    const ownerPid = 2_147_483_647;
+    const processGroupId = 2_147_483_645;
+    mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
+    writeVerifyRunMetadata(runDirectory, ownerPid, false, [{ id: 'active-group', pid: processGroupId }]);
+    const actualKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid, signal) => {
+      if (pid === ownerPid && signal === 0) {
+        const error = Object.assign(new Error('process not found'), { code: 'ESRCH' });
+        throw error;
+      }
+      if (pid === -processGroupId && signal === 0) {
+        return undefined;
+      }
+      return actualKill(pid, signal);
+    }) as typeof process.kill);
+
+    try {
+      await runFormalSpecVerification('No formal specification was generated.', directory);
+
+      expect(existsSync(runDirectory)).toBe(true);
+    } finally {
+      killSpy.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should track Windows process completion by launch id rather than pid', async () => {
+    const directory = createTestDirectory();
+    const abortController = new AbortController();
+    const originalPlatform = process.platform;
+    let verification: Promise<unknown> | undefined;
+    processBoundaryControls.fixedChildPid = 10_001;
+    processResponses.push({ code: 0 }, { hang: true });
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+
+    try {
+      verification = runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, abortController.signal);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(spawnedProcesses).toHaveLength(2);
+      abortController.abort(new Error('verification cancelled'));
+      await expect(verification).rejects.toThrow('verification cancelled');
+
+      const runDirectories = readdirSync(join(directory, '.takt', 'runs'))
+        .filter((name) => name.startsWith('verify-'));
+      expect(runDirectories).toHaveLength(1);
+      const metadata = JSON.parse(readFileSync(
+        join(directory, '.takt', 'runs', runDirectories[0]!, '.verify-run.json'),
+        'utf8',
+      )) as { processes: Array<{ id: string; pid: number }> };
+      expect(metadata.processes).toHaveLength(2);
+      expect(metadata.processes.map(({ pid }) => pid)).toEqual([10_001, 10_001]);
+      expect(metadata.processes[0]?.id).not.toBe(metadata.processes[1]?.id);
+    } finally {
+      abortController.abort(new Error('verification cleanup'));
+      await verification?.catch(() => undefined);
+      Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform });
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should preserve the verification result when run cleanup fails', async () => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0, stdout: '0 . Check Safety for 1\n' },
+      { code: 1, stderr: 'counterexample' },
+    );
+    failVerifyRunRemoval.enabled = true;
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+
+      expect(result.verdict).toBe('failed');
+      expect(result.alloy).toMatchObject({ status: 'failed', message: 'counterexample' });
+      expect(readdirSync(join(directory, '.takt', 'runs'))
+        .filter((name) => name.startsWith('verify-'))).toHaveLength(1);
+    } finally {
+      failVerifyRunRemoval.enabled = false;
       rmSync(directory, { recursive: true, force: true });
     }
   });

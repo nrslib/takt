@@ -132,10 +132,15 @@ function createConversation(overrides?: Partial<TuiConversationOptions>): TuiCon
   });
 }
 
-function send(conversation: TuiConversation, text: string, chunks: string[]) {
+function send(
+  conversation: TuiConversation,
+  text: string,
+  chunks: string[],
+  abortSignal: AbortSignal = new AbortController().signal,
+) {
   return conversation.submit({
     text,
-    abortSignal: new AbortController().signal,
+    abortSignal,
     onAssistantChunk: (chunk) => chunks.push(chunk),
   });
 }
@@ -675,6 +680,13 @@ describe('TUI local commands', () => {
   it('should reject /verify outside formal specification mode without sending it to the provider', async () => {
     const conversation = createConversation();
 
+    expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
+    expect(resolveSlashCompletions('/ver', conversation.lang, conversation.commandAvailability)).toEqual([]);
+    expect(conversation.resolveLocalCommand('/verify')).toEqual({
+      kind: 'notice',
+      message: expect.any(String),
+    });
+
     const outcome = await send(conversation, '/verify', []);
 
     expect(outcome.kind).toBe('error');
@@ -700,12 +712,17 @@ describe('TUI local commands', () => {
         sessionId: 'session-1',
       });
     const chunks: string[] = [];
+    const abortController = new AbortController();
 
-    const outcome = await send(conversation, '/verify', chunks);
+    const outcome = await send(conversation, '/verify', chunks, abortController.signal);
 
     expect(outcome).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining('passed') });
     expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
-    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      '```quint\nmodule currentAgreement {}\n```',
+      '/repo',
+      abortController.signal,
+    );
     expect(chunks).toEqual([]);
   });
 
@@ -720,11 +737,15 @@ describe('TUI local commands', () => {
       kind: 'notice',
       message: '/retry is only available in Retry mode from `takt list`.',
     });
-    expect(conversation.commandAvailability).toEqual({
+    expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: false,
       hasPreviousOrder: false,
       enableSettingsCommands: true,
     });
+    expect(conversation.commandAvailability.enabledCommands).toEqual(
+      expect.arrayContaining([SlashCommand.Go, SlashCommand.Cancel]),
+    );
+    expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
   });
 
   it('should treat an empty previous order as no order, like the readline loop', () => {
@@ -746,10 +767,11 @@ describe('TUI local commands', () => {
       kind: 'notice',
       message: 'No previous order (order.md) found. /retry is only available during retry.',
     });
-    expect(conversation.commandAvailability).toEqual({
+    expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: true,
       hasPreviousOrder: false,
     });
+    expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
   });
 
   it('should resubmit a previous order that has content', () => {
@@ -771,10 +793,11 @@ describe('TUI local commands', () => {
       .toEqual({ kind: 'execute', task: '# Previous order', origin: 'replay' });
     expect(conversation.resolveLocalCommand('/retry'))
       .toEqual({ kind: 'choose_action', task: '# Previous order', origin: 'retry' });
-    expect(conversation.commandAvailability).toEqual({
+    expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: true,
       hasPreviousOrder: true,
     });
+    expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
   });
 
   it('should build /go from the mode prompt builder and mark where the task came from', async () => {
