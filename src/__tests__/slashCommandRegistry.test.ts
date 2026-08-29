@@ -3,7 +3,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
+import {
+  filterSlashCommands,
+  resolveFormalSpecCommandAvailability,
+} from '../features/interactive/slashCommandRegistry.js';
 import { INTERACTIVE_SETTING_COMMANDS, SlashCommand } from '../shared/constants.js';
 
 describe('filterSlashCommands', () => {
@@ -144,5 +147,17 @@ describe('filterSlashCommands', () => {
       formalSpec: false,
       enabledCommands: [SlashCommand.Verify],
     })).toEqual([]);
+  });
+
+  it.each([
+    [true, [SlashCommand.Go, SlashCommand.Cancel, SlashCommand.Verify]],
+    [false, [SlashCommand.Go, SlashCommand.Cancel]],
+  ] as const)('should align /verify with formal specification mode=%s in an explicit allowlist', (formalSpec, enabledCommands) => {
+    expect(resolveFormalSpecCommandAvailability({
+      enabledCommands: [SlashCommand.Go, SlashCommand.Cancel],
+    }, formalSpec)).toEqual({
+      ...(formalSpec ? { formalSpec: true } : {}),
+      enabledCommands,
+    });
   });
 });

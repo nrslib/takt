@@ -27,6 +27,7 @@ interface SessionOptions {
   effort?: string;
   disableSessionRetry?: boolean;
   model?: string;
+  formalSpec?: boolean;
   persistSession?: boolean;
 }
 
@@ -35,12 +36,13 @@ function createSession({
   effort,
   disableSessionRetry,
   model,
+  formalSpec = false,
   persistSession,
 }: SessionOptions = {}) {
   return createConversationSession({
     cwd: '/repo',
     outputMode: 'silent',
-    formalSpec: false,
+    formalSpec,
     ...(persistSession === false ? { persistSession: false } : {}),
     ctx: makeSessionContext({
       provider: makeProvider({ setup: () => ({ call: mockCall }) }),
@@ -373,6 +375,29 @@ describe('a turn the caller has already moved past', () => {
 });
 
 describe('a turn that produces no answer', () => {
+  it.each(['error', 'blocked'] as const)('should not retry formal specification generation after an existing session returns %s', async (status) => {
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive',
+      status,
+      content: '',
+      error: `formal generation ${status}`,
+      timestamp: new Date(),
+    });
+    const session = createSession({ sessionId: 'session-existing', formalSpec: true });
+
+    const failed = await session.handleUserMessage({ text: '/verify' });
+
+    expect(failed).toEqual({
+      kind: 'error',
+      code: 'provider_error',
+      message: `formal generation ${status}`,
+    });
+    expect(mockCall).toHaveBeenCalledTimes(1);
+    expect(mockCall.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      sessionId: 'session-existing',
+    }));
+  });
+
   it('should not automatically resend a failed message when interactive effort is set', async () => {
     mockCall.mockResolvedValueOnce({
       persona: 'interactive',

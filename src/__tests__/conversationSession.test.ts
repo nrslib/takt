@@ -39,6 +39,8 @@ vi.mock('../features/interactive/formalSpecVerification.js', () => ({
 }));
 
 import { createConversationSession } from '../features/interactive/conversationSession.js';
+import { SlashCommand } from '../shared/constants.js';
+import { getLabel } from '../shared/i18n/index.js';
 import { makeSessionContext } from './test-helpers.js';
 
 function createSession(cwd = '/repo', formalSpec = false) {
@@ -67,14 +69,14 @@ describe('conversation session application API', () => {
       sessionId: 'provider-session-1',
     });
     mockBuildSummaryPrompt.mockReturnValue('summary prompt');
-  mockRunFormalSpecVerification.mockResolvedValue({
-    verdict: 'passed',
-    verificationStarted: true,
-    quint: { status: 'passed' },
-    alloy: { status: 'passed' },
+    mockRunFormalSpecVerification.mockResolvedValue({
+      verdict: 'passed',
+      verificationStarted: true,
+      quint: { status: 'passed' },
+      alloy: { status: 'passed' },
+    });
+    mockProviderSupportsFormalSpecVerification.mockReturnValue(true);
   });
-  mockProviderSupportsFormalSpecVerification.mockReturnValue(true);
-});
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -111,10 +113,10 @@ describe('conversation session application API', () => {
 
     const result = await session.handleUserMessage({ text: '/verify' });
 
-    expect(result.kind).toBe('error');
-    if (result.kind === 'error') {
-      expect(result.message).toMatch(/verify|formal|specification|仕様/i);
-    }
+    expect(result).toEqual({
+      kind: 'error',
+      message: getLabel('interactive.ui.verifyUnavailable', 'en'),
+    });
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
@@ -152,16 +154,18 @@ describe('conversation session application API', () => {
 
     const result = await session.handleUserMessage({ text: '/verify' });
 
-    expect(result.kind).toBe('error');
-    if (result.kind === 'error') {
-      expect(result.message).toMatch(/block|specification|仕様/i);
-    }
+    expect(result).toEqual({
+      kind: 'error',
+      message: 'No formal specification blocks found.',
+    });
     await session.handleUserMessage({ text: 'continue with the current agreement' });
 
     expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
-    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
-    expect(JSON.stringify(mockRunFormalSpecVerification.mock.calls[0])).toContain('no formal blocks');
-    expect(JSON.stringify(mockRunFormalSpecVerification.mock.calls[0])).not.toContain('oldAgreement');
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      'The current agreement has no formal blocks.',
+      '/repo',
+      undefined,
+    );
     expect(mockCallAIWithRetry.mock.calls[1]?.[4]).toEqual(expect.objectContaining({
       sessionId: 'provider-session-1',
     }));
@@ -182,10 +186,49 @@ describe('conversation session application API', () => {
 
     const result = await session.handleUserMessage({ text: '/verify' });
 
-    expect(result).toMatchObject({ kind: 'error', message: expect.stringMatching(/provider|tool|verify/i) });
+    expect(result).toEqual({
+      kind: 'error',
+      message: getLabel('interactive.ui.verifyProviderUnavailable', 'en'),
+    });
     expect(mockProviderSupportsFormalSpecVerification).toHaveBeenCalledWith('deepseek-harness');
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
     expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [false, true],
+    [true, false],
+  ] as const)('should update the internal /verify gate after prompt configuration changes (%s to %s)', async (initialFormalSpec, resumedFormalSpec) => {
+    const session = createConversationSession({
+      cwd: '/repo',
+      formalSpec: initialFormalSpec,
+      ctx: makeSessionContext(),
+      strategy: {
+        systemPrompt: 'initial system prompt',
+        allowedTools: ['Read'],
+        transformPrompt: (message: string) => message,
+        enabledCommands: [SlashCommand.Go, SlashCommand.Cancel, SlashCommand.Resume],
+      },
+    });
+
+    session.setPromptConfiguration({
+      systemPrompt: 'resumed system prompt',
+      formalSpec: resumedFormalSpec,
+    });
+
+    const result = await session.handleUserMessage({ text: '/verify' });
+
+    if (resumedFormalSpec) {
+      expect(result.kind).toBe('assistant_response');
+      expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    } else {
+      expect(result).toEqual({
+        kind: 'error',
+        message: getLabel('interactive.ui.verifyUnavailable', 'en'),
+      });
+      expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+      expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
+    }
   });
 
   it.each(['parse', 'typecheck', 'process'] as const)('should send a %s error after verification starts to the interpretation provider', async (stage) => {
@@ -217,22 +260,18 @@ describe('conversation session application API', () => {
 
     expect(result).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining(`Interpretation of ${stage} failure`) });
     expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
-    const interpretationPrompt = String(mockCallAIWithRetry.mock.calls[1]?.[0]);
-    const interpretationSystemPrompt = String(mockCallAIWithRetry.mock.calls[1]?.[1]);
-    expect(interpretationPrompt).toContain('"run"');
-    expect(interpretationPrompt).toContain('"status": "failed"');
-    expect(interpretationPrompt).toContain(`reason: ${stage} violated invSafe`);
-    expect(interpretationPrompt).toContain('counterexample: counter = -1');
-    expect(interpretationPrompt).toMatch(/only when the user explicitly runs \/verify again/i);
-    expect(interpretationPrompt).not.toMatch(/automatically\s+(?:run|verify)/i);
-    expect(interpretationSystemPrompt).toMatch(/Do not verify or rerun anything/i);
-    expect(interpretationSystemPrompt).toMatch(/only tell the user to run \/verify explicitly/i);
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      '```quint\nmodule currentAgreement {}\n```',
+      '/repo',
+      undefined,
+    );
   });
 
   it('should generate, verify, and interpret the current specification in one session turn', async () => {
     const session = createConversationSession({
       cwd: '/repo',
       formalSpec: true,
+      initialUserMessage: 'unique-session-agreement-6d2a91',
       handoffHistory: [{ role: 'assistant', content: 'oldAgreement must never be used' }],
       ctx: makeSessionContext(),
       strategy: {
@@ -240,6 +279,14 @@ describe('conversation session application API', () => {
         allowedTools: ['Read'],
         transformPrompt: (message: string) => message,
       },
+    });
+    const verificationMessage = 'unique-session-verification-message-9a4c10';
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: 'failed',
+      verificationStarted: true,
+      message: verificationMessage,
+      quint: { status: 'failed', message: verificationMessage },
+      alloy: { status: 'skipped' },
     });
     const generatedSpecification = [
       'Current agreement:',
@@ -278,26 +325,32 @@ describe('conversation session application API', () => {
     }
     expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
     expect(mockCallAIWithRetry.mock.calls[0]?.[2]).toEqual([]);
-    expect(String(mockCallAIWithRetry.mock.calls[0]?.[1])).toMatch(/formal|specification/i);
-    expect(String(mockCallAIWithRetry.mock.calls[0]?.[1])).not.toBe('formal system prompt');
+    expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toContain(
+      '<initial-user-input>\nunique-session-agreement-6d2a91\n</initial-user-input>',
+    );
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+      sessionId: undefined,
+      disableSessionRetry: true,
+    }));
     expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
     }));
     expect(mockCallAIWithRetry.mock.calls[1]?.[2]).toEqual([]);
+    expect(mockCallAIWithRetry.mock.calls[1]?.[0]).toContain(verificationMessage);
     expect(mockCallAIWithRetry.mock.calls[1]?.[4]).toEqual(expect.objectContaining({
       sessionId: 'provider-session-1',
+      disableSessionRetry: true,
     }));
     expect(mockCallAIWithRetry.mock.calls[1]?.[5]).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
     }));
-    expect(String(mockCallAIWithRetry.mock.calls[1]?.[1])).toMatch(/verification|検証/i);
-    expect(String(mockCallAIWithRetry.mock.calls[1]?.[1])).not.toBe('formal system prompt');
-    expect(mockRunFormalSpecVerification).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(mockRunFormalSpecVerification.mock.calls[0])).toContain('currentAgreement');
-    expect(JSON.stringify(mockRunFormalSpecVerification.mock.calls[0])).not.toContain('oldAgreement');
-    expect(String(mockCallAIWithRetry.mock.calls[1]?.[0])).toContain('passed');
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      generatedSpecification,
+      '/repo',
+      undefined,
+    );
     expect(session.snapshotHistory().slice(-2)).toEqual([
       { role: 'assistant', content: generatedSpecification },
       { role: 'assistant', content: 'verification-pass: the current agreement is valid.' },

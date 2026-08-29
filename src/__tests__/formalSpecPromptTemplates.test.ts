@@ -45,6 +45,21 @@ function parseInvestigationPolicy(prompt: string): unknown {
   return JSON.parse(serializedPolicy) as unknown;
 }
 
+function parseStructuredPolicy(prompt: string, tagName: string): unknown {
+  const openingTag = `<${tagName}>`;
+  const closingTag = `</${tagName}>`;
+  const openingIndex = prompt.indexOf(openingTag);
+  if (openingIndex < 0) {
+    throw new Error(`${tagName} metadata is missing`);
+  }
+  const contentStart = openingIndex + openingTag.length;
+  const closingIndex = prompt.indexOf(closingTag, contentStart);
+  if (closingIndex < 0) {
+    throw new Error(`${tagName} metadata is not closed`);
+  }
+  return JSON.parse(prompt.slice(contentStart, closingIndex).trim()) as unknown;
+}
+
 function renderJapaneseSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
   return buildSummaryPrompt(
     [{ role: 'user', content: '状態を更新する機能を追加する' }],
@@ -112,6 +127,40 @@ describe('interactive formal specification prompt template wiring', () => {
   );
 });
 
+describe('formal specification role policy wiring', () => {
+  it.each(['en', 'ja'] as const)('keeps generation and interpretation policies stable for %s', (lang) => {
+    expect(parseStructuredPolicy(
+      buildFormalSpecGenerationSystemPrompt(lang),
+      'takt-formal-spec-generation-policy',
+    )).toEqual({
+      role: 'formal-specification-generator',
+      quint: {
+        invariantPrefix: 'inv',
+        temporalPropertyPrefix: 'prop',
+      },
+      alloy: {
+        targetCommand: 'check',
+      },
+    });
+    expect(parseStructuredPolicy(
+      buildFormalSpecInterpretationSystemPrompt(lang),
+      'takt-formal-spec-interpretation-policy',
+    )).toEqual({
+      role: 'formal-specification-interpreter',
+      rerunPolicy: 'explicit-user-only',
+    });
+  });
+});
+
+describe('formal specification generation context wiring', () => {
+  it.each(['en', 'ja'] as const)('preserves the unique initial agreement inside its stable delimiter for %s', (lang) => {
+    const initialAgreement = `unique-initial-agreement-${lang}-8b7e2d`;
+    const prompt = buildFormalSpecGenerationPrompt(lang, initialAgreement);
+
+    expect(prompt).toContain(`<initial-user-input>\n${initialAgreement}\n</initial-user-input>`);
+  });
+});
+
 describe('task instruction formal specification prompt template wiring', () => {
   it.each([
     ['en', renderEnglishSummaryPrompt],
@@ -132,61 +181,4 @@ describe('task instruction formal specification prompt template wiring', () => {
       expect(withDefaultComments).toBe(withComments);
     },
   );
-});
-
-describe('formal specification naming guidance', () => {
-  it.each([
-    ['interactive', (lang: 'en' | 'ja') => renderInteractivePrompt(lang, true)],
-    ['task instruction', (lang: 'en' | 'ja') => lang === 'en'
-      ? renderEnglishSummaryPrompt(true)
-      : renderJapaneseSummaryPrompt(true)],
-  ] as const)('requires invariant, temporal, and Alloy check naming in the %s prompt for both languages', (_name, renderPrompt) => {
-    for (const lang of ['en', 'ja'] as const) {
-      const prompt = renderPrompt(lang);
-
-      if (lang === 'en') {
-        expect(prompt).toMatch(/Name every Quint invariant with the `inv` prefix/i);
-        expect(prompt).toMatch(/every temporal property with the `prop` prefix/i);
-        expect(prompt).toMatch(/a `check` command for every Alloy property/i);
-      } else {
-        expect(prompt).toMatch(/Quint の不変条件には `inv` プレフィックス/i);
-        expect(prompt).toMatch(/時相プロパティには `prop` プレフィックス/i);
-        expect(prompt).toMatch(/各プロパティには `check` コマンド/i);
-      }
-    }
-  });
-
-  it.each(['en', 'ja'] as const)('requires the same naming contract in the /verify generation prompt for %s', (lang) => {
-    const prompt = buildFormalSpecGenerationPrompt(lang);
-
-    if (lang === 'en') {
-      expect(prompt).toMatch(/Prefix every Quint invariant name with inv/i);
-      expect(prompt).toMatch(/every temporal property name with prop/i);
-      expect(prompt).toMatch(/a check command for every Alloy property to verify/i);
-    } else {
-      expect(prompt).toMatch(/Quintの不変条件名はinvで始め/i);
-      expect(prompt).toMatch(/時相プロパティ名はpropで始め/i);
-      expect(prompt).toMatch(/Alloyの検証対象には必ずcheckコマンド/i);
-    }
-  });
-});
-
-describe('formal specification role prompts', () => {
-  it.each(['en', 'ja'] as const)('keeps generation and interpretation roles separate for %s', (lang) => {
-    const generationSystemPrompt = buildFormalSpecGenerationSystemPrompt(lang);
-    const interpretationSystemPrompt = buildFormalSpecInterpretationSystemPrompt(lang);
-
-    expect(generationSystemPrompt).not.toBe(interpretationSystemPrompt);
-    expect(generationSystemPrompt).toMatch(/Quint|形式仕様/i);
-    expect(interpretationSystemPrompt).toMatch(/verify|検証/i);
-    expect(interpretationSystemPrompt).not.toMatch(/ordinary task implementation|通常のタスク実装/);
-  });
-
-  it.each(['en', 'ja'] as const)('passes the initial user agreement as quoted generation data for %s', (lang) => {
-    const prompt = buildFormalSpecGenerationPrompt(lang, 'ACP対応を追加する');
-
-    expect(prompt).toContain('<initial-user-input>');
-    expect(prompt).toContain('ACP対応を追加する');
-    expect(prompt).toContain('</initial-user-input>');
-  });
 });

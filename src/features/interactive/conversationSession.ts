@@ -1,8 +1,11 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { updatePersonaSession } from '../../infra/config/index.js';
-import { matchSlashCommand } from './commandMatcher.js';
-import type { CommandAvailability } from './slashCommandRegistry.js';
+import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
+import {
+  resolveFormalSpecCommandAvailability,
+  type CommandAvailability,
+} from './slashCommandRegistry.js';
 import { prependInitialPromptContext } from './promptSections.js';
 import {
   buildConversationSummaryPrompt,
@@ -245,11 +248,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
    * What the front-end gates its own command list with. Sharing it is what keeps
    * a disabled command from being re-read as a command down here.
    */
-  const commandAvailability: CommandAvailability = {
-    ...(options.strategy.enabledCommands
+  let commandAvailability: CommandAvailability = resolveFormalSpecCommandAvailability(
+    options.strategy.enabledCommands
       ? { enabledCommands: options.strategy.enabledCommands }
-      : {}),
-  };
+      : {},
+    formalSpec,
+  );
   /**
    * Opens a turn and hands back the test for "is this still the turn in play".
    *
@@ -419,7 +423,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       buildFormalSpecGenerationSystemPrompt(ctx.lang),
       [],
       options.cwd,
-      { ...ctx, sessionId },
+      { ...ctx, sessionId, disableSessionRetry: true },
       {
         outputMode: options.outputMode,
         abortSignal: input.abortSignal,
@@ -488,7 +492,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       buildFormalSpecInterpretationSystemPrompt(ctx.lang),
       [],
       options.cwd,
-      { ...ctx, sessionId: generationSessionId },
+      { ...ctx, sessionId: generationSessionId, disableSessionRetry: true },
       {
         outputMode: options.outputMode,
         abortSignal: input.abortSignal,
@@ -671,6 +675,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
       formalSpec = configuration.formalSpec;
       formalSpecComments = configuration.formalSpecComments ?? true;
       systemPrompt = configuration.systemPrompt;
+      commandAvailability = resolveFormalSpecCommandAvailability(
+        commandAvailability,
+        formalSpec,
+      );
     },
 
     recordRejectedDraft(task: string): void {
@@ -689,10 +697,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
       const match = matchSlashCommand(message, commandAvailability);
       if (!match) {
-        if (
-          commandAvailability.enabledCommands?.includes(SlashCommand.Verify) === false
-          && matchSlashCommand(message)?.command === SlashCommand.Verify
-        ) {
+        if (isDisabledVerifyCommand(message, commandAvailability)) {
           return {
             kind: 'error',
             message: getLabel('interactive.ui.verifyUnavailable', ctx.lang),

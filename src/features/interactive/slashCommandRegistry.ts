@@ -47,6 +47,32 @@ export interface CommandAvailability {
   readonly enabledCommands?: readonly SlashCommand[];
 }
 
+export function resolveFormalSpecCommandAvailability(
+  availability: CommandAvailability,
+  formalSpec: boolean,
+): CommandAvailability {
+  type MutableCommandAvailability = {
+    -readonly [Key in keyof CommandAvailability]: CommandAvailability[Key];
+  };
+  const baseAvailability: MutableCommandAvailability = { ...availability };
+  delete baseAvailability.formalSpec;
+  delete baseAvailability.enabledCommands;
+  const { enabledCommands } = availability;
+  const resolvedEnabledCommands = enabledCommands === undefined
+    ? undefined
+    : formalSpec
+      ? enabledCommands.includes(SlashCommand.Verify)
+        ? enabledCommands
+        : [...enabledCommands, SlashCommand.Verify]
+      : enabledCommands.filter((command) => command !== SlashCommand.Verify);
+
+  return {
+    ...baseAvailability,
+    ...(resolvedEnabledCommands === undefined ? {} : { enabledCommands: resolvedEnabledCommands }),
+    ...(formalSpec ? { formalSpec: true } : {}),
+  };
+}
+
 /**
  * Filter slash commands by prefix match and availability conditions.
  */

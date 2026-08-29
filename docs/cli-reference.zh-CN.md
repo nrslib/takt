@@ -75,7 +75,7 @@ takt hello
 
 在当前交互会话中启用形式规范模式后，运行 `/verify` 可以一次性验证当前达成共识的内容。TAKT 会要求 Assistant 将当前共识输出为形式规范，从该响应中提取 `quint` 和 `alloy` 代码块并运行验证器，然后将结果返回同一会话，由 Assistant 进行解释。
 
-Quint 的 `parse`、`typecheck` 和 `run` 始终执行。如果检测到 Java 17 或更高版本，TAKT 还会执行 `quint verify` 和 Alloy Analyzer。如果未检测到 Java，或版本低于 17，则跳过这些附加检查；Quint 基本检查仍会执行，结果会明确说明 Alloy 规范未经过验证。
+只有当响应包含 Quint 或 Alloy 代码块时才会开始验证。对于 Quint 代码块，TAKT 会先执行 `parse`，仅在解析成功后执行 `typecheck`；只有在类型检查成功、找到包含 `init` 和 `step` action 的主模块，并且选定的验证目标位于该模块中时才执行 `run`。检测到 Java 17 或更高版本时，只有 Quint 前置阶段全部成功才会执行 `quint verify`；只要存在 Alloy 代码块，就会独立于 Quint 结果执行 Alloy Analyzer。未检测到 Java 或版本低于 17 时，会跳过这些依赖 Java 的阶段；适用的 Quint 基础阶段仍按上述条件执行，结果会明确说明 Alloy 规范未经过验证。设置 `TAKT_ALLOY_JAR` 可使用指定的 Alloy JAR（相对路径以项目目录为基准解析）；未设置时，TAKT 会将固定版本的 artifact 下载并缓存到项目内的 `.takt/cache/alloy/6.2.0/alloy.jar`。
 
 ### 执行示例
 

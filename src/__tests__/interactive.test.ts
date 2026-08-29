@@ -8,6 +8,7 @@ import {
   restoreStdin,
   toRawInputs,
   createMockProvider,
+  createScenarioProvider,
 } from './helpers/stdinSimulator.js';
 
 const {
@@ -89,6 +90,7 @@ import { runConversationLoop } from '../features/interactive/conversationLoop.js
 import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { runDirectInstructMode } from '../features/tasks/resume/directInstructMode.js';
 import { selectOption } from '../shared/prompt/index.js';
+import { getLabel } from '../shared/i18n/index.js';
 import { info } from '../shared/ui/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
@@ -174,6 +176,60 @@ describe('interactiveMode', () => {
     await interactiveMode('/project');
 
     expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [false, true],
+    [true, false],
+  ] as const)('should update guarded /verify execution after readline resume (%s to %s)', async (initialFormalSpec, resumedFormalSpec) => {
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({
+      mode: initialFormalSpec,
+      comments: true,
+    });
+    mockSelectRecentSession.mockResolvedValue('selected-session');
+    setupRawStdin(toRawInputs(['/resume', '/verify', '/cancel']));
+    setupMockProvider(resumedFormalSpec
+      ? [
+        '```quint\nmodule resumedAgreement {}\n```',
+        'The resumed specification passed.',
+      ]
+      : []);
+
+    const plan = createInstructConversationPlan('/project', {
+      cwd: '/project',
+      branchContext: 'branch context',
+      branchName: 'feature/verify',
+      taskName: 'verify command',
+      taskContent: 'add formal verification',
+      retryNote: '',
+    });
+    const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue({
+      systemPrompt: 'resumed system prompt',
+      formalSpec: resumedFormalSpec,
+      formalSpecComments: true,
+    });
+
+    const result = await runConversationLoop(
+      '/project',
+      plan.ctx,
+      { ...plan.strategy, resolveResumedSessionConfiguration },
+      undefined,
+      undefined,
+    );
+
+    expect(result.action).toBe('cancel');
+    expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
+    if (resumedFormalSpec) {
+      expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+        '```quint\nmodule resumedAgreement {}\n```',
+        '/project',
+        expect.any(AbortSignal),
+      );
+    } else {
+      expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyUnavailable', 'en'));
+      expect(mockGetProvider.mock.results[0]?.value?._call).not.toHaveBeenCalled();
+      expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
+    }
   });
 
   it.each([
@@ -529,7 +585,7 @@ describe('interactiveMode', () => {
     expect(result.action).toBe('cancel');
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).not.toHaveBeenCalled();
-    expect(mockInfo.mock.calls.some(([message]) => /verify|formal|specification|仕様/i.test(String(message)))).toBe(true);
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyUnavailable', 'en'));
   });
 
   it('should reject /verify before generation when the provider cannot enforce tool-free calls', async () => {
@@ -545,7 +601,7 @@ describe('interactiveMode', () => {
     expect(mockProvider._call).not.toHaveBeenCalled();
     expect(mockProviderSupportsFormalSpecVerification).toHaveBeenCalledWith('mock');
     expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
-    expect(mockInfo.mock.calls.some(([message]) => /provider|tool|verify/i.test(String(message)))).toBe(true);
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyProviderUnavailable', 'en'));
   });
 
   it('should stop the /verify flow with an explicit error when the generated response has no formal blocks', async () => {
@@ -565,14 +621,70 @@ describe('interactiveMode', () => {
     expect(result.action).toBe('cancel');
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
-    expect(mockInfo.mock.calls.some(([message]) => /block|specification|仕様/i.test(String(message)))).toBe(true);
+    expect(mockInfo).toHaveBeenCalledWith('No formal specification blocks found.');
   });
 
   it('should route one /verify command through generation, verification, and interpretation', async () => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const initialAgreement = 'unique-readline-agreement-3c91b7';
+    const verificationMessage = 'unique-readline-verification-message-42f0ac';
+    const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
     const { provider, capture } = createMockProvider([
-      '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```',
+      generatedResponse,
       'The current agreement passed verification.',
+    ]);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: 'failed',
+      verificationStarted: true,
+      message: verificationMessage,
+      quint: { status: 'failed', message: verificationMessage },
+      alloy: { status: 'skipped' },
+    });
+
+    const result = await interactiveMode('/project', { userMessage: initialAgreement });
+
+    expect(result.action).toBe('cancel');
+    expect(provider._call).toHaveBeenCalledTimes(2);
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      generatedResponse,
+      '/project',
+      expect.any(AbortSignal),
+    );
+    expect(capture.prompts[0]).toContain('<initial-user-input>');
+    expect(capture.prompts[0]).toContain(initialAgreement);
+    expect(capture.prompts[0]).toContain('</initial-user-input>');
+    expect(capture.prompts[1]).toContain(verificationMessage);
+    expect(capture.allowedTools).toEqual([[], []]);
+    expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
+    expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
+  });
+
+  it('should not retry a failed existing session during formal generation', async () => {
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'formal generation failed', status: 'error' },
+    ]);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+
+    const result = await interactiveMode('/project', undefined, undefined, 'stale-formal-session');
+
+    expect(result.action).toBe('cancel');
+    expect(provider._call).toHaveBeenCalledTimes(1);
+    expect(capture.sessionIds).toEqual(['stale-formal-session']);
+    expect(capture.allowedTools).toEqual([[]]);
+    expect(capture.permissionModes).toEqual(['readonly']);
+    expect(capture.internalAgentIsolations).toEqual(['strict-readonly']);
+  });
+
+  it('should not retry a failed existing session during formal interpretation', async () => {
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const generatedResponse = '```quint\nmodule currentAgreement {}\n```';
+    const { provider, capture } = createScenarioProvider([
+      { content: generatedResponse, sessionId: 'formal-generation-session' },
+      { content: 'formal interpretation failed', status: 'error' },
     ]);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
     mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
@@ -581,19 +693,45 @@ describe('interactiveMode', () => {
 
     expect(result.action).toBe('cancel');
     expect(provider._call).toHaveBeenCalledTimes(2);
-    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
-    expect(capture.prompts[0]).toMatch(/Quint/i);
-    expect(capture.prompts[0]).toMatch(/Alloy/i);
-    expect(capture.prompts[1]).toMatch(/passed/i);
+    expect(capture.sessionIds).toEqual([undefined, 'formal-generation-session']);
     expect(capture.allowedTools).toEqual([[], []]);
     expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
     expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
   });
 
+  it('should abort the verifier on SIGINT before starting interpretation', async () => {
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const { provider } = createMockProvider([
+      '```quint\nmodule currentAgreement {}\n```',
+    ]);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    let verificationSignal: AbortSignal | undefined;
+    mockRunFormalSpecVerification.mockImplementationOnce(async (...args: unknown[]) => {
+      verificationSignal = args[2] as AbortSignal;
+      process.emit('SIGINT');
+      verificationSignal.throwIfAborted();
+      return {
+        verdict: 'passed' as const,
+        verificationStarted: true,
+        quint: { status: 'passed' as const },
+        alloy: { status: 'skipped' as const },
+      };
+    });
+
+    const result = await interactiveMode('/project');
+
+    expect(result.action).toBe('cancel');
+    expect(verificationSignal).toBeInstanceOf(AbortSignal);
+    expect(verificationSignal?.aborted).toBe(true);
+    expect(provider._call).toHaveBeenCalledOnce();
+  });
+
   it('should interpret a failed verification once without automatically verifying again', async () => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
-    const { provider, capture } = createMockProvider([
-      '```quint\nmodule currentAgreement {}\n```',
+    const generatedResponse = '```quint\nmodule currentAgreement {}\n```';
+    const { provider } = createMockProvider([
+      generatedResponse,
       'The generated specification has a counterexample; use this corrected block.',
     ]);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
@@ -609,8 +747,11 @@ describe('interactiveMode', () => {
 
     expect(result.action).toBe('cancel');
     expect(provider._call).toHaveBeenCalledTimes(2);
-    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
-    expect(capture.prompts[1]).toContain('counterexample');
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      generatedResponse,
+      '/project',
+      expect.any(AbortSignal),
+    );
   });
 
   it('should route an enabled task-action /verify through the readline verifier with its task content', async () => {
@@ -640,14 +781,17 @@ describe('interactiveMode', () => {
     expect(result.action).toBe('cancel');
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(2);
-    expect(mockProvider._call.mock.calls[0]?.[0]).toContain('add formal verification');
-    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      '```quint\nmodule taskActionAgreement {}\n```',
+      '/project',
+      expect.any(AbortSignal),
+    );
   });
 
-  it('should include direct instruct task content in the first /verify generation prompt', async () => {
+  it('should route direct instruct /verify through the verifier', async () => {
     const taskContent = '形式仕様検証を追加する';
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
-    const { provider, capture } = createMockProvider([
+    const { provider } = createMockProvider([
       '```quint\nmodule directInstructAgreement {}\n```',
       'The direct instruct specification passed.',
     ]);
@@ -675,8 +819,12 @@ describe('interactiveMode', () => {
     });
 
     expect(result.action).toBe('cancel');
-    expect(capture.prompts[0]).toContain(taskContent);
-    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    expect(provider._call).toHaveBeenCalledTimes(2);
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      '```quint\nmodule directInstructAgreement {}\n```',
+      '/project',
+      expect.any(AbortSignal),
+    );
   });
 
   it('should reject an unavailable task-action /verify before the readline provider or verifier', async () => {
@@ -704,21 +852,7 @@ describe('interactiveMode', () => {
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).not.toHaveBeenCalled();
     expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
-    expect(mockInfo.mock.calls.some(([message]) => /verify|formal|specification|仕様/i.test(String(message)))).toBe(true);
-  });
-
-  it('should include the initial user message in the first /verify generation prompt', async () => {
-    setupRawStdin(toRawInputs(['/verify', '/cancel']));
-    const { provider, capture } = createMockProvider([
-      '```quint\nmodule currentAgreement {}\n```',
-      'The current agreement was verified.',
-    ]);
-    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
-
-    await interactiveMode('/project', { userMessage: 'ACP対応を追加する' });
-
-    expect(capture.prompts[0]).toContain('ACP対応を追加する');
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyUnavailable', 'en'));
   });
 
   describe('/accept command', () => {

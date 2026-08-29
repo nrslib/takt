@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 
 const require = createRequire(import.meta.url);
@@ -19,7 +19,9 @@ const QUINT_TIMEOUT_MS = 60_000;
 const ALLOY_TIMEOUT_MS = 60_000;
 const ALLOY_VERSION = '6.2.0';
 const ALLOY_JAR_URL = `https://repo1.maven.org/maven2/org/alloytools/org.alloytools.alloy.dist/${ALLOY_VERSION}/org.alloytools.alloy.dist-${ALLOY_VERSION}.jar`;
+const ALLOY_JAR_SHA256 = '6037cbeee0e8423c1c468447ed10f5fcf2f2743a2ffc39cb1c81f2905c0fdb9d';
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
+const ALLOY_COMMAND_OUTPUT_TRUNCATED_MESSAGE = 'Alloy command enumeration output was truncated before all commands could be read.';
 const MAX_FAILURE_MESSAGE = 8_000;
 
 export type FormalSpecVerificationStatus = 'passed' | 'failed' | 'error' | 'skipped';
@@ -80,6 +82,8 @@ interface ProcessResult {
   readonly status: number | null;
   readonly stdout: string;
   readonly stderr: string;
+  readonly stdoutTruncated: boolean;
+  readonly stderrTruncated: boolean;
   readonly error?: string;
 }
 
@@ -274,9 +278,12 @@ function toProcessText(value: string | Buffer | null): string {
   return value === null ? '' : String(value);
 }
 
-function appendProcessOutput(current: string, chunk: string): string {
+function appendProcessOutput(current: string, chunk: string): { output: string; truncated: boolean } {
   const remaining = MAX_PROCESS_OUTPUT - current.length;
-  return remaining > 0 ? current + chunk.slice(0, remaining) : current;
+  return {
+    output: remaining > 0 ? current + chunk.slice(0, remaining) : current,
+    truncated: chunk.length > Math.max(remaining, 0),
+  };
 }
 
 async function runProcess(
@@ -291,6 +298,8 @@ async function runProcess(
   let timedOut = false;
   let stdout = '';
   let stderr = '';
+  let stdoutTruncated = false;
+  let stderrTruncated = false;
   const timeoutHandle = setTimeout(() => {
     timedOut = true;
     processAbortController.abort(new Error(`Process timed out after ${timeout} ms`));
@@ -318,11 +327,15 @@ async function runProcess(
     );
     managedProcess.child.stdout?.setEncoding('utf8');
     managedProcess.child.stdout?.on('data', (chunk: string | Buffer) => {
-      stdout = appendProcessOutput(stdout, toProcessText(chunk));
+      const appended = appendProcessOutput(stdout, toProcessText(chunk));
+      stdout = appended.output;
+      stdoutTruncated ||= appended.truncated;
     });
     managedProcess.child.stderr?.setEncoding('utf8');
     managedProcess.child.stderr?.on('data', (chunk: string | Buffer) => {
-      stderr = appendProcessOutput(stderr, toProcessText(chunk));
+      const appended = appendProcessOutput(stderr, toProcessText(chunk));
+      stderr = appended.output;
+      stderrTruncated ||= appended.truncated;
     });
 
     const exit = await managedProcess.wait();
@@ -333,6 +346,8 @@ async function runProcess(
         status: null,
         stdout,
         stderr,
+        stdoutTruncated,
+        stderrTruncated,
         error: `Process timed out after ${timeout} ms`,
       };
     }
@@ -341,6 +356,8 @@ async function runProcess(
       status: exit.code,
       stdout,
       stderr,
+      stdoutTruncated,
+      stderrTruncated,
     };
   } catch (error) {
     abortSignal?.throwIfAborted();
@@ -350,6 +367,8 @@ async function runProcess(
         status: null,
         stdout,
         stderr,
+        stdoutTruncated,
+        stderrTruncated,
         error: `Process timed out after ${timeout} ms`,
       };
     }
@@ -358,6 +377,8 @@ async function runProcess(
       status: null,
       stdout,
       stderr,
+      stdoutTruncated,
+      stderrTruncated,
       error: error instanceof Error ? error.message : String(error),
     };
   } finally {
@@ -520,18 +541,27 @@ function isUsableFile(path: string): boolean {
   }
 }
 
+function assertTrustedAlloyJar(bytes: Buffer, source: string): void {
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (digest !== ALLOY_JAR_SHA256) {
+    throw new Error(`Alloy jar SHA-256 mismatch for ${source}`);
+  }
+}
+
 async function ensureAlloyJar(cwd: string, abortSignal?: AbortSignal): Promise<string> {
   const configuredPath = process.env.TAKT_ALLOY_JAR;
   if (configuredPath) {
-    if (!isUsableFile(configuredPath)) {
-      throw new Error(`Configured Alloy jar is not a readable file: ${configuredPath}`);
+    const resolvedConfiguredPath = resolve(cwd, configuredPath);
+    if (!isUsableFile(resolvedConfiguredPath)) {
+      throw new Error(`Configured Alloy jar is not a readable file: ${resolvedConfiguredPath}`);
     }
-    return configuredPath;
+    return resolvedConfiguredPath;
   }
 
   const cacheDirectory = join(cwd, '.takt', 'cache', 'alloy', ALLOY_VERSION);
   const cachedPath = join(cacheDirectory, 'alloy.jar');
   if (isUsableFile(cachedPath)) {
+    assertTrustedAlloyJar(readFileSync(cachedPath), cachedPath);
     return cachedPath;
   }
 
@@ -550,6 +580,7 @@ async function ensureAlloyJar(cwd: string, abortSignal?: AbortSignal): Promise<s
     if (bytes.length < 2 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
       throw new Error('Alloy jar download did not return a valid archive');
     }
+    assertTrustedAlloyJar(bytes, ALLOY_JAR_URL);
     writeFileSync(temporaryPath, bytes, { mode: 0o600 });
     renameSync(temporaryPath, cachedPath);
     return cachedPath;
@@ -782,6 +813,9 @@ export async function runFormalSpecVerification(
         const commandsProcess = await runAlloyCommand(jarPath, ['commands', alloyPath], runDirectory, abortSignal);
         if (!isSuccessfulProcess(commandsProcess)) {
           alloy = { status: 'error', message: processFailureMessage(commandsProcess) };
+          stages.push(alloy);
+        } else if (commandsProcess.stdoutTruncated) {
+          alloy = { status: 'error', message: ALLOY_COMMAND_OUTPUT_TRUNCATED_MESSAGE };
           stages.push(alloy);
         } else {
           const commands = parseAlloyCommands(commandsProcess.stdout);

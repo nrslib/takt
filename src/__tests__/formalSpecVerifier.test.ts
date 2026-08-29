@@ -4,6 +4,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { alloyJarDigestOverride } = vi.hoisted(() => ({
+  alloyJarDigestOverride: { value: undefined as string | undefined },
+}));
+
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return {
+    ...actual,
+    createHash: (...args: Parameters<typeof actual.createHash>) => {
+      const digest = alloyJarDigestOverride.value;
+      if (digest === undefined) {
+        return actual.createHash(...args);
+      }
+      return {
+        update: () => ({ digest: () => digest }),
+      } as unknown as ReturnType<typeof actual.createHash>;
+    },
+  };
+});
+
 const { mockSpawnManagedProcess } = vi.hoisted(() => ({
   mockSpawnManagedProcess: vi.fn(),
 }));
@@ -73,11 +93,12 @@ let parseResult: unknown = {
   }],
 };
 
-function installCachedAlloyJar(directory: string): void {
-  const cacheDirectory = join(directory, '.takt', 'cache', 'alloy', '6.2.0');
-  mkdirSync(cacheDirectory, { recursive: true, mode: 0o700 });
-  const jarPath = join(cacheDirectory, 'alloy.jar');
+const EXPECTED_ALLOY_JAR_SHA256 = '6037cbeee0e8423c1c468447ed10f5fcf2f2743a2ffc39cb1c81f2905c0fdb9d';
+
+function installConfiguredAlloyJar(directory: string): void {
+  const jarPath = join(directory, 'alloy-fixture.jar');
   writeFileSync(jarPath, Buffer.from([0x50, 0x4b, 0x03, 0x04]), { mode: 0o600 });
+  process.env.TAKT_ALLOY_JAR = jarPath;
 }
 
 function mockProcessBoundary(): void {
@@ -144,6 +165,7 @@ beforeEach(() => {
     }],
   };
   failSpecsDirectoryCreation.enabled = false;
+  alloyJarDigestOverride.value = undefined;
   delete process.env.TAKT_ALLOY_JAR;
   mockProcessBoundary();
 });
@@ -152,6 +174,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   failSpecsDirectoryCreation.enabled = false;
+  alloyJarDigestOverride.value = undefined;
   if (originalAlloyJar === undefined) {
     delete process.env.TAKT_ALLOY_JAR;
   } else {
@@ -349,7 +372,7 @@ describe('runFormalSpecVerification', () => {
 
   it('should collect Alloy results after an independent Quint parse error and clean the run directory', async () => {
     const directory = createTestDirectory();
-    installCachedAlloyJar(directory);
+    installConfiguredAlloyJar(directory);
     processResponses.push(
       { code: 1, stderr: 'Quint parse failed' },
       { code: 0, stderr: 'openjdk version "17.0.1"' },
@@ -380,7 +403,7 @@ describe('runFormalSpecVerification', () => {
 
   it('should not report an Alloy-only specification as passed when every stage is skipped', async () => {
     const directory = createTestDirectory();
-    installCachedAlloyJar(directory);
+    installConfiguredAlloyJar(directory);
     processResponses.push({ error: new Error('java is unavailable') });
     try {
       const result = await runFormalSpecVerification(validAlloyResponse(), directory);
@@ -395,7 +418,7 @@ describe('runFormalSpecVerification', () => {
 
   it('should classify an Alloy counterexample as failed and an Alloy process error as error', async () => {
     const directory = createTestDirectory();
-    installCachedAlloyJar(directory);
+    installConfiguredAlloyJar(directory);
     try {
       processResponses.push(
         { code: 0, stderr: 'openjdk version "17.0.1"' },
@@ -450,6 +473,30 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
+  it('should resolve a relative configured Alloy jar from the project cwd', async () => {
+    const directory = createTestDirectory();
+    const fixtureDirectory = join(directory, 'fixtures');
+    mkdirSync(fixtureDirectory, { recursive: true, mode: 0o700 });
+    const jarPath = join(fixtureDirectory, 'alloy.jar');
+    writeFileSync(jarPath, Buffer.from([0x50, 0x4b, 0x03, 0x04]), { mode: 0o600 });
+    process.env.TAKT_ALLOY_JAR = 'fixtures/alloy.jar';
+    processResponses.push(
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0, stdout: '0 . Check Safety for 1\n' },
+      { code: 0 },
+    );
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+
+      expect(result.alloy.status).toBe('passed');
+      const alloyCalls = spawnedProcesses.filter(({ command }) => command === 'java');
+      expect(alloyCalls.at(-1)?.args[1]).toBe(jarPath);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('should download the Alloy jar into the isolated cache without using a real fetch', async () => {
     const directory = createTestDirectory();
     const fetchMock = vi.fn().mockResolvedValue({
@@ -457,6 +504,7 @@ describe('runFormalSpecVerification', () => {
       arrayBuffer: async () => Buffer.from([0x50, 0x4b, 0x03, 0x04]),
     } as unknown as Response);
     vi.stubGlobal('fetch', fetchMock);
+    alloyJarDigestOverride.value = EXPECTED_ALLOY_JAR_SHA256;
     processResponses.push(
       { code: 0, stderr: 'openjdk version "17.0.1"' },
       { code: 0, stdout: '0 . Check Safety for 1\n' },
@@ -492,6 +540,74 @@ describe('runFormalSpecVerification', () => {
       });
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(readdirSync(cacheDirectory).filter((name) => name.startsWith('.alloy-'))).toEqual([]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject a downloaded Alloy jar whose SHA-256 does not match the pinned artifact', async () => {
+    const directory = createTestDirectory();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    } as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const cacheDirectory = join(directory, '.takt', 'cache', 'alloy', '6.2.0');
+
+      expect(result.alloy).toMatchObject({
+        status: 'error',
+        message: expect.stringContaining('Alloy jar SHA-256 mismatch'),
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(existsSync(join(cacheDirectory, 'alloy.jar'))).toBe(false);
+      expect(readdirSync(cacheDirectory).filter((name) => name.startsWith('.alloy-'))).toEqual([]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject a cached Alloy jar whose SHA-256 does not match the pinned artifact', async () => {
+    const directory = createTestDirectory();
+    const cacheDirectory = join(directory, '.takt', 'cache', 'alloy', '6.2.0');
+    mkdirSync(cacheDirectory, { recursive: true, mode: 0o700 });
+    writeFileSync(join(cacheDirectory, 'alloy.jar'), Buffer.from([0x50, 0x4b, 0x03, 0x04]), { mode: 0o600 });
+    processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+
+      expect(result.alloy).toMatchObject({
+        status: 'error',
+        message: expect.stringContaining('Alloy jar SHA-256 mismatch'),
+      });
+      expect(spawnedProcesses).toHaveLength(1);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject truncated Alloy command enumeration output before executing any check', async () => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const oversizedCommands = `0 . Check First\n${'not-a-command\n'.repeat(100_000)}1 . Check Later\n`;
+    processResponses.push(
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0, stdout: oversizedCommands },
+    );
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+
+      expect(result.alloy).toMatchObject({
+        status: 'error',
+        message: 'Alloy command enumeration output was truncated before all commands could be read.',
+      });
+      expect(spawnedProcesses).toHaveLength(2);
+      expect(spawnedProcesses.some(({ args }) => args.includes('exec'))).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

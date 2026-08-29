@@ -9,8 +9,14 @@
 
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { matchSlashCommand } from '../interactive/commandMatcher.js';
-import type { CommandAvailability } from '../interactive/slashCommandRegistry.js';
+import {
+  isDisabledVerifyCommand,
+  matchSlashCommand,
+} from '../interactive/commandMatcher.js';
+import {
+  resolveFormalSpecCommandAvailability,
+  type CommandAvailability,
+} from '../interactive/slashCommandRegistry.js';
 import { resolvePreviousOrder, type ConversationPlan } from '../interactive/conversationPlan.js';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import {
@@ -106,13 +112,12 @@ function createCommandAvailability(
   enableSettingsCommands: boolean,
   formalSpec: boolean,
 ): CommandAvailability {
-  return {
+  return resolveFormalSpecCommandAvailability({
     enableRetryCommand: strategy.enableRetryCommand === true,
     hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
     ...(enableSettingsCommands ? { enableSettingsCommands: true } : {}),
     ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
-    ...(formalSpec ? { formalSpec: true } : {}),
-  };
+  }, formalSpec);
 }
 
 export interface TuiSubmitInput {
@@ -233,9 +238,6 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     options.enableSettingsCommands === true,
     strategy.formalSpec === true,
   );
-  const isDisabledVerifyCommand = (text: string): boolean =>
-    commandAvailability.enabledCommands?.includes(SlashCommand.Verify) === false
-    && matchSlashCommand(text)?.command === SlashCommand.Verify;
 
   return {
     lang: ctx.lang,
@@ -252,7 +254,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
       // command line so it can produce the mode's unavailable notice locally.
       const trimmed = text.trim();
       return matchSlashCommand(trimmed, commandAvailability) !== null
-        || isDisabledVerifyCommand(trimmed);
+        || isDisabledVerifyCommand(trimmed, commandAvailability);
     },
 
     recordRejectedDraft(task: string): void {
@@ -271,7 +273,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
       const trimmed = text.trim();
       const match = matchSlashCommand(trimmed, commandAvailability);
       if (!match) {
-        if (isDisabledVerifyCommand(trimmed)) {
+        if (isDisabledVerifyCommand(trimmed, commandAvailability)) {
           return {
             kind: 'notice',
             message: getLabel('interactive.ui.verifyUnavailable', ctx.lang),

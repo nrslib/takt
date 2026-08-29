@@ -634,9 +634,11 @@ describe('TUI local commands', () => {
         strategy: {
           ...plan.strategy,
           formalSpec: initialFormalSpec,
+          enabledCommands: [SlashCommand.Go, SlashCommand.Cancel, SlashCommand.Resume],
           resolveResumedSessionConfiguration,
         },
       },
+      persistSession: false,
     });
 
     const completionCommands = () => resolveSlashCompletions(
@@ -653,6 +655,21 @@ describe('TUI local commands', () => {
     expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
     expect(completionCommands()).toEqual(resumedFormalSpec ? ['/verify'] : []);
     expect(conversation.isCommandLine('/verify')).toBe(true);
+
+    if (resumedFormalSpec) {
+      const outcome = await send(conversation, '/verify', []);
+      expect(outcome.kind).toBe('assistant_response');
+      expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    } else {
+      expect(conversation.resolveLocalCommand('/verify')).toEqual({
+        kind: 'notice',
+        message: expect.any(String),
+      });
+      const outcome = await send(conversation, '/verify', []);
+      expect(outcome).toMatchObject({ kind: 'error', message: expect.any(String) });
+      expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+      expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
+    }
   });
 
   it('should reject /verify outside formal specification mode without sending it to the provider', async () => {
@@ -690,7 +707,6 @@ describe('TUI local commands', () => {
     expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
     expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
     expect(chunks).toEqual([]);
-    expect(lastCallSystemPrompt()).toMatch(/verify|検証/i);
   });
 
   it('should report /replay and /retry as unavailable, matching the readline loop', () => {
@@ -870,7 +886,7 @@ describe('TUI local commands', () => {
     expect(conversation.tracksResultSource).toBe(true);
   });
 
-  it('should add /verify to the actual task-action plan and execute it only when formal specification mode is enabled', async () => {
+  it('should add /verify to the actual task-action plan and execute it when formal specification mode is enabled', async () => {
     const instructOptions = {
       cwd: '/repo',
       branchContext: 'branch context',
@@ -904,9 +920,23 @@ describe('TUI local commands', () => {
       });
     const outcome = await send(formalConversation, '/verify', []);
     expect(outcome).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining('passed') });
-    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
-    expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toContain('add formal verification');
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      '```quint\nmodule taskActionAgreement {}\n```',
+      '/repo',
+      expect.any(AbortSignal),
+    );
+  });
 
+  it('should keep /verify unavailable in a regular task-action plan', async () => {
+    const instructOptions = {
+      cwd: '/repo',
+      branchContext: 'branch context',
+      branchName: 'feature/verify',
+      taskName: 'verify command',
+      taskContent: 'add formal verification',
+      retryNote: '',
+      workflowContext: WORKFLOW_CONTEXT,
+    } as const;
     mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({ mode: false, comments: true });
     const regularPlan = createInstructConversationPlan('/repo', instructOptions);
     expect(regularPlan.strategy.enabledCommands).not.toContain(SlashCommand.Verify);

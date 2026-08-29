@@ -54,3 +54,11 @@ export const matchSlashCommand = (
 
   return null;
 };
+
+export const isDisabledVerifyCommand = (
+  input: string,
+  availability?: CommandAvailability,
+): boolean => (
+  availability?.enabledCommands?.includes(SlashCommand.Verify) === false
+  && matchSlashCommand(input)?.command === SlashCommand.Verify
+);

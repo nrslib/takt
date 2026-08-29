@@ -21,8 +21,11 @@ import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readPipedLine } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
-import { matchSlashCommand } from './commandMatcher.js';
-import type { CommandAvailability } from './slashCommandRegistry.js';
+import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
+import {
+  resolveFormalSpecCommandAvailability,
+  type CommandAvailability,
+} from './slashCommandRegistry.js';
 import { SlashCommand } from '../../shared/constants.js';
 import {
   type WorkflowContext,
@@ -245,6 +248,7 @@ export async function runConversationLoop(
       callOptions: {
         permissionMode?: PermissionMode;
         internalAgentIsolation?: InternalAgentIsolation;
+        disableSessionRetry?: boolean;
         persistSession?: boolean;
         commitSession?: boolean;
       } = {},
@@ -263,7 +267,13 @@ export async function runConversationLoop(
         sysPrompt,
         tools,
         cwd,
-        { ...ctx, sessionId: callSessionId },
+        {
+          ...ctx,
+          sessionId: callSessionId,
+          ...(callOptions.disableSessionRetry === undefined
+            ? {}
+            : { disableSessionRetry: callOptions.disableSessionRetry }),
+        },
         {
           imageAttachments,
           permissionMode: callOptions.permissionMode ?? strategy.permissionMode,
@@ -352,6 +362,7 @@ export async function runConversationLoop(
         {
           permissionMode: 'readonly',
           internalAgentIsolation: 'strict-readonly',
+          disableSessionRetry: true,
           persistSession: false,
           commitSession: false,
         },
@@ -367,12 +378,23 @@ export async function runConversationLoop(
       }
 
       let verification;
+      const verificationAbortController = new AbortController();
+      const abortVerification = (): void => {
+        verificationAbortController.abort();
+      };
+      process.on('SIGINT', abortVerification);
       try {
-        verification = await runFormalSpecVerification(generated.content, cwd);
+        verification = await runFormalSpecVerification(
+          generated.content,
+          cwd,
+          verificationAbortController.signal,
+        );
       } catch (caught) {
         info(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
         blankLine();
         return;
+      } finally {
+        process.removeListener('SIGINT', abortVerification);
       }
       if (!verification.verificationStarted) {
         sessionId = generationCall.sessionId;
@@ -393,6 +415,7 @@ export async function runConversationLoop(
         {
           permissionMode: 'readonly',
           internalAgentIsolation: 'strict-readonly',
+          disableSessionRetry: true,
           persistSession: false,
           commitSession: false,
         },
@@ -420,11 +443,11 @@ export async function runConversationLoop(
       blankLine();
     }
 
-    const commandAvailability: CommandAvailability = {
+    let commandAvailability: CommandAvailability = resolveFormalSpecCommandAvailability({
       enableRetryCommand: strategy.enableRetryCommand,
       hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
       enabledCommands: strategy.enabledCommands,
-    };
+    }, activePromptConfiguration.formalSpec);
 
     while (true) {
       const input = await readPipedLine(chalk.green('> '));
@@ -445,10 +468,7 @@ export async function runConversationLoop(
 
       // No slash command detected, treat as regular message
       if (!match) {
-        if (
-          commandAvailability.enabledCommands?.includes(SlashCommand.Verify) === false
-          && matchSlashCommand(trimmed)?.command === SlashCommand.Verify
-        ) {
+        if (isDisabledVerifyCommand(trimmed, commandAvailability)) {
           info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
           continue;
         }
@@ -627,6 +647,10 @@ export async function runConversationLoop(
             sessionId = selectedId;
             if (strategy.resolveResumedSessionConfiguration) {
               activePromptConfiguration = await strategy.resolveResumedSessionConfiguration();
+              commandAvailability = resolveFormalSpecCommandAvailability(
+                commandAvailability,
+                activePromptConfiguration.formalSpec,
+              );
             }
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }
