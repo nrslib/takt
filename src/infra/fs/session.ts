@@ -21,6 +21,7 @@ import {
   parseCanonicalWorkflowResumeFrame,
 } from '../../shared/types/workflow-resume.js';
 import { isAgentFailureCategory } from '../../shared/types/agent-failure.js';
+import { parseNdjsonParallelMetadata } from '../../shared/utils/parallelMetadata.js';
 
 export type {
   SessionLog,
@@ -42,6 +43,7 @@ export type {
   NdjsonCompanionReviewSkipped,
   NdjsonCompanionReviewMode,
   NdjsonCompanionReviewTrigger,
+  NdjsonParallelMetadata,
   NdjsonRecord,
 } from '../../shared/utils/index.js';
 
@@ -151,6 +153,7 @@ export class SessionManager {
               content: record.content,
               ...(record.workflow ? { workflow: record.workflow } : {}),
               ...(record.stack ? { stack: record.stack } : {}),
+              ...(record.parallel ? { parallel: record.parallel } : {}),
               ...(record.error ? { error: record.error } : {}),
               ...(record.matchedRuleIndex != null ? { matchedRuleIndex: record.matchedRuleIndex } : {}),
               ...(record.matchedRuleMethod ? { matchedRuleMethod: record.matchedRuleMethod } : {}),
@@ -357,12 +360,13 @@ export function parseNdjsonRecord(line: string): NdjsonRecord {
   if (typeof record.type !== 'string' || record.type.length === 0) {
     throw new Error('NDJSON session record type is invalid');
   }
-  const normalized = record.stack === undefined
-    ? record
-    : {
+  const normalized = {
     ...record,
-        stack: parseNdjsonStack(record.stack),
-      };
+    ...(record.stack === undefined ? {} : { stack: parseNdjsonStack(record.stack) }),
+    ...(record.parallel === undefined
+      ? {}
+      : { parallel: parseNdjsonParallelMetadata(record.parallel) }),
+  };
   assertNdjsonRecordShape(normalized);
   return normalized as unknown as NdjsonRecord;
 }

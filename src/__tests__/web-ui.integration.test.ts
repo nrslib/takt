@@ -2293,7 +2293,9 @@ describe('Web UI HTTP boundary', () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain('<details id="execution-context" class="execution-context" open>');
-    expect(html.indexOf('id="execution-context"')).toBeLessThan(html.indexOf('<main'));
+    expect(html.indexOf('id="execution-context"')).toBeGreaterThan(html.indexOf('<main'));
+    expect(html.indexOf('id="execution-context"')).toBeGreaterThan(html.indexOf('id="chat-surface"'));
+    expect(html.indexOf('id="execution-context"')).toBeLessThan(html.indexOf('id="chat-thinking"'));
     expect(html).toContain('id="viewer-screen"');
     expect(html).toContain('id="new-task-button"');
     expect(html).toContain('id="language-toggle"');

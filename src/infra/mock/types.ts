@@ -2,7 +2,7 @@
  * Mock module type definitions
  */
 
-import type { Status } from '../../core/models/status.js';
+import type { PermissionMode, Status } from '../../core/models/status.js';
 import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
@@ -15,6 +15,7 @@ export interface MockCallOptions {
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   allowedTools?: string[];
+  permissionMode?: PermissionMode;
   /** Provider-prepared MCP material (issue #1137). */
   preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   /** Native structured-output schema requested by the caller. */
@@ -39,6 +40,8 @@ export interface ScenarioEntry {
   status: Status;
   /** Response content body */
   content: string;
+  /** Response content used when fileCondition does not match */
+  mismatchContent?: string;
   /** Optional structured output payload (for outputSchema-driven flows) */
   structuredOutput?: Record<string, unknown>;
   /** Optional error message */
@@ -61,4 +64,8 @@ export interface ScenarioEntry {
    */
   textChunks?: Array<{ text: string; delayMs?: number }>;
   fileWrites?: Array<{ path: string; content: string }>;
+  fileCondition?:
+    | { filename: string; state: 'missing' }
+    | { filename: string; state: 'unreadable' }
+    | { filename: string; state: 'readable'; includes: string };
 }

@@ -915,6 +915,20 @@ provider_options:
     runtime_mode: exe                  # exe 或 node；node 仅用于显式 SDK 开发模式
 ```
 
+DeepSeek Harness 的 `model` 字段既接受 `deepseek-v4-flash` 这样的纯 model
+引用，也接受 `openai/gpt-5.4` 或 `my-gateway/org/custom-model` 这样的
+`<route>/<model>` 格式。TAKT 将第一个 `/` 之前的文本作为 provider route，
+并将后续所有 `/` 保留为 model 引用的一部分。省略 route 时，为保持向后兼容，
+使用 `deepseek-official`。route 会按原样传给官方 SDK；TAKT 不使用 route
+allowlist，也不转换 provider alias。route 和 model 两部分都会按原样传递，
+包括首尾空白以及 model 中的 `:`。TAKT 将 model 部分视为不透明的 model ID；
+例如，`ollama/qwen3.5:397b` 会作为完整 model ID 交由 SDK 解释。
+空值、`/gpt-5.4`（空 route）和 `openai/`（空 model）等格式会在 bridge
+启动前被拒绝。仅含空白的 route 或 model 也视为空值。错误会包含原始引用和
+验证位置。TAKT 不会预先验证未知 route 或 model ID，而是将原值分别作为
+provider 和 model 字段传给 bridge/SDK；若 SDK 拒绝，错误会标明原始引用以及
+bridge/SDK 的失败位置。
+
 `python_path` 和 `cordis` 只允许来自受信任的全局配置或对应环境变量；项目设置使用默认 `python3`。`session_root` 和 `cordis` 相对配置的工作目录解析。带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、TAKT `allowed_tools`、MCP server map、图片附件、structured output、permission mode 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略；工具组合请通过 Cordis 配置。
 
 #### 网络访问（`network_access`）

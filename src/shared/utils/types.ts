@@ -27,6 +27,7 @@ export interface SessionLog {
     error?: string;
     workflow?: string;
     stack?: NdjsonWorkflowStackEntry[];
+    parallel?: NdjsonParallelMetadata;
     /** Matched rule index (0-based) when rules-based detection was used */
     matchedRuleIndex?: number;
     /** How the rule match was detected */
@@ -49,6 +50,24 @@ export interface NdjsonWorkflowStart {
 
 export type NdjsonWorkflowStackEntry = CanonicalWorkflowResumeFrame;
 
+/**
+ * Canonical identity for a step's participation in a parallel invocation.
+ *
+ * This is intentionally small and contains only stable workflow/step
+ * identity, never prompts, responses, or provider data.  It is optional so
+ * older session logs remain valid.
+ */
+export type NdjsonParallelRole =
+  | 'parent'
+  | 'direct_participant'
+  | 'workflow_call_participant';
+
+export interface NdjsonParallelMetadata {
+  readonly role: NdjsonParallelRole;
+  readonly participationId: string;
+  readonly parentParticipationId?: string;
+}
+
 export interface NdjsonWorkflowCallStart {
   type: 'workflow_call_start';
   workflow: string;
@@ -56,6 +75,7 @@ export interface NdjsonWorkflowCallStart {
   childWorkflow: string;
   callInstance: number;
   stack: NdjsonWorkflowStackEntry[];
+  parallel?: NdjsonParallelMetadata;
   timestamp: string;
 }
 
@@ -66,6 +86,7 @@ export interface NdjsonWorkflowCallComplete {
   childWorkflow: string;
   callInstance: number;
   stack: NdjsonWorkflowStackEntry[];
+  parallel?: NdjsonParallelMetadata;
   status: 'completed' | 'aborted' | 'failed';
   returnValue?: string;
   abortKind?: string;
@@ -82,6 +103,7 @@ export interface NdjsonStepStart {
   timestamp: string;
   workflow?: string;
   stack?: NdjsonWorkflowStackEntry[];
+  parallel?: NdjsonParallelMetadata;
   instruction?: string;
   provider?: string;
   providerSource?: string;
@@ -101,6 +123,7 @@ export interface NdjsonStepComplete {
   instruction: string;
   workflow?: string;
   stack?: NdjsonWorkflowStackEntry[];
+  parallel?: NdjsonParallelMetadata;
   matchedRuleIndex?: number;
   matchedRuleMethod?: string;
   matchMethod?: string;
@@ -131,6 +154,7 @@ export interface NdjsonPhaseStart {
   iteration?: number;
   workflow?: string;
   stack?: NdjsonWorkflowStackEntry[];
+  parallel?: NdjsonParallelMetadata;
   phase: 1 | 2 | 3;
   phaseName: 'execute' | 'report' | 'judge';
   phaseExecutionId?: string;
@@ -146,6 +170,7 @@ export interface NdjsonPhaseComplete {
   iteration?: number;
   workflow?: string;
   stack?: NdjsonWorkflowStackEntry[];
+  parallel?: NdjsonParallelMetadata;
   phase: 1 | 2 | 3;
   phaseName: 'execute' | 'report' | 'judge';
   phaseExecutionId?: string;
@@ -161,6 +186,7 @@ export interface NdjsonPhaseJudgeStage {
   iteration?: number;
   workflow?: string;
   stack?: NdjsonWorkflowStackEntry[];
+  parallel?: NdjsonParallelMetadata;
   phase: 3;
   phaseName: 'judge';
   phaseExecutionId?: string;

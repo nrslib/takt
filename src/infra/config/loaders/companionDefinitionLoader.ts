@@ -25,6 +25,44 @@ const CompanionDefinitionSchema = z.object({
   interval_ms: z.number().int().positive().max(MAX_COMPANION_INTERVAL_MS).optional(),
 }).strict();
 
+export interface CompanionDefinitionDocument {
+  readonly name: string;
+  readonly description: string;
+  readonly persona?: string;
+  readonly policy?: string | string[];
+  readonly knowledge?: string | string[];
+  readonly instruction: string;
+  readonly interval_ms?: number;
+}
+
+export function resolveCompanionDefinitionResource(
+  name: string,
+  candidateDirs: readonly string[],
+): { readonly path: string; readonly candidateDir: string } | undefined {
+  const resolved = resolveNamedResourceWithSource(name, {
+    candidateDirs,
+    extensions: COMPANION_DEFINITION_EXTENSIONS,
+    rejectSymlinkedCandidateDirs: true,
+  });
+  return resolved === undefined
+    ? undefined
+    : { path: resolved.path, candidateDir: resolved.candidateDir };
+}
+
+export function parseCompanionDefinitionDocument(
+  content: string,
+  referenceName: string,
+): CompanionDefinitionDocument {
+  const parsed = CompanionDefinitionSchema.parse(parseYaml(content));
+  if (parsed.name !== referenceName) {
+    throw new Error(`Companion reference "${referenceName}" does not match declared name "${parsed.name}"`);
+  }
+  return {
+    ...parsed,
+    instruction: parsed.instruction ?? DEFAULT_COMPANION_INSTRUCTION,
+  };
+}
+
 function asList(value: string | string[] | undefined): string[] | undefined {
   if (value === undefined) return undefined;
   return Array.isArray(value) ? [...value] : [value];
@@ -78,19 +116,12 @@ export function loadCompanionDefinition(
     facetContext?: FacetResolutionContext;
   },
 ): ResolvedCompanionDefinition {
-  const resolved = resolveNamedResourceWithSource(name, {
-    candidateDirs: input.candidateDirs,
-    extensions: COMPANION_DEFINITION_EXTENSIONS,
-    rejectSymlinkedCandidateDirs: true,
-  });
+  const resolved = resolveCompanionDefinitionResource(name, input.candidateDirs);
   if (!resolved) throw new Error(`Undefined companion "${name}"`);
-  const parsed = CompanionDefinitionSchema.parse(parseYaml(readFileSync(resolved.path, 'utf-8')));
-  if (parsed.name !== name) {
-    throw new Error(`Companion reference "${name}" does not match declared name "${parsed.name}"`);
-  }
+  const parsed = parseCompanionDefinitionDocument(readFileSync(resolved.path, 'utf-8'), name);
   const policies = asList(parsed.policy);
   const knowledge = asList(parsed.knowledge);
-  const instructionName = parsed.instruction ?? DEFAULT_COMPANION_INSTRUCTION;
+  const instructionName = parsed.instruction;
   return {
     name,
     description: parsed.description,

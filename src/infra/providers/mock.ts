@@ -29,6 +29,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
     onStream: options.onStream,
     onActivity: options.onActivity,
     allowedTools: options.allowedTools,
+    permissionMode: options.permissionMode,
     preparedMcp: options.preparedMcp,
     outputSchema: options.outputSchema,
   };

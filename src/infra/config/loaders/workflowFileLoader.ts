@@ -31,6 +31,7 @@ interface LoadWorkflowFromFileOptions {
   trustInfo?: WorkflowTrustInfo;
   callableArgs?: Record<string, WorkflowCallArgValue>;
   callableArgPolicy?: WorkflowCallArgResolutionPolicy;
+  resourceRoot?: string;
 }
 
 type WorkflowLoadMode = 'runtime' | 'discovery';
@@ -70,6 +71,7 @@ function loadWorkflowFromFileInternal(
     projectDir,
     workflowDir,
     repertoireDir,
+    resourceRoot: options?.resourceRoot,
   };
 
   const config = normalizeWorkflowConfig(
@@ -110,7 +112,11 @@ function loadWorkflowFromFileInternal(
     if (step.companion.moderator !== undefined) companionNames.add(step.companion.moderator);
   }
   if (companionNames.size > 0) {
-    const candidateDirs = buildConfiguredCompanionLookupDirs(projectDir, context.lang);
+    const candidateDirs = buildConfiguredCompanionLookupDirs(
+      projectDir,
+      context.lang,
+      context.resourceRoot,
+    );
     config.companions = Object.fromEntries([...companionNames].map((name) => [
       name,
       loadCompanionDefinition(name, {

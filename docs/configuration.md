@@ -9,6 +9,8 @@ For phase-level usage events and analysis, see the [Observability Guide](./obser
 
 Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatically on first run. All fields are optional.
 
+TAKT compares existing global and project configuration directories by their real paths, and directories that do not yet exist by their normalized absolute logical paths. If the global configuration directory and the current project's `.takt/` match after this resolution, TAKT exits with an error before initializing either directory. If you run from your home directory or the paths collide through a symbolic link, set `TAKT_CONFIG_DIR` to a directory different from the project's `.takt/` and run TAKT again. `--help` and `--version` are exempt from this check.
+
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI language: 'en' or 'ja'
@@ -1262,6 +1264,23 @@ provider_options:
     shutdown_timeout_ms: 1000
     runtime_mode: exe                  # exe or node; node is for explicit SDK development mode
 ```
+
+The DeepSeek Harness `model` field accepts either a bare model reference such as
+`deepseek-v4-flash` or `<route>/<model>` such as `openai/gpt-5.4` and
+`my-gateway/org/custom-model`. TAKT uses the text before the first `/` as the
+provider route and preserves every later `/` in the model reference. A bare
+model uses the backward-compatible `deepseek-official` route. Routes are passed
+to the official SDK as written; TAKT does not apply a route allowlist or
+provider-specific aliases. The route and model substrings are passed as written,
+including surrounding whitespace and any `:` in the model. TAKT treats the model
+substring as an opaque model ID; for example, `ollama/qwen3.5:397b` remains a
+complete model ID for the SDK to interpret.
+Malformed references such as an empty value, `/gpt-5.4`, or `openai/` are
+rejected before the bridge starts; route and model values containing only
+whitespace are also empty. The error includes the supplied reference and the
+validation point. Unknown routes or model IDs are not validated by TAKT and are
+passed unchanged as separate provider/model fields to the bridge/SDK; an SDK
+rejection identifies the supplied reference and the bridge/SDK failure point.
 
 For credential safety, `python_path` is accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`; workflow and project-local provider options must use the default `python3` executable. `cordis` is also accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS`, because it selects executable tool composition. The example above intentionally omits both fields. The same restrictions apply to project `runtime.yaml` profiles; global runtime profiles may select trusted values. Project runtime profiles may use only loopback `base_url` values.
 
