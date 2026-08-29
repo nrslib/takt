@@ -40,5 +40,6 @@ export {
   createSessionLog,
   finalizeSessionLog,
   loadSessionLog,
+  parseNdjsonRecordWithPath,
   parseNdjsonRecord,
 } from './session.js';

@@ -3,10 +3,7 @@ import { join, relative, resolve } from 'node:path';
 import { readRunContextOrderContent } from '../../core/workflow/run/order-content.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import {
-  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
-  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
-  PROVIDER_EVENTS_LOG_FILE_SUFFIX,
-  USAGE_EVENTS_LOG_FILE_SUFFIX,
+  SESSION_LOG_SIDECAR_SUFFIXES,
 } from '../../core/logging/contracts.js';
 import { loadNdjsonLog } from '../../infra/fs/index.js';
 import type { SessionLog } from '../../shared/utils/index.js';
@@ -253,10 +250,7 @@ function findSessionLogFile(cwd: string, logsDir: string): string | null {
   const files = readdirSync(logsDir).filter(
     (f) => (
       f.endsWith('.jsonl')
-      && !f.endsWith(PROVIDER_EVENTS_LOG_FILE_SUFFIX)
-      && !f.endsWith(USAGE_EVENTS_LOG_FILE_SUFFIX)
-      && !f.endsWith(PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX)
-      && !f.endsWith(OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX)
+      && SESSION_LOG_SIDECAR_SUFFIXES.every((suffix) => !f.endsWith(suffix))
     ),
   ).sort();
 

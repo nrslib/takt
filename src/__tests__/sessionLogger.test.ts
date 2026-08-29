@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -28,7 +29,10 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   })),
 }));
 import { initNdjsonLog, parseNdjsonRecord } from '../infra/fs/session.js';
-import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
+import {
+  projectTerminalSessionRecord,
+  SessionLogger,
+} from '../features/tasks/execute/sessionLogger.js';
 import { buildTraceFromRecords } from '../features/tasks/execute/traceReportParser.js';
 import { buildWorkflowStepScopeKey } from '../features/tasks/execute/workflowStepScope.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
@@ -109,6 +113,40 @@ describe('SessionLogger', () => {
       { error: expect.stringContaining('[path]') },
     );
     expect(JSON.stringify(mockPromptLogWarn.mock.calls[0])).not.toContain(logsDir);
+  });
+
+  it('終端セッション再解析の不正レコードにログファイルパスを含める', () => {
+    const logsDir = createTempLogsDir();
+    const start = {
+      task: 'terminal task',
+      workflowName: 'workflow',
+      startTime: '2026-08-29T00:00:00.000Z',
+    };
+    const ndjsonLogPath = initNdjsonLog(
+      'session-invalid-terminal',
+      start.task,
+      start.workflowName,
+      { logsDir, startTime: start.startTime },
+    );
+    appendFileSync(ndjsonLogPath, `${JSON.stringify({})}\n`);
+
+    let thrown: unknown;
+    try {
+      projectTerminalSessionRecord(ndjsonLogPath, start, {
+        type: 'workflow_complete',
+        iterations: 0,
+        endTime: '2026-08-29T00:00:01.000Z',
+        publicationId: 'publication-1',
+      });
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain(ndjsonLogPath);
+      expect(thrown.message).toContain('NDJSON session record type is invalid');
+    }
   });
 
   it('companion review round と queue coalescing を run NDJSON に永続化する', () => {
@@ -464,15 +502,18 @@ describe('SessionLogger', () => {
     const direct = records.find((record) => record.type === 'phase_start' && record.step === 'reviewers');
     const call = records.find((record) => record.type === 'workflow_call_start');
     const child = records.find((record) => record.type === 'phase_start' && record.step === 'work');
+    const parallelMetadata = (record: (typeof records)[number] | undefined) =>
+      record !== undefined && 'parallel' in record ? record.parallel : undefined;
 
-    expect(parent?.parallel).toMatchObject({ role: 'parent' });
-    expect(direct?.parallel).toMatchObject({
+    expect(parallelMetadata(parent)).toMatchObject({ role: 'parent' });
+    expect(parallelMetadata(direct)).toMatchObject({
       role: 'direct_participant',
-      parentParticipationId: parent?.parallel?.participationId,
+      parentParticipationId: parallelMetadata(parent)?.participationId,
     });
-    expect(direct?.parallel?.participationId).not.toBe(parent?.parallel?.participationId);
-    expect(call?.parallel).toMatchObject({ role: 'workflow_call_participant' });
-    expect(child?.parallel).toEqual(call?.parallel);
+    expect(parallelMetadata(direct)?.participationId)
+      .not.toBe(parallelMetadata(parent)?.participationId);
+    expect(parallelMetadata(call)).toMatchObject({ role: 'workflow_call_participant' });
+    expect(parallelMetadata(child)).toEqual(parallelMetadata(call));
   });
 
   it('step_complete に parent parallel identity を付与する', () => {
@@ -1092,7 +1133,7 @@ describe('SessionLogger', () => {
       passPreviousResponse: true,
     };
 
-    logger.onStepStart(step, 1, 'Implement it');
+    logger.onStepStart(step, 1, 'Implement it', undefined);
     logger.onStepComplete(
       step,
       {
@@ -1144,6 +1185,9 @@ describe('SessionLogger', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set<string>(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'aborted' as const,
     };
 

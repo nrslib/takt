@@ -127,7 +127,7 @@ export class SessionManager {
     let sessionLog: SessionLog | null = null;
 
     for (const line of lines) {
-      const record = parseNdjsonRecord(line);
+      const record = parseNdjsonRecordWithPath(line, filepath);
 
       switch (record.type) {
         case 'workflow_start':
@@ -296,7 +296,8 @@ export function loadSessionLog(filepath: string): SessionLog | null {
  * Extract failure information from an NDJSON session log file.
  *
  * @param filepath - Path to the .jsonl session log file
- * @returns FailureInfo or null if file doesn't exist or is invalid
+ * @returns FailureInfo or null if file doesn't exist or is empty
+ * @throws Error if a record cannot be parsed; the error includes the filepath
  */
 export function extractFailureInfo(filepath: string): FailureInfo | null {
   if (!existsSync(filepath)) {
@@ -318,7 +319,7 @@ export function extractFailureInfo(filepath: string): FailureInfo | null {
   const sessionId = filename?.replace(/\.jsonl$/, '') ?? null;
 
   for (const line of lines) {
-      const record = parseNdjsonRecord(line);
+      const record = parseNdjsonRecordWithPath(line, filepath);
 
       switch (record.type) {
         case 'step_start':
@@ -349,6 +350,18 @@ export function extractFailureInfo(filepath: string): FailureInfo | null {
     errorMessage,
     sessionId,
   };
+}
+
+export function parseNdjsonRecordWithPath(line: string, filepath: string): NdjsonRecord {
+  try {
+    return parseNdjsonRecord(line);
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to parse NDJSON session record in ${filepath}: ${detail}`,
+      { cause: error },
+    );
+  }
 }
 
 export function parseNdjsonRecord(line: string): NdjsonRecord {

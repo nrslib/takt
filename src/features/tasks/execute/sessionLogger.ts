@@ -6,7 +6,7 @@
 
 import {
   appendNdjsonLine,
-  parseNdjsonRecord,
+  parseNdjsonRecordWithPath,
 } from '../../../infra/fs/index.js';
 import type { InteractiveMetadata } from './types.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -82,7 +82,7 @@ export function projectTerminalSessionRecord(
           .split('\n')
           .filter((line) => line.length > 0)
       : [];
-    const records = lines.map(parseNdjsonRecord);
+    const records = lines.map((line) => parseNdjsonRecordWithPath(line, ndjsonLogPath));
     if (records.length === 0) {
       records.push({
         type: 'workflow_start',

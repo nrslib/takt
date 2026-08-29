@@ -3,13 +3,7 @@ import {
   readdirSync,
 } from 'node:fs';
 import { basename, extname, join } from 'node:path';
-import {
-  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
-  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
-  PROMPT_LOG_FILE_SUFFIX,
-  PROVIDER_EVENTS_LOG_FILE_SUFFIX,
-  USAGE_EVENTS_LOG_FILE_SUFFIX,
-} from '../../../core/logging/contracts.js';
+import { SESSION_LOG_SIDECAR_SUFFIXES } from '../../../core/logging/contracts.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { RunMeta } from '../../../core/workflow/run/run-meta.js';
 import {
@@ -42,14 +36,6 @@ interface TaskRunForceFailAdapterContext
   readonly loopAnalysisScheduler?: LoopAnalysisScheduler;
   readonly loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
 }
-
-const RUN_LOG_SIDECAR_FILE_SUFFIXES = Object.freeze([
-  PROVIDER_EVENTS_LOG_FILE_SUFFIX,
-  USAGE_EVENTS_LOG_FILE_SUFFIX,
-  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
-  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
-  PROMPT_LOG_FILE_SUFFIX,
-]);
 
 class FileTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
   readonly currentStep: string | undefined;
@@ -161,7 +147,7 @@ function resolveRunNdjsonLog(
 
 function isSessionLogFileName(name: string): boolean {
   return name.endsWith('.jsonl')
-    && RUN_LOG_SIDECAR_FILE_SUFFIXES.every((suffix) => !name.endsWith(suffix));
+    && SESSION_LOG_SIDECAR_SUFFIXES.every((suffix) => !name.endsWith(suffix));
 }
 
 function createForceFailSessionLog(

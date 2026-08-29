@@ -3,6 +3,7 @@ import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { StatePaths } from '../../core/execution/locations.js';
+import { SESSION_LOG_SIDECAR_SUFFIXES } from '../../core/logging/contracts.js';
 import {
   getAllParallelSubSteps,
   type WorkflowConfig,
@@ -32,13 +33,6 @@ import {
 const NOFOLLOW = (constants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
 
 const RUN_STATUSES = new Set(['running', 'completed', 'aborted', 'failed']);
-const SESSION_LOG_SIDECAR_SUFFIXES = [
-  '-prompts.jsonl',
-  '-provider-events.jsonl',
-  '-usage-events.jsonl',
-  '-usage-events.phase.jsonl',
-  '-otel-session-shadow.jsonl',
-];
 const MAX_RUNS = 50;
 const MAX_REPORTS = 50;
 const MAX_REPORT_BYTES = 256 * 1024;

@@ -2,7 +2,11 @@ import type { TaskListItem } from '../../../infra/task/index.js';
 import { TaskRunner, isStaleRunningTask } from '../../../infra/task/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
 import { success, warn, error as logError } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import {
+  createLogger,
+  getErrorMessage,
+  sanitizeTerminalText,
+} from '../../../shared/utils/index.js';
 import { createTaskRunForceFailStorage } from './taskRunForceFailStorage.js';
 
 const log = createLogger('list-tasks');
@@ -48,7 +52,9 @@ export async function forceFailRunningTask(
     }
   } catch (err) {
     const message = getErrorMessage(err);
-    logError(`Failed to mark running task "${task.name}" as failed: ${message}`);
+    logError(sanitizeTerminalText(
+      `Failed to mark running task "${task.name}" as failed: ${message}`,
+    ));
     log.error('Failed to force-fail running task', { name: task.name, filePath: task.filePath, error: message });
     return false;
   }

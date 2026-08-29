@@ -9,6 +9,11 @@ import { initNdjsonLog } from '../infra/fs/index.js';
 import { getSessionStatePath } from '../infra/config/project/sessionState.js';
 import { createUsageEventLogger } from '../core/logging/usageEventLogger.js';
 import {
+  initDebugLogger,
+  resetDebugLogger,
+  setVerboseConsole,
+} from '../shared/utils/debug.js';
+import {
   OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
   PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
   PROMPT_LOG_FILE_SUFFIX,
@@ -54,11 +59,6 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  createLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  }),
   getErrorMessage: (error: unknown) => error instanceof Error ? error.message : String(error),
 }));
 
@@ -130,6 +130,7 @@ describe('forceFailRunningTask', () => {
   let projectDir: string;
 
   beforeEach(() => {
+    resetDebugLogger();
     vi.clearAllMocks();
     mockSpawn.mockReturnValue({
       once: mockWorkerOnce,
@@ -140,6 +141,7 @@ describe('forceFailRunningTask', () => {
   });
 
   afterEach(() => {
+    resetDebugLogger();
     fs.rmSync(projectDir, { recursive: true, force: true });
   });
 
@@ -158,7 +160,7 @@ describe('forceFailRunningTask', () => {
         task: createRunningTask(projectDir),
         projectDir,
         onWarning: mockWarn,
-      });
+      })!;
 
       expect(storage.currentStep).toBe('implement');
       const reason = 'contract force-fail';
@@ -403,7 +405,7 @@ describe('forceFailRunningTask', () => {
       task: createRunningTask(projectDir, { runSlug }),
       projectDir,
       onWarning: mockWarn,
-    });
+    })!;
 
     await expect(storage.terminalize('usage sidecar force-fail'))
       .resolves.toMatchObject({ issues: [] });
@@ -435,7 +437,7 @@ describe('forceFailRunningTask', () => {
       task: createRunningTask(projectDir, { runSlug }),
       projectDir,
       onWarning: mockWarn,
-    });
+    })!;
 
     await expect(storage.terminalize('corrupt extra log force-fail'))
       .rejects.toThrow('NDJSON session record type is invalid');
@@ -457,7 +459,7 @@ describe('forceFailRunningTask', () => {
       task: createRunningTask(projectDir, { runSlug }),
       projectDir,
       onWarning: mockWarn,
-    });
+    })!;
 
     await expect(storage.terminalize('empty extra log force-fail'))
       .rejects.toThrow(
@@ -485,7 +487,7 @@ describe('forceFailRunningTask', () => {
       task: createRunningTask(projectDir, { runSlug }),
       projectDir,
       onWarning: mockWarn,
-    });
+    })!;
 
     await expect(storage.terminalize('corrupt session force-fail'))
       .rejects.toThrow('NDJSON session record type is invalid');
@@ -906,6 +908,66 @@ describe('forceFailRunningTask', () => {
       'Failed to mark running task "running-task" as failed: runner exploded',
     );
     expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
+  it('should sanitize control characters in force-fail terminal errors while preserving raw diagnostics', async () => {
+    mockConfirm.mockResolvedValue(true);
+    const runSlug = '20260409-unsafe-session-log';
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    writeMetaOnly(projectDir, runSlug, {
+      status: 'running',
+      currentStep: 'implement',
+    });
+    fs.mkdirSync(runPaths.logsAbs, { recursive: true });
+    const unsafeLogPath = path.join(
+      runPaths.logsAbs,
+      'unsafe-\u009b31m-session.jsonl',
+    );
+    fs.writeFileSync(unsafeLogPath, '{}\n', 'utf-8');
+
+    const task = createRunningTask(projectDir, { runSlug });
+    const debugLogPath = path.join(projectDir, 'debug', 'force-fail.log');
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      initDebugLogger({ enabled: true, logFile: debugLogPath }, projectDir);
+      setVerboseConsole(true);
+
+      const result = await forceFailRunningTask(task, projectDir);
+      const rawMessage =
+        `Failed to parse NDJSON session record in ${unsafeLogPath}: `
+        + 'NDJSON session record type is invalid';
+      const visibleLogPath = unsafeLogPath.replace('\u009b', '\\x9b');
+      const stderrOutput = stderrSpy.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join('');
+      const debugOutput = fs.readFileSync(debugLogPath, 'utf-8');
+
+      expect(result).toBe(false);
+      expect(mockLogError).toHaveBeenCalledTimes(1);
+      expect(mockLogError).toHaveBeenCalledWith(
+        `Failed to mark running task "running-task" as failed: `
+        + `Failed to parse NDJSON session record in ${visibleLogPath}: `
+        + 'NDJSON session record type is invalid',
+      );
+      expect(mockLogError.mock.calls[0]?.[0]).not.toContain('\u009b');
+      expect(mockLogError.mock.calls[0]?.[0]).toContain(
+        'unsafe-\\x9b31m-session.jsonl',
+      );
+      expect(mockLogError.mock.calls[0]?.[0]).toContain(
+        'NDJSON session record type is invalid',
+      );
+      expect(stderrOutput).toContain('Failed to force-fail running task');
+      expect(stderrOutput).not.toContain('\u009b');
+      expect(stderrOutput).not.toContain(unsafeLogPath);
+      expect(debugOutput).toContain(rawMessage);
+      expect(debugOutput).toContain(unsafeLogPath);
+      expect(debugOutput).toContain('NDJSON session record type is invalid');
+      expect(mockForceFailRunningTask).not.toHaveBeenCalled();
+      expect(mockSuccess).not.toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 
 });
