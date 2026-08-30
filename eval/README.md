@@ -113,6 +113,11 @@ The `security-review-method` suite measures the initial security-review method
 against seven boundary and evidence cases on Opus 5, Luna Max, and Sol High.
 Run it through `npm run eval:prompts:security-review-method`.
 
+The `antipattern-wording-tests` suite runs the ai-antipattern review
+composition on Claude Opus 5 and Codex Luna Max. It needs both CLI logins
+and is excluded from the default suite run; invoke it with
+`npm run eval:prompts -- antipattern-wording-tests`.
+
 ## Suite registry
 
 `eval/suite-registry.mjs` is the single source of truth for suite membership.
@@ -165,6 +170,7 @@ remain excluded.
 | `arch` | peer-review / arch-review | sample-project | recall on 3 planted architecture violations |
 | `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
 | `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
+| `antipattern-wording-tests` | peer-review / ai-antipattern-review-2nd | sample-project | whether Claude Opus 5 and Codex Luna Max reject wording-fixed tests without contract grounds while accepting declared machine-readable contract assertions |
 | `frontend` | review-frontend / frontend-review | frontend-app | recall on 3 planted layering violations |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |

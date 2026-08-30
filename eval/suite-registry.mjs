@@ -8,7 +8,7 @@ const CLASSIFICATIONS = [
   {
     tier: 'active',
     reason: '現在の共有 reviewer persona/policy の代表的な recall・precision 回帰を測る',
-    suites: ['coding', 'arch', 'antipattern', 'frontend', 'cqrs', 'arch-failure-aggregation'],
+    suites: ['coding', 'arch', 'antipattern', 'antipattern-wording-tests', 'frontend', 'cqrs', 'arch-failure-aggregation'],
   },
   {
     tier: 'active',
@@ -293,6 +293,12 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: '7ケースを3モデルで測るため両CLI認証と大きな実行枠を要する',
   },
+  'antipattern-wording-tests': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'standard',
+    reason: 'Claude Opus と Codex Luna の2モデル比較のため両CLI認証を要する',
+  },
   'write-tests-default-priority': {
     defaultEligible: false,
     credentials: ['claude'],
@@ -311,6 +317,7 @@ const PREPARE_TARGET_OVERRIDES = {
   coding: ['coding-review'],
   arch: ['arch-review'],
   antipattern: ['antipattern-review'],
+  'antipattern-wording-tests': ['antipattern-review'],
   frontend: ['frontend-review'],
   cqrs: ['cqrs-review'],
   'frontend-coder': ['frontend-implement'],
