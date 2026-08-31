@@ -19,6 +19,14 @@ function buildConfirmationMessage(task: TaskListItem): string {
   return `Process ${task.ownerPid} may still be running. Mark "${task.name}" as failed anyway?`;
 }
 
+/**
+ * Mark a running task as failed after user confirmation.
+ *
+ * @param task - Task that must have the running kind
+ * @param projectDir - Project directory used to resolve the task and run state; run state may be located in the task worktree
+ * @returns true when the task is marked as failed, or false when confirmation is declined or force-fail processing fails
+ * @throws Error if task.kind is not 'running' or the confirmation prompt rejects
+ */
 export async function forceFailRunningTask(
   task: TaskListItem,
   projectDir: string,

@@ -114,7 +114,13 @@ export class SessionManager {
   }
 
 
-  /** Load an NDJSON log file and convert it to a SessionLog */
+  /**
+   * Load an NDJSON log file and convert it to a SessionLog.
+   *
+   * @param filepath - Path to the NDJSON session log file
+   * @returns The parsed session log, or null if the file is missing, empty, or contains no workflow_start record
+   * @throws Error if the file cannot be read or contains an invalid NDJSON record
+   */
   loadNdjsonLog(filepath: string): SessionLog | null {
     if (!existsSync(filepath)) {
       return null;
@@ -297,7 +303,7 @@ export function loadSessionLog(filepath: string): SessionLog | null {
  *
  * @param filepath - Path to the .jsonl session log file
  * @returns FailureInfo or null if file doesn't exist or is empty
- * @throws Error if a record cannot be parsed; the error includes the filepath
+ * @throws Error if the file cannot be read or a record cannot be parsed; parse errors include the filepath
  */
 export function extractFailureInfo(filepath: string): FailureInfo | null {
   if (!existsSync(filepath)) {
@@ -352,6 +358,14 @@ export function extractFailureInfo(filepath: string): FailureInfo | null {
   };
 }
 
+/**
+ * Parse and validate one NDJSON session record while adding its source path to parse errors.
+ *
+ * @param line - A single NDJSON line
+ * @param filepath - Path of the session log containing the line
+ * @returns The validated NDJSON session record
+ * @throws Error if the line is invalid JSON or does not match a supported record shape
+ */
 export function parseNdjsonRecordWithPath(line: string, filepath: string): NdjsonRecord {
   try {
     return parseNdjsonRecord(line);

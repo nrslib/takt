@@ -145,6 +145,12 @@ function resolveRunNdjsonLog(
   return matching[0]!;
 }
 
+/**
+ * Determine whether a filename is a primary NDJSON session log rather than a sidecar artifact.
+ *
+ * @param name - Filename to inspect
+ * @returns true if the filename ends in .jsonl and does not use a known session-log sidecar suffix; otherwise false
+ */
 function isSessionLogFileName(name: string): boolean {
   return name.endsWith('.jsonl')
     && SESSION_LOG_SIDECAR_SUFFIXES.every((suffix) => !name.endsWith(suffix));

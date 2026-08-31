@@ -65,6 +65,15 @@ type TerminalSessionRecord = Extract<
   readonly publicationId: string;
 };
 
+/**
+ * Append a terminal session record while preserving the session identity.
+ *
+ * @param ndjsonLogPath - Path to the NDJSON session log
+ * @param start - Session identity used to initialize an empty log or validate its first record
+ * @param record - Terminal record to append or reconcile
+ * @returns Nothing; an identical existing terminal publication is treated as already complete
+ * @throws Error if the log is invalid, its identity or terminal publication conflicts, or file access fails
+ */
 export function projectTerminalSessionRecord(
   ndjsonLogPath: string,
   start: {

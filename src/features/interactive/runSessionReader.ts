@@ -240,6 +240,14 @@ function loadReports(reportsDir: string, reportNames?: readonly string[]): Repor
   return collectReportFiles(reportsDir, reportsDir);
 }
 
+/**
+ * Locate the first non-sidecar NDJSON session log in a run's logs directory.
+ *
+ * @param cwd - Project root used to validate the logs path
+ * @param logsDir - Run logs directory to search
+ * @returns The lexicographically first non-sidecar .jsonl path, or null if the directory is missing or has no matching file
+ * @throws Error if the logs path or selected entry violates the path and file requirements, or the directory cannot be read
+ */
 function findSessionLogFile(cwd: string, logsDir: string): string | null {
   const logsDirStats = assertLogPathSegmentsAreSafe(cwd, logsDir, logsDir);
   if (logsDirStats === null) {
