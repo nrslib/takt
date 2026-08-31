@@ -12,6 +12,12 @@ import { createTaskRunForceFailStorage } from './taskRunForceFailStorage.js';
 const log = createLogger('list-tasks');
 const FORCE_FAIL_ERROR = 'Manually marked as failed';
 
+/**
+ * Build the confirmation prompt for force-failing a running task.
+ *
+ * @param task - Running task to force-fail
+ * @returns Prompt text reflecting whether the task owner process is stale
+ */
 function buildConfirmationMessage(task: TaskListItem): string {
   if (isStaleRunningTask(task.ownerPid)) {
     return `Mark running task "${task.name}" as failed?`;

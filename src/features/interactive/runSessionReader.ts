@@ -226,6 +226,14 @@ function loadExpectedReports(reportsDir: string, reportNames: readonly string[])
     .filter((report): report is ReportEntry => report !== null);
 }
 
+/**
+ * Load requested reports or collect every report when no names are specified.
+ *
+ * @param reportsDir - Run report directory
+ * @param reportNames - Optional report filenames to load
+ * @returns Loaded report entries
+ * @throws Error if the report directory or requested path is invalid
+ */
 function loadReports(reportsDir: string, reportNames?: readonly string[]): ReportEntry[] {
   const reportDirStats = lstatIfExists(reportsDir);
   if (reportDirStats === null) {

@@ -502,6 +502,12 @@ describe('SessionLogger', () => {
     const direct = records.find((record) => record.type === 'phase_start' && record.step === 'reviewers');
     const call = records.find((record) => record.type === 'workflow_call_start');
     const child = records.find((record) => record.type === 'phase_start' && record.step === 'work');
+    /**
+     * Extract optional parallel metadata without narrowing records at each assertion site.
+     *
+     * @param record - Parsed record to inspect
+     * @returns Parallel metadata when present
+     */
     const parallelMetadata = (record: (typeof records)[number] | undefined) =>
       record !== undefined && 'parallel' in record ? record.parallel : undefined;
 

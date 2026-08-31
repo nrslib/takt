@@ -646,6 +646,16 @@ async function readReport(
   return { filename, content, omitted: false };
 }
 
+/**
+ * Load selected reports while validating the run-root snapshot around filesystem access.
+ *
+ * @param location - Run store location
+ * @param snapshot - Run-root snapshot to validate
+ * @param meta - Run metadata identifying the report directory
+ * @param include - Predicate selecting report paths
+ * @returns Loaded report records
+ * @throws Error if report paths or the run-root snapshot are invalid
+ */
 async function loadReports(
   location: RunStoreLocation,
   snapshot: RunsRootSnapshot,

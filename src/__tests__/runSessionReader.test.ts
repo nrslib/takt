@@ -22,6 +22,9 @@ vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return {
     ...actual,
+    /**
+     * Reverse only the targeted directory's entries to exercise order-independent log selection.
+     */
     readdirSync: ((...args: Parameters<typeof actual.readdirSync>) => {
       const entries = actual.readdirSync(...args);
       const argumentCount = (args as readonly unknown[]).length;

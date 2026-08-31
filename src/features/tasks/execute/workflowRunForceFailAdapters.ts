@@ -120,6 +120,14 @@ function buildForceFailPublicationPayload(input: {
   });
 }
 
+/**
+ * Resolve the NDJSON session log to use for force-failing a run.
+ *
+ * @param logsDirectory - Run logs directory
+ * @param meta - Run metadata used to identify the session log
+ * @returns Path to the matching session log, creating one when no primary log exists
+ * @throws Error if existing primary logs are invalid or do not resolve to exactly one matching log
+ */
 function resolveRunNdjsonLog(
   logsDirectory: string,
   meta: RunMeta,
@@ -156,6 +164,13 @@ function isSessionLogFileName(name: string): boolean {
     && SESSION_LOG_SIDECAR_SUFFIXES.every((suffix) => !name.endsWith(suffix));
 }
 
+/**
+ * Initialize a session log for a run that has no primary log yet.
+ *
+ * @param logsDirectory - Run logs directory
+ * @param meta - Run metadata used to initialize the session identity
+ * @returns Path to the initialized session log
+ */
 function createForceFailSessionLog(
   logsDirectory: string,
   meta: RunMeta,
