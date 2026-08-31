@@ -40,6 +40,11 @@ interface TaskRunForceFailAdapterContext
 class FileTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
   readonly currentStep: string | undefined;
 
+  /**
+   * Initialize a file-backed force-fail storage adapter for a task run.
+   *
+   * @param context - Task-run context used to expose the current step and publish terminal state
+   */
   constructor(
     private readonly context: TaskRunForceFailAdapterContext,
   ) {
@@ -48,6 +53,13 @@ class FileTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
       : undefined;
   }
 
+  /**
+   * Publish a failed terminal state and schedule its follow-up analysis when a scheduler is configured.
+   *
+   * @param reason - Non-empty reason for force-failing the run
+   * @returns The finalization result returned by the terminal publisher
+   * @throws Error if reason is empty, the session log cannot be resolved or is invalid, or terminal publication fails
+   */
   async terminalize(reason: string): Promise<RunFinalization> {
     const runPaths = buildRunPaths(this.context.cwd, this.context.meta.runSlug);
     const payload = buildForceFailPublicationPayload({
@@ -73,12 +85,25 @@ class FileTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
   }
 }
 
+/**
+ * Create a file-backed storage handle for force-failing a task run.
+ *
+ * @param context - Task-run context used to resolve and publish terminal state
+ * @returns A force-fail handle backed by the run's filesystem artifacts
+ */
 export function createFileTaskRunForceFailStorage(
   context: TaskRunForceFailAdapterContext,
 ): WorkflowRunForceFailHandle {
   return new FileTaskRunForceFailStorage(context);
 }
 
+/**
+ * Build the terminal publication payload for a force-failed run.
+ *
+ * @param input - Run context and a non-empty force-fail reason
+ * @returns Terminal publication payload derived from the matching session log
+ * @throws Error if the session log cannot be resolved, is invalid, or does not match the run, if the reason is missing or empty, or if terminal payload construction or validation fails
+ */
 function buildForceFailPublicationPayload(input: {
   readonly projectDir: string;
   readonly runPaths: ReturnType<typeof buildRunPaths>;
@@ -170,6 +195,7 @@ function isSessionLogFileName(name: string): boolean {
  * @param logsDirectory - Run logs directory
  * @param meta - Run metadata used to initialize the session identity
  * @returns Path to the initialized session log
+ * @throws Error if creating the log directory or writing the initial workflow-start record fails
  */
 function createForceFailSessionLog(
   logsDirectory: string,

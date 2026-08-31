@@ -246,10 +246,27 @@ export class SessionManager {
 
 const defaultManager = new SessionManager();
 
+/**
+ * Append one NDJSON session record to a log file.
+ *
+ * @param filepath - Path to the session log file
+ * @param record - NDJSON record to append
+ * @throws Error if the record cannot be appended or the log directory cannot be recreated
+ */
 export function appendNdjsonLine(filepath: string, record: NdjsonRecord): void {
   defaultManager.appendNdjsonLine(filepath, record);
 }
 
+/**
+ * Initialize an NDJSON session log with a workflow-start record.
+ *
+ * @param sessionId - Session identifier used for the log filename
+ * @param task - Task associated with the session
+ * @param workflowName - Workflow associated with the session
+ * @param options - Log directory and optional workflow start time
+ * @returns Path to the initialized session log
+ * @throws Error if the log directory or initial record cannot be written
+ */
 export function initNdjsonLog(
   sessionId: string,
   task: string,
@@ -260,19 +277,46 @@ export function initNdjsonLog(
 }
 
 
+/**
+ * Load an NDJSON log file and convert it to a session log.
+ *
+ * @param filepath - Path to the NDJSON session log file
+ * @returns The parsed session log, or null if the file is missing, empty, or contains no workflow_start record
+ * @throws Error if the file cannot be read or contains an invalid NDJSON record
+ */
 export function loadNdjsonLog(filepath: string): SessionLog | null {
   return defaultManager.loadNdjsonLog(filepath);
 }
 
 
+/**
+ * Generate a timestamped random session identifier.
+ *
+ * @returns A session identifier suitable for an NDJSON log filename
+ */
 export function generateSessionId(): string {
   return defaultManager.generateSessionId();
 }
 
+/**
+ * Generate a report directory name from a task.
+ *
+ * @param task - Task used to derive the report directory name
+ * @returns The generated report directory name
+ */
 export function generateReportDir(task: string): string {
   return defaultManager.generateReportDir(task);
 }
 
+/**
+ * Create an empty running session log.
+ *
+ * @param task - Task associated with the session
+ * @param projectDir - Project directory associated with the session
+ * @param workflowName - Workflow associated with the session
+ * @param options - Optional session start time
+ * @returns A running session log with zero iterations and an empty history
+ */
 export function createSessionLog(
   task: string,
   projectDir: string,
@@ -287,6 +331,13 @@ export function createSessionLog(
   );
 }
 
+/**
+ * Finalize a session log without mutating the input.
+ *
+ * @param log - Session log to finalize
+ * @param status - Terminal status to assign
+ * @returns A finalized copy with the supplied status and an end time
+ */
 export function finalizeSessionLog(
   log: SessionLog,
   status: 'completed' | 'aborted',
@@ -294,6 +345,13 @@ export function finalizeSessionLog(
   return defaultManager.finalizeSessionLog(log, status);
 }
 
+/**
+ * Load a session log from an NDJSON `.jsonl` file.
+ *
+ * @param filepath - Path to the NDJSON session log file
+ * @returns The parsed session log, or null if the file is missing, empty, or contains no workflow_start record
+ * @throws Error if the file cannot be read or contains an invalid NDJSON record; parse errors include the filepath
+ */
 export function loadSessionLog(filepath: string): SessionLog | null {
   return defaultManager.loadSessionLog(filepath);
 }
@@ -378,6 +436,13 @@ export function parseNdjsonRecordWithPath(line: string, filepath: string): Ndjso
   }
 }
 
+/**
+ * Parse and validate one NDJSON session record.
+ *
+ * @param line - A single NDJSON line
+ * @returns The validated NDJSON session record
+ * @throws Error if the line is invalid JSON or does not match a supported record shape
+ */
 export function parseNdjsonRecord(line: string): NdjsonRecord {
   const value = JSON.parse(line) as unknown;
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {

@@ -57,6 +57,13 @@ export interface RunPaths {
   readonly reportsDir: string;
 }
 
+/**
+ * Limit content to a maximum-length prefix and append an ellipsis when needed.
+ *
+ * @param content - Content to truncate
+ * @param maxLength - Maximum length of the prefix before an ellipsis is appended
+ * @returns The original content when within the limit, or a prefix of at most maxLength characters followed by an ellipsis
+ */
 function truncateContent(content: string, maxLength: number): string {
   if (content.length <= maxLength) {
     return content;
@@ -64,6 +71,12 @@ function truncateContent(content: string, maxLength: number): string {
   return content.slice(0, maxLength) + '…';
 }
 
+/**
+ * Convert session history entries into prompt-facing step log entries.
+ *
+ * @param sessionLog - Session log whose history should be converted
+ * @returns Step log entries with content represented by a MAX_CONTENT_LENGTH-character prefix and an ellipsis when truncated
+ */
 function buildStepLogs(sessionLog: SessionLog): StepLogEntry[] {
   return sessionLog.history.map((entry) => ({
     step: entry.step,
@@ -75,6 +88,12 @@ function buildStepLogs(sessionLog: SessionLog): StepLogEntry[] {
   }));
 }
 
+/**
+ * Format one workflow stack frame for display in a step scope.
+ *
+ * @param entry - Workflow stack frame to format
+ * @returns A workflow and step label, with a workflow-call marker when applicable
+ */
 function formatStepScopeEntry(
   entry: NonNullable<StepLogEntry['stack']>[number],
 ): string {
@@ -82,6 +101,12 @@ function formatStepScopeEntry(
   return `${entry.workflow}/${entry.step}${kindSuffix}`;
 }
 
+/**
+ * Format the most specific available workflow scope for a step log entry.
+ *
+ * @param log - Step log entry whose scope should be formatted
+ * @returns The full stack scope, workflow/step scope, or step name
+ */
 function formatStepScope(log: StepLogEntry): string {
   if (log.stack && log.stack.length > 0) {
     return log.stack.map((entry) => formatStepScopeEntry(entry)).join(' -> ');
@@ -94,6 +119,12 @@ function formatStepScope(log: StepLogEntry): string {
   return log.step;
 }
 
+/**
+ * Replace C0 control characters and DEL in an artifact label with a safe placeholder.
+ *
+ * @param label - Artifact label to sanitize
+ * @returns The label with C0 control characters and DEL replaced by `?`
+ */
 function sanitizeArtifactLabel(label: string): string {
   return Array.from(label, (char) => {
     const code = char.charCodeAt(0);
@@ -101,6 +132,12 @@ function sanitizeArtifactLabel(label: string): string {
   }).join('');
 }
 
+/**
+ * Format a report entry as an artifact block for prompt output.
+ *
+ * @param report - Report entry to format
+ * @returns The report filename and content separated as a text block
+ */
 function formatReportArtifact(report: ReportEntry): string {
   return [
     `Filename: ${report.filename}`,
@@ -109,6 +146,13 @@ function formatReportArtifact(report: ReportEntry): string {
   ].join('\n');
 }
 
+/**
+ * Convert a report path boundary violation into a report-specific error.
+ *
+ * @param violation - Detected report path violation
+ * @param filename - Report filename associated with the violation
+ * @returns An error describing the report path violation
+ */
 function buildReportBoundaryError(violation: BoundaryViolation, filename: string): Error {
   switch (violation) {
     case 'outside':
@@ -120,6 +164,13 @@ function buildReportBoundaryError(violation: BoundaryViolation, filename: string
   }
 }
 
+/**
+ * Convert a session-log path boundary violation into a log-specific error.
+ *
+ * @param violation - Detected session-log path violation
+ * @param filename - Session-log filename associated with the violation
+ * @returns An error describing the session-log path violation
+ */
 function buildLogBoundaryError(violation: BoundaryViolation, filename: string): Error {
   switch (violation) {
     case 'outside':
@@ -131,14 +182,39 @@ function buildLogBoundaryError(violation: BoundaryViolation, filename: string): 
   }
 }
 
+/**
+ * Validate report path segments and return the final path statistics when present.
+ *
+ * @param rootDir - Root report directory
+ * @param fullPath - Report path to validate
+ * @param filename - Report filename used in boundary errors
+ * @returns Final path statistics, or null when the path is missing
+ * @throws Error if the path is outside the root, traverses a symbolic link, or has a non-directory parent
+ */
 function assertReportPathSegmentsAreSafe(rootDir: string, fullPath: string, filename: string): Stats | null {
   return assertPathSegmentsAreSafe(rootDir, fullPath, (violation) => buildReportBoundaryError(violation, filename));
 }
 
+/**
+ * Validate session-log path segments and return the final path statistics when present.
+ *
+ * @param rootDir - Root logs directory
+ * @param fullPath - Session-log path to validate
+ * @param filename - Session-log filename used in boundary errors
+ * @returns Final path statistics, or null when the path is missing
+ * @throws Error if the path is outside the root, traverses a symbolic link, or has a non-directory parent
+ */
 function assertLogPathSegmentsAreSafe(rootDir: string, fullPath: string, filename: string): Stats | null {
   return assertPathSegmentsAreSafe(rootDir, fullPath, (violation) => buildLogBoundaryError(violation, filename));
 }
 
+/**
+ * Assert that the report root is a regular directory.
+ *
+ * @param rootDir - Report root directory to validate
+ * @param stats - File statistics for the report root
+ * @throws Error if the root is a symbolic link or is not a directory
+ */
 function assertReportsDirectory(rootDir: string, stats: Stats): void {
   if (stats.isSymbolicLink()) {
     throw new Error(`Reports directory must not be a symbolic link: ${rootDir}`);
@@ -148,6 +224,13 @@ function assertReportsDirectory(rootDir: string, stats: Stats): void {
   }
 }
 
+/**
+ * Assert that the session-log root is a regular directory.
+ *
+ * @param rootDir - Logs root directory to validate
+ * @param stats - File statistics for the logs root
+ * @throws Error if the root is a symbolic link or is not a directory
+ */
 function assertLogsDirectory(rootDir: string, stats: Stats): void {
   if (stats.isSymbolicLink()) {
     throw new Error(`Logs directory must not be a symbolic link: ${rootDir}`);
@@ -157,6 +240,15 @@ function assertLogsDirectory(rootDir: string, stats: Stats): void {
   }
 }
 
+/**
+ * Read one report file after validating its path and size.
+ *
+ * @param rootDir - Root report directory
+ * @param fullPath - Full report path to read
+ * @param filename - Report filename used in errors and the returned entry
+ * @returns The report entry, or null when the file is missing, disappears during access, or reading it fails with `ENOENT` or `ENOTDIR`
+ * @throws Error if the path is unsafe, is not a file, exceeds the size limit, or cannot be read for a reason other than `ENOENT` or `ENOTDIR`
+ */
 function readReportFile(rootDir: string, fullPath: string, filename: string): ReportEntry | null {
   const stats = assertReportPathSegmentsAreSafe(rootDir, fullPath, filename);
   if (stats === null) {
@@ -183,6 +275,14 @@ function readReportFile(rootDir: string, fullPath: string, filename: string): Re
   }
 }
 
+/**
+ * Recursively collect Markdown report files in lexical directory order.
+ *
+ * @param rootDir - Root report directory used for relative filenames and validation
+ * @param currentDir - Directory currently being traversed
+ * @returns Report entries found below the current directory; report files that are missing or become unavailable with `ENOENT` or `ENOTDIR` during file access are omitted
+ * @throws Error if directory enumeration fails, including with `ENOENT` or `ENOTDIR`, if a report path is unsafe, is not a file, exceeds the size limit, or cannot be read for another reason
+ */
 function collectReportFiles(rootDir: string, currentDir: string): ReportEntry[] {
   const entries = readdirSync(currentDir, { withFileTypes: true })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -208,10 +308,27 @@ function collectReportFiles(rootDir: string, currentDir: string): ReportEntry[] 
   return reports;
 }
 
+/**
+ * Determine whether a directory entry is a regular Markdown report file.
+ *
+ * @param entry - Directory entry to inspect
+ * @returns `true` when the entry is a regular file whose name ends with `.md`; otherwise `false`
+ */
 function isMarkdownReport(entry: Dirent): boolean {
   return entry.isFile() && entry.name.endsWith('.md');
 }
 
+/**
+ * Load only the report files named by the run metadata.
+ *
+ * Missing requested files are omitted, including files that disappear or
+ * become unavailable as `ENOENT` or `ENOTDIR` during the read.
+ *
+ * @param reportsDir - Run report directory
+ * @param reportNames - Report filenames to load
+ * @returns Existing report entries in the requested order
+ * @throws Error if a requested path is outside reportsDir, passes through a symbolic link or non-directory parent, is not a file, exceeds MAX_RUN_REPORT_BYTES, or cannot be read for a reason other than ENOENT or ENOTDIR
+ */
 function loadExpectedReports(reportsDir: string, reportNames: readonly string[]): ReportEntry[] {
   return reportNames
     .map((reportName) => {

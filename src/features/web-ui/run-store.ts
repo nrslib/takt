@@ -38,6 +38,9 @@ const MAX_REPORTS = 50;
 const MAX_REPORT_BYTES = 256 * 1024;
 
 export class RunOccurrenceNotFoundError extends Error {
+  /**
+   * Create an error for a run occurrence that cannot be found.
+   */
   constructor() {
     super('Occurrence was not found in this run');
   }
@@ -77,6 +80,14 @@ interface RunMeta {
   readonly failure?: { readonly step: string; readonly error: string };
 }
 
+/**
+ * Require an unknown value to be a non-array object record.
+ *
+ * @param value - Value to validate
+ * @param label - Label used in the validation error
+ * @returns The value narrowed to a readonly object record
+ * @throws Error if the value is null, not an object, or an array
+ */
 function requireRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
@@ -84,6 +95,14 @@ function requireRecord(value: unknown, label: string): Readonly<Record<string, u
   return value as Readonly<Record<string, unknown>>;
 }
 
+/**
+ * Require an unknown value to be a non-empty string.
+ *
+ * @param value - Value to validate
+ * @param label - Label used in the validation error
+ * @returns The validated string
+ * @throws Error if the value is not a non-empty string
+ */
 function requireString(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`${label} must be a non-empty string`);
@@ -91,11 +110,27 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
+/**
+ * Validate an optional string value.
+ *
+ * @param value - Optional value to validate
+ * @param label - Label used in the validation error
+ * @returns `undefined` when omitted, otherwise the validated string
+ * @throws Error if a provided value is not a non-empty string
+ */
 function optionalString(value: unknown, label: string): string | undefined {
   if (value === undefined) return undefined;
   return requireString(value, label);
 }
 
+/**
+ * Validate an optional non-negative integer value.
+ *
+ * @param value - Optional value to validate
+ * @param label - Label used in the validation error
+ * @returns `undefined` when omitted, otherwise the validated integer
+ * @throws Error if a provided value is not a non-negative integer
+ */
 function optionalInteger(value: unknown, label: string): number | undefined {
   if (value === undefined) return undefined;
   if (!Number.isInteger(value) || (value as number) < 0) {
@@ -104,6 +139,14 @@ function optionalInteger(value: unknown, label: string): number | undefined {
   return value as number;
 }
 
+/**
+ * Parse and validate run metadata against the directory slug that contains it.
+ *
+ * @param value - Raw run metadata value
+ * @param expectedSlug - Slug expected from the containing directory
+ * @returns Validated run metadata; malformed optional failure values are omitted
+ * @throws Error if required metadata, status, slug, resume point, or another provided optional scalar field is invalid
+ */
 function parseRunMeta(value: unknown, expectedSlug: string): RunMeta {
   const raw = requireRecord(value, 'Run metadata');
   const runSlug = requireString(raw.runSlug, 'runSlug');
@@ -160,10 +203,23 @@ function parseRunMeta(value: unknown, expectedSlug: string): RunMeta {
   };
 }
 
+/**
+ * Determine whether an error represents a missing filesystem entry.
+ *
+ * @param error - Value to inspect
+ * @returns `true` when the value has the `ENOENT` error code; otherwise `false`
+ */
 function isMissing(error: unknown): boolean {
   return error !== null && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
 }
 
+/**
+ * Read directory entries while treating a missing directory as empty.
+ *
+ * @param path - Directory path to read
+ * @returns Directory entries, or an empty array when the directory is missing
+ * @throws Error if the directory cannot be read for a reason other than `ENOENT`
+ */
 async function readDirectory(path: string) {
   try {
     return await readdir(path, { withFileTypes: true });
@@ -173,6 +229,14 @@ async function readDirectory(path: string) {
   }
 }
 
+/**
+ * Resolve a path and reject symbolic links at or below it.
+ *
+ * @param path - Filesystem path to resolve
+ * @param label - Label used in validation errors
+ * @returns The resolved regular path
+ * @throws Error if the path is missing, is a symbolic link, or contains a symbolic link
+ */
 async function resolveRegularPath(path: string, label: string): Promise<string> {
   const expected = resolve(path);
   const stats = await lstat(expected);
@@ -182,6 +246,15 @@ async function resolveRegularPath(path: string, label: string): Promise<string> 
   return actual;
 }
 
+/**
+ * Resolve a symlink-free path contained within a run root.
+ *
+ * @param root - Run root used as the containment boundary
+ * @param candidate - Candidate child path
+ * @param label - Label used in validation errors
+ * @returns The resolved path contained in the run root
+ * @throws Error if the root or candidate is missing, outside the root, or contains a symbolic link
+ */
 async function resolveContainedDirectory(
   root: string,
   candidate: string,
@@ -206,6 +279,13 @@ interface RunsRootSnapshot {
   readonly fingerprint: { readonly dev: number; readonly ino: number };
 }
 
+/**
+ * Resolve and fingerprint the runs directory for a read operation.
+ *
+ * @param location - Run store filesystem locations and optional expected fingerprint
+ * @returns The validated runs directory and its device/inode fingerprint
+ * @throws Error if the runs directory is invalid or its fingerprint does not match the expected one
+ */
 async function captureRunsRoot(location: RunStoreLocation): Promise<RunsRootSnapshot> {
   const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
   const directory = await resolveContainedDirectory(stateDirectory, runsDirectory, 'Runs directory');
@@ -221,6 +301,13 @@ async function captureRunsRoot(location: RunStoreLocation): Promise<RunsRootSnap
   return { directory, fingerprint };
 }
 
+/**
+ * Verify that the runs directory has not changed since a snapshot was captured.
+ *
+ * @param location - Run store filesystem locations
+ * @param snapshot - Previously captured runs-root snapshot
+ * @throws Error if the runs directory path or device/inode identity changed
+ */
 async function verifyRunsRootSnapshot(
   location: RunStoreLocation,
   snapshot: RunsRootSnapshot,
@@ -235,6 +322,14 @@ async function verifyRunsRootSnapshot(
   }
 }
 
+/**
+ * Read a regular file without following symbolic links.
+ *
+ * @param path - File path to read
+ * @param label - Label used in validation errors
+ * @returns The file contents as UTF-8 text
+ * @throws Error if safe no-follow access is unavailable, the path is missing, contains a symbolic link, is not a regular file, or any filesystem operation required to open, inspect, read, or close it fails
+ */
 async function readRegularFile(path: string, label: string): Promise<string> {
   if (NOFOLLOW === undefined) throw new Error(`${label} cannot be opened safely on this platform`);
   const expected = resolve(path);
@@ -250,6 +345,15 @@ async function readRegularFile(path: string, label: string): Promise<string> {
   }
 }
 
+/**
+ * Load and validate metadata for one run.
+ *
+ * @param location - Run store filesystem locations
+ * @param snapshot - Runs-root snapshot to validate during the read
+ * @param slug - Run slug and expected metadata slug
+ * @returns Validated run metadata
+ * @throws Error if the run root or metadata file is invalid or changes during the read
+ */
 async function loadRunMeta(
   location: RunStoreLocation,
   snapshot: RunsRootSnapshot,
@@ -265,6 +369,12 @@ async function loadRunMeta(
 
 type RunStoreLocation = StatePaths;
 
+/**
+ * Extract the state and runs directories used by the run store.
+ *
+ * @param input - Run store location
+ * @returns The state and runs directory paths
+ */
 function resolveRunStoreLocation(input: RunStoreLocation): {
   readonly stateDirectory: string;
   readonly runsDirectory: string;
@@ -272,6 +382,12 @@ function resolveRunStoreLocation(input: RunStoreLocation): {
   return { stateDirectory: input.stateDirectory, runsDirectory: input.runsDirectory };
 }
 
+/**
+ * Create the compact run summary exposed by the collection reader.
+ *
+ * @param meta - Validated run metadata
+ * @returns Summary fields for the run
+ */
 function summarize(meta: RunMeta) {
   return {
     slug: meta.runSlug,
@@ -285,6 +401,13 @@ function summarize(meta: RunMeta) {
   };
 }
 
+/**
+ * Read and summarize the runs in the configured runs directory.
+ *
+ * @param location - Run store filesystem locations
+ * @returns Run summaries and warnings for entries that fail to load for non-`ENOENT` reasons. An initially missing runs directory without an expected fingerprint returns `{ runs: [], warnings: [] }`; an individual `ENOENT` entry is omitted without a warning
+ * @throws Error if the runs directory cannot be validated or read, its expected fingerprint does not match, or its identity changes during the read. An initial missing runs directory is tolerated only when no expected fingerprint is supplied
+ */
 export async function readRunCollection(location: RunStoreLocation) {
   let root: RunsRootSnapshot;
   try {
@@ -322,12 +445,29 @@ export async function readRunCollection(location: RunStoreLocation) {
   return { runs, warnings: [...warningsFromEntries, ...warnings] };
 }
 
+/**
+ * Validate a run slug used to construct a run path.
+ *
+ * @param slug - Run slug to validate
+ * @throws Error if the slug contains characters outside the supported format
+ */
 function assertRunSlug(slug: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) {
     throw new Error('Run slug is invalid');
   }
 }
 
+/**
+ * Resolve a run child path while enforcing run-root containment.
+ *
+ * @param stateDirectory - Project state directory
+ * @param runsDirectory - Absolute path to the runs directory
+ * @param slug - Run slug
+ * @param childDirectory - Child path relative to the state directory
+ * @param label - Label used in validation errors
+ * @returns The validated contained path, including when the target is missing; existing targets are not required to be directories
+ * @throws Error if the child path is absolute, outside the run, or an existing path cannot be validated as symlink-free
+ */
 async function resolveRunChildDirectory(
   stateDirectory: string,
   runsDirectory: string,
@@ -355,6 +495,16 @@ async function resolveRunChildDirectory(
   }
 }
 
+/**
+ * Recursively collect report paths below a validated report root.
+ *
+ * @param root - Report root directory
+ * @param directory - Directory currently being traversed
+ * @param include - Predicate selecting report paths
+ * @param limit - Maximum number of paths to collect
+ * @returns Selected Markdown report paths in depth-first order, with entries sorted by name within each directory
+ * @throws Error if a report directory path is invalid or cannot be read
+ */
 async function collectReportPaths(
   root: string,
   directory = root,
@@ -381,6 +531,13 @@ async function collectReportPaths(
 
 type WorkflowStackFrame = NonNullable<RunLogEvent['stack']>[number];
 
+/**
+ * Determine whether one workflow stack is a prefix of another stack.
+ *
+ * @param left - Candidate prefix stack
+ * @param right - Stack to compare against
+ * @returns `true` when every frame in `left` matches the corresponding frame in `right`
+ */
 function stackFramesMatch(
   left: readonly WorkflowStackFrame[],
   right: readonly WorkflowStackFrame[],
@@ -396,6 +553,14 @@ function stackFramesMatch(
   });
 }
 
+/**
+ * Build canonical report namespace segments from a workflow stack.
+ *
+ * @param stack - Workflow stack to inspect
+ * @param occurrences - Occurrences used to resolve omitted child frames
+ * @param childWorkflow - Optional child workflow filter
+ * @returns Canonical namespace segments, or `undefined` when the namespace is invalid or ambiguous
+ */
 function canonicalReportNamespaceSegments(
   stack: readonly WorkflowStackFrame[] | undefined,
   occurrences: readonly RunLogEvent[] = [],
@@ -440,10 +605,23 @@ function canonicalReportNamespaceSegments(
   return segments;
 }
 
+/**
+ * Convert a native relative path to the portable slash-separated form used in report names.
+ *
+ * @param root - Root path used to calculate the relative path
+ * @param path - Path to convert
+ * @returns The relative path with `/` separators
+ */
 function portableRelativePath(root: string, path: string): string {
   return relative(root, path).split(sep).join('/');
 }
 
+/**
+ * Parse the subworkflow namespace prefix from a report filename.
+ *
+ * @param filename - Report filename to inspect
+ * @returns Namespace segments, or `undefined` when the filename has no valid namespace
+ */
 function reportNamespaceSegments(filename: string): readonly string[] | undefined {
   const parts = filename.split('/');
   const segments: string[] = [];
@@ -462,6 +640,13 @@ function reportNamespaceSegments(filename: string): readonly string[] | undefine
   return segments;
 }
 
+/**
+ * Compare one report namespace segment with an expected segment, including legacy names.
+ *
+ * @param actual - Namespace segment from a report filename
+ * @param expected - Canonical namespace segment
+ * @returns `true` when the segments represent the same workflow-call site
+ */
 function namespaceSegmentsMatch(actual: string, expected: string): boolean {
   if (actual === expected) return true;
   const actualNamespace = parseWorkflowCallNamespaceSegment(actual);
@@ -475,11 +660,24 @@ function namespaceSegmentsMatch(actual: string, expected: string): boolean {
     && actualNamespace.workflowName === expectedNamespace.workflowName;
 }
 
+/**
+ * Determine whether two report namespace paths match segment by segment.
+ *
+ * @param actual - Namespace path from a report filename
+ * @param expected - Expected namespace path
+ * @returns `true` when both paths have the same length and matching segments
+ */
 function namespacePathsMatch(actual: readonly string[], expected: readonly string[]): boolean {
   return actual.length === expected.length
     && actual.every((segment, index) => namespaceSegmentsMatch(segment, expected[index]!));
 }
 
+/**
+ * Derive the workflow stack that owns reports for an occurrence.
+ *
+ * @param occurrence - Run-log occurrence whose owner stack should be derived
+ * @returns The owner stack, or `undefined` when the occurrence has no usable stack
+ */
 function reportOwnerStack(
   occurrence: RunLogEvent,
 ): readonly WorkflowStackFrame[] | undefined {
@@ -491,6 +689,13 @@ function reportOwnerStack(
     : stack;
 }
 
+/**
+ * Enrich workflow-call frames with invocation instances from a resume point.
+ *
+ * @param stack - Workflow stack to enrich
+ * @param resumePoint - Optional `WorkflowResumePoint` containing workflow-call invocation records
+ * @returns A copied stack with workflow-call instances taken from matching resume-point records; if an instance is unavailable or does not match the frame's `occurrence`, the frame's original `occurrence` is retained, while other frames are copied unchanged
+ */
 function participationStack(
   stack: readonly WorkflowStackFrame[],
   resumePoint: WorkflowResumePoint | undefined,
@@ -523,6 +728,14 @@ function participationStack(
   return enriched;
 }
 
+/**
+ * Resolve the report paths attributed to a selected occurrence.
+ *
+ * @param meta - Run metadata containing participation records
+ * @param selectedOccurrence - Occurrence whose reports are being selected
+ * @param occurrences - All occurrences used to reconstruct report namespaces
+ * @returns A set of exact report paths when a matching participation record is found. Returns `undefined` when the occurrence lacks the stack/step data needed to build its identity, identity construction fails, or no participation record exists. Returns an empty `Set` when a participation record exists but its owner stack or canonical namespace is unavailable, invalid, or ambiguous, or when no valid report names remain
+ */
 function selectedParticipationReportPaths(
   meta: RunMeta,
   selectedOccurrence: RunLogEvent,
@@ -591,6 +804,16 @@ function selectedParticipationReportPaths(
   return new Set(paths);
 }
 
+/**
+ * Determine whether a report filename belongs to the selected run occurrence.
+ *
+ * @param filename - Report filename to classify
+ * @param meta - Run metadata used for participation and resume-point rules
+ * @param selectedOccurrence - Occurrence that should own the report
+ * @param occurrences - All occurrences used to resolve report namespaces
+ * @param graphTruncated - Whether the occurrence graph is incomplete
+ * @returns `true` when the report is attributed to the selected occurrence; otherwise `false`
+ */
 function reportBelongsToOccurrence(
   filename: string,
   meta: RunMeta,
@@ -627,6 +850,16 @@ function reportBelongsToOccurrence(
   return !usesLegacyNamespace || (!graphTruncated && matchingPaths.length === 1);
 }
 
+/**
+ * Read one report file while validating the run-root snapshot around filesystem access.
+ *
+ * @param location - Run store location
+ * @param snapshot - Run-root snapshot to validate
+ * @param root - Validated report directory
+ * @param path - Report path under the report directory
+ * @returns The loaded report record, or an omitted record when the file exceeds the size limit
+ * @throws Error if the report path or run-root snapshot is invalid, or the file cannot be read
+ */
 async function readReport(
   location: RunStoreLocation,
   snapshot: RunsRootSnapshot,
