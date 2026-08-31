@@ -85,6 +85,12 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
 
+### Formal Specification Verification
+
+When formal specification mode is enabled for the current interactive session, run `/verify` to verify the current agreement in one shot. TAKT asks the assistant to output the current agreement as formal specifications, extracts the `quint` and `alloy` code blocks from that response, runs the verifiers, and sends the results back to the same session for the assistant to interpret.
+
+Verification starts only when the response contains a Quint or Alloy code block. For a Quint block, TAKT runs `parse`; `typecheck` runs only after parsing passes, and `run` runs only after typechecking passes, a main module with `init` and `step` actions is found, and the selected verification targets are in that module. With Java 17 or later, TAKT additionally runs `quint verify` only when those preceding Quint stages pass, and runs the Alloy Analyzer when an Alloy block is present, independently of Quint results. When Java is unavailable or older than 17, these Java-dependent stages are skipped; the applicable basic Quint stages still run, and the result explicitly reports that the Alloy specification was not verified. Set `TAKT_ALLOY_JAR` to use an explicit Alloy JAR path (relative paths are resolved from the project directory); otherwise TAKT downloads and caches the pinned artifact at `.takt/cache/alloy/6.2.0/alloy.jar` within the project.
+
 ### Execution Example
 
 ```
@@ -136,11 +142,11 @@ takt --task "Add authentication" --workflow dual
 
 ## Workflow Maker
 
-`takt make` starts the TTY-only Workflow Maker. Before the conversation, choose New workflow or a project, global, builtin, or repertoire workflow as the base. Existing workflows are reference inputs only; Workflow Maker never edits the selected source.
+`takt make` starts the TTY-only Workflow Maker. Before the conversation, choose New workflow or a project, global, built-in, or repertoire workflow as the base. Existing workflows are reference inputs only; Workflow Maker never edits the selected source.
 
 Use `/workflow` to replace the base during the conversation and `/go` to prepare a complete implementation instruction. The approval screen shows the planned `.takt/make/YYYYMMDD-HHmmss-SSS/` path and offers exactly Execute, Continue editing, and Cancel. No Maker artifact is written until Execute is selected.
 
-An approved run copies the statically reachable dependency closure into an isolated directory containing `workflows/`, `steps/`, `facet-pools/`, and `facets/`, rewrites references to the copies, and runs the builtin `workflow-maker` directly with that directory as its working directory. It does not create a task, worktree, commit, push, or pull request. Dynamic or unresolved dependencies fail before execution. Completed and failed runs remain at their displayed paths, including the doctor report when one was produced.
+An approved run copies the statically reachable dependency closure into an isolated directory containing `workflows/`, `steps/`, `facet-pools/`, and `facets/`, rewrites references to the copies, and runs the built-in `workflow-maker` directly with that directory as its working directory. It does not create a task, worktree, commit, push, or pull request. Dynamic or unresolved dependencies fail before execution. Completed and failed runs remain at their displayed paths, including the doctor report when one was produced.
 
 ```bash
 takt make

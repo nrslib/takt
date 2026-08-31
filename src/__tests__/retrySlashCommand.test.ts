@@ -11,6 +11,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+const {
+  mockResolveFormalSpecConfigurationWithoutPrompt,
+  mockRunFormalSpecVerification,
+  mockProviderSupportsFormalSpecVerification,
+} = vi.hoisted(() => ({
+  mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
+  mockRunFormalSpecVerification: vi.fn(),
+  mockProviderSupportsFormalSpecVerification: vi.fn(),
+}));
+
 import {
   setupRawStdin,
   restoreStdin,
@@ -46,6 +57,17 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 vi.mock('../shared/context.js', () => ({
   isQuietMode: vi.fn(() => false),
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveFormalSpecConfigurationWithoutPrompt: (...args: unknown[]) =>
+    mockResolveFormalSpecConfigurationWithoutPrompt(...args),
+}));
+
+vi.mock('../features/interactive/formalSpecVerification.js', () => ({
+  runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
+  providerSupportsFormalSpecVerification: (...args: unknown[]) => mockProviderSupportsFormalSpecVerification(...args),
 }));
 
 vi.mock('../infra/config/paths.js', async (importOriginal) => ({
@@ -147,6 +169,14 @@ describe('/retry slash command', () => {
   beforeEach(() => {
     tmpDir = createTmpDir();
     vi.clearAllMocks();
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+    mockRunFormalSpecVerification.mockResolvedValue({
+      verdict: 'passed',
+      verificationStarted: true,
+      quint: { status: 'passed' },
+      alloy: { status: 'passed' },
+    });
+    mockProviderSupportsFormalSpecVerification.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -226,6 +256,28 @@ describe('/retry slash command', () => {
     expect(result.task).toBe(orderContent);
     const options = vi.mocked(selectOption).mock.calls[0]?.[1] as Array<{ value: string }>;
     expect(options.map((option) => option.value)).toEqual(['execute', 'continue']);
+  });
+
+  it('should include canonical order content in the first formal specification generation prompt for direct retry', async () => {
+    const orderContent = '# Direct Order\n\nFix the failed direct run.';
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const capture = setupProvider([
+      '```quint\nmodule directResumeAgreement {}\n```',
+      'The direct resume specification passed.',
+    ]);
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: true });
+
+    const result = await runDirectRetryMode(tmpDir, buildRetryContext({
+      subject: {
+        kind: 'run',
+        value: '20260524-direct-failed',
+      },
+      previousOrderContent: orderContent,
+    }));
+
+    expect(result.action).toBe('cancel');
+    expect(capture.prompts[0]).toContain(orderContent);
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
   });
 
 });

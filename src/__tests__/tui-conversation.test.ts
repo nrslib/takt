@@ -15,11 +15,17 @@ const {
   mockInitializeSession,
   mockLoadTemplate,
   mockLoadAssistantInitContext,
+  mockRunFormalSpecVerification,
+  mockProviderSupportsFormalSpecVerification,
+  mockResolveFormalSpecConfigurationWithoutPrompt,
 } = vi.hoisted(() => ({
   mockCallAIWithRetry: vi.fn(),
   mockInitializeSession: vi.fn(),
   mockLoadTemplate: vi.fn(),
   mockLoadAssistantInitContext: vi.fn(),
+  mockRunFormalSpecVerification: vi.fn(),
+  mockProviderSupportsFormalSpecVerification: vi.fn(),
+  mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
 }));
 
 vi.mock('../features/interactive/aiCaller.js', () => ({
@@ -38,16 +44,28 @@ vi.mock('../features/interactive/assistantInitFiles.js', () => ({
   loadAssistantInitContext: (...args: unknown[]) => mockLoadAssistantInitContext(...args),
 }));
 
+vi.mock('../features/interactive/formalSpecVerification.js', () => ({
+  runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
+  providerSupportsFormalSpecVerification: (...args: unknown[]) => mockProviderSupportsFormalSpecVerification(...args),
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveFormalSpecConfigurationWithoutPrompt: (...args: unknown[]) => mockResolveFormalSpecConfigurationWithoutPrompt(...args),
+}));
+
 import {
   createAssistantConversationPlan,
   type ConversationPlan,
 } from '../features/interactive/conversationPlan.js';
+import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { createSessionImageAttachmentStore } from '../features/interactive/imageAttachments.js';
 import {
   createTuiConversation,
   type TuiConversation,
   type TuiConversationOptions,
 } from '../features/tui/tuiConversation.js';
+import { resolveSlashCompletions } from '../features/tui/slashCompletion.js';
 
 interface CallAIOptions {
   outputMode?: 'terminal' | 'silent';
@@ -114,10 +132,15 @@ function createConversation(overrides?: Partial<TuiConversationOptions>): TuiCon
   });
 }
 
-function send(conversation: TuiConversation, text: string, chunks: string[]) {
+function send(
+  conversation: TuiConversation,
+  text: string,
+  chunks: string[],
+  abortSignal: AbortSignal = new AbortController().signal,
+) {
   return conversation.submit({
     text,
-    abortSignal: new AbortController().signal,
+    abortSignal,
     onAssistantChunk: (chunk) => chunks.push(chunk),
   });
 }
@@ -138,6 +161,14 @@ beforeEach(() => {
   });
   mockLoadTemplate.mockReturnValue('rendered template');
   mockLoadAssistantInitContext.mockReturnValue(undefined);
+  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+  mockRunFormalSpecVerification.mockResolvedValue({
+    verdict: 'passed',
+    verificationStarted: true,
+    quint: { status: 'passed' },
+    alloy: { status: 'passed' },
+  });
+  mockProviderSupportsFormalSpecVerification.mockReturnValue(true);
   mockCallAIWithRetry.mockImplementation((...args: unknown[]) => {
     const options = args[5] as CallAIOptions;
     options.onStream?.({ type: 'text', data: { text: 'chunk-1' } });
@@ -593,6 +624,108 @@ describe('TUI local commands', () => {
     );
   });
 
+  it.each([
+    [false, true],
+    [true, false],
+  ] as const)('should update /verify completion availability on the same conversation after resume (%s to %s)', async (initialFormalSpec, resumedFormalSpec) => {
+    const plan = createPlan();
+    const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue({
+      systemPrompt: 'resumed system prompt',
+      formalSpec: resumedFormalSpec,
+    });
+    const conversation = createConversation({
+      plan: {
+        ...plan,
+        strategy: {
+          ...plan.strategy,
+          formalSpec: initialFormalSpec,
+          enabledCommands: [SlashCommand.Go, SlashCommand.Cancel, SlashCommand.Resume],
+          resolveResumedSessionConfiguration,
+        },
+      },
+      persistSession: false,
+    });
+
+    const completionCommands = () => resolveSlashCompletions(
+      '/ver',
+      conversation.lang,
+      conversation.commandAvailability,
+    ).map((completion) => completion.command);
+
+    expect(completionCommands()).toEqual(initialFormalSpec ? ['/verify'] : []);
+    expect(conversation.isCommandLine('/verify')).toBe(true);
+
+    await conversation.resumeSession('resumed-session');
+
+    expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
+    expect(completionCommands()).toEqual(resumedFormalSpec ? ['/verify'] : []);
+    expect(conversation.isCommandLine('/verify')).toBe(true);
+
+    if (resumedFormalSpec) {
+      const outcome = await send(conversation, '/verify', []);
+      expect(outcome.kind).toBe('assistant_response');
+      expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    } else {
+      expect(conversation.resolveLocalCommand('/verify')).toEqual({
+        kind: 'notice',
+        message: expect.any(String),
+      });
+      const outcome = await send(conversation, '/verify', []);
+      expect(outcome).toMatchObject({ kind: 'error', message: expect.any(String) });
+      expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+      expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
+    }
+  });
+
+  it('should reject /verify outside formal specification mode without sending it to the provider', async () => {
+    const conversation = createConversation();
+
+    expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
+    expect(resolveSlashCompletions('/ver', conversation.lang, conversation.commandAvailability)).toEqual([]);
+    expect(conversation.resolveLocalCommand('/verify')).toEqual({
+      kind: 'notice',
+      message: expect.any(String),
+    });
+
+    const outcome = await send(conversation, '/verify', []);
+
+    expect(outcome.kind).toBe('error');
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+  });
+
+  it('should route /verify through generation, verification, and interpretation in the TUI', async () => {
+    const plan = createPlan();
+    const conversation = createConversation({
+      plan: {
+        ...plan,
+        strategy: { ...plan.strategy, formalSpec: true },
+      },
+      persistSession: false,
+    });
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({
+        result: { content: '```quint\nmodule currentAgreement {}\n```', sessionId: 'session-1', success: true },
+        sessionId: 'session-1',
+      })
+      .mockResolvedValueOnce({
+        result: { content: 'The formal specification passed.', sessionId: 'session-1', success: true },
+        sessionId: 'session-1',
+      });
+    const chunks: string[] = [];
+    const abortController = new AbortController();
+
+    const outcome = await send(conversation, '/verify', chunks, abortController.signal);
+
+    expect(outcome).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining('passed') });
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      '```quint\nmodule currentAgreement {}\n```',
+      '/repo',
+      abortController.signal,
+    );
+    expect(chunks).toEqual([]);
+  });
+
   it('should report /replay and /retry as unavailable, matching the readline loop', () => {
     const conversation = createConversation();
 
@@ -604,11 +737,15 @@ describe('TUI local commands', () => {
       kind: 'notice',
       message: '/retry is only available in Retry mode from `takt list`.',
     });
-    expect(conversation.commandAvailability).toEqual({
+    expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: false,
       hasPreviousOrder: false,
       enableSettingsCommands: true,
     });
+    expect(conversation.commandAvailability.enabledCommands).toEqual(
+      expect.arrayContaining([SlashCommand.Go, SlashCommand.Cancel]),
+    );
+    expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
   });
 
   it('should treat an empty previous order as no order, like the readline loop', () => {
@@ -630,10 +767,11 @@ describe('TUI local commands', () => {
       kind: 'notice',
       message: 'No previous order (order.md) found. /retry is only available during retry.',
     });
-    expect(conversation.commandAvailability).toEqual({
+    expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: true,
       hasPreviousOrder: false,
     });
+    expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
   });
 
   it('should resubmit a previous order that has content', () => {
@@ -655,10 +793,11 @@ describe('TUI local commands', () => {
       .toEqual({ kind: 'execute', task: '# Previous order', origin: 'replay' });
     expect(conversation.resolveLocalCommand('/retry'))
       .toEqual({ kind: 'choose_action', task: '# Previous order', origin: 'retry' });
-    expect(conversation.commandAvailability).toEqual({
+    expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: true,
       hasPreviousOrder: true,
     });
+    expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
   });
 
   it('should build /go from the mode prompt builder and mark where the task came from', async () => {
@@ -768,6 +907,80 @@ describe('TUI local commands', () => {
     expect(conversation.resolveLocalCommand('/replay'))
       .toEqual({ kind: 'execute', task: 'previous order', origin: 'replay' });
     expect(conversation.tracksResultSource).toBe(true);
+  });
+
+  it('should add /verify to the actual task-action plan and execute it when formal specification mode is enabled', async () => {
+    const instructOptions = {
+      cwd: '/repo',
+      branchContext: 'branch context',
+      branchName: 'feature/verify',
+      taskName: 'verify command',
+      taskContent: 'add formal verification',
+      retryNote: '',
+      workflowContext: WORKFLOW_CONTEXT,
+    } as const;
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({ mode: true, comments: true });
+    const formalPlan = createInstructConversationPlan('/repo', instructOptions);
+    expect(formalPlan.strategy.enabledCommands).toContain(SlashCommand.Verify);
+    const formalConversation = createTuiConversation({
+      cwd: '/repo',
+      plan: formalPlan,
+      workflowContext: WORKFLOW_CONTEXT,
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+      persistSession: false,
+    });
+    expect(resolveSlashCompletions('/ver', 'en', formalConversation.commandAvailability))
+      .toEqual([{ command: '/verify', description: expect.any(String) }]);
+    expect(formalConversation.isCommandLine('/verify')).toBe(true);
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({
+        result: { content: '```quint\nmodule taskActionAgreement {}\n```', sessionId: undefined, success: true },
+        sessionId: undefined,
+      })
+      .mockResolvedValueOnce({
+        result: { content: 'The task-action specification passed.', sessionId: undefined, success: true },
+        sessionId: undefined,
+      });
+    const outcome = await send(formalConversation, '/verify', []);
+    expect(outcome).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining('passed') });
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      '```quint\nmodule taskActionAgreement {}\n```',
+      '/repo',
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('should keep /verify unavailable in a regular task-action plan', async () => {
+    const instructOptions = {
+      cwd: '/repo',
+      branchContext: 'branch context',
+      branchName: 'feature/verify',
+      taskName: 'verify command',
+      taskContent: 'add formal verification',
+      retryNote: '',
+      workflowContext: WORKFLOW_CONTEXT,
+    } as const;
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({ mode: false, comments: true });
+    const regularPlan = createInstructConversationPlan('/repo', instructOptions);
+    expect(regularPlan.strategy.enabledCommands).not.toContain(SlashCommand.Verify);
+    const regularConversation = createTuiConversation({
+      cwd: '/repo',
+      plan: regularPlan,
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+      persistSession: false,
+    });
+    expect(resolveSlashCompletions('/ver', 'en', regularConversation.commandAvailability)).toEqual([]);
+    expect(regularConversation.isCommandLine('/verify')).toBe(true);
+    mockCallAIWithRetry.mockClear();
+    mockRunFormalSpecVerification.mockClear();
+    expect(regularConversation.resolveLocalCommand('/verify')).toEqual({
+      kind: 'notice',
+      message: expect.any(String),
+    });
+    const unavailable = await send(regularConversation, '/verify', []);
+    expect(unavailable).toMatchObject({ kind: 'error', message: expect.any(String) });
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
   });
 
   it('should send a command the mode disabled to the provider as text', async () => {

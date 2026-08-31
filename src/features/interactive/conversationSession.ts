@@ -1,7 +1,11 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { matchSlashCommand } from './commandMatcher.js';
-import type { CommandAvailability } from './slashCommandRegistry.js';
+import { updatePersonaSession } from '../../infra/config/index.js';
+import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
+import {
+  resolveFormalSpecCommandAvailability,
+  type CommandAvailability,
+} from './slashCommandRegistry.js';
 import { prependInitialPromptContext } from './promptSections.js';
 import {
   buildConversationSummaryPrompt,
@@ -18,6 +22,16 @@ import type { PermissionMode } from '../../core/models/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
+import {
+  providerSupportsFormalSpecVerification,
+  runFormalSpecVerification,
+} from './formalSpecVerification.js';
+import {
+  buildFormalSpecGenerationPrompt,
+  buildFormalSpecGenerationSystemPrompt,
+  buildFormalSpecInterpretationPrompt,
+  buildFormalSpecInterpretationSystemPrompt,
+} from './formalSpecPrompts.js';
 
 export interface ConversationSessionStrategy {
   systemPrompt: string;
@@ -41,6 +55,8 @@ export interface ConversationSessionStrategy {
    * mode disabled is text here too — not a command it happens to understand.
    */
   enabledCommands?: readonly SlashCommand[];
+  /** Task/action content supplied to the first `/verify` generation call. */
+  formalSpecInitialContext?: string;
 }
 
 export interface ConversationSessionOptions {
@@ -204,8 +220,10 @@ function resolveWorkflowIdentifierFromUserInputs(history: ConversationMessage[],
 }
 
 export function createConversationSession(options: ConversationSessionOptions): InteractiveConversationSession {
-  let history: ConversationMessage[] = options.initialUserMessage
-    ? [{ role: 'user', content: options.initialUserMessage }]
+  const initialUserMessage = options.initialUserMessage;
+  const formalSpecInitialContext = initialUserMessage ?? options.strategy.formalSpecInitialContext;
+  let history: ConversationMessage[] = initialUserMessage
+    ? [{ role: 'user', content: initialUserMessage }]
     : [];
   let sessionId = options.ctx.sessionId;
   let formalSpec = options.formalSpec;
@@ -230,11 +248,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
    * What the front-end gates its own command list with. Sharing it is what keeps
    * a disabled command from being re-read as a command down here.
    */
-  const commandAvailability: CommandAvailability = {
-    ...(options.strategy.enabledCommands
+  let commandAvailability: CommandAvailability = resolveFormalSpecCommandAvailability(
+    options.strategy.enabledCommands
       ? { enabledCommands: options.strategy.enabledCommands }
-      : {}),
-  };
+      : {},
+    formalSpec,
+  );
   /**
    * Opens a turn and hands back the test for "is this still the turn in play".
    *
@@ -357,6 +376,169 @@ export function createConversationSession(options: ConversationSessionOptions): 
       kind: 'assistant_response',
       content: result.content,
       sessionId: result.sessionId,
+    };
+  }
+
+  async function handleVerifyCommand(
+    input: ConversationTurnInput,
+  ): Promise<ConversationSessionResult> {
+    if (!formalSpec) {
+      return {
+        kind: 'error',
+        message: getLabel('interactive.ui.verifyUnavailable', ctx.lang),
+      };
+    }
+    if (!providerSupportsFormalSpecVerification(ctx.providerType)) {
+      return {
+        kind: 'error',
+        message: getLabel('interactive.ui.verifyProviderUnavailable', ctx.lang),
+      };
+    }
+
+    const isCurrentTurn = beginTurn(input.abortSignal);
+    const interrupted = (): ConversationSessionResult => ({
+      kind: 'error',
+      code: 'provider_error',
+      message: 'Formal specification verification was interrupted.',
+    });
+    if (!isCurrentTurn()) {
+      return interrupted();
+    }
+
+    const initialFormalSpecContext = sessionId === undefined && formalSpecInitialContext
+      ? options.strategy.transformPrompt(formalSpecInitialContext, options.sourceContext)
+      : undefined;
+    const generationPrompt = resolveProviderPrompt(
+      buildFormalSpecGenerationPrompt(ctx.lang, initialFormalSpecContext),
+    );
+    let generationImageAttachments;
+    try {
+      generationImageAttachments = options.resolveImageAttachments?.(generationPrompt.prompt);
+    } catch (error) {
+      return { kind: 'error', code: 'provider_error', message: getErrorMessage(error) };
+    }
+
+    const generation = await callAIWithRetry(
+      generationPrompt.prompt,
+      buildFormalSpecGenerationSystemPrompt(ctx.lang),
+      [],
+      options.cwd,
+      { ...ctx, sessionId, disableSessionRetry: true },
+      {
+        outputMode: options.outputMode,
+        abortSignal: input.abortSignal,
+        onStream: input.onStream ?? options.onStream,
+        persistSession: false,
+        permissionMode: 'readonly',
+        internalAgentIsolation: 'strict-readonly',
+        imageAttachments: generationImageAttachments,
+        ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+      },
+    );
+    if (!isCurrentTurn()) {
+      return interrupted();
+    }
+
+    if (!generation.result) {
+      return generation.error === undefined
+        ? { kind: 'error', code: 'empty_ai_response', message: 'AI response was empty' }
+        : { kind: 'error', code: 'provider_error', message: generation.error };
+    }
+    if (!generation.result.success) {
+      return { kind: 'error', code: 'provider_error', message: generation.result.content };
+    }
+
+    let verification;
+    try {
+      verification = await runFormalSpecVerification(generation.result.content, options.cwd, input.abortSignal);
+    } catch (error) {
+      if (!isCurrentTurn()) {
+        return interrupted();
+      }
+      return { kind: 'error', message: getErrorMessage(error) };
+    }
+    if (!isCurrentTurn()) {
+      return interrupted();
+    }
+    const generationSessionId = generation.sessionId ?? generation.result.sessionId;
+    if (!verification.verificationStarted) {
+      consumeHandoffHistory(generationPrompt.handoffHistory);
+      shouldSendInitialPromptContext = false;
+      history = [...history, { role: 'assistant', content: generation.result.content }];
+      sessionId = generationSessionId;
+      if (options.persistSession !== false && generationSessionId !== undefined) {
+        updatePersonaSession(options.cwd, ctx.personaName, generationSessionId, ctx.providerType);
+      }
+      return {
+        kind: 'error',
+        message: verification.message ?? 'Formal specification verification failed.',
+      };
+    }
+
+    const interpretationPrompt = buildFormalSpecInterpretationPrompt(
+      verification,
+      generation.result.content,
+      ctx.lang,
+    );
+    let interpretationImageAttachments;
+    try {
+      interpretationImageAttachments = options.resolveImageAttachments?.(interpretationPrompt);
+    } catch (error) {
+      return { kind: 'error', code: 'provider_error', message: getErrorMessage(error) };
+    }
+
+    const interpretation = await callAIWithRetry(
+      interpretationPrompt,
+      buildFormalSpecInterpretationSystemPrompt(ctx.lang),
+      [],
+      options.cwd,
+      { ...ctx, sessionId: generationSessionId, disableSessionRetry: true },
+      {
+        outputMode: options.outputMode,
+        abortSignal: input.abortSignal,
+        onStream: input.onStream ?? options.onStream,
+        persistSession: false,
+        permissionMode: 'readonly',
+        internalAgentIsolation: 'strict-readonly',
+        imageAttachments: interpretationImageAttachments,
+        ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+      },
+    );
+    if (!isCurrentTurn()) {
+      return interrupted();
+    }
+
+    if (!interpretation.result) {
+      return interpretation.error === undefined
+        ? { kind: 'error', code: 'empty_ai_response', message: 'AI response was empty' }
+        : { kind: 'error', code: 'provider_error', message: interpretation.error };
+    }
+    if (!interpretation.result.success) {
+      return { kind: 'error', code: 'provider_error', message: interpretation.result.content };
+    }
+    if (!isCurrentTurn()) {
+      return interrupted();
+    }
+
+    const finalSessionId = interpretation.sessionId
+      ?? interpretation.result.sessionId
+      ?? generationSessionId;
+    consumeHandoffHistory(generationPrompt.handoffHistory);
+    shouldSendInitialPromptContext = false;
+    history = [
+      ...history,
+      { role: 'assistant', content: generation.result.content },
+      { role: 'assistant', content: interpretation.result.content },
+    ];
+    sessionId = finalSessionId;
+    if (options.persistSession !== false && finalSessionId !== undefined) {
+      updatePersonaSession(options.cwd, ctx.personaName, finalSessionId, ctx.providerType);
+    }
+
+    return {
+      kind: 'assistant_response',
+      content: `${generation.result.content}\n\n${interpretation.result.content}`,
+      ...(finalSessionId === undefined ? {} : { sessionId: finalSessionId }),
     };
   }
 
@@ -493,6 +675,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
       formalSpec = configuration.formalSpec;
       formalSpecComments = configuration.formalSpecComments ?? true;
       systemPrompt = configuration.systemPrompt;
+      commandAvailability = resolveFormalSpecCommandAvailability(
+        commandAvailability,
+        formalSpec,
+      );
     },
 
     recordRejectedDraft(task: string): void {
@@ -511,10 +697,18 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
       const match = matchSlashCommand(message, commandAvailability);
       if (!match) {
+        if (isDisabledVerifyCommand(message, commandAvailability)) {
+          return {
+            kind: 'error',
+            message: getLabel('interactive.ui.verifyUnavailable', ctx.lang),
+          };
+        }
         return handleRegularMessage(message, input);
       }
 
       switch (match.command) {
+        case SlashCommand.Verify:
+          return handleVerifyCommand(input);
         case SlashCommand.Go:
           return handleGoCommand(match.text, input);
         default:

@@ -3,7 +3,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
+import {
+  filterSlashCommands,
+  resolveFormalSpecCommandAvailability,
+} from '../features/interactive/slashCommandRegistry.js';
 import { INTERACTIVE_SETTING_COMMANDS, SlashCommand } from '../shared/constants.js';
 
 describe('filterSlashCommands', () => {
@@ -130,5 +133,40 @@ describe('filterSlashCommands', () => {
       enableSetupCommand: false,
       enabledCommands: [SlashCommand.Setup],
     }).map((entry) => entry.command)).toEqual([]);
+  });
+
+  it('should expose /verify only when formal specification mode is enabled', () => {
+    expect(filterSlashCommands('/ver', { formalSpec: true })).toEqual([
+      { command: '/verify', labelKey: 'interactive.commands.verify' },
+    ]);
+    expect(filterSlashCommands('/ver', { formalSpec: false })).toEqual([]);
+  });
+
+  it('should keep /verify hidden when an allowlist enables it but formal specification mode is disabled', () => {
+    expect(filterSlashCommands('/ver', {
+      formalSpec: false,
+      enabledCommands: [SlashCommand.Verify],
+    })).toEqual([]);
+  });
+
+  it.each([
+    [true, [SlashCommand.Go, SlashCommand.Cancel, SlashCommand.Verify]],
+    [false, [SlashCommand.Go, SlashCommand.Cancel]],
+  ] as const)('should align /verify with formal specification mode=%s in an explicit allowlist', (formalSpec, enabledCommands) => {
+    expect(resolveFormalSpecCommandAvailability({
+      enabledCommands: [SlashCommand.Go, SlashCommand.Cancel],
+    }, formalSpec)).toEqual({
+      ...(formalSpec ? { formalSpec: true } : {}),
+      enabledCommands,
+    });
+  });
+
+  it('should explicitly exclude /verify from the implicit command set when formal specification mode is disabled', () => {
+    const availability = resolveFormalSpecCommandAvailability({}, false);
+
+    expect(availability.enabledCommands).toEqual(
+      expect.arrayContaining([SlashCommand.Go, SlashCommand.Cancel]),
+    );
+    expect(availability.enabledCommands).not.toContain(SlashCommand.Verify);
   });
 });

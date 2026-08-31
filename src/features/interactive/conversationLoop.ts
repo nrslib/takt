@@ -10,6 +10,7 @@
 import chalk from 'chalk';
 import {
   takeSessionState,
+  updatePersonaSession,
 } from '../../infra/config/index.js';
 import {
   createLogger,
@@ -20,8 +21,11 @@ import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readPipedLine } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
-import { matchSlashCommand } from './commandMatcher.js';
-import type { CommandAvailability } from './slashCommandRegistry.js';
+import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
+import {
+  resolveFormalSpecCommandAvailability,
+  type CommandAvailability,
+} from './slashCommandRegistry.js';
 import { SlashCommand } from '../../shared/constants.js';
 import {
   type WorkflowContext,
@@ -42,6 +46,7 @@ import {
 import { resolvePreviousOrder } from './conversationPlan.js';
 import { prependInitialPromptContext } from './promptSections.js';
 import type { PermissionMode } from '../../core/models/index.js';
+import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
@@ -49,6 +54,16 @@ import {
   resolvePromptImageAttachments,
 } from './imageAttachments.js';
 import type { InteractiveImageAttachment } from './imageAttachments.js';
+import {
+  providerSupportsFormalSpecVerification,
+  runFormalSpecVerification,
+} from './formalSpecVerification.js';
+import {
+  buildFormalSpecGenerationPrompt,
+  buildFormalSpecGenerationSystemPrompt,
+  buildFormalSpecInterpretationPrompt,
+  buildFormalSpecInterpretationSystemPrompt,
+} from './formalSpecPrompts.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
 
@@ -84,12 +99,8 @@ function findLatestAssistantMessage(history: ConversationMessage[]): Conversatio
 }
 
 export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): void {
-  if (hasInteractiveTerminal()) {
-    return;
-  }
-
   const sessionState = takeSessionState(cwd);
-  if (!sessionState) {
+  if (hasInteractiveTerminal() || !sessionState) {
     return;
   }
 
@@ -170,6 +181,8 @@ export interface ConversationStrategy {
   enabledCommands?: readonly SlashCommand[];
   /** Context prepended to the first regular prompt in this conversation. */
   initialPromptContext?: string;
+  /** Task/action content supplied to the first `/verify` generation call. */
+  formalSpecInitialContext?: string;
   /** Context prepended to summary prompts. */
   summaryPromptContext?: string;
   /** Include the command source on returned results for task re-execution flows. */
@@ -189,8 +202,10 @@ export async function runConversationLoop(
   workflowContext: WorkflowContext | undefined,
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
-  const history: ConversationMessage[] = initialInput?.userMessage
-    ? [{ role: 'user', content: initialInput.userMessage }]
+  const initialUserMessage = initialInput?.userMessage;
+  const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
+  const history: ConversationMessage[] = initialUserMessage
+    ? [{ role: 'user', content: initialUserMessage }]
     : [];
   const sourceContext = initialInput?.sourceContext;
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
@@ -216,26 +231,69 @@ export async function runConversationLoop(
     }
     blankLine();
 
-    /** Helper: call AI with current session and update session state */
-    async function doCallAI(prompt: string, sysPrompt: string, tools: string[]): Promise<CallAIResult | null> {
+    interface ConversationAICall {
+      readonly result: CallAIResult | null;
+      readonly sessionId: string | undefined;
+    }
+
+    /** Call AI and optionally commit its provider session to this conversation. */
+    async function callConversationAI(
+      prompt: string,
+      sysPrompt: string,
+      tools: string[],
+      callOptions: {
+        permissionMode?: PermissionMode;
+        internalAgentIsolation?: InternalAgentIsolation;
+        disableSessionRetry?: boolean;
+        persistSession?: boolean;
+        commitSession?: boolean;
+      } = {},
+      callSessionId = sessionId,
+    ): Promise<ConversationAICall> {
       let imageAttachments: ReturnType<typeof resolvePromptImageAttachments>;
       try {
         imageAttachments = resolvePromptImageAttachments(prompt, attachmentStore.listAttachments());
       } catch (caught) {
         error(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
         blankLine();
-        return null;
+        return { result: null, sessionId: undefined };
       }
       const { result, sessionId: newSessionId } = await callAIWithRetry(
         prompt,
         sysPrompt,
         tools,
         cwd,
-        { ...ctx, sessionId },
-        { imageAttachments, permissionMode: strategy.permissionMode },
+        {
+          ...ctx,
+          sessionId: callSessionId,
+          ...(callOptions.disableSessionRetry === undefined
+            ? {}
+            : { disableSessionRetry: callOptions.disableSessionRetry }),
+        },
+        {
+          imageAttachments,
+          permissionMode: callOptions.permissionMode ?? strategy.permissionMode,
+          ...(callOptions.internalAgentIsolation === undefined
+            ? {}
+            : { internalAgentIsolation: callOptions.internalAgentIsolation }),
+          ...(callOptions.persistSession === undefined ? {} : { persistSession: callOptions.persistSession }),
+        },
       );
-      sessionId = newSessionId;
-      return result;
+      if (callOptions.commitSession !== false) {
+        sessionId = newSessionId;
+      }
+      return { result, sessionId: newSessionId };
+    }
+
+    /** Helper for ordinary messages, whose returned session is committed immediately. */
+    async function doCallAI(
+      prompt: string,
+      sysPrompt: string,
+      tools: string[],
+      callOptions: { permissionMode?: PermissionMode } = {},
+    ): Promise<CallAIResult | null> {
+      const call = await callConversationAI(prompt, sysPrompt, tools, callOptions);
+      return call.result;
     }
 
     if (sourceContext) {
@@ -278,11 +336,114 @@ export async function runConversationLoop(
       );
     }
 
-    const commandAvailability: CommandAvailability = {
+    async function handleVerifyCommand(): Promise<void> {
+      if (!activePromptConfiguration.formalSpec) {
+        info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
+        return;
+      }
+      if (!providerSupportsFormalSpecVerification(ctx.providerType)) {
+        info(getLabel('interactive.ui.verifyProviderUnavailable', ctx.lang));
+        return;
+      }
+
+      process.stdin.pause();
+      info(getLabel('interactive.ui.thinking', ctx.lang));
+      const initialFormalSpecContext = sessionId === undefined && formalSpecInitialContext
+        ? strategy.transformPrompt(formalSpecInitialContext, sourceContext)
+        : undefined;
+      const generationCall = await callConversationAI(
+        buildFormalSpecGenerationPrompt(ctx.lang, initialFormalSpecContext),
+        buildFormalSpecGenerationSystemPrompt(ctx.lang),
+        [],
+        {
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          disableSessionRetry: true,
+          persistSession: false,
+          commitSession: false,
+        },
+      );
+      const generated = generationCall.result;
+      if (!generated) {
+        return;
+      }
+      if (!generated.success) {
+        error(generated.content);
+        blankLine();
+        return;
+      }
+
+      let verification;
+      const verificationAbortController = new AbortController();
+      const abortVerification = (): void => {
+        verificationAbortController.abort();
+      };
+      process.on('SIGINT', abortVerification);
+      try {
+        verification = await runFormalSpecVerification(
+          generated.content,
+          cwd,
+          verificationAbortController.signal,
+        );
+      } catch (caught) {
+        info(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
+        blankLine();
+        return;
+      } finally {
+        process.removeListener('SIGINT', abortVerification);
+      }
+      if (!verification.verificationStarted) {
+        sessionId = generationCall.sessionId;
+        if (sessionId !== undefined) {
+          updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+        }
+        shouldSendInitialPromptContext = false;
+        history.push({ role: 'assistant', content: generated.content });
+        info(verification.message ?? 'Formal specification verification failed.');
+        blankLine();
+        return;
+      }
+
+      const interpretationCall = await callConversationAI(
+        buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang),
+        buildFormalSpecInterpretationSystemPrompt(ctx.lang),
+        [],
+        {
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          disableSessionRetry: true,
+          persistSession: false,
+          commitSession: false,
+        },
+        generationCall.sessionId,
+      );
+      const interpreted = interpretationCall.result;
+      if (!interpreted) {
+        return;
+      }
+      if (!interpreted.success) {
+        error(interpreted.content);
+        blankLine();
+        return;
+      }
+
+      sessionId = interpretationCall.sessionId ?? generationCall.sessionId;
+      if (sessionId !== undefined) {
+        updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+      }
+      shouldSendInitialPromptContext = false;
+      history.push(
+        { role: 'assistant', content: generated.content },
+        { role: 'assistant', content: interpreted.content },
+      );
+      blankLine();
+    }
+
+    let commandAvailability: CommandAvailability = resolveFormalSpecCommandAvailability({
       enableRetryCommand: strategy.enableRetryCommand,
       hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
       enabledCommands: strategy.enabledCommands,
-    };
+    }, activePromptConfiguration.formalSpec);
 
     while (true) {
       const input = await readPipedLine(chalk.green('> '));
@@ -303,6 +464,10 @@ export async function runConversationLoop(
 
       // No slash command detected, treat as regular message
       if (!match) {
+        if (isDisabledVerifyCommand(trimmed, commandAvailability)) {
+          info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
+          continue;
+        }
         history.push({ role: 'user', content: trimmed });
         log.debug('Sending to AI', {
           messageCount: history.length,
@@ -348,6 +513,11 @@ export async function runConversationLoop(
             task: assistantMessage.content,
             ...(strategy.trackResultSource ? { source: 'accept' as const } : {}),
           }, attachmentStore);
+        }
+
+        case SlashCommand.Verify: {
+          await handleVerifyCommand();
+          continue;
         }
 
         case SlashCommand.Retry: {
@@ -473,6 +643,10 @@ export async function runConversationLoop(
             sessionId = selectedId;
             if (strategy.resolveResumedSessionConfiguration) {
               activePromptConfiguration = await strategy.resolveResumedSessionConfiguration();
+              commandAvailability = resolveFormalSpecCommandAvailability(
+                commandAvailability,
+                activePromptConfiguration.formalSpec,
+              );
             }
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }

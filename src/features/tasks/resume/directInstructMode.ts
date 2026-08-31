@@ -94,6 +94,7 @@ export async function runDirectInstructMode(
   displayAndClearSessionState(options.cwd, ctx.lang);
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
+  const canonicalTaskContent = (options.previousOrderContent ?? options.taskContent).trim();
   const systemPrompt = prependSourceContextGuardToSystemPrompt(
     ctx.lang,
     loadTemplate(
@@ -114,6 +115,7 @@ export async function runDirectInstructMode(
     introMessage: `${ui.intro}${replayHint}`,
     selectAction: createDirectSelectAction(ui),
     previousOrderContent: options.previousOrderContent ?? undefined,
+    formalSpecInitialContext: canonicalTaskContent,
   };
 
   const result = hasInteractiveTerminal()

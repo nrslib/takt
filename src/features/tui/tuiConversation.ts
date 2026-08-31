@@ -9,8 +9,14 @@
 
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { matchSlashCommand } from '../interactive/commandMatcher.js';
-import type { CommandAvailability } from '../interactive/slashCommandRegistry.js';
+import {
+  isDisabledVerifyCommand,
+  matchSlashCommand,
+} from '../interactive/commandMatcher.js';
+import {
+  resolveFormalSpecCommandAvailability,
+  type CommandAvailability,
+} from '../interactive/slashCommandRegistry.js';
 import { resolvePreviousOrder, type ConversationPlan } from '../interactive/conversationPlan.js';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import {
@@ -101,6 +107,19 @@ function describeSessionError(
     : getLabel(SESSION_ERROR_LABEL_KEYS[code], lang);
 }
 
+function createCommandAvailability(
+  strategy: ConversationPlan['strategy'],
+  enableSettingsCommands: boolean,
+  formalSpec: boolean,
+): CommandAvailability {
+  return resolveFormalSpecCommandAvailability({
+    enableRetryCommand: strategy.enableRetryCommand === true,
+    hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
+    ...(enableSettingsCommands ? { enableSettingsCommands: true } : {}),
+    ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
+  }, formalSpec);
+}
+
 export interface TuiSubmitInput {
   text: string;
   abortSignal: AbortSignal;
@@ -189,7 +208,6 @@ export interface TuiConversation {
 export function createTuiConversation(options: TuiConversationOptions): TuiConversation {
   const { ctx, strategy } = options.plan;
 
-
   const session = createConversationSession({
     cwd: options.cwd,
     outputMode: 'silent',
@@ -215,25 +233,28 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
   // Exactly what the readline loop builds (conversationLoop.ts): the retry mode
   // is the only one that enables `/retry`, `/replay` needs an order to resubmit,
   // and a mode with a guarded execution path names the commands it allows at all.
-  const commandAvailability: CommandAvailability = {
-    enableRetryCommand: strategy.enableRetryCommand === true,
-    hasPreviousOrder: previousOrder !== undefined,
-    ...(options.enableSettingsCommands === true ? { enableSettingsCommands: true } : {}),
-    ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
-  };
+  let commandAvailability = createCommandAvailability(
+    strategy,
+    options.enableSettingsCommands === true,
+    strategy.formalSpec === true,
+  );
 
   return {
     lang: ctx.lang,
-    commandAvailability,
+    get commandAvailability(): CommandAvailability {
+      return commandAvailability;
+    },
     // Only the modes that rewrite the task's `order.md` put the command path on
     // the result, exactly as in the readline loop.
     tracksResultSource: strategy.trackResultSource === true,
 
     isCommandLine(text: string): boolean {
       // The registry decides, not the leading character: `/go` is a command,
-      // `/usr/bin/env is missing` is a sentence. A mode that disables a command
-      // has no command there either, so the line stays text.
-      return matchSlashCommand(text.trim(), commandAvailability) !== null;
+      // `/usr/bin/env is missing` is a sentence. A disabled `/verify` remains a
+      // command line so it can produce the mode's unavailable notice locally.
+      const trimmed = text.trim();
+      return matchSlashCommand(trimmed, commandAvailability) !== null
+        || isDisabledVerifyCommand(trimmed, commandAvailability);
     },
 
     recordRejectedDraft(task: string): void {
@@ -249,8 +270,15 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     },
 
     resolveLocalCommand(text: string): TuiLocalCommand | null {
-      const match = matchSlashCommand(text.trim(), commandAvailability);
+      const trimmed = text.trim();
+      const match = matchSlashCommand(trimmed, commandAvailability);
       if (!match) {
+        if (isDisabledVerifyCommand(trimmed, commandAvailability)) {
+          return {
+            kind: 'notice',
+            message: getLabel('interactive.ui.verifyUnavailable', ctx.lang),
+          };
+        }
         return null;
       }
       switch (match.command) {
@@ -300,6 +328,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
             };
         case SlashCommand.Go:
         case SlashCommand.Setup:
+        case SlashCommand.Verify:
           return null;
       }
     },
@@ -381,7 +410,13 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     async resumeSession(sessionId: string): Promise<string | undefined> {
       session.setSessionId(sessionId);
       if (strategy.resolveResumedSessionConfiguration) {
-        session.setPromptConfiguration(await strategy.resolveResumedSessionConfiguration());
+        const configuration = await strategy.resolveResumedSessionConfiguration();
+        session.setPromptConfiguration(configuration);
+        commandAvailability = createCommandAvailability(
+          strategy,
+          options.enableSettingsCommands === true,
+          configuration.formalSpec === true,
+        );
       }
       return undefined;
     },

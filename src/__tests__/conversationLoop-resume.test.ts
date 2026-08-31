@@ -255,6 +255,7 @@ describe('callAIWithRetry', () => {
     await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx);
 
     expect(capture.providerOptions).toEqual([providerOptions, providerOptions]);
+    expect(capture.internalAgentIsolations).toEqual([undefined, undefined]);
     expect(capture.sessionIds).toEqual(['stale-session', undefined]);
   });
 
@@ -277,6 +278,31 @@ describe('callAIWithRetry', () => {
     });
 
     expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
+    expect(capture.sessionIds).toEqual(['stale-session', undefined]);
+  });
+
+  it('passes strict tool-free isolation to the initial call and stale-session retry', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'stale', status: 'error' },
+      { content: 'ok', sessionId: 'fresh-session' },
+    ]);
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'claude',
+      model: 'opus',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: 'stale-session',
+    };
+
+    await callAIWithRetry('verify', 'formal system prompt', [], '/repo', ctx, {
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+    });
+
+    expect(capture.allowedTools).toEqual([[], []]);
+    expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
+    expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
     expect(capture.sessionIds).toEqual(['stale-session', undefined]);
   });
 

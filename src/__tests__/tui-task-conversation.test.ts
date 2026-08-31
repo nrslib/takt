@@ -196,7 +196,7 @@ describe('retry and replay availability', () => {
     expect(enabled.command)
       .toEqual({ kind: 'choose_action', task: 'previous order', origin: 'retry' });
     expect(enabled.conversation.commandAvailability)
-      .toEqual({ enableRetryCommand: true, hasPreviousOrder: true });
+      .toMatchObject({ enableRetryCommand: true, hasPreviousOrder: true });
 
     const withoutOrder = await resolveCommand({ enableRetryCommand: true }, SlashCommand.Retry);
     expect(withoutOrder).toMatchObject({ command: { kind: 'notice' } });
