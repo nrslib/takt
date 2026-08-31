@@ -135,7 +135,7 @@ function buildAlloyFixture(directory: string): AlloyFixture {
     '      label = label.substring(0, scopeIndex).trim();',
     '    }',
     '    String displayType = type.substring(0, 1).toUpperCase(Locale.ROOT) + type.substring(1);',
-    '    System.out.println(number + " . " + displayType + " " + label + " for 1");',
+    '    System.out.printf(Locale.ROOT, "%-2d. %s%n", number, displayType + " " + label + " for 1");',
     '  }',
     '',
     '  private static int commandNumber(String[] args) {',
@@ -593,6 +593,61 @@ describe('bundled Quint CLI verification boundary', () => {
       expect(invocations.filter((args) => args.includes('commands'))).toHaveLength(1);
       expect(readdirSync(join(directory, '.takt', 'runs')).filter((name) => name.startsWith('verify-'))).toEqual([]);
       expect(existsSync(join(directory, 'spec.als'))).toBe(false);
+    } finally {
+      restoreEnvironmentVariable('TAKT_ALLOY_JAR', originalJar);
+      restoreEnvironmentVariable('TAKT_ALLOY_FIXTURE_LOG', originalLog);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('enumerates and executes checks at two-digit Alloy command indexes', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-alloy-two-digit-'));
+    const alloyFixture = buildAlloyFixture(directory);
+    const originalJar = process.env.TAKT_ALLOY_JAR;
+    const originalLog = process.env.TAKT_ALLOY_FIXTURE_LOG;
+    process.env.TAKT_ALLOY_JAR = alloyFixture.jarPath;
+    process.env.TAKT_ALLOY_FIXTURE_LOG = alloyFixture.logPath;
+
+    try {
+      const result = await runFormalSpecVerification([
+        '```alloy',
+        'sig A {}',
+        'check Check0 for 3',
+        'run Run1 for 3',
+        'check Check2 for 3',
+        'run Run3 for 3',
+        'check Check4 for 3',
+        'run Run5 for 3',
+        'check Check6 for 3',
+        'run Run7 for 3',
+        'check Check8 for 3',
+        'run Run9 for 3',
+        'check Check10 for 3',
+        '```',
+      ].join('\n'), directory);
+
+      expect(result.verdict).toBe('passed');
+      expect(result.alloy).toMatchObject({
+        status: 'passed',
+        checks: [0, 2, 4, 6, 8, 10],
+        commands: [
+          { number: 0, type: 'check', label: 'Check0' },
+          { number: 1, type: 'run', label: 'Run1' },
+          { number: 2, type: 'check', label: 'Check2' },
+          { number: 3, type: 'run', label: 'Run3' },
+          { number: 4, type: 'check', label: 'Check4' },
+          { number: 5, type: 'run', label: 'Run5' },
+          { number: 6, type: 'check', label: 'Check6' },
+          { number: 7, type: 'run', label: 'Run7' },
+          { number: 8, type: 'check', label: 'Check8' },
+          { number: 9, type: 'run', label: 'Run9' },
+          { number: 10, type: 'check', label: 'Check10' },
+        ],
+      });
+
+      const invocations = readAlloyFixtureInvocations(alloyFixture.logPath);
+      expect(invocations.filter((args) => args.includes('exec'))
+        .map((args) => argumentAfter(args, '--command'))).toEqual(['0', '2', '4', '6', '8', '10']);
     } finally {
       restoreEnvironmentVariable('TAKT_ALLOY_JAR', originalJar);
       restoreEnvironmentVariable('TAKT_ALLOY_FIXTURE_LOG', originalLog);

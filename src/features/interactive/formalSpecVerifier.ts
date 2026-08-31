@@ -834,7 +834,7 @@ function resultForUnexpectedError(
 function parseAlloyCommands(output: string): AlloyParsedCommand[] {
   const commands: AlloyParsedCommand[] = [];
   for (const line of output.split(/\r\n?|\n/u)) {
-    const match = /^\s*(\d+)\s+\.\s+(Check|Run)\s+(.+?)\s*$/iu.exec(line);
+    const match = /^\s*(\d+)\s*\.\s+(Check|Run)\s+(.+?)\s*$/iu.exec(line);
     if (!match) {
       continue;
     }
