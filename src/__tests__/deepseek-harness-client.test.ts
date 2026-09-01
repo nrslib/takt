@@ -46,17 +46,25 @@ function findPython(): string | undefined {
   return undefined;
 }
 
-const supportedRuntime = (
+const supportedPlatform = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
   || (process.platform === 'darwin' && process.arch === 'arm64')
-) && findPython() !== undefined;
+);
+const supportedRuntime = supportedPlatform && findPython() !== undefined;
 
-it.skipIf(supportedRuntime)('DeepSeek Harness fails fast with an actionable unsupported-platform error', async () => {
+it.skipIf(supportedPlatform)('DeepSeek Harness fails fast with an actionable unsupported-platform error', async () => {
   const response = await callDeepSeekHarness('worker', 'hello', { cwd: process.cwd() });
 
   expect(response.status).toBe('error');
   expect(response.content).toContain('Linux x64/arm64 or macOS arm64');
   expect(response.content).toContain('no provider fallback is available');
+});
+
+it.skipIf(!supportedPlatform || supportedRuntime)('DeepSeek Harness fails fast with an actionable missing-Python error on a supported platform', async () => {
+  const response = await callDeepSeekHarness('worker', 'hello', { cwd: process.cwd() });
+
+  expect(response.status).toBe('error');
+  expect(response.content).toContain('Python 3.10');
 });
 
 describe.skipIf(!supportedRuntime)('DeepSeek Harness bridge lifecycle', () => {
