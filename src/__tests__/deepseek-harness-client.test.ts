@@ -15,8 +15,7 @@ function isSupportedPythonVersion(version: readonly [number, number]): boolean {
     || (version[0] === minimum[0] && version[1] >= minimum[1]);
 }
 
-function findPython(): string | undefined {
-  const candidates = process.platform === 'win32' ? ['python'] : ['python3', 'python'];
+function findPython(candidates: readonly string[]): string | undefined {
   for (const candidate of candidates) {
     try {
       const details = execFileSync(candidate, [
@@ -46,11 +45,17 @@ function findPython(): string | undefined {
   return undefined;
 }
 
+function findLifecyclePython(): string | undefined {
+  const candidates = process.platform === 'win32' ? ['python'] : ['python3', 'python'];
+  return findPython(candidates);
+}
+
 const supportedPlatform = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
   || (process.platform === 'darwin' && process.arch === 'arm64')
 );
-const supportedRuntime = supportedPlatform && findPython() !== undefined;
+const defaultRuntimeSupported = supportedPlatform && findPython(['python3']) !== undefined;
+const lifecycleRuntimeSupported = supportedPlatform && findLifecyclePython() !== undefined;
 
 it.skipIf(supportedPlatform)('DeepSeek Harness fails fast with an actionable unsupported-platform error', async () => {
   const response = await callDeepSeekHarness('worker', 'hello', { cwd: process.cwd() });
@@ -60,19 +65,19 @@ it.skipIf(supportedPlatform)('DeepSeek Harness fails fast with an actionable uns
   expect(response.content).toContain('no provider fallback is available');
 });
 
-it.skipIf(!supportedPlatform || supportedRuntime)('DeepSeek Harness fails fast with an actionable missing-Python error on a supported platform', async () => {
+it.skipIf(!supportedPlatform || defaultRuntimeSupported)('DeepSeek Harness fails fast with an actionable missing-Python error on a supported platform', async () => {
   const response = await callDeepSeekHarness('worker', 'hello', { cwd: process.cwd() });
 
   expect(response.status).toBe('error');
   expect(response.content).toContain('Python 3.10');
 });
 
-describe.skipIf(!supportedRuntime)('DeepSeek Harness bridge lifecycle', () => {
+describe.skipIf(!lifecycleRuntimeSupported)('DeepSeek Harness bridge lifecycle', () => {
   let root: string;
   let pythonPath: string;
 
   beforeEach(async () => {
-    const python = findPython();
+    const python = findLifecyclePython();
     if (python === undefined) {
       throw new Error('Python 3.10+ was detected during suite selection but is unavailable');
     }
