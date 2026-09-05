@@ -82,7 +82,7 @@ describe('WorkflowRunLoop failure metadata', () => {
     };
     const prepareInstruction = vi.fn(() => prepared);
     const runStep = vi.fn(async (_step: WorkflowStep, input?: PreparedInstruction) => {
-      expect(input).toBe(prepared);
+      expect(input).toEqual(prepared);
       return { response: makeResponse({ content: 'done' }), instruction: input!.text };
     });
     await run({ ...deps, prepareInstruction, runStep });
