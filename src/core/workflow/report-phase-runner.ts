@@ -166,6 +166,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
+      injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();
     let firstAttemptOptions: RunAgentOptions;
@@ -238,6 +239,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
+      injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();
     const retryInstruction = firstAttempt.failureReason === 'invalid_output'

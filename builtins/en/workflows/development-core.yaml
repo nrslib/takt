@@ -89,7 +89,7 @@ subworkflow:
     implementation_instruction:
       type: facet_ref
       facet_kind: instruction
-      default: implement
+      default: development-implement-with-reports
     scope_report_format:
       type: facet_ref
       facet_kind: report_format

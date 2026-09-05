@@ -1,5 +1,5 @@
 Implement according to the plan within the causally related scope while preserving existing contracts outside the requested change scope.
-Refer only to files within the Report Directory shown in the Workflow Context. Do not search or reference other report directories.
+Refer to files within the Report Directory shown in the Workflow Context and upstream artifacts explicitly supplied in the input. Do not search or reference other report directories.
 Use reports in the Report Directory as the primary source of truth. If additional context is needed, you may consult Previous Response and conversation history as secondary sources (Previous Response may be unavailable). If information conflicts, prioritize reports in the Report Directory and actual file contents.
 
 {{include:instructions/implement-common}}

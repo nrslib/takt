@@ -29,6 +29,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { runReportPhase } from '../core/workflow/phase-runner.js';
 import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
@@ -157,6 +158,63 @@ describe('WorkflowEngine workflow_call integration', () => {
     expect(state.status).toBe('completed');
     expect(workflowCallResolver).not.toHaveBeenCalled();
     expect(onEffectiveAutoRoutingReached).not.toHaveBeenCalled();
+  });
+
+  it('hands the same parent report body to child execution and every report after the source is removed', async () => {
+    writeWorkflow(tmpDir, 'child.yaml', `name: child
+subworkflow:
+  callable: true
+initial_step: implement
+max_steps: 3
+steps:
+  - name: implement
+    persona: coder
+    instruction: "Use {report:requirements.md}"
+    output_contracts:
+      report:
+        - name: result.md
+          format: "Report the implementation result."
+        - name: evidence.md
+          format: "Report the supporting evidence."
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent', initial_step: 'prepare', max_steps: 4,
+      steps: [
+        { name: 'prepare', persona: 'planner', instruction: 'Prepare requirements',
+          output_contracts: { report: [{ name: 'requirements.md', format: 'Report the requirements.' }] },
+          rules: [{ condition: 'done', next: 'delegate' }] },
+        { name: 'delegate', kind: 'workflow_call', call: 'child',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] },
+      ],
+    });
+    const actual = await vi.importActual<typeof import('../core/workflow/phase-runner.js')>('../core/workflow/phase-runner.js');
+    let parentReportPath = '';
+    vi.mocked(runReportPhase).mockImplementation(async (step, iteration, context) => {
+      if (step.name === 'prepare') parentReportPath = join(context.reportDir, 'requirements.md');
+      return actual.runReportPhase(step, iteration, context);
+    });
+    const upstream = 'REQ-X: retain every planned item';
+    let callIndex = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: prompt });
+      const index = callIndex++;
+      if (index === 2) {
+        expect(prompt).toContain(upstream);
+        rmSync(parentReportPath);
+      }
+      return makeResponse({ persona: 'worker', content: index === 1 ? upstream : 'Completed work' });
+    });
+    mockRuleEvaluationSequence(Array.from({ length: 3 }, () => ({ index: 0, method: 'phase3_tag' as const })));
+    engine = new WorkflowEngine(config, tmpDir, 'Implement requirement', createWorkflowCallOptions(tmpDir));
+    expect((await engine.run()).status).toBe('completed');
+    expect(callIndex).toBe(5);
+    for (const call of vi.mocked(runAgent).mock.calls.slice(3)) {
+      const records = call[1].split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+      expect(records).toEqual([{ reference: 'requirements.md', scope: 'parent-run-readonly', content: upstream }]);
+    }
   });
 
   it('workflow-wide rules are inherited additively by a workflow_call child', async () => {

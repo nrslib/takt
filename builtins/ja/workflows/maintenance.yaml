@@ -41,7 +41,7 @@ steps:
         - architecture
         - implementation-semantics
         - existing-system
-      implementation_instruction: implement-maintenance
+      implementation_instruction: development-maintenance-with-reports
       scope_report_format: maintenance-scope
       fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
       fix_plan_report_format: scenario-based-fix-plan
