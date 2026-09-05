@@ -206,6 +206,7 @@ describe('runReportPhase retry with new session', () => {
     const step = createStep('02-coder.md');
     const ctx = createContext(reportDir, 'Implemented feature X');
     ctx.task = 'Preserve this original task marker in the report context';
+    ctx.injectedReports = [{ reference: 'requirements.md', scope: 'parent-run-readonly', content: 'REQ-A\noriginal upstream body' }];
     ctx.onProviderAttempt = vi.fn();
     const failedUsage = { inputTokens: 3, outputTokens: 1, totalTokens: 4, usageMissing: false };
     const successfulUsage = { inputTokens: 5, outputTokens: 2, totalTokens: 7, usageMissing: false };
@@ -238,6 +239,10 @@ describe('runReportPhase retry with new session', () => {
     expect(runAgentMock).toHaveBeenCalledTimes(2);
     expect(runAgentMock.mock.calls[0]?.[1]).toContain(ctx.task);
     expect(runAgentMock.mock.calls[1]?.[1]).toContain(ctx.task);
+    for (const call of runAgentMock.mock.calls) {
+      const reports = call[1].split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+      expect(reports).toEqual(ctx.injectedReports);
+    }
     expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ provider: 'opencode' }),
@@ -1512,6 +1517,7 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('04-qa.md');
     const ctx = createContext(reportDir);
+    ctx.injectedReports = [{ reference: 'requirements.md', scope: 'step', content: 'ORIGINAL-FALLBACK-INPUT' }];
     queueRunAgentResponses([
       {
         persona: 'coder',
@@ -1542,6 +1548,10 @@ describe('runReportPhase retry with new session', () => {
     expect(readFileSync(join(reportDir, '04-qa.md'), 'utf-8')).toBe('Recovered report from fallback');
     expect(runAgentMock).toHaveBeenCalledTimes(3);
     const fallbackOptions = runAgentMock.mock.calls[2]?.[2];
+    for (const call of runAgentMock.mock.calls) {
+      const records = call[1].split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+      expect(records).toEqual(ctx.injectedReports);
+    }
     expect(fallbackOptions).toEqual(expect.objectContaining({
       resolvedProvider: 'claude',
       allowedTools: [],

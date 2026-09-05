@@ -1,3 +1,4 @@
+import type { PreparedInstruction } from '../core/workflow/instruction/prepared-instruction.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
@@ -50,9 +51,9 @@ function makeDeps(
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
     resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE', commandGates: 'required' as const })),
     runLoopMonitorJudge: vi.fn(),
-    runStep: vi.fn(async (_step: WorkflowStep, instruction: string) => ({ response, instruction })),
+    runStep: vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({ response, instruction })),
     runQualityGates: vi.fn(async () => ({ ok: true as const })),
-    buildInstruction: vi.fn((_step: WorkflowStep, stepIteration: number) => `instruction ${stepIteration}`),
+    prepareInstruction: vi.fn((_step: WorkflowStep, stepIteration: number) => ({ text: `instruction ${stepIteration}`, injectedReports: [] })),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
     prepareNormalStepExecution: vi.fn(async () => undefined),
     resolveStepProviderModel: vi.fn(() => ({
@@ -71,6 +72,24 @@ function makeDeps(
 }
 
 describe('WorkflowRunLoop failure metadata', () => {
+  it.each([runWorkflowToCompletion, runSingleWorkflowIteration])('forwards the complete prepared instruction without rebuilding it (%#)', async (run) => {
+    const step = makeStep('implement', { rules: [makeRule('done', 'COMPLETE')] });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const deps = makeDeps(state, step, makeResponse({ content: 'done' }));
+    const prepared: PreparedInstruction = {
+      text: 'instruction with REQ-A',
+      injectedReports: [{ reference: 'requirements.md', scope: 'parent-run-readonly', content: 'REQ-A' }],
+    };
+    const prepareInstruction = vi.fn(() => prepared);
+    const runStep = vi.fn(async (_step: WorkflowStep, input?: PreparedInstruction) => {
+      expect(input).toEqual(prepared);
+      return { response: makeResponse({ content: 'done' }), instruction: input!.text };
+    });
+    await run({ ...deps, prepareInstruction, runStep });
+    expect(prepareInstruction).toHaveBeenCalledOnce();
+    expect(runStep).toHaveBeenCalledOnce();
+  });
+
   it('Given a bounded categorized provider error, When the workflow aborts, Then reason and failure metadata preserve it without a step prefix', async () => {
     const step = makeStep('implement', {
       rules: [makeRule('Implementation complete', 'COMPLETE')],

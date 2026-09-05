@@ -50,7 +50,7 @@ steps:
         - architecture
         - task-decomposition
         - implementation-semantics
-      implementation_instruction: implement
+      implementation_instruction: development-implement-with-reports
       review_policy:
         - coding
         - testing

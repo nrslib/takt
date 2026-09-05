@@ -1,7 +1,9 @@
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { replaceTemplatePlaceholders } from '../core/workflow/instruction/escape.js';
+import { prepareTemplatePlaceholders, replaceTemplatePlaceholders } from '../core/workflow/instruction/escape.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { ReportInstructionBuilder } from '../core/workflow/instruction/ReportInstructionBuilder.js';
 import { makeInstructionContext, makeStep } from './test-helpers.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -51,6 +53,53 @@ import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-
 
 describe('resolveReportReferenceDetailed', () => {
   const temporaryDirectories: string[] = [];
+
+  it('keeps the injected parent body after modification and deletion, but refreshes on new preparation', () => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    const childReports = join(reports, 'subworkflows', 'child');
+    mkdirSync(childReports, { recursive: true });
+    const path = join(reports, 'requirements.md');
+    const original = 'REQ-A: preserve work\n{report:unrelated.md}\n{{#if hidden}}literal{{/if}}';
+    writeFileSync(path, original);
+    const step = makeStep({ instruction: '{report:requirements.md}\n{report: requirements.md }', outputContracts: [{ name: 'result.md' }] });
+    const context = makeInstructionContext({ reportDir: childReports, reportsRootDir: reports });
+    const prepared = new InstructionBuilder(step, context).prepare();
+    expect(prepared.injectedReports).toEqual([{ reference: 'requirements.md', scope: 'parent-run-readonly', content: original }]);
+    expect(prepared.text).toContain(original);
+    writeFileSync(path, 'updated requirements');
+    expect(new InstructionBuilder(step, context).prepare().injectedReports[0]?.content).toBe('updated requirements');
+    rmSync(path);
+    const reportPrompt = new ReportInstructionBuilder(step, {
+      cwd: context.cwd, reportDir: childReports, stepIteration: 1,
+      injectedReports: prepared.injectedReports,
+    }).build();
+    const records = reportPrompt.split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+    expect(records).toEqual(prepared.injectedReports);
+  });
+
+  it('retains missing references and does not collect preview paths or unreferenced files', () => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    mkdirSync(reports);
+    writeFileSync(join(reports, 'unused.md'), 'not injected');
+    const step = makeStep({ instruction: '{report:absent.md}' });
+    const context = makeInstructionContext({ reportDir: reports });
+    const prepared = prepareTemplatePlaceholders(step.instruction, step, context);
+    expect(prepared.injectedReports).toEqual([{ reference: 'absent.md', scope: 'missing', content: prepared.text }]);
+    writeFileSync(join(reports, 'absent.md'), 'created later');
+    expect(prepared.injectedReports[0]?.scope).toBe('missing');
+    expect(prepareTemplatePlaceholders(step.instruction, step, context).injectedReports[0]?.content).toBe('created later');
+    expect(prepareTemplatePlaceholders(step.instruction, step, { ...context, validateReportReferences: false }).injectedReports).toEqual([]);
+    expect(prepareTemplatePlaceholders('no references', step, context).injectedReports).toEqual([]);
+  });
+
+  it.each(['en', 'ja'] as const)('leaves a report with no injected references unchanged (%s)', (language) => {
+    const step = makeStep({ outputContracts: [{ name: 'result.md' }] });
+    const context = { cwd: '/project', reportDir: '/project/reports', stepIteration: 1, language };
+    const withoutSnapshot = new ReportInstructionBuilder(step, context).build();
+    expect(new ReportInstructionBuilder(step, { ...context, injectedReports: [] }).build()).toBe(withoutSnapshot);
+    expect(withoutSnapshot).not.toContain('Reference Reports Injected into Phase 1');
+    expect(withoutSnapshot).not.toContain('Phase 1に注入された参考レポート');
+  });
 
   afterEach(() => {
     injectedFsError.operation = '';
@@ -324,6 +373,15 @@ describe('resolveReportReferenceDetailed', () => {
       content: 'EXACT SOURCE',
       scope: 'resume-snapshot-readonly',
     });
+    const step = makeStep({ instruction: '{report:review-resolution.md}', outputContracts: [{ name: 'result.md' }] });
+    const prepared = new InstructionBuilder(step, makeInstructionContext({
+      reportDir: currentReports, reportsRootDir: reports, resumeReportConsumerKey: consumerKey,
+    })).prepare();
+    expect(prepared.injectedReports).toEqual([{ reference: 'review-resolution.md', scope: 'resume-snapshot-readonly', content: 'EXACT SOURCE' }]);
+    const prompt = new ReportInstructionBuilder(step, {
+      cwd: root, reportDir: currentReports, stepIteration: 1, injectedReports: prepared.injectedReports,
+    }).build();
+    expect(prompt.split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line))).toEqual(prepared.injectedReports);
   });
 
   it.each(['EACCES', 'EPERM', 'EIO'])(

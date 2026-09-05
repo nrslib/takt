@@ -15,11 +15,13 @@ import {
   renderReportOutputInstruction,
 } from './InstructionBuilder.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import type { InjectedReport } from './prepared-instruction.js';
 
 /**
  * Context for building report phase instruction.
  */
 export interface ReportInstructionContext {
+  injectedReports?: readonly InjectedReport[];
   /** Working directory */
   cwd: string;
   /** Original workflow task. */
@@ -112,6 +114,10 @@ export class ReportInstructionBuilder {
       hasTask: this.context.task != null && this.context.task.trim().length > 0,
       task: this.context.task ?? '',
       hasGitRules,
+      hasInjectedReports: (this.context.injectedReports?.length ?? 0) > 0,
+      injectedReports: this.context.injectedReports?.map((report) =>
+        JSON.stringify(report),
+      ).join('\n\n') ?? '',
       gitRules,
       reportContext,
       hasLastResponse: this.context.lastResponse != null && this.context.lastResponse.trim().length > 0,
