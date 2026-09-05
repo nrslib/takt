@@ -742,6 +742,7 @@ describe('companion StepExecutor lifecycle', () => {
       companion: { fixed: ['reviewer'], pool: [] },
       rules: [],
     });
+    vi.useFakeTimers();
     const runPromise = new StepExecutor(deps({
       cwd,
       paths,
@@ -774,6 +775,7 @@ describe('companion StepExecutor lifecycle', () => {
     } finally {
       followUpReleased();
       await runPromise.catch(() => undefined);
+      vi.useRealTimers();
     }
   });
 
