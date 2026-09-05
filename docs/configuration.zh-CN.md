@@ -6,10 +6,10 @@
 
 ## 全局配置
 
-在 `~/.takt/config.yaml` 中配置 TAKT 默认值。首次运行时会自动创建该文件，所有字段均可省略。
+在 `<global TAKT directory>/config.yaml` 中配置 TAKT 默认值。设置 `TAKT_CONFIG_DIR` 时，全局 TAKT 目录就是该目录；未设置时默认为 `~/.takt/`。首次运行时会自动创建该文件，所有字段均可省略。
 
 ```yaml
-# ~/.takt/config.yaml
+# <global TAKT directory>/config.yaml（默认：~/.takt/config.yaml）
 language: en                  # UI 语言：'en' 或 'ja'
 logging:
   level: info                 # 日志级别：debug、info、warn、error
@@ -291,7 +291,7 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 #     no_skills: true
 #   deepseek_harness:
 #     # python_path 和 cordis 仅允许受信任的全局配置/环境变量；项目配置
-#     # 使用默认 python3，不能选择 Cordis 可执行配置。
+#     # 使用 managed VENV，不能选择 Cordis 可执行配置。
 #     base_url: http://127.0.0.1:8787/v1
 #     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
@@ -896,11 +896,15 @@ provider_options:
 
 #### DeepSeek Harness（`deepseek-harness`）
 
-`deepseek-harness` 在 Python 3.10+ 子进程中启动官方 `deepseek-harness-sdk`，通过逐行 JSON-RPC bridge 通信。请单独安装匹配的 runtime：
+`deepseek-harness` 在 Python 3.10+ 子进程中启动官方 `deepseek-harness-sdk`，通过逐行 JSON-RPC bridge 通信。设置 `TAKT_CONFIG_DIR` 时，全局 TAKT 目录就是该目录；未设置时默认为 `~/.takt/`。TAKT 管理的 managed root 是 `<global TAKT directory>/deepseek-harness/`，VENV 是其下的 `<global TAKT directory>/deepseek-harness/venv/`（默认 `~/.takt/deepseek-harness/venv/`），`DSH_HOME` 则是独立的 `<global TAKT directory>/deepseek-harness/dsh-home/`（默认 `~/.takt/deepseek-harness/dsh-home/`）。请显式创建或重建：
 
 ```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
+takt deepseek-harness install
 ```
+
+该命令会先验证 bootstrap Python，再删除已有 VENV；验证失败时会保留已有 VENV。随后创建全新 VENV，并安装精确版本对 `deepseek-harness-sdk==0.1.1rc1` 与 `deepseek-harness-runtime-bin==0.1.1rc1`。需要指定 bootstrap 用的 Python 3.10+ 解释器时使用 `--python <path>`。重新运行仅删除已有 VENV 后安装固定版本对，不保留旧版本也不自动回滚。同一 managed root 的并行安装会从删除 VENV 到最终验证完成保持串行。TAKT 在正常 provider 启动期间不会安装或更新该环境。
+
+`DSH_HOME` 独立保存在 `<global TAKT directory>/deepseek-harness/dsh-home`（默认 `~/.takt/deepseek-harness/dsh-home`），因此重建 VENV 不会删除其中保存的 DeepSeek profiles 或 plugins。正常启动使用 managed VENV，从不猜测全局 Python 解释器。若显式设置了 `provider_options.deepseek_harness.python_path`，TAKT 改用该可执行文件，但会在 bridge 启动前校验 Python、已安装包版本与 SDK constructor。缺包、版本不一致或不支持的 constructor 参数会以可操作错误失败。
 
 官方 runtime wheel 支持 Linux x64/arm64 和 macOS arm64；Windows 与 macOS x64 会快速失败，TAKT 不会 fallback。认证使用环境变量 `DEEPSEEK_API_KEY`，可选 `DEEPSEEK_BASE_URL`；API key 不会写入 workflow/config 或命令参数。
 
@@ -937,7 +941,7 @@ allowlist，也不转换 provider alias。route 和 model 两部分都会按原�
 provider 和 model 字段传给 bridge/SDK；若 SDK 拒绝，错误会标明原始引用以及
 bridge/SDK 的失败位置。
 
-`python_path` 和 `cordis` 只允许来自受信任的全局配置或对应环境变量；项目设置使用默认 `python3`。`session_root` 和 `cordis` 相对配置的工作目录解析。带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、TAKT `allowed_tools`、MCP server map、图片附件、structured output、permission mode 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略；工具组合请通过 Cordis 配置。
+`python_path` 和 `cordis` 只允许来自受信任的全局配置或对应环境变量；工作流与项目本地 provider options 不能替换 managed 默认值。`session_root` 和 `cordis` 相对配置的工作目录解析。带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、TAKT `allowed_tools`、MCP server map、图片附件、structured output、permission mode 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略；工具组合请通过 Cordis 配置。
 
 #### 网络访问（`network_access`）
 

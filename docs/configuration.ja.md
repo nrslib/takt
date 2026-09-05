@@ -7,12 +7,12 @@ phase 粒度の usage events と集計方法は [Observability Guide](./observab
 
 ## グローバル設定
 
-`~/.takt/config.yaml` で TAKT のデフォルト設定を行います。このファイルは初回実行時に自動作成されます。すべてのフィールドは省略可能です。
+`<global TAKT directory>/config.yaml` で TAKT のデフォルト設定を行います。global TAKT directory は `TAKT_CONFIG_DIR` 設定時はその値、未設定時は `~/.takt/` です。このファイルは初回実行時に自動作成されます。すべてのフィールドは省略可能です。
 
 TAKT は、存在するグローバル設定ディレクトリとプロジェクト設定ディレクトリを実体パスで比較し、まだ存在しないディレクトリは正規化した絶対論理パスで比較します。この解決後にグローバル設定ディレクトリと現在のプロジェクトの `.takt/` が一致する場合、TAKT はどちらの設定ディレクトリも初期化する前にエラー終了します。ホームディレクトリで実行する場合やシンボリックリンク経由で衝突する場合は、`TAKT_CONFIG_DIR` をプロジェクトの `.takt/` とは異なるディレクトリに設定してから再実行してください。`--help` と `--version` はこのチェックの対象外です。
 
 ```yaml
-# ~/.takt/config.yaml
+# <global TAKT directory>/config.yaml（未設定時の既定: ~/.takt/config.yaml）
 language: en                  # UI 言語: 'en' または 'ja'
 logging:
   level: info                 # ログレベル: debug, info, warn, error
@@ -294,7 +294,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     no_skills: true
 #   deepseek_harness:
 #     # python_path と cordis は trusted global / env 専用。project config
-#     # では既定の python3 を使い、Cordis の実行設定は選択できません。
+#     # では managed VENV を使い、Cordis の実行設定は選択できません。
 #     base_url: http://127.0.0.1:8787/v1
 #     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
@@ -1187,11 +1187,27 @@ workflow と project config での `base_url` は local proxy 用に限定され
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-`deepseek-harness` は公式の `deepseek-harness-sdk` を Python 3.10+ の子プロセスで起動し、非公開の行指向 JSON-RPC bridge で通信します。SDK と対応する `deepseek-harness-runtime-bin` wheel は別途インストールしてください。
+`deepseek-harness` は公式の `deepseek-harness-sdk` を Python 3.10+ の子プロセスで起動し、非公開の行指向 JSON-RPC bridge で通信します。global TAKT directory は `TAKT_CONFIG_DIR` 設定時はその値、未設定時は `~/.takt/` です。TAKT は managed root `<global TAKT directory>/deepseek-harness/` を管理し、VENV はその配下の `<global TAKT directory>/deepseek-harness/venv/`（既定は `~/.takt/deepseek-harness/venv/`）、`DSH_HOME` は別の `<global TAKT directory>/deepseek-harness/dsh-home/`（既定は `~/.takt/deepseek-harness/dsh-home/`）に置きます。明示的に作成・再作成してください。
 
 ```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
+takt deepseek-harness install
 ```
+
+このコマンドは既存 VENV を削除する前に bootstrap Python を検証します。検証に失敗した場合は既存 VENV を保持します。その後、新しい VENV を作成し、`deepseek-harness-sdk==0.1.1rc1` と
+`deepseek-harness-runtime-bin==0.1.1rc1` の対応ペアを exact version で
+インストールします。VENV の作成に使う Python 3.10+ を指定する場合は
+`--python <path>` を使います。再実行時は既存 VENV だけを削除してから固定版を
+インストールし、旧版の保持や自動 rollback は行いません。同じ managed root への
+並行 install は、VENV の削除から最終検証まで直列化されます。通常の provider 起動時に
+この環境をインストール・更新することはありません。
+
+`DSH_HOME` は VENV と分離した global TAKT directory 配下の
+`deepseek-harness/dsh-home`（デフォルトは `~/.takt/deepseek-harness/dsh-home`）に置かれるため、
+VENV を再作成してもそこに保存した DeepSeek の profile や plugin は削除されません。
+通常起動は managed VENV を使用し、global Python を推測して使うことはありません。
+`provider_options.deepseek_harness.python_path` を明示した場合はその executable を
+使いますが、bridge 起動前に Python、SDK/runtime の実インストール版、SDK constructor
+を検証します。未導入、版不一致、constructor 非対応は actionable error になります。
 
 確認済みの公式 runtime wheel は Linux x64/arm64 と macOS arm64 に対応します。Windows と macOS x64 は未対応で fail fast し、TAKT は別 provider へ暗黙 fallback しません。認証情報は意図的に環境変数だけで渡します: `DEEPSEEK_API_KEY` と、任意の `DEEPSEEK_BASE_URL` を設定してください。API key は workflow/config や command argument に書き込みません。
 
@@ -1235,7 +1251,7 @@ bridge 起動前に拒否されます。空白だけの route または model �
 bridge/SDK に渡します。SDK が拒否した場合は、入力された参照と bridge/SDK で
 失敗した箇所を含むエラーになります。
 
-credential safety のため、`python_path` は信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH` からのみ設定できます。workflow と project-local provider options では既定の `python3` executable を使用してください。`cordis` も実行する tool composition を選択するため、信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` からのみ設定できます。上の例では両方の項目を意図的に省略しています。同じ制約は project の `runtime.yaml` profile にも適用されます。global runtime profile では信頼できる値を選択できます。project runtime profile の `base_url` は loopback のみ使用できます。
+credential safety のため、`python_path` は信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH` からのみ設定できます。workflow と project-local provider options では managed VENV の既定を置き換えられません。`cordis` も実行する tool composition を選択するため、信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` からのみ設定できます。上の例では両方の項目を意図的に省略しています。同じ制約は project の `runtime.yaml` profile にも適用されます。global runtime profile では信頼できる値を選択できます。project runtime profile の `base_url` は loopback のみ使用できます。
 
 `session_root` と `cordis` は設定された作業ディレクトリからの相対パスとして解決されます。workflow が `session_key` を指定するとセッションを再利用し、one-shot call は bridge を直ちに close します。`request_timeout_ms` は Python bridge request 全体を終了させ、TAKT call の abort は bridge の process tree を終了させます。公式 `session.event` notification は TAKT の text、thinking、tool-use、tool-result、error、result event へ変換されます。system prompt、TAKT の `allowed_tools`、MCP server map、画像添付、structured output、permission mode、`maxTurns` は公式 SDK の call に存在しないため warning とともに無視されます。system/tool composition は Cordis で設定してください。
 

@@ -19,6 +19,7 @@ describe('CLI command registration', () => {
       'list',
       'resume',
       'exec',
+      'deepseek-harness',
       'make',
       'ui',
       'clear',
@@ -66,6 +67,7 @@ describe('CLI command registration', () => {
   it.each([
     ['reset', ['config', 'categories']],
     ['workflow', ['init', 'doctor', 'inspect', 'bundle']],
+    ['deepseek-harness', ['install']],
     ['metrics', ['review']],
     ['telemetry', ['status', 'enable', 'disable']],
     ['repertoire', ['add', 'remove', 'list']],

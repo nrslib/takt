@@ -45,6 +45,17 @@ export function getGlobalConfigDir(): string {
   return process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt');
 }
 
+/** Resolve the process-wide global config path before worktree execution can change cwd. */
+export function resolveGlobalConfigDirAtStartup(startupCwd: string): string {
+  const configured = getGlobalConfigDir();
+  const resolvedConfigDir = resolve(startupCwd, configured);
+  const environmentConfigDir = process.env.TAKT_CONFIG_DIR;
+  if (globalConfigDirOverride === undefined && environmentConfigDir !== undefined && environmentConfigDir.length > 0) {
+    process.env.TAKT_CONFIG_DIR = resolvedConfigDir;
+  }
+  return resolvedConfigDir;
+}
+
 /** Get takt global personas directory (~/.takt/personas) */
 export function getGlobalPersonasDir(): string {
   return join(getGlobalConfigDir(), 'personas');

@@ -179,6 +179,17 @@ describe('CLI entrypoint lazy loading', () => {
     expect(mockCleanupImmediateSigintExit).toHaveBeenCalledTimes(1);
   });
 
+  it('should anchor a relative global config directory to the startup cwd', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-cli-relative-config-'));
+    temporaryRootDir = projectDir;
+    process.chdir(projectDir);
+    process.env.TAKT_CONFIG_DIR = 'global-config';
+
+    await executeCli(['task description']);
+
+    expect(process.env.TAKT_CONFIG_DIR).toBe(join(projectDir, 'global-config'));
+  });
+
   it('should initialize and route an unknown slash command through the default action', async () => {
     await executeCli(['/foo', '--bar']);
 

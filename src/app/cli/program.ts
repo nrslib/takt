@@ -75,7 +75,10 @@ program
  */
 export async function runPreActionHook(): Promise<void> {
   const { assertConfigDirsDoNotCollide, initializeCliExecutionContext } = await import('./initialization.js');
-  assertConfigDirsDoNotCollide(process.cwd());
+  const { resolveGlobalConfigDirAtStartup } = await import('../../infra/config/paths.js');
+  const startupCwd = process.cwd();
+  resolveGlobalConfigDirAtStartup(startupCwd);
+  assertConfigDirsDoNotCollide(startupCwd);
   await scheduleUpdateCheck();
   await initializeCliExecutionContext(program, cliVersion);
 }

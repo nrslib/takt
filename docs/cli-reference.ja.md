@@ -27,7 +27,24 @@
 
 正式オプションは `--workflow` です。
 
-グローバル設定ディレクトリ（デフォルト: `~/.takt/`）は環境変数 `TAKT_CONFIG_DIR` で変更できます。
+グローバル設定ディレクトリ（デフォルト: `~/.takt/`）は環境変数 `TAKT_CONFIG_DIR` で変更できます。相対値は TAKT プロセスの起動時の作業ディレクトリを基準に一度だけ解決され、後から使う worktree や bridge の cwd には依存しません。
+
+## DeepSeek Harness 環境
+
+`deepseek-harness` は推測した global interpreter ではなく、TAKT が管理する Python 環境を使用します。固定版の SDK/runtime ペアを作成・再作成するには次を実行します。
+
+```bash
+takt deepseek-harness install
+```
+
+このコマンドは設定された global TAKT directory 配下の既存
+`deepseek-harness/venv` を削除して作り直し、
+`deepseek-harness-sdk==0.1.1rc1` と
+`deepseek-harness-runtime-bin==0.1.1rc1` をインストールします。
+Python 3.10+ の bootstrap interpreter を指定する場合は
+`--python <path>` を使います。分離された `deepseek-harness/dsh-home` は削除しないため、
+profile と plugin は再作成後も保持されます。インストール・更新経路はこのコマンドだけで、
+通常の provider 起動時に最新版をダウンロードすることはありません。
 
 ## Web UI の実行境界
 

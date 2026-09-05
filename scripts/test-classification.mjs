@@ -14,6 +14,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/dependency-versions.test.ts',
   'src/__tests__/deepseek-harness-client.test.ts',
   'src/__tests__/deepseek-harness-live-smoke.test.ts',
+  'src/__tests__/deepseek-harness-managed-venv.test.ts',
   'src/__tests__/e2e-helpers.test.ts',
   'src/__tests__/engine-abort.test.ts',
   'src/__tests__/engine-agent-overrides.test.ts',

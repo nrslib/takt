@@ -27,7 +27,24 @@ This document provides a complete reference for all TAKT CLI commands and option
 
 `--workflow` is the canonical option.
 
-The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
+The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable. A relative value is resolved once against the TAKT process's startup working directory, not a later worktree or bridge cwd.
+
+## DeepSeek Harness environment
+
+`deepseek-harness` uses a TAKT-managed Python environment rather than a guessed global interpreter. Create or recreate the fixed SDK/runtime pair with:
+
+```bash
+takt deepseek-harness install
+```
+
+This removes the existing `deepseek-harness/venv` below the configured global
+TAKT directory, creates it again, and installs
+`deepseek-harness-sdk==0.1.1rc1` together with
+`deepseek-harness-runtime-bin==0.1.1rc1`. Use `--python <path>` to select the
+Python 3.10+ bootstrap interpreter. The separate `deepseek-harness/dsh-home`
+directory is never removed, so profiles and plugins survive recreation. The
+command is the only installation/update path; ordinary provider startup never
+downloads a latest release.
 
 ## Web UI execution boundary
 

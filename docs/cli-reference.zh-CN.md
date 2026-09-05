@@ -29,6 +29,18 @@
 
 全局配置目录默认为 `~/.takt/`，可通过 `TAKT_CONFIG_DIR` 环境变量修改。
 
+相对值仅以 TAKT 进程启动时的工作目录为基准解析一次，不依赖后续 worktree 或 bridge cwd。
+
+## DeepSeek Harness 环境
+
+`deepseek-harness` 使用 TAKT 管理的 Python 环境，而非猜测的全局解释器。用以下命令创建或重建固定版本 SDK/runtime 对：
+
+```bash
+takt deepseek-harness install
+```
+
+该命令删除配置的全局 TAKT 目录下已有的 `deepseek-harness/venv` 并重建，同时安装 `deepseek-harness-sdk==0.1.1rc1` 与 `deepseek-harness-runtime-bin==0.1.1rc1`。用 `--python <path>` 选择 Python 3.10+ bootstrap 解释器。独立的 `deepseek-harness/dsh-home` 目录不会被删除，因此 profiles 和 plugins 在重建后保留。该命令是唯一的安装/更新途径；正常 provider 启动不会下载最新版本。
+
 ## 交互模式
 
 交互模式会先与 AI 对话来完善任务内容，然后再执行。当需求不明确，或希望在咨询 AI 的同时明确内容时，这种模式很有用。

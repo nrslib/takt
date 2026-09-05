@@ -137,6 +137,21 @@ program
     });
   });
 
+const deepseekHarness = program
+  .command('deepseek-harness')
+  .description('Manage the DeepSeek Harness managed Python environment');
+
+deepseekHarness
+  .command('install')
+  .description('Recreate the pinned DeepSeek Harness Python environment')
+  .option('--python <path>', 'Bootstrap Python executable (default: python3, or python on Windows)')
+  .action(async (opts: { python?: string }) => {
+    const { runDeepSeekHarnessInstallCommand } = await import('../../features/deepseek-harness/command.js');
+    await runDeepSeekHarnessInstallCommand({
+      ...(opts.python === undefined ? {} : { pythonPath: opts.python }),
+    });
+  });
+
 program
   .command('make')
   .description('Start interactive Workflow Maker')

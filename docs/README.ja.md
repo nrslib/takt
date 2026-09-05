@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode`、`pi` などの SDK 経由 provider は Node.js と認証情報で動きます。`deepseek-harness` は Python 3.10+ と公式 SDK/runtime wheel も必要です。CLI 経由 provider を使う場合は対応する外部 CLI が必要です。
+初回実行時は `<global TAKT directory>/config.yaml`（`TAKT_CONFIG_DIR` 設定時はその値、未設定時は `~/.takt/config.yaml`）で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode`、`pi` などの SDK 経由 provider は Node.js と認証情報で動きます。`deepseek-harness` は `takt deepseek-harness install` で Python 3.10+ の固定版 managed VENV を作成してください。CLI 経由 provider を使う場合は対応する外部 CLI が必要です。
 
 ### 動画チュートリアル
 
@@ -114,13 +114,23 @@ TAKT の実行には Node.js `>=22.22.0` が必要です。
 - `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-`deepseek-harness` は公式 Python SDK を非公開 JSON-RPC bridge 経由で使用します。Python 3.10+ に対応する SDK/runtime をインストールしてください。
+`deepseek-harness` は公式 Python SDK を非公開 JSON-RPC bridge 経由で使用します。Python 3.10+ で固定版の managed VENV を明示的に作成してください。
 
 ```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
+takt deepseek-harness install
 ```
 
-公式 runtime wheel の対応 platform は Linux x64/arm64 と macOS arm64 です。Windows と macOS x64 は fail fast し、別 provider へ暗黙 fallback しません。`DEEPSEEK_API_KEY` と、任意で `DEEPSEEK_BASE_URL` を環境変数に設定します。SDK と `deepseek-harness-runtime-bin` は対応する release を使用してください。この provider は developer preview の互換性境界であり、matching release 間でも upstream API/event vocabulary が変わる可能性があります。新しい SDK/runtime の組み合わせを使う前に configuration guide の opt-in live smoke を実行してください。
+TAKT の global TAKT directory は、`TAKT_CONFIG_DIR` を設定した場合はそのディレクトリ、未設定時は既定で `~/.takt/` です。managed root は `<global TAKT directory>/deepseek-harness/`、VENV はその配下の `<global TAKT directory>/deepseek-harness/venv/`（既定は `~/.takt/deepseek-harness/venv/`）、`DSH_HOME` は VENV とは別の `<global TAKT directory>/deepseek-harness/dsh-home/`（既定は `~/.takt/deepseek-harness/dsh-home/`）です。
+`deepseek-harness-sdk==0.1.1rc1` と
+`deepseek-harness-runtime-bin==0.1.1rc1` の exact version ペアをインストールします。
+bootstrap 用の Python を選ぶ場合は `--python <path>` を指定します。既存 VENV を削除する前に bootstrap Python を検証するため、検証失敗時は既存 VENV を保持します。再実行時は VENV
+だけを削除して再作成し、`DSH_HOME` にある profile と plugin は保持します。同じ managed root
+への並行 install は最終検証まで直列化されます。
+通常起動時にインストールや更新は行わず、global Python を推測して使用することも
+ありません。明示的な `python_path` は trusted settings からのみ指定でき、bridge 起動前
+に Python、固定版ペア、constructor の対応を検証します。
+
+公式 runtime wheel の対応 platform は Linux x64/arm64 と macOS arm64 です。Windows と macOS x64 は fail fast し、別 provider へ暗黙 fallback しません。`DEEPSEEK_API_KEY` と、任意で `DEEPSEEK_BASE_URL` を環境変数に設定します。この provider は developer preview の互換性境界であり、matching release 間でも upstream API/event vocabulary が変わる可能性があります。新しい SDK/runtime の組み合わせを使う前に configuration guide の opt-in live smoke を実行してください。
 
 次のプロバイダーを使う場合は外部 CLI のインストールが必要です:
 
@@ -301,7 +311,7 @@ exec は前回の設定から開始するか、初回実行時はデフォルト
 
 ## 設定
 
-最小限の `~/.takt/config.yaml` は次の通りです。
+最小限の `<global TAKT directory>/config.yaml`（未設定時の既定は `~/.takt/config.yaml`）は次の通りです。
 
 ```yaml
 provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
@@ -313,7 +323,7 @@ run metadata、session、trace、report などの run artifact は `.takt/runs/<
 
 最小設定に加えて `config.yaml`（legacy モード）では内部エージェントの上書き（`takt_providers`）と候補プールから step ごとに provider/model を選択する `auto_routing`（`cost` / `balanced` / `performance` 戦略）を設定できます。オートルーティングの決定は `.takt/events/` に NDJSON としてローカル記録できます。記録はオプトイン（`takt telemetry enable` または `telemetry.routing_decisions`）で、TAKT がルーティング決定をアップロードすることはありません。runtime モードでは provider/model/options と routing を `runtime.yaml` に置きます（後述）。
 
-provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude、Codex、OpenCode、Pi が対象）。`deepseek-harness` は Python 3.10+ と公式 SDK/runtime wheel を別途必要とします。
+provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude、Codex、OpenCode、Pi が対象）。`deepseek-harness` は `takt deepseek-harness install` で作成した Python 3.10+ managed VENV を使用します。
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)
@@ -384,7 +394,7 @@ takt --pipeline --task "バグを修正して" --auto-pr
 ## プロジェクト構造
 
 ```
-~/.takt/                    # グローバル設定
+<global TAKT directory>/     # グローバル設定（既定: ~/.takt/）
 ├── config.yaml             # プロバイダー、モデル、言語など
 ├── workflows/              # ユーザー定義の workflow
 ├── facets/                 # ユーザー定義のファセット（personas, policies, knowledge など）

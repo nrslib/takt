@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-首次运行时，请在 `~/.takt/config.yaml` 中配置 provider，或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`opencode` 和 `pi` 等 SDK provider 可在 Node.js 中运行；`deepseek-harness` 还需要 Python 3.10+ 和官方 runtime wheel。CLI provider 还需要对应的外部 CLI。
+首次运行时，请在 `<global TAKT directory>/config.yaml` 中配置 provider（设置 `TAKT_CONFIG_DIR` 时使用该目录，未设置时默认为 `~/.takt/config.yaml`），或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`opencode` 和 `pi` 等 SDK provider 可在 Node.js 中运行；`deepseek-harness` 需要 Python 3.10+，并通过 `takt deepseek-harness install` 创建固定版本的 managed VENV。CLI provider 还需要对应的外部 CLI。
 
 ### 视频教程
 
@@ -112,13 +112,15 @@ TAKT 需要 Node.js `>=22.22.0`。
 - `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-`deepseek-harness` 通过私有 JSON-RPC bridge 使用官方 Python SDK。请在 Python 3.10+ 中安装匹配的 SDK/runtime 包：
+`deepseek-harness` 通过私有 JSON-RPC bridge 使用官方 Python SDK。请用 Python 3.10+ 显式创建其固定版本 managed 环境：
 
 ```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
+takt deepseek-harness install
 ```
 
-官方 runtime 当前支持 Linux x64/arm64 和 macOS arm64。Windows 和 macOS x64 会快速失败；TAKT 不会静默切换到其他 provider。请设置 `DEEPSEEK_API_KEY`，也可以设置 `DEEPSEEK_BASE_URL`。Python SDK 与 `deepseek-harness-runtime-bin` 必须来自匹配的版本。这是 developer-preview 兼容性边界；使用新的 SDK/runtime 组合前，请按照配置指南执行 opt-in live smoke。
+TAKT 使用配置的全局 TAKT 目录：设置 `TAKT_CONFIG_DIR` 时使用该目录，未设置时默认为 `~/.takt/`。managed root 是 `<global TAKT directory>/deepseek-harness/`，VENV 是其下的 `<global TAKT directory>/deepseek-harness/venv/`（默认路径为 `~/.takt/deepseek-harness/venv/`），`DSH_HOME` 则是独立的 `<global TAKT directory>/deepseek-harness/dsh-home/`（默认 `~/.takt/deepseek-harness/dsh-home/`）。TAKT 会安装精确版本对 `deepseek-harness-sdk==0.1.1rc1` 与 `deepseek-harness-runtime-bin==0.1.1rc1`。用 `--python <path>` 选择 bootstrap 解释器。删除已有 VENV 前会先验证 bootstrap Python，因此验证失败时会保留已有 VENV。重新运行该命令只删除该 VENV；`DSH_HOME` 中的 DeepSeek profiles 和 plugins 会保留；同一 managed root 的并行安装会串行到最终验证完成。正常 provider 启动使用 managed VENV，不执行安装或更新，也不猜测全局 Python。显式的 `python_path` 仅允许来自受信任设置，并在 bridge 启动前校验 Python、固定版本对与 constructor 支持。
+
+官方 runtime 当前支持 Linux x64/arm64 和 macOS arm64。Windows 和 macOS x64 会快速失败；TAKT 不会静默切换到其他 provider。请设置 `DEEPSEEK_API_KEY`，也可以设置 `DEEPSEEK_BASE_URL`。这是 developer-preview 兼容性边界；使用新的 SDK/runtime 组合前，请按照配置指南执行 opt-in live smoke。
 
 以下 provider 需要外部 CLI：
 
@@ -280,6 +282,7 @@ steps:
 | `takt workflow doctor` | 验证 workflow 定义 |
 | `takt workflow inspect` | 检查 workflow 的配置与解析来源 |
 | `takt repertoire add` | 从 GitHub 安装 repertoire package |
+| `takt deepseek-harness install` | 创建或重建固定版本 DeepSeek Harness managed Python 环境 |
 
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。
 
@@ -297,7 +300,7 @@ exec 输入支持图片附件。使用 `/paste-image` 或 macOS 上的 `Ctrl+V` 
 
 ## 配置
 
-最小的 `~/.takt/config.yaml`：
+最小的 `<global TAKT directory>/config.yaml`（未设置时默认为 `~/.takt/config.yaml`）：
 
 ```yaml
 provider: claude              # claude, claude-sdk, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
@@ -447,7 +450,7 @@ takt --pipeline --task "Fix the bug" --auto-pr
 ## 项目结构
 
 ```text
-~/.takt/                    # 全局配置
+<global TAKT directory>/     # 全局配置（默认：~/.takt/）
 ├── config.yaml             # provider、model、language 等
 ├── workflows/              # 用户 workflow 定义
 ├── facets/                 # 用户 facet（persona、policy、knowledge 等）

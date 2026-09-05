@@ -2,11 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
 import {
   callDeepSeekHarness,
   closeDeepSeekHarnessProcesses,
+  resolveDeepSeekHarnessManagedPaths,
 } from '../infra/deepseek-harness/index.js';
 
 function isSupportedPythonVersion(version: readonly [number, number]): boolean {
@@ -50,11 +51,119 @@ function findLifecyclePython(): string | undefined {
   return findPython(candidates);
 }
 
+async function createNodePythonFixture(root: string): Promise<string> {
+  const executable = path.join(root, 'fixture-python.cjs');
+  await writeFile(executable, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const pinnedVersion = '0.1.1rc1';
+let configuration;
+
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + '\\n');
+}
+
+function handle(request) {
+  if (request.type === 'start') {
+    configuration = request.config;
+    send({ kind: 'ready', requestId: request.id });
+    return;
+  }
+  if (request.type === 'run') {
+    const sessionId = request.sessionId || 'fixture-session';
+    fs.writeFileSync(
+      path.join(configuration.cwd, 'fixture-environment.json'),
+      JSON.stringify({ dshHome: process.env.DSH_HOME }),
+    );
+    send({
+      kind: 'notification',
+      requestId: request.id,
+      notification: { method: 'session.started', payload: { sessionId } },
+    });
+    send({
+      kind: 'notification',
+      requestId: request.id,
+      notification: {
+        method: 'session.event',
+        payload: {
+          sessionId,
+          event: { type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: 'hello' } } },
+        },
+      },
+    });
+    send({
+      kind: 'notification',
+      requestId: request.id,
+      notification: {
+        method: 'session.event',
+        payload: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } },
+      },
+    });
+    send({
+      kind: 'result',
+      requestId: request.id,
+      result: { sessionId, finalResponse: 'hello', finishReason: 'completed' },
+    });
+    return;
+  }
+  if (request.type === 'close') {
+    send({ kind: 'closed', requestId: request.id });
+  }
+}
+
+const args = process.argv.slice(2);
+if (args[0] === '-c') {
+  process.stdout.write(JSON.stringify({
+    pythonVersion: [3, 10],
+    sdkVersion: pinnedVersion,
+    runtimeVersion: pinnedVersion,
+  }) + '\\n');
+  process.exit(0);
+}
+if (args[0] !== '-u') {
+  process.exit(2);
+}
+
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  input += chunk;
+  let newlineIndex;
+  while ((newlineIndex = input.indexOf('\\n')) !== -1) {
+    const line = input.slice(0, newlineIndex);
+    input = input.slice(newlineIndex + 1);
+    if (line.trim().length > 0) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+`, 'utf8');
+  await chmod(executable, 0o755);
+  return executable;
+}
+
+async function createHangingProbeFixture(root: string): Promise<string> {
+  const executable = path.join(root, 'hanging-probe.cjs');
+  await writeFile(executable, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+if (process.argv[2] === '-c') {
+  setInterval(() => {}, 1_000);
+} else if (process.argv[2] === '-u') {
+  fs.writeFileSync(path.join(process.cwd(), 'bridge-started.marker'), 'started\\n');
+  setInterval(() => {}, 1_000);
+} else {
+  process.exit(2);
+}
+`, 'utf8');
+  await chmod(executable, 0o755);
+  return executable;
+}
+
 const supportedPlatform = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
   || (process.platform === 'darwin' && process.arch === 'arm64')
 );
-const defaultRuntimeSupported = supportedPlatform && findPython(['python3']) !== undefined;
 const lifecycleRuntimeSupported = supportedPlatform && findLifecyclePython() !== undefined;
 
 it.skipIf(supportedPlatform)('DeepSeek Harness fails fast with an actionable unsupported-platform error', async () => {
@@ -65,11 +174,82 @@ it.skipIf(supportedPlatform)('DeepSeek Harness fails fast with an actionable uns
   expect(response.content).toContain('no provider fallback is available');
 });
 
-it.skipIf(!supportedPlatform || defaultRuntimeSupported)('DeepSeek Harness fails fast with an actionable missing-Python error on a supported platform', async () => {
-  const response = await callDeepSeekHarness('worker', 'hello', { cwd: process.cwd() });
+describe.skipIf(!supportedPlatform)('DeepSeek Harness managed VENV selection', () => {
+  let root: string;
+  let worktreeRoot: string;
+  let secondWorktreeRoot: string;
+  let configRoot: string;
 
-  expect(response.status).toBe('error');
-  expect(response.content).toContain('Python 3.10');
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-managed-client-'));
+    worktreeRoot = path.join(root, 'worktree');
+    secondWorktreeRoot = path.join(root, 'second-worktree');
+    configRoot = path.join(root, 'global-config');
+    await mkdir(worktreeRoot);
+    await mkdir(secondWorktreeRoot);
+    await mkdir(configRoot);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await closeDeepSeekHarnessProcesses();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('uses the managed executable and stable DSH_HOME for separate worktree directories', async () => {
+    const fixturePath = await createNodePythonFixture(root);
+    const configDir = path.relative(process.cwd(), configRoot);
+    vi.stubEnv('TAKT_CONFIG_DIR', configDir);
+    const managedPaths = resolveDeepSeekHarnessManagedPaths(configDir);
+    await mkdir(path.dirname(managedPaths.pythonPath), { recursive: true });
+    await symlink(fixturePath, managedPaths.pythonPath);
+
+    const firstResponse = await callDeepSeekHarness('worker', 'hello', { cwd: worktreeRoot });
+    const secondResponse = await callDeepSeekHarness('worker', 'hello', { cwd: secondWorktreeRoot });
+    const firstEnvironment = JSON.parse(
+      await readFile(path.join(worktreeRoot, 'fixture-environment.json'), 'utf8'),
+    ) as { dshHome?: unknown };
+    const secondEnvironment = JSON.parse(
+      await readFile(path.join(secondWorktreeRoot, 'fixture-environment.json'), 'utf8'),
+    ) as { dshHome?: unknown };
+
+    expect(firstResponse).toMatchObject({ status: 'done', content: 'hello' });
+    expect(secondResponse).toMatchObject({ status: 'done', content: 'hello' });
+    expect(managedPaths.rootPath).toBe(path.join(configRoot, 'deepseek-harness'));
+    expect(managedPaths.pythonPath).toBe(path.join(configRoot, 'deepseek-harness', 'venv', 'bin', 'python'));
+    expect(firstEnvironment.dshHome).toBe(managedPaths.dshHomePath);
+    expect(secondEnvironment.dshHome).toBe(managedPaths.dshHomePath);
+    expect(firstEnvironment.dshHome).toBe(secondEnvironment.dshHome);
+  });
+
+  it('uses request_timeout_ms to bound a hanging Python probe before bridge startup', async () => {
+    const fixturePath = await createHangingProbeFixture(root);
+    const startedAt = Date.now();
+
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: worktreeRoot,
+      providerOptions: {
+        pythonPath: fixturePath,
+        requestTimeoutMs: 100,
+      },
+    });
+
+    expect(response.status).toBe('error');
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    await expect(readFile(path.join(worktreeRoot, 'bridge-started.marker'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails when the managed VENV is absent instead of guessing a global Python', async () => {
+    vi.stubEnv('TAKT_CONFIG_DIR', configRoot);
+
+    const response = await callDeepSeekHarness('worker', 'hello', { cwd: worktreeRoot });
+
+    expect(response.status).toBe('error');
+    expect(response.content).toContain('takt deepseek-harness install');
+    await expect(readFile(path.join(worktreeRoot, 'fixture-environment.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
 
 describe.skipIf(!lifecycleRuntimeSupported)('DeepSeek Harness bridge lifecycle', () => {
@@ -166,7 +346,7 @@ class DeepSeekHarness:
                 prompt_file.write(input)
         if input == 'inspect-env':
             environment = {}
-            for name in ['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'OPENAI_API_KEY', 'TAKT_OBSERVABILITY_ENABLED', 'HOME', 'DSH_RUNTIME_MODE']:
+            for name in ['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'OPENAI_API_KEY', 'TAKT_OBSERVABILITY_ENABLED', 'HOME', 'DSH_HOME', 'DSH_RUNTIME_MODE']:
                 value = os.environ.get(name)
                 if value is not None:
                     environment[name] = value
@@ -224,6 +404,18 @@ class DeepSeekHarness:
         final_response = 'firstsecond' if input == 'message-events' else (secret if secret_events else 'hello')
         return Result(active_session, final_response, result_finish_reason)
 `, 'utf8');
+    for (const [distribution, version] of [
+      ['deepseek_harness_sdk', '0.1.1rc1'],
+      ['deepseek_harness_runtime_bin', '0.1.1rc1'],
+    ] as const) {
+      const metadataDir = path.join(root, `${distribution}-${version}.dist-info`);
+      await mkdir(metadataDir);
+      await writeFile(
+        path.join(metadataDir, 'METADATA'),
+        `Name: ${distribution.replaceAll('_', '-')}\nVersion: ${version}\n`,
+        'utf8',
+      );
+    }
     pythonPath = path.join(root, 'python-wrapper.sh');
     await writeFile(pythonPath, `#!/bin/sh\nPYTHONPATH="${root}:${'${PYTHONPATH:-}'}" exec "${python}" "$@"\n`, 'utf8');
     await chmod(pythonPath, 0o755);
@@ -242,7 +434,7 @@ class DeepSeekHarness:
         pythonPath,
         requestTimeoutMs: 10_000,
       },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
 
     expect(response).toMatchObject({ status: 'done', content: 'hello', sessionId: 'generated-session' });
@@ -310,6 +502,24 @@ class DeepSeekHarness:
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('rejects an explicit Python environment with a mismatched runtime before bridge startup', async () => {
+    await writeFile(
+      path.join(root, 'deepseek_harness_runtime_bin-0.1.1rc1.dist-info', 'METADATA'),
+      'Name: deepseek-harness-runtime-bin\nVersion: 0.1.0\n',
+      'utf8',
+    );
+
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.content).toContain('version mismatch');
+    await expect(readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it.each([
     [
       'unknown-route/known-model',
@@ -341,7 +551,7 @@ class DeepSeekHarness:
       cwd: root,
       model: reference,
       providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
     const [configuration] = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
       .trim()
@@ -378,7 +588,7 @@ class DeepSeekHarness:
       cwd: root,
       model: reference,
       providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
 
     expect(response.status).toBe('error');
@@ -458,7 +668,7 @@ class DeepSeekHarness:
       childProcessEnv: { DEEPSEEK_API_KEY: secret },
       providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
       onStream: (event) => {
-        events.push(event as { type: string; data: Record<string, unknown> });
+        events.push(event as unknown as { type: string; data: Record<string, unknown> });
         logger.logEvent({
           provider: 'deepseek-harness',
           providerModel: 'deepseek-v4-flash',
@@ -560,7 +770,7 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'reason:aborted', {
       cwd: root,
       providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
 
     expect(response).toMatchObject({
@@ -593,7 +803,7 @@ class DeepSeekHarness:
       cwd: root,
       ...(model === undefined ? {} : { model }),
       providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
 
     expect(response).toMatchObject({
@@ -730,6 +940,13 @@ class DeepSeekHarness:
     expect(bridgeEnvironment.DEEPSEEK_API_KEY).toBe('deepseek-env-secret');
     expect(bridgeEnvironment.DEEPSEEK_BASE_URL).toBe('https://deepseek.example/v1');
     expect(bridgeEnvironment.TAKT_OBSERVABILITY_ENABLED).toBe('1');
+    const configDir = process.env.TAKT_CONFIG_DIR;
+    if (configDir === undefined) {
+      throw new Error('TAKT_CONFIG_DIR is required by the isolated test environment');
+    }
+    expect(bridgeEnvironment.DSH_HOME).toBe(
+      path.join(configDir, 'deepseek-harness', 'dsh-home'),
+    );
     expect(Object.prototype.hasOwnProperty.call(bridgeEnvironment, 'OPENAI_API_KEY')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(bridgeEnvironment, 'HOME')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(bridgeEnvironment, 'DSH_RUNTIME_MODE')).toBe(false);
@@ -1008,7 +1225,7 @@ class DeepSeekHarness:
       cwd: root,
       providerOptions: {
         pythonPath,
-        requestTimeoutMs: 100,
+        requestTimeoutMs: 2_000,
       },
     });
 
