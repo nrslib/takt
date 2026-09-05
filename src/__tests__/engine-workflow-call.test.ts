@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -192,27 +192,41 @@ steps:
     });
     const actual = await vi.importActual<typeof import('../core/workflow/phase-runner.js')>('../core/workflow/phase-runner.js');
     let parentReportPath = '';
+    let reportingStep: string | undefined;
     vi.mocked(runReportPhase).mockImplementation(async (step, iteration, context) => {
       if (step.name === 'prepare') parentReportPath = join(context.reportDir, 'requirements.md');
-      return actual.runReportPhase(step, iteration, context);
+      reportingStep = step.name;
+      try {
+        return await actual.runReportPhase(step, iteration, context);
+      } finally {
+        reportingStep = undefined;
+      }
     });
     const upstream = 'REQ-X: retain every planned item';
-    let callIndex = 0;
+    const childExecutionPrompts: string[] = [];
+    const childReportPrompts: string[] = [];
     vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
       options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: prompt });
-      const index = callIndex++;
-      if (index === 2) {
-        expect(prompt).toContain(upstream);
+      if (reportingStep === 'prepare') {
+        return makeResponse({ persona: 'planner', content: upstream });
+      }
+      if (reportingStep === 'implement') {
+        expect(existsSync(parentReportPath)).toBe(false);
+        childReportPrompts.push(prompt);
+      } else if (persona === 'coder') {
+        childExecutionPrompts.push(prompt);
         rmSync(parentReportPath);
       }
-      return makeResponse({ persona: 'worker', content: index === 1 ? upstream : 'Completed work' });
+      return makeResponse({ persona: 'worker', content: 'Completed work' });
     });
     mockRuleEvaluationSequence(Array.from({ length: 3 }, () => ({ index: 0, method: 'phase3_tag' as const })));
     engine = new WorkflowEngine(config, tmpDir, 'Implement requirement', createWorkflowCallOptions(tmpDir));
     expect((await engine.run()).status).toBe('completed');
-    expect(callIndex).toBe(5);
-    for (const call of vi.mocked(runAgent).mock.calls.slice(3)) {
-      const records = call[1].split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+    expect(childExecutionPrompts).not.toHaveLength(0);
+    for (const prompt of childExecutionPrompts) expect(prompt).toContain(upstream);
+    expect(childReportPrompts).not.toHaveLength(0);
+    for (const prompt of childReportPrompts) {
+      const records = prompt.split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
       expect(records).toEqual([{ reference: 'requirements.md', scope: 'parent-run-readonly', content: upstream }]);
     }
   });
