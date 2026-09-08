@@ -35,6 +35,7 @@ export {
   appendNdjsonLine,
   initNdjsonLog,
   loadNdjsonLog,
+  parseNdjsonLogContent,
   generateSessionId,
   generateReportDir,
   createSessionLog,

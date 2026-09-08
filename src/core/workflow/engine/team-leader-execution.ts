@@ -36,6 +36,9 @@ export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
   maxConcurrency: number;
   abortSignal?: AbortSignal;
+  beforeInitialPartExecution?: () => Promise<MorePartsResponse | undefined>;
+  /** Whether live instructions appeared after the leader marked planning done. */
+  hasPendingLiveIntervention?: () => boolean;
   runPart: (
     part: PartDefinition,
     partIndex: number,
@@ -207,7 +210,10 @@ export async function runTeamLeaderExecution(
     terminalGate.assertRunning('feedback.dequeue');
     options.abortSignal?.throwIfAborted();
     if (leaderDone) {
-      return;
+      if (options.hasPendingLiveIntervention?.() !== true) {
+        return;
+      }
+      leaderDone = false;
     }
     publishSettledParts();
     const latestBatchResults = partResults.slice(latestBatchStart);
@@ -372,6 +378,34 @@ export async function runTeamLeaderExecution(
   };
 
   try {
+    const initialFeedback = await options.beforeInitialPartExecution?.();
+    if (initialFeedback !== undefined) {
+      terminalGate.assertRunning('feedback.initial_provider_result');
+      options.abortSignal?.throwIfAborted();
+      applyCancellations(initialFeedback.cancelPartIds);
+      if (initialFeedback.done) {
+        leaderDone = true;
+      } else {
+        const newParts: PartDefinition[] = [];
+        for (const newPart of initialFeedback.parts) {
+          if (scheduledIds.has(newPart.id)) {
+            continue;
+          }
+          scheduledIds.add(newPart.id);
+          newParts.push(structuredClone(newPart));
+        }
+        if (newParts.length > 0) {
+          terminalGate.assertRunning('feedback.initial_parts_added');
+          plannedParts.push(...newParts);
+          queue.push(...newParts);
+          options.onPartsAdded?.({
+            parts: structuredClone(newParts),
+            reason: initialFeedback.reasoning,
+            totalPlanned: plannedParts.length,
+          });
+        }
+      }
+    }
     while (
       queue.length > 0
       || running.size > 0
@@ -443,6 +477,10 @@ export async function runTeamLeaderExecution(
       }
 
       if (leaderDone) {
+        if (options.hasPendingLiveIntervention?.() === true) {
+          leaderDone = false;
+          continue;
+        }
         if (options.onExecutionTerminal === undefined || executionTerminalRequested) {
           break;
         }
@@ -460,6 +498,10 @@ export async function runTeamLeaderExecution(
           applyTerminalContinuation(continuation);
         }
         if (queue.length > 0 || running.size > 0 || !leaderDone) {
+          continue;
+        }
+        if (options.hasPendingLiveIntervention?.() === true) {
+          leaderDone = false;
           continue;
         }
         break;

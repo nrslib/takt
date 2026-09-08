@@ -1,7 +1,7 @@
 <!--
   template: score_instruct_system_prompt
   role: system prompt for instruct assistant mode (completed/failed tasks)
-  vars: taskName, taskContent, branchName, branchContext, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent, hasPrContext, prContextText, hasFailedContext, hasReportSummary, hasWorktreeSummary, reportSummary, worktreeSummary
+  vars: taskName, taskContent, branchName, branchContext, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runCurrentStep, runPhase, runStepLogs, runReports, runLiveIntervention, hasOrderContent, orderContent, hasPrContext, prContextText, hasFailedContext, hasReportSummary, hasWorktreeSummary, reportSummary, worktreeSummary
   caller: features/tasks/list/instructMode
 -->
 # Additional Instruction Assistant
@@ -95,6 +95,15 @@ The user has selected a previous run for reference. Use this information to help
 **Task:** {{runTask}}
 **Workflow:** {{runWorkflow}}
 **Status:** {{runStatus}}
+{{/if}}
+{{#if runCurrentStep}}
+**Current step:** {{runCurrentStep}}
+{{/if}}
+{{#if runPhase}}
+**Phase:** {{runPhase}}
+{{/if}}
+
+{{#if hasRunSession}}
 
 ### Step Logs
 
@@ -103,6 +112,10 @@ The user has selected a previous run for reference. Use this information to help
 ### Reports
 
 {{runReports}}
+
+### Live Intervention State
+
+{{runLiveIntervention}}
 
 ### Guidance
 

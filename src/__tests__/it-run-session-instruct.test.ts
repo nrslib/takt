@@ -32,6 +32,7 @@ const promptLanguage = vi.hoisted(() => ({ value: 'en' as 'en' | 'ja' }));
 
 vi.mock('../infra/fs/session.js', () => ({
   loadNdjsonLog: vi.fn(),
+  parseNdjsonLogContent: vi.fn(),
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -96,7 +97,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 // --- Imports (after mocks) ---
 
 import { getProvider } from '../infra/providers/index.js';
-import { loadNdjsonLog } from '../infra/fs/session.js';
+import { loadNdjsonLog, parseNdjsonLogContent } from '../infra/fs/session.js';
 import {
   listRecentRuns,
   loadRunSessionContext,
@@ -105,6 +106,7 @@ import { runInstructMode } from '../features/tasks/list/instructMode.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
+const mockParseNdjsonLogContent = vi.mocked(parseNdjsonLogContent);
 
 // --- Fixture helpers ---
 
@@ -182,6 +184,7 @@ describe('Integration: Run session → instruct mode with interactive flow', () 
   beforeEach(() => {
     tmpDir = createTmpDir();
     vi.clearAllMocks();
+    mockParseNdjsonLogContent.mockImplementation((_content, filepath) => mockLoadNdjsonLog(filepath));
     promptLanguage.value = 'en';
   });
 

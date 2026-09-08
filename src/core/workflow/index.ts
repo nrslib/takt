@@ -78,6 +78,16 @@ export type {
   ProviderType,
 } from './types.js';
 export type {
+  LiveInterventionChannel,
+  LiveInterventionDelivery,
+  LiveInterventionDeliveryContext,
+  LiveInterventionInstruction,
+  LiveInterventionInstructionState,
+  LiveInterventionState,
+  LiveInterventionDeliveryMode,
+  PreparedLiveInterventionDelivery,
+} from './live-intervention/types.js';
+export type {
   ReportInstructionContext,
 } from './instruction/ReportInstructionBuilder.js';
 export type {

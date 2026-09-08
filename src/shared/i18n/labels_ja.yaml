@@ -69,6 +69,7 @@ interactive:
     retry: "前回の指示書を確認して再実行"
     replay: "前回の指示書で即再実行"
     cancel: "対話モードを終了"
+    open: "実行中タスクのディレクトリを開く"
     resume: "セッションを読み込む"
     pasteImage: "クリップボード画像を添付"
     setup: "exec エージェントを設定"

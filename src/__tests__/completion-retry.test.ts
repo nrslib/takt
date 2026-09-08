@@ -5,6 +5,7 @@ import {
   buildCompletionRetryOutputSchema,
   runCompletionRetryEpisode,
 } from '../core/workflow/completion-retry.js';
+import { StructuredOutputFinalizationError } from '../core/workflow/structured-output-finalization-error.js';
 
 function response(content: string, sessionId = 'review-session'): AgentResponse {
   return {
@@ -364,5 +365,55 @@ describe('completion retry episode', () => {
     expect(result.response).toBe(latest);
     expect(result.reviewerSessionId).toBe('stable-session');
     expect(result.diagnostic?.kind).toBe('reviewer_retry_failed');
+  });
+
+  it('propagates structured output finalization errors from a reviewer retry', async () => {
+    const finalizationError = new StructuredOutputFinalizationError(
+      'structured output is missing',
+      'live_intervention',
+    );
+
+    await expect(runCompletionRetryEpisode({
+      config: { minRetry: 0, maxRetry: 1, retryInstruction: 'retry' },
+      originalInstruction: 'review',
+      initialResponse: response('initial'),
+      initialSessionId: 'review-session',
+      executeRetry: vi.fn().mockRejectedValue(finalizationError),
+      judge: vi.fn().mockResolvedValue({
+        complete: false,
+        reason: 'gap',
+        missingObligations: [{ path: 'consumer.ts', reason: 'unvisited' }],
+      }),
+      isAbort: () => false,
+    })).rejects.toBe(finalizationError);
+  });
+
+  it('keeps the latest valid response and reports a normal retry structured output error', async () => {
+    const latest = response('authoritative reviewer report', 'stable-session');
+    const finalizationError = new StructuredOutputFinalizationError(
+      'structured output is missing',
+      'normal',
+    );
+
+    const result = await runCompletionRetryEpisode({
+      config: { minRetry: 0, maxRetry: 1, retryInstruction: 'retry' },
+      originalInstruction: 'review',
+      initialResponse: latest,
+      initialSessionId: latest.sessionId,
+      executeRetry: vi.fn().mockRejectedValue(finalizationError),
+      judge: vi.fn().mockResolvedValue({
+        complete: false,
+        reason: 'gap',
+        missingObligations: [{ path: 'consumer.ts', reason: 'unvisited' }],
+      }),
+      isAbort: () => false,
+    });
+
+    expect(result.response).toBe(latest);
+    expect(result.reviewerSessionId).toBe('stable-session');
+    expect(result.diagnostic).toMatchObject({
+      kind: 'reviewer_retry_failed',
+      reason: 'structured output is missing',
+    });
   });
 });

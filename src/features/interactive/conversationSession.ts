@@ -35,6 +35,10 @@ export interface ConversationSessionStrategy {
    * from the canonical order — the same builder the readline loop uses.
    */
   summaryPromptBuilder?: SummaryPromptBuilder;
+  /** Resolve the prompt again immediately before a regular turn or /go summary. */
+  resolveCurrentPromptConfiguration?: () => ConversationPromptConfiguration | Promise<ConversationPromptConfiguration>;
+  /** Use the current conversation system prompt as /go's system prompt. */
+  useCurrentSystemPromptForSummary?: boolean;
   /**
    * The commands this mode allows. The front-end refuses the rest before they
    * reach the session, and the session reads the same list so a line a guarded
@@ -216,6 +220,15 @@ export function createConversationSession(options: ConversationSessionOptions): 
     ? options.handoffHistory.map((message) => ({ ...message }))
     : undefined;
   let shouldSendInitialPromptContext = !!options.strategy.initialPromptContext;
+  async function refreshPromptConfiguration(): Promise<void> {
+    const resolved = await options.strategy.resolveCurrentPromptConfiguration?.();
+    if (resolved === undefined) {
+      return;
+    }
+    formalSpec = resolved.formalSpec;
+    formalSpecComments = resolved.formalSpecComments ?? true;
+    systemPrompt = resolved.systemPrompt;
+  }
   /**
    * The turn whose result the session still belongs to.
    *
@@ -281,6 +294,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
     message: string,
     input: ConversationTurnInput,
   ): Promise<ConversationSessionResult> {
+    if (options.strategy.resolveCurrentPromptConfiguration !== undefined) {
+      await refreshPromptConfiguration();
+    }
     const isCurrentTurn = beginTurn(input.abortSignal);
     const previousHistory = history;
     history = [...history, { role: 'user', content: message }];
@@ -364,6 +380,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
     userNote: string,
     input: ConversationTurnInput,
   ): Promise<ConversationSessionResult> {
+    if (options.strategy.resolveCurrentPromptConfiguration !== undefined) {
+      await refreshPromptConfiguration();
+    }
     // `/go` is a turn like any other: opening it supersedes a chat turn that is
     // still running, so that one no longer writes history or session id when it
     // finally settles.
@@ -417,7 +436,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     }
     const { result, sessionId: newSessionId, error: callError } = await callAIWithRetry(
       providerPrompt.prompt,
-      summaryPrompt,
+      options.strategy.useCurrentSystemPromptForSummary ? systemPrompt : summaryPrompt,
       options.strategy.allowedTools,
       options.cwd,
       { ...ctx, sessionId: undefined },

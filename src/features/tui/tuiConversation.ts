@@ -67,6 +67,7 @@ export type TuiHandoffId =
   | 'provider'
   | 'model'
   | 'effort'
+  | 'open'
   | 'exec-setup'
   | 'exec-go';
 
@@ -218,6 +219,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
   const commandAvailability: CommandAvailability = {
     enableRetryCommand: strategy.enableRetryCommand === true,
     hasPreviousOrder: previousOrder !== undefined,
+    ...(strategy.enableOpenCommand === true ? { enableOpenCommand: true } : {}),
     ...(options.enableSettingsCommands === true ? { enableSettingsCommands: true } : {}),
     ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
   };
@@ -297,7 +299,9 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
             : {
               kind: 'notice',
               message: getLabel('tui.errors.settingValueRequired', ctx.lang, { command: match.command }),
-            };
+              };
+        case SlashCommand.Open:
+          return { kind: 'handoff', id: 'open', text: match.text || undefined };
         case SlashCommand.Go:
         case SlashCommand.Setup:
           return null;

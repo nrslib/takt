@@ -18,6 +18,7 @@ import { makeFileRunMetaPathFields } from './test-helpers.js';
 
 vi.mock('../infra/fs/session.js', () => ({
   loadNdjsonLog: vi.fn(),
+  parseNdjsonLogContent: vi.fn(),
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -97,7 +98,7 @@ vi.mock('../shared/prompts/index.js', () => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
-import { loadNdjsonLog } from '../infra/fs/session.js';
+import { loadNdjsonLog, parseNdjsonLogContent } from '../infra/fs/session.js';
 import {
   listRecentRuns,
   loadRunSessionContext,
@@ -116,6 +117,7 @@ const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
 const mockLoadTemplate = vi.mocked(loadTemplate);
 const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
+const mockParseNdjsonLogContent = vi.mocked(parseNdjsonLogContent);
 const mockConfirm = vi.mocked(confirm);
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
@@ -134,6 +136,7 @@ function setupScenarioProvider(...scenarios: Parameters<typeof createScenarioPro
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockParseNdjsonLogContent.mockImplementation((_content, filepath) => mockLoadNdjsonLog(filepath));
   process.env.TMPDIR = TEST_TMPDIR;
   mockSelectOption.mockResolvedValue('execute');
 });

@@ -21,6 +21,7 @@ import { forceFailRunningTask } from './taskForceFailActions.js';
 import * as taskRetryActions from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
+import { runLiveInterventionMode } from './liveInterventionMode.js';
 
 export type { ListNonInteractiveOptions } from './listNonInteractive.js';
 
@@ -199,6 +200,10 @@ export async function listTasks(
     } else if (type === 'running') {
       const task = tasks[idx];
       if (!task) continue;
+      if (task.runSlug !== undefined && task.worktreePath !== undefined) {
+        await runLiveInterventionMode(cwd, task);
+        continue;
+      }
       const taskAction = await showRunningTaskAndPromptAction(task);
       if (taskAction === 'force_fail') {
         await forceFailRunningTask(task, cwd);

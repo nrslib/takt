@@ -69,6 +69,7 @@ interactive:
     retry: "Review & rerun with previous instructions"
     replay: "Rerun immediately with previous instructions"
     cancel: "Exit interactive mode"
+    open: "Open the running task directory"
     resume: "Load a previous session"
     pasteImage: "Attach clipboard image"
     setup: "Configure exec agents"

@@ -30,6 +30,7 @@ import { makeFileRunMetaPathFields } from './test-helpers.js';
 
 vi.mock('../infra/fs/session.js', () => ({
   loadNdjsonLog: vi.fn(),
+  parseNdjsonLogContent: vi.fn(),
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -98,7 +99,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 // --- Imports (after mocks) ---
 
 import { getProvider } from '../infra/providers/index.js';
-import { loadNdjsonLog } from '../infra/fs/session.js';
+import { loadNdjsonLog, parseNdjsonLogContent } from '../infra/fs/session.js';
 import {
   loadRunSessionContext,
   formatRunSessionForPrompt,
@@ -109,6 +110,7 @@ import { confirm } from '../shared/prompt/confirm.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
+const mockParseNdjsonLogContent = vi.mocked(parseNdjsonLogContent);
 const mockConfirm = vi.mocked(confirm);
 
 // --- Fixture helpers ---
@@ -178,6 +180,7 @@ describe('E2E: Retry mode with failure context injection', () => {
   beforeEach(() => {
     tmpDir = createTmpDir();
     vi.clearAllMocks();
+    mockParseNdjsonLogContent.mockImplementation((_content, filepath) => mockLoadNdjsonLog(filepath));
   });
 
   afterEach(() => {
