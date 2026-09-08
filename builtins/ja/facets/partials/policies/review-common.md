@@ -7,6 +7,7 @@
 このレビューは、依頼に基づきレビュー対象として提供されたコードベースへ行う防御的な品質・セキュリティ監査である。第三者のシステムへの適用や攻撃手法の開発は目的に含まれない。
 
 {{include:policies/reviewer-evidence}}
+{{include:policies/finding-validity}}
 
 ## 原則
 

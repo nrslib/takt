@@ -68,6 +68,7 @@ const CLASSIFICATIONS = [
       'fix-verification-scope',
       'fix-verification-current-diff-regression',
       'fix-verification-preserved-condition',
+      'remediation-evidence',
     ],
   },
   {
@@ -160,6 +161,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '全シナリオを3モデルで測る production-condition suite である',
+  },
+  'remediation-evidence': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '共有 remediation 指示の変更時に実行する、固定証跡による判定比較である',
   },
   'fix-plan-cause-check': {
     defaultEligible: false,
@@ -323,6 +330,7 @@ const PREPARE_TARGET_OVERRIDES = {
   'frontend-coder': ['frontend-implement'],
   'cqrs-coder': ['cqrs-implement'],
   'fix-loop-convergence': [],
+  'remediation-evidence': [],
   'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
   'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
   'final-readiness-preservation': ['final-readiness-supervision-phase2'],

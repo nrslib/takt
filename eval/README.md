@@ -56,6 +56,15 @@ logins, is excluded from the default suite run, and asserts on a fixed
 machine-readable `JUDGEMENT:` line — invoke it explicitly
 (`npm run eval:prompts:fix-loop-convergence`).
 
+The `remediation-evidence` suite checks five fixed-input completion decisions:
+an effective alternative guard, a guard after prohibited effects, an explicit
+method requirement, absent optional execution records, and a missing required
+regression test. Run `npm run eval:prompts -- remediation-evidence --no-cache`.
+It uses Codex Sol High and live Japanese builtin facets in a reduced desk-review
+prompt, not a full remediation loop. The assertion checks one exact result
+heading; inspect the reasoning too. These are regression examples, not evidence
+of improved production convergence. Run repeated trials for comparative claims.
+
 The `fix-verifier-model-matrix` command checks two separate responsibilities on
 Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3: Phase 1 derives and
 records source-backed state and path gaps, while Phase 3 applies workflow-owned

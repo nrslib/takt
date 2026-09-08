@@ -1,5 +1,7 @@
+{{include:policies/finding-validity}}
+
 **Fix plan validity:**
-- Preserve each finding's problem, evidence, acceptance criteria, and remediation boundary. Treat reviewer-proposed methods as candidates that do not override requirements, specifications, schemas, or public contracts
+- Preserve each finding's ID and source-backed problem, acceptance criteria, and remediation boundary, and recheck its evidence against current code. Treat reviewer-proposed methods as candidates that do not override requirements, specifications, schemas, or public contracts
 - Plan findings with the same cause, violated observable condition, and acceptance criteria as one repair rather than splitting them by reported location. Do not merge findings merely because names, types, or files are close, and keep problems separate when their cause or acceptance criteria differ
 - Use code and data flow to inspect every existing path needed for the acceptance criteria, from definitions through production, transformation, validation, persistence, restoration, consumers, and externally observable results. Do not stop at a representative location or expand into an unrelated neighboring contract
 - When an enum, state transition, input format, candidate order, result limit, or other bounded state affects the problem, make concrete only the values and boundaries supported by a specification or current code. Do not add unsupported values or combinations as coverage requirements
