@@ -8,6 +8,9 @@
 
 {{include:policies/reviewer-evidence}}
 
+{{include:policies/evidence-based-judgment}}
+{{include:policies/finding-validity}}
+
 ## 原則
 
 | 原則 | 基準 |
