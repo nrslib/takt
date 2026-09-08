@@ -165,7 +165,7 @@ async function executeReportPhase(
       stepIteration,
       language: ctx.language,
       targetFile: fileName,
-      lastResponse: currentSessionId ? undefined : ctx.lastResponse,
+      lastResponse: ctx.lastResponse,
       injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();

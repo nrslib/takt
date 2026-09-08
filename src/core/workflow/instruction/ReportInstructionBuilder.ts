@@ -34,7 +34,7 @@ export interface ReportInstructionContext {
   language?: Language;
   /** Target report file name (when generating a single report) */
   targetFile?: string;
-  /** Last response from Phase 1 (used when report phase retries in a new session) */
+  /** Latest Phase 1 work result, supplied regardless of report session reuse. */
   lastResponse?: string;
   /** Advisory diagnostics emitted by the reviewer completion check. */
   completionRetryDiagnostic?: string;
