@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import assertRemediationResult from './remediation-evidence.mjs';
 import buildRemediationEvidencePrompt from '../remediation-evidence-prompt.mjs';
+import { assertBuiltinFacetIncluded } from './builtin-facet-assembly.mjs';
 
 const unknownSection = '## 任意の実行記録がない未確認範囲（判定非ブロッキング）\nなし';
 
@@ -38,11 +39,19 @@ test('requires one nonempty non-blocking unknown section in either language', ()
   }
 });
 
-test('selects English facets explicitly and rejects unsupported languages', () => {
+test('selects each builtin language through facet expansion and preserves the default', () => {
   const vars = { task: 'Task', fix_plan: 'Plan', fix_report: 'Report' };
-  const prompt = buildRemediationEvidencePrompt({ vars: { ...vars, language: 'en' } });
-  assert.ok(prompt.includes('## Result: verified / incomplete / plan_invalid'));
-  assert.equal(prompt.includes('{{include:'), false);
+  for (const language of ['ja', 'en']) {
+    const prompt = buildRemediationEvidencePrompt({ vars: { ...vars, language } });
+    assertBuiltinFacetIncluded(prompt, language, 'policies/review.md');
+    assertBuiltinFacetIncluded(prompt, language, 'output-contracts/fix-verification.md');
+    assert.equal(prompt.includes('{{include:'), false);
+  }
+  assert.equal(buildRemediationEvidencePrompt({ vars }), buildRemediationEvidencePrompt({ vars: { ...vars, language: 'ja' } }));
+});
+
+test('rejects unsupported facet languages', () => {
+  const vars = { task: 'Task', fix_plan: 'Plan', fix_report: 'Report' };
   assert.throws(() => buildRemediationEvidencePrompt({ vars: { ...vars, language: '../ja' } }), /Unknown facet language/);
 });
 

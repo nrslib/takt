@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
 import assertEvidenceJudgment from './evidence-judgment.mjs';
 import buildEvidenceJudgmentPrompt from '../evidence-judgment-prompt.mjs';
+import { assertBuiltinFacetIncluded } from './builtin-facet-assembly.mjs';
 
 test('expands every shipped policy in both languages without missing or cyclic includes', () => {
   for (const language of ['ja', 'en']) {
@@ -44,16 +45,36 @@ test('assembles each role with resolved includes without leaking the expected an
   }
 });
 
+test('rejects absent output and absent expected decisions with a failed grading result', () => {
+  for (const [output, vars] of [
+    ['', { expected_decision: 'retain' }],
+    ['DECISION: retain', {}],
+  ]) {
+    const result = assertEvidenceJudgment(output, { vars });
+    assert.equal(result.pass, false);
+    assert.equal(result.score, 0);
+    assert.equal(typeof result.reason, 'string');
+    assert.ok(result.reason.length > 0);
+  }
+});
+
 test('rejects unknown roles instead of selecting an unrelated policy', () => {
   for (const role of ['unknown', 'toString', undefined]) {
     assert.throws(() => buildEvidenceJudgmentPrompt({ vars: { role, task: 'Task' } }), /Unknown judgment role/);
   }
 });
 
-test('selects English facets explicitly and rejects unsupported languages', () => {
+test('selects each builtin language through facet expansion and preserves the default', () => {
   const vars = { role: 'planner', task: 'Task' };
-  const prompt = buildEvidenceJudgmentPrompt({ vars: { ...vars, language: 'en' } });
-  assert.ok(prompt.includes('Evidence-Based Judgment'));
-  assert.equal(prompt.includes('{{include:'), false);
+  for (const language of ['ja', 'en']) {
+    const prompt = buildEvidenceJudgmentPrompt({ vars: { ...vars, language } });
+    assertBuiltinFacetIncluded(prompt, language, 'policies/contract-change.md');
+    assert.equal(prompt.includes('{{include:'), false);
+  }
+  assert.equal(buildEvidenceJudgmentPrompt({ vars }), buildEvidenceJudgmentPrompt({ vars: { ...vars, language: 'ja' } }));
+});
+
+test('rejects unsupported facet languages', () => {
+  const vars = { role: 'planner', task: 'Task' };
   assert.throws(() => buildEvidenceJudgmentPrompt({ vars: { ...vars, language: '../ja' } }), /Unknown facet language/);
 });
