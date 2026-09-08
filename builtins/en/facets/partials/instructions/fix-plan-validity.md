@@ -1,5 +1,7 @@
 {{include:policies/finding-validity}}
 
+{{include:policies/evidence-based-judgment}}
+
 **Fix plan validity:**
 - Preserve each finding's ID and source-backed problem, acceptance criteria, and remediation boundary, and recheck its evidence against current code. Treat reviewer-proposed methods as candidates that do not override requirements, specifications, schemas, or public contracts
 - Plan findings with the same cause, violated observable condition, and acceptance criteria as one repair rather than splitting them by reported location. Do not merge findings merely because names, types, or files are close, and keep problems separate when their cause or acceptance criteria differ

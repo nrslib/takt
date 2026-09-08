@@ -7,6 +7,8 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 This review is a defensive quality and security audit performed, on request, against a codebase provided as the review target. Applying techniques against third-party systems or developing attack tooling is not part of the purpose.
 
 {{include:policies/reviewer-evidence}}
+
+{{include:policies/evidence-based-judgment}}
 {{include:policies/finding-validity}}
 
 ## Principles

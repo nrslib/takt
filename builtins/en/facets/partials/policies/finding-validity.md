@@ -1,8 +1,6 @@
-## Finding Premises and Counterevidence
+## Finding Reassessment and Tracking
 
-- Before requesting a repair or returning work, separate conditions required by the original requirements, specifications, and public contracts from methods proposed by a reviewer or plan. A proposed method does not become mandatory merely by appearing in a plan or prior verification
-- Inspect both supporting evidence and current code or records that could refute the finding. Trace real entries to the observation point, including existing validation, aborts, and rollback. Do not justify a defect with a hypothetical path that removes an active guard
-- A guard's existence alone does not establish resolution. Confirm that it acts before prohibited results or side effects, prevents the relevant failure, and preserves required success behavior. When another method meets these conditions, a difference from the proposal alone does not justify returning work
-- Preserve explicit requirements for methods, structure, tests, and documentation. Equivalent results do not excuse omitting these obligations
-- Distinguish absent records from absent required verification mechanisms. To require an evidence repair, identify the source-backed verification obligation, the concrete violation to detect, and why existing verification cannot detect it. Missing optional execution records remain unverified, neither proof of success nor grounds for returning work
-- When counterevidence refutes a prior finding's premise, record the connection to that finding, the evidence, and why confirmation alone is sufficient. Do not change code or tests on the assumption that a defect remains. Preserve mandatory conditions and establish a real gap before classifying it as a plan, implementation, or evidence defect
+- Apply only when handling submitted findings. Follow the shared judgment principles for evidence and unknowns while preserving the current stage's decision labels, repair authority, and reporting contract
+- When existing IDs are supplied, preserve them and the original acceptance criteria, linking current evidence and counterevidence. Do not invent IDs or prior findings for inputs without them or without history
+- When a finding's premise is refuted, record why confirmation alone is sufficient. Do not require unnecessary code or test changes on the assumption that the finding remains
+- Preserve mandatory conditions and establish a real gap before classifying it as a plan, implementation, or evidence defect. Missing optional execution records alone do not justify returning work; record them as unverified

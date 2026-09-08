@@ -35,6 +35,7 @@ const CLASSIFICATIONS = [
       'review-adjudication-binding',
       'security-review-method',
       'review-impact-path-coverage',
+      'evidence-judgment',
     ],
   },
   {
@@ -132,6 +133,12 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'evidence-judgment': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '共通判断ポリシーを役割別の固定入力で評価する',
+  },
   coding: {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -321,6 +328,7 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'evidence-judgment': [],
   coding: ['coding-review'],
   arch: ['arch-review'],
   antipattern: ['antipattern-review'],

@@ -56,14 +56,29 @@ logins, is excluded from the default suite run, and asserts on a fixed
 machine-readable `JUDGEMENT:` line — invoke it explicitly
 (`npm run eval:prompts:fix-loop-convergence`).
 
+The `evidence-judgment` suite checks the shared evidence-based judgment policy
+across planner, implementer, adjudicator, and Companion roles. It uses live role
+facets and the shared contract-change policy in a reduced fixed-input prompt;
+it does not reproduce a complete step or execute the actions being judged.
+Run `npm run eval:prompts -- evidence-judgment --no-cache`. The five cases cover
+an unknown cause, an optional method, mandatory test execution, an effective upstream guard, and
+a guard after irreversible effects. Inspect the reasoning as well as the exact
+`DECISION:` classification. It requires Codex login and is explicitly selected.
+The independent `evidence-based-judgment` policy contains the shared principles;
+`contract-change` and `review-common` consume it, while `finding-validity`
+contains only submitted-finding tracking and disposition rules.
+
 The `remediation-evidence` suite checks five fixed-input completion decisions:
 an effective alternative guard, a guard after prohibited effects, an explicit
 method requirement, absent optional execution records, and a missing required
 regression test. Run `npm run eval:prompts -- remediation-evidence --no-cache`.
-It uses Codex Sol High and live Japanese builtin facets in a reduced desk-review
+It uses Codex Sol High and live builtin facets in a reduced desk-review
 prompt, not a full remediation loop. The assertion checks one exact result
-heading; inspect the reasoning too. These are regression examples, not evidence
+heading and one nonempty dedicated non-blocking unknown section; inspect the
+reasoning and section contents too. These are regression examples, not evidence
 of improved production convergence. Run repeated trials for comparative claims.
+Both suites default to Japanese facets. Add `--var language=en` to evaluate
+English facets against the same Japanese case inputs and evaluation wrapper.
 
 The `fix-verifier-model-matrix` command checks two separate responsibilities on
 Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3: Phase 1 derives and
