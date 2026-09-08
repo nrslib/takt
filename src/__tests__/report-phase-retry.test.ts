@@ -961,6 +961,12 @@ describe('runReportPhase retry with new session', () => {
       outputContracts: [{ name: '03-first.md' }, { name: '03-second.md' }],
     };
     const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    ctx.injectedReports = [{
+      reference: 'requirements.md',
+      scope: 'resume-snapshot-readonly',
+      content: 'REQ-A\nOriginal requirements before fallback',
+    }];
+    const expectedReports = structuredClone(ctx.injectedReports);
     const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
     ctx.updatePersonaSession = (key, sessionId) => {
       sessionUpdates.push({ key, sessionId });
@@ -1020,6 +1026,8 @@ describe('runReportPhase retry with new session', () => {
     expect(runAgentMock).toHaveBeenCalledTimes(4);
     for (const [, instruction] of runAgentMock.mock.calls) {
       expect(instruction).toContain('Implemented feature X');
+      const reports = instruction.split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+      expect(reports).toEqual(expectedReports);
     }
     expect(sessionUpdates).toEqual([
       { key: '["coder","claude"]', sessionId: 'claude-fallback-session' },

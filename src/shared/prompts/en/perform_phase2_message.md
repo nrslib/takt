@@ -42,6 +42,7 @@ Use these records for requirements, prior findings, and historical context. If t
 {{#if hasLastResponse}}
 
 ## Work Result
+
 The following is the latest Phase 1 work result for this execution, explicitly supplied even when the same session is reused. Use it as the primary evidence of current work for every report and retry. It is not a previous step response, conversation summary, or past reference report. Preserve its results, verification evidence, and limitations; a completion claim alone does not override requirements or prove unverified work:
 
 {{lastResponse}}
