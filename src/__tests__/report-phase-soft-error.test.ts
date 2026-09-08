@@ -129,7 +129,9 @@ function makeParallelRunner(): ParallelRunner {
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: {
       prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
-      buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
+      prepareInstruction: vi.fn((step: WorkflowStep) => ({
+        text: `instruction:${step.name}`, injectedReports: [],
+      })),
       emitStepReports: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
       normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
@@ -186,6 +188,18 @@ beforeEach(() => {
 });
 
 describe('ReportPhaseGenerationError soft error', () => {
+  it('passes injected reports to Phase 2 without adding them to Phase 3 context', async () => {
+    const injectedReports = [{ reference: 'requirements.md', scope: 'parent-run-readonly' as const, content: 'REQ-A' }];
+    await makeStepExecutor().applyPostExecutionPhases(
+      makeReportStep(), makeState(), 1, makeDoneResponse(), vi.fn(),
+      undefined, undefined, undefined, undefined, injectedReports,
+    );
+    expect(runReportPhase).toHaveBeenCalledOnce();
+    expect(vi.mocked(runReportPhase).mock.calls[0]?.[2].injectedReports).toEqual(injectedReports);
+    expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
+    expect(vi.mocked(runStatusJudgmentPhase).mock.calls[0]?.[1]).not.toHaveProperty('injectedReports');
+  });
+
   it('continues StepExecutor to Phase 3 when report phase raises ReportPhaseGenerationError', async () => {
     const executor = makeStepExecutor();
     const step = makeReportStep();

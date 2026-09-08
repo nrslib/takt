@@ -11,7 +11,8 @@
 import type { WorkflowStep, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
-import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
+import { escapeTemplateChars, prepareTemplatePlaceholders } from './escape.js';
+import type { PreparedInstruction } from './prepared-instruction.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderFallbackNotice } from './fallback-notice.js';
 import {
@@ -91,6 +92,10 @@ export class InstructionBuilder {
    * in a single loadTemplate() call.
    */
   build(): string {
+    return this.prepare().text;
+  }
+
+  prepare(): PreparedInstruction {
     const language = this.context.language ?? 'en';
 
     // Execution context variables
@@ -156,14 +161,15 @@ export class InstructionBuilder {
       : '';
 
     // Instructions (step instruction with placeholder processing)
-    const instructions = this.appendCompanionInstruction(replaceTemplatePlaceholders(
+    const prepared = prepareTemplatePlaceholders(
       tmpl,
       this.step,
       {
         ...this.context,
         previousResponseText: previousResponsePrepared || undefined,
       },
-    ));
+    );
+    const instructions = this.appendCompanionInstruction(prepared.text);
 
     // Workflow name and description
     const workflowName = this.context.workflowName ?? '';
@@ -203,7 +209,7 @@ export class InstructionBuilder {
       ? aiQualityGates.map(gate => `- ${gate}`).join('\n')
       : '';
 
-    return loadTemplate('perform_phase1_message', language, {
+    const text = loadTemplate('perform_phase1_message', language, {
       workingDirectory: this.context.cwd,
       hasGitRules,
       gitRules,
@@ -243,6 +249,7 @@ export class InstructionBuilder {
       workflowRulesBeforeInstruction: workflowRules.beforeInstructionRules,
       instructions,
     });
+    return { text, injectedReports: prepared.injectedReports };
   }
 
   /**

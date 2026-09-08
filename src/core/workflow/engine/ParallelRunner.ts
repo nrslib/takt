@@ -475,7 +475,7 @@ export class ParallelRunner {
             throw new Error(`Prepared parallel sub-step is missing for "${subStep.name}"`);
           }
           const { executableSubStep, subIteration } = preparedSubStep;
-          const subInstruction = this.deps.stepExecutor.buildInstruction(
+          const subInstruction = this.deps.stepExecutor.prepareInstruction(
             executableSubStep,
             subIteration,
             state,
@@ -486,7 +486,7 @@ export class ParallelRunner {
               reviewerOperationOrigin(subStep.name),
             ),
           );
-          const phase1Instruction = subInstruction;
+          const phase1Instruction = subInstruction.text;
           subStepInstructionByName.set(subStep.name, phase1Instruction);
           const parentIteration = state.iteration;
           const subPm = providerInfoByStep.get(subStep.name);
@@ -814,7 +814,10 @@ export class ParallelRunner {
             : { ...basePhaseContext, completionRetryDiagnostic };
           if (subStep.outputContracts && subStep.outputContracts.length > 0) {
             try {
-              const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
+              const reportResult = await runReportPhase(subStep, subIteration, {
+                ...phaseCtx,
+                injectedReports: subInstruction.injectedReports,
+              });
               if (reportResult && 'blocked' in reportResult) {
                 const blockedResponse: AgentResponse = {
                   ...subResponse,

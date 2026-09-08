@@ -43,6 +43,7 @@ import {
   StructuredAgentResponseError,
 } from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
+import type { InjectedReport, PreparedInstruction } from '../instruction/prepared-instruction.js';
 import type {
   DynamicFacetSelectionContext,
   DynamicFacetSelectorCoordinator,
@@ -253,6 +254,7 @@ export interface StepExecutorDeps {
 export interface PreparedNormalStepExecution {
   readonly executableStep: AgentWorkflowStep;
   readonly phase1Instruction: string;
+  readonly injectedReports: readonly InjectedReport[];
   readonly priorStepResponseText?: string;
   readonly stepIteration: number;
 }
@@ -999,7 +1001,7 @@ export class StepExecutor {
       task,
       stepIteration,
     );
-    const instruction = this.buildInstruction(
+    const instruction = this.prepareInstruction(
       executableStep,
       stepIteration,
       state,
@@ -1014,10 +1016,11 @@ export class StepExecutor {
     return {
       executableStep,
       phase1Instruction: this.buildPhase1Instruction(
-        instruction,
+        instruction.text,
         executableStep,
         runtime,
       ),
+      injectedReports: instruction.injectedReports,
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
       stepIteration,
     };
@@ -1214,6 +1217,18 @@ export class StepExecutor {
     fallbackContext?: FallbackContext,
     transaction?: InstructionBuildTransaction,
   ): string {
+    return this.prepareInstruction(step, stepIteration, state, task, maxSteps, fallbackContext, transaction).text;
+  }
+
+  prepareInstruction(
+    step: WorkflowStep,
+    stepIteration: number,
+    state: WorkflowState,
+    task: string,
+    maxSteps: number | 'infinite',
+    fallbackContext?: FallbackContext,
+    transaction?: InstructionBuildTransaction,
+  ): PreparedInstruction {
     const suppressPreviousResponse = state.pendingFallback !== undefined
       && (state.lastOutput?.status === 'error' || state.lastOutput?.status === 'rate_limited');
     const includePreviousResponse = !suppressPreviousResponse;
@@ -1288,7 +1303,7 @@ export class StepExecutor {
         getRunSlug: () => this.deps.getRunId(),
         getRunPathNamespace: () => this.deps.getRunPathNamespace(),
       }),
-    }).build();
+    }).prepare();
     return instruction;
   }
 
@@ -1310,6 +1325,7 @@ export class StepExecutor {
       terminalOperation: NonNullable<StepRunResult['terminalOperation']>,
     ) => void,
     phase2Diagnostic?: string,
+    injectedReports?: readonly InjectedReport[],
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -1346,7 +1362,7 @@ export class StepExecutor {
     // Report generation is only valid after a completed Phase 1 response.
     if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
       try {
-        const reportResult = await runReportPhase(step, stepIteration, phaseCtx);
+        const reportResult = await runReportPhase(step, stepIteration, { ...phaseCtx, injectedReports });
         if (reportResult && 'blocked' in reportResult) {
           onTerminalOperation?.({
             origin: reviewerOperationOrigin(step.name),
@@ -1460,7 +1476,7 @@ export class StepExecutor {
     task: string,
     maxSteps: number | 'infinite',
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
-    prebuiltInstruction?: string,
+    prebuiltInstruction?: PreparedInstruction,
     runtime?: RuntimeStepResolution,
     preparedExecution?: PreparedNormalStepExecution,
   ): Promise<StepRunResult> {
@@ -1472,15 +1488,16 @@ export class StepExecutor {
     const executableStep = preparedExecution?.executableStep ?? step as AgentWorkflowStep;
     const executionRuntime = runtime;
 
-    const instruction = preparedExecution?.phase1Instruction
-      ?? prebuiltInstruction
-      ?? this.buildInstruction(
+    const preparedInstruction = preparedExecution === undefined
+      ? prebuiltInstruction ?? this.prepareInstruction(
         executableStep,
         stepIteration,
         state,
         task,
         maxSteps,
-      );
+      )
+      : { text: preparedExecution.phase1Instruction, injectedReports: preparedExecution.injectedReports };
+    const instruction = preparedInstruction.text;
     const phase1Instruction = preparedExecution?.phase1Instruction
       ?? this.buildPhase1Instruction(instruction, executableStep, executionRuntime);
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(
@@ -1873,6 +1890,7 @@ export class StepExecutor {
           terminalOperation = operation;
         },
         completionRetryDiagnostic,
+        preparedInstruction.injectedReports,
       );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {

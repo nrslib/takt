@@ -1,3 +1,4 @@
+import type { PreparedInstruction } from '../instruction/prepared-instruction.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { RATE_LIMIT_ERROR_MESSAGE } from '../../models/response.js';
 import type {
@@ -111,7 +112,7 @@ interface WorkflowRunLoopDeps {
   ) => Promise<string>;
   runStep: (
     step: WorkflowStep,
-    prebuiltInstruction?: string,
+    prebuiltInstruction?: PreparedInstruction,
     runtime?: RuntimeStepResolution,
     stepIteration?: number,
     preparedExecution?: PreparedNormalStepExecution,
@@ -132,11 +133,11 @@ interface WorkflowRunLoopDeps {
     stepIteration: number,
     content: string,
   ) => void;
-  buildInstruction: (
+  prepareInstruction: (
     step: WorkflowStep,
     stepIteration: number,
     fallbackContext?: FallbackContext,
-  ) => string;
+  ) => PreparedInstruction;
   buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   /** Engine が通常 agent ステップに渡す、実行前に一度だけ確定した入力。 */
   prepareNormalStepExecution: (
@@ -904,7 +905,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
     let stepRuntime: RuntimeStepResolution | undefined;
     let preparedExecution: PreparedNormalStepExecution | undefined;
     let executionStep: WorkflowStep;
-    let prebuiltInstruction: string | undefined;
+    let prebuiltInstruction: PreparedInstruction | undefined;
     let stepInstruction: string;
     let providerInfo: StepProviderInfo;
     let stepEventWorkflowStack: StepSpanParams['workflowStack'];
@@ -941,11 +942,11 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
           );
           const resolvedExecutionStep = resolvedPreparedExecution?.executableStep ?? step;
           const resolvedPrebuiltInstruction = resolvedPreparedExecution === undefined && !isDelegated
-            ? deps.buildInstruction(step, stepIteration, resolvedRuntime?.fallback)
+            ? deps.prepareInstruction(step, stepIteration, resolvedRuntime?.fallback)
             : undefined;
           const resolvedStepInstruction = resolvedPreparedExecution?.phase1Instruction
             ?? (resolvedPrebuiltInstruction
-            ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction, resolvedRuntime)
+            ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction.text, resolvedRuntime)
             : '');
           const resolvedProviderInfo = deps.resolveStepProviderModel(resolvedExecutionStep, resolvedRuntime);
           const resolvedWorkflowStack = requireWorkflowResumeStackSnapshot(
@@ -1337,11 +1338,11 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
         );
         const resolvedExecutionStep = resolvedPreparedExecution?.executableStep ?? step;
         const resolvedPrebuiltInstruction = resolvedPreparedExecution === undefined && !isDelegated
-          ? deps.buildInstruction(step, stepIteration, resolvedRuntime?.fallback)
+          ? deps.prepareInstruction(step, stepIteration, resolvedRuntime?.fallback)
           : undefined;
         const resolvedStepInstruction = resolvedPreparedExecution?.phase1Instruction
           ?? (deps.options.observability?.enabled === true && resolvedPrebuiltInstruction
-            ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction, resolvedRuntime)
+            ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction.text, resolvedRuntime)
             : '');
         const resolvedProviderInfo = deps.resolveStepProviderModel(resolvedExecutionStep, resolvedRuntime);
         return {

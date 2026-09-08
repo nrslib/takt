@@ -263,7 +263,7 @@ export class TeamLeaderRunner {
     }
     const teamLeaderConfig = executableStep.teamLeader;
     const leaderStep = createTeamLeaderPlanningStep(executableStep);
-    const instruction = this.deps.stepExecutor.buildInstruction(
+    const preparedInstruction = this.deps.stepExecutor.prepareInstruction(
       leaderStep,
       stepIteration,
       state,
@@ -272,6 +272,7 @@ export class TeamLeaderRunner {
       runtime?.fallback,
       instructionTransaction,
     );
+    const instruction = preparedInstruction.text;
     const leaderRuntime = await this.resolveLeaderAutoRouting(
       leaderStep,
       runtime,
@@ -1026,6 +1027,8 @@ export class TeamLeaderRunner {
       (operation) => {
         terminalOperation = operation;
       },
+      undefined,
+      preparedInstruction.injectedReports,
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);
