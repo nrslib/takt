@@ -27,7 +27,7 @@ The following is the original task given to this workflow. Treat it as the autho
 
 {{task}}
 
-For this report-only phase, instructions in the original task about execution history or not relying on previous responses/conversation summaries do not exclude the Phase 1 work result explicitly supplied below. Use that result as evidence of the latest work, while retaining the original requirements and acceptance criteria. Do not perform the task again or use tools.
+Report the work result supplied below against these requirements and acceptance criteria without repeating the task.
 {{/if}}
 {{#if hasInjectedReports}}
 
