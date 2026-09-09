@@ -1,10 +1,15 @@
 ```markdown
 # Implementation Completion Evidence
 
+Report Status: Report complete / Missing handoff information
+
+## Missing Handoff Information
+{Identify missing upstream obligations, ID mappings, or individual work results; "none" if absent. A plan that defines no IDs is not missing information.}
+
 ## Completion Contracts
 | Contract ID | Origin | Upstream Completion Obligation | Implementation Result | Implementation Location | Counterexample and Observed Result | Evidence | Status |
 |-------------|--------|-------------------------------|-----------------------|-------------------------|------------------------------------|----------|--------|
-| `{ID}` | Plan / Newly discovered (discovery stage) | {meaning of the same ID in the upstream contract ledger} | {implemented behavior or preservation obligation} | `{file:line, or "not implemented"}` | {rejected incorrect implementation and concrete observed value, effect, record, field, argument, or event; do not infer rejection from string absence alone; or not run with reason} | Valid: {result}; Failure: {result or N/A with basis}; Boundary: {result or N/A with basis}; Assertion: {observation}; Command: `{execution}` | Verified / Incomplete / Environment-limited |
+| `{ID, or "No ID" when inputs define none}` | Plan / Newly discovered (discovery stage) | {meaning of the upstream obligation} | {implemented behavior or preservation obligation} | `{file:line, "not implemented", or "unknown" if information is absent}` | {rejected incorrect implementation and concrete observed value, effect, record, field, argument, or event; do not infer rejection from string absence alone; or not run with reason} | Valid: {result}; Failure: {result or N/A with basis}; Boundary: {result or N/A with basis}; Assertion: {observation}; Command: `{execution}` | Verified / Incomplete / Environment-limited / Insufficient information |
 
 ## Impact-Path Verification (only for applicable contracts)
 | Contract ID | Producers / Equivalent Branches / Auxiliary Entry Points / Consumers Checked | Migrated / Preserved / Obsolete Paths | Applicable Invariants and Continuous Scenario |
@@ -14,7 +19,7 @@
 ## Quality Gates
 | Type | Execution | Result |
 |------|-----------|--------|
-| Build / Test / Static Check | `{execution}` | Pass / Fail |
+| Build / Test / Static Check | `{execution, or "unknown" when not recorded}` | Pass / Fail / Not run (explicitly reported) / Unknown |
 
 ## Unverified Scope
 | Item | Reason | Deterministic Alternative Verification | Remaining Risk |

@@ -25,7 +25,7 @@
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
     "eval:prompts": "node eval/scripts/run-evals.mjs --prepare",
     "eval:prompts:retained": "node eval/scripts/run-evals.mjs --prepare --tier retained",
-    "eval:prompts:contracts": "node --test eval/suite-registry.test.mjs eval/asserts/fix-loop-convergence.test.mjs eval/asserts/remediation-evidence.test.mjs eval/asserts/evidence-judgment.test.mjs",
+    "eval:prompts:contracts": "node --test eval/suite-registry.test.mjs eval/asserts/fix-loop-convergence.test.mjs eval/asserts/remediation-evidence.test.mjs eval/asserts/evidence-judgment.test.mjs eval/providers/implementation-report-handoff.test.mjs",
     "eval:prompts:coding": "node --test eval/asserts/coding-review-metrics.test.mjs && node eval/scripts/prepare.mjs coding-review && node eval/scripts/run-evals.mjs coding",
     "eval:prompts:fix-closure": "node eval/scripts/prepare.mjs fix-closure && node eval/scripts/run-evals.mjs fix-closure",
     "eval:prompts:fix-self-scan": "node eval/scripts/prepare.mjs fix-self-scan && node eval/scripts/run-evals.mjs fix-self-scan",

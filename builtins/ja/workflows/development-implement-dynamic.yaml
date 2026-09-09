@@ -60,12 +60,14 @@ steps:
     companion:
       $param: implementation_companions
     rules:
-      - condition: 実装が完了した
+      - condition: 引き継ぎ情報に不足がなく、実装が完了した
         next: COMPLETE
-      - condition: 実装未着手（レポートのみ）
+      - condition: 引き継ぎ情報に不足がなく、実装未着手（レポートのみ）
         next: COMPLETE
-      - condition: 実装を進行できない
+      - condition: 実装の欠落・検証失敗など具体的な実装・検証上の問題で完了できない（他の情報が不明でも、確認できた問題を優先する）
         return: need_replan
+      - condition: 引き継ぎ情報の不足だけが完了判断を妨げており、具体的な実装・検証上の問題は確認されていない
+        next: ABORT
       - condition: ユーザー入力が必要
         next: implement
         requires_user_input: true

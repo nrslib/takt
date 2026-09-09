@@ -45,6 +45,7 @@ const CLASSIFICATIONS = [
       'initial-plan-contract-closure',
       'implement-contract-traceability',
       'implementation-report-contract-traceability',
+      'implementation-report-handoff',
     ],
   },
   {
@@ -174,6 +175,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['codex'],
     cost: 'standard',
     reason: '共有 remediation 指示の変更時に実行する、固定証跡による判定比較である',
+  },
+  'implementation-report-handoff': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '実装の固定証跡から報告生成と判定の2フェーズを連続実行する比較である',
   },
   'fix-plan-cause-check': {
     defaultEligible: false,
@@ -328,6 +335,7 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'implementation-report-handoff': [],
   'evidence-judgment': [],
   coding: ['coding-review'],
   arch: ['arch-review'],

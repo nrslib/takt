@@ -57,12 +57,14 @@ steps:
     companion:
       $param: implementation_companions
     rules:
-      - condition: Implementation is complete
+      - condition: Handoff information is sufficient and implementation is complete
         next: COMPLETE
-      - condition: No implementation was started (report only)
+      - condition: Handoff information is sufficient and no implementation was started (report only)
         next: COMPLETE
-      - condition: Implementation cannot proceed
+      - condition: Concrete implementation or verification problems, such as missing implementation or failed checks, prevent completion (known problems take priority even when other information is unknown)
         return: need_replan
+      - condition: Missing handoff information alone prevents a completion decision, with no concrete implementation or verification problem established
+        next: ABORT
       - condition: User input is required
         next: implement
         requires_user_input: true

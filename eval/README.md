@@ -1,5 +1,21 @@
 # Prompt Quality Eval
 
+The `implementation-report-handoff` scenario feeds fixed upstream reports and
+implementation results into the runtime report builder, generates a Phase 2
+report, then judges only that generated report with the runtime Phase 3 builder.
+Run `npm run build` first, then
+`npm run eval:prompts -- implementation-report-handoff --no-cache`.
+It uses Claude Opus 5, Codex Luna Max, and Codex Sol High, live builtin report format/order and implementation
+workflow rules, and an isolated synthetic fixture; it is excluded from default
+runs. The four cases cover upstream IDs with ID-less work results, missing
+handoff inputs, an actual implementation failure, and a plan without IDs.
+Assertions check the resulting route, required completion rows with individual statuses, and unexpected references
+using the synthetic cases' uppercase hyphenated ID convention, not their semantic
+mapping: inspect obligation meanings, origins, evidence, and statuses manually.
+This is a reduced report-to-judgment scenario, not a full `development-core`
+execution, Phase 1 implementation test, or deterministic engine handoff guard.
+Local provider contract tests use injected fakes and do not measure model quality.
+
 promptfoo-based quality evaluation for TAKT's faceted prompts. Unlike the mock
 E2E suite (which verifies engine mechanics), this measures whether the
 *content* of personas/policies/instructions actually produces good agent

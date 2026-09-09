@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: '実装結果からPhase 2報告・Phase 3判定: 契約情報不足と実装不足の区別'
+prompts:
+  - file://../../implementation-report-handoff-prompt.mjs
+providers:
+  - id: file://../../providers/implementation-report-handoff.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/remediation-evidence
+      isolate_working_dir: true
+  - id: file://../../providers/implementation-report-handoff.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/remediation-evidence
+      isolate_working_dir: true
+  - id: file://../../providers/implementation-report-handoff.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/remediation-evidence
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  vars:
+    expected_ids: [CTR-01, CTR-02, CTR-03, TEST-DISC-01]
+    task: |
+      ラベルの前後の空白だけを除去し、大文字小文字と内部空白を保持してください。
+      空白だけなら空文字列を返し、文字列以外はTypeErrorで拒否してください。
+      各条件を純粋関数のテストで検証してください。外部サービスは使いません。
+    reports:
+      - reference: plan.md
+        scope: parent-run-readonly
+        content: |
+          | 契約ID | 完了義務 |
+          | CTR-01 | 大文字小文字と内部空白を保持する |
+          | CTR-02 | 前後の空白を除去する |
+          | CTR-03 | 空白だけなら空文字列を返す |
+      - reference: test-report.md
+        scope: parent-run-readonly
+        content: |
+          TEST-DISC-01: テスト工程で確認した既存契約。文字列以外はTypeErrorで拒否する。
+  assert:
+    - type: javascript
+      metric: report-handoff/routing
+      value: file://../../asserts/implementation-report-handoff.mjs
+tests:
+  - description: '正しい引き継ぎ: IDは上流、実装証拠は作業結果にあり台帳専用artifactはない'
+    vars:
+      expected_route: COMPLETE
+      work_result: |
+        実装完了。normalizeLabelは文字列以外をTypeErrorで拒否し、入力のtrim()を返す。
+        src/label.js:1-4に実装。test/label.test.jsは実関数を直接呼ぶ。
+        npm testで、空白だけ→空文字列、42→TypeError、" A  b "→"A  b"、"UPPER"→"UPPER"を全て確認した。
+        型チェック・lintも成功。pure functionだけなので状態・所有権・並行性の契約はない。残作業なし。
+  - description: '引き継ぎ欠落: 計画の契約IDと意味が欠落した完了自己申告を未完了にも成功にも変換しない'
+    vars:
+      reports: []
+      expected_ids: []
+      expected_route: ABORT
+      work_result: |
+        計画で定義された契約ID全件の実装と検証が完了した。build/lint/unit/ITは成功。
+        ただし計画とテスト報告の本文は今回の入力に欠落しており、契約IDと個別の完了義務は引き継がれていない。
+  - description: '実在する実装不足: 情報が揃っている失敗を引き継ぎエラーに逃がさない'
+    vars:
+      expected_route: need_replan
+      work_result: |
+        CTR-01: 大文字小文字と内部空白を保持。" A  b "→"A  b"確認済み。
+        CTR-02: 前後空白除去。上記で確認済み。
+        CTR-03: 空白だけなら空文字列。"  "→""確認済み。
+        TEST-DISC-01: テスト工程由来の文字列以外へのTypeError拒否は未実装。
+        src/label.js:1はString(value).trim()を返すため、42が"42"になり拒否しない。
+        test/label.test.jsの42拒否テストは失敗。必要な修正は入力型の検査。実装を完了できていない。
+  - description: 'IDを使わない計画: 提供されていないIDを引き継ぎ欠落と誤認しない'
+    vars:
+      expected_route: COMPLETE
+      expected_ids: []
+      reports:
+        - reference: plan.md
+          scope: parent-run-readonly
+          content: |
+            ラベルの前後空白だけを除去し、大文字小文字・内部空白を保持する。
+            空白だけなら空文字列。文字列以外はTypeError。この計画は契約IDを定義しない。
+      work_result: |
+        src/label.js:1-4で型検査とtrimを実装し、test/label.test.jsで実関数を直接呼び出した。
+        npm testは成功。" A  b "→"A  b"、"UPPER"→"UPPER"、"  "→""、42→TypeErrorをassertした。
+        型チェックとlintも成功。状態を持たない純粋関数だけなので実行交差の確認は非該当。実装完了。
