@@ -51,7 +51,7 @@ export function assertReusableWorktreePath(projectDir: string, candidatePath: st
   const fallbackCloneBaseDir = path.join(projectDir, '.takt', 'worktrees');
   const candidateAbsolutePath = path.resolve(candidatePath);
   const boundaryRoot = [cloneBaseDir, fallbackCloneBaseDir]
-    .find((root) => isPathInside(root, candidateAbsolutePath));
+    .find((root) => isPathInside(root, candidateAbsolutePath) || isRealPathInside(root, candidateAbsolutePath));
   if (boundaryRoot === undefined) {
     throw new Error(`Worktree path is outside the clone base directory: ${candidatePath}`);
   }
@@ -59,8 +59,21 @@ export function assertReusableWorktreePath(projectDir: string, candidatePath: st
   if (rootStats?.isSymbolicLink()) {
     throw new Error(`Clone base directory must not be a symlink: ${boundaryRoot}`);
   }
+  const realBoundaryRoot = fs.realpathSync(boundaryRoot);
+  let candidateBoundaryRoot = candidateAbsolutePath;
+  while (fs.realpathSync(candidateBoundaryRoot) !== realBoundaryRoot) {
+    const parent = path.dirname(candidateBoundaryRoot);
+    if (parent === candidateBoundaryRoot) {
+      throw new Error(`Worktree path is outside the clone base directory: ${candidatePath}`);
+    }
+    candidateBoundaryRoot = parent;
+  }
+  if (fs.lstatSync(candidateBoundaryRoot).isSymbolicLink()) {
+    throw new Error(`Clone base directory must not be a symlink: ${candidateBoundaryRoot}`);
+  }
+  // Normalize ancestors of the boundary only: links inside it must still be inspected.
   assertPathSegmentsAreSafe(
-    boundaryRoot,
+    candidateBoundaryRoot,
     candidateAbsolutePath,
     (violation, segmentPath) => {
       switch (violation) {

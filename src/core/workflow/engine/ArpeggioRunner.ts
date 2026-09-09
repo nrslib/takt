@@ -520,6 +520,7 @@ export class ArpeggioRunner {
     const liveDeliveries: PreparedLiveInterventionDelivery[] = [];
     if (liveIntervention !== undefined && liveIntervention.read().pending > 0) {
       liveDeliveries.push(await liveIntervention.prepareDelivery({
+        language: agentOptions.language,
         mode: 'batch_boundary',
         step: step.name,
         phase: 1,
@@ -576,6 +577,7 @@ export class ArpeggioRunner {
           return undefined;
         }
         const preparedDelivery = await liveIntervention.prepareDelivery({
+          language: agentOptions.language,
           mode: 'batch_boundary',
           step: step.name,
           phase: 1,
@@ -661,8 +663,9 @@ export class ArpeggioRunner {
             iteration,
           );
           await deliveryCommitter?.settle();
-          await prepareBoundaryDelivery();
           completedBatchIndexes.add(batch.batchIndex);
+          runningBatchIndexes.delete(batch.batchIndex);
+          await prepareBoundaryDelivery();
           return result;
         } finally {
           await deliveryCommitter?.settle();

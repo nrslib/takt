@@ -26,7 +26,7 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 }));
 
 import { runAgent } from '../agents/runner.js';
-import { requestMoreParts } from '../agents/decompose-task-usecase.js';
+import { requestMoreParts, type DecomposeTaskOptions, type MorePartsOptions } from '../agents/decompose-task-usecase.js';
 import type { StructuredCaller } from '../agents/structured-caller.js';
 import { WorkflowEngine, type WorkflowEngineOptions } from '../core/workflow/index.js';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -44,12 +44,6 @@ const REPORT_DIR = 'test-report-dir';
 
 interface LiveWorkflowEngineOptions extends WorkflowEngineOptions {
   readonly liveIntervention: LiveInterventionFileStore;
-}
-
-interface SessionAwareStructuredOptions {
-  readonly sessionId?: string;
-  readonly onPromptResolved?: (parts: { systemPrompt: string; userInstruction: string }) => void;
-  readonly onDispatch?: (permissionMode: string | undefined) => void;
 }
 
 interface SessionAwareStructuredResponse {
@@ -82,7 +76,7 @@ function createDeferred<T>(): {
 }
 
 function dispatchStructuredPrompt(
-  options: SessionAwareStructuredOptions,
+  options: DecomposeTaskOptions,
   instruction: string,
 ): void {
   options.onPromptResolved?.({
@@ -117,34 +111,36 @@ describe('TeamLeaderRunner live intervention integration', () => {
     }
   });
 
-  it('passes the complete history to the leader feedback turn on the same leader session', async () => {
+  it.each([true, false])('keeps leader feedback bounded with dispatch notification=%s', async (notifyDispatch) => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     const decompositionGate = createDeferred<SessionAwareStructuredResponse & { parts: unknown[] }>();
     let decompositionStarted!: () => void;
     const started = new Promise<void>((resolve) => {
       decompositionStarted = resolve;
     });
-    let feedbackOptions: SessionAwareStructuredOptions | undefined;
+    let feedbackOptions: MorePartsOptions | undefined;
     let feedbackInstruction = '';
+    let feedbackCalls = 0;
     const workerInstructions: string[] = [];
 
     const structuredCaller: StructuredCaller = {
       judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
-        const sessionAwareOptions = options as unknown as SessionAwareStructuredOptions;
-        dispatchStructuredPrompt(sessionAwareOptions, 'decompose the task');
+        dispatchStructuredPrompt(options, 'decompose the task');
         decompositionStarted();
         await decompositionGate.promise;
         return {
           parts: [{ id: 'part-1', title: 'one part', instruction: 'run one part' }],
           sessionId: 'leader-session',
-        } as Awaited<ReturnType<StructuredCaller['decomposeTask']>> & SessionAwareStructuredResponse;
+        };
       },
       requestMoreParts: async (originalInstruction, _results, _existingIds, options) => {
+        feedbackCalls += 1;
+        if (feedbackCalls > 10) throw new Error('feedback did not make progress');
         feedbackInstruction = originalInstruction;
-        feedbackOptions = options as unknown as SessionAwareStructuredOptions;
-        dispatchStructuredPrompt(feedbackOptions, originalInstruction);
+        feedbackOptions = options;
+        if (notifyDispatch) feedbackOptions.onDispatch?.(undefined);
         return {
           done: true,
           reasoning: 'no more parts',
@@ -196,6 +192,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     const state = await runPromise;
 
     expect(state.status).toBe('completed');
+    expect(feedbackCalls).toBeLessThanOrEqual(10);
     expect(feedbackInstruction).toContain('leader feedback instruction');
     expect(feedbackOptions?.sessionId).toBe('leader-session');
     expect(feedbackInstruction.indexOf('leader feedback instruction')).toBeGreaterThanOrEqual(0);
@@ -203,9 +200,10 @@ describe('TeamLeaderRunner live intervention integration', () => {
     expect(workerInstructions[0]).not.toContain('leader feedback instruction');
     expect(store.read()).toMatchObject({
       pending: 0,
-      deliveredSameSession: 1,
+      deliveredSameSession: notifyDispatch ? 1 : 0,
+      unconsumedWarned: notifyDispatch ? 0 : 1,
       deliveredNextStep: 0,
-      instructions: [expect.objectContaining({ state: 'deliveredSameSession' })],
+      instructions: [expect.objectContaining({ state: notifyDispatch ? 'deliveredSameSession' : 'unconsumedWarned' })],
     });
   });
 
@@ -219,14 +217,14 @@ describe('TeamLeaderRunner live intervention integration', () => {
       evaluateCondition: async () => 0,
       decomposeTask: async (instruction, _maxInitialParts, options) => {
         decompositionInstruction = instruction;
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, instruction);
+        dispatchStructuredPrompt(options, instruction);
         return {
           parts: [{ id: 'part-1', title: 'one part', instruction: 'run one part' }],
           sessionId: 'leader-session',
         };
       },
       requestMoreParts: async (_originalInstruction, _results, _existingIds, options) => {
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, 'feedback');
+        options.onDispatch?.(undefined);
         return {
           done: true,
           reasoning: 'no more parts',
@@ -279,7 +277,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
   it('retains parts returned by initial feedback when a live follow-up is complete', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     const feedbackInstructions: string[] = [];
-    const feedbackOptions: SessionAwareStructuredOptions[] = [];
+    const feedbackOptions: MorePartsOptions[] = [];
     const workerInstructions: string[] = [];
     let feedbackCallCount = 0;
 
@@ -287,7 +285,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
       judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, 'decompose');
+        dispatchStructuredPrompt(options, 'decompose');
         await store.issue('instruction before initial feedback', '2026-09-03T00:00:00.000Z');
         return {
           parts: [{ id: 'part-1', title: 'one part', instruction: 'run one part' }],
@@ -297,8 +295,8 @@ describe('TeamLeaderRunner live intervention integration', () => {
       requestMoreParts: async (originalInstruction, _results, _existingIds, options) => {
         feedbackCallCount += 1;
         feedbackInstructions.push(originalInstruction);
-        feedbackOptions.push(options as unknown as SessionAwareStructuredOptions);
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, originalInstruction);
+        feedbackOptions.push(options);
+        options.onDispatch?.(undefined);
         if (feedbackCallCount === 1) {
           await store.issue('instruction during initial feedback', '2026-09-03T00:00:01.000Z');
           return {
@@ -380,14 +378,14 @@ describe('TeamLeaderRunner live intervention integration', () => {
   it('drains an instruction issued during leader feedback before scheduling the next outcome', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     const feedbackInstructions: string[] = [];
-    const feedbackOptions: SessionAwareStructuredOptions[] = [];
+    const feedbackOptions: MorePartsOptions[] = [];
     const workerInstructions: string[] = [];
 
     const structuredCaller: StructuredCaller = {
       judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, 'decompose');
+        dispatchStructuredPrompt(options, 'decompose');
         return {
           parts: [{ id: 'part-1', title: 'one part', instruction: 'run one part' }],
           sessionId: 'leader-session',
@@ -395,11 +393,11 @@ describe('TeamLeaderRunner live intervention integration', () => {
       },
       requestMoreParts: async (originalInstruction, _results, _existingIds, options) => {
         feedbackInstructions.push(originalInstruction);
-        feedbackOptions.push(options as unknown as SessionAwareStructuredOptions);
+        feedbackOptions.push(options);
         if (feedbackInstructions.length === 1) {
           await store.issue('issued during leader feedback', '2026-09-03T00:00:01.000Z');
         }
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, originalInstruction);
+        options.onDispatch?.(undefined);
         if (feedbackInstructions.length === 1) {
           return {
             done: false,
@@ -471,14 +469,14 @@ describe('TeamLeaderRunner live intervention integration', () => {
     const workerGate = createDeferred<ReturnType<typeof makeResponse>>();
     const workerStarted = createDeferred<void>();
     const feedbackInstructions: string[] = [];
-    const feedbackOptions: SessionAwareStructuredOptions[] = [];
+    const feedbackOptions: MorePartsOptions[] = [];
     const workerInstructions: string[] = [];
 
     const structuredCaller: StructuredCaller = {
       judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, 'decompose');
+        dispatchStructuredPrompt(options, 'decompose');
         decompositionStarted.resolve();
         await decompositionGate.promise;
         return {
@@ -488,9 +486,9 @@ describe('TeamLeaderRunner live intervention integration', () => {
       },
       requestMoreParts: async (originalInstruction, _results, _existingIds, options) => {
         feedbackInstructions.push(originalInstruction);
-        const sessionAwareOptions = options as unknown as SessionAwareStructuredOptions;
+        const sessionAwareOptions = options;
         feedbackOptions.push(sessionAwareOptions);
-        dispatchStructuredPrompt(sessionAwareOptions, originalInstruction);
+        sessionAwareOptions.onDispatch?.(undefined);
         return {
           done: true,
           reasoning: 'no more parts',
@@ -575,7 +573,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     const firstFeedbackStarted = createDeferred<void>();
     const releaseFirstFeedback = createDeferred<void>();
     const feedbackInstructions: string[] = [];
-    const feedbackOptions: SessionAwareStructuredOptions[] = [];
+    const feedbackOptions: MorePartsOptions[] = [];
     let workerCallCount = 0;
     let feedbackCallCount = 0;
 
@@ -583,7 +581,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
       judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, 'decompose');
+        dispatchStructuredPrompt(options, 'decompose');
         return {
           parts: [
             { id: 'part-a', title: 'part A', instruction: 'run part A' },
@@ -595,9 +593,9 @@ describe('TeamLeaderRunner live intervention integration', () => {
       requestMoreParts: async (originalInstruction, _results, _existingIds, options) => {
         feedbackCallCount += 1;
         feedbackInstructions.push(originalInstruction);
-        const sessionAwareOptions = options as unknown as SessionAwareStructuredOptions;
+        const sessionAwareOptions = options;
         feedbackOptions.push(sessionAwareOptions);
-        dispatchStructuredPrompt(sessionAwareOptions, originalInstruction);
+        sessionAwareOptions.onDispatch?.(undefined);
         if (feedbackCallCount === 1) {
           firstFeedbackStarted.resolve();
           await releaseFirstFeedback.promise;
@@ -697,7 +695,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
       }),
     };
     const feedbackInstructions: string[] = [];
-    const feedbackOptions: SessionAwareStructuredOptions[] = [];
+    const feedbackOptions: MorePartsOptions[] = [];
     const workerInstructions: string[] = [];
     let feedbackCallCount = 0;
 
@@ -705,7 +703,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
       judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, 'decompose');
+        dispatchStructuredPrompt(options, 'decompose');
         return {
           parts: [{ id: 'part-1', title: 'one part', instruction: 'run one part' }],
           sessionId: 'leader-session',
@@ -714,8 +712,8 @@ describe('TeamLeaderRunner live intervention integration', () => {
       requestMoreParts: async (originalInstruction, _results, _existingIds, options) => {
         feedbackCallCount += 1;
         feedbackInstructions.push(originalInstruction);
-        feedbackOptions.push(options as unknown as SessionAwareStructuredOptions);
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, originalInstruction);
+        feedbackOptions.push(options);
+        options.onDispatch?.(undefined);
         if (feedbackCallCount === 1) {
           return {
             done: true,
@@ -850,7 +848,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
       judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, 'decompose');
+        dispatchStructuredPrompt(options, 'decompose');
         return {
           parts: [
             { id: 'part-a', title: 'part A', instruction: 'run part A' },
@@ -860,7 +858,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
       },
       requestMoreParts: async (_originalInstruction, _results, _existingIds, options) => {
         feedbackCallCount += 1;
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, 'feedback');
+        options.onDispatch?.(undefined);
         if (feedbackCallCount === 1) {
           firstFeedbackStarted.resolve();
           await releaseFirstFeedback.promise;
@@ -980,7 +978,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
       judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (instruction, _maxInitialParts, options) => {
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, instruction);
+        dispatchStructuredPrompt(options, instruction);
         return {
           parts: [{ id: 'part-1', title: 'one part', instruction: 'run one part' }],
           sessionId: 'leader-session-1',
@@ -1071,7 +1069,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
       judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
-        dispatchStructuredPrompt(options as unknown as SessionAwareStructuredOptions, 'decompose');
+        dispatchStructuredPrompt(options, 'decompose');
         await store.issue('leader session is required');
         return {
           parts: [{ id: 'part-1', title: 'one part', instruction: 'run one part' }],

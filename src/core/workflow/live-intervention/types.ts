@@ -39,7 +39,9 @@ export interface LiveInterventionState {
   readonly lastDelivery?: LiveInterventionDelivery;
 }
 
-export type LiveInterventionDeliveryContext = LiveInterventionDelivery;
+export interface LiveInterventionDeliveryContext extends LiveInterventionDelivery {
+  readonly language?: Language;
+}
 
 export interface PreparedLiveInterventionDelivery {
   readonly instructionIds: readonly number[];
@@ -53,3 +55,4 @@ export interface LiveInterventionChannel {
   commitDelivery(delivery: PreparedLiveInterventionDelivery): Promise<void>;
   recordTerminal(status: 'completed' | 'failed', terminalAt?: string): Promise<number>;
 }
+import type { Language } from '../../models/types.js';

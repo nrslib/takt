@@ -294,10 +294,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
     message: string,
     input: ConversationTurnInput,
   ): Promise<ConversationSessionResult> {
+    const isCurrentTurn = beginTurn(input.abortSignal);
     if (options.strategy.resolveCurrentPromptConfiguration !== undefined) {
       await refreshPromptConfiguration();
     }
-    const isCurrentTurn = beginTurn(input.abortSignal);
     const previousHistory = history;
     history = [...history, { role: 'user', content: message }];
     const prompt = prependInitialPromptContext(
@@ -380,13 +380,13 @@ export function createConversationSession(options: ConversationSessionOptions): 
     userNote: string,
     input: ConversationTurnInput,
   ): Promise<ConversationSessionResult> {
-    if (options.strategy.resolveCurrentPromptConfiguration !== undefined) {
-      await refreshPromptConfiguration();
-    }
     // `/go` is a turn like any other: opening it supersedes a chat turn that is
     // still running, so that one no longer writes history or session id when it
     // finally settles.
     const isCurrentTurn = beginTurn(input.abortSignal);
+    if (options.strategy.resolveCurrentPromptConfiguration !== undefined) {
+      await refreshPromptConfiguration();
+    }
     const resumedSessionNote = options.summarizeResumedSession === true && sessionId
       ? getLabel('interactive.noTranscript', ctx.lang)
       : undefined;

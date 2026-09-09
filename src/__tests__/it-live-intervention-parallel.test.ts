@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeSync, existsSync, openSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -183,6 +184,11 @@ describe('ParallelRunner live intervention integration', () => {
   it('reruns the whole parallel step when the parent status judgment receives an instruction', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     let issued = false;
+    vi.mocked(runReportPhase).mockImplementation(async (_step, _iteration, context) => {
+      const reportDir = resolve(projectCwd, context.reportDir);
+      mkdirSync(reportDir, { recursive: true });
+      writeFileSync(join(reportDir, 'review.md'), 'review report');
+    });
     vi.mocked(runStatusJudgmentPhase).mockImplementation(async (step) => {
       if (step.name === 'reviewers' && !issued) {
         issued = true;
@@ -206,7 +212,7 @@ describe('ParallelRunner live intervention integration', () => {
       steps: [makeStep('reviewers', {
         concurrency: 2,
         parallel: [
-          makeStep('a', { rules: [makeRule('approved', 'COMPLETE')] }),
+          makeStep('a', { outputContracts: [{ name: 'review.md', format: 'markdown' }], rules: [makeRule('approved', 'COMPLETE')] }),
           makeStep('b', { rules: [makeRule('approved', 'COMPLETE')] }),
         ],
         rules: [
@@ -217,6 +223,8 @@ describe('ParallelRunner live intervention integration', () => {
     };
 
     engine = new WorkflowEngine(config, projectCwd, 'test task', createEngineOptions(projectCwd, store));
+    const emittedReports = vi.fn();
+    engine.on('step:report', emittedReports);
     const state = await engine.run();
     const calls = vi.mocked(runAgent).mock.calls;
     const deliveryEvents = readFileSync(store.getFilePath(), 'utf8')
@@ -228,6 +236,7 @@ describe('ParallelRunner live intervention integration', () => {
     const bCalls = calls.filter(([persona]) => persona === '../personas/b.md');
 
     expect(state.status).toBe('completed');
+    expect(emittedReports).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runStatusJudgmentPhase)).toHaveBeenCalledTimes(2);
     expect(aCalls).toHaveLength(2);
     expect(bCalls).toHaveLength(2);
@@ -503,12 +512,13 @@ describe('ParallelRunner live intervention integration', () => {
       firstCallStarted = resolve;
     });
     let liveInterventionReadCount = 0;
+    let delayedIssue: Promise<number> | undefined;
     const liveIntervention: LiveInterventionChannel = {
       read: () => {
         const state = store.read();
         liveInterventionReadCount += 1;
         if (liveInterventionReadCount === 2) {
-          void store.issue('parallel delayed dispatch instruction', '2026-09-03T00:00:01.000Z');
+          delayedIssue = store.issue('parallel delayed dispatch instruction', '2026-09-03T00:00:01.000Z');
         }
         return state;
       },
@@ -554,6 +564,7 @@ describe('ParallelRunner live intervention integration', () => {
     engine = new WorkflowEngine(config, projectCwd, 'test task', createEngineOptions(projectCwd, liveIntervention));
     const runPromise = engine.run();
     await firstCallStartedPromise;
+    await delayedIssue;
     firstCallGate.resolve(undefined);
 
     const state = await runPromise;

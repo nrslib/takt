@@ -3,8 +3,7 @@ import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
 import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
 import { SlashCommand } from '../shared/constants.js';
 
-const OPEN_COMMAND = '/open' as SlashCommand;
-const LIVE_COMMANDS = [SlashCommand.Go, SlashCommand.Cancel, OPEN_COMMAND] as const;
+const LIVE_COMMANDS = [SlashCommand.Go, SlashCommand.Cancel, SlashCommand.Open] as const;
 
 describe('live intervention slash commands', () => {
   it('offers exactly the commands that live intervention can handle', () => {
@@ -23,7 +22,7 @@ describe('live intervention slash commands', () => {
 
     expect(matchSlashCommand('/go', availability)).toEqual({ command: SlashCommand.Go, text: '' });
     expect(matchSlashCommand('/cancel', availability)).toEqual({ command: SlashCommand.Cancel, text: '' });
-    expect(matchSlashCommand('/open', availability)).toEqual({ command: OPEN_COMMAND, text: '' });
+    expect(matchSlashCommand('/open', availability)).toEqual({ command: SlashCommand.Open, text: '' });
     expect(matchSlashCommand('/accept', availability)).toBeNull();
     expect(matchSlashCommand('/retry', availability)).toBeNull();
     expect(matchSlashCommand('/replay', availability)).toBeNull();

@@ -285,6 +285,7 @@ export class TeamLeaderRunner {
     const initialLiveDelivery: PreparedLiveInterventionDelivery | undefined = liveIntervention !== undefined
       && liveIntervention.read().pending > 0
       ? await liveIntervention.prepareDelivery({
+          language: this.deps.engineOptions.language,
           mode: 'next_step',
           step: step.name,
           phase: 1,
@@ -588,6 +589,7 @@ export class TeamLeaderRunner {
       const liveDelivery: PreparedLiveInterventionDelivery | undefined = liveIntervention !== undefined
         && liveIntervention.read().pending > 0
         ? await liveIntervention.prepareDelivery({
+            language: this.deps.engineOptions.language,
             mode: 'same_session',
             step: step.name,
             phase: 1,
@@ -642,6 +644,7 @@ export class TeamLeaderRunner {
         }
 
         const followUpDelivery = await liveIntervention.prepareDelivery({
+          language: this.deps.engineOptions.language,
           mode: 'same_session',
           step: step.name,
           phase: 1,
@@ -699,7 +702,16 @@ export class TeamLeaderRunner {
       };
 
       while (liveIntervention !== undefined && liveIntervention.read().pending > 0) {
+        const pendingIds = liveIntervention.read().instructions
+          .filter((instruction) => instruction.state === 'pending')
+          .map((instruction) => instruction.instructionId);
         await drainResponse();
+        const remainingIds = new Set(liveIntervention.read().instructions
+          .filter((instruction) => instruction.state === 'pending')
+          .map((instruction) => instruction.instructionId));
+        if (pendingIds.every((id) => remainingIds.has(id))) {
+          break;
+        }
       }
       return response;
     };
@@ -881,9 +893,9 @@ export class TeamLeaderRunner {
         initialParts: parts,
         maxConcurrency: teamLeaderConfig.maxConcurrency,
         abortSignal: executionAbortScope.signal,
-        hasPendingLiveIntervention: () => (
-          liveIntervention !== undefined && liveIntervention.read().pending > 0
-        ),
+        getPendingLiveInterventionIds: () => liveIntervention?.read().instructions
+          .filter((instruction) => instruction.state === 'pending')
+          .map((instruction) => instruction.instructionId) ?? [],
         beforeInitialPartExecution: async () => {
           if (liveIntervention !== undefined && liveIntervention.read().pending > 0) {
             const response = await requestLeaderFeedback({

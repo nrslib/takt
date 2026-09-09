@@ -355,6 +355,7 @@ export class ParallelRunner {
     let liveDelivery = liveIntervention !== undefined
       && liveIntervention.read().pending > 0
       ? await liveIntervention.prepareDelivery({
+          language: this.deps.engineOptions.language,
           mode: 'next_step',
           step: step.name,
           phase: 1,
@@ -390,10 +391,12 @@ export class ParallelRunner {
             throw error;
           }
           restoreParallelAttemptState(state, attemptState);
+          this.deps.stepExecutor.drainReportFiles();
           if (error.parentOccurrence !== undefined) {
             this.deps.setActiveResumePoint(step, state.iteration, error.parentOccurrence);
           }
           liveDelivery = await liveIntervention.prepareDelivery({
+            language: this.deps.engineOptions.language,
             mode: 'next_step',
             step: step.name,
             phase: 1,
@@ -405,6 +408,7 @@ export class ParallelRunner {
           throw error;
         }
         restoreParallelAttemptState(state, attemptState);
+        this.deps.stepExecutor.drainReportFiles();
         if (error.parentOccurrence !== undefined) {
           this.deps.setActiveResumePoint(step, state.iteration, error.parentOccurrence);
         }
@@ -1203,6 +1207,7 @@ export class ParallelRunner {
       }
       await liveDeliveryCommitter?.settle();
       const restartDelivery = await liveIntervention.prepareDelivery({
+        language: this.deps.engineOptions.language,
         mode: 'next_step',
         step: step.name,
         phase: 1,

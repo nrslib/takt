@@ -31,7 +31,7 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 
 import { runAgent } from '../agents/runner.js';
 import { WorkflowEngine, type WorkflowEngineOptions } from '../core/workflow/index.js';
-import type { ArpeggioStepConfig, WorkflowConfig } from '../core/models/index.js';
+import type { AgentResponse, ArpeggioStepConfig, WorkflowConfig } from '../core/models/index.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import {
@@ -180,8 +180,8 @@ describe('ArpeggioRunner live intervention integration', () => {
         type: 'delivered',
         mode: 'batch_boundary',
         step: 'process',
-        processedBatchCount: 2,
-        runningBatchIndexes: [2, 3],
+        processedBatchCount: 3,
+        runningBatchIndexes: [3],
         appliesToBatchIndexes: [4, 5],
         instructionIds: [1],
       }),

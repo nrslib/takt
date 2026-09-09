@@ -783,9 +783,7 @@ export class StepExecutor {
               response: { ...recovery.response, status: 'error', error: error.message },
               onPhaseComplete: this.deps.onPhaseComplete,
             });
-            if (afterPhase1Response === undefined) {
-              recordUsage(false, recovery.response.providerUsage);
-            }
+            recordUsage(false, recovery.response.providerUsage);
             throw error;
           }
           completeObservedPhase1Attempt({
@@ -1168,7 +1166,7 @@ export class StepExecutor {
     if (liveIntervention?.read().pending === 0) {
       return undefined;
     }
-    return liveIntervention?.prepareDelivery(context);
+    return liveIntervention?.prepareDelivery({ ...context, language: this.deps.getLanguage() });
   }
 
   private appendLiveInterventionInstruction(
@@ -1870,7 +1868,9 @@ export class StepExecutor {
     let phaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
     const drainLiveIntervention = async (
       initialResponse: AgentResponse,
+      initialUsageRecorded = false,
     ): Promise<CompanionFollowUpResult> => {
+      let usageRecorded = initialUsageRecorded;
       let drainedResponse = initialResponse;
       let drainedLiveIntervention = false;
       if (
@@ -1910,6 +1910,14 @@ export class StepExecutor {
           sameSessionDelivery,
           baseAgentOptions.onDispatch,
         );
+        // The final response is counted by its caller. Preserve each response
+        // that this extra provider turn is about to replace.
+        if (!usageRecorded) {
+          this.deps.recordSynthesizedAgentUsage(
+            step.name, providerInfo, drainedResponse.status === 'done', drainedResponse.providerUsage,
+          );
+        }
+        usageRecorded = false;
         try {
           const observed = await executeObservedPhase1Attempt({
             enabled: this.deps.observabilityEnabled?.() === true,
@@ -1937,18 +1945,26 @@ export class StepExecutor {
             onPhaseStart: this.deps.onPhaseStart,
             onPhaseComplete: this.deps.onPhaseComplete,
             failurePersona: executableStep.persona ?? executableStep.name,
+            recordFailure: () => this.deps.recordSynthesizedAgentUsage(
+              step.name, providerInfo, false, undefined,
+            ),
           });
           if (!observed.promptResolved) {
             throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
           }
-          drainedResponse = this.finalizeObservedLiveInterventionResponse({
-            eventStep: step,
-            executableStep,
-            iteration: state.iteration,
-            attempt: liveAttempt,
-            response: observed.response,
-            runtime: executionRuntime,
-          });
+          try {
+            drainedResponse = this.finalizeObservedLiveInterventionResponse({
+              eventStep: step,
+              executableStep,
+              iteration: state.iteration,
+              attempt: liveAttempt,
+              response: observed.response,
+              runtime: executionRuntime,
+            });
+          } catch (error) {
+            this.deps.recordSynthesizedAgentUsage(step.name, providerInfo, false, observed.response.providerUsage);
+            throw error;
+          }
         } finally {
           await sameSessionCommitter?.settle();
         }
@@ -2100,7 +2116,7 @@ export class StepExecutor {
               usage,
             ),
           });
-          const normalizedAfterLiveIntervention = await drainLiveIntervention(normalized);
+          const normalizedAfterLiveIntervention = await drainLiveIntervention(normalized, true);
           if (
             normalizedAfterLiveIntervention.kind === 'live_intervention'
             && normalizedAfterLiveIntervention.response.status !== 'done'

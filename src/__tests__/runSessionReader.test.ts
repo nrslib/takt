@@ -14,36 +14,24 @@ import {
   USAGE_EVENTS_LOG_FILE_SUFFIX,
 } from '../core/logging/contracts.js';
 
+interface FileRaceControl {
+  targetPath?: string;
+  run?: () => void;
+  triggered: boolean;
+  descriptor?: number;
+}
+
 const fsControl = vi.hoisted(() => ({
   reverseLogDirectory: undefined as string | undefined,
-  replaceSessionLogAfterListing: undefined as string | undefined,
-  replaceSessionLogAfterListingNow: undefined as (() => void) | undefined,
-  sessionLogReplacedAfterListing: false,
-  publishReportDuringListing: undefined as string | undefined,
-  publishReportDuringListingNow: undefined as (() => void) | undefined,
-  reportPublishedDuringListing: false,
-  replaceReportDirectory: undefined as string | undefined,
-  replaceReportDirectoryNow: undefined as (() => void) | undefined,
-  reportDirectoryReplaced: false,
-  replaceReportEntryDirectory: undefined as string | undefined,
-  replaceReportEntryDirectoryNow: undefined as (() => void) | undefined,
-  reportEntryDirectoryReplaced: false,
-  replaceReportListingDirectory: undefined as string | undefined,
-  replaceReportListingDirectoryNow: undefined as (() => void) | undefined,
-  reportListingDirectoryReplaced: false,
-  replaceReportAfterOpen: undefined as string | undefined,
-  replaceReportAfterOpenNow: undefined as (() => void) | undefined,
-  reportAfterOpenReplaced: false,
-  replaceReportAfterRead: undefined as string | undefined,
-  replaceReportAfterReadNow: undefined as (() => void) | undefined,
-  reportAfterReadReplaced: false,
-  reportAfterReadDescriptor: undefined as number | undefined,
-  replaceReportBeforeDirectoryOpen: undefined as string | undefined,
-  replaceReportBeforeDirectoryOpenNow: undefined as (() => void) | undefined,
-  reportBeforeDirectoryOpenReplaced: false,
-  replaceSessionLog: undefined as string | undefined,
-  replaceSessionLogNow: undefined as (() => void) | undefined,
-  sessionLogReplaced: false,
+  replaceSessionLogAfterListing: { triggered: false } as FileRaceControl,
+  publishReportDuringListing: { triggered: false } as FileRaceControl,
+  replaceReportDirectory: { triggered: false } as FileRaceControl,
+  replaceReportEntryDirectory: { triggered: false } as FileRaceControl,
+  replaceReportListingDirectory: { triggered: false } as FileRaceControl,
+  replaceReportAfterOpen: { triggered: false } as FileRaceControl,
+  replaceReportAfterRead: { triggered: false } as FileRaceControl,
+  replaceReportBeforeDirectoryOpen: { triggered: false } as FileRaceControl,
+  replaceSessionLog: { triggered: false } as FileRaceControl,
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -58,11 +46,11 @@ vi.mock('node:fs', async (importOriginal) => {
       const argumentCount = (args as readonly unknown[]).length;
       if (
         argumentCount === 1
-        && String(args[0]) === fsControl.replaceSessionLogAfterListing
-        && !fsControl.sessionLogReplacedAfterListing
+        && String(args[0]) === fsControl.replaceSessionLogAfterListing.targetPath
+        && !fsControl.replaceSessionLogAfterListing.triggered
       ) {
-        fsControl.sessionLogReplacedAfterListing = true;
-        fsControl.replaceSessionLogAfterListingNow?.();
+        fsControl.replaceSessionLogAfterListing.triggered = true;
+        fsControl.replaceSessionLogAfterListing.run?.();
       }
       return String(args[0]) === fsControl.reverseLogDirectory && argumentCount === 1
         ? [...entries].reverse()
@@ -71,63 +59,63 @@ vi.mock('node:fs', async (importOriginal) => {
     opendirSync: ((...args: Parameters<typeof actual.opendirSync>) => {
       const directory = actual.opendirSync(...args);
       if (
-        String(args[0]) === fsControl.replaceReportDirectory
-        && !fsControl.reportDirectoryReplaced
+        String(args[0]) === fsControl.replaceReportDirectory.targetPath
+        && !fsControl.replaceReportDirectory.triggered
       ) {
-        fsControl.reportDirectoryReplaced = true;
-        fsControl.replaceReportDirectoryNow?.();
+        fsControl.replaceReportDirectory.triggered = true;
+        fsControl.replaceReportDirectory.run?.();
       }
       if (
-        String(args[0]) === fsControl.replaceReportEntryDirectory
-        && !fsControl.reportEntryDirectoryReplaced
+        String(args[0]) === fsControl.replaceReportEntryDirectory.targetPath
+        && !fsControl.replaceReportEntryDirectory.triggered
       ) {
-        fsControl.reportEntryDirectoryReplaced = true;
-        fsControl.replaceReportEntryDirectoryNow?.();
+        fsControl.replaceReportEntryDirectory.triggered = true;
+        fsControl.replaceReportEntryDirectory.run?.();
       }
       if (
-        String(args[0]) === fsControl.replaceReportListingDirectory
-        && !fsControl.reportListingDirectoryReplaced
+        String(args[0]) === fsControl.replaceReportListingDirectory.targetPath
+        && !fsControl.replaceReportListingDirectory.triggered
       ) {
-        fsControl.reportListingDirectoryReplaced = true;
-        fsControl.replaceReportListingDirectoryNow?.();
+        fsControl.replaceReportListingDirectory.triggered = true;
+        fsControl.replaceReportListingDirectory.run?.();
       }
       if (
-        String(args[0]) === fsControl.publishReportDuringListing
-        && !fsControl.reportPublishedDuringListing
+        String(args[0]) === fsControl.publishReportDuringListing.targetPath
+        && !fsControl.publishReportDuringListing.triggered
       ) {
-        fsControl.reportPublishedDuringListing = true;
-        fsControl.publishReportDuringListingNow?.();
+        fsControl.publishReportDuringListing.triggered = true;
+        fsControl.publishReportDuringListing.run?.();
       }
       return directory;
     }) as typeof actual.opendirSync,
     openSync: ((...args: Parameters<typeof actual.openSync>) => {
       if (
-        String(args[0]) === fsControl.replaceReportBeforeDirectoryOpen
-        && !fsControl.reportBeforeDirectoryOpenReplaced
+        String(args[0]) === fsControl.replaceReportBeforeDirectoryOpen.targetPath
+        && !fsControl.replaceReportBeforeDirectoryOpen.triggered
       ) {
-        fsControl.reportBeforeDirectoryOpenReplaced = true;
-        fsControl.replaceReportBeforeDirectoryOpenNow?.();
+        fsControl.replaceReportBeforeDirectoryOpen.triggered = true;
+        fsControl.replaceReportBeforeDirectoryOpen.run?.();
       }
       if (
-        String(args[0]) === fsControl.replaceReportAfterOpen
-        && !fsControl.reportAfterOpenReplaced
+        String(args[0]) === fsControl.replaceReportAfterOpen.targetPath
+        && !fsControl.replaceReportAfterOpen.triggered
       ) {
-        fsControl.reportAfterOpenReplaced = true;
-        fsControl.replaceReportAfterOpenNow?.();
+        fsControl.replaceReportAfterOpen.triggered = true;
+        fsControl.replaceReportAfterOpen.run?.();
       }
       if (
-        String(args[0]) === fsControl.replaceSessionLog
-        && !fsControl.sessionLogReplaced
+        String(args[0]) === fsControl.replaceSessionLog.targetPath
+        && !fsControl.replaceSessionLog.triggered
       ) {
-        fsControl.sessionLogReplaced = true;
-        fsControl.replaceSessionLogNow?.();
+        fsControl.replaceSessionLog.triggered = true;
+        fsControl.replaceSessionLog.run?.();
       }
       const descriptor = actual.openSync(...args);
       if (
-        String(args[0]) === fsControl.replaceReportAfterRead
-        && !fsControl.reportAfterReadReplaced
+        String(args[0]) === fsControl.replaceReportAfterRead.targetPath
+        && !fsControl.replaceReportAfterRead.triggered
       ) {
-        fsControl.reportAfterReadDescriptor = descriptor;
+        fsControl.replaceReportAfterRead.descriptor = descriptor;
       }
       return descriptor;
     }) as typeof actual.openSync,
@@ -135,13 +123,12 @@ vi.mock('node:fs', async (importOriginal) => {
       const content = actual.readFileSync(...args);
       if (
         typeof args[0] === 'number'
-        && args[0] === fsControl.reportAfterReadDescriptor
-        && !fsControl.reportAfterReadReplaced
+        && args[0] === fsControl.replaceReportAfterRead.descriptor
+        && !fsControl.replaceReportAfterRead.triggered
       ) {
-        fsControl.reportAfterReadReplaced = true;
-        fsControl.reportAfterReadDescriptor = undefined;
-        fsControl.replaceReportAfterRead = undefined;
-        fsControl.replaceReportAfterReadNow?.();
+        fsControl.replaceReportAfterRead.triggered = true;
+            fsControl.replaceReportAfterRead.targetPath = undefined;
+        fsControl.replaceReportAfterRead.run?.();
       }
       return content;
     }) as typeof actual.readFileSync,
@@ -479,8 +466,8 @@ describe('loadRunSessionContext', () => {
     const nestedDirectory = join(runDir, 'reports', 'subworkflows');
     mkdirSync(nestedDirectory, { recursive: true });
     const replacementReportPath = join(nestedDirectory, '01-replacement.md');
-    fsControl.replaceReportDirectory = nestedDirectory;
-    fsControl.replaceReportDirectoryNow = () => {
+    fsControl.replaceReportDirectory.targetPath = nestedDirectory;
+    fsControl.replaceReportDirectory.run = () => {
       rmSync(nestedDirectory, { recursive: true, force: true });
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, '# Replacement', 'utf-8');
@@ -489,7 +476,7 @@ describe('loadRunSessionContext', () => {
     expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(
       /Report parent identity changed while reading/,
     );
-    expect(fsControl.reportDirectoryReplaced).toBe(true);
+    expect(fsControl.replaceReportDirectory.triggered).toBe(true);
   });
 
   it('should reject a nested report directory replaced after parent enumeration during earlier child traversal', () => {
@@ -509,16 +496,16 @@ describe('loadRunSessionContext', () => {
     mkdirSync(firstChildDirectory, { recursive: true });
     mkdirSync(nestedDirectory, { recursive: true });
     const replacementReportPath = join(nestedDirectory, '01-replacement.md');
-    fsControl.replaceReportEntryDirectory = firstChildDirectory;
-    fsControl.replaceReportEntryDirectoryNow = () => {
+    fsControl.replaceReportEntryDirectory.targetPath = firstChildDirectory;
+    fsControl.replaceReportEntryDirectory.run = () => {
       rmSync(nestedDirectory, { recursive: true, force: true });
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf-8');
     };
     expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(
-      /Report parent identity changed while opening/,
+      /Reports directory identity changed while reading/,
     );
-    expect(fsControl.reportEntryDirectoryReplaced).toBe(true);
+    expect(fsControl.replaceReportEntryDirectory.triggered).toBe(true);
   });
 
   it('should reject a nested report directory replaced after the parent stream opens before child identity capture', () => {
@@ -536,8 +523,8 @@ describe('loadRunSessionContext', () => {
     const nestedDirectory = join(reportsDirectory, 'subworkflows');
     const replacementReportPath = join(nestedDirectory, '01-replacement.md');
     mkdirSync(nestedDirectory, { recursive: true });
-    fsControl.replaceReportListingDirectory = reportsDirectory;
-    fsControl.replaceReportListingDirectoryNow = () => {
+    fsControl.replaceReportListingDirectory.targetPath = reportsDirectory;
+    fsControl.replaceReportListingDirectory.run = () => {
       rmSync(nestedDirectory, { recursive: true, force: true });
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf-8');
@@ -546,7 +533,7 @@ describe('loadRunSessionContext', () => {
     expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(
       /Reports directory identity changed while reading/,
     );
-    expect(fsControl.reportListingDirectoryReplaced).toBe(true);
+    expect(fsControl.replaceReportListingDirectory.triggered).toBe(true);
   });
 
   it('should reject a nested report directory replaced after the directory snapshot', () => {
@@ -567,16 +554,16 @@ describe('loadRunSessionContext', () => {
     writeFileSync(firstReportPath, '# First', 'utf-8');
     mkdirSync(nestedDirectory, { recursive: true });
     writeFileSync(join(nestedDirectory, '01-safe.md'), '# Safe', 'utf-8');
-    fsControl.replaceReportAfterOpen = firstReportPath;
-    fsControl.replaceReportAfterOpenNow = () => {
+    fsControl.replaceReportAfterOpen.targetPath = firstReportPath;
+    fsControl.replaceReportAfterOpen.run = () => {
       rmSync(nestedDirectory, { recursive: true, force: true });
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf-8');
     };
     expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(
-      /Report parent identity changed while opening/,
+      /Reports directory identity changed while reading/,
     );
-    expect(fsControl.reportAfterOpenReplaced).toBe(true);
+    expect(fsControl.replaceReportAfterOpen.triggered).toBe(true);
   });
 
   it('should reject a nested report directory replaced after parent enumeration before child open', () => {
@@ -594,8 +581,8 @@ describe('loadRunSessionContext', () => {
     const nestedDirectory = join(reportsDirectory, 'subworkflows');
     const replacementReportPath = join(nestedDirectory, '01-replacement.md');
     mkdirSync(nestedDirectory, { recursive: true });
-    fsControl.replaceReportBeforeDirectoryOpen = nestedDirectory;
-    fsControl.replaceReportBeforeDirectoryOpenNow = () => {
+    fsControl.replaceReportBeforeDirectoryOpen.targetPath = nestedDirectory;
+    fsControl.replaceReportBeforeDirectoryOpen.run = () => {
       rmSync(nestedDirectory, { recursive: true, force: true });
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf-8');
@@ -604,7 +591,7 @@ describe('loadRunSessionContext', () => {
     expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(
       /Report parent identity changed while opening/,
     );
-    expect(fsControl.reportBeforeDirectoryOpenReplaced).toBe(true);
+    expect(fsControl.replaceReportBeforeDirectoryOpen.triggered).toBe(true);
   });
 
   it('should load only requested reports and ignore unexpected oversized reports', () => {
@@ -748,8 +735,8 @@ describe('loadRunSessionContext', () => {
     const requestedReportPath = join(nestedDirectory, 'requested.md');
     mkdirSync(nestedDirectory, { recursive: true });
     writeFileSync(requestedReportPath, 'SAFE_ORIGINAL', 'utf-8');
-    fsControl.replaceReportBeforeDirectoryOpen = nestedDirectory;
-    fsControl.replaceReportBeforeDirectoryOpenNow = () => {
+    fsControl.replaceReportBeforeDirectoryOpen.targetPath = nestedDirectory;
+    fsControl.replaceReportBeforeDirectoryOpen.run = () => {
       rmSync(nestedDirectory, { recursive: true, force: true });
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(requestedReportPath, 'EXTERNAL_MARKER', 'utf-8');
@@ -758,7 +745,7 @@ describe('loadRunSessionContext', () => {
     expect(() => loadRunSessionContext(tmpDir, slug, {
       reportNames: ['subworkflows/requested.md'],
     })).toThrow(/Report parent identity changed while opening/);
-    expect(fsControl.reportBeforeDirectoryOpenReplaced).toBe(true);
+    expect(fsControl.replaceReportBeforeDirectoryOpen.triggered).toBe(true);
   });
 
   it('should discard a report scan that overlaps actual report publication', () => {
@@ -774,15 +761,15 @@ describe('loadRunSessionContext', () => {
     });
     const reportsDirectory = join(runDir, 'reports');
     writeReportFile(reportsDirectory, 'stable.md', 'STABLE_REPORT');
-    fsControl.publishReportDuringListing = reportsDirectory;
-    fsControl.publishReportDuringListingNow = () => {
+    fsControl.publishReportDuringListing.targetPath = reportsDirectory;
+    fsControl.publishReportDuringListing.run = () => {
       writeReportFile(reportsDirectory, 'published.md', 'PUBLISHED_REPORT');
     };
 
     expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(
       /Report directory snapshot changed while reading/,
     );
-    expect(fsControl.reportPublishedDuringListing).toBe(true);
+    expect(fsControl.publishReportDuringListing.triggered).toBe(true);
 
     const context = loadRunSessionContext(tmpDir, slug);
     expect(context.reports).toEqual([
@@ -804,15 +791,15 @@ describe('loadRunSessionContext', () => {
     });
     const reportsDirectory = join(runDir, 'reports');
     const stableReportPath = writeReportFile(reportsDirectory, 'stable.md', 'STABLE_REPORT');
-    fsControl.replaceReportAfterRead = stableReportPath;
-    fsControl.replaceReportAfterReadNow = () => {
+    fsControl.replaceReportAfterRead.targetPath = stableReportPath;
+    fsControl.replaceReportAfterRead.run = () => {
       writeReportFile(reportsDirectory, 'stable.md', 'PUBLISHED_REPORT');
     };
 
     expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(
       /Report directory snapshot changed while reading/,
     );
-    expect(fsControl.reportAfterReadReplaced).toBe(true);
+    expect(fsControl.replaceReportAfterRead.triggered).toBe(true);
 
     const context = loadRunSessionContext(tmpDir, slug);
     expect(context.reports).toEqual([
@@ -873,14 +860,14 @@ describe('loadRunSessionContext', () => {
     });
     const logPath = join(runDir, 'logs', 'session-001.jsonl');
     writeFileSync(logPath, '{}', 'utf-8');
-    fsControl.replaceSessionLog = logPath;
-    fsControl.replaceSessionLogNow = () => {
+    fsControl.replaceSessionLog.targetPath = logPath;
+    fsControl.replaceSessionLog.run = () => {
       rmSync(logPath, { force: true });
       writeFileSync(logPath, '{}', 'utf-8');
     };
 
     expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(/identity changed/);
-    expect(fsControl.sessionLogReplaced).toBe(true);
+    expect(fsControl.replaceSessionLog.triggered).toBe(true);
     expect(mockParseNdjsonLogContent).not.toHaveBeenCalled();
   });
 
@@ -898,8 +885,8 @@ describe('loadRunSessionContext', () => {
     const logsDirectory = join(runDir, 'logs');
     const logPath = join(logsDirectory, 'session-001.jsonl');
     writeFileSync(logPath, '{}', 'utf-8');
-    fsControl.replaceSessionLogAfterListing = logsDirectory;
-    fsControl.replaceSessionLogAfterListingNow = () => {
+    fsControl.replaceSessionLogAfterListing.targetPath = logsDirectory;
+    fsControl.replaceSessionLogAfterListing.run = () => {
       rmSync(logPath, { force: true });
       writeFileSync(logPath, 'EXTERNAL_MARKER', 'utf-8');
     };
@@ -907,7 +894,7 @@ describe('loadRunSessionContext', () => {
     expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(
       /Session log directory snapshot changed while selecting/,
     );
-    expect(fsControl.sessionLogReplacedAfterListing).toBe(true);
+    expect(fsControl.replaceSessionLogAfterListing.triggered).toBe(true);
     expect(mockParseNdjsonLogContent).not.toHaveBeenCalled();
   });
 
@@ -1137,34 +1124,15 @@ describe('loadRunSessionContext', () => {
 
   afterEach(() => {
     fsControl.reverseLogDirectory = undefined;
-    fsControl.replaceSessionLogAfterListing = undefined;
-    fsControl.replaceSessionLogAfterListingNow = undefined;
-    fsControl.sessionLogReplacedAfterListing = false;
-    fsControl.publishReportDuringListing = undefined;
-    fsControl.publishReportDuringListingNow = undefined;
-    fsControl.reportPublishedDuringListing = false;
-    fsControl.replaceReportDirectory = undefined;
-    fsControl.replaceReportDirectoryNow = undefined;
-    fsControl.reportDirectoryReplaced = false;
-    fsControl.replaceReportEntryDirectory = undefined;
-    fsControl.replaceReportEntryDirectoryNow = undefined;
-    fsControl.reportEntryDirectoryReplaced = false;
-    fsControl.replaceReportListingDirectory = undefined;
-    fsControl.replaceReportListingDirectoryNow = undefined;
-    fsControl.reportListingDirectoryReplaced = false;
-    fsControl.replaceReportAfterOpen = undefined;
-    fsControl.replaceReportAfterOpenNow = undefined;
-    fsControl.reportAfterOpenReplaced = false;
-    fsControl.replaceReportAfterRead = undefined;
-    fsControl.replaceReportAfterReadNow = undefined;
-    fsControl.reportAfterReadReplaced = false;
-    fsControl.reportAfterReadDescriptor = undefined;
-    fsControl.replaceReportBeforeDirectoryOpen = undefined;
-    fsControl.replaceReportBeforeDirectoryOpenNow = undefined;
-    fsControl.reportBeforeDirectoryOpenReplaced = false;
-    fsControl.replaceSessionLog = undefined;
-    fsControl.replaceSessionLogNow = undefined;
-    fsControl.sessionLogReplaced = false;
+    fsControl.replaceSessionLogAfterListing = { triggered: false };
+    fsControl.publishReportDuringListing = { triggered: false };
+    fsControl.replaceReportDirectory = { triggered: false };
+    fsControl.replaceReportEntryDirectory = { triggered: false };
+    fsControl.replaceReportListingDirectory = { triggered: false };
+    fsControl.replaceReportAfterOpen = { triggered: false };
+    fsControl.replaceReportAfterRead = { triggered: false };
+    fsControl.replaceReportBeforeDirectoryOpen = { triggered: false };
+    fsControl.replaceSessionLog = { triggered: false };
     rmSync(tmpDir, { recursive: true, force: true });
   });
 });

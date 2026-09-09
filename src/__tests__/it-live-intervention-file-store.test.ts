@@ -19,7 +19,9 @@ interface ChildMessage {
 }
 
 function createProjectDirectory(): string {
-  return join(tmpdir(), `takt-live-intervention-${process.pid}-${Date.now()}-${Math.random()}`);
+  const directory = join(tmpdir(), `takt-live-intervention-${process.pid}-${Date.now()}-${Math.random()}`);
+  mkdirSync(directory, { recursive: true });
+  return directory;
 }
 
 function createStore(projectCwd: string): LiveInterventionFileStore {
@@ -137,6 +139,49 @@ describe('LiveInterventionFileStore integration', () => {
     expect(readFileSync(tuiStore.getFilePath(), 'utf8').trim().split('\n')).toHaveLength(2);
   });
 
+  it('recovers a killed lock holder while preserving a live holder', async () => {
+    const projectCwd = createProjectDirectory();
+    projectDirectories.push(projectCwd);
+    const store = createStore(projectCwd);
+    const lockPath = `${store.getFilePath()}.lock`;
+    const lockModuleUrl = pathToFileURL(resolve('src/shared/utils/private-file-lock.ts')).href;
+    const child = spawn(process.execPath, ['--import', 'tsx/esm', '--input-type=module', '--eval', `
+      const { runPrivateFileExclusive } = await import(${JSON.stringify(lockModuleUrl)});
+      runPrivateFileExclusive(${JSON.stringify(lockPath)}, () => {
+        process.send?.({ type: 'ready' });
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      });
+    `], { cwd: resolve('.'), stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    childProcesses.push(child);
+    await waitForMessage(child, 'ready');
+    const lockContent = readFileSync(lockPath, 'utf8');
+    let settled = false;
+    const issuing = store.issue('after owner exit').then((id) => { settled = true; return id; });
+    await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 30));
+    expect(settled).toBe(false);
+    expect(readFileSync(lockPath, 'utf8')).toBe(lockContent);
+    const exited = new Promise<void>((resolveExit) => child.once('exit', () => resolveExit()));
+    child.kill('SIGKILL');
+    await exited;
+    expect(await issuing).toBe(1);
+    expect(existsSync(lockPath)).toBe(false);
+    expect(store.read().instructions[0]?.content).toBe('after owner exit');
+  });
+
+  it.each([
+    { language: 'en' as const, heading: 'additional instructions from the user' },
+    { language: 'ja' as const, heading: 'ユーザー' },
+  ])('renders delivery guidance in $language', async ({ language, heading }) => {
+    const projectCwd = createProjectDirectory();
+    projectDirectories.push(projectCwd);
+    const store = createStore(projectCwd);
+    await store.issue('original instruction');
+    const delivery = await store.prepareDelivery({ mode: 'same_session', step: 'review', phase: 1, language });
+    expect(delivery.prompt).toContain(heading);
+    expect(delivery.prompt).toContain('original instruction');
+    expect(delivery.context).not.toHaveProperty('language');
+  });
+
   it('commits only the pending IDs captured by delivery preparation', async () => {
     const projectCwd = createProjectDirectory();
     projectDirectories.push(projectCwd);
@@ -246,10 +291,8 @@ describe('LiveInterventionFileStore integration', () => {
   });
 
   it.each([
-    JSON.stringify([
-      JSON.parse(issueEvent(1, 'first', '2026-09-03T00:00:00.000Z')),
-      JSON.parse(issueEvent(1, 'duplicate', '2026-09-03T00:00:01.000Z')),
-    ]),
+    `${issueEvent(1, 'first', '2026-09-03T00:00:00.000Z')}\n`
+      + `${issueEvent(1, 'duplicate', '2026-09-03T00:00:01.000Z')}\n`,
     `${issueEvent(0, 'zero', '2026-09-03T00:00:00.000Z')}\n`,
     `${JSON.stringify({ type: 'issued', instructionId: 1.5, issuedAt: '2026-09-03T00:00:00.000Z', content: 'fraction' })}\n`,
     `${JSON.stringify({ type: 'delivered', instructionIds: [1], deliveredAt: '2026-09-03T00:00:00.000Z', mode: 'same_session', step: 'x', phase: 1 })}\n`,

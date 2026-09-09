@@ -63,7 +63,7 @@ vi.mock('../features/tasks/list/listNonInteractive.js', () => ({
 
 vi.mock('../features/tasks/list/liveInterventionMode.js', () => ({
   runLiveInterventionMode: mockRunLiveInterventionMode,
-}), { virtual: true });
+}));
 
 import { listTasks } from '../features/tasks/list/index.js';
 
@@ -113,6 +113,19 @@ describe('live intervention task-list entry', () => {
 
     expect(mockRunLiveInterventionMode).not.toHaveBeenCalled();
     expect(mockForceFailRunningTask).toHaveBeenCalledWith(runningTask, '/project');
+  });
+
+  it('offers force-fail when the live run cannot be opened', async () => {
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockRunLiveInterventionMode.mockRejectedValueOnce(new Error('Run is no longer running'));
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('force_fail');
+
+    await listTasks('/project');
+
+    expect(mockForceFailRunningTask).toHaveBeenCalledWith(eligibleRunningTask, '/project');
+    expect(mockSelectOption).toHaveBeenCalledTimes(3);
   });
 
   it('keeps the non-interactive list path out of live intervention', async () => {

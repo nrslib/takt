@@ -1,3 +1,5 @@
+import { loadTemplate } from '../../../shared/prompts/index.js';
+import type { Language } from '../../models/types.js';
 import type {
   LiveInterventionInstruction,
   LiveInterventionState,
@@ -5,15 +7,15 @@ import type {
 
 export function buildLiveInterventionPrompt(
   instructions: readonly LiveInterventionInstruction[],
+  language: Language | undefined,
 ): string {
   if (instructions.length === 0) {
     return '';
   }
 
-  return [
-    'ユーザーの追加指示（発行順に適用してください）:',
-    ...instructions.map((instruction, index) => `${index + 1}. ${instruction.content}`),
-  ].join('\n');
+  return loadTemplate('live_intervention_instructions', language ?? 'en', {
+    instructions: instructions.map((instruction, index) => `${index + 1}. ${instruction.content}`).join('\n'),
+  });
 }
 
 export function formatLiveInterventionStateForPrompt(

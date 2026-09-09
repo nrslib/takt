@@ -58,9 +58,9 @@ describe('live intervention state', () => {
     ]);
     expect(state.pending).toBe(2);
     expect(state.issuedTotal).toBe(2);
-    expect(buildLiveInterventionPrompt(state.instructions)).toEqual(expect.stringContaining('Aを追加して'));
+    expect(buildLiveInterventionPrompt(state.instructions, 'ja')).toEqual(expect.stringContaining('Aを追加して'));
 
-    const prompt = buildLiveInterventionPrompt(state.instructions);
+    const prompt = buildLiveInterventionPrompt(state.instructions, 'ja');
     expect(prompt.indexOf('Aを追加して')).toBeLessThan(prompt.indexOf('さっきのAはやっぱりなし'));
     expect(prompt).toContain('ユーザー');
   });
@@ -148,7 +148,10 @@ describe('live intervention state', () => {
     expect(state.terminalStatus).toBe(status);
   });
 
-  it('rejects delivery of a non-pending or unknown instruction and preserves the prior state', () => {
+  it.each([
+    { name: 'non-pending', instructionId: 1 },
+    { name: 'unknown', instructionId: 99 },
+  ])('rejects delivery of a $name instruction and preserves the prior state', ({ instructionId }) => {
     let state = createLiveInterventionState();
     state = issue(state, 1, 'one', FIRST_ISSUED_AT);
     state = reduceLiveInterventionEvent(state, {
@@ -160,22 +163,16 @@ describe('live intervention state', () => {
       phase: 1,
     });
 
+    const priorState = structuredClone(state);
     expect(() => reduceLiveInterventionEvent(state, {
       type: 'delivered',
-      instructionIds: [1],
+      instructionIds: [instructionId],
       deliveredAt: '2026-09-03T00:00:03.000Z',
       mode: 'same_session',
       step: 'implement',
       phase: 1,
-    })).toThrow(/pending|delivered|state/i);
-    expect(() => reduceLiveInterventionEvent(state, {
-      type: 'delivered',
-      instructionIds: [99],
-      deliveredAt: '2026-09-03T00:00:03.000Z',
-      mode: 'same_session',
-      step: 'implement',
-      phase: 1,
-    })).toThrow(/unknown|instruction|issued/i);
+    })).toThrow();
+    expect(state).toEqual(priorState);
   });
 
   it('rejects issuing after terminal state instead of reopening the run', () => {

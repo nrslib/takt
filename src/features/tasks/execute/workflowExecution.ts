@@ -1,5 +1,6 @@
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
 import { join } from 'node:path';
+import { getLabel } from '../../../shared/i18n/index.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
 import { createDefaultSystemStepServices } from '../../../infra/workflow/system/DefaultSystemStepServices.js';
@@ -80,6 +81,14 @@ import { LiveInterventionFileStore } from '../../../infra/workflow/live-interven
 import { createOutputFns } from './outputFns.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
+
+function warnUnconsumedLiveInstructions(
+  out: ReturnType<typeof createOutputFns>,
+  count: number,
+  language: WorkflowExecutionOptions['language'],
+): void {
+  out.warn(getLabel('workflow.unconsumedLiveInstructions', language, { count: String(count) }));
+}
 
 export type WorkflowRunContext = {
   ignoreIterationLimit?: boolean;
@@ -287,7 +296,7 @@ async function executeWorkflowInternal(
       loopAnalysisScheduler: options.loopAnalysisScheduler,
       ...(liveIntervention === undefined ? {} : { liveIntervention }),
       onLiveInterventionWarning: (count: number) => {
-        bootstrapFailureOut.warn(`未消化の追加指示が ${count} 件あります`);
+        warnUnconsumedLiveInstructions(bootstrapFailureOut, count, options.language);
       },
     });
   }
@@ -423,7 +432,7 @@ async function executeWorkflowInternal(
         ...(liveIntervention === undefined ? {} : {
           liveIntervention,
           onLiveInterventionWarning: (count: number) => {
-            bootstrap.out.warn(`未消化の追加指示が ${count} 件あります`);
+            warnUnconsumedLiveInstructions(bootstrap.out, count, options.language);
           },
         }),
         observability: bootstrap.observability,
@@ -583,7 +592,7 @@ async function executeWorkflowInternal(
           const unconsumedCount = await liveIntervention.recordTerminal('failed');
           if (unconsumedCount > 0) {
             try {
-              bootstrap.out.warn(`未消化の追加指示が ${unconsumedCount} 件あります`);
+              warnUnconsumedLiveInstructions(bootstrap.out, unconsumedCount, options.language);
             } catch (error) {
               terminalizationErrors.push(error);
             }

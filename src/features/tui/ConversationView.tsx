@@ -198,18 +198,15 @@ export function ConversationView({
   /** Set by Esc so the completion list closes without touching the draft. */
   const [completionsHidden, setCompletionsHidden] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const liveStatusRef = useRef<string | undefined>(undefined);
-  if (liveStatusRef.current === undefined) {
-    liveStatusRef.current = liveStatusReader === undefined ? '' : toSingleLineText(liveStatusReader());
-  }
+  const liveStatusRef = useRef('');
   const liveStatusListenersRef = useRef(new Set<() => void>());
   const liveStatus = useSyncExternalStore(
     (listener) => {
       liveStatusListenersRef.current.add(listener);
       return () => liveStatusListenersRef.current.delete(listener);
     },
-    () => liveStatusRef.current ?? '',
-    () => liveStatusRef.current ?? '',
+    () => liveStatusRef.current,
+    () => liveStatusRef.current,
   );
   const pendingRef = useRef<Set<PendingWork>>(new Set());
   /** Set late, because the drain is built out of callbacks defined below it. */

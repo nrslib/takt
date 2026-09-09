@@ -225,6 +225,7 @@ exec:
 
 # ===== Workflow Execution UI =====
 workflow:
+  unconsumedLiveInstructions: "未消化の追加指示が {count} 件あります"
   teamLeader:
     decomposeWait: "チームリーダーがタスクを分解中です。しばらくお待ちください..."
     feedbackWait: "チームリーダーが結果を評価して次のタスクを計画中です..."

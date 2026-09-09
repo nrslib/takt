@@ -4,6 +4,7 @@ import {
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { info, header, blankLine } from '../../../shared/ui/index.js';
+import { getErrorMessage } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import {
   type ListAction,
@@ -201,8 +202,13 @@ export async function listTasks(
       const task = tasks[idx];
       if (!task) continue;
       if (task.runSlug !== undefined && task.worktreePath !== undefined) {
-        await runLiveInterventionMode(cwd, task);
-        continue;
+        try {
+          await runLiveInterventionMode(cwd, task);
+          continue;
+        } catch (error) {
+          // A stale run must still offer the running-task recovery actions.
+          info(getErrorMessage(error));
+        }
       }
       const taskAction = await showRunningTaskAndPromptAction(task);
       if (taskAction === 'force_fail') {

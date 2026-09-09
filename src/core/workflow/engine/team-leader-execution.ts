@@ -37,8 +37,8 @@ export interface TeamLeaderExecutionOptions {
   maxConcurrency: number;
   abortSignal?: AbortSignal;
   beforeInitialPartExecution?: () => Promise<MorePartsResponse | undefined>;
-  /** Whether live instructions appeared after the leader marked planning done. */
-  hasPendingLiveIntervention?: () => boolean;
+  /** IDs allow a failed delivery to remain pending without restarting planning forever. */
+  getPendingLiveInterventionIds?: () => readonly number[];
   runPart: (
     part: PartDefinition,
     partIndex: number,
@@ -109,6 +109,18 @@ export async function runTeamLeaderExecution(
   let latestBatchStart = 0;
   let executionTerminalRequested = false;
   let pendingTerminalFeedback: MorePartsResponse | undefined;
+  const resumedInstructionIds = new Set<number>();
+  const resumeForLiveIntervention = (): boolean => {
+    const pendingIds = options.getPendingLiveInterventionIds?.() ?? [];
+    if (!pendingIds.some((id) => !resumedInstructionIds.has(id))) {
+      return false;
+    }
+    for (const id of pendingIds) {
+      resumedInstructionIds.add(id);
+    }
+    leaderDone = false;
+    return true;
+  };
 
   const cancellablePartIds = (): string[] => [
     ...queue.map((part) => part.id),
@@ -210,10 +222,9 @@ export async function runTeamLeaderExecution(
     terminalGate.assertRunning('feedback.dequeue');
     options.abortSignal?.throwIfAborted();
     if (leaderDone) {
-      if (options.hasPendingLiveIntervention?.() !== true) {
+      if (!resumeForLiveIntervention()) {
         return;
       }
-      leaderDone = false;
     }
     publishSettledParts();
     const latestBatchResults = partResults.slice(latestBatchStart);
@@ -477,8 +488,7 @@ export async function runTeamLeaderExecution(
       }
 
       if (leaderDone) {
-        if (options.hasPendingLiveIntervention?.() === true) {
-          leaderDone = false;
+        if (resumeForLiveIntervention()) {
           continue;
         }
         if (options.onExecutionTerminal === undefined || executionTerminalRequested) {
@@ -500,8 +510,7 @@ export async function runTeamLeaderExecution(
         if (queue.length > 0 || running.size > 0 || !leaderDone) {
           continue;
         }
-        if (options.hasPendingLiveIntervention?.() === true) {
-          leaderDone = false;
+        if (resumeForLiveIntervention()) {
           continue;
         }
         break;

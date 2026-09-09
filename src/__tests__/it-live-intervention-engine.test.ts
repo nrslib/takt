@@ -22,16 +22,28 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 }));
 
 const mockOutputWarn = vi.hoisted(() => vi.fn());
-const liveInterventionReadFailure = vi.hoisted(() => ({ enabled: false }));
+const liveInterventionReadFailure = vi.hoisted(() => ({ target: undefined as 'next' | 'terminal' | undefined }));
 
 vi.mock('../infra/workflow/live-intervention-store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/workflow/live-intervention-store.js')>();
   type ActualStore = InstanceType<typeof actual.LiveInterventionFileStore>;
 
   class TestLiveInterventionFileStore extends actual.LiveInterventionFileStore {
+    private inTerminal = false;
+
+    override async recordTerminal(...args: Parameters<ActualStore['recordTerminal']>): Promise<number> {
+      this.inTerminal = true;
+      try {
+        return await super.recordTerminal(...args);
+      } finally {
+        this.inTerminal = false;
+      }
+    }
+
     override read(): ReturnType<ActualStore['read']> {
-      if (liveInterventionReadFailure.enabled) {
-        liveInterventionReadFailure.enabled = false;
+      if (liveInterventionReadFailure.target === 'next'
+        || (liveInterventionReadFailure.target === 'terminal' && this.inTerminal)) {
+        liveInterventionReadFailure.target = undefined;
         throw new Error('deterministic live intervention read failure');
       }
       return super.read();
@@ -94,12 +106,12 @@ function createEngineOptions(
   };
 }
 
-function failNextLiveInterventionRead(): void {
-  liveInterventionReadFailure.enabled = true;
+function failLiveInterventionRead(target: 'next' | 'terminal'): void {
+  liveInterventionReadFailure.target = target;
 }
 
 function clearLiveInterventionReadFailure(): void {
-  liveInterventionReadFailure.enabled = false;
+  liveInterventionReadFailure.target = undefined;
 }
 
 function createDeferred<T>(): {
@@ -166,13 +178,13 @@ function buildCompanionStatusConfig(name: string): WorkflowConfig {
   };
 }
 
-function createCompanionDiffReader() {
+function createCompanionDiffReader(fixedDigest?: string) {
   let readCount = 0;
   return {
     readBaselineSha: vi.fn().mockResolvedValue('baseline-sha'),
     readDiff: vi.fn().mockImplementation(async () => {
       readCount += 1;
-      const digest = `current-digest-${readCount}`;
+      const digest = fixedDigest ?? `current-digest-${readCount}`;
       return {
         status: 'ok' as const,
         snapshot: {
@@ -198,12 +210,14 @@ describe('WorkflowEngine live intervention integration', () => {
     vi.resetAllMocks();
     clearLiveInterventionReadFailure();
     projectCwd = createTestTmpDir();
+    vi.stubEnv('TAKT_CONFIG_DIR', join(projectCwd, 'config'));
     vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
     vi.mocked(runReportPhase).mockResolvedValue(undefined);
     vi.mocked(runStatusJudgmentPhase).mockResolvedValue({ label: 'done', method: 'auto_select' });
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (engine !== undefined) {
       cleanupWorkflowEngine(engine);
       engine = undefined;
@@ -213,7 +227,10 @@ describe('WorkflowEngine live intervention integration', () => {
     }
   });
 
-  it('waits for the active Phase 1 turn and sends the complete history on the same session', async () => {
+  it.each([
+    { language: 'en' as const, heading: 'additional instructions from the user' },
+    { language: 'ja' as const, heading: 'ユーザー' },
+  ])('waits for Phase 1 and sends the full same-session history in $language', async ({ language, heading }) => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     const firstTurn = createDeferred<AgentResponse>();
     let firstTurnStarted!: () => void;
@@ -245,7 +262,7 @@ describe('WorkflowEngine live intervention integration', () => {
       buildSingleStepConfig([makeRule('done', 'COMPLETE')]),
       projectCwd,
       'test task',
-      createEngineOptions(projectCwd, store),
+      { ...createEngineOptions(projectCwd, store), language },
     );
     const runPromise = engine.run();
     await started;
@@ -269,7 +286,7 @@ describe('WorkflowEngine live intervention integration', () => {
     expect(followUpPrompt.indexOf('Aを追加して')).toBeLessThan(
       followUpPrompt.indexOf('さっきのAはやっぱりなし'),
     );
-    expect(followUpPrompt).toContain('ユーザー');
+    expect(followUpPrompt).toContain(heading);
     expect(store.read()).toMatchObject({
       pending: 0,
       deliveredSameSession: 2,
@@ -281,14 +298,46 @@ describe('WorkflowEngine live intervention integration', () => {
     });
   });
 
+  it.each(['done', 'throw'] as const)('counts every replaced Phase 1 response and live %s attempt once', async (outcome) => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const delegatedUsage = vi.fn();
+    const completedTokens: number[] = [];
+    let calls = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      calls += 1;
+      options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      options.onDispatch?.(options.permissionMode);
+      if (calls < 3) await store.issue(`instruction ${calls}`);
+      if (calls === 3 && outcome === 'throw') throw new Error('live provider failure');
+      return makeResponse({
+        sessionId: 'usage-session',
+        providerUsage: { inputTokens: calls * 10, outputTokens: calls, totalTokens: calls * 11, usageMissing: false },
+      });
+    });
+    engine = new WorkflowEngine(
+      buildSingleStepConfig([makeRule('done', 'COMPLETE')]), projectCwd, 'usage test',
+      { ...createEngineOptions(projectCwd, store), onDelegatedAgentUsage: delegatedUsage },
+    );
+    engine.on('step:complete', (_step, response) => {
+      completedTokens.push(response.providerUsage?.totalTokens ?? 0);
+    });
+    if (outcome === 'throw') {
+      expect((await engine.run()).status).toBe('aborted');
+    } else {
+      expect((await engine.run()).status).toBe('completed');
+    }
+    expect(calls).toBe(3);
+    const usage = delegatedUsage.mock.calls.map(([, result]) => result);
+    expect(usage.map((result) => result.usage?.totalTokens)).toEqual(
+      outcome === 'throw' ? [11, 22, undefined] : [11, 22],
+    );
+    expect(completedTokens).toEqual(outcome === 'throw' ? [] : [33]);
+    if (outcome === 'throw') expect(usage.at(-1)?.success).toBe(false);
+  });
+
   it('normalizes a non-native live response, stores it, and evaluates a structured rule', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-    const schema = {
-      type: 'object',
-      properties: { result: { type: 'string' } },
-      required: ['result'],
-      additionalProperties: false,
-    };
+    const schema = STRUCTURED_RESULT_SCHEMA;
     const config: WorkflowConfig = {
       name: 'live-intervention-structured-output',
       maxSteps: 1,
@@ -362,12 +411,7 @@ describe('WorkflowEngine live intervention integration', () => {
 
   it('does not parse native provider response content when structured output is missing', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-    const schema = {
-      type: 'object',
-      properties: { result: { type: 'string' } },
-      required: ['result'],
-      additionalProperties: false,
-    };
+    const schema = STRUCTURED_RESULT_SCHEMA;
     const config: WorkflowConfig = {
       name: 'live-intervention-native-structured-output',
       maxSteps: 1,
@@ -644,7 +688,7 @@ describe('WorkflowEngine live intervention integration', () => {
     vi.mocked(runStatusJudgmentPhase).mockImplementation(async () => {
       await store.issue('未消化の一件目', '2026-09-03T00:00:00.000Z');
       await store.issue('未消化の二件目', '2026-09-03T00:00:01.000Z');
-      failNextLiveInterventionRead();
+      failLiveInterventionRead('terminal');
       return { label: 'approved', method: 'auto_select' };
     });
     vi.mocked(mockRuleEvaluation).mockImplementation((_step, selection) => ({
@@ -686,7 +730,7 @@ describe('WorkflowEngine live intervention integration', () => {
       );
       await store.issue('未消化の一件目', '2026-09-03T00:00:00.000Z');
       await store.issue('未消化の二件目', '2026-09-03T00:00:01.000Z');
-      failNextLiveInterventionRead();
+      failLiveInterventionRead('terminal');
       return response;
     });
 
@@ -827,12 +871,7 @@ describe('WorkflowEngine live intervention integration', () => {
 
   it('normalizes a native live response issued during completion retry before the next judge', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-    const schema = {
-      type: 'object',
-      properties: { result: { type: 'string' } },
-      required: ['result'],
-      additionalProperties: false,
-    };
+    const schema = STRUCTURED_RESULT_SCHEMA;
     const config: WorkflowConfig = {
       name: 'live-intervention-completion-retry-structured-output',
       maxSteps: 1,
@@ -913,12 +952,7 @@ describe('WorkflowEngine live intervention integration', () => {
 
   it('propagates a missing native live response issued during completion retry', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-    const schema = {
-      type: 'object',
-      properties: { result: { type: 'string' } },
-      required: ['result'],
-      additionalProperties: false,
-    };
+    const schema = STRUCTURED_RESULT_SCHEMA;
     const config: WorkflowConfig = {
       name: 'live-intervention-completion-retry-structured-output-error',
       maxSteps: 1,
@@ -1109,22 +1143,7 @@ describe('WorkflowEngine live intervention integration', () => {
 
   it('drains an intervention issued during a Companion follow-up before the step completes', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-    const companionDiffReader = {
-      readBaselineSha: vi.fn().mockResolvedValue('baseline-sha'),
-      readDiff: vi.fn().mockResolvedValue({
-        status: 'ok' as const,
-        snapshot: {
-          digest: 'current-digest',
-          changedLines: 10,
-          content: '+changed content\n',
-          changedFiles: ['src/changed.ts'],
-          fileFingerprints: { 'src/changed.ts': 'current-digest' },
-          hunkFingerprints: { 'src/changed.ts:1-10': 'current-digest' },
-          omittedBytes: 0,
-          truncated: false,
-        },
-      }),
-    };
+    const companionDiffReader = createCompanionDiffReader('current-digest');
     const config: WorkflowConfig = {
       name: 'live-intervention-companion',
       maxSteps: 1,
@@ -1205,28 +1224,8 @@ describe('WorkflowEngine live intervention integration', () => {
 
   it('normalizes a native live response issued during a Companion follow-up', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-    const schema = {
-      type: 'object',
-      properties: { result: { type: 'string' } },
-      required: ['result'],
-      additionalProperties: false,
-    };
-    const companionDiffReader = {
-      readBaselineSha: vi.fn().mockResolvedValue('baseline-sha'),
-      readDiff: vi.fn().mockResolvedValue({
-        status: 'ok' as const,
-        snapshot: {
-          digest: 'current-digest',
-          changedLines: 10,
-          content: '+changed content\n',
-          changedFiles: ['src/changed.ts'],
-          fileFingerprints: { 'src/changed.ts': 'current-digest' },
-          hunkFingerprints: { 'src/changed.ts:1-10': 'current-digest' },
-          omittedBytes: 0,
-          truncated: false,
-        },
-      }),
-    };
+    const schema = STRUCTURED_RESULT_SCHEMA;
+    const companionDiffReader = createCompanionDiffReader('current-digest');
     const config: WorkflowConfig = {
       name: 'live-intervention-companion-structured-output',
       maxSteps: 1,
@@ -1318,12 +1317,7 @@ describe('WorkflowEngine live intervention integration', () => {
 
   it('propagates a missing native live response issued during a Companion follow-up', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-    const schema = {
-      type: 'object',
-      properties: { result: { type: 'string' } },
-      required: ['result'],
-      additionalProperties: false,
-    };
+    const schema = STRUCTURED_RESULT_SCHEMA;
     const companionDiffReader = createCompanionDiffReader();
     const config: WorkflowConfig = {
       name: 'live-intervention-companion-structured-output-error',
@@ -1651,6 +1645,7 @@ describe('WorkflowEngine live intervention integration', () => {
         rules: [makeRule('done', 'COMPLETE')],
       })],
     };
+    const delegatedUsage = vi.fn();
     let mainCalls = 0;
     let companionReviewCalls = 0;
     const mainCallRecords: Array<{ readonly sessionId: string | undefined }> = [];
@@ -1700,12 +1695,14 @@ describe('WorkflowEngine live intervention integration', () => {
         persona: typeof persona === 'string' ? persona : 'implementer',
         content,
         sessionId: `implementer-session-${mainCalls}`,
+        providerUsage: { totalTokens: mainCalls * 100, usageMissing: false },
         ...(structuredOutput === undefined ? {} : { structuredOutput }),
       });
     });
 
     engine = new WorkflowEngine(config, projectCwd, 'test task', {
       ...createEngineOptions(projectCwd, store),
+      onDelegatedAgentUsage: delegatedUsage,
       companionEnabled: true,
       companionFixPolicy: policy,
       companionProviders: { reviewer: { provider: 'mock' } },
@@ -1724,6 +1721,9 @@ describe('WorkflowEngine live intervention integration', () => {
         : [undefined, 'implementer-session-1', 'implementer-session-2'],
     );
     if (expectsFailure) {
+      expect(delegatedUsage.mock.calls.filter(([context, result]) => (
+        context.step === 'implement' && result.success === false
+      )).map(([, result]) => result.usage?.totalTokens)).toEqual([failureAt! * 100]);
       expect(state.companion).toMatchObject({
         completionSettled: false,
         completionFailure: true,
@@ -1744,12 +1744,7 @@ describe('WorkflowEngine live intervention integration', () => {
 
   it('propagates a missing native live response from a Companion follow-up inside completion retry', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-    const schema = {
-      type: 'object',
-      properties: { result: { type: 'string' } },
-      required: ['result'],
-      additionalProperties: false,
-    };
+    const schema = STRUCTURED_RESULT_SCHEMA;
     const companionDiffReader = createCompanionDiffReader();
     const config: WorkflowConfig = {
       name: 'live-intervention-completion-retry-companion-structured-output-error',
@@ -1861,12 +1856,7 @@ describe('WorkflowEngine live intervention integration', () => {
     'routes a live Companion callback %s response through completion retry fallback',
     async (status) => {
       const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-      const schema = {
-        type: 'object',
-        properties: { result: { type: 'string' } },
-        required: ['result'],
-        additionalProperties: false,
-      };
+      const schema = STRUCTURED_RESULT_SCHEMA;
       const companionDiffReader = createCompanionDiffReader();
       const config: WorkflowConfig = {
         name: `live-intervention-completion-retry-companion-${status}`,
@@ -2024,6 +2014,7 @@ describe('WorkflowEngine live intervention integration', () => {
           projectCwd,
           provider: 'mock',
           reportDirName: REPORT_DIR,
+          language: 'ja',
           outputMode: 'silent',
         },
       );
@@ -2079,6 +2070,7 @@ describe('WorkflowEngine live intervention integration', () => {
           projectCwd,
           provider: 'mock',
           reportDirName: REPORT_DIR,
+          language: 'ja',
           outputMode: 'terminal',
         },
       );
@@ -2124,6 +2116,7 @@ describe('WorkflowEngine live intervention integration', () => {
           projectCwd,
           provider: 'mock',
           reportDirName: REPORT_DIR,
+          language: 'ja',
           outputMode: 'terminal',
         },
       );
@@ -2146,10 +2139,13 @@ describe('WorkflowEngine live intervention integration', () => {
   });
 
   it.each([
-    { outputMode: 'terminal' as const, expectedWarningCount: 1 },
-    { outputMode: 'silent' as const, expectedWarningCount: 0 },
+    { outputMode: 'terminal' as const, language: 'ja' as const, warning: '未消化の追加指示が 2 件あります', expectedWarningCount: 1 },
+    { outputMode: 'terminal' as const, language: 'en' as const, warning: 'There are 2 unconsumed additional instructions', expectedWarningCount: 1 },
+    { outputMode: 'silent' as const, language: 'ja' as const, warning: '未消化の追加指示が 2 件あります', expectedWarningCount: 0 },
   ])('terminalizes bootstrap failure and respects the $outputMode output adapter', async ({
     outputMode,
+    language,
+    warning,
     expectedWarningCount,
   }) => {
     const cloneCwd = mkdtempSync(join(tmpdir(), `takt-live-engine-bootstrap-${outputMode}-`));
@@ -2170,12 +2166,13 @@ describe('WorkflowEngine live intervention integration', () => {
           projectCwd,
           provider: 'mock',
           reportDirName: REPORT_DIR,
+          language,
           outputMode,
         },
       )).rejects.toThrow('deterministic bootstrap failure');
 
       const exactWarnings = mockOutputWarn.mock.calls.filter(([message]) => (
-        message === '未消化の追加指示が 2 件あります'
+        message === warning
       ));
       expect(exactWarnings).toHaveLength(expectedWarningCount);
       expect(store.read()).toMatchObject({
@@ -2196,7 +2193,7 @@ describe('WorkflowEngine live intervention integration', () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     await store.issue('bootstrap read failure instruction one', '2026-09-03T00:00:00.000Z');
     await store.issue('bootstrap read failure instruction two', '2026-09-03T00:00:01.000Z');
-    failNextLiveInterventionRead();
+    failLiveInterventionRead('next');
     const publishBundle = vi.spyOn(workflowExecutionBundle, 'publishWorkflowExecutionBundle')
       .mockImplementationOnce(() => {
         throw new Error('deterministic bootstrap read failure');
@@ -2211,6 +2208,7 @@ describe('WorkflowEngine live intervention integration', () => {
           projectCwd,
           provider: 'mock',
           reportDirName: REPORT_DIR,
+          language: 'ja',
           outputMode: 'terminal',
         },
       ).then(
@@ -2267,6 +2265,7 @@ describe('WorkflowEngine live intervention integration', () => {
           projectCwd,
           provider: 'mock',
           reportDirName: REPORT_DIR,
+          language: 'ja',
           outputMode: 'terminal',
           restartPoint: {
             stack: [{

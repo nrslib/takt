@@ -735,7 +735,7 @@ export class WorkflowCallRunner {
         runtime,
         false,
         attempt.preparedExecution,
-        options?.liveIntervention,
+        options?.liveIntervention ?? null,
       );
       let response: AgentResponse;
       try {
