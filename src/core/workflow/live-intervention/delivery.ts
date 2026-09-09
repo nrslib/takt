@@ -25,7 +25,7 @@ export function createLiveInterventionDeliveryCommitter(
   }
 
   let dispatched = false;
-  let commitPromise: Promise<void> | undefined;
+  let commitPromise: Promise<PromiseSettledResult<void>> | undefined;
   return {
     onDispatch(permissionMode): void {
       priorOnDispatch?.(permissionMode);
@@ -33,10 +33,17 @@ export function createLiveInterventionDeliveryCommitter(
         return;
       }
       dispatched = true;
-      commitPromise = channel.commitDelivery(delivery);
+      // Observe failures immediately while allowing the active provider turn to finish.
+      commitPromise = channel.commitDelivery(delivery).then(
+        () => ({ status: 'fulfilled' as const, value: undefined }),
+        (reason: unknown) => ({ status: 'rejected' as const, reason }),
+      );
     },
     async settle(): Promise<void> {
-      await commitPromise;
+      const result = await commitPromise;
+      if (result?.status === 'rejected') {
+        throw result.reason;
+      }
     },
   };
 }

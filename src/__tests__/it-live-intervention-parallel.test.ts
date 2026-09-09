@@ -602,7 +602,11 @@ describe('ParallelRunner live intervention integration', () => {
     });
   });
 
-  it('commits a parallel workflow_call delivery once through the parent channel', async () => {
+  it.each([
+    { concurrency: 2, workflowCallsOnly: false },
+    { concurrency: 1, workflowCallsOnly: true },
+    { concurrency: 2, workflowCallsOnly: true },
+  ])('delivers to all parallel children and commits once ($concurrency, workflow calls only: $workflowCallsOnly)', async ({ concurrency, workflowCallsOnly }) => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     await store.issue('parallel workflow_call instruction', '2026-09-03T00:00:00.000Z');
 
@@ -628,9 +632,11 @@ describe('ParallelRunner live intervention integration', () => {
       maxSteps: 10,
       initialStep: 'reviewers',
       steps: [makeStep('reviewers', {
-        concurrency: 2,
+        concurrency,
         parallel: [
-          makeStep('agent-review', { rules: [makeRule('approved', 'COMPLETE')] }),
+          workflowCallsOnly
+            ? { ...delegatedStep, name: 'delegated-first', personaDisplayName: 'delegated-first' }
+            : makeStep('agent-review', { rules: [makeRule('approved', 'COMPLETE')] }),
           delegatedStep,
         ],
         rules: [makeRule('all("approved")', 'COMPLETE')],
@@ -661,12 +667,13 @@ describe('ParallelRunner live intervention integration', () => {
 
     expect(state.status).toBe('completed');
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
-    expect(workflowCallCompletions).toEqual([
+    expect(workflowCallCompletions).toEqual(expect.arrayContaining([
       expect.objectContaining({
         step: 'delegated',
         result: { status: 'completed' },
       }),
-    ]);
+    ]));
+    expect(workflowCallCompletions).toHaveLength(workflowCallsOnly ? 2 : 1);
     expect(vi.mocked(runAgent).mock.calls.every(([, instruction]) => (
       instruction.includes('parallel workflow_call instruction')
     ))).toBe(true);

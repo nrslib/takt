@@ -163,7 +163,7 @@ function classifyTeamLeaderPartFailures(
   readonly terminal: boolean;
 } {
   const failedResults = partResults.filter((result) => result.response.status === 'error');
-  const allFailed = failedResults.length === partResults.length;
+  const allFailed = partResults.length > 0 && failedResults.length === partResults.length;
   const timeoutContinuationFailed = hasFailedTimeoutContinuationResult([...partResults]);
   const failClosedPartError = failOnPartError && failedResults.length > 0;
   return {
@@ -667,7 +667,12 @@ export class TeamLeaderRunner {
             ],
             buildFeedbackOptions(
               input.abortSignal,
-              input.cancellablePartIds,
+              [
+                ...input.cancellablePartIds,
+                ...[...deliveredPartIds].filter((partId) => (
+                  !input.existingIds.includes(partId) && !response.cancelPartIds.includes(partId)
+                )),
+              ],
               input.companionFindings,
               input.ignoredCancelPartIds,
               followUpCommitter?.onDispatch,
@@ -682,17 +687,19 @@ export class TeamLeaderRunner {
               responseParts.push(part);
             }
           }
+          const cancelPartIds = [...new Set([
+            ...response.cancelPartIds,
+            ...followUpResponse.cancelPartIds,
+          ])];
+          const retainedResponseParts = responseParts.filter((part) => !cancelPartIds.includes(part.id));
           response = {
             ...response,
             ...followUpResponse,
-            done: followUpResponse.done && responseParts.every((part) => (
+            done: followUpResponse.done && retainedResponseParts.every((part) => (
               input.existingIds.includes(part.id)
             )),
-            parts: responseParts,
-            cancelPartIds: [...new Set([
-              ...response.cancelPartIds,
-              ...followUpResponse.cancelPartIds,
-            ])],
+            parts: retainedResponseParts,
+            cancelPartIds,
             ...(followUpResponse.sessionId === undefined && response.sessionId === undefined
               ? {}
               : { sessionId: followUpResponse.sessionId ?? response.sessionId }),
@@ -826,11 +833,11 @@ export class TeamLeaderRunner {
       const rateLimitedResult = currentPartResults.find(
         (result) => result.response.status === 'rate_limited',
       );
-      const failedResults = currentPartResults.filter((result) => result.response.status === 'error');
-      const allFailed = failedResults.length === currentPartResults.length;
-      const timeoutContinuationFailed = hasFailedTimeoutContinuationResult(currentPartResults);
-      const failClosedPartError = teamLeaderConfig.failOnPartError === true && failedResults.length > 0;
-      if (rateLimitedResult !== undefined || allFailed || timeoutContinuationFailed || failClosedPartError) {
+      const failureClassification = classifyTeamLeaderPartFailures(
+        currentPartResults,
+        teamLeaderConfig.failOnPartError === true,
+      );
+      if (rateLimitedResult !== undefined || failureClassification.terminal) {
         return undefined;
       }
 
@@ -904,7 +911,7 @@ export class TeamLeaderRunner {
               results: [],
               existingIds: parts.map((part) => part.id),
               abortSignal: executionAbortScope.signal,
-              cancellablePartIds: [],
+              cancellablePartIds: parts.map((part) => part.id),
             });
             await this.addPartAutoRouting(
               routedProviderInfoByPart,

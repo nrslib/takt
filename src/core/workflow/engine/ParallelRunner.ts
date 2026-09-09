@@ -446,15 +446,6 @@ export class ParallelRunner {
         requestRestart(parentOccurrence);
       }
     };
-    const scopedWorkflowCallLiveIntervention = liveIntervention !== undefined
-      && liveDelivery !== undefined
-      && liveDeliveryCommitter !== undefined
-      ? createScopedLiveInterventionChannel(
-          liveIntervention,
-          liveDelivery,
-          liveDeliveryCommitter,
-        )
-      : undefined;
     const selectorProvider = this.deps.engineOptions.selectorProvider;
     const selectorDeadline = isDynamicParallelSubSteps(step.parallel) && selectorProvider !== undefined
       ? executionDeadlineContext?.begin('parallel-selector', selectorProvider)
@@ -666,6 +657,15 @@ export class ParallelRunner {
                 `Parallel workflow_call sub-step "${subStep.name}" has no parent resume stack`,
               );
             }
+            const scopedWorkflowCallLiveIntervention = liveIntervention !== undefined
+              && liveDelivery !== undefined
+              && liveDeliveryCommitter !== undefined
+              ? createScopedLiveInterventionChannel(
+                  liveIntervention,
+                  liveDelivery,
+                  liveDeliveryCommitter,
+                )
+              : undefined;
             subStepInstructionByName.set(subStep.name, '');
             return await this.runWorkflowCallSubStep(
               subStep,

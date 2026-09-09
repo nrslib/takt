@@ -1062,6 +1062,203 @@ describe('TeamLeaderRunner live intervention integration', () => {
     });
   });
 
+  it.each([true, false])('cancels an unstarted initial part with replacement=%s', async (replacePart) => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const feedbackSessions: Array<string | undefined> = [];
+
+    const structuredCaller: StructuredCaller = {
+      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      evaluateCondition: async () => 0,
+      decomposeTask: async (instruction, _maxInitialParts, options) => {
+        dispatchStructuredPrompt(options, instruction);
+        await store.issue('cancel the initial part', '2026-09-03T00:00:00.000Z');
+        return {
+          parts: [{ id: 'part-1', title: 'one part', instruction: 'run one part' }],
+          sessionId: 'leader-session-1',
+        };
+      },
+      requestMoreParts,
+    };
+
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onPromptResolved?.({
+        systemPrompt: persona ?? '',
+        userInstruction: instruction,
+      });
+      options.onDispatch?.(options.permissionMode);
+      return makeResponse({ persona: 'coder', content: 'part complete', sessionId: 'worker-session' });
+    });
+    mockExecuteAgent.mockImplementation(async (
+      persona: Parameters<typeof runAgent>[0],
+      instruction: Parameters<typeof runAgent>[1],
+      options: Parameters<typeof runAgent>[2],
+    ) => {
+      if (typeof persona !== 'string' || !persona.includes('team-leader')) {
+        return runAgent(persona, instruction, options);
+      }
+
+      feedbackSessions.push(options.sessionId);
+      options.onDispatch?.(options.permissionMode);
+      return makeResponse({
+        persona: 'team-leader-more-parts',
+        sessionId: 'leader-session-1',
+        structuredOutput: {
+          done: !replacePart || feedbackSessions.length > 1,
+          reasoning: 'replace the obsolete initial part',
+          cancelPartIds: feedbackSessions.length === 1 ? ['part-1'] : [],
+          parts: replacePart && feedbackSessions.length === 1
+            ? [{ id: 'replacement', title: 'replacement', instruction: 'perform the revised task' }]
+            : [],
+        },
+      });
+    });
+
+    const config: WorkflowConfig = {
+      name: 'live-intervention-team-leader-initial-cancellation',
+      maxSteps: 10,
+      initialStep: 'implement',
+      steps: [makeStep('implement', {
+        teamLeader: {
+          persona: '../personas/team-leader.md',
+          maxConcurrency: 1,
+          timeoutMs: 10000,
+          partPersona: '../personas/coder.md',
+          partAllowedTools: ['Read', 'Edit', 'Write'],
+          partEdit: true,
+          partPermissionMode: 'edit',
+        },
+        rules: [makeRule('done', 'COMPLETE')],
+      })],
+    };
+
+    engine = new WorkflowEngine(
+      config,
+      projectCwd,
+      'test task',
+      createEngineOptions(projectCwd, store, structuredCaller),
+    );
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(feedbackSessions).toEqual(replacePart
+      ? ['leader-session-1', 'leader-session-1']
+      : ['leader-session-1']);
+    expect(runAgent).toHaveBeenCalledTimes(replacePart ? 1 : 0);
+    if (replacePart) {
+      expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('perform the revised task');
+    }
+    expect(store.read()).toMatchObject({
+      pending: 0,
+      deliveredSameSession: 1,
+      instructions: [expect.objectContaining({ state: 'deliveredSameSession' })],
+    });
+  });
+
+  it.each([
+    { initialFeedback: true, retainProposal: true },
+    { initialFeedback: false, retainProposal: true },
+    { initialFeedback: true, retainProposal: false },
+    { initialFeedback: false, retainProposal: false },
+  ])('cancels a newly proposed part before scheduling (initial: $initialFeedback, retain: $retainProposal)', async ({ initialFeedback, retainProposal }) => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const feedbackSessions: Array<string | undefined> = [];
+    const structuredCaller: StructuredCaller = {
+      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      evaluateCondition: async () => 0,
+      decomposeTask: async (instruction, _maxInitialParts, options) => {
+        dispatchStructuredPrompt(options, instruction);
+        if (initialFeedback) {
+          await store.issue('revise the proposed work');
+        }
+        return {
+          parts: [{ id: 'initial', title: 'initial', instruction: 'execute initial work' }],
+          sessionId: 'leader-session',
+        };
+      },
+      requestMoreParts,
+    };
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onDispatch?.(options.permissionMode);
+      return makeResponse({ persona: 'coder', content: 'part complete', sessionId: 'worker-session' });
+    });
+    mockExecuteAgent.mockImplementation(async (
+      persona: Parameters<typeof runAgent>[0],
+      instruction: Parameters<typeof runAgent>[1],
+      options: Parameters<typeof runAgent>[2],
+    ) => {
+      if (typeof persona !== 'string' || !persona.includes('team-leader')) {
+        return runAgent(persona, instruction, options);
+      }
+      feedbackSessions.push(options.sessionId);
+      options.onDispatch?.(options.permissionMode);
+      if (feedbackSessions.length === 1) {
+        await store.issue('cancel the obsolete proposal');
+        return makeResponse({
+          persona: 'team-leader-more-parts',
+          sessionId: 'leader-session',
+          structuredOutput: {
+            done: false,
+            reasoning: 'propose new work',
+            cancelPartIds: [],
+            parts: [
+              { id: 'obsolete', title: 'obsolete', instruction: 'execute obsolete work' },
+              ...(retainProposal
+                ? [{ id: 'retained', title: 'retained', instruction: 'execute retained work' }]
+                : []),
+            ],
+          },
+        });
+      }
+      return makeResponse({
+        persona: 'team-leader-more-parts',
+        sessionId: 'leader-session',
+        structuredOutput: {
+          done: feedbackSessions.length > 2 || !retainProposal,
+          reasoning: 'cancel obsolete work',
+          cancelPartIds: feedbackSessions.length === 2 ? ['obsolete'] : [],
+          parts: [],
+        },
+      });
+    });
+    const config: WorkflowConfig = {
+      name: 'live-intervention-team-leader-proposal-cancellation',
+      maxSteps: 10,
+      initialStep: 'implement',
+      steps: [makeStep('implement', {
+        teamLeader: {
+          persona: '../personas/team-leader.md',
+          maxConcurrency: 1,
+          timeoutMs: 10000,
+          partPersona: '../personas/coder.md',
+          partAllowedTools: ['Read', 'Edit', 'Write'],
+          partEdit: true,
+          partPermissionMode: 'edit',
+        },
+        rules: [makeRule('done', 'COMPLETE')],
+      })],
+    };
+    engine = new WorkflowEngine(
+      config, projectCwd, 'test task', createEngineOptions(projectCwd, store, structuredCaller),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const workerInstructions = vi.mocked(runAgent).mock.calls.map(([, instruction]) => instruction);
+    expect(workerInstructions).toHaveLength(retainProposal ? 2 : 1);
+    expect(workerInstructions[0]).toContain('execute initial work');
+    if (retainProposal) {
+      expect(workerInstructions[1]).toContain('execute retained work');
+    }
+    expect(workerInstructions.some((instruction) => instruction.includes('execute obsolete work'))).toBe(false);
+    expect(feedbackSessions).toEqual(Array.from({ length: retainProposal ? 3 : 2 }, () => 'leader-session'));
+    expect(store.read()).toMatchObject({
+      pending: 0,
+      deliveredSameSession: initialFeedback ? 2 : 1,
+      terminalStatus: 'completed',
+    });
+  });
+
   it('fails the leader step instead of creating a fresh session when decomposition omits its session ID', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     const requestFeedback = vi.fn();
