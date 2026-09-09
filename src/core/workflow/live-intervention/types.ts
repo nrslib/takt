@@ -1,3 +1,5 @@
+import type { Language } from '../../models/types.js';
+
 export type LiveInterventionInstructionState =
   | 'pending'
   | 'deliveredSameSession'
@@ -55,4 +57,3 @@ export interface LiveInterventionChannel {
   commitDelivery(delivery: PreparedLiveInterventionDelivery): Promise<void>;
   recordTerminal(status: 'completed' | 'failed', terminalAt?: string): Promise<number>;
 }
-import type { Language } from '../../models/types.js';
