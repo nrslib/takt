@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   existsSync,
-  mkdirSync,
+  mkdirSync, renameSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -637,7 +637,7 @@ describe('live intervention mode', () => {
     const replacementReportPath = join(nestedDirectory, 'replacement.md');
     reportChildOpenRace.targetPath = nestedDirectory;
     reportChildOpenRace.replace = () => {
-      rmSync(nestedDirectory, { recursive: true, force: true });
+      renameSync(nestedDirectory, join(projectCwd, 'original-report-directory'));
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf8');
     };
@@ -674,7 +674,7 @@ describe('live intervention mode', () => {
     const replacementReportPath = join(nestedDirectory, 'replacement.md');
     reportListingRace.targetPath = reportsDirectory;
     reportListingRace.replace = () => {
-      rmSync(nestedDirectory, { recursive: true, force: true });
+      renameSync(nestedDirectory, join(projectCwd, 'original-report-directory'));
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf8');
     };

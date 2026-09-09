@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, renameSync, statSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -19,6 +19,7 @@ interface FileRaceControl {
   run?: () => void;
   triggered: boolean;
   descriptor?: number;
+  replacementBirthtimeMs?: number;
 }
 
 const fsControl = vi.hoisted(() => ({
@@ -111,6 +112,9 @@ vi.mock('node:fs', async (importOriginal) => {
         fsControl.replaceSessionLog.run?.();
       }
       const descriptor = actual.openSync(...args);
+      if (String(args[0]) === fsControl.replaceSessionLog.targetPath) {
+        fsControl.replaceSessionLog.descriptor = descriptor;
+      }
       if (
         String(args[0]) === fsControl.replaceReportAfterRead.targetPath
         && !fsControl.replaceReportAfterRead.triggered
@@ -119,6 +123,14 @@ vi.mock('node:fs', async (importOriginal) => {
       }
       return descriptor;
     }) as typeof actual.openSync,
+    fstatSync: ((...args: Parameters<typeof actual.fstatSync>) => {
+      const stats = actual.fstatSync(...args);
+      if (args[0] === fsControl.replaceSessionLog.descriptor
+        && fsControl.replaceSessionLog.replacementBirthtimeMs !== undefined) {
+        return Object.assign(stats, { birthtimeMs: fsControl.replaceSessionLog.replacementBirthtimeMs });
+      }
+      return stats;
+    }) as typeof actual.fstatSync,
     readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
       const content = actual.readFileSync(...args);
       if (
@@ -127,7 +139,7 @@ vi.mock('node:fs', async (importOriginal) => {
         && !fsControl.replaceReportAfterRead.triggered
       ) {
         fsControl.replaceReportAfterRead.triggered = true;
-            fsControl.replaceReportAfterRead.targetPath = undefined;
+        fsControl.replaceReportAfterRead.targetPath = undefined;
         fsControl.replaceReportAfterRead.run?.();
       }
       return content;
@@ -468,7 +480,7 @@ describe('loadRunSessionContext', () => {
     const replacementReportPath = join(nestedDirectory, '01-replacement.md');
     fsControl.replaceReportDirectory.targetPath = nestedDirectory;
     fsControl.replaceReportDirectory.run = () => {
-      rmSync(nestedDirectory, { recursive: true, force: true });
+      renameSync(nestedDirectory, join(tmpDir, 'original-report-directory'));
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, '# Replacement', 'utf-8');
     };
@@ -498,7 +510,7 @@ describe('loadRunSessionContext', () => {
     const replacementReportPath = join(nestedDirectory, '01-replacement.md');
     fsControl.replaceReportEntryDirectory.targetPath = firstChildDirectory;
     fsControl.replaceReportEntryDirectory.run = () => {
-      rmSync(nestedDirectory, { recursive: true, force: true });
+      renameSync(nestedDirectory, join(tmpDir, 'original-report-directory'));
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf-8');
     };
@@ -525,7 +537,7 @@ describe('loadRunSessionContext', () => {
     mkdirSync(nestedDirectory, { recursive: true });
     fsControl.replaceReportListingDirectory.targetPath = reportsDirectory;
     fsControl.replaceReportListingDirectory.run = () => {
-      rmSync(nestedDirectory, { recursive: true, force: true });
+      renameSync(nestedDirectory, join(tmpDir, 'original-report-directory'));
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf-8');
     };
@@ -556,7 +568,7 @@ describe('loadRunSessionContext', () => {
     writeFileSync(join(nestedDirectory, '01-safe.md'), '# Safe', 'utf-8');
     fsControl.replaceReportAfterOpen.targetPath = firstReportPath;
     fsControl.replaceReportAfterOpen.run = () => {
-      rmSync(nestedDirectory, { recursive: true, force: true });
+      renameSync(nestedDirectory, join(tmpDir, 'original-report-directory'));
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf-8');
     };
@@ -583,7 +595,7 @@ describe('loadRunSessionContext', () => {
     mkdirSync(nestedDirectory, { recursive: true });
     fsControl.replaceReportBeforeDirectoryOpen.targetPath = nestedDirectory;
     fsControl.replaceReportBeforeDirectoryOpen.run = () => {
-      rmSync(nestedDirectory, { recursive: true, force: true });
+      renameSync(nestedDirectory, join(tmpDir, 'original-report-directory'));
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(replacementReportPath, 'EXTERNAL_MARKER', 'utf-8');
     };
@@ -737,7 +749,7 @@ describe('loadRunSessionContext', () => {
     writeFileSync(requestedReportPath, 'SAFE_ORIGINAL', 'utf-8');
     fsControl.replaceReportBeforeDirectoryOpen.targetPath = nestedDirectory;
     fsControl.replaceReportBeforeDirectoryOpen.run = () => {
-      rmSync(nestedDirectory, { recursive: true, force: true });
+      renameSync(nestedDirectory, join(tmpDir, 'original-report-directory'));
       mkdirSync(nestedDirectory, { recursive: true });
       writeFileSync(requestedReportPath, 'EXTERNAL_MARKER', 'utf-8');
     };
@@ -847,6 +859,26 @@ describe('loadRunSessionContext', () => {
     expect(mockLoadNdjsonLog).not.toHaveBeenCalled();
   });
 
+  it('rejects a new session log generation when the filesystem reuses its inode', () => {
+    const slug = 'session-log-reused-inode';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: 'inode reuse', workflow: 'default', status: 'running', startTime: '2026-02-01T00:00:00.000Z',
+    });
+    const logPath = join(runDir, 'logs', 'session-001.jsonl');
+    writeFileSync(logPath, '{}', 'utf8');
+    const original = statSync(logPath);
+    fsControl.replaceSessionLog.targetPath = logPath;
+    fsControl.replaceSessionLog.run = () => {
+      // Emulate a replacement with the same dev/ino but a newer creation time.
+      writeFileSync(logPath, '{"replacement":true}', 'utf8');
+      fsControl.replaceSessionLog.replacementBirthtimeMs = original.birthtimeMs + 1000;
+    };
+
+    expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(/identity changed/);
+    expect(fsControl.replaceSessionLog.triggered).toBe(true);
+    expect(mockParseNdjsonLogContent).not.toHaveBeenCalled();
+  });
+
   it('should reject a session log replaced after selection and before opening', () => {
     const slug = 'session-log-race-run';
     const runDir = createRunDir(tmpDir, slug, {
@@ -862,7 +894,7 @@ describe('loadRunSessionContext', () => {
     writeFileSync(logPath, '{}', 'utf-8');
     fsControl.replaceSessionLog.targetPath = logPath;
     fsControl.replaceSessionLog.run = () => {
-      rmSync(logPath, { force: true });
+      renameSync(logPath, join(tmpDir, 'original-session-log'));
       writeFileSync(logPath, '{}', 'utf-8');
     };
 

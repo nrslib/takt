@@ -275,6 +275,7 @@ class ReportSnapshotConflict extends Error {
 function hasSameIdentity(expected: Stats, actual: Stats): boolean {
   return expected.dev === actual.dev
     && expected.ino === actual.ino
+    && expected.birthtimeMs === actual.birthtimeMs
     && expected.mode === actual.mode
     && expected.isFile() === actual.isFile()
     && expected.isDirectory() === actual.isDirectory()
@@ -524,6 +525,9 @@ function assertReportDirectoryListingIdentity({
   const buildIdentityError = (): Error => new Error(directory.path === reportRoot.path
     ? `Reports directory identity changed while reading: ${reportRoot.path}`
     : `Report parent identity changed while reading: ${filename}`);
+  if (!hasStableReportDirectoryPath(directory.path, expectedStats)) {
+    throw buildIdentityError();
+  }
   const currentStats = fs.fstatSync(directory.descriptor);
   if (!currentStats.isDirectory() || !hasSameIdentity(expectedStats, currentStats)) {
     throw buildIdentityError();
