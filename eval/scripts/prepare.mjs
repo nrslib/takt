@@ -413,6 +413,7 @@ const { getBuiltinCompanionsDir } = await import(
 function findStepTarget(
   workflow,
   stepName,
+  projectDir = repoRoot,
   depth = 0,
   inheritedWorkflowRules,
   inheritedWorkflowCallVars = {},
@@ -456,11 +457,12 @@ function findStepTarget(
     ];
     for (const candidate of candidates) {
       if (candidate.kind !== 'workflow_call') continue;
-      const child = resolveWorkflowCallTarget(workflow, candidate, repoRoot);
+      const child = resolveWorkflowCallTarget(workflow, candidate, projectDir);
       if (!child) continue;
       const found = findStepTarget(
         child,
         stepName,
+        projectDir,
         depth + 1,
         workflowRules,
         { ...inheritedWorkflowCallVars, ...candidate.vars },
@@ -485,29 +487,29 @@ function findStepTarget(
   return null;
 }
 
-function findStepThroughCall(workflow, callStepName, stepName) {
+function findStepThroughCall(workflow, callStepName, stepName, projectDir = repoRoot) {
   const callStep = workflow.steps.find((step) => step.name === callStepName);
   if (!callStep || callStep.kind !== 'workflow_call') {
     throw new Error(`Workflow call "${callStepName}" not found while resolving step "${stepName}"`);
   }
-  const child = resolveWorkflowCallTarget(workflow, callStep, repoRoot);
+  const child = resolveWorkflowCallTarget(workflow, callStep, projectDir);
   if (!child) {
     throw new Error(`Workflow call "${callStepName}" could not be resolved`);
   }
   const inheritedWorkflowRules = mergeWorkflowWideRules(undefined, workflow.allStepsRules);
-  return findStepTarget(child, stepName, 1, inheritedWorkflowRules, callStep.vars);
+  return findStepTarget(child, stepName, projectDir, 1, inheritedWorkflowRules, callStep.vars);
 }
 
-function composeConfiguredDynamicFacets(target, selection, targetId, stepName) {
+function composeConfiguredDynamicFacets(target, selection, targetId, stepName, projectDir = repoRoot) {
   if (selection === undefined) return target;
 
-  const sourceWorkflow = loadWorkflowByIdentifier(selection.sourceWorkflow, repoRoot);
+  const sourceWorkflow = loadWorkflowByIdentifier(selection.sourceWorkflow, projectDir);
   if (!sourceWorkflow) {
     throw new Error(
       `Dynamic facet source workflow not found for eval target "${targetId}": ${selection.sourceWorkflow}`,
     );
   }
-  const source = findStepTarget(sourceWorkflow, stepName);
+  const source = findStepTarget(sourceWorkflow, stepName, projectDir);
   if (!source) {
     throw new Error(
       `Dynamic facet source step not found for eval target "${targetId}": `
@@ -598,6 +600,7 @@ async function main() {
       mkdirSync(dirname(runDir), { recursive: true });
       cpSync(fixtureDir, runDir, { recursive: true });
     }
+    const projectDir = projectFromFixture ? runDir : repoRoot;
     const artifactDir = artifacts === undefined ? runDir : resolve(repoRoot, artifacts);
 
     let config = null;
@@ -617,7 +620,7 @@ async function main() {
       ].filter((content) => content !== undefined).join('\n\n');
       config = { name: companionName, maxSteps: 1, steps: [] };
     } else {
-      config = loadWorkflowByIdentifier(workflowName, projectFromFixture ? runDir : repoRoot);
+      config = loadWorkflowByIdentifier(workflowName, projectDir);
       if (!config) {
         throw new Error(`Workflow not found: ${workflowName}`);
       }
@@ -654,8 +657,8 @@ async function main() {
       stepIndex = config.steps.findIndex(({ name }) => name === monitor.cycle.at(-1));
     } else {
       const found = via === undefined
-        ? findStepTarget(config, stepName)
-        : findStepThroughCall(config, via, stepName);
+        ? findStepTarget(config, stepName, projectDir)
+        : findStepThroughCall(config, via, stepName, projectDir);
       if (found) {
         config = found.workflow;
         target = found.target;
@@ -676,7 +679,7 @@ async function main() {
       throw new Error(`Step "${stepName}" not found in ${workflowName}. Available: ${names.join(', ')}`);
     }
 
-    target = composeConfiguredDynamicFacets(target, dynamicFacetSelection, id, stepName);
+    target = composeConfiguredDynamicFacets(target, dynamicFacetSelection, id, stepName, projectDir);
 
     if (facetMode === 'none') {
       target = { ...target, policyContents: [], knowledgeContents: [] };
@@ -766,7 +769,7 @@ async function main() {
 
     // The codex provider concatenates system prompt (persona) and instruction.
     const persona = target.personaPath
-      ? loadPersonaPromptFromPath(target.personaPath, repoRoot).trim()
+      ? loadPersonaPromptFromPath(target.personaPath, projectDir).trim()
       : '';
     const assembled = (persona ? `${persona}\n\n${instruction}` : instruction)
       .replaceAll(TASK_MARKER, '{{task}}')
@@ -797,4 +800,4 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   await main();
 }
 
-export { composeConfiguredDynamicFacets };
+export { composeConfiguredDynamicFacets, findStepTarget, findStepThroughCall };
