@@ -185,11 +185,11 @@ steps:
           format:
             $param: plan_report_format
     rules:
-      - condition: An untried project-scoped change or investigation and its verification steps were defined and can be performed
+      - condition: An untried change or investigation necessary to resolve an unmet requirement or changed contract of this task, and executable within the project, was defined with its verification steps (excludes plans for unrelated pre-existing issues or out-of-scope work)
         next: implement
-      - condition: The current implementation satisfies the requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation remains
+      - condition: The current implementation satisfies this task’s requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation necessary for this task remains (includes cases where only unrelated pre-existing issues or out-of-scope work remain; a plan entry or incomplete label alone does not make them mandatory)
         next: peer-review
-      - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the blocker, leaving only an external action or mutually incompatible requirements
+      - condition: For a mandatory condition of this task, confirmed evidence shows that project-scoped changes or investigation cannot resolve the blocker, leaving only an external action or mutually incompatible requirements
         next: ABORT
 
   - name: write_tests

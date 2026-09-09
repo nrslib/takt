@@ -12,14 +12,14 @@
 | `{ID}` | {searched and inspected scope} | {change, preservation, and obsolete-path handling} | {separate named evidence for each applicable axis among State, Ownership, Identity, Authorization/Allow-Deny, Failure/Re-entry/Terminal, Retry/Re-execution, and Concurrency/Interleaving; then Scenario and Command; omit non-applicable axes} |
 
 ## Quality Gates
-| Type | Execution | Result |
-|------|-----------|--------|
-| Build / Test / Static Check | `{execution}` | Pass / Fail |
+| Type | Execution | Result | Effect on This Task’s Completion and Evidence |
+|------|-----------|--------|-----------------------------------------------|
+| Build / Test / Static Check | `{execution}` | Pass / Fail / Not run | {mandatory condition and causal relationship to the change; blocking / non-blocking / undetermined, with evidence} |
 
 ## Unverified Scope
-| Item | Reason | Deterministic Alternative Verification | Remaining Risk |
-|------|--------|----------------------------------------|----------------|
-| {unverified item, or "none"} | {incomplete implementation, failed verification, environmental limitation, etc.} | {alternative verification performed, or "none"} | {remaining risk and next action} |
+| Item | Reason | Deterministic Alternative Verification | Remaining Risk and Effect on This Task’s Completion |
+|------|--------|----------------------------------------|-----------------------------------------------------|
+| {unverified item, or "none"} | {incomplete implementation, failed verification, environmental limitation, etc.} | {alternative verification performed, or "none"} | {remaining risk, whether required for this task or out of scope, evidence, and next action} |
 
 `Verified` is allowed only when all applicable contract and impact-path evidence succeeded. Record every failed or unexecuted item under Unverified Scope with its reason, deterministic alternative verification, and remaining risk.
 ```
