@@ -1,0 +1,27 @@
+description: "実装完了・再計画: 無関係な既存失敗と今回の必須検証を区別する Phase 3 評価"
+prompts:
+  - file://../../completion-routing-prompt.mjs
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-astra-medium
+    config:
+      cli: codex
+      model: gpt-6-astra
+      reasoning_effort: medium
+      working_dir: fixtures/remediation-evidence
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 2
+defaultTest:
+  vars:
+    language:
+      - ja
+      - en
+    workflow: development-implement-dynamic
+  assert:
+    - type: javascript
+      value: |
+        const step = context.vars.workflow === 'development-core' ? 'REPLAN' : 'IMPLEMENT';
+        const expected = `[${step}:${context.vars.expected_rule}]`;
+        return { pass: output.trim() === expected, score: output.trim() === expected ? 1 : 0, reason: `Expected ${expected}; got ${output.trim()}` };
+tests: file://../../cases/completion-scope-routing.yaml

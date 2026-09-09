@@ -60,11 +60,11 @@ steps:
     companion:
       $param: implementation_companions
     rules:
-      - condition: Implementation is complete
+      - condition: The required implementation was performed and its mandatory verification is complete (pre-existing failures and out-of-scope work that are neither causally related to this change nor mandatory for this task do not block completion; an incomplete label in the report alone does not justify returning it)
         next: COMPLETE
-      - condition: No implementation was started (report only)
+      - condition: No implementation change is needed for this task and mandatory verification is complete (report-only work; excludes any required work that has not been performed)
         next: COMPLETE
-      - condition: Implementation cannot proceed
+      - condition: Implementation, verification, or investigation required by this task or its changed contracts remains incomplete (includes regressions, pre-existing problems the change depends on, amplifies, or newly exposes, and unmet mandatory conditions; excludes unrelated pre-existing failures and out-of-scope work alone)
         return: need_replan
       - condition: User input is required
         next: implement

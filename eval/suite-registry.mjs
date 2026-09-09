@@ -45,6 +45,8 @@ const CLASSIFICATIONS = [
       'initial-plan-contract-closure',
       'implement-contract-traceability',
       'implementation-report-contract-traceability',
+      'completion-scope-routing',
+      'completion-scope-structured',
     ],
   },
   {
@@ -133,6 +135,18 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'completion-scope-structured': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '本番の構造化応答で実装完了と再計画のスコープ判定を比較する',
+  },
+  'completion-scope-routing': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '実装完了と再計画のスコープ判定を固定レポートで比較する',
+  },
   'evidence-judgment': {
     defaultEligible: false,
     credentials: ['codex'],
@@ -328,6 +342,8 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'completion-scope-structured': [],
+  'completion-scope-routing': [],
   'evidence-judgment': [],
   coding: ['coding-review'],
   arch: ['arch-review'],
