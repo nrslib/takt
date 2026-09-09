@@ -50,8 +50,11 @@ const EMPTY_RUN_SESSION_VARS = {
   runTask: '',
   runWorkflow: '',
   runStatus: '',
+  runCurrentStep: '',
+  runPhase: '',
   runStepLogs: '',
   runReports: '',
+  runLiveIntervention: '',
 };
 
 const INTERACTIVE_INVESTIGATION_POLICIES = {
@@ -126,6 +129,8 @@ export interface AssistantConversationInput {
   resolveResumedFormalSpecConfiguration?: () => Promise<{ mode: boolean; comments: boolean }>;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
+  /** Re-read a live run before each provider turn while retaining the session. */
+  resolveRunSessionContext?: () => RunSessionContext;
   provider?: ProviderType;
   model?: string;
   effort?: string;
@@ -185,6 +190,7 @@ export function createAssistantConversationPlan(
   const assistantInitContext = loadAssistantInitContext(cwd);
   const buildPromptConfiguration = (
     formalSpecConfiguration: { mode: boolean; comments: boolean },
+    runSessionContext = input.runSessionContext,
   ): ConversationPromptConfiguration => ({
     formalSpec: formalSpecConfiguration.mode,
     formalSpecComments: formalSpecConfiguration.comments,
@@ -193,12 +199,21 @@ export function createAssistantConversationPlan(
       formalSpec: formalSpecConfiguration.mode,
       formalSpecComments: formalSpecConfiguration.comments,
       ...(input.workflowContext ? { workflowContext: input.workflowContext } : {}),
-      ...(input.runSessionContext ? { runSessionContext: input.runSessionContext } : {}),
+      ...(runSessionContext ? { runSessionContext } : {}),
     }),
   });
   const resolvePromptConfiguration = input.resolveResumedFormalSpecConfiguration
     ? async (): Promise<ConversationPromptConfiguration> =>
       buildPromptConfiguration(await input.resolveResumedFormalSpecConfiguration!())
+    : undefined;
+  const resolveCurrentPromptConfiguration = input.resolveRunSessionContext
+    ? async (): Promise<ConversationPromptConfiguration> => buildPromptConfiguration(
+      {
+        mode: input.formalSpec,
+        comments: input.formalSpecComments,
+      },
+      input.resolveRunSessionContext!(),
+    )
     : undefined;
   const initialPromptConfiguration = buildPromptConfiguration({
     mode: input.formalSpec,
@@ -218,6 +233,9 @@ export function createAssistantConversationPlan(
       summaryPromptContext: assistantInitContext,
       ...(resolvePromptConfiguration
         ? { resolveResumedSessionConfiguration: resolvePromptConfiguration }
+        : {}),
+      ...(resolveCurrentPromptConfiguration
+        ? { resolveCurrentPromptConfiguration }
         : {}),
     },
   };

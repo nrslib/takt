@@ -202,8 +202,10 @@ export async function instructBranch(
     stepPreviews: workflowDesc.stepPreviews,
   };
 
-  // Runs data lives in the worktree (written during previous execution)
-  const runSessionContext = await selectRunSessionContext(worktreePath, lang);
+  // Run logs and reports live in the worktree; live intervention history is canonical in projectDir.
+  const runSessionContext = await selectRunSessionContext(worktreePath, lang, {
+    liveInterventionProjectCwd: projectDir,
+  });
   if (hasDeprecatedProviderConfig(previousOrderContent)) {
     warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
   }

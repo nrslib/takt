@@ -77,8 +77,17 @@ import type {
   WorkflowStepExecutionDeadlineContext,
 } from './step-deadline.js';
 import type { CompanionDiffBaseline } from '../companion/step-runtime.js';
+import type { PreparedLiveInterventionDelivery } from '../live-intervention/types.js';
+import { createLiveInterventionDeliveryCommitter } from '../live-intervention/delivery.js';
 
 const log = createLogger('team-leader-runner');
+
+class LiveInterventionSessionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LiveInterventionSessionError';
+  }
+}
 
 async function runWithExecutionDeadline<T>(
   context: WorkflowStepExecutionDeadlineContext | undefined,
@@ -154,7 +163,7 @@ function classifyTeamLeaderPartFailures(
   readonly terminal: boolean;
 } {
   const failedResults = partResults.filter((result) => result.response.status === 'error');
-  const allFailed = failedResults.length === partResults.length;
+  const allFailed = partResults.length > 0 && failedResults.length === partResults.length;
   const timeoutContinuationFailed = hasFailedTimeoutContinuationResult([...partResults]);
   const failClosedPartError = failOnPartError && failedResults.length > 0;
   return {
@@ -273,6 +282,25 @@ export class TeamLeaderRunner {
       instructionTransaction,
     );
     const instruction = preparedInstruction.text;
+    const liveIntervention = this.deps.engineOptions.liveIntervention;
+    const initialLiveDelivery: PreparedLiveInterventionDelivery | undefined = liveIntervention !== undefined
+      && liveIntervention.read().pending > 0
+      ? await liveIntervention.prepareDelivery({
+          language: this.deps.engineOptions.language,
+          mode: 'next_step',
+          step: step.name,
+          phase: 1,
+          target: 'team_leader_step',
+        })
+      : undefined;
+    const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
+      liveIntervention,
+      initialLiveDelivery,
+      undefined,
+    );
+    const leaderInstruction = [instruction, initialLiveDelivery?.prompt]
+      .filter((part): part is string => part !== undefined && part.length > 0)
+      .join('\n\n');
     const leaderRuntime = await this.resolveLeaderAutoRouting(
       leaderStep,
       runtime,
@@ -441,11 +469,13 @@ export class TeamLeaderRunner {
     if (!structuredCaller) {
       throw new Error('structuredCaller is required for team leader execution');
     }
+    let leaderSessionId: string | undefined;
     const buildFeedbackOptions = (
       abortSignal: AbortSignal | undefined,
       cancellablePartIds: readonly string[],
       companionFindings?: readonly CompanionFinding[],
       ignoredCancelPartIds?: readonly string[],
+      onDispatch?: RunAgentOptions['onDispatch'],
     ) => ({
       cwd: this.deps.getCwd(),
       persona: leaderStep.persona,
@@ -477,6 +507,8 @@ export class TeamLeaderRunner {
       abortSignal,
       onStream: leaderStream,
       onActivity: leaderBaseOptions.onActivity,
+      ...(leaderSessionId === undefined ? {} : { sessionId: leaderSessionId }),
+      ...(onDispatch === undefined ? {} : { onDispatch }),
       onAgentResponse: (response: AgentResponse) => {
         this.recordUsage(
           leaderStep.name,
@@ -514,6 +546,10 @@ export class TeamLeaderRunner {
       abortSignal: leaderAbortSignal,
       onStream: leaderStream,
       onActivity: leaderBaseOptions.onActivity,
+      ...(leaderSessionId === undefined ? {} : { sessionId: leaderSessionId }),
+      ...(initialDeliveryCommitter === undefined
+        ? {}
+        : { onDispatch: initialDeliveryCommitter.onDispatch }),
       onAgentResponse: (response: AgentResponse) => {
         this.recordUsage(
           leaderStep.name,
@@ -541,39 +577,191 @@ export class TeamLeaderRunner {
         didEmitPhaseStart = true;
       },
     });
+    const requestLeaderFeedback = async (input: {
+      readonly instruction: string;
+      readonly results: TeamLeaderPartFeedbackResult[];
+      readonly existingIds: string[];
+      readonly abortSignal: AbortSignal | undefined;
+      readonly cancellablePartIds: readonly string[];
+      readonly companionFindings?: readonly CompanionFinding[];
+      readonly ignoredCancelPartIds?: readonly string[];
+    }): Promise<MorePartsResponse> => {
+      const liveIntervention = this.deps.engineOptions.liveIntervention;
+      const liveDelivery: PreparedLiveInterventionDelivery | undefined = liveIntervention !== undefined
+        && liveIntervention.read().pending > 0
+        ? await liveIntervention.prepareDelivery({
+            language: this.deps.engineOptions.language,
+            mode: 'same_session',
+            step: step.name,
+            phase: 1,
+          })
+        : undefined;
+      if (liveDelivery !== undefined && leaderSessionId === undefined) {
+        throw new LiveInterventionSessionError(
+          `Live intervention requires a session ID for team leader step "${step.name}"`,
+        );
+      }
+      const deliveryCommitter = createLiveInterventionDeliveryCommitter(
+        liveIntervention,
+        liveDelivery,
+        undefined,
+      );
+      let response: MorePartsResponse;
+      try {
+        response = await structuredCaller.requestMoreParts(
+          [input.instruction, liveDelivery?.prompt]
+            .filter((part): part is string => part !== undefined && part.length > 0)
+            .join('\n\n'),
+          input.results,
+          input.existingIds,
+          {
+            ...buildFeedbackOptions(
+              input.abortSignal,
+              input.cancellablePartIds,
+              input.companionFindings,
+              input.ignoredCancelPartIds,
+              deliveryCommitter?.onDispatch,
+            ),
+          },
+        );
+      } finally {
+        await deliveryCommitter?.settle();
+      }
+
+      if (response.sessionId !== undefined) {
+        leaderSessionId = response.sessionId;
+      }
+
+      const responseParts = [...response.parts];
+      const deliveredPartIds = new Set(responseParts.map((part) => part.id));
+      const drainResponse = async (): Promise<void> => {
+        if (liveIntervention === undefined || liveIntervention.read().pending === 0) {
+          return;
+        }
+        if (leaderSessionId === undefined) {
+          throw new LiveInterventionSessionError(
+            `Live intervention requires a session ID for team leader step "${step.name}"`,
+          );
+        }
+
+        const followUpDelivery = await liveIntervention.prepareDelivery({
+          language: this.deps.engineOptions.language,
+          mode: 'same_session',
+          step: step.name,
+          phase: 1,
+        });
+        const followUpCommitter = createLiveInterventionDeliveryCommitter(
+          liveIntervention,
+          followUpDelivery,
+          undefined,
+        );
+        try {
+          const followUpResponse = await structuredCaller.requestMoreParts(
+            [input.instruction, followUpDelivery.prompt]
+              .filter((part): part is string => part.length > 0)
+              .join('\n\n'),
+            input.results,
+            [
+              ...input.existingIds,
+              ...deliveredPartIds,
+            ],
+            buildFeedbackOptions(
+              input.abortSignal,
+              [
+                ...input.cancellablePartIds,
+                ...[...deliveredPartIds].filter((partId) => (
+                  !input.existingIds.includes(partId) && !response.cancelPartIds.includes(partId)
+                )),
+              ],
+              input.companionFindings,
+              input.ignoredCancelPartIds,
+              followUpCommitter?.onDispatch,
+            ),
+          );
+          if (followUpResponse.sessionId !== undefined) {
+            leaderSessionId = followUpResponse.sessionId;
+          }
+          for (const part of followUpResponse.parts) {
+            if (!deliveredPartIds.has(part.id)) {
+              deliveredPartIds.add(part.id);
+              responseParts.push(part);
+            }
+          }
+          const cancelPartIds = [...new Set([
+            ...response.cancelPartIds,
+            ...followUpResponse.cancelPartIds,
+          ])];
+          const retainedResponseParts = responseParts.filter((part) => !cancelPartIds.includes(part.id));
+          response = {
+            ...response,
+            ...followUpResponse,
+            done: followUpResponse.done && retainedResponseParts.every((part) => (
+              input.existingIds.includes(part.id)
+            )),
+            parts: retainedResponseParts,
+            cancelPartIds,
+            ...(followUpResponse.sessionId === undefined && response.sessionId === undefined
+              ? {}
+              : { sessionId: followUpResponse.sessionId ?? response.sessionId }),
+          };
+        } finally {
+          await followUpCommitter?.settle();
+        }
+      };
+
+      while (liveIntervention !== undefined && liveIntervention.read().pending > 0) {
+        const pendingIds = liveIntervention.read().instructions
+          .filter((instruction) => instruction.state === 'pending')
+          .map((instruction) => instruction.instructionId);
+        await drainResponse();
+        const remainingIds = new Set(liveIntervention.read().instructions
+          .filter((instruction) => instruction.state === 'pending')
+          .map((instruction) => instruction.instructionId));
+        if (pendingIds.every((id) => remainingIds.has(id))) {
+          break;
+        }
+      }
+      return response;
+    };
     const requestDecomposition = () => {
       return structuredCaller.decomposeTask(
-        instruction,
+        leaderInstruction,
         teamLeaderConfig.initialMaxParts,
         buildDecompositionOptions(),
       );
     };
-    const decomposition = await runWithExecutionDeadline(
-      executionDeadlineContext,
-      leaderDeadline,
-      () => runWithPhaseSpan(
-        {
-          enabled: this.deps.observabilityEnabled,
-          runId: this.deps.observabilityRunId,
-          workflowName: this.deps.getWorkflowName(),
-          step: leaderStep,
-          iteration: parentIteration,
-          phase: 1,
-          phaseName: 'execute',
-          instruction,
-          phaseExecutionId,
-          workflowStack: this.deps.getCurrentWorkflowStack?.(),
-          sanitizeText: this.deps.sanitizeObservabilityText,
-          providerInfo: leaderProviderInfo,
-          getPromptParts: () => resolvedPromptParts,
-        },
-        requestDecomposition,
-        (result) => ({
-          status: 'done',
-          content: JSON.stringify({ parts: result.parts }, null, 2),
-        }),
-      ),
-    );
+    let decomposition: Awaited<ReturnType<typeof requestDecomposition>>;
+    try {
+      decomposition = await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => runWithPhaseSpan(
+          {
+            enabled: this.deps.observabilityEnabled,
+            runId: this.deps.observabilityRunId,
+            workflowName: this.deps.getWorkflowName(),
+            step: leaderStep,
+            iteration: parentIteration,
+            phase: 1,
+            phaseName: 'execute',
+            instruction: leaderInstruction,
+            phaseExecutionId,
+            workflowStack: this.deps.getCurrentWorkflowStack?.(),
+            sanitizeText: this.deps.sanitizeObservabilityText,
+            providerInfo: leaderProviderInfo,
+            getPromptParts: () => resolvedPromptParts,
+          },
+          requestDecomposition,
+          (result) => ({
+            status: 'done',
+            content: JSON.stringify({ parts: result.parts }, null, 2),
+          }),
+        ),
+      );
+    } finally {
+      await initialDeliveryCommitter?.settle();
+    }
+    leaderSessionId = decomposition.sessionId;
     const parts = decomposition.parts;
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
@@ -588,7 +776,7 @@ export class TeamLeaderRunner {
     this.emitLeaderRoutingDecisionEvent(
       leaderStep,
       leaderResponse,
-      instruction,
+      leaderInstruction,
       leaderProviderInfo,
       Math.max(0, Date.now() - leaderStartedAt),
       parentIteration,
@@ -645,11 +833,11 @@ export class TeamLeaderRunner {
       const rateLimitedResult = currentPartResults.find(
         (result) => result.response.status === 'rate_limited',
       );
-      const failedResults = currentPartResults.filter((result) => result.response.status === 'error');
-      const allFailed = failedResults.length === currentPartResults.length;
-      const timeoutContinuationFailed = hasFailedTimeoutContinuationResult(currentPartResults);
-      const failClosedPartError = teamLeaderConfig.failOnPartError === true && failedResults.length > 0;
-      if (rateLimitedResult !== undefined || allFailed || timeoutContinuationFailed || failClosedPartError) {
+      const failureClassification = classifyTeamLeaderPartFailures(
+        currentPartResults,
+        teamLeaderConfig.failOnPartError === true,
+      );
+      if (rateLimitedResult !== undefined || failureClassification.terminal) {
         return undefined;
       }
 
@@ -660,17 +848,14 @@ export class TeamLeaderRunner {
       const finalCompletionContext: SingleCompanionCompletionContext = {
         abortSignal: leaderAbortSignal,
         requestFollowUp: async (followUpInstruction, abortSignal) => {
-          const response = await structuredCaller.requestMoreParts(
-            followUpInstruction,
-            buildFeedbackResults(currentPartResults),
-            [...scheduledIds],
-            buildFeedbackOptions(
-              abortSignal,
-              [],
-              undefined,
-              currentPartResults.map((result) => result.part.id),
-            ),
-          );
+          const response = await requestLeaderFeedback({
+            instruction: followUpInstruction,
+            results: buildFeedbackResults(currentPartResults),
+            existingIds: [...scheduledIds],
+            abortSignal,
+            cancellablePartIds: [],
+            ignoredCancelPartIds: currentPartResults.map((result) => result.part.id),
+          });
           const knownPartIds = new Set(scheduledIds);
           const correctionParts = response.parts.filter((part) => {
             if (knownPartIds.has(part.id)) {
@@ -710,12 +895,34 @@ export class TeamLeaderRunner {
     let executionResult: Awaited<ReturnType<typeof runTeamLeaderExecution>>;
     try {
       executionResult = await runWithExecutionDeadline(
-        executionDeadlineContext,
-        leaderDeadline,
-        () => runTeamLeaderExecution({
+      executionDeadlineContext,
+      leaderDeadline,
+      () => runTeamLeaderExecution({
         initialParts: parts,
         maxConcurrency: teamLeaderConfig.maxConcurrency,
         abortSignal: executionAbortScope.signal,
+        getPendingLiveInterventionIds: () => liveIntervention?.read().instructions
+          .filter((instruction) => instruction.state === 'pending')
+          .map((instruction) => instruction.instructionId) ?? [],
+        beforeInitialPartExecution: async () => {
+          if (liveIntervention !== undefined && liveIntervention.read().pending > 0) {
+            const response = await requestLeaderFeedback({
+              instruction,
+              results: [],
+              existingIds: parts.map((part) => part.id),
+              abortSignal: executionAbortScope.signal,
+              cancellablePartIds: parts.map((part) => part.id),
+            });
+            await this.addPartAutoRouting(
+              routedProviderInfoByPart,
+              executableStep,
+              response.parts,
+              runtime,
+            );
+            return response;
+          }
+          return undefined;
+        },
         onTerminalError: (error) => {
           executionAbortScope.abort(error);
         },
@@ -765,6 +972,9 @@ export class TeamLeaderRunner {
           step: step.name,
           detail: getErrorMessage(error),
         });
+        if (error instanceof LiveInterventionSessionError) {
+          throw error;
+        }
       },
       onCompletionPlanningFailure: (error) => {
         activeTeamCompanionRuntime?.completeFollowUpFailure(
@@ -808,7 +1018,6 @@ export class TeamLeaderRunner {
           ? feedbackAbortSignal
           : AbortSignal.any([feedbackAbortSignal, leaderDeadline.signal]);
         try {
-          const feedbackInstruction = instruction;
           if (companionFindings !== undefined && companionFindings.length > 0) {
             if (activeTeamCompanionRuntime === undefined) {
               throw new Error('Team Companion findings require an active Companion runtime');
@@ -819,12 +1028,14 @@ export class TeamLeaderRunner {
             );
             teamCompanionFollowUpRound += 1;
           }
-          const moreParts = await structuredCaller.requestMoreParts(
-            feedbackInstruction,
-            feedbackResults,
-            scheduledIdsCopy,
-            buildFeedbackOptions(feedbackSignal, cancellablePartIdsCopy, companionFindings),
-          );
+          const moreParts = await requestLeaderFeedback({
+            instruction,
+            results: feedbackResults,
+            existingIds: scheduledIdsCopy,
+            abortSignal: feedbackSignal,
+            cancellablePartIds: cancellablePartIdsCopy,
+            companionFindings,
+          });
           await this.addPartAutoRouting(
             routedProviderInfoByPart,
             executableStep,
@@ -834,6 +1045,9 @@ export class TeamLeaderRunner {
           return moreParts;
         } catch (error) {
           if (feedbackSignal.aborted) {
+            throw error;
+          }
+          if (error instanceof LiveInterventionSessionError) {
             throw error;
           }
           if (isProviderStreamParseError(error)) {

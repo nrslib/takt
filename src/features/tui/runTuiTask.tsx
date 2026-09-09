@@ -25,8 +25,8 @@ import {
 } from '../interactive/imageAttachments.js';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import { handOverAttachments } from './attachmentHandover.js';
-import { runTuiConversation } from './conversationRunner.js';
-import { createTuiConversation, type InteractiveResultSource } from './tuiConversation.js';
+import { runTuiConversation, type TuiHandoffOutcome } from './conversationRunner.js';
+import { createTuiConversation, type InteractiveResultSource, type TuiHandoffId } from './tuiConversation.js';
 import { describeSessionModel } from './tuiSetup.js';
 
 export interface RunTuiTaskConversationOptions {
@@ -35,6 +35,13 @@ export interface RunTuiTaskConversationOptions {
   readonly plan: ConversationPlan;
   /** Left out when the mode has no workflow to describe to the summary prompt. */
   readonly workflowContext?: WorkflowContext;
+  readonly liveStatusReader?: () => string;
+  readonly liveStatusRefreshIntervalMs?: number;
+  readonly onHandoff?: (
+    id: TuiHandoffId,
+    text: string,
+  ) => Promise<TuiHandoffOutcome>;
+  readonly dispatch?: (result: InteractiveModeResult) => Promise<string | null>;
 }
 
 /** Runs one task conversation and returns what the user decided. */
@@ -95,6 +102,10 @@ export async function runTuiTaskConversation(
       modelLabel: () => getLabel('tui.ui.model', ctx.lang, { value: describeSessionModel(ctx) }),
       chooseAction,
       continuePrompt: ui.continuePrompt,
+      liveStatusReader: options.liveStatusReader,
+      liveStatusRefreshIntervalMs: options.liveStatusRefreshIntervalMs,
+      onHandoff: options.onHandoff,
+      dispatch: options.dispatch,
     });
     const handedOverResult = handOverAttachments(
       buildInteractiveResultWithAttachments(result, attachmentStore),

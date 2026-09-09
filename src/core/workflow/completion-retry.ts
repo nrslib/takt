@@ -1,5 +1,8 @@
 import type { AgentResponse, Language, CompletionRetryConfig } from '../models/types.js';
 import type { CompletionRetryEvidence } from './completion-retry-evidence.js';
+import {
+  isLiveInterventionStructuredOutputFinalizationError,
+} from './structured-output-finalization-error.js';
 
 export const COMPLETION_RETRY_JUDGE_NAME = 'review-completion-judge';
 export const COMPLETION_RETRY_SCHEMA_REF = 'takt.review-completion.decision';
@@ -219,6 +222,7 @@ export async function runCompletionRetryEpisode(input: {
         }
       } catch (error) {
         if (input.isAbort(error)) throw error;
+        if (isLiveInterventionStructuredOutputFinalizationError(error)) throw error;
         lastJudgeFailure = error instanceof Error ? error.message : String(error);
         if (attemptIndex === input.config.maxRetry) {
           return {

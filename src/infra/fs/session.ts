@@ -62,6 +62,80 @@ export interface FailureInfo {
 }
 
 /**
+ * Parse NDJSON session-log content without resolving the source path again.
+ *
+ * @param content - UTF-8 content read from a session-log descriptor
+ * @param sourcePath - Path used only to identify the source in parse errors
+ * @returns The parsed session log, or null if the content is empty or has no workflow_start record
+ * @throws Error if a record cannot be parsed or validated
+ */
+export function parseNdjsonLogContent(content: string, sourcePath: string): SessionLog | null {
+  const lines = content.trim().split('\n').filter((line) => line.length > 0);
+  if (lines.length === 0) return null;
+
+  let sessionLog: SessionLog | null = null;
+
+  for (const line of lines) {
+    const record = parseNdjsonRecordWithPath(line, sourcePath);
+
+    switch (record.type) {
+      case 'workflow_start':
+        sessionLog = {
+          task: record.task,
+          projectDir: '',
+          workflowName: record.workflowName,
+          iterations: 0,
+          startTime: record.startTime,
+          status: 'running',
+          history: [],
+        };
+        break;
+
+      case 'step_complete':
+        if (sessionLog) {
+          sessionLog.history.push({
+            step: record.step,
+            persona: record.persona,
+            instruction: record.instruction,
+            status: record.status,
+            timestamp: record.timestamp,
+            content: record.content,
+            ...(record.workflow ? { workflow: record.workflow } : {}),
+            ...(record.stack ? { stack: record.stack } : {}),
+            ...(record.parallel ? { parallel: record.parallel } : {}),
+            ...(record.error ? { error: record.error } : {}),
+            ...(record.matchedRuleIndex != null ? { matchedRuleIndex: record.matchedRuleIndex } : {}),
+            ...(record.matchedRuleMethod ? { matchedRuleMethod: record.matchedRuleMethod } : {}),
+            ...(record.matchMethod ? { matchMethod: record.matchMethod } : {}),
+            ...(record.failureCategory ? { failureCategory: record.failureCategory } : {}),
+          });
+          sessionLog.iterations++;
+        }
+        break;
+
+      case 'workflow_complete':
+        if (sessionLog) {
+          sessionLog.status = 'completed';
+          sessionLog.endTime = record.endTime;
+        }
+        break;
+
+      case 'workflow_abort':
+        if (sessionLog) {
+          sessionLog.status = 'aborted';
+          sessionLog.endTime = record.endTime;
+        }
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  return sessionLog;
+}
+
+/**
  * Manages session lifecycle: ID generation, NDJSON logging,
  * and session log creation/loading.
  */
@@ -126,70 +200,7 @@ export class SessionManager {
       return null;
     }
 
-    const content = readFileSync(filepath, 'utf-8');
-    const lines = content.trim().split('\n').filter((line) => line.length > 0);
-    if (lines.length === 0) return null;
-
-    let sessionLog: SessionLog | null = null;
-
-    for (const line of lines) {
-      const record = parseNdjsonRecordWithPath(line, filepath);
-
-      switch (record.type) {
-        case 'workflow_start':
-          sessionLog = {
-            task: record.task,
-            projectDir: '',
-            workflowName: record.workflowName,
-            iterations: 0,
-            startTime: record.startTime,
-            status: 'running',
-            history: [],
-          };
-          break;
-
-        case 'step_complete':
-          if (sessionLog) {
-            sessionLog.history.push({
-              step: record.step,
-              persona: record.persona,
-              instruction: record.instruction,
-              status: record.status,
-              timestamp: record.timestamp,
-              content: record.content,
-              ...(record.workflow ? { workflow: record.workflow } : {}),
-              ...(record.stack ? { stack: record.stack } : {}),
-              ...(record.parallel ? { parallel: record.parallel } : {}),
-              ...(record.error ? { error: record.error } : {}),
-              ...(record.matchedRuleIndex != null ? { matchedRuleIndex: record.matchedRuleIndex } : {}),
-              ...(record.matchedRuleMethod ? { matchedRuleMethod: record.matchedRuleMethod } : {}),
-              ...(record.matchMethod ? { matchMethod: record.matchMethod } : {}),
-              ...(record.failureCategory ? { failureCategory: record.failureCategory } : {}),
-            });
-            sessionLog.iterations++;
-          }
-          break;
-
-        case 'workflow_complete':
-          if (sessionLog) {
-            sessionLog.status = 'completed';
-            sessionLog.endTime = record.endTime;
-          }
-          break;
-
-        case 'workflow_abort':
-          if (sessionLog) {
-            sessionLog.status = 'aborted';
-            sessionLog.endTime = record.endTime;
-          }
-          break;
-
-        default:
-          break;
-      }
-    }
-
-    return sessionLog;
+    return parseNdjsonLogContent(readFileSync(filepath, 'utf-8'), filepath);
   }
 
   /** Generate a session ID */

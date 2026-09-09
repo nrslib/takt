@@ -101,32 +101,57 @@ function recoverDeadHolder(lockPath: string): void {
   removeLockIfUnchanged(lockPath, { state: current.state, content });
 }
 
+function tryAcquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock | undefined {
+  const holder: LockHolder = { pid: process.pid, token: randomUUID() };
+  const content = JSON.stringify(holder);
+  try {
+    writeNewPrivateFileWithMode(lockPath, content, LOCK_MODE);
+    const acquired = readPrivateFileState(lockPath);
+    if (!acquired.state.exists
+      || !('content' in acquired)
+      || acquired.content.toString('utf-8') !== content) {
+      throw new Error(`Private file lock identity changed after acquisition: ${lockPath}`);
+    }
+    return { state: acquired.state, content };
+  } catch (error) {
+    if (!(error instanceof PrivateArtifactPublicationConflictError)
+      && !String(error).includes('already exists')) {
+      throw error;
+    }
+  }
+  recoverDeadHolder(lockPath);
+  return undefined;
+}
+
+function assertLockDeadline(lockPath: string, deadline: number): void {
+  if (Date.now() >= deadline) {
+    throw new Error(`Timed out waiting for private file lock: ${lockPath}`);
+  }
+}
+
 function acquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock {
   ensurePrivateDirectory(dirname(lockPath));
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   while (true) {
-    const holder: LockHolder = { pid: process.pid, token: randomUUID() };
-    const content = JSON.stringify(holder);
-    try {
-      writeNewPrivateFileWithMode(lockPath, content, LOCK_MODE);
-      const acquired = readPrivateFileState(lockPath);
-      if (!acquired.state.exists
-        || !('content' in acquired)
-        || acquired.content.toString('utf-8') !== content) {
-        throw new Error(`Private file lock identity changed after acquisition: ${lockPath}`);
-      }
-      return { state: acquired.state, content };
-    } catch (error) {
-      if (!(error instanceof PrivateArtifactPublicationConflictError)
-        && !String(error).includes('already exists')) {
-        throw error;
-      }
-    }
-    recoverDeadHolder(lockPath);
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for private file lock: ${lockPath}`);
-    }
+    const acquired = tryAcquirePrivateFileLock(lockPath);
+    if (acquired !== undefined) return acquired;
+    assertLockDeadline(lockPath, deadline);
     waitForLock();
+  }
+}
+
+/** Wait without blocking other users of the same file in this process. */
+export async function runPrivateFileExclusiveAsync<Result>(
+  lockPath: string,
+  action: () => Result,
+): Promise<Result> {
+  ensurePrivateDirectory(dirname(lockPath));
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  while (true) {
+    const acquired = tryAcquirePrivateFileLock(lockPath);
+    if (acquired !== undefined) return runWithAcquiredLock(lockPath, acquired, action);
+    assertLockDeadline(lockPath, deadline);
+    await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
   }
 }
 
@@ -135,6 +160,14 @@ export function runPrivateFileExclusive<Result>(
   action: () => Result,
 ): Result {
   const acquired = acquirePrivateFileLock(lockPath);
+  return runWithAcquiredLock(lockPath, acquired, action);
+}
+
+function runWithAcquiredLock<Result>(
+  lockPath: string,
+  acquired: AcquiredPrivateFileLock,
+  action: () => Result,
+): Result {
   let result!: Result;
   let actionError: unknown;
   try {
