@@ -45,7 +45,7 @@ export {
 
 type PendingTaskAction = 'delete';
 type ExceededTaskAction = 'requeue' | 'delete';
-type RunningTaskAction = 'force_fail';
+type RunningTaskAction = 'force_fail' | 'interactive';
 type FailedTaskAction = 'requeue' | 'retry' | 'create_pr' | 'delete';
 type PrFailedTaskAction = Exclude<ListAction, 'create_pr'>;
 type CompletedTaskAction = ListAction;
@@ -94,7 +94,12 @@ async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<Runni
 
   return await selectOption<RunningTaskAction>(
     `Action for ${task.name}:`,
-    [{ label: 'Mark as failed', value: 'force_fail', description: 'Mark stuck running task as failed' }],
+    [
+      { label: 'Mark as failed', value: 'force_fail', description: 'Mark stuck running task as failed' },
+      ...(task.runSlug !== undefined && task.worktreePath !== undefined
+        ? [{ label: 'Interactive', value: 'interactive' as const, description: 'Consult the running task and propose additional instructions' }]
+        : []),
+    ],
   );
 }
 
@@ -201,17 +206,14 @@ export async function listTasks(
     } else if (type === 'running') {
       const task = tasks[idx];
       if (!task) continue;
-      if (task.runSlug !== undefined && task.worktreePath !== undefined) {
+      const taskAction = await showRunningTaskAndPromptAction(task);
+      if (taskAction === 'interactive') {
         try {
           await runLiveInterventionMode(cwd, task);
-          continue;
         } catch (error) {
-          // A stale run must still offer the running-task recovery actions.
           info(getErrorMessage(error));
         }
-      }
-      const taskAction = await showRunningTaskAndPromptAction(task);
-      if (taskAction === 'force_fail') {
+      } else if (taskAction === 'force_fail') {
         await forceFailRunningTask(task, cwd);
       }
     } else if (type === 'completed') {

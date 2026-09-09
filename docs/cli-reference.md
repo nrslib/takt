@@ -340,7 +340,7 @@ In interactive mode, **Merge from root** merges the root repository HEAD into th
 
 #### Consult a running task
 
-Select a running task with a worktree clone in `takt list` to open its live consultation. The assistant reads the run history and proposes an instruction; `/go` queues it for the running workflow, and `/cancel` closes the consultation.
+Selecting a task in `takt list` opens its status-specific action menu. Existing actions such as Instruct and Requeue remain available for their respective task states. Running tasks with a run identity and worktree clone offer **Interactive** alongside **Mark as failed**. Select **Interactive** to open the live consultation. The assistant reads the run history and proposes an instruction; `/go` queues it for the running workflow, and `/cancel` closes the consultation and returns to the task list.
 
 Within this consultation, `/open` (without arguments) opens the run directory, `<clone>/.takt/runs/<runSlug>`, in the system file manager. It uses `open` on macOS, `xdg-open` on Linux, or `explorer.exe` on Windows. Invalid paths, unsupported platforms, and launch failures are reported in the conversation. A successful launch means the opener process started; TAKT does not wait for the file manager to finish. `/open` does not queue an instruction or change the workflow state.
 
