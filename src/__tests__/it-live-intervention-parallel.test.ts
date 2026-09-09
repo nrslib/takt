@@ -668,6 +668,10 @@ describe('ParallelRunner live intervention integration', () => {
     expect(state.status).toBe('completed');
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
     expect(workflowCallCompletions).toEqual(expect.arrayContaining([
+      ...(workflowCallsOnly ? [expect.objectContaining({
+        step: 'delegated-first',
+        result: { status: 'completed' },
+      })] : []),
       expect.objectContaining({
         step: 'delegated',
         result: { status: 'completed' },
