@@ -69,7 +69,6 @@ interactive:
     retry: "Review & rerun with previous instructions"
     replay: "Rerun immediately with previous instructions"
     cancel: "Exit interactive mode"
-    open: "Open the running task directory"
     resume: "Load a previous session"
     pasteImage: "Attach clipboard image"
     setup: "Configure exec agents"
@@ -225,7 +224,6 @@ exec:
 
 # ===== Workflow Execution UI =====
 workflow:
-  unconsumedLiveInstructions: "There are {count} unconsumed additional instructions"
   teamLeader:
     decomposeWait: "Team leader is decomposing tasks. This may take some time..."
     feedbackWait: "Team leader is reviewing results and planning next tasks..."

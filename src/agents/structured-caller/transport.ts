@@ -37,7 +37,6 @@ export interface StructuredAgentCallOptions {
   readonly maxTurns?: number;
   readonly language?: Language;
   readonly abortSignal?: AbortSignal;
-  readonly sessionId?: string;
   readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly failureDir?: RunAgentOptions['failureDir'];
   readonly onStream?: RunAgentOptions['onStream'];
@@ -140,7 +139,7 @@ async function executeFreshAgent(
     ...(options.onDispatch === undefined ? {} : { onDispatch: options.onDispatch }),
     ...(options.workflowMeta === undefined ? {} : { workflowMeta: options.workflowMeta }),
     ...(options.outputSchema === undefined ? {} : { outputSchema: options.outputSchema }),
-    sessionId: options.sessionId,
+    sessionId: undefined,
   });
 }
 

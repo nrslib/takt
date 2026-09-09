@@ -54,7 +54,6 @@ const EMPTY_RUN_SESSION_VARS = {
   runStatus: '',
   runStepLogs: '',
   runReports: '',
-  runLiveIntervention: '',
 };
 
 function retrySubjectLabel(kind: RetryContext['subject']['kind'], lang: 'en' | 'ja'): string {

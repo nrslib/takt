@@ -7,12 +7,7 @@ import {
   type TaskInfo,
 } from '../../../infra/task/index.js';
 import { syncProjectLocalTaktForRetry } from '../../../infra/task/projectLocalTaktSync.js';
-import {
-  assertPathSegmentsAreSafe,
-  isPathInside,
-  isRealPathInside,
-  lstatIfExists,
-} from '../../../shared/utils/index.js';
+import { isRealPathInside } from '../../../shared/utils/index.js';
 
 export interface ReusedWorktreeExecution {
   execCwd: string;
@@ -49,44 +44,10 @@ export function assertReusableWorktreePath(projectDir: string, candidatePath: st
   const realCandidatePath = fs.realpathSync(candidatePath);
   const cloneBaseDir = resolveCloneBaseDir(projectDir);
   const fallbackCloneBaseDir = path.join(projectDir, '.takt', 'worktrees');
-  const candidateAbsolutePath = path.resolve(candidatePath);
-  const boundaryRoot = [cloneBaseDir, fallbackCloneBaseDir]
-    .find((root) => isPathInside(root, candidateAbsolutePath) || isRealPathInside(root, candidateAbsolutePath));
-  if (boundaryRoot === undefined) {
-    throw new Error(`Worktree path is outside the clone base directory: ${candidatePath}`);
-  }
-  const rootStats = lstatIfExists(boundaryRoot);
-  if (rootStats?.isSymbolicLink()) {
-    throw new Error(`Clone base directory must not be a symlink: ${boundaryRoot}`);
-  }
-  const realBoundaryRoot = fs.realpathSync(boundaryRoot);
-  let candidateBoundaryRoot = candidateAbsolutePath;
-  while (fs.realpathSync(candidateBoundaryRoot) !== realBoundaryRoot) {
-    const parent = path.dirname(candidateBoundaryRoot);
-    if (parent === candidateBoundaryRoot) {
-      throw new Error(`Worktree path is outside the clone base directory: ${candidatePath}`);
-    }
-    candidateBoundaryRoot = parent;
-  }
-  if (fs.lstatSync(candidateBoundaryRoot).isSymbolicLink()) {
-    throw new Error(`Clone base directory must not be a symlink: ${candidateBoundaryRoot}`);
-  }
-  // Normalize ancestors of the boundary only: links inside it must still be inspected.
-  assertPathSegmentsAreSafe(
-    candidateBoundaryRoot,
-    candidateAbsolutePath,
-    (violation, segmentPath) => {
-      switch (violation) {
-        case 'symlink':
-          return new Error(`Worktree path must not contain a symlink: ${segmentPath}`);
-        case 'not_directory':
-          return new Error(`Worktree path contains a non-directory segment: ${segmentPath}`);
-        case 'outside':
-          return new Error(`Worktree path is outside the clone base directory: ${candidatePath}`);
-      }
-    },
-  );
-  if (!isRealPathInside(boundaryRoot, realCandidatePath)) {
+  if (
+    !isRealPathInside(cloneBaseDir, realCandidatePath)
+    && !isRealPathInside(fallbackCloneBaseDir, realCandidatePath)
+  ) {
     throw new Error(`Worktree path is outside the clone base directory: ${candidatePath}`);
   }
 }

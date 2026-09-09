@@ -64,32 +64,6 @@ describe('reused worktree execution', () => {
       .toThrow('outside the clone base directory');
   });
 
-  it('accepts different ancestor aliases for the same clone boundary', () => {
-    const parentDir = makeProject();
-    const projectDir = path.join(parentDir, 'project');
-    const aliasDir = path.join(parentDir, 'project-alias');
-    const worktreePath = path.join(projectDir, '.takt', 'worktrees', 'safe');
-    fs.mkdirSync(worktreePath, { recursive: true });
-    fs.symlinkSync(projectDir, aliasDir, 'dir');
-
-    expect(() => assertReusableWorktreePath(aliasDir, worktreePath)).not.toThrow();
-    expect(() => assertReusableWorktreePath(projectDir, path.join(aliasDir, '.takt', 'worktrees', 'safe')))
-      .not.toThrow();
-  });
-
-  it('rejects symlinks inside the boundary even when ancestors use aliases', () => {
-    const parentDir = makeProject();
-    const projectDir = path.join(parentDir, 'project');
-    const aliasDir = path.join(parentDir, 'project-alias');
-    const cloneBase = path.join(projectDir, '.takt', 'worktrees');
-    fs.mkdirSync(path.join(cloneBase, 'safe', 'nested'), { recursive: true });
-    fs.symlinkSync(projectDir, aliasDir, 'dir');
-    fs.symlinkSync(path.join(cloneBase, 'safe'), path.join(cloneBase, 'linked'), 'dir');
-
-    expect(() => assertReusableWorktreePath(aliasDir, path.join(cloneBase, 'linked', 'nested')))
-      .toThrow('must not contain a symlink');
-  });
-
   it('rejects a symlinked worktree even when its target is inside the boundary', () => {
     const projectDir = makeProject();
     const safeWorktree = path.join(projectDir, '.takt', 'worktrees', 'safe');

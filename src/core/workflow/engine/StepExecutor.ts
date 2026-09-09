@@ -103,7 +103,6 @@ import {
 } from './phase1-empty-recovery.js';
 import { buildCompanionInstructionContext } from '../companion/instruction-context.js';
 import { runCompanionFixPolicy } from '../companion/fix-policy.js';
-import type { CompanionFollowUpResult } from '../companion/fix-loop.js';
 import {
   CompanionStepRuntime,
   type CompanionDiffBaseline,
@@ -130,15 +129,6 @@ import {
   fallbackContextForOperation,
   reviewerOperationOrigin,
 } from './fallback-operation.js';
-import {
-  StructuredOutputFinalizationError,
-  type StructuredOutputFinalizationOrigin,
-} from '../structured-output-finalization-error.js';
-import type {
-  LiveInterventionChannel,
-  PreparedLiveInterventionDelivery,
-} from '../live-intervention/types.js';
-import { createLiveInterventionDeliveryCommitter } from '../live-intervention/delivery.js';
 
 const log = createLogger('step-executor');
 
@@ -255,7 +245,6 @@ export interface StepExecutorDeps {
   ) => void;
   readonly dynamicFacetSelectorCoordinator?: DynamicFacetSelectorCoordinator;
   readonly getFacetPool?: (name: string) => ResolvedFacetPool | undefined;
-  readonly liveIntervention?: LiveInterventionChannel;
 }
 
 /**
@@ -268,7 +257,6 @@ export interface PreparedNormalStepExecution {
   readonly injectedReports: readonly InjectedReport[];
   readonly priorStepResponseText?: string;
   readonly stepIteration: number;
-  readonly liveInterventionDelivery?: PreparedLiveInterventionDelivery;
 }
 
 interface StructuredOutputNormalizationResult {
@@ -486,98 +474,16 @@ export class StepExecutor {
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
   ): AgentResponse {
-    return this.normalizeReviewerResponseWithOrigin(step, response, runtime, 'normal');
-  }
-
-  private normalizeReviewerResponseWithOrigin(
-    step: AgentWorkflowStep,
-    response: AgentResponse,
-    runtime: RuntimeStepResolution | undefined,
-    origin: StructuredOutputFinalizationOrigin,
-  ): AgentResponse {
     const normalized = this.normalizeStructuredOutputWithDiagnostics(step, response, runtime);
     if (normalized.invalidDetail !== undefined) {
-      throw new StructuredOutputFinalizationError(
+      throw new Error(
         `Reviewer attempt for step "${step.name}" produced invalid structured_output: ${normalized.invalidDetail}`,
-        origin,
       );
     }
     return normalized.response;
   }
 
-  private finalizeObservedNormalAttempt(input: {
-    readonly eventStep: WorkflowStep;
-    readonly executableStep: AgentWorkflowStep;
-    readonly iteration: number;
-    readonly attempt: Phase1Attempt;
-    readonly response: AgentResponse;
-    readonly runtime?: RuntimeStepResolution;
-  },
-  origin: StructuredOutputFinalizationOrigin,
-  ): AgentResponse {
-    let normalized: StructuredOutputNormalizationResult;
-    try {
-      normalized = this.normalizeStructuredOutputWithDiagnostics(
-        input.executableStep,
-        input.response,
-        input.runtime,
-      );
-    } catch (error) {
-      completeObservedPhase1Attempt({
-        eventStep: input.eventStep,
-        iteration: input.iteration,
-        attempt: input.attempt,
-        response: {
-          ...input.response,
-          status: 'error',
-          error: getErrorMessage(error),
-        },
-        onPhaseComplete: this.deps.onPhaseComplete,
-      });
-      throw error;
-    }
-    if (normalized.invalidDetail !== undefined) {
-      const provider = this.deps.optionsBuilder
-        .resolveStepProviderModel(input.executableStep, input.runtime)
-        .provider;
-      const error = new StructuredOutputFinalizationError(
-        `Step "${input.executableStep.name}" requires structured_output for provider "${provider}": ${normalized.invalidDetail}`,
-        origin,
-      );
-      completeObservedPhase1Attempt({
-        eventStep: input.eventStep,
-        iteration: input.iteration,
-        attempt: input.attempt,
-        response: { ...input.response, status: 'error', error: error.message },
-        onPhaseComplete: this.deps.onPhaseComplete,
-      });
-      throw error;
-    }
-    completeObservedPhase1Attempt({
-      eventStep: input.eventStep,
-      iteration: input.iteration,
-      attempt: input.attempt,
-      response: normalized.response,
-      onPhaseComplete: this.deps.onPhaseComplete,
-    });
-    return normalized.response;
-  }
-
-  private finalizeObservedLiveInterventionResponse(input: {
-    readonly eventStep: WorkflowStep;
-    readonly executableStep: AgentWorkflowStep;
-    readonly iteration: number;
-    readonly attempt: Phase1Attempt;
-    readonly response: AgentResponse;
-    readonly runtime?: RuntimeStepResolution;
-  }): AgentResponse {
-    if (input.executableStep.completionRetry !== undefined) {
-      return this.finalizeObservedReviewerAttemptWithOrigin(input, 'live_intervention');
-    }
-    return this.finalizeObservedNormalAttempt(input, 'live_intervention');
-  }
-
-  private finalizeObservedReviewerAttemptWithOrigin(input: {
+  finalizeObservedReviewerAttempt(input: {
     readonly eventStep: WorkflowStep;
     readonly executableStep: AgentWorkflowStep;
     readonly iteration: number;
@@ -585,14 +491,13 @@ export class StepExecutor {
     readonly response: AgentResponse;
     readonly runtime?: RuntimeStepResolution;
     readonly recordUsage?: (success: boolean, usage: AgentResponse['providerUsage']) => void;
-  }, origin: StructuredOutputFinalizationOrigin): AgentResponse {
+  }): AgentResponse {
     let normalized: AgentResponse;
     try {
-      normalized = this.normalizeReviewerResponseWithOrigin(
+      normalized = this.normalizeReviewerResponse(
         input.executableStep,
         input.response,
         input.runtime,
-        origin,
       );
     } catch (error) {
       completeObservedPhase1Attempt({
@@ -620,18 +525,6 @@ export class StepExecutor {
     return normalized;
   }
 
-  finalizeObservedReviewerAttempt(input: {
-    readonly eventStep: WorkflowStep;
-    readonly executableStep: AgentWorkflowStep;
-    readonly iteration: number;
-    readonly attempt: Phase1Attempt;
-    readonly response: AgentResponse;
-    readonly runtime?: RuntimeStepResolution;
-    readonly recordUsage?: (success: boolean, usage: AgentResponse['providerUsage']) => void;
-  }): AgentResponse {
-    return this.finalizeObservedReviewerAttemptWithOrigin(input, 'normal');
-  }
-
   async completeCompanionReview(input: {
     readonly eventStep: WorkflowStep;
     readonly executableStep: AgentWorkflowStep;
@@ -644,7 +537,6 @@ export class StepExecutor {
     readonly nextSequence: () => number;
     readonly onSingleFixSettled?: () => void;
     readonly abortSignal: AbortSignal | undefined;
-    readonly afterPhase1Response?: (response: AgentResponse) => Promise<CompanionFollowUpResult>;
     readonly recordUsage?: (
       success: boolean,
       usage: AgentResponse['providerUsage'],
@@ -668,7 +560,7 @@ export class StepExecutor {
       completeReview: ({ implementerResponse, followUpRound }) => (
         input.companionRuntime!.complete(input.state, implementerResponse, { followUpRound })
       ),
-      executeFollowUp: async (attempt): Promise<CompanionFollowUpResult> => {
+      executeFollowUp: async (attempt) => {
         input.companionRuntime!.beginFollowUpRound(attempt.sequence, attempt.findingCount);
         const promptResolvedAttempts = new Set<number>();
         const phaseAttempts = new Map<number, Phase1Attempt>();
@@ -755,64 +647,45 @@ export class StepExecutor {
             `Missing prompt parts for companion fix: ${input.eventStep.name}:1:${finalAttempt.sequence}`,
           );
         }
-        const afterPhase1Response = input.afterPhase1Response;
-        let normalizedResponse: AgentResponse;
         if (input.executableStep.completionRetry !== undefined) {
-          normalizedResponse = this.finalizeObservedReviewerAttempt({
+          return this.finalizeObservedReviewerAttempt({
             eventStep: input.eventStep,
             executableStep: input.executableStep,
             iteration: input.state.iteration,
             attempt: finalAttempt,
             response: recovery.response,
             runtime: input.runtime,
-            ...(afterPhase1Response === undefined ? { recordUsage } : {}),
+            recordUsage,
           });
-        } else {
-          const normalized = this.normalizeStructuredOutputWithDiagnostics(
-            input.executableStep,
-            recovery.response,
-            input.runtime,
+        }
+        const normalized = this.normalizeStructuredOutputWithDiagnostics(
+          input.executableStep,
+          recovery.response,
+          input.runtime,
+        );
+        if (normalized.invalidDetail !== undefined) {
+          const error = new Error(
+            `Companion fix for step "${input.executableStep.name}" produced invalid structured_output: ${normalized.invalidDetail}`,
           );
-          if (normalized.invalidDetail !== undefined) {
-            const error = new StructuredOutputFinalizationError(
-              `Companion fix for step "${input.executableStep.name}" produced invalid structured_output: ${normalized.invalidDetail}`,
-              'normal',
-            );
-            completeObservedPhase1Attempt({
-              eventStep: input.eventStep,
-              iteration: input.state.iteration,
-              attempt: finalAttempt,
-              response: { ...recovery.response, status: 'error', error: error.message },
-              onPhaseComplete: this.deps.onPhaseComplete,
-            });
-            recordUsage(false, recovery.response.providerUsage);
-            throw error;
-          }
           completeObservedPhase1Attempt({
             eventStep: input.eventStep,
             iteration: input.state.iteration,
             attempt: finalAttempt,
-            response: normalized.response,
+            response: { ...recovery.response, status: 'error', error: error.message },
             onPhaseComplete: this.deps.onPhaseComplete,
           });
-          normalizedResponse = normalized.response;
+          recordUsage(false, recovery.response.providerUsage);
+          throw error;
         }
-        if (afterPhase1Response === undefined) {
-          if (input.executableStep.completionRetry === undefined) {
-            recordUsage(normalizedResponse.status === 'done', normalizedResponse.providerUsage);
-          }
-          return { kind: 'normal_follow_up', response: normalizedResponse };
-        }
-        if (normalizedResponse.status !== 'done') {
-          recordUsage(false, normalizedResponse.providerUsage);
-          return { kind: 'normal_follow_up', response: normalizedResponse };
-        }
-        const responseAfterLiveIntervention = await afterPhase1Response(normalizedResponse);
-        recordUsage(
-          responseAfterLiveIntervention.response.status === 'done',
-          responseAfterLiveIntervention.response.providerUsage,
-        );
-        return responseAfterLiveIntervention;
+        completeObservedPhase1Attempt({
+          eventStep: input.eventStep,
+          iteration: input.state.iteration,
+          attempt: finalAttempt,
+          response: normalized.response,
+          onPhaseComplete: this.deps.onPhaseComplete,
+        });
+        recordUsage(normalized.response.status === 'done', normalized.response.providerUsage);
+        return normalized.response;
       },
       abortSignal: input.abortSignal,
     });
@@ -1140,45 +1013,17 @@ export class StepExecutor {
       ),
     );
 
-    const liveInterventionDelivery = await this.prepareLiveInterventionDelivery({
-      mode: 'next_step',
-      step: executableStep.name,
-      phase: 1,
-    }, executableStep.engineSynthesized === true);
     return {
       executableStep,
-      phase1Instruction: this.appendLiveInterventionInstruction(
-        this.buildPhase1Instruction(instruction.text, executableStep, runtime),
-        liveInterventionDelivery,
+      phase1Instruction: this.buildPhase1Instruction(
+        instruction.text,
+        executableStep,
+        runtime,
       ),
       injectedReports: instruction.injectedReports,
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
       stepIteration,
-      ...(liveInterventionDelivery === undefined ? {} : { liveInterventionDelivery }),
     };
-  }
-
-  private async prepareLiveInterventionDelivery(
-    context: Parameters<LiveInterventionChannel['prepareDelivery']>[0],
-    engineSynthesized: boolean,
-  ): Promise<PreparedLiveInterventionDelivery | undefined> {
-    if (context.mode === 'next_step' && engineSynthesized) {
-      return undefined;
-    }
-    const liveIntervention = this.deps.liveIntervention;
-    if (liveIntervention?.read().pending === 0) {
-      return undefined;
-    }
-    return liveIntervention?.prepareDelivery({ ...context, language: this.deps.getLanguage() });
-  }
-
-  private appendLiveInterventionInstruction(
-    instruction: string,
-    delivery: PreparedLiveInterventionDelivery | undefined,
-  ): string {
-    return delivery === undefined
-      ? instruction
-      : [instruction, delivery.prompt].filter((part) => part.length > 0).join('\n\n');
   }
 
   /**
@@ -1653,24 +1498,12 @@ export class StepExecutor {
       )
       : { text: preparedExecution.phase1Instruction, injectedReports: preparedExecution.injectedReports };
     const instruction = preparedInstruction.text;
-    let phase1Instruction = preparedExecution?.phase1Instruction
+    const phase1Instruction = preparedExecution?.phase1Instruction
       ?? this.buildPhase1Instruction(instruction, executableStep, executionRuntime);
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(
       executableStep,
       executionRuntime,
     );
-    let liveInterventionDelivery = preparedExecution?.liveInterventionDelivery;
-    if (liveInterventionDelivery === undefined) {
-      liveInterventionDelivery = await this.prepareLiveInterventionDelivery({
-        mode: 'next_step',
-        step: executableStep.name,
-        phase: 1,
-      }, executableStep.engineSynthesized === true);
-      phase1Instruction = this.appendLiveInterventionInstruction(
-        phase1Instruction,
-        liveInterventionDelivery,
-      );
-    }
     const sessionKey = buildSessionKey(executableStep, {
       provider: providerInfo.provider,
       model: providerInfo.model,
@@ -1707,147 +1540,133 @@ export class StepExecutor {
         updatePersonaSession,
       );
     }
-    const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
-      this.deps.liveIntervention,
-      liveInterventionDelivery,
-      baseAgentOptions.onDispatch,
-    );
     const agentOptions: RunAgentOptions = {
       ...baseAgentOptions,
       ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
-      ...(initialDeliveryCommitter === undefined
-        ? {}
-        : { onDispatch: initialDeliveryCommitter.onDispatch }),
     };
     activeCompanionRuntime?.beginReviewAttempt();
     const promptResolvedAttempts = new Set<number>();
-    let phase1Result: Awaited<ReturnType<typeof runPhase1WithEmptyRecovery>>;
-    try {
-      phase1Result = await runPhase1WithEmptyRecovery({
-        instruction: phase1Instruction,
-        initialSessionId: executableStep.internalFreshSession === true
-          ? undefined
-          : agentOptions.sessionId,
-        retryProviderErrorFresh: false,
-        execute: async (attempt) => {
-          const result = await executeObservedPhase1Attempt({
-            enabled: this.deps.observabilityEnabled?.() === true,
-            runId: this.deps.getObservabilityRunId?.(),
-            workflowName: this.deps.getWorkflowName(),
+    const phase1Result = await runPhase1WithEmptyRecovery({
+      instruction: phase1Instruction,
+      initialSessionId: executableStep.internalFreshSession === true
+        ? undefined
+        : agentOptions.sessionId,
+      retryProviderErrorFresh: false,
+      execute: async (attempt) => {
+        const result = await executeObservedPhase1Attempt({
+          enabled: this.deps.observabilityEnabled?.() === true,
+          runId: this.deps.getObservabilityRunId?.(),
+          workflowName: this.deps.getWorkflowName(),
+          eventStep: step,
+          spanStep: executableStep,
+          iteration: state.iteration,
+          attempt,
+          workflowStack: this.deps.getCurrentWorkflowStack?.(),
+          sanitizeText: this.deps.sanitizeObservabilityText,
+          providerInfo,
+          execute: (attemptInstruction, sessionId, onPromptResolved) => (
+            executableStep.internalFreshSession === true
+              ? executeStructuredTextAgent(attemptInstruction, {
+                  name: executableStep.name,
+                  cwd: agentOptions.cwd,
+                  projectCwd: agentOptions.projectCwd,
+                  persona: executableStep.persona,
+                  personaPath: agentOptions.personaPath,
+                  workflowBundleResourceRoot: agentOptions.workflowBundleResourceRoot,
+                  resolution: {
+                    provider: requireStructuredAgentProvider(
+                      providerInfo.provider,
+                      executableStep.name,
+                    ),
+                    model: providerInfo.model,
+                    providerOptions: providerInfo.providerOptions,
+                    permissionMode: agentOptions.permissionMode,
+                    permissionModeSource: agentOptions.permissionMode === undefined ? 'synthetic' : 'explicit',
+                  },
+                  language: agentOptions.language,
+                  abortSignal: agentOptions.abortSignal,
+                  childProcessEnv: agentOptions.childProcessEnv,
+                  failureDir: agentOptions.failureDir,
+                  onStream: agentOptions.onStream,
+                  onActivity: agentOptions.onActivity,
+                  onPromptResolved,
+                  workflowMeta: agentOptions.workflowMeta,
+                  mcpServers: agentOptions.mcpServers,
+                  mcpAssignment: agentOptions.mcpAssignment,
+                  mcpServerIdentity: agentOptions.mcpServerIdentity,
+                }).then((response) => {
+                  const freshResponse = { ...response };
+                  delete freshResponse.sessionId;
+                  return freshResponse;
+                }).catch((error: unknown) => {
+                  if (
+                    !(error instanceof StructuredAgentResponseError)
+                    || error.response.status === 'done'
+                  ) {
+                    throw error;
+                  }
+                  const failedResponse = { ...error.response };
+                  delete failedResponse.sessionId;
+                  return failedResponse;
+                })
+              : executeAgent(
+                  executableStep.persona,
+                  attemptInstruction,
+                  {
+                    ...agentOptions,
+                    sessionId,
+                    onPromptResolved,
+                  },
+                )
+          ),
+          onPhaseStart: this.deps.onPhaseStart,
+          ...(executableStep.completionRetry === undefined
+            ? {}
+            : {
+                onPhaseComplete: this.deps.onPhaseComplete,
+                failurePersona: executableStep.persona ?? executableStep.name,
+                recordFailure: () => this.deps.recordSynthesizedAgentUsage(
+                  step.name,
+                  providerInfo,
+                  false,
+                  undefined,
+                ),
+              }),
+        });
+        if (result.promptResolved) {
+          promptResolvedAttempts.add(attempt.sequence);
+        }
+        return result.response;
+      },
+      discardSession: (sessionId) => {
+        if (executableStep.internalFreshSession === true) {
+          return;
+        }
+        invalidatePersonaSessionIfExpected(
+          state,
+          sessionKey,
+          sessionId,
+          updatePersonaSession,
+        );
+      },
+      recordSupersededAttempt: (supersededResponse, attempt) => {
+        if (promptResolvedAttempts.has(attempt.sequence)) {
+          completeObservedPhase1Attempt({
             eventStep: step,
-            spanStep: executableStep,
             iteration: state.iteration,
             attempt,
-            workflowStack: this.deps.getCurrentWorkflowStack?.(),
-            sanitizeText: this.deps.sanitizeObservabilityText,
-            providerInfo,
-            execute: (attemptInstruction, sessionId, onPromptResolved) => (
-              executableStep.internalFreshSession === true
-                ? executeStructuredTextAgent(attemptInstruction, {
-                    name: executableStep.name,
-                    cwd: agentOptions.cwd,
-                    projectCwd: agentOptions.projectCwd,
-                    persona: executableStep.persona,
-                    personaPath: agentOptions.personaPath,
-                    workflowBundleResourceRoot: agentOptions.workflowBundleResourceRoot,
-                    resolution: {
-                      provider: requireStructuredAgentProvider(
-                        providerInfo.provider,
-                        executableStep.name,
-                      ),
-                      model: providerInfo.model,
-                      providerOptions: providerInfo.providerOptions,
-                      permissionMode: agentOptions.permissionMode,
-                      permissionModeSource: agentOptions.permissionMode === undefined ? 'synthetic' : 'explicit',
-                    },
-                    language: agentOptions.language,
-                    abortSignal: agentOptions.abortSignal,
-                    childProcessEnv: agentOptions.childProcessEnv,
-                    failureDir: agentOptions.failureDir,
-                    onStream: agentOptions.onStream,
-                    onActivity: agentOptions.onActivity,
-                    onPromptResolved,
-                    onDispatch: agentOptions.onDispatch,
-                    workflowMeta: agentOptions.workflowMeta,
-                    mcpServers: agentOptions.mcpServers,
-                    mcpAssignment: agentOptions.mcpAssignment,
-                    mcpServerIdentity: agentOptions.mcpServerIdentity,
-                  }).then((response) => {
-                    const freshResponse = { ...response };
-                    delete freshResponse.sessionId;
-                    return freshResponse;
-                  }).catch((error: unknown) => {
-                    if (
-                      !(error instanceof StructuredAgentResponseError)
-                      || error.response.status === 'done'
-                    ) {
-                      throw error;
-                    }
-                    const failedResponse = { ...error.response };
-                    delete failedResponse.sessionId;
-                    return failedResponse;
-                  })
-                : executeAgent(
-                    executableStep.persona,
-                    attemptInstruction,
-                    {
-                      ...agentOptions,
-                      sessionId,
-                      onPromptResolved,
-                    },
-                  )
-            ),
-            onPhaseStart: this.deps.onPhaseStart,
-            ...(executableStep.completionRetry === undefined
-              ? {}
-              : {
-                  onPhaseComplete: this.deps.onPhaseComplete,
-                  failurePersona: executableStep.persona ?? executableStep.name,
-                  recordFailure: () => this.deps.recordSynthesizedAgentUsage(
-                    step.name,
-                    providerInfo,
-                    false,
-                    undefined,
-                  ),
-                }),
+            response: supersededResponse,
+            onPhaseComplete: this.deps.onPhaseComplete,
           });
-          if (result.promptResolved) {
-            promptResolvedAttempts.add(attempt.sequence);
-          }
-          return result.response;
-        },
-        discardSession: (sessionId) => {
-          if (executableStep.internalFreshSession === true) {
-            return;
-          }
-          invalidatePersonaSessionIfExpected(
-            state,
-            sessionKey,
-            sessionId,
-            updatePersonaSession,
-          );
-        },
-        recordSupersededAttempt: (supersededResponse, attempt) => {
-          if (promptResolvedAttempts.has(attempt.sequence)) {
-            completeObservedPhase1Attempt({
-              eventStep: step,
-              iteration: state.iteration,
-              attempt,
-              response: supersededResponse,
-              onPhaseComplete: this.deps.onPhaseComplete,
-            });
-          }
-          this.deps.recordSynthesizedAgentUsage(
-            step.name,
-            providerInfo,
-            supersededResponse.status === 'done',
-            supersededResponse.providerUsage,
-          );
-        },
-      });
-    } finally {
-      await initialDeliveryCommitter?.settle();
-    }
+        }
+        this.deps.recordSynthesizedAgentUsage(
+          step.name,
+          providerInfo,
+          supersededResponse.status === 'done',
+          supersededResponse.providerUsage,
+        );
+      },
+    });
     let response = phase1Result.response;
     if (!promptResolvedAttempts.has(phase1Result.finalAttempt.sequence)) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
@@ -1857,17 +1676,30 @@ export class StepExecutor {
     }
 
     if (executableStep.completionRetry === undefined) {
-      response = this.finalizeObservedNormalAttempt({
-        eventStep: step,
+      const normalizedPhase1 = this.normalizeStructuredOutputWithDiagnostics(
         executableStep,
-        iteration: state.iteration,
-        attempt: phase1Result.finalAttempt,
         response,
-        runtime: executionRuntime,
-      }, 'normal');
+        executionRuntime,
+      );
+      if (normalizedPhase1.invalidDetail !== undefined) {
+        const provider = this.deps.optionsBuilder
+          .resolveStepProviderModel(executableStep, runtime)
+          .provider;
+        throw new Error(
+          `Step "${executableStep.name}" requires structured_output for provider "${provider}": ${normalizedPhase1.invalidDetail}`,
+        );
+      }
+      response = normalizedPhase1.response;
       if (executableStep.internalFreshSession !== true && response.sessionId !== undefined) {
         updatePersonaSession(sessionKey, response.sessionId);
       }
+      completeObservedPhase1Attempt({
+        eventStep: step,
+        iteration: state.iteration,
+        attempt: phase1Result.finalAttempt,
+        response,
+        onPhaseComplete: this.deps.onPhaseComplete,
+      });
     } else {
       response = this.finalizeObservedReviewerAttempt({
         eventStep: step,
@@ -1880,126 +1712,6 @@ export class StepExecutor {
       if (response.sessionId !== undefined) {
         updatePersonaSession(sessionKey, response.sessionId);
       }
-    }
-
-    let phaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
-    const drainLiveIntervention = async (
-      initialResponse: AgentResponse,
-      initialUsageRecorded = false,
-    ): Promise<CompanionFollowUpResult> => {
-      let usageRecorded = initialUsageRecorded;
-      let drainedResponse = initialResponse;
-      let drainedLiveIntervention = false;
-      if (
-        this.deps.liveIntervention === undefined
-        || executableStep.internalFreshSession === true
-      ) {
-        return { kind: 'normal_follow_up', response: drainedResponse };
-      }
-      while (drainedResponse.status === 'done' && this.deps.liveIntervention.read().pending > 0) {
-        const sameSessionDelivery = await this.prepareLiveInterventionDelivery({
-          mode: 'same_session',
-          step: executableStep.name,
-          phase: 1,
-        }, false);
-        if (sameSessionDelivery === undefined) {
-          break;
-        }
-        if (drainedResponse.sessionId === undefined) {
-          throw new Error(
-            `Live intervention requires a session ID for Phase 1 step "${executableStep.name}"`,
-          );
-        }
-        const liveInstruction = this.buildPhase1Instruction(
-          sameSessionDelivery.prompt,
-          executableStep,
-          executionRuntime,
-        );
-        const liveAttempt: Phase1Attempt = {
-          sequence: phaseExecutionSequence++,
-          reason: 'live_intervention',
-          instruction: liveInstruction,
-          sessionId: drainedResponse.sessionId,
-        };
-        drainedLiveIntervention = true;
-        const sameSessionCommitter = createLiveInterventionDeliveryCommitter(
-          this.deps.liveIntervention,
-          sameSessionDelivery,
-          baseAgentOptions.onDispatch,
-        );
-        // The final response is counted by its caller. Preserve each response
-        // that this extra provider turn is about to replace.
-        if (!usageRecorded) {
-          this.deps.recordSynthesizedAgentUsage(
-            step.name, providerInfo, drainedResponse.status === 'done', drainedResponse.providerUsage,
-          );
-        }
-        usageRecorded = false;
-        try {
-          const observed = await executeObservedPhase1Attempt({
-            enabled: this.deps.observabilityEnabled?.() === true,
-            runId: this.deps.getObservabilityRunId?.(),
-            workflowName: this.deps.getWorkflowName(),
-            eventStep: step,
-            spanStep: executableStep,
-            iteration: state.iteration,
-            attempt: liveAttempt,
-            workflowStack: this.deps.getCurrentWorkflowStack?.(),
-            sanitizeText: this.deps.sanitizeObservabilityText,
-            providerInfo,
-            execute: (attemptInstruction, sessionId, onPromptResolved) => executeAgent(
-              executableStep.persona,
-              attemptInstruction,
-              {
-                ...agentOptions,
-                sessionId,
-                onPromptResolved,
-                ...(sameSessionCommitter === undefined
-                  ? {}
-                  : { onDispatch: sameSessionCommitter.onDispatch }),
-              },
-            ),
-            onPhaseStart: this.deps.onPhaseStart,
-            onPhaseComplete: this.deps.onPhaseComplete,
-            failurePersona: executableStep.persona ?? executableStep.name,
-            recordFailure: () => this.deps.recordSynthesizedAgentUsage(
-              step.name, providerInfo, false, undefined,
-            ),
-          });
-          if (!observed.promptResolved) {
-            throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
-          }
-          try {
-            drainedResponse = this.finalizeObservedLiveInterventionResponse({
-              eventStep: step,
-              executableStep,
-              iteration: state.iteration,
-              attempt: liveAttempt,
-              response: observed.response,
-              runtime: executionRuntime,
-            });
-          } catch (error) {
-            this.deps.recordSynthesizedAgentUsage(step.name, providerInfo, false, observed.response.providerUsage);
-            throw error;
-          }
-        } finally {
-          await sameSessionCommitter?.settle();
-        }
-        if (drainedResponse.sessionId !== undefined) {
-          updatePersonaSession(sessionKey, drainedResponse.sessionId);
-        }
-      }
-      return {
-        kind: drainedLiveIntervention ? 'live_intervention' : 'normal_follow_up',
-        response: drainedResponse,
-      };
-    };
-    if (
-      this.deps.liveIntervention !== undefined
-      && executableStep.internalFreshSession !== true
-      && response.status === 'done'
-    ) {
-      response = (await drainLiveIntervention(response)).response;
     }
 
     // Provider failures should abort immediately.
@@ -2018,6 +1730,7 @@ export class StepExecutor {
       return { response, instruction: phase1Instruction, providerInfo };
     }
 
+    let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
     let companionSingleFixSettled = false;
     response = await this.completeCompanionReview({
       eventStep: step,
@@ -2028,8 +1741,7 @@ export class StepExecutor {
       runtime: executionRuntime,
       companionRuntime: activeCompanionRuntime,
       providerInfo,
-      nextSequence: () => phaseExecutionSequence++,
-      afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
+      nextSequence: () => reviewerPhaseExecutionSequence++,
       onSingleFixSettled: () => {
         companionSingleFixSettled = true;
       },
@@ -2038,7 +1750,6 @@ export class StepExecutor {
     if (response.sessionId !== undefined) {
       updatePersonaSession(sessionKey, response.sessionId);
     }
-    response = (await drainLiveIntervention(response)).response;
     if (response.status === 'error' || response.status === 'rate_limited') {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
@@ -2064,7 +1775,7 @@ export class StepExecutor {
           const resolveObservedAttempt = (attempt: Phase1Attempt): Phase1Attempt => {
             const existing = observedAttempts.get(attempt.sequence);
             if (existing !== undefined) return existing;
-            const created = { ...attempt, sequence: phaseExecutionSequence++ };
+            const created = { ...attempt, sequence: reviewerPhaseExecutionSequence++ };
             observedAttempts.set(attempt.sequence, created);
             return created;
           };
@@ -2133,27 +1844,19 @@ export class StepExecutor {
               usage,
             ),
           });
-          const normalizedAfterLiveIntervention = await drainLiveIntervention(normalized, true);
-          if (
-            normalizedAfterLiveIntervention.kind === 'live_intervention'
-            && normalizedAfterLiveIntervention.response.status !== 'done'
-          ) {
-            return normalizedAfterLiveIntervention.response;
-          }
           if (companionSingleFixSettled) {
-            return normalizedAfterLiveIntervention.response;
+            return normalized;
           }
           return this.completeCompanionReview({
             eventStep: step,
             executableStep,
             state,
-            initialResponse: normalizedAfterLiveIntervention.response,
+            initialResponse: normalized,
             agentOptions,
             runtime: executionRuntime,
             companionRuntime: activeCompanionRuntime,
             providerInfo,
-            nextSequence: () => phaseExecutionSequence++,
-            afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
+            nextSequence: () => reviewerPhaseExecutionSequence++,
             onSingleFixSettled: () => {
               companionSingleFixSettled = true;
             },
@@ -2163,7 +1866,6 @@ export class StepExecutor {
       });
       response = completion.response;
       updatePersonaSession(sessionKey, completion.reviewerSessionId);
-      response = (await drainLiveIntervention(response)).response;
       completionRetryDiagnostic = completion.diagnostic === undefined
         ? undefined
         : formatCompletionRetryDiagnostic(completion.diagnostic, this.deps.getLanguage());

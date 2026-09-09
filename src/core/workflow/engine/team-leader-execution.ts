@@ -36,9 +36,6 @@ export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
   maxConcurrency: number;
   abortSignal?: AbortSignal;
-  beforeInitialPartExecution?: () => Promise<MorePartsResponse | undefined>;
-  /** IDs allow a failed delivery to remain pending without restarting planning forever. */
-  getPendingLiveInterventionIds?: () => readonly number[];
   runPart: (
     part: PartDefinition,
     partIndex: number,
@@ -109,18 +106,6 @@ export async function runTeamLeaderExecution(
   let latestBatchStart = 0;
   let executionTerminalRequested = false;
   let pendingTerminalFeedback: MorePartsResponse | undefined;
-  const resumedInstructionIds = new Set<number>();
-  const resumeForLiveIntervention = (): boolean => {
-    const pendingIds = options.getPendingLiveInterventionIds?.() ?? [];
-    if (!pendingIds.some((id) => !resumedInstructionIds.has(id))) {
-      return false;
-    }
-    for (const id of pendingIds) {
-      resumedInstructionIds.add(id);
-    }
-    leaderDone = false;
-    return true;
-  };
 
   const cancellablePartIds = (): string[] => [
     ...queue.map((part) => part.id),
@@ -222,9 +207,7 @@ export async function runTeamLeaderExecution(
     terminalGate.assertRunning('feedback.dequeue');
     options.abortSignal?.throwIfAborted();
     if (leaderDone) {
-      if (!resumeForLiveIntervention()) {
-        return;
-      }
+      return;
     }
     publishSettledParts();
     const latestBatchResults = partResults.slice(latestBatchStart);
@@ -389,34 +372,6 @@ export async function runTeamLeaderExecution(
   };
 
   try {
-    const initialFeedback = await options.beforeInitialPartExecution?.();
-    if (initialFeedback !== undefined) {
-      terminalGate.assertRunning('feedback.initial_provider_result');
-      options.abortSignal?.throwIfAborted();
-      applyCancellations(initialFeedback.cancelPartIds);
-      if (initialFeedback.done) {
-        leaderDone = true;
-      } else {
-        const newParts: PartDefinition[] = [];
-        for (const newPart of initialFeedback.parts) {
-          if (scheduledIds.has(newPart.id)) {
-            continue;
-          }
-          scheduledIds.add(newPart.id);
-          newParts.push(structuredClone(newPart));
-        }
-        if (newParts.length > 0) {
-          terminalGate.assertRunning('feedback.initial_parts_added');
-          plannedParts.push(...newParts);
-          queue.push(...newParts);
-          options.onPartsAdded?.({
-            parts: structuredClone(newParts),
-            reason: initialFeedback.reasoning,
-            totalPlanned: plannedParts.length,
-          });
-        }
-      }
-    }
     while (
       queue.length > 0
       || running.size > 0
@@ -488,9 +443,6 @@ export async function runTeamLeaderExecution(
       }
 
       if (leaderDone) {
-        if (resumeForLiveIntervention()) {
-          continue;
-        }
         if (options.onExecutionTerminal === undefined || executionTerminalRequested) {
           break;
         }
@@ -508,9 +460,6 @@ export async function runTeamLeaderExecution(
           applyTerminalContinuation(continuation);
         }
         if (queue.length > 0 || running.size > 0 || !leaderDone) {
-          continue;
-        }
-        if (resumeForLiveIntervention()) {
           continue;
         }
         break;

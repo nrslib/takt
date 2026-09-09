@@ -61,14 +61,12 @@ export interface DecomposeTaskOptions {
   mcpServers?: RunAgentOptions['mcpServers'];
   mcpAssignment?: RunAgentOptions['mcpAssignment'];
   mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
-  sessionId?: string;
   inspectTools?: string[];
   inspectGuidance?: boolean;
   onPromptResolved?: (promptParts: {
     systemPrompt: string;
     userInstruction: string;
   }) => void;
-  onDispatch?: RunAgentOptions['onDispatch'];
   onAgentResponse?: (response: AgentResponse) => void;
   onAgentError?: (error: unknown) => void;
 }
@@ -88,13 +86,11 @@ export interface MorePartsResponse {
   reasoning: string;
   cancelPartIds: string[];
   parts: PartDefinition[];
-  sessionId?: string;
   providerUsage?: ProviderUsageSnapshot;
 }
 
 export interface DecomposeTaskResponse {
   parts: PartDefinition[];
-  sessionId?: string;
   providerUsage?: ProviderUsageSnapshot;
 }
 
@@ -139,9 +135,7 @@ export async function requestDecompositionRawResponse(
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
-      sessionId: options.sessionId,
       onPromptResolved: options.onPromptResolved,
-      onDispatch: options.onDispatch,
     });
   } catch (error) {
     if (error instanceof StructuredAgentResponseError) {
@@ -192,7 +186,6 @@ function parseDecomposition(
       parts: parts == null
         ? parseParts(response.content, maxInitialParts)
         : toPartDefinitions(parts, maxInitialParts),
-      ...(response.sessionId === undefined ? {} : { sessionId: response.sessionId }),
       ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
     };
   } catch (error) {
@@ -247,8 +240,6 @@ export async function requestMorePartsRawResponse(
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
-      sessionId: options.sessionId,
-      onDispatch: options.onDispatch,
     });
   } catch (error) {
     if (error instanceof StructuredAgentResponseError) {
@@ -291,7 +282,6 @@ export async function requestMoreParts(
   return {
     ...parsedResponse,
     cancelPartIds: parsedResponse.cancelPartIds.filter((partId) => !ignoredCancelPartIds.has(partId)),
-    ...(response.sessionId === undefined ? {} : { sessionId: response.sessionId }),
     ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
   };
 }

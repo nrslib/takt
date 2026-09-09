@@ -1,6 +1,5 @@
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
 import { join } from 'node:path';
-import { getLabel } from '../../../shared/i18n/index.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
 import { createDefaultSystemStepServices } from '../../../infra/workflow/system/DefaultSystemStepServices.js';
@@ -77,18 +76,8 @@ import {
 } from './workflowExecutionBundle.js';
 import { scheduleLoopAnalysis } from './loopAnalysis.js';
 import { buildChildProcessEnv } from '../../../shared/utils/child-process-env.js';
-import { LiveInterventionFileStore } from '../../../infra/workflow/live-intervention-store.js';
-import { createOutputFns } from './outputFns.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
-
-function warnUnconsumedLiveInstructions(
-  out: ReturnType<typeof createOutputFns>,
-  count: number,
-  language: WorkflowExecutionOptions['language'],
-): void {
-  out.warn(getLabel('workflow.unconsumedLiveInstructions', language, { count: String(count) }));
-}
 
 export type WorkflowRunContext = {
   ignoreIterationLimit?: boolean;
@@ -259,7 +248,6 @@ async function executeWorkflowInternal(
   const artifactResumeSource = resumeLineage.artifactResumeSource;
   const publishedResumeSource = resumeLineage.publishedResumeSource;
   let bootstrap: WorkflowExecutionBootstrap;
-  const bootstrapFailureOut = createOutputFns(undefined, options.outputMode);
   try {
     publishWorkflowExecutionBundle(activeRun.runPaths, preparedBundle);
     const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
@@ -280,9 +268,6 @@ async function executeWorkflowInternal(
       resumeLineage,
     );
   } catch (bootstrapError) {
-    const liveIntervention = cwd === options.projectCwd
-      ? undefined
-      : new LiveInterventionFileStore(options.projectCwd, activeRun.runSlug);
     return terminalizeBootstrapFailure({
       activeRun,
       workflowConfig,
@@ -294,10 +279,6 @@ async function executeWorkflowInternal(
       primaryError: bootstrapError,
       resumeLineage,
       loopAnalysisScheduler: options.loopAnalysisScheduler,
-      ...(liveIntervention === undefined ? {} : { liveIntervention }),
-      onLiveInterventionWarning: (count: number) => {
-        warnUnconsumedLiveInstructions(bootstrapFailureOut, count, options.language);
-      },
     });
   }
   const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
@@ -324,9 +305,6 @@ async function executeWorkflowInternal(
   const terminalPayloads = createWorkflowTerminalPayloadFactory(
     terminalPublicationContext,
   );
-  const liveIntervention = cwd === options.projectCwd
-    ? undefined
-    : new LiveInterventionFileStore(options.projectCwd, bootstrap.runSlug);
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
@@ -335,7 +313,6 @@ async function executeWorkflowInternal(
   let abortHandler: AbortHandler | undefined;
   let primaryError: unknown;
   let latentAbortPrimary: WorkflowAbortError | undefined;
-  let liveInterventionTerminalizationOwned = false;
   const terminalizationErrors: unknown[] = [];
   const cleanupErrors: unknown[] = [];
   const finalizationIssues: RunFinalizationIssue[] = [];
@@ -429,12 +406,6 @@ async function executeWorkflowInternal(
         onAskUserQuestion: options.onAskUserQuestion ?? createDenyAskUserQuestionHandler(),
         ignoreIterationLimit: runContext?.ignoreIterationLimit === true,
         projectCwd: options.projectCwd,
-        ...(liveIntervention === undefined ? {} : {
-          liveIntervention,
-          onLiveInterventionWarning: (count: number) => {
-            warnUnconsumedLiveInstructions(bootstrap.out, count, options.language);
-          },
-        }),
         observability: bootstrap.observability,
         observabilityRunId: bootstrap.runSlug,
         sanitizeObservabilityText: bootstrap.sanitizeObservabilityText,
@@ -525,7 +496,6 @@ async function executeWorkflowInternal(
       });
 
       abortHandler.install();
-      liveInterventionTerminalizationOwned = true;
       const finalState = await engine.run();
       await eventBridge.flushEventSink();
       executionResult = {
@@ -587,20 +557,6 @@ async function executeWorkflowInternal(
   } finally {
     let committedPublication: WorkflowTerminalPublicationPayload | undefined;
     if (runExecution !== undefined || primaryError !== undefined) {
-      if (liveIntervention !== undefined && !liveInterventionTerminalizationOwned) {
-        try {
-          const unconsumedCount = await liveIntervention.recordTerminal('failed');
-          if (unconsumedCount > 0) {
-            try {
-              warnUnconsumedLiveInstructions(bootstrap.out, unconsumedCount, options.language);
-            } catch (error) {
-              terminalizationErrors.push(error);
-            }
-          }
-        } catch (error) {
-          terminalizationErrors.push(error);
-        }
-      }
       try {
         const terminalPublication = resolveTerminalPublication(
           eventBridge,
@@ -705,8 +661,6 @@ async function terminalizeBootstrapFailure(input: {
   readonly primaryError: unknown;
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
   readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
-  readonly liveIntervention?: LiveInterventionFileStore;
-  readonly onLiveInterventionWarning?: (count: number) => void;
 }): Promise<never> {
   const reason = getErrorMessage(input.primaryError);
   const finalizationErrors: unknown[] = [];
@@ -776,20 +730,6 @@ async function terminalizeBootstrapFailure(input: {
     lastStepName: undefined,
     endTime: new Date().toISOString(),
   });
-  if (input.liveIntervention !== undefined) {
-    try {
-      const unconsumedCount = await input.liveIntervention.recordTerminal('failed');
-      if (unconsumedCount > 0) {
-        try {
-          input.onLiveInterventionWarning?.(unconsumedCount);
-        } catch (error) {
-          finalizationErrors.push(error);
-        }
-      }
-    } catch (error) {
-      finalizationErrors.push(error);
-    }
-  }
   try {
     const finalization = await input.activeRun.finish({
       status: 'failed',

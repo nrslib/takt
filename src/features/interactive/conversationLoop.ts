@@ -142,10 +142,6 @@ export interface ConversationStrategy {
   formalSpecComments?: boolean;
   /** Resolve prompt configuration after the user selects another session. */
   resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
-  /** Resolve the prompt again immediately before a regular turn or /go summary. */
-  resolveCurrentPromptConfiguration?: () => ConversationPromptConfiguration | Promise<ConversationPromptConfiguration>;
-  /** Use the current conversation system prompt as /go's system prompt. */
-  useCurrentSystemPromptForSummary?: boolean;
   /** Allowed tools for AI calls */
   allowedTools: string[];
   /** Permission mode for AI calls. */
@@ -170,8 +166,6 @@ export interface ConversationStrategy {
   previousOrderContent?: string;
   /** Enable /retry slash command (retry mode only) */
   enableRetryCommand?: boolean;
-  /** Enable /open for a mode that can resolve a target run directory. */
-  enableOpenCommand?: boolean;
   /** Explicit slash-command allowlist for modes with a guarded execution path. */
   enabledCommands?: readonly SlashCommand[];
   /** Context prepended to the first regular prompt in this conversation. */
@@ -205,13 +199,6 @@ export async function runConversationLoop(
     systemPrompt: strategy.systemPrompt,
     formalSpec: strategy.formalSpec,
     formalSpecComments: strategy.formalSpecComments ?? true,
-  };
-  const refreshPromptConfiguration = async (): Promise<void> => {
-    const resolved = await strategy.resolveCurrentPromptConfiguration?.();
-    if (resolved === undefined) {
-      return;
-    }
-    activePromptConfiguration = resolved;
   };
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
@@ -294,7 +281,6 @@ export async function runConversationLoop(
     const commandAvailability: CommandAvailability = {
       enableRetryCommand: strategy.enableRetryCommand,
       hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
-      ...(strategy.enableOpenCommand === true ? { enableOpenCommand: true } : {}),
       enabledCommands: strategy.enabledCommands,
     };
 
@@ -317,9 +303,6 @@ export async function runConversationLoop(
 
       // No slash command detected, treat as regular message
       if (!match) {
-        if (strategy.resolveCurrentPromptConfiguration !== undefined) {
-          await refreshPromptConfiguration();
-        }
         history.push({ role: 'user', content: trimmed });
         log.debug('Sending to AI', {
           messageCount: history.length,
@@ -388,9 +371,6 @@ export async function runConversationLoop(
         }
 
         case SlashCommand.Go: {
-          if (strategy.resolveCurrentPromptConfiguration !== undefined) {
-            await refreshPromptConfiguration();
-          }
           const { summaryHistory, userNote } = resolveGoSummaryInput(
             history,
             !!sessionId,
@@ -442,12 +422,7 @@ export async function runConversationLoop(
           }
           // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
           const { result: summaryResult } = await callAIWithRetry(
-            summaryPrompt,
-            strategy.useCurrentSystemPromptForSummary
-              ? activePromptConfiguration.systemPrompt
-              : summaryPrompt,
-            strategy.allowedTools,
-            cwd,
+            summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
             { ...ctx, sessionId: undefined },
             {
               imageAttachments: summaryImageAttachments,

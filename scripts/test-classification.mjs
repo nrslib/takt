@@ -221,7 +221,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/knowledge.test.ts',
   'src/__tests__/listNonInteractive.test.ts',
   'src/__tests__/listTasks.test.ts',
-  'src/__tests__/live-intervention-instruct-context.test.ts',
   'src/__tests__/loadPreviousOrderContent.test.ts',
   'src/__tests__/logging-contracts.test.ts',
   'src/__tests__/loop-analysis-prompt-composition.test.ts',
@@ -297,8 +296,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/team-leader-schema-loader.test.ts',
   'src/__tests__/tmpdir.test.ts',
   'src/__tests__/traceReport.test.ts',
-  'src/__tests__/tui-conversation-view.test.tsx',
-  'src/__tests__/tui-live-intervention-status.test.tsx',
   'src/__tests__/tui-run.test.ts',
   'src/__tests__/usageEventLogger.test.ts',
   'src/__tests__/watcher.test.ts',
@@ -351,7 +348,6 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-provider-aux-entry.integration.test.ts',
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
   'src/__tests__/runtime-provider-nonworkflow-seam.integration.test.ts',
-  'src/__tests__/taskInstructionActions.test.ts',
 ]);
 
 export const lightIntegrationTestFiles = Object.freeze([

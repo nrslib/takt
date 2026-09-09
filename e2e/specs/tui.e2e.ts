@@ -1490,13 +1490,6 @@ steps:
     await tui.waitForOutput(TUI_HINT);
     await submitLine(tui, 'test');
     await tui.waitForOutput('SLOW-REPLY-END', 120_000);
-    await tui.waitForScreen(
-      'the completed reply and redrawn input box',
-      (screen) => screen.includes('SLOW-REPLY-END')
-        && screen.includes('╭')
-        && screen.includes(PLACEHOLDER)
-        && !screen.includes(THINKING_MARKER),
-    );
 
     const visible = await tui.visibleTranscript();
     const rendered = visible.join('\n');

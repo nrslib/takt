@@ -24,23 +24,6 @@ function makeResult(part: PartDefinition): PartResult {
 }
 
 describe('runTeamLeaderExecution', () => {
-  it('does not retry failed planning indefinitely for the same pending instruction', async () => {
-    const requestMoreParts = vi.fn().mockRejectedValue(new Error('delivery failed'));
-    const onPlanningError = vi.fn();
-    const result = await runTeamLeaderExecution({
-      initialParts: [makePart('p1')],
-      maxConcurrency: 1,
-      getPendingLiveInterventionIds: () => [1],
-      runPart: async (part) => makeResult(part),
-      requestMoreParts,
-      onPlanningError,
-      onExecutionTerminal: vi.fn().mockResolvedValue(undefined),
-    });
-    expect(result.partResults).toHaveLength(1);
-    expect(requestMoreParts).toHaveBeenCalledTimes(2);
-    expect(onPlanningError).toHaveBeenCalledTimes(2);
-  });
-
   it('初回5パートを最大2並列で順次実行する', async () => {
     const parts = ['p1', 'p2', 'p3', 'p4', 'p5'].map(makePart);
     let activeParts = 0;

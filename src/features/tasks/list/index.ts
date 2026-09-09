@@ -4,7 +4,6 @@ import {
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { info, header, blankLine } from '../../../shared/ui/index.js';
-import { getErrorMessage } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import {
   type ListAction,
@@ -22,7 +21,6 @@ import { forceFailRunningTask } from './taskForceFailActions.js';
 import * as taskRetryActions from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
-import { runLiveInterventionMode } from './liveInterventionMode.js';
 
 export type { ListNonInteractiveOptions } from './listNonInteractive.js';
 
@@ -201,15 +199,6 @@ export async function listTasks(
     } else if (type === 'running') {
       const task = tasks[idx];
       if (!task) continue;
-      if (task.runSlug !== undefined && task.worktreePath !== undefined) {
-        try {
-          await runLiveInterventionMode(cwd, task);
-          continue;
-        } catch (error) {
-          // A stale run must still offer the running-task recovery actions.
-          info(getErrorMessage(error));
-        }
-      }
       const taskAction = await showRunningTaskAndPromptAction(task);
       if (taskAction === 'force_fail') {
         await forceFailRunningTask(task, cwd);

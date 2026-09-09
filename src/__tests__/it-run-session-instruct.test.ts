@@ -30,6 +30,10 @@ import { makeFileRunMetaPathFields } from './test-helpers.js';
 
 const promptLanguage = vi.hoisted(() => ({ value: 'en' as 'en' | 'ja' }));
 
+vi.mock('../infra/fs/session.js', () => ({
+  loadNdjsonLog: vi.fn(),
+}));
+
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: promptLanguage.value })),
   getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
@@ -92,7 +96,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 // --- Imports (after mocks) ---
 
 import { getProvider } from '../infra/providers/index.js';
-import { writeRunSessionLogFixture } from './helpers/run-session-log-fixture.js';
+import { loadNdjsonLog } from '../infra/fs/session.js';
 import {
   listRecentRuns,
   loadRunSessionContext,
@@ -100,6 +104,7 @@ import {
 import { runInstructMode } from '../features/tasks/list/instructMode.js';
 
 const mockGetProvider = vi.mocked(getProvider);
+const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
 
 // --- Fixture helpers ---
 
@@ -140,13 +145,28 @@ function createRunFixture(
     writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
   }
 
-  writeFileSync(join(runDir, 'logs', 'session-001.jsonl'), '', 'utf-8');
+  writeFileSync(join(runDir, 'logs', 'session-001.jsonl'), '{}', 'utf-8');
 
   for (const report of overrides?.reports ?? []) {
     writeFileSync(join(runDir, 'reports', report.name), report.content, 'utf-8');
   }
 }
 
+function setupMockNdjsonLog(history: Array<{ step: string; persona: string; status: string; content: string }>): void {
+  mockLoadNdjsonLog.mockReturnValue({
+    task: 'mock',
+    projectDir: '',
+    workflowName: 'default',
+    iterations: history.length,
+    startTime: '2026-02-01T00:00:00.000Z',
+    status: 'completed',
+    history: history.map((h) => ({
+      ...h,
+      instruction: '',
+      timestamp: '2026-02-01T00:00:00.000Z',
+    })),
+  });
+}
 
 function setupProvider(responses: string[]): MockProviderCapture {
   const { provider, capture } = createMockProvider(responses);
@@ -178,7 +198,7 @@ describe('Integration: Run session → instruct mode with interactive flow', () 
         { name: '00-plan.md', content: '# Plan\n\nJWT auth with refresh tokens.' },
       ],
     });
-    writeRunSessionLogFixture(tmpDir, 'run-auth', [
+    setupMockNdjsonLog([
       { step: 'plan', persona: 'architect', status: 'completed', content: 'Planned JWT auth flow' },
       { step: 'implement', persona: 'coder', status: 'completed', content: 'Created auth middleware' },
     ]);
@@ -298,7 +318,7 @@ describe('Integration: Run session → instruct mode with interactive flow', () 
 
   it('should cancel cleanly mid-conversation with run session', async () => {
     createRunFixture(tmpDir, 'run-1');
-    writeRunSessionLogFixture(tmpDir, 'run-1', []);
+    setupMockNdjsonLog([]);
 
     const context = loadRunSessionContext(tmpDir, 'run-1');
 

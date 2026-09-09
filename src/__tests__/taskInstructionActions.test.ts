@@ -1,7 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 import {
@@ -19,7 +16,6 @@ const {
   mockSelectWorkflow,
   mockConfirm,
   mockGetLabel,
-  mockGetProvider,
   mockGetWorkflowDescription,
   mockResolveLanguage,
   mockListRecentRuns,
@@ -47,7 +43,6 @@ const {
   mockSelectWorkflow: vi.fn(),
   mockConfirm: vi.fn(),
   mockGetLabel: vi.fn(),
-  mockGetProvider: vi.fn(),
   mockGetWorkflowDescription: vi.fn(() => ({
     name: 'default',
     description: 'desc',
@@ -99,36 +94,11 @@ vi.mock('../infra/task/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  resolveConfigValues: vi.fn(() => ({ language: 'en' })),
   resolveWorkflowConfigValues: vi.fn(() => ({ interactivePreviewSteps: 3, language: 'en' })),
-  resolveNonWorkflowProviderModel: vi.fn(() => ({ provider: 'mock', model: undefined })),
-  resolveNonWorkflowProviderOptions: vi.fn(() => undefined),
-  takeSessionState: vi.fn(() => null),
-  updatePersonaSession: vi.fn(),
   getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
   isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
   loadWorkflowByIdentifier: (...args: unknown[]) => mockLoadWorkflowByIdentifier(...args),
   loadAllStandaloneWorkflowsWithSources: (...args: unknown[]) => mockLoadAllStandaloneWorkflowsWithSources(...args),
-}));
-
-vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantProviderModel: vi.fn(() => ({
-    provider: 'mock',
-    model: undefined,
-    runtimeManaged: false,
-  })),
-}));
-
-vi.mock('../infra/providers/index.js', () => ({
-  getProvider: (...args: unknown[]) => mockGetProvider(...args),
-}));
-
-vi.mock('../infra/config/global/globalConfig.js', () => ({
-  loadGlobalConfig: vi.fn(() => ({ language: 'en' })),
-}));
-
-vi.mock('../infra/config/project/projectConfig.js', () => ({
-  loadProjectConfig: vi.fn(() => ({})),
 }));
 
 vi.mock('../features/tasks/list/instructMode.js', () => ({
@@ -145,26 +115,10 @@ vi.mock('../features/interactive/actionDispatcher.js', () => ({
 
 vi.mock('../shared/prompt/index.js', () => ({
   confirm: (...args: unknown[]) => mockConfirm(...args),
-  selectOption: vi.fn().mockResolvedValue('execute'),
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: (...args: unknown[]) => mockGetLabel(...args),
-  getLabelObject: vi.fn(() => ({
-    intro: 'Instruct intro',
-    resume: 'Resume',
-    noConversation: 'No conversation',
-    summarizeFailed: 'Summarize failed',
-    continuePrompt: 'Continue?',
-    proposed: 'Proposed:',
-    actionPrompt: 'What next?',
-    cancelled: 'Cancelled',
-    acceptNoAssistant: 'No assistant response',
-    retryUnavailable: 'Retry unavailable',
-    retryNoOrder: 'No order',
-    pasteImageUnavailable: 'Paste unavailable',
-    actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
-  })),
 }));
 
 vi.mock('../features/interactive/index.js', () => ({
@@ -180,7 +134,6 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 }));
 
 vi.mock('../features/tasks/orderRevision.js', () => ({
-  resolveMaxImageIndex: vi.fn(() => 0),
   resolveTaskOrderContent: (...args: unknown[]) => mockResolveTaskOrderContent(...args),
   persistTaskOrderRevision: (...args: unknown[]) => mockPersistTaskOrderRevision(...args),
   cleanupPersistedTaskOrderRevision: (...args: unknown[]) => mockCleanupPersistedTaskOrderRevision(...args),
@@ -193,19 +146,11 @@ vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   error: vi.fn(),
-  blankLine: vi.fn(),
   warn: mockWarn,
-  StreamDisplay: class {
-    createHandler(): () => void {
-      return () => undefined;
-    }
-    flush(): void {}
-  },
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  hasInteractiveTerminal: () => false,
   createLogger: () => ({
     info: vi.fn(),
     error: vi.fn(),
@@ -214,14 +159,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { instructBranch } from '../features/tasks/list/taskActions.js';
-import { loadRunSessionContext as loadRealRunSessionContext } from '../features/interactive/runSessionReader.js';
-import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
-import {
-  restoreStdin,
-  setupRawStdin,
-  toRawInputs,
-  createMockProvider,
-} from './helpers/stdinSimulator.js';
 const testAttachment = {
   placeholder: '[Image #1]',
   tempPath: '/tmp/takt/session-1/attachments/image-1.png',
@@ -1076,14 +1013,10 @@ describe('instructBranch direct execution flow', () => {
     });
 
     expect(mockConfirm).toHaveBeenCalledWith(expect.any(String), false);
-    // Logs/reports come from the worktree while live intervention history comes from projectDir.
+    // selectRunSessionContext uses worktreePath for run data
     expect(mockListRecentRuns).toHaveBeenCalledWith('/project/.takt/worktrees/done-task');
     expect(mockSelectRun).toHaveBeenCalledWith('/project/.takt/worktrees/done-task', 'en');
-    expect(mockLoadRunSessionContext).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/done-task',
-      'run-1',
-      { liveInterventionProjectCwd: '/project' },
-    );
+    expect(mockLoadRunSessionContext).toHaveBeenCalledWith('/project/.takt/worktrees/done-task', 'run-1');
     expect(mockRunInstructMode).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: '/project/.takt/worktrees/done-task',
@@ -1096,81 +1029,6 @@ describe('instructBranch direct execution flow', () => {
         previousOrderContent: 'done',
       }),
     );
-  });
-
-  it('should carry project-side intervention history through the real instruct loader entry', async () => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-instruct-project-'));
-    const worktreePath = join(projectDir, '.takt', 'worktrees', 'done-task');
-    const runDir = join(worktreePath, '.takt', 'runs', 'run-1');
-    mkdirSync(join(runDir, 'logs'), { recursive: true });
-    mkdirSync(join(runDir, 'reports'), { recursive: true });
-    writeFileSync(join(runDir, 'meta.json'), JSON.stringify({
-      task: 'done',
-      workflow: 'default',
-      runSlug: 'run-1',
-      runRoot: '.takt/runs/run-1',
-      reportDirectory: '.takt/runs/run-1/reports',
-      contextDirectory: '.takt/runs/run-1/context',
-      logsDirectory: '.takt/runs/run-1/logs',
-      status: 'completed',
-      startTime: '2026-09-03T00:00:00.000Z',
-      currentStep: 'review',
-      phase: 3,
-    }), 'utf8');
-    const projectStore = new LiveInterventionFileStore(projectDir, 'run-1');
-    await projectStore.issue('first history from project root', '2026-09-03T00:00:00.000Z');
-    await projectStore.issue('second history from project root', '2026-09-03T00:00:01.000Z');
-    await new LiveInterventionFileStore(worktreePath, 'run-1').issue('clone-only history');
-    mockListRecentRuns.mockReturnValue([
-      { slug: 'run-1', task: 'done', workflow: 'default', status: 'completed', startTime: '2026-09-03T00:00:00Z' },
-    ]);
-    mockSelectRun.mockResolvedValue('run-1');
-    mockLoadRunSessionContext.mockImplementation((cwd: string, slug: string, options?: {
-      readonly liveInterventionProjectCwd?: string;
-    }) => loadRealRunSessionContext(cwd, slug, options));
-    const { provider, capture } = createMockProvider(['provider response']);
-    mockGetProvider.mockReturnValue(provider);
-    setupRawStdin(toRawInputs(['project historyを確認する', '/cancel']));
-    const actualInstructMode = await vi.importActual<typeof import('../features/tasks/list/instructMode.js')>(
-      '../features/tasks/list/instructMode.js',
-    );
-    mockRunInstructMode.mockImplementation((options) => actualInstructMode.runInstructMode(options));
-    mockDispatchConversationAction.mockImplementation(async (result, handlers) => {
-      if (result.action === 'cancel') {
-        return handlers.cancel();
-      }
-      return handlers.execute();
-    });
-
-    try {
-      await instructBranch(projectDir, {
-        kind: 'completed',
-        name: 'done-task',
-        createdAt: '2026-09-03T00:00:00.000Z',
-        filePath: join(projectDir, '.takt', 'tasks.yaml'),
-        content: 'done',
-        branch: 'takt/done-task',
-        worktreePath,
-        runSlug: 'run-1',
-        data: { task: 'done', workflow: 'default' },
-      });
-
-      expect(capture.callCount).toBe(1);
-      const systemPrompt = capture.systemPrompts[0]!;
-      const firstHistoryIndex = systemPrompt.indexOf('first history from project root');
-      const secondHistoryIndex = systemPrompt.indexOf('second history from project root');
-      expect(firstHistoryIndex).toBeGreaterThanOrEqual(0);
-      expect(secondHistoryIndex).toBeGreaterThan(firstHistoryIndex);
-      expect(systemPrompt).not.toContain('clone-only history');
-      expect(mockLoadRunSessionContext).toHaveBeenCalledWith(
-        worktreePath,
-        'run-1',
-        { liveInterventionProjectCwd: projectDir },
-      );
-    } finally {
-      restoreStdin();
-      rmSync(projectDir, { recursive: true, force: true });
-    }
   });
 
   it('should not warn when canonical order uses provider block fields', async () => {

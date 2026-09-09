@@ -1,13 +1,5 @@
 import { Box, Text, useInput, useWindowSize } from 'ink';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type ReactElement,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import { PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
@@ -116,10 +108,6 @@ export interface ConversationViewProps {
     entries: readonly TranscriptEntry[],
     columns: number,
   ) => void;
-  /** Reads the live run status while this mounted view remains open. */
-  readonly liveStatusReader?: () => string;
-  /** Polling interval for the live run status. */
-  readonly liveStatusRefreshIntervalMs?: number;
   /** Called once, with what the next mount has to carry on from. */
   readonly onExit: (exit: ConversationExit, carried: ConversationCarryOver) => void;
 }
@@ -153,8 +141,6 @@ export function ConversationView({
   residentSession,
   initialQueue,
   finalizeTranscript,
-  liveStatusReader,
-  liveStatusRefreshIntervalMs = 1000,
   onExit,
 }: ConversationViewProps): ReactElement {
   const [transcript, setTranscriptView] = useState<readonly TranscriptEntry[]>(
@@ -198,16 +184,6 @@ export function ConversationView({
   /** Set by Esc so the completion list closes without touching the draft. */
   const [completionsHidden, setCompletionsHidden] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const liveStatusRef = useRef('');
-  const liveStatusListenersRef = useRef(new Set<() => void>());
-  const liveStatus = useSyncExternalStore(
-    (listener) => {
-      liveStatusListenersRef.current.add(listener);
-      return () => liveStatusListenersRef.current.delete(listener);
-    },
-    () => liveStatusRef.current,
-    () => liveStatusRef.current,
-  );
   const pendingRef = useRef<Set<PendingWork>>(new Set());
   /** Set late, because the drain is built out of callbacks defined below it. */
   const drainQueueRef = useRef<() => void>(() => undefined);
@@ -223,24 +199,6 @@ export function ConversationView({
   useEffect(() => {
     columnsRef.current = columns;
   }, [columns]);
-  useEffect(() => {
-    if (liveStatusReader === undefined) {
-      return undefined;
-    }
-    const refresh = (): void => {
-      const nextStatus = toSingleLineText(liveStatusReader());
-      if (nextStatus === liveStatusRef.current) {
-        return;
-      }
-      liveStatusRef.current = nextStatus;
-      for (const listener of liveStatusListenersRef.current) {
-        listener();
-      }
-    };
-    refresh();
-    const interval = setInterval(refresh, Math.max(1, liveStatusRefreshIntervalMs));
-    return () => clearInterval(interval);
-  }, [liveStatusReader, liveStatusRefreshIntervalMs]);
   // Resolved once per render: the keys and the box must agree on the row width.
   const contentWidth = resolvePromptContentWidth(columns);
   const allCompletions = useMemo(
@@ -796,9 +754,6 @@ export function ConversationView({
           label={`${ui.thinking} ${ui.interruptHint}`}
           streamed={streamingPreview}
         />
-        {liveStatusReader !== undefined && (
-          <Text dimColor wrap="truncate-end">{liveStatus || ' '}</Text>
-        )}
         <Text color="red" wrap="truncate-end">{notice === null ? ' ' : notice}</Text>
         <PromptInput
           text={editor.text}

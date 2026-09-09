@@ -46,7 +46,6 @@ import { terminalLabelOf } from '../../models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
-import type { LiveInterventionChannel } from '../live-intervention/types.js';
 
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
@@ -622,7 +621,6 @@ export class WorkflowCallRunner {
     runtime: RuntimeStepResolution,
     syncParentState: boolean,
     preparedExecution: PreparedWorkflowCallExecution,
-    liveIntervention?: LiveInterventionChannel | null,
   ): Promise<{
     childResult: WorkflowCallExecutionResult;
     providerInfo: NonNullable<StepRunResult['providerInfo']>;
@@ -665,7 +663,6 @@ export class WorkflowCallRunner {
       personaProviders: this.buildChildPersonaProviders(),
       providerRouting: this.buildChildProviderRouting(),
       providerLadders: this.buildChildProviderLadders(),
-      ...(liveIntervention === undefined ? {} : { liveIntervention }),
     }, {
       syncParentState,
     });
@@ -719,10 +716,6 @@ export class WorkflowCallRunner {
     runtime: RuntimeStepResolution,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
     token: WorkflowCallExecutionToken,
-    options?: {
-      /** Null prevents the isolated child from inheriting the parent channel. */
-      readonly liveIntervention?: LiveInterventionChannel | null;
-    },
   ): Promise<{
     result: StepRunResult;
     sessionUpdates: WorkflowCallSessionUpdates;
@@ -735,7 +728,6 @@ export class WorkflowCallRunner {
         runtime,
         false,
         attempt.preparedExecution,
-        options?.liveIntervention ?? null,
       );
       let response: AgentResponse;
       try {

@@ -28,6 +28,10 @@ import { makeFileRunMetaPathFields } from './test-helpers.js';
 
 // --- Mocks (infrastructure only) ---
 
+vi.mock('../infra/fs/session.js', () => ({
+  loadNdjsonLog: vi.fn(),
+}));
+
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
   getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
@@ -94,7 +98,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 // --- Imports (after mocks) ---
 
 import { getProvider } from '../infra/providers/index.js';
-import { writeRunSessionLogFixture } from './helpers/run-session-log-fixture.js';
+import { loadNdjsonLog } from '../infra/fs/session.js';
 import {
   loadRunSessionContext,
   formatRunSessionForPrompt,
@@ -104,6 +108,7 @@ import { runTaskRetryMode, type RetryContext } from '../features/interactive/ret
 import { confirm } from '../shared/prompt/confirm.js';
 
 const mockGetProvider = vi.mocked(getProvider);
+const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
 const mockConfirm = vi.mocked(confirm);
 
 // --- Fixture helpers ---
@@ -136,13 +141,28 @@ function createRunFixture(
     ...overrides?.meta,
   };
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
-  writeFileSync(join(runDir, 'logs', 'session-001.jsonl'), '', 'utf-8');
+  writeFileSync(join(runDir, 'logs', 'session-001.jsonl'), '{}', 'utf-8');
 
   for (const report of overrides?.reports ?? []) {
     writeFileSync(join(runDir, 'reports', report.name), report.content, 'utf-8');
   }
 }
 
+function setupMockNdjsonLog(history: Array<{ step: string; persona: string; status: string; content: string }>): void {
+  mockLoadNdjsonLog.mockReturnValue({
+    task: 'mock',
+    projectDir: '',
+    workflowName: 'default',
+    iterations: history.length,
+    startTime: '2026-02-01T00:00:00.000Z',
+    status: 'completed',
+    history: history.map((h) => ({
+      ...h,
+      instruction: '',
+      timestamp: '2026-02-01T00:00:00.000Z',
+    })),
+  });
+}
 
 function setupProvider(responses: string[]): MockProviderCapture {
   const { provider, capture } = createMockProvider(responses);
@@ -288,7 +308,7 @@ describe('E2E: Retry mode with failure context injection', () => {
         { name: '00-plan.md', content: '# Plan\n\nLogin form with OAuth2.' },
       ],
     });
-    writeRunSessionLogFixture(tmpDir, 'run-failed', [
+    setupMockNdjsonLog([
       { step: 'plan', persona: 'architect', status: 'completed', content: 'Planned OAuth2 login flow' },
       { step: 'implement', persona: 'coder', status: 'failed', content: 'Failed at CSS compilation' },
     ]);

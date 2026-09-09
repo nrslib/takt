@@ -21,7 +21,6 @@ export const SlashCommand = {
   Retry: '/retry',
   Replay: '/replay',
   Cancel: '/cancel',
-  Open: '/open',
   Resume: '/resume',
   PasteImage: '/paste-image',
   Setup: '/setup',

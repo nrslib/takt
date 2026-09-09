@@ -10,9 +10,6 @@ function isCommandMatchEnabled(command: SlashCommand, availability?: CommandAvai
   if (command === SlashCommand.Setup) {
     return availability?.enableSetupCommand === true;
   }
-  if (command === SlashCommand.Open) {
-    return availability?.enableOpenCommand === true;
-  }
   if (INTERACTIVE_SETTING_COMMANDS.has(command)) {
     return availability?.enableSettingsCommands === true;
   }

@@ -107,10 +107,9 @@ const integrationBuiltinModules = new Set([
 function listTestFiles(directory: string): string[] {
   return readdirSync(directory).flatMap((entry) => {
     const path = join(directory, entry);
-    const isTestFile = path.endsWith('.test.ts') || path.endsWith('.test.tsx');
     return statSync(path).isDirectory()
       ? listTestFiles(path)
-      : isTestFile ? [path] : [];
+      : path.endsWith('.test.ts') ? [path] : [];
   });
 }
 

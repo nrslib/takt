@@ -99,7 +99,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: 実 PTY 上で TUI が既定起動し、既存 readline セレクタ（ワークフロー選択・モード選択・`/go` 後のアクション選択）と Ink 会話の往復、Ctrl+C、前提条件違反が期待どおり動作することを確認。あわせて `takt make`（Workflow Maker）の base 選択、承認分岐、隔離成果物での直接実行、失敗時復帰、再実行、日本語表示を確認。
   - LLM: 呼び出さない（mock providerと固定scenarioを使用。runtime設定の由来を検証するケースだけはCLI provider overrideを注入しない）
   - 備考: PTY が必要なため `e2e/helpers/takt-pty-runner.ts`（node-pty）を使う。固定 sleep は使わず、出力ポーリングで同期する。
-  - 備考: 生の出力は消去済みフレームも含むため、画面に実際に残る内容は `@xterm/headless` に食わせた `visibleTranscript()` / `visibleScreen()` で検証する。 ストリーミング後の残留フレーム検証では、応答末尾の受信に加えて入力ボックスの再描画完了も待つ。
+  - 備考: 生の出力は消去済みフレームも含むため、画面に実際に残る内容は `@xterm/headless` に食わせた `visibleTranscript()` / `visibleScreen()` で検証する。
   - 手順（ユーザー行動/コマンド）:
     - `takt make` の初期セレクターで project、global、builtin、repertoire の各 source を実際に選択し、選択したファイルパス、YAML `name`、本文がMakerのprovider promptへ渡ることを確認する。
     - 制御文字を含むworkflowファイル名は選択画面で16進表記へ可視化され、選択後のMaker provider promptには制御文字を含む元の実pathが渡ることを確認する。
