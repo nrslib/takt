@@ -7,12 +7,14 @@ const {
   mockForceFailRunningTask,
   mockRunLiveInterventionMode,
   mockListTasksNonInteractive,
+  mockInfo,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
   mockListAllTaskItems: vi.fn(),
   mockForceFailRunningTask: vi.fn(),
   mockRunLiveInterventionMode: vi.fn(),
   mockListTasksNonInteractive: vi.fn(),
+  mockInfo: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -28,7 +30,7 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
-  info: vi.fn(),
+  info: mockInfo,
   header: vi.fn(),
   blankLine: vi.fn(),
 }));
@@ -89,9 +91,26 @@ describe('live intervention task-list entry', () => {
     mockListTasksNonInteractive.mockResolvedValue(undefined);
   });
 
-  it('opens live intervention for a running task with run identity and worktree', async () => {
+  it('shows the running task actions and returns to the list on cancellation', async () => {
     mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
     mockSelectOption.mockResolvedValueOnce('running:0');
+
+    await listTasks('/project');
+
+    expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
+      expect.objectContaining({ label: 'Mark as failed', value: 'force_fail' }),
+      expect.objectContaining({ label: 'Interactive', value: 'interactive' }),
+    ]);
+    expect(mockSelectOption.mock.calls[2]?.[0]).toBe('List Tasks');
+    expect(mockRunLiveInterventionMode).not.toHaveBeenCalled();
+    expect(mockForceFailRunningTask).not.toHaveBeenCalled();
+  });
+
+  it('opens live intervention only after Interactive is selected and returns to the list', async () => {
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('interactive');
 
     await listTasks('/project');
 
@@ -100,24 +119,31 @@ describe('live intervention task-list entry', () => {
       '/project',
       eligibleRunningTask,
     ]);
+    expect(mockSelectOption.mock.calls[2]?.[0]).toBe('List Tasks');
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
   });
 
-  it('keeps force-fail for a running task without live-run identity', async () => {
-    mockListAllTaskItems.mockReturnValue([runningTask]);
+  it.each([
+    runningTask,
+    { ...runningTask, runSlug: eligibleRunningTask.runSlug },
+    { ...runningTask, worktreePath: eligibleRunningTask.worktreePath },
+  ])('keeps only force-fail when live-run metadata is incomplete: %j', async (task) => {
+    mockListAllTaskItems.mockReturnValue([task]);
     mockSelectOption
       .mockResolvedValueOnce('running:0')
       .mockResolvedValueOnce('force_fail');
 
     await listTasks('/project');
 
+    expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
+      expect.objectContaining({ value: 'force_fail' }),
+    ]);
     expect(mockRunLiveInterventionMode).not.toHaveBeenCalled();
-    expect(mockForceFailRunningTask).toHaveBeenCalledWith(runningTask, '/project');
+    expect(mockForceFailRunningTask).toHaveBeenCalledWith(task, '/project');
   });
 
-  it('offers force-fail when the live run cannot be opened', async () => {
+  it('keeps force-fail available without opening an eligible live run', async () => {
     mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
-    mockRunLiveInterventionMode.mockRejectedValueOnce(new Error('Run is no longer running'));
     mockSelectOption
       .mockResolvedValueOnce('running:0')
       .mockResolvedValueOnce('force_fail');
@@ -125,7 +151,40 @@ describe('live intervention task-list entry', () => {
     await listTasks('/project');
 
     expect(mockForceFailRunningTask).toHaveBeenCalledWith(eligibleRunningTask, '/project');
-    expect(mockSelectOption).toHaveBeenCalledTimes(3);
+    expect(mockRunLiveInterventionMode).not.toHaveBeenCalled();
+  });
+
+  it('reports an unavailable live run and preserves recovery actions', async () => {
+    const message = 'Run is no longer running';
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockRunLiveInterventionMode.mockRejectedValueOnce(new Error(message));
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('interactive')
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('force_fail');
+
+    await listTasks('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith(message);
+    expect(mockRunLiveInterventionMode).toHaveBeenCalledTimes(1);
+    expect(mockForceFailRunningTask).toHaveBeenCalledWith(eligibleRunningTask, '/project');
+    expect(mockSelectOption.mock.calls[2]?.[0]).toBe('List Tasks');
+  });
+
+  it('refreshes the list when the selected live run disappears before it can be opened', async () => {
+    mockListAllTaskItems.mockReturnValueOnce([eligibleRunningTask]).mockReturnValue([]);
+    mockRunLiveInterventionMode.mockRejectedValueOnce(new Error('Run no longer exists'));
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('interactive');
+
+    await listTasks('/project');
+
+    expect(mockRunLiveInterventionMode).toHaveBeenCalledTimes(1);
+    expect(mockListAllTaskItems).toHaveBeenCalledTimes(2);
+    expect(mockSelectOption).toHaveBeenCalledTimes(2);
+    expect(mockForceFailRunningTask).not.toHaveBeenCalled();
   });
 
   it('keeps the non-interactive list path out of live intervention', async () => {
