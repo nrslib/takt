@@ -47,6 +47,7 @@ const CLASSIFICATIONS = [
       'implementation-report-contract-traceability',
       'completion-scope-routing',
       'completion-scope-structured',
+      'implement-scope-actions',
     ],
   },
   {
@@ -135,6 +136,12 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'implement-scope-actions': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '隔離した書き込み可能なプロジェクトで実装・検証の行動を実モデル評価する',
+  },
   'completion-scope-structured': {
     defaultEligible: false,
     credentials: ['codex'],

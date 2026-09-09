@@ -44,3 +44,5 @@ npm run eval:prompts -- completion-scope-structured --no-cache --var baseline_re
 ```
 
 これは固定レポートに対するPhase 3の意味評価であり、実装・レポート生成を含むrun全体の収束保証ではない。実行中runに保存済みのworkflow bundleは、このソース変更だけでは更新しない。
+
+実装担当の編集・コマンド実行による範囲拡大は、[実装行動の評価](implement-scope-actions.md)で別に確認する。そちらでは行動側のREDは再現していない。

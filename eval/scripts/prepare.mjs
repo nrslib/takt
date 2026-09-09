@@ -217,6 +217,14 @@ const TARGETS = [
     fixture: 'eval/fixtures/scope-architecture-boundary',
   },
   {
+    id: 'implement-scope-actions',
+    workflow: 'development-implement',
+    projectFromFixture: true,
+    step: 'implement',
+    fixture: 'eval/fixtures/implement-scope-actions',
+    mutable: true,
+  },
+  {
     id: 'implement-contract-traceability',
     workflow: 'default',
     step: 'implement',
@@ -568,6 +576,7 @@ async function main() {
     fixture,
     mutable,
     workflowCallVars,
+    projectFromFixture,
     facetMode,
     artifacts,
     phase: requestedPhase,
@@ -608,7 +617,7 @@ async function main() {
       ].filter((content) => content !== undefined).join('\n\n');
       config = { name: companionName, maxSteps: 1, steps: [] };
     } else {
-      config = loadWorkflowByIdentifier(workflowName, repoRoot);
+      config = loadWorkflowByIdentifier(workflowName, projectFromFixture ? runDir : repoRoot);
       if (!config) {
         throw new Error(`Workflow not found: ${workflowName}`);
       }
