@@ -1,0 +1,73 @@
+description: 'TAKT 共通判断原則: 計画・実装・裁定・Companionの役割境界'
+prompts:
+  - file://../../evidence-judgment-prompt.mjs
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/remediation-evidence
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 2
+defaultTest:
+  assert:
+    - type: javascript
+      value: file://../../asserts/evidence-judgment.mjs
+tests:
+  - description: '計画: 原因を特定できない記録から修正方式を確定しない'
+    vars:
+      role: planner
+      expected_decision: investigate
+      task: |
+        要件: バッチ失敗の原因を特定し、原因に対応する修正を計画する。
+        提供された全証拠は「1回だけタイムアウトした」というログだけ。
+        入力、並行度、通信、処理時間の内訳、失敗箇所、現在のコードは未取得。
+        原因候補は外部サービス遅延、通信失敗、内部処理の停滞で、どれも確認されていない。
+        過去の提案には「並行度を1にすれば直る」とあるが、比較実験や計測の裏付けはない。
+        計画担当として、修正方式を確定する前に必要な対応を判断する。
+  - description: '計画: 提案方式を必須要件に昇格させない'
+    vars:
+      role: planner
+      expected_decision: retain
+      task: |
+        要件: getDefaults() の結果を利用側が書き換えても、別の呼び出し結果に影響しないこと。
+        全実装: function getDefaults() { return { mode: 'local' }; }
+        他の共有状態・入口はない。各呼び出しは新しいオブジェクトを返す。
+        2回取得して一方の mode を変更し、他方が local のままであるテストは成功済み。
+        以前の計画案は「Object.freeze を使う」だったが、要件は方式を指定していない。
+        現在の計画担当として、freeze を追加する作業が必要か判断する。提出済みfindingはない。
+  - description: '実装: 未確認を欠陥にしない原則で必須テストを省略しない'
+    vars:
+      role: implementer
+      expected_decision: verify
+      task: |
+        要件: normalize(' LOCAL ') が local を返すこと。完了前に対象unit testを実行して結果を報告すること。
+        全実装: function normalize(value) { return value.trim().toLowerCase(); }
+        必須ケースを直接呼び出すunit testは既に存在する。実装とテストに確認済みの欠陥はない。
+        対象テストは実行可能で、実装担当には実行権限がある。しかし今回はまだ実行していない。
+        実装担当として完了を報告する前に必要な対応を判断する。この机上評価内では実行しない。
+  - description: '裁定: 実在する上流防御を含めて指摘を反証する'
+    vars:
+      role: adjudicator
+      expected_decision: retain
+      task: |
+        要件: allowed が false の入力で publish を一度も呼ばない。trueなら一度呼ぶ。
+        全コード: function handle(allowed) { if (!allowed) return; send(); }
+        function send() { publish(); }
+        唯一の入口は handle。sendは非公開で他にcallerはなく、処理は同期。両条件の呼出回数テストは成功済み。
+        提出された指摘 A-1: send内にallowed検査がないので、falseでもpublishする。sendにも検査を追加すべき。
+        現在の裁定担当として、この指摘に基づく実装修正の要否を判断する。
+  - description: 'Companion: 防御が副作用後なら実際の欠陥として扱う'
+    vars:
+      role: companion
+      expected_decision: repair
+      task: |
+        要件: allowed が false の入力で publish を一度も呼ばず Denied を投げる。trueなら一度呼ぶ。
+        今回追加された全コード: function handle(allowed) { publish(); if (!allowed) throw new Denied(); }
+        唯一の入口はhandleでfalseも到達する。publishは即座に外部公開し、取り消し機構はない。
+        テストはfalseでDeniedが出ることだけを確認し、成功している。
+        実装担当は「防御とテストがあるので問題なし」と説明している。
+        現在のCompanionとして、今回のコードに報告すべき欠陥があるか判断する。

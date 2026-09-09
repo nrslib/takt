@@ -439,6 +439,34 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     }
   });
 
+  it('keeps injected report snapshots separate between parallel siblings', async () => {
+    const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
+    mkdirSync(reportDir, { recursive: true });
+    const names = ['left', 'right'];
+    for (const name of names) writeFileSync(join(reportDir, `${name}.md`), `${name}-input`);
+    const config = buildDefaultWorkflowConfig({
+      initialStep: 'review',
+      steps: [makeStep('review', {
+        parallel: names.map((name) => makeStep(name, {
+          instruction: `{report:${name}.md}`,
+          outputContracts: [{ name: `${name}-result.md` }],
+          rules: [makeRule('done', 'COMPLETE')],
+        })),
+        rules: [makeRule('all("done")', 'COMPLETE')],
+      })],
+    });
+    mockRunAgentSequence(names.map((name) => makeResponse({ persona: name, content: `${name}-done` })));
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, { index: 0, method: 'phase3_tag' }, { index: 0, method: 'aggregate' },
+    ]);
+    const engine = new WorkflowEngine(config, tmpDir, 'Review independent inputs', { projectCwd: tmpDir, provider: 'mock' });
+    expect((await engine.run()).status).toBe('completed');
+    expect(vi.mocked(runReportPhase).mock.calls).toHaveLength(2);
+    for (const [step, , context] of vi.mocked(runReportPhase).mock.calls) {
+      expect(context.injectedReports).toEqual([{ reference: `${step.name}.md`, scope: 'step', content: `${step.name}-input` }]);
+    }
+  });
+
   it('should aggregate sub-step outputs', async () => {
     const config = buildDefaultWorkflowConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });

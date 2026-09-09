@@ -158,7 +158,7 @@ function makeRunner(options: {
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: {
       prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
-      buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
+      prepareInstruction: vi.fn((step: WorkflowStep) => ({ text: `instruction:${step.name}`, injectedReports: [] })),
       emitStepReports: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
       completeReviewerResponse: vi.fn(async ({ initialResponse }) => ({

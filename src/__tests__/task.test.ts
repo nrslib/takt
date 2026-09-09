@@ -712,6 +712,10 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(tasks[0]?.taskDir).toBe('.takt/tasks/20260201-000000-demo');
     expect(tasks[0]?.content).toContain('.takt/tasks/20260201-000000-demo');
     expect(tasks[0]?.content).toContain('.takt/tasks/20260201-000000-demo/order.md');
+    expect(tasks[0]?.content).toContain('Use report files in Report Directory as primary execution history.');
+    const historyRestrictions = tasks[0]!.content.split('\n')
+      .filter((line) => /do not rely.*(?:previous response|conversation summary)/i.test(line));
+    expect(historyRestrictions).toEqual([]);
   });
 
   it('should throw when task_dir order.md is missing', () => {

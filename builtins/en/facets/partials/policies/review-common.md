@@ -8,6 +8,9 @@ This review is a defensive quality and security audit performed, on request, aga
 
 {{include:policies/reviewer-evidence}}
 
+{{include:policies/evidence-based-judgment}}
+{{include:policies/finding-validity}}
+
 ## Principles
 
 | Principle | Criteria |

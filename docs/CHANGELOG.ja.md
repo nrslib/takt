@@ -6,6 +6,12 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.64.1] - 2026-09-05
+
+### Internal
+
+- プロバイダ SDK を更新しました (#1534)。`@anthropic-ai/claude-agent-sdk` 0.3.206 → 0.3.261、`@openai/codex-sdk` 0.147.0 → 0.153.3、`@opencode-ai/sdk` 1.18.2 → 1.18.28。
+
 ## [0.64.0] - 2026-09-01
 
 ### Added

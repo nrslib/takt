@@ -78,7 +78,7 @@ export class LoopMonitorJudgeRunner {
     const maxSteps = this.deps.getMaxSteps();
     this.deps.state.iteration++;
     const stepIteration = incrementStepIteration(this.deps.state, judgeStep.name);
-    const baseInstruction = this.deps.stepExecutor.buildInstruction(
+    const baseInstruction = this.deps.stepExecutor.prepareInstruction(
       judgeStep,
       stepIteration,
       this.deps.state,
@@ -98,7 +98,7 @@ export class LoopMonitorJudgeRunner {
         const stepEventWorkflowStack = this.deps.onStepStart(
           judgeStep,
           this.deps.state.iteration,
-          prebuiltInstruction,
+          prebuiltInstruction.text,
           providerInfo,
           triggeringStep.name,
           stepIteration,

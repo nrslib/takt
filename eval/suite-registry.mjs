@@ -35,6 +35,7 @@ const CLASSIFICATIONS = [
       'review-adjudication-binding',
       'security-review-method',
       'review-impact-path-coverage',
+      'evidence-judgment',
     ],
   },
   {
@@ -68,6 +69,7 @@ const CLASSIFICATIONS = [
       'fix-verification-scope',
       'fix-verification-current-diff-regression',
       'fix-verification-preserved-condition',
+      'remediation-evidence',
     ],
   },
   {
@@ -131,6 +133,12 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'evidence-judgment': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '共通判断ポリシーを役割別の固定入力で評価する',
+  },
   coding: {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -160,6 +168,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '全シナリオを3モデルで測る production-condition suite である',
+  },
+  'remediation-evidence': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '共有 remediation 指示の変更時に実行する、固定証跡による判定比較である',
   },
   'fix-plan-cause-check': {
     defaultEligible: false,
@@ -314,6 +328,7 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'evidence-judgment': [],
   coding: ['coding-review'],
   arch: ['arch-review'],
   antipattern: ['antipattern-review'],
@@ -323,6 +338,7 @@ const PREPARE_TARGET_OVERRIDES = {
   'frontend-coder': ['frontend-implement'],
   'cqrs-coder': ['cqrs-implement'],
   'fix-loop-convergence': [],
+  'remediation-evidence': [],
   'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
   'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
   'final-readiness-preservation': ['final-readiness-supervision-phase2'],

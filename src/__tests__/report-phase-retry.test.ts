@@ -200,12 +200,57 @@ describe('runReportPhase retry with new session', () => {
     }
   });
 
+  it.each([
+    { language: 'en' as const, sessionId: 'phase1-session' },
+    { language: 'ja' as const, sessionId: 'phase1-session' },
+    { language: 'en' as const, sessionId: undefined },
+    { language: 'ja' as const, sessionId: undefined },
+  ])('passes the latest Phase 1 result to each report ($language, session=$sessionId)', async ({ language, sessionId }) => {
+    const reportDir = join(tmpRoot, 'reports');
+    const step: WorkflowStep = {
+      ...createStep('implementation.md'),
+      outputContracts: [{ name: 'implementation.md' }, { name: 'verification.md' }],
+    };
+    const latestResult = 'REQ-A completed: negative limits are rejected. Regression test passed. REQ-B remains unverified.';
+    const ctx = createContext(reportDir, latestResult, sessionId);
+    ctx.language = language;
+    ctx.task = 'Reject negative limits and preserve ordering. Use report files in Report Directory as primary execution history. Do not rely on previous response or conversation summary.';
+    ctx.injectedReports = [{
+      reference: 'previous-implementation.md',
+      scope: 'resume-snapshot-readonly',
+      content: 'REQ-A incomplete: negative limits are still accepted. REQ-B complete.',
+    }];
+    queueRunAgentResponses(['implementation body', 'verification body'].map((content) => ({
+      persona: 'coder',
+      status: 'done' as const,
+      content,
+      timestamp: new Date('2026-09-08T00:00:00Z'),
+      sessionId: 'report-session',
+    })));
+
+    await runReportPhase(step, 1, ctx);
+
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[2]?.sessionId).toBe(sessionId);
+    expect(calls[1]?.[2]?.sessionId).toBe('report-session');
+    for (const [, instruction] of calls) {
+      expect(instruction).toContain(latestResult);
+      expect(instruction).toContain(ctx.task);
+      const reports = instruction.split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+      expect(reports).toEqual(ctx.injectedReports);
+    }
+    expect(readFileSync(join(reportDir, 'implementation.md'), 'utf-8')).toBe('implementation body');
+    expect(readFileSync(join(reportDir, 'verification.md'), 'utf-8')).toBe('verification body');
+  });
+
   it('should retry with new session when first attempt returns empty content', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('02-coder.md');
     const ctx = createContext(reportDir, 'Implemented feature X');
     ctx.task = 'Preserve this original task marker in the report context';
+    ctx.injectedReports = [{ reference: 'requirements.md', scope: 'parent-run-readonly', content: 'REQ-A\noriginal upstream body' }];
     ctx.onProviderAttempt = vi.fn();
     const failedUsage = { inputTokens: 3, outputTokens: 1, totalTokens: 4, usageMissing: false };
     const successfulUsage = { inputTokens: 5, outputTokens: 2, totalTokens: 7, usageMissing: false };
@@ -238,6 +283,11 @@ describe('runReportPhase retry with new session', () => {
     expect(runAgentMock).toHaveBeenCalledTimes(2);
     expect(runAgentMock.mock.calls[0]?.[1]).toContain(ctx.task);
     expect(runAgentMock.mock.calls[1]?.[1]).toContain(ctx.task);
+    for (const call of runAgentMock.mock.calls) {
+      expect(call[1]).toContain('Implemented feature X');
+      const reports = call[1].split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+      expect(reports).toEqual(ctx.injectedReports);
+    }
     expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ provider: 'opencode' }),
@@ -911,6 +961,12 @@ describe('runReportPhase retry with new session', () => {
       outputContracts: [{ name: '03-first.md' }, { name: '03-second.md' }],
     };
     const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    ctx.injectedReports = [{
+      reference: 'requirements.md',
+      scope: 'resume-snapshot-readonly',
+      content: 'REQ-A\nOriginal requirements before fallback',
+    }];
+    const expectedReports = structuredClone(ctx.injectedReports);
     const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
     ctx.updatePersonaSession = (key, sessionId) => {
       sessionUpdates.push({ key, sessionId });
@@ -968,6 +1024,11 @@ describe('runReportPhase retry with new session', () => {
     expect(readFileSync(join(reportDir, '03-first.md'), 'utf-8')).toContain('Recovered by Claude fallback');
     expect(readFileSync(join(reportDir, '03-second.md'), 'utf-8')).toContain('Second file from primary session');
     expect(runAgentMock).toHaveBeenCalledTimes(4);
+    for (const [, instruction] of runAgentMock.mock.calls) {
+      expect(instruction).toContain('Implemented feature X');
+      const reports = instruction.split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+      expect(reports).toEqual(expectedReports);
+    }
     expect(sessionUpdates).toEqual([
       { key: '["coder","claude"]', sessionId: 'claude-fallback-session' },
       { key: 'coder', sessionId: 'opencode-session-after-second-file' },
@@ -1512,6 +1573,7 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('04-qa.md');
     const ctx = createContext(reportDir);
+    ctx.injectedReports = [{ reference: 'requirements.md', scope: 'step', content: 'ORIGINAL-FALLBACK-INPUT' }];
     queueRunAgentResponses([
       {
         persona: 'coder',
@@ -1542,6 +1604,10 @@ describe('runReportPhase retry with new session', () => {
     expect(readFileSync(join(reportDir, '04-qa.md'), 'utf-8')).toBe('Recovered report from fallback');
     expect(runAgentMock).toHaveBeenCalledTimes(3);
     const fallbackOptions = runAgentMock.mock.calls[2]?.[2];
+    for (const call of runAgentMock.mock.calls) {
+      const records = call[1].split('\n').filter((line) => line.startsWith('{"reference":')).map((line) => JSON.parse(line));
+      expect(records).toEqual(ctx.injectedReports);
+    }
     expect(fallbackOptions).toEqual(expect.objectContaining({
       resolvedProvider: 'claude',
       allowedTools: [],
