@@ -82,6 +82,33 @@ const TARGETS = [
     workflowCallVars: { review_mode: 'initial' },
   },
   {
+    id: 'db-pagination',
+    workflow: 'development-review',
+    step: 'backend-review',
+    fixture: 'eval/fixtures/page-query',
+    workflowCallVars: { review_mode: 'initial' },
+  },
+  {
+    id: 'db-pagination-adjudication',
+    workflow: 'peer-review',
+    projectFromFixture: true,
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/page-query-adjudication',
+  },
+  {
+    id: 'db-pagination-implement',
+    workflow: 'development-implement-dynamic',
+    projectFromFixture: true,
+    step: 'implement',
+    fixture: 'eval/fixtures/page-query-implementation',
+    mutable: true,
+    dynamicFacetSelection: {
+      sourceWorkflow: 'development-implement-dynamic',
+      pool: 'coding-facets',
+      candidateIds: ['backend', 'testing'],
+    },
+  },
+  {
     id: 'initial-review-contract-discovery',
     workflow: 'peer-review',
     via: 'initial-reviewers',

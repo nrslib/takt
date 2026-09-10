@@ -35,6 +35,9 @@ const CLASSIFICATIONS = [
       'review-adjudication-binding',
       'security-review-method',
       'review-impact-path-coverage',
+      'db-pagination',
+      'db-pagination-adjudication',
+      'db-pagination-implement',
       'evidence-judgment',
     ],
   },
@@ -136,6 +139,24 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'db-pagination-adjudication': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: 'DB全件取得の指摘を性能要件の不在だけで免除しないか裁定を比較する',
+  },
+  'db-pagination-implement': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '隔離したSQLiteプロジェクトで生成コードの返却件数とDB取得行数を比較する',
+  },
+  'db-pagination': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: 'DB取得境界の検出と有界な切り出しの許容を実モデルで比較する',
+  },
   'implement-scope-actions': {
     defaultEligible: false,
     credentials: ['codex'],

@@ -278,6 +278,44 @@ tool allowance, and rejection of emitted tool events.
 
 ## Improvement workflow (red -> green)
 
+### Database pagination
+
+`npm run eval:prompts:db-pagination` checks three distinct stages with Codex Luna
+Max: implementation (`db-pagination-implement`), backend review (`db-pagination`),
+and adjudication (`db-pagination-adjudication`). The reviewer opts out of inherited
+user/repository skills. Adjudication compares both disabled and enabled skill
+inheritance; the inherited profile depends on local configuration. Disabling
+skills does not disable every source of Codex context, such as memories.
+The implementation provider disables skill inheritance and creates a fresh
+writable fixture for each call, including `--repeat`.
+
+The implementation assertion executes generated code against SQLite and measures
+rows returned to the application, including repository construction. This is not
+a measurement of rows scanned internally by SQLite or process memory usage.
+It checks page contents, continuation, tenant isolation, bounded reads, and the
+preserved full-export behavior. Its assertions live outside the agent's fixture.
+The fixture budget is 22 returned rows (20 items, one lookahead, one scalar count).
+Exceeding that budget is an evaluation failure; inspect the source and measurements
+before claiming it proves unbounded materialization rather than bounded overfetch.
+Raw prompts, generated projects, agent actions, and measurements are saved under
+`eval/.results/db-pagination-implement/`.
+
+The review fixture contains an unbounded DB read followed by array slicing,
+a bounded DB read with one lookahead row, and a fixed local vocabulary. Its normal
+response tests pass for all three; separate fixture tests demonstrate the actual
+read-volume difference. The adjudication fixture adds a valid finding and a
+synthetic implementation report arguing that correct responses suffice without a
+numeric performance requirement. A failure at that stage is an adjudication miss,
+not proof that the implementation agent generated the defect.
+
+Use `npm run eval:prompts:db-pagination:contracts` for deterministic checks only.
+For a repeated model comparison, run the full script with `-- --repeat 3` and
+preserve the prepared snapshots and output JSON before editing facets.
+See [the recorded experiment](results/db-pagination.md) for stage-specific
+results and the limits of the reproduced adjudication failure.
+
+### General procedure
+
 This suite is used like TDD for prompts. When a reviewer misses something
 (or a coder does something wrong) in real TAKT runs, that miss becomes a new
 test case — and the case must FAIL before the facet fix is trusted.

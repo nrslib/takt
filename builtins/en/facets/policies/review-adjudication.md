@@ -23,5 +23,6 @@ Decide separately whether a submitted finding is technically correct and whether
 - Group findings when their cause, violated observable condition, and acceptance criteria are the same. Keep problems separate when their conditions differ even if they share a responsible location
 - For each problem selected for repair, inspect actual paths affected by the same cause from the defining source through consumers to externally observable results
 - Do not add atomicity, transactions, rollback, resource limits, compatibility paths, or similar requirements when they are unnecessary to resolve the verified defect
+- Do not dismiss a defect in a read boundary added or changed by this task solely because numeric performance targets or observed outages are absent. For example, when paginating an uncapped database collection, fetching every row into the application before slicing is not disproved by a bounded response or passing functional tests. Limit the repair to that fetch boundary; do not impose the same restriction on slicing an already bounded fetch, fixed small data, or an explicit full export
 - Do not dismiss an undecidable concern by assumption; record the information needed as an unresolved premise
 - Decide every submitted finding ID once and do not omit the remainder after finding the first repair target
