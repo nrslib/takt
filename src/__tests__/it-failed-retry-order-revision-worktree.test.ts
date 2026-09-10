@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -82,7 +82,7 @@ function createProject(): {
   return { root, projectDir, worktreePath };
 }
 
-describe('IT: failed retry order revision re-execution terminal worktree', () => {
+describe('IT: failed retry order revision queueing in terminal worktree', () => {
   let environment: ReturnType<typeof createProject>;
 
   beforeEach(() => {
@@ -100,7 +100,7 @@ describe('IT: failed retry order revision re-execution terminal worktree', () =>
     }
   });
 
-  it('failed Retryの/go→Yes後に新run reportを同じworktreeへ保存する', async () => {
+  it('failed Retryの/go→タスクにつむ後に更新orderを保存してpendingにする', async () => {
     expect(loadWorkflowByIdentifier('failed-retry-it', environment.projectDir)).not.toBeNull();
     const runner = new TaskRunner(environment.projectDir);
     runner.addTask('failed retry terminal task', {
@@ -147,20 +147,21 @@ describe('IT: failed retry order revision re-execution terminal worktree', () =>
     setMockScenario([
       { persona: 'retry', content: 'I will apply the repair.' },
       { persona: 'retry', content: 'Apply the proposed repair.' },
-      { persona: 'fixer', status: 'done', content: '[FIX:1]\nre-execution complete' },
     ]);
     const failedTask = runner.listAllTaskItems()[0]!;
     const success = await retryFailedTask(failedTask, environment.projectDir);
 
     const finalTask = runner.listAllTaskItems()[0]!;
     expect(success).toBe(true);
-    expect(finalTask.kind).toBe('completed');
+    expect(finalTask.kind).toBe('pending');
+    expect(finalTask.taskDir).toBeDefined();
+    expect(readFileSync(join(environment.projectDir, finalTask.taskDir!, 'order.md'), 'utf-8'))
+      .toBe('Apply the proposed repair.');
     expect(finalTask.worktreePath).toBe(environment.worktreePath);
-    expect(finalTask.runSlug).toBeDefined();
-    expect(finalTask.runSlug).not.toBe(failedRunSlug);
+    expect(finalTask.runSlug).toBeUndefined();
+    expect(finalTask.sourceRunSlug).toBe(failedRunSlug);
 
-    const reportDir = join(environment.worktreePath, '.takt', 'runs', finalTask.runSlug!, 'reports');
-    expect(existsSync(reportDir)).toBe(true);
-    expect(readdirSync(reportDir, { recursive: true }).length).toBeGreaterThan(0);
+    const runDirectory = join(environment.worktreePath, '.takt', 'runs');
+    expect(readdirSync(runDirectory)).toEqual([failedRunSlug]);
   });
 });

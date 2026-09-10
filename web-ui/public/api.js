@@ -157,6 +157,14 @@ export function restartChatSession(sessionId) {
   return requestMutation(`/api/chat/sessions/${encodeURIComponent(sessionId)}/restart`, {});
 }
 
+export function continueTaskAction(sessionId) {
+  return requestMutation(`/api/chat/sessions/${encodeURIComponent(sessionId)}/continue`, {});
+}
+
+export function cancelTaskAction(sessionId) {
+  return requestMutation(`/api/chat/sessions/${encodeURIComponent(sessionId)}/cancel`, {});
+}
+
 function parseChatStreamRecord(line) {
   let record;
   try {

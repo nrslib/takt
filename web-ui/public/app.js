@@ -1,5 +1,7 @@
 import {
   browseDirectories,
+  cancelTaskAction,
+  continueTaskAction,
   createChatSession,
   getRun,
   getRunOccurrenceArtifacts,
@@ -25,6 +27,7 @@ import {
   taskActionFinalizationState,
   taskActionNeedsConfirmation,
   taskActionSurfaceModel,
+  taskActionSurfaceWithReview,
   taskActionSurfaceWithState,
   taskInstructionRoute,
 } from './task-action-ui.js';
@@ -424,6 +427,8 @@ function renderTaskActionContext() {
     select.append(entry);
   }
   select.disabled = finalizationState === 'finalizing'
+    || finalizationState === 'reviewing'
+    || chatOperationInProgress
     || finalizationState === 'accepted'
     || taskActionSurface.retryStartOptions.length === 0;
   select.addEventListener('change', () => {
@@ -447,22 +452,46 @@ function renderTaskActionContext() {
     : 'app.retryOptionRequired';
   elements.chatTaskActionOptions.append(label, select, message);
   label.htmlFor = select.id;
+
+  if (finalizationState === 'active') {
+    const cancel = createElement('button', 'chat-task-action-review-button', t('app.taskActionCancelReview'));
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => { void cancelTaskActionConversation(); });
+    elements.chatTaskActionOptions.append(cancel);
+  }
+
+  if (finalizationState === 'reviewing') {
+    const review = createElement('p', 'chat-task-action-review-message', t('app.taskActionReviewPrompt'));
+    review.dataset.i18n = 'app.taskActionReviewPrompt';
+    const queue = createElement('button', 'chat-task-action-review-button', t('app.taskActionQueue'));
+    queue.type = 'button';
+    queue.autofocus = true;
+    queue.addEventListener('click', () => { void finalizeReviewedTask(); });
+    const continueEditing = createElement('button', 'chat-task-action-review-button', t('app.taskActionContinueEditing'));
+    continueEditing.type = 'button';
+    continueEditing.addEventListener('click', () => { void continueReviewedTask(); });
+    const cancel = createElement('button', 'chat-task-action-review-button', t('app.taskActionCancelReview'));
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => { void cancelTaskActionConversation(); });
+    elements.chatTaskActionOptions.append(review, queue, continueEditing, cancel);
+  }
 }
 
 function syncChatControls() {
   const settingsDisabled = !executionEnabled || chatOperationInProgress;
   const taskAction = taskActionSurface !== null;
   const taskActionState = taskActionFinalizationState(taskActionSurface);
-  const taskActionLocked = taskActionState === 'finalizing' || taskActionState === 'accepted';
+  const taskActionLocked = taskActionState === 'finalizing'
+    || taskActionState === 'accepted';
   const hasProjects = [...elements.project.options].some((option) => option.value !== '');
   const taskActionCannotFinalize = taskAction
-    && (taskActionLocked
+    && (taskActionState === 'reviewing'
+      || taskActionLocked
       || taskActionSurface.action === 'retry' && taskActionSurface.canFinalizeRetry !== true);
   const typedTaskActionGo = taskAction
     ? taskActionGoState(taskActionSurface, elements.chatMessage.value)
     : { canSubmit: true };
-  const taskActionGoBlocked = taskAction && typedTaskActionGo.goCommand !== false
-    && typedTaskActionGo.canSubmit !== true;
+  const taskActionSubmitBlocked = taskAction && typedTaskActionGo.canSubmit !== true;
   elements.category.disabled = settingsDisabled || taskAction;
   elements.project.disabled = taskAction || !hasProjects;
   elements.workflow.disabled = settingsDisabled || taskAction;
@@ -471,7 +500,7 @@ function syncChatControls() {
   elements.chatSendButton.disabled = !executionEnabled
     || chatOperationInProgress
     || taskActionLocked
-    || taskActionGoBlocked;
+    || taskActionSubmitBlocked;
   elements.chatGoButton.disabled = !executionEnabled
     || chatOperationInProgress
     || taskActionCannotFinalize;
@@ -479,6 +508,14 @@ function syncChatControls() {
   elements.chatNewButton.disabled = chatSession === null
     || chatOperationInProgress
     || taskAction && !taskActionCanRestart(taskActionSurface);
+  const retryOptionSelect = elements.chatTaskActionOptions.querySelector('select');
+  if (retryOptionSelect !== null) {
+    retryOptionSelect.disabled = chatOperationInProgress
+      || taskActionState === 'reviewing'
+      || taskActionState === 'finalizing'
+      || taskActionState === 'accepted'
+      || taskActionSurface?.retryStartOptions?.length === 0;
+  }
 }
 
 function setExecutionEnabled(enabled) {
@@ -1092,6 +1129,7 @@ function handleChatMessageInput() {
   if (elements.chatStatus.textContent === t(EMPTY_CHAT_MESSAGE_KEY)) {
     setChatStatusRaw('');
   }
+  syncChatControls();
 }
 
 function submitGoCommand() {
@@ -1333,6 +1371,10 @@ async function submitChat(event) {
     setChatStatusMessage(taskActionGo.reasonKey ?? 'app.taskActionFinalized');
     return;
   }
+  if (taskActionSurface?.action === 'retry' && text === '/cancel') {
+    await cancelTaskActionConversation();
+    return;
+  }
   if (text === '/setup') {
     if (taskActionSurface !== null) {
       setChatStatusMessage('app.taskActionSettingsDisabled');
@@ -1386,26 +1428,38 @@ async function submitChat(event) {
         ) {
           throw new Error('Task action conversation response is invalid');
         }
-        taskActionFinalizationStarted = true;
-        taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'finalizing');
-        syncChatControls();
-        setChatStatusMessage('app.taskActionFinalizing');
-        const result = await runTaskAction(
-          taskActionSurface.projectId,
-          reference.taskId,
-          reference.action,
-          instructionRoute.task,
-          reference.sessionId,
-          taskActionOptionId,
-        );
-        taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'accepted');
-        responseCompleted = true;
-        messageWasCleared = false;
-        renderTaskActionContext();
-        syncChatControls();
-        appendTaskActionResult(result);
-        setChatStatusMessage('app.taskActionCompleted');
-        await refreshRuns();
+        if (taskActionSurface.action === 'retry') {
+          taskActionSurface = taskActionSurfaceWithReview(
+            taskActionSurface,
+            instructionRoute.task,
+            taskActionOptionId,
+          );
+          appendChatEntry('assistant', instructionRoute.task);
+          renderTaskActionContext();
+          syncChatControls();
+          setChatStatusMessage('app.taskActionReviewPrompt');
+        } else {
+          taskActionFinalizationStarted = true;
+          taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'finalizing');
+          syncChatControls();
+          setChatStatusMessage('app.taskActionFinalizing');
+          const result = await runTaskAction(
+            taskActionSurface.projectId,
+            reference.taskId,
+            reference.action,
+            instructionRoute.task,
+            reference.sessionId,
+            taskActionOptionId,
+          );
+          taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'accepted');
+          responseCompleted = true;
+          messageWasCleared = false;
+          renderTaskActionContext();
+          syncChatControls();
+          appendTaskActionResult(result);
+          setChatStatusMessage('app.taskActionCompleted');
+          await refreshRuns();
+        }
       } else {
         throw new Error('Task action conversation response is invalid');
       }
@@ -1440,6 +1494,89 @@ async function submitChat(event) {
   } finally {
     finishChatThinking(responseCompleted);
     delete elements.chatStatus.dataset.busy;
+    setChatOperationInProgress(false);
+  }
+}
+
+async function finalizeReviewedTask() {
+  if (
+    taskActionSurface === null
+    || taskActionSurface.action !== 'retry'
+    || taskActionFinalizationState(taskActionSurface) !== 'reviewing'
+    || typeof taskActionSurface.reviewedTask !== 'string'
+    || chatSession === null
+  ) return;
+  taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'finalizing');
+  setChatOperationInProgress(true);
+  setChatStatusMessage('app.taskActionFinalizing');
+  renderTaskActionContext();
+  let accepted = false;
+  try {
+    const result = await runTaskAction(
+      taskActionSurface.projectId,
+      taskActionSurface.taskId,
+      'retry',
+      taskActionSurface.reviewedTask,
+      chatSession.id,
+      taskActionSurface.reviewedTaskActionOptionId ?? taskActionSurface.selectedOptionId,
+    );
+    taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'accepted');
+    accepted = true;
+    renderTaskActionContext();
+    appendTaskActionResult(result);
+    setChatStatusMessage('app.taskActionCompleted');
+    await refreshRuns();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (accepted) {
+      appendChatEntry('system', message);
+      setChatStatusMessage('app.taskActionCompleted');
+    } else {
+      taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'failed');
+      renderTaskActionContext();
+      setChatStatusRaw(message);
+    }
+  } finally {
+    setChatOperationInProgress(false);
+  }
+}
+
+async function continueReviewedTask() {
+  if (
+    taskActionSurface === null
+    || taskActionSurface.action !== 'retry'
+    || taskActionFinalizationState(taskActionSurface) !== 'reviewing'
+    || chatSession === null
+  ) return;
+  setChatOperationInProgress(true);
+  setChatStatusMessage('app.taskActionContinueEditing');
+  try {
+    await continueTaskAction(chatSession.id);
+    taskActionSurface = taskActionSurfaceWithState(taskActionSurface, 'active');
+    delete taskActionSurface.reviewedTask;
+    delete taskActionSurface.reviewedTaskActionOptionId;
+    renderTaskActionContext();
+    syncChatControls();
+    elements.chatMessage.focus();
+  } catch (error) {
+    setChatStatusRaw(error instanceof Error ? error.message : String(error));
+  } finally {
+    setChatOperationInProgress(false);
+  }
+}
+
+async function cancelTaskActionConversation() {
+  if (chatSession === null || taskActionSurface === null) return;
+  setChatOperationInProgress(true);
+  try {
+    await cancelTaskAction(chatSession.id);
+    elements.chatMessage.value = '';
+    chatMessageRevision += 1;
+    resizeChatMessage();
+    resetChatSession();
+  } catch (error) {
+    setChatStatusRaw(error instanceof Error ? error.message : String(error));
+  } finally {
     setChatOperationInProgress(false);
   }
 }

@@ -1443,6 +1443,45 @@ export class CentralTaskRepository {
     return this.requeueTask(taskId);
   }
 
+  /** Persist a failed task as pending without claiming it for a worker. */
+  async resetFailedTaskToPending(
+    taskId: string,
+    options: {
+      readonly task?: string;
+      readonly executionRequest?: CentralExecutionRequest;
+    } = {},
+  ): Promise<CentralTaskRecord> {
+    assertTaskId(taskId);
+    return withLock(this.paths, async () => {
+      const tasks = [...await this.readTasks()];
+      const taskIndex = tasks.findIndex((task) => task.taskId === taskId);
+      const task = taskIndex < 0 ? undefined : tasks[taskIndex];
+      if (task === undefined) {
+        throw new CentralTaskRequeueError('Task was not found');
+      }
+      if (task.status !== 'failed') {
+        throw new CentralTaskRequeueError('Only failed tasks can be queued');
+      }
+      if (task.drainingExecution !== undefined) {
+        throw new CentralTaskRequeueError('Cannot queue a task while its previous worker is draining');
+      }
+      const taskContent = options.task?.trim();
+      if (taskContent !== undefined && (taskContent.length === 0 || taskContent.includes('\0'))) {
+        throw new CentralTaskRequeueError('Task instruction is invalid');
+      }
+      if (options.executionRequest !== undefined) validateExecutionRequest(options.executionRequest);
+      const queued = resetFailedTaskToPending(
+        task,
+        new Date().toISOString(),
+        taskContent ?? task.task,
+        options.executionRequest,
+      );
+      tasks[taskIndex] = queued;
+      await this.writeTasks(tasks);
+      return queued;
+    });
+  }
+
   /**
    * Start another run for an existing terminal task. The task id and central
    * run history remain stable; an optional instruction is persisted as the

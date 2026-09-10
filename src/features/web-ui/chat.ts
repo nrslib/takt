@@ -92,6 +92,13 @@ export interface WebTaskActionClaim {
   readonly reservationToken: string;
   readonly context: WebTaskActionContext;
   readonly retrySelection?: TaskRetryStartSelection;
+  /** Exact instruction shown by /go and eligible for final queueing. */
+  readonly taskActionDraft?: WebTaskActionDraft;
+}
+
+export interface WebTaskActionDraft {
+  readonly task: string;
+  readonly taskActionOptionId?: string;
 }
 
 export interface CreateWebChatRequest {
@@ -134,8 +141,14 @@ export interface WebChatService {
   ) => WebChatSessionDescription;
   /** Validate that a completion belongs to the task-action conversation. */
   getTaskActionContext?: (sessionId: string) => WebTaskActionContext | undefined;
-  /** Atomically reserve a task-action conversation for its final /go request. */
+  /** Atomically reserve a task-action conversation for its final queue request. */
   claimTaskAction?: (sessionId: string, optionId?: string) => WebTaskActionClaim;
+  /** Return the server-held /go draft awaiting the user's choice. */
+  getTaskActionDraft?: (sessionId: string) => WebTaskActionDraft | undefined;
+  /** Return a rejected /go draft to the same conversation for further editing. */
+  continueTaskAction?: (sessionId: string) => WebTaskActionDraft;
+  /** Discard a pending /go draft and close the task-action conversation. */
+  cancelTaskAction?: (sessionId: string) => void;
   /** Permanently consume a successful task-action reservation. */
   commitTaskAction: (sessionId: string, reservationToken: string) => void;
   /** Release a failed task-action reservation owned by the caller. */
@@ -148,6 +161,7 @@ interface ActiveConversation {
   session: InteractiveConversationSession;
   busy: boolean;
   taskActionContext?: WebTaskActionContext;
+  taskActionDraft?: WebTaskActionDraft;
   taskActionReservation?: string;
   taskActionCommitted: boolean;
 }
@@ -500,6 +514,44 @@ export function createWebChatService(): WebChatService {
       return context === undefined ? undefined : copyTaskActionContext(context);
     },
 
+    getTaskActionDraft(sessionId): WebTaskActionDraft | undefined {
+      const draft = conversations.get(sessionId)?.taskActionDraft;
+      return draft === undefined ? undefined : { ...draft };
+    },
+
+    continueTaskAction(sessionId): WebTaskActionDraft {
+      const conversation = conversations.get(sessionId);
+      if (conversation === undefined) throw new WebChatInputError(404, 'Chat session not found');
+      if (conversation.busy) throw new WebChatInputError(409, 'Chat session is busy');
+      if (conversation.taskActionCommitted || conversation.taskActionReservation !== undefined) {
+        throw new WebChatInputError(409, 'Task action conversation has already been finalized or reserved');
+      }
+      if (conversation.taskActionContext?.action !== 'retry') {
+        throw new WebChatInputError(409, 'Only Retry conversations can continue a task draft');
+      }
+      if (conversation.taskActionDraft === undefined) {
+        throw new WebChatInputError(409, 'No task instruction is awaiting confirmation');
+      }
+      const draft = { ...conversation.taskActionDraft };
+      conversation.session.recordRejectedDraft(draft.task);
+      delete conversation.taskActionDraft;
+      return draft;
+    },
+
+    cancelTaskAction(sessionId): void {
+      const conversation = conversations.get(sessionId);
+      if (conversation === undefined) throw new WebChatInputError(404, 'Chat session not found');
+      if (conversation.busy) throw new WebChatInputError(409, 'Chat session is busy');
+      if (conversation.taskActionCommitted || conversation.taskActionReservation !== undefined) {
+        throw new WebChatInputError(409, 'Task action conversation has already been finalized or reserved');
+      }
+      if (conversation.taskActionContext === undefined) {
+        throw new WebChatInputError(409, 'This chat session is not a task action conversation');
+      }
+      delete conversation.taskActionDraft;
+      conversation.taskActionCommitted = true;
+    },
+
     claimTaskAction(sessionId, optionId): WebTaskActionClaim {
       const conversation = conversations.get(sessionId);
       if (conversation === undefined) {
@@ -519,6 +571,13 @@ export function createWebChatService(): WebChatService {
         if (optionId === undefined) {
           throw new WebChatInputError(409, 'Retry start option is required');
         }
+        if (
+          conversation.taskActionDraft === undefined
+          || conversation.taskActionDraft.taskActionOptionId === undefined
+          || conversation.taskActionDraft.taskActionOptionId !== optionId
+        ) {
+          throw new WebChatInputError(409, 'Retry must be finalized from the instruction shown for confirmation');
+        }
         const entry = context.retryStartSelections?.find((candidate) => candidate.id === optionId);
         if (entry === undefined) {
           throw new WebChatInputError(409, 'Retry start option is no longer valid');
@@ -536,6 +595,9 @@ export function createWebChatService(): WebChatService {
         reservationToken,
         context: copyTaskActionContext(context),
         ...(retrySelection === undefined ? {} : { retrySelection }),
+        ...(conversation.taskActionDraft === undefined
+          ? {}
+          : { taskActionDraft: { ...conversation.taskActionDraft } }),
       };
     },
 
@@ -611,6 +673,7 @@ export function createWebChatService(): WebChatService {
       );
       conversation.description = replacement.description;
       conversation.session = replacement.session;
+      delete conversation.taskActionDraft;
       return replacement.description;
     },
 
@@ -622,9 +685,16 @@ export function createWebChatService(): WebChatService {
       if (taskActionOptionId !== undefined && conversation.taskActionContext === undefined) {
         throw new WebChatInputError(400, 'taskActionOptionId is only valid for task action conversations');
       }
+      if (conversation.taskActionDraft !== undefined) {
+        // A direct message is treated as the same "continue editing" choice.
+        // The browser presents an explicit button; retaining this fallback
+        // keeps the chat transport usable for non-browser clients.
+        conversation.session.recordRejectedDraft(conversation.taskActionDraft.task);
+        delete conversation.taskActionDraft;
+      }
       conversation.busy = true;
       try {
-        return toWebReply(
+        const reply = toWebReply(
           await conversation.session.handleUserMessage({
             text,
             ...(onThinking === undefined
@@ -650,6 +720,16 @@ export function createWebChatService(): WebChatService {
               },
           taskActionOptionId,
         );
+        if (
+          reply.kind === 'task_instruction'
+          && conversation.taskActionContext?.action === 'retry'
+        ) {
+          conversation.taskActionDraft = {
+            task: reply.task,
+            ...(taskActionOptionId === undefined ? {} : { taskActionOptionId }),
+          };
+        }
+        return reply;
       } finally {
         conversation.busy = false;
       }

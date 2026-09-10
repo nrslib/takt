@@ -332,7 +332,7 @@ function routeTaskAction(pathname: string): { taskId: string; action: string } |
 
 function routeChatSessionId(
   pathname: string,
-  action: 'messages' | 'settings' | 'restart',
+  action: 'messages' | 'settings' | 'restart' | 'continue' | 'cancel',
 ): string | null {
   const match = pathname.match(
     new RegExp(`^/api/chat/sessions/([A-Za-z0-9_-]+)/${action}$`, 'u'),
@@ -542,6 +542,18 @@ function assertTaskActionSnapshot(
     || context.runIds.some((runId, index) => runId !== task.runIds[index])
   ) {
     throw new CentralTaskActionError('Task action conversation is stale', 409);
+  }
+}
+
+function assertTaskActionConversationAvailable(
+  actionInFlight: ReadonlyMap<string, Promise<unknown>>,
+  chat: WebChatService,
+  sessionId: string,
+): void {
+  const context = chat.getTaskActionContext?.(sessionId);
+  if (context?.projectId === undefined) return;
+  if (actionInFlight.has(`${context.projectId}:${context.taskId}`)) {
+    throw new HttpError(409, 'This task action is already running');
   }
 }
 
@@ -879,6 +891,14 @@ export async function createWebUiServer(options: {
               if (chat.claimTaskAction === undefined || conversationId === undefined) {
                 throw new HttpError(501, 'Task action conversation finalization is unavailable');
               }
+              if (action === 'retry') {
+                if (chat.getTaskActionDraft === undefined) {
+                  throw new HttpError(501, 'Retry task-action draft validation is unavailable');
+                }
+                if (chat.getTaskActionDraft(conversationId) === undefined) {
+                  throw new HttpError(409, 'Retry must be finalized from the instruction shown for confirmation');
+                }
+              }
               taskActionClaim = chat.claimTaskAction(conversationId, taskActionOptionId);
               assertTaskActionSnapshot(taskActionClaim.context, project, task, action);
               // Availability was checked before claiming the process-local
@@ -1069,12 +1089,43 @@ export async function createWebUiServer(options: {
         sendJson(response, 200, chat.restart(chatRestartSessionId));
         return;
       }
+      const chatContinueSessionId = method === 'POST'
+        ? routeChatSessionId(url.pathname, 'continue')
+        : null;
+      if (chatContinueSessionId !== null) {
+        requireSessionToken(request, sessionToken);
+        await readJsonBody(request);
+        assertTaskActionConversationAvailable(actionInFlight, chat, chatContinueSessionId);
+        if (chat.continueTaskAction === undefined) {
+          throw new HttpError(501, 'Task action continuation is unavailable');
+        }
+        sendJson(response, 200, {
+          status: 'continued',
+          draft: chat.continueTaskAction(chatContinueSessionId),
+        });
+        return;
+      }
+      const chatCancelSessionId = method === 'POST'
+        ? routeChatSessionId(url.pathname, 'cancel')
+        : null;
+      if (chatCancelSessionId !== null) {
+        requireSessionToken(request, sessionToken);
+        await readJsonBody(request);
+        assertTaskActionConversationAvailable(actionInFlight, chat, chatCancelSessionId);
+        if (chat.cancelTaskAction === undefined) {
+          throw new HttpError(501, 'Task action cancellation is unavailable');
+        }
+        chat.cancelTaskAction(chatCancelSessionId);
+        sendJson(response, 200, { status: 'cancelled' });
+        return;
+      }
       const chatMessageSessionId = method === 'POST'
         ? routeChatSessionId(url.pathname, 'messages')
         : null;
       if (chatMessageSessionId !== null) {
         requireSessionToken(request, sessionToken);
         const message = parseWebChatMessageRequest(await readJsonBody(request));
+        assertTaskActionConversationAvailable(actionInFlight, chat, chatMessageSessionId);
         if (
           message.taskActionOptionId !== undefined
           && chat.getTaskActionContext !== undefined

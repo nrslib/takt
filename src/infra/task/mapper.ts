@@ -141,6 +141,7 @@ function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRec
     summary: task.summary,
     taskDir: task.task_dir,
     runSlug: task.run_slug,
+    sourceRunSlug: task.source_run_slug,
     branch: task.branch,
     worktreePath: task.worktree_path,
     prUrl: task.pr_url,

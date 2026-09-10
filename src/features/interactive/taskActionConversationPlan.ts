@@ -41,8 +41,12 @@ import {
   createOrderRevisionSelector,
   normalizeOrderRevisionSummary,
 } from './orderRevisionMode.js';
+import {
+  buildSummaryActionOptions,
+  buildReplayHint,
+  selectSummaryAction,
+} from './interactive-summary.js';
 import { resolveMaxImageIndex } from '../tasks/orderRevision.js';
-import { buildReplayHint } from './interactive-summary.js';
 import { SlashCommand } from '../../shared/constants.js';
 
 const RETRY_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
@@ -151,12 +155,26 @@ function withOrderRevision(
   retry: boolean,
   previousOrderContent?: string,
 ): ConversationStrategy {
+  const selectRetryQueueAction = async (task: string, retryLang: 'en' | 'ja') => {
+    const ui = getLabelObject<InstructUIText>('retry.ui', retryLang);
+    return selectSummaryAction(
+      task,
+      ui.proposed,
+      ui.actionPrompt,
+      buildSummaryActionOptions(
+        {
+          execute: ui.actions.execute,
+          saveTask: ui.actions.saveTask,
+          continue: ui.actions.continue,
+        },
+        [],
+        ['execute', 'create_issue'],
+      ),
+    );
+  };
   return {
     ...strategy,
-    selectGoAction: createOrderRevisionSelector(),
-    ...(retry
-      ? { selectRetryAction: async () => 'execute' as const }
-      : {}),
+    selectGoAction: retry ? selectRetryQueueAction : createOrderRevisionSelector(),
     summaryPromptBuilder: (summaryOptions) =>
       buildOrderRevisionPrompt(summaryOptions, canonicalOrderContent),
     normalizeSummaryTask: (task, attachments) =>
@@ -164,13 +182,12 @@ function withOrderRevision(
     initialImageAttachmentIndex: resolveMaxImageIndex(canonicalOrderContent),
     enabledCommands: [
       SlashCommand.Go,
-      ...(retry ? [SlashCommand.Retry] : []),
-      ...(retry ? [SlashCommand.Replay] : [SlashCommand.Replay]),
+      ...(!retry ? [SlashCommand.Replay] : []),
       SlashCommand.Cancel,
       SlashCommand.Resume,
       SlashCommand.PasteImage,
     ],
-    ...(retry ? { enableRetryCommand: true } : {}),
+    ...(retry ? { enableRetryCommand: false } : {}),
     ...(previousOrderContent === undefined ? {} : { previousOrderContent }),
     trackResultSource: true,
   };
