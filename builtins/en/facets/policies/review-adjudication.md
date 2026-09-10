@@ -2,6 +2,8 @@
 
 Decide separately whether a submitted finding is technically correct and whether the current change must repair it. Select only necessary repairs.
 
+{{include:policies/finding-validity}}
+
 ## Decision Criteria
 
 | Situation | Treatment |

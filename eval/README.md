@@ -68,6 +68,24 @@ The independent `evidence-based-judgment` policy contains the shared principles;
 `contract-change` and `review-common` consume it, while `finding-validity`
 contains only submitted-finding tracking and disposition rules.
 
+The `review-proof-boundary` and `testing-proof-boundary` suites check whether
+adjudication and testing review distinguish a required behavioral test from an
+additional observation method justified only by a hypothetical mutation. They
+assemble the live `peer-review` step facets and read an isolated delivery-editor
+fixture with seeded prior reports. Four controls preserve explicit test
+obligations (`review-proof-required-check`), actual defects
+(`review-proof-actual-regression`), and missing tests for new failure behavior
+(`review-proof-missing-failure`), including a new behavior without an explicit
+testing directive (`testing-proof-new-behavior`). Run them explicitly with
+`npm run eval:prompts -- review-proof-boundary testing-proof-boundary review-proof-required-check review-proof-actual-regression review-proof-missing-failure testing-proof-new-behavior --no-cache`.
+They use Luna Max, an exact disposition assertion, and a semantic rubric. The
+rubric and independent fixture behavior tests are outside the model's isolated
+working directory. `npm run eval:prompts:contracts` verifies the fixture's actual
+retry behavior, shared finding-policy composition for both roles, and disposition
+parsing with Markdown decoration and conflicting-label rejection. These are individual agent evaluations with seeded reports,
+not an end-to-end review loop. See [the experiment record](experiments/review-proof-boundary.md)
+for baseline conditions and the limits of comparative claims.
+
 The `remediation-evidence` suite checks five fixed-input completion decisions:
 an effective alternative guard, a guard after prohibited effects, an explicit
 method requirement, absent optional execution records, and a missing required
@@ -215,6 +233,12 @@ remain excluded.
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking problems and checks the complete affected scope of each |
 | `initial-review-external-identity-wiring` | takt-development-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
 | `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
+| `review-proof-boundary` | peer-review / review-adjudication | review-proof-boundary | whether adjudication closes a fulfilled finding without requiring another observation justified only by a hypothetical mutation |
+| `testing-proof-boundary` | peer-review / follow-up testing-review | testing-proof-boundary | whether testing review preserves the original acceptance conditions when assessing an added observation demand |
+| `review-proof-required-check` | peer-review / review-adjudication | review-proof-required-check | control: retain an explicitly required verification that is still missing |
+| `review-proof-actual-regression` | peer-review / review-adjudication | review-proof-actual-regression | control: retain a confirmed implementation defect despite passing existing tests |
+| `review-proof-missing-failure` | peer-review / review-adjudication | review-proof-missing-failure | control: retain missing tests for representative new failure behavior |
+| `testing-proof-new-behavior` | peer-review / initial testing-review | testing-proof-new-behavior | control: require tests for new failure behavior without an explicit testing directive |
 | `state-after-event-plan` | default / plan | state-after-event-plan | paired applicable and non-applicable cases: whether the plan applies same-entity before -> change -> after evidence only when the request names a change and asks behavior to continue following the state, including artifacts created before the change |
 | `state-after-event-plan-config` | default / plan | state-after-event-plan-config | paired applicable and non-applicable cases for a configuration change: whether the plan applies same-entity evidence to a named running configuration update, including artifacts created before the change, while keeping process-restart persistence separate |
 | `state-after-event-write-tests` | default / write_tests | state-after-event-write-tests (work copy) | whether mutable tests observe one connection before and after a named state change, including the pre-change status, and the test report records applicable continuous-execution and ownership evidence |

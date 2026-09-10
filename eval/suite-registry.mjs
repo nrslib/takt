@@ -31,6 +31,12 @@ const CLASSIFICATIONS = [
       'scope-architecture-search-unrelated',
       'scope-architecture-boundary',
       'review-adjudication',
+      'review-proof-boundary',
+      'testing-proof-boundary',
+      'testing-proof-new-behavior',
+      'review-proof-required-check',
+      'review-proof-actual-regression',
+      'review-proof-missing-failure',
       'review-adjudication-report',
       'review-adjudication-binding',
       'security-review-method',
@@ -290,6 +296,30 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
+  },
+  'review-proof-required-check': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '証拠境界の変更が必要な修正を抑制しないことを測る対照評価',
+  },
+  'review-proof-actual-regression': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '証拠境界の変更が必要な修正を抑制しないことを測る対照評価',
+  },
+  'review-proof-missing-failure': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '証拠境界の変更が必要な修正を抑制しないことを測る対照評価',
+  },
+  'testing-proof-new-behavior': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '明示テスト要求がなくても新規振る舞いの未検証条件を維持する対照評価',
+  },
+  'testing-proof-boundary': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '修正後レビューが元のテスト契約を拡張しないことを測る',
+  },
+  'review-proof-boundary': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: 'Luna Maxで裁定の証拠境界を比較する明示選択の評価',
   },
   'review-adjudication': {
     defaultEligible: false,

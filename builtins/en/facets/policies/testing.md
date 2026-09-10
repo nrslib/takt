@@ -1,6 +1,6 @@
 # Testing Policy
 
-Subject to the four-part evidence gate below, an observable behavior change requires the minimum test needed to prevent regressions that existing tests cannot detect, and a bug fix requires an existing or new regression test that would detect the pre-fix failure.
+Subject to the five-part evidence gate below, an observable behavior change requires the minimum test needed to prevent regressions that existing tests cannot detect, and a bug fix requires an existing or new regression test that would detect the pre-fix failure.
 
 ## Principles
 
@@ -20,7 +20,9 @@ Subject to the four-part evidence gate below, an observable behavior change requ
 
 Delete existing tests that pin only internal structure instead of replacing them with another internal-structure assertion. Limit this check to existing tests that import, invoke, or directly reference the changed contract owner; do not exclude them by filename or claimed purpose, and do not expand the check into repository-wide cleanup of unrelated tests. Add a replacement only when a real external contract or regression risk exists, and verify the observable behavior. Exact strings remain appropriate when the string itself is a public contract such as CLI output, a protocol value, or a published error code.
 
-A test may be required only when all of the following can be shown: an acceptance criterion or observable contract that serves as the source of truth, a concrete failure reachable through a real path, evidence that existing tests cannot detect that failure, and the smallest layer that owns its verification. Do not require a test when any of these is absent. Module count, call-chain length, internal branch count, and file layout are not test-addition grounds. When an existing unit, integration, or E2E test detects the same failure, do not duplicate it at another layer or per consumer.
+A test may be required only when all of the following can be shown: an obligation to add that verification in this task (an explicit verification requirement, addition or modification of the behavior or condition being verified itself, or a confirmed defect), an acceptance criterion or observable contract that serves as the source of truth, a concrete failure reachable through a real path, evidence that existing tests cannot detect that failure, and the smallest layer that owns its verification. Do not require a test when any of these is absent. Module count, call-chain length, internal branch count, and file layout are not test-addition grounds. When an existing unit, integration, or E2E test detects the same failure, do not duplicate it at another layer or per consumer.
+
+Determine the verification obligation for the owner and condition of the contract being observed. A new consumer calling an existing component can justify checking the consumer's handoff and result; it does not create a new obligation to test other conditions inside an unchanged existing component. A requirement to preserve an existing contract does not by itself move existing test debt into mandatory repairs for this task. When there is an explicit test requirement, a changed handoff or update rule, or an established inconsistency, verify that affected condition.
 
 ## Coverage Criteria
 
@@ -336,5 +338,6 @@ writeConfig({ backend, connectionPool: backend === 'embedded' ? 1 : 10 })
 |----------|----------|
 | Expected return values, exceptions, or side effects are directly verified | OK |
 | Both sides of a boundary change, such as success/failure or allow/deny, are verified | OK |
-| Only configuration values or the last internal state are checked | REJECT |
+| Configuration or internal state is read without exercising the operation, or substitutes for a different required effect | REJECT |
+| State transition or preservation is the contract and the relevant operation and condition are exercised to observe the result | OK. Do not mandate another observation method solely because the evidence observes state |
 | Main boundary conditions require an external environment to reproduce | Consider a deterministic test with a fake or stub |

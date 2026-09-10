@@ -1,0 +1,40 @@
+description: 'TAKT: review adjudication distinguishes test obligations from hypothetical mutations'
+prompts:
+  - file://../../prompts/review-proof-actual-regression.phase1.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      disable_inherited_skills: true
+      working_dir: fixtures/review-proof-actual-regression
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/review-proof-actual-regression
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+tests:
+  - description: 'reachable delivery regression remains blocking'
+    vars:
+      task: file://../../cases/review-proof-actual-regression-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        value: '/^(?:\*\*|`)?DISPOSITION: repair(?:\*\*|`)?\s*$/m.test(output) && !/^(?:\*\*|`)?DISPOSITION: close(?:\*\*|`)?\s*$/m.test(output)'
+        metric: review/required-repair-preserved
+      - type: llm-rubric
+        metric: review/proof-basis
+        value: |
+          DELIVERY-RETRY-002 を実在する実装不具合として修正対象にすること。
+          現在の catch 内の無条件 disconnect により一時的エラーでも route が消え、同じ client の再送に null が渡る因果関係を説明すること。
+          元の画面状態テストの不足 TEST-DELIVERY-001 とは区別すること。
