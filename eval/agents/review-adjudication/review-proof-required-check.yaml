@@ -1,0 +1,40 @@
+description: 'TAKT: review adjudication distinguishes test obligations from hypothetical mutations'
+prompts:
+  - file://../../prompts/review-proof-required-check.phase1.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      disable_inherited_skills: true
+      working_dir: fixtures/review-proof-required-check
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/review-proof-required-check
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+tests:
+  - description: 'explicitly required retry verification remains mandatory'
+    vars:
+      task: file://../../cases/review-proof-required-check-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        value: '/^(?:\*\*|`)?DISPOSITION: repair(?:\*\*|`)?\s*$/m.test(output) && !/^(?:\*\*|`)?DISPOSITION: close(?:\*\*|`)?\s*$/m.test(output)'
+        metric: review/required-repair-preserved
+      - type: llm-rubric
+        metric: review/proof-basis
+        value: |
+          失敗後の再送と元の配送先を自動テストで確認する明示要件に基づき、必須の追加修正を要求すること。
+          現在のテストは一回の失敗後の画面状態しか確認せず、その明示要件を満たさないと説明すること。
+          現行 client が対象エラーで route を消す実装不具合を捏造しないこと。

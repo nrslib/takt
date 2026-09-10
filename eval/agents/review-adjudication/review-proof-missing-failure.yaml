@@ -1,0 +1,40 @@
+description: 'TAKT: review adjudication distinguishes test obligations from hypothetical mutations'
+prompts:
+  - file://../../prompts/review-proof-missing-failure.phase1.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      disable_inherited_skills: true
+      working_dir: fixtures/review-proof-missing-failure
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/review-proof-missing-failure
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+tests:
+  - description: 'missing representative failure test remains blocking'
+    vars:
+      task: file://../../cases/review-proof-missing-failure-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        value: '/^(?:\*\*|`)?DISPOSITION: repair(?:\*\*|`)?\s*$/m.test(output) && !/^(?:\*\*|`)?DISPOSITION: close(?:\*\*|`)?\s*$/m.test(output)'
+        metric: review/required-repair-preserved
+      - type: llm-rubric
+        metric: review/proof-basis
+        value: |
+          通信断と一時的サービスエラーに対する新規画面の失敗分岐のテストがないため、TEST-DELIVERY-001 を修正対象として維持すること。
+          成功テストだけではエラー表示・画面と下書きと配送先の保持・確定処理を呼ばない条件を確認できないと説明すること。
+          現行実装の不具合を示せないことだけを理由に、この必須の振る舞いテスト不足を免除しないこと。

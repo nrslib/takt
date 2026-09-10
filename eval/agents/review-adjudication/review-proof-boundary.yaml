@@ -1,0 +1,42 @@
+description: 'TAKT: review adjudication distinguishes test obligations from hypothetical mutations'
+prompts:
+  - file://../../prompts/review-proof-boundary.phase1.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      disable_inherited_skills: true
+      working_dir: fixtures/review-proof-boundary
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/review-proof-boundary
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+tests:
+  - description: 'fulfilled failure contract with a hypothetical mutation claim'
+    vars:
+      task: file://../../cases/review-proof-boundary-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        value: '/^(?:\*\*|`)?DISPOSITION: close(?:\*\*|`)?\s*$/m.test(output) && !/^(?:\*\*|`)?DISPOSITION: repair(?:\*\*|`)?\s*$/m.test(output)'
+        metric: review/optional-proof-not-blocking
+      - type: llm-rubric
+        metric: review/proof-basis
+        value: |
+          TEST-DELIVERY-001 の元の受入条件は現在の失敗テストで満たされ、必須の追加修正は不要と判断すること。
+          現行 client は対象の一時的失敗で route を消していないことをソースに基づき確認すること。
+          仮想的な route 消去への mutation 感度だけでは、再送テストを今回の必須条件にできないと判断すること。
+          再送テストを任意の改善として提案してもよいが、明示的に禁止・免除されていると捏造しないこと。
+          テスト不足は常に非blocking、または現行不具合がなければテスト不要という一般化をしないこと。

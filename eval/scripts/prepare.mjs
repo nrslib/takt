@@ -37,6 +37,12 @@ const EVAL_LANGUAGE = 'ja';
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  { id: 'testing-proof-new-behavior', workflow: 'peer-review', via: 'initial-reviewers', step: 'testing-review', fixture: 'eval/fixtures/testing-proof-new-behavior', projectFromFixture: true },
+  { id: 'review-proof-boundary', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-boundary', projectFromFixture: true },
+  { id: 'testing-proof-boundary', workflow: 'peer-review', via: 'reviewers', step: 'testing-review', fixture: 'eval/fixtures/testing-proof-boundary', projectFromFixture: true },
+  { id: 'review-proof-required-check', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-required-check', projectFromFixture: true },
+  { id: 'review-proof-actual-regression', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-actual-regression', projectFromFixture: true },
+  { id: 'review-proof-missing-failure', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-proof-missing-failure', projectFromFixture: true },
   { id: 'coding-review', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/sample-project' },
   { id: 'arch-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/sample-project' },
   { id: 'resource-flow-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/resource-flow', projectFromFixture: true },
