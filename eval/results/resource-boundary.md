@@ -131,3 +131,25 @@ wording clarification. Delivery and relay measurements now have separate test
 cases, and the resource-flow contract command runs independently of pagination.
 The actor model and effort remain fixed in the evaluation YAML to preserve the
 experimental comparison; normal TAKT runtime configuration is not changed.
+
+## Final wording recheck
+
+After the acquisition-unit clarification, commit
+`ce884e5f8eee18e62ae852b62c118aa5b8a99c81` was built and both resource-flow
+prompts were prepared again. The same fixed model, effort, cases, and rubrics
+ran without cache, with three independent fixture copies per suite and up to
+three concurrent trials. No facet changed during these runs.
+
+| Suite | Passed / failed / errors | Evaluation ID |
+|---|---|---|
+| Resource-flow architecture review | 3 / 0 / 0 | `eval-F9V-2026-09-10T05:35:07` |
+| Resource-flow adjudication | 3 / 0 / 0 | `eval-Tts-2026-09-10T05:35:08` |
+
+Direct inspection of all six final responses confirmed both required repairs
+and preservation of relay, exact aggregation, and the bounded manifest. These
+are additional regression trials after the initial 18, not a new baseline.
+The prompts use the Japanese facets; English wording was checked for parity,
+not separately model-evaluated. The final contract commands passed 9 resource-flow
+and 21 pagination/registry/skill tests independently. Raw results are retained
+locally as `.tmp/resource-flow-review-final.json` and
+`.tmp/resource-flow-adjudication-final.json`.
