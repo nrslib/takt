@@ -465,7 +465,7 @@ return page.slice(0, pageSize);
 
 A stream or iterator still retains everything if its implementation fetches all data or accumulates an array before consumption. Incremental retention depends on input-unit size, prefetch count, concurrency, and waiting for consumption to complete. A bounded item count does not prove a byte bound when individual items are uncapped.
 
-A full export or exact aggregate may require scanning every input without retaining them all simultaneously. Fixed small collections, effectively bounded buffers, and algorithms requiring the whole input have different applicability conditions. Measuring returned rows is not measuring DB-internal scans or process memory; growth established from code is also distinct from a measured outage threshold.
+A full export or exact aggregate may require scanning every input without retaining them all simultaneously. Fixed small collections, effectively bounded buffers, and algorithms requiring the whole input have different applicability conditions. Measuring acquired volume (rows, characters, bytes, or similar units) is not measuring DB-internal scans or process memory. Growth established from code is also distinct from a measured outage threshold.
 
 ## Big Picture
 

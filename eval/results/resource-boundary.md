@@ -119,8 +119,15 @@ failed result rather than throwing. Its measurement tests execute module adapter
 in memory, removing temporary-directory cleanup concerns without signal handlers.
 
 Local gates passed: build, lint, fast unit (401 files / 6,081 tests), light IT
-(159 files / 2,460 tests), 28 evaluation contracts, mock E2E smoke (19 passed /
+(159 files / 2,460 tests), 30 evaluation contracts (21 pagination/registry/skill + 9 resource-flow), mock E2E smoke (19 passed /
 1 skipped), and OpenCode smoke (11 passed with the installed CLI's directory
 first in PATH). The existing CLI provider suite passed 21 tests on rerun without
 code changes; its first run alongside the unit shards failed one 500ms startup
 timeout test.
+
+Follow-up review clarified acquisition units in both knowledge translations
+without changing the decision criteria. The 18 actor trials above precede that
+wording clarification. Delivery and relay measurements now have separate test
+cases, and the resource-flow contract command runs independently of pagination.
+The actor model and effort remain fixed in the evaluation YAML to preserve the
+experimental comparison; normal TAKT runtime configuration is not changed.

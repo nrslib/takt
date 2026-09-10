@@ -27,9 +27,11 @@ for (const count of [50, 2000]) {
     assert.equal(source.stats.downloadedCharacters, count * 64);
   });
 
-  test(`delivery and relay preserve all ${count} blocks but differ before the first write`, async () => {
-    const observations = [];
-    for (const copy of [deliver, relay]) {
+  for (const [name, copy, expectedFirstWrite] of [
+    ['deliver buffers the complete input', deliver, count],
+    ['relay delivers incrementally', relay, 1],
+  ]) {
+    test(`${name} while preserving all ${count} blocks`, async () => {
       const source = observedSource(count);
       let characters = 0;
       let firstWriteAfterPulls;
@@ -42,10 +44,9 @@ for (const count of [50, 2000]) {
       });
       assert.equal(characters, count * 64);
       assert.equal(source.stats.pulls, count);
-      observations.push(firstWriteAfterPulls);
-    }
-    assert.deepEqual(observations, [count, 1]);
-  });
+      assert.equal(firstWriteAfterPulls, expectedFirstWrite);
+    });
+  }
 
   test(`full scan is necessary for an exact summary of ${count} blocks`, async () => {
     const source = observedSource(count);
