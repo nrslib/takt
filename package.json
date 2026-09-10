@@ -23,6 +23,8 @@
     "watch": "tsc --watch",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
+    "eval:prompts:db-pagination:contracts": "node --test eval/asserts/db-pagination-fixture.test.mjs eval/asserts/db-pagination-implement.test.mjs eval/providers/pagination-skill-isolation.test.mjs eval/suite-registry.test.mjs",
+    "eval:prompts:db-pagination": "npm run eval:prompts:db-pagination:contracts && node eval/scripts/run-evals.mjs --prepare db-pagination db-pagination-adjudication db-pagination-implement --no-cache",
     "eval:prompts": "node eval/scripts/run-evals.mjs --prepare",
     "eval:prompts:retained": "node eval/scripts/run-evals.mjs --prepare --tier retained",
     "eval:prompts:contracts": "node --test eval/suite-registry.test.mjs eval/asserts/fix-loop-convergence.test.mjs eval/asserts/remediation-evidence.test.mjs eval/asserts/evidence-judgment.test.mjs",
@@ -105,7 +107,9 @@
     "lint": "eslint src/",
     "check:release": "node scripts/run-release-check.mjs",
     "prepublishOnly": "npm run lint && npm run build",
-    "canary:coder": "node scripts/canary-coder.mjs"
+    "canary:coder": "node scripts/canary-coder.mjs",
+    "eval:prompts:resource-boundary:contracts": "node --test eval/asserts/resource-flow-fixture.test.mjs",
+    "eval:prompts:resource-boundary": "npm run eval:prompts:resource-boundary:contracts && node eval/scripts/run-evals.mjs --prepare resource-flow-review resource-flow-adjudication --no-cache"
   },
   "keywords": [
     "ai",

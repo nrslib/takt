@@ -39,6 +39,8 @@ const EVAL_LANGUAGE = 'ja';
 const TARGETS = [
   { id: 'coding-review', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/sample-project' },
   { id: 'arch-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/sample-project' },
+  { id: 'resource-flow-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/resource-flow', projectFromFixture: true },
+  { id: 'resource-flow-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/resource-flow-adjudication', projectFromFixture: true },
   {
     id: 'arch-failure-aggregation',
     workflow: 'peer-review',
@@ -80,6 +82,33 @@ const TARGETS = [
     step: 'backend-review',
     fixture: 'eval/fixtures/review-impact-path-coverage',
     workflowCallVars: { review_mode: 'initial' },
+  },
+  {
+    id: 'db-pagination',
+    workflow: 'development-review',
+    step: 'backend-review',
+    fixture: 'eval/fixtures/page-query',
+    workflowCallVars: { review_mode: 'initial' },
+  },
+  {
+    id: 'db-pagination-adjudication',
+    workflow: 'peer-review',
+    projectFromFixture: true,
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/page-query-adjudication',
+  },
+  {
+    id: 'db-pagination-implement',
+    workflow: 'development-implement-dynamic',
+    projectFromFixture: true,
+    step: 'implement',
+    fixture: 'eval/fixtures/page-query-implementation',
+    mutable: true,
+    dynamicFacetSelection: {
+      sourceWorkflow: 'development-implement-dynamic',
+      pool: 'coding-facets',
+      candidateIds: ['backend', 'testing'],
+    },
   },
   {
     id: 'initial-review-contract-discovery',

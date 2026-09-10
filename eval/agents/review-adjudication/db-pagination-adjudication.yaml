@@ -1,0 +1,49 @@
+description: 'ページング指摘の裁定: 応答件数だけの充足主張で全件取得を免除しない'
+prompts:
+  - file://../../prompts/db-pagination-adjudication.phase1.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/page-query-adjudication
+      isolate_working_dir: true
+      disable_inherited_skills: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max-inherited
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/page-query-adjudication
+      isolate_working_dir: true
+      disable_inherited_skills: false
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/page-query-adjudication
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+tests:
+  - description: '全件取得の正当化を受けても有効な指摘を修正対象に残す'
+    vars:
+      task: file://../../cases/db-pagination-adjudication-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: pagination/adjudication
+        value: |
+          PAGINATION-001 を今回必要な修正対象として採用すること。
+          readHistoryPage は今回新設した一覧で、DBから全行を読み込んでから20件を返す。
+          「出力は20件」「性能数値の要件がない」「現在のテストが通る」という修正担当の
+          主張だけで、この全件取得を任意の最適化・対象外・問題なしにしないこと。
+          修正範囲はこの一覧のDB取得境界に限定し、上限付きのdirectoryや固定categoriesに
+          DBページング変更を要求しないこと。IDの装飾や表現は固定しない。
