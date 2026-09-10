@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, URL} from 'node:url';
 import {parse} from 'yaml';
 import {createDeliveryClient as createCleanClient} from '../fixtures/review-proof-boundary/src/delivery-client.mjs';
 import {createDeliveryClient as createBrokenClient} from '../fixtures/review-proof-actual-regression/src/delivery-client.mjs';
