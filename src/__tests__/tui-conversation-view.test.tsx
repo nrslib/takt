@@ -457,7 +457,8 @@ describe('ConversationView', () => {
     ['/provider', { kind: 'handoff', id: 'provider' }],
     ['/model custom-model', { kind: 'handoff', id: 'model', text: 'custom-model' }],
     ['/effort custom-effort', { kind: 'handoff', id: 'effort', text: 'custom-effort' }],
-  ] as const)('should hand off the real resident setting command input without calling AI: %s', async (
+    ['/tell skip Android support', { kind: 'handoff', id: 'tell', text: 'skip Android support' }],
+  ] as const)('should hand off a real resident command input without calling AI: %s', async (
     input,
     expected,
   ) => {
@@ -481,6 +482,7 @@ describe('ConversationView', () => {
           allowedTools: [],
           transformPrompt: (message: string) => message,
           introMessage: 'Interactive mode',
+          enableTellCommand: true,
         },
       },
       attachmentStore: createSessionImageAttachmentStore('/repo'),
@@ -2903,6 +2905,7 @@ describe('ConversationView', () => {
   it('should offer slash completions, move the highlight and accept one with Tab', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, {
       ...NO_ORDER_COMMANDS,
+      enableTellCommand: true,
       enableSettingsCommands: true,
     });
     const app = renderConversation(conversation, 'chat', vi.fn());
@@ -2914,6 +2917,7 @@ describe('ConversationView', () => {
     const completionFrame = app.lastFrame() ?? '';
     expect(completionFrame).toContain('❯ /accept');
     expect(completionFrame).toContain('/go');
+    expect(completionFrame).toContain('/tell');
     expect(completionFrame).toContain('/cancel');
     expect(completionFrame).toContain('/workflow');
     expect(completionFrame).toContain('/interaction');

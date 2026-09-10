@@ -111,6 +111,19 @@ describe('Claude terminal transcript reader', () => {
           content: [{ type: 'text', text: 'Done.' }],
         },
       }),
+      JSON.stringify({
+        type: 'user',
+        session_id: 'claude-session-1',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'toolu_1',
+            content: [{ type: 'text', text: 'run state' }],
+            is_error: false,
+          }],
+        },
+      }),
     ].join('\n');
 
     const parsed = parseClaudeTerminalTranscript(transcript);
@@ -125,7 +138,39 @@ describe('Claude terminal transcript reader', () => {
           tool: 'Read',
           input: { file_path: 'src/index.ts' },
         },
+        {
+          type: 'tool_result',
+          id: 'toolu_1',
+          content: 'run state',
+          isError: false,
+        },
       ],
+    });
+  });
+
+  it('Given tool_result content, When parsing, Then an error result remains linked to its tool id', () => {
+    const transcript = JSON.stringify({
+      type: 'user',
+      session_id: 'claude-session-1',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_failed',
+          content: 'permission denied',
+          is_error: true,
+        }],
+      },
+    });
+
+    expect(parseClaudeTerminalTranscript(transcript)).toMatchObject({
+      sessionId: 'claude-session-1',
+      events: [{
+        type: 'tool_result',
+        id: 'toolu_failed',
+        content: 'permission denied',
+        isError: true,
+      }],
     });
   });
 

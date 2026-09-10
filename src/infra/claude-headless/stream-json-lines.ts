@@ -160,6 +160,60 @@ export function tryExtractToolUseFromStreamJsonLine(line: string): StreamJsonToo
   });
 }
 
+function stringifyToolResultBlock(block: unknown): string {
+  if (typeof block === 'string') {
+    return block;
+  }
+  const record = toRecord(block);
+  if (record?.type === 'text' && typeof record.text === 'string') {
+    return record.text;
+  }
+  const serialized = JSON.stringify(block);
+  return serialized ?? String(block);
+}
+
+function normalizeToolResultContent(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map(stringifyToolResultBlock).join('');
+  }
+  return stringifyToolResultBlock(content);
+}
+
+export interface StreamJsonToolResult {
+  readonly id: string;
+  readonly content: string;
+  readonly isError: boolean;
+}
+
+export function tryExtractToolResultFromStreamJsonLine(line: string): StreamJsonToolResult[] {
+  const root = toRecord(parseStreamJsonLine(line));
+  if (!root) {
+    return [];
+  }
+
+  const message = toRecord(root.message);
+  const blocks = root.type === 'user' && Array.isArray(message?.content)
+    ? message.content
+    : root.type === 'tool_result'
+      ? [root]
+      : [];
+
+  return blocks.flatMap((block) => {
+    const record = toRecord(block);
+    if (record?.type !== 'tool_result' || typeof record.tool_use_id !== 'string' || record.tool_use_id.length === 0) {
+      return [];
+    }
+    return [{
+      id: record.tool_use_id,
+      content: normalizeToolResultContent(record.content),
+      isError: record.is_error === true,
+    }];
+  });
+}
+
 export function tryExtractSessionIdFromStreamJsonLine(line: string): string | undefined {
   const parsed = parseStreamJsonLine(line);
   if (!parsed) {

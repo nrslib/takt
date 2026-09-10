@@ -1294,6 +1294,61 @@ describe('callClaudeHeadless', () => {
     });
   });
 
+  it('streams tool_result blocks with their matching tool id before the final result', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{
+              type: 'tool_use',
+              id: 'tool-1',
+              name: 'takt_get_run',
+              input: { runSlug: 'run-a' },
+            }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'user',
+          message: {
+            content: [{
+              type: 'tool_result',
+              tool_use_id: 'tool-1',
+              content: [{ type: 'text', text: 'run state' }],
+              is_error: false,
+            }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'done',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    await callClaudeHeadless('agent', 'p', { cwd: '/tmp', onStream });
+
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'tool_use',
+      data: { tool: 'takt_get_run', id: 'tool-1', input: { runSlug: 'run-a' } },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'tool_result',
+      data: { id: 'tool-1', content: 'run state', isError: false },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(3, {
+      type: 'result',
+      data: {
+        result: 'done',
+        success: true,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
   it('omits --mcp-config when mcpServers is an empty object', async () => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],

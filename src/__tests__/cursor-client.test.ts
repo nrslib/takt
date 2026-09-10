@@ -14,6 +14,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { callCursor } from '../infra/cursor/client.js';
+import { formatTaskStateReferenceMarker } from '../shared/task-state-reference.js';
 
 type SpawnScenario = {
   stdout?: string;
@@ -137,7 +138,7 @@ describe('callCursor', () => {
       '-p',
       '--trust',
       '--output-format',
-      'json',
+      'stream-json',
       '--workspace',
       '/repo',
       '--model',
@@ -450,6 +451,65 @@ describe('callCursor', () => {
         success: false,
         error: expect.stringContaining('Failed to parse cursor-agent JSON output'),
         sessionId: 'sess-parse-error',
+      },
+    });
+  });
+
+  it('should forward Cursor MCP tool results as structured stream events', async () => {
+    const marker = formatTaskStateReferenceMarker('run-from-cursor');
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'started',
+          call_id: 'cursor-tool-1',
+          tool_call: {
+            mcpToolCall: {
+              args: { name: 'takt_get_run', args: { runSlug: 'run-from-cursor' } },
+            },
+          },
+          session_id: 'cursor-session',
+        }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          call_id: 'cursor-tool-1',
+          tool_call: {
+            mcpToolCall: {
+              args: { name: 'takt_get_run', args: { runSlug: 'run-from-cursor' } },
+              result: { success: { content: `run details\n${marker}` } },
+            },
+          },
+          session_id: 'cursor-session',
+        }),
+        JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'answer',
+          session_id: 'cursor-session',
+        }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer', sessionId: 'cursor-session' });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_use',
+      data: {
+        id: 'cursor-tool-1',
+        tool: 'takt_get_run',
+        input: { runSlug: 'run-from-cursor' },
+      },
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_result',
+      data: {
+        id: 'cursor-tool-1',
+        content: `run details\n${marker}`,
+        isError: false,
       },
     });
   });

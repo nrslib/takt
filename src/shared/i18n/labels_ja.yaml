@@ -13,7 +13,7 @@ interactive:
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   formalSpecPrompt: "形式仕様モード（Alloy, Quint）を有効にしますか？ モードの既定値は assistant.formal_spec.mode（または旧 scalar 形式の assistant.formal_spec）で変更できます。"
   ui:
-    intro: "対話モード - タスク内容を入力してください。準備ができたら /go で指示書を作成・実行します。"
+    intro: "対話モード - タスク内容を入力してください。準備ができたら /go で指示書を作成・実行し、実行中タスクへの追加指示は /tell で送信します。"
     introGrillMe: "Grill Meモード - 推奨案付きの質問を1問ずつ行い、要件を固めます。準備ができたら /go で指示書を作成・実行します。"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
@@ -49,6 +49,7 @@ interactive:
     prompt: "参照するrunを選択してください:"
     noRuns: "前回のrunが見つかりませんでした。"
   continueNoSession: "前回のアシスタントセッションが見つかりません。新しいセッションで開始します。"
+  mcpUnavailable: "プロバイダ {provider} ではタスク状態の参照を利用できません。会話は継続します。理由: {error}"
   resumeSessionLoaded: "セッションを読み込みました。以降のAI呼び出しでこのセッションを使用します。"
   sessionSelector:
     prompt: "直近のセッションを引き継ぎますか？"
@@ -66,6 +67,7 @@ interactive:
   commands:
     accept: "最新のアシスタント発言を採用"
     go: "指示書を作成して実行"
+    tell: "実行中タスクへ追加指示を送る"
     retry: "前回の指示書を確認して再実行"
     replay: "前回の指示書で即再実行"
     cancel: "対話モードを終了"
@@ -323,5 +325,16 @@ tui:
     conversationRebuildFailed: "会話設定の切り替えに失敗しました: {error}"
     unsupportedCommand: "このコマンドは TUI では利用できません。"
     settingNoArguments: "{command} に引数は指定できません。"
+    tellInstructionRequired: "追加指示を入力してから /tell を使用してください。"
+    tellGenerationFailed: "追加指示を生成できませんでした: {error}"
+    tellRequiresTty: "追加指示は送信されませんでした: /tell には対話端末 (TTY) が必要です。"
+    tellNoCandidates: "追加指示を受け取れる worktree clone の実行中タスクがありません。"
+    tellExcluded: "/tell の候補から除外した実行中タスク:\n{tasks}"
+    tellCancelled: "追加指示は送信しませんでした。"
+    tellStale: "追加指示は送信されませんでした: {error}"
     settingValueRequired: "{command} には値が必要です。"
     imagePasteFailed: "画像を貼り付けられませんでした。"
+  tell:
+    selectPrompt: "追加指示を送る実行中タスクを選択してください:"
+    confirm: "この追加指示を送信しますか？\nタスク: {task}\n要約: {summary}\nワークフロー: {workflow}\n現在ステップ: {step}\nRun slug: {runSlug}\n追加指示:\n{content}"
+    sent: "{task} へ追加指示を送信しました（指示 #{instructionId}）。"

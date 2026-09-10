@@ -16,6 +16,7 @@ import {
   createAssistantConversationPlan,
   createPersonaConversationPlan,
   type ConversationPlan,
+  type InitialTaskContext,
 } from '../interactive/conversationPlan.js';
 import type { ConversationMessage } from '../interactive/interactiveApplication.js';
 import { displayAndClearSessionState } from '../interactive/conversationLoop.js';
@@ -33,6 +34,10 @@ import {
 import type { TaskHistorySummaryItem } from '../interactive/interactive-summary-types.js';
 import { selectInteractiveMode } from '../interactive/modeSelection.js';
 import { selectInteractiveProvider } from '../interactive/providerSelection.js';
+import { runTellCommand } from '../interactive/tellCommand.js';
+import { resolveTaskStateMcp } from '../interactive/taskStateMcp.js';
+import { SlashCommand } from '../../shared/constants.js';
+import { matchSlashCommand } from '../interactive/commandMatcher.js';
 import { formatSessionStatus } from '../interactive/interactive.js';
 import type { InteractiveModeResult, InteractiveUIText } from '../interactive/interactive.js';
 import {
@@ -61,6 +66,10 @@ export interface RunTuiOptions {
   agentOverrides?: TaskExecutionOptions;
   taskHistory: TaskHistorySummaryItem[];
   userMessage?: string;
+  /** Run selected by `takt list`, used as the initial conversation reference. */
+  initialTellRunSlug?: string;
+  /** Lightweight task metadata selected by `takt list`; reports are not loaded. */
+  initialTaskContext?: InitialTaskContext;
   sourceContext?: string;
   excludeActions?: readonly SummaryActionValue[];
   continueSession?: boolean;
@@ -138,6 +147,9 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     }];
     if (resumeNotice !== null) {
       entries.push({ role: 'system', content: resumeNotice });
+    }
+    if (plan.strategy.mcpUnavailableNotice !== undefined) {
+      entries.push({ role: 'system', content: plan.strategy.mcpUnavailableNotice });
     }
     if (personaFallback) {
       entries.push({
@@ -232,6 +244,11 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           : {}),
       };
       let nextPlan: ConversationPlan;
+      const carriedReferenceRunSlug = initial
+        ? options.initialTellRunSlug
+        : currentConversation.getReferenceRunSlug === undefined
+          ? options.initialTellRunSlug
+          : currentConversation.getReferenceRunSlug();
       if (usePersonaPlan) {
         nextPlan = createPersonaConversationPlan(options.cwd, description.firstStep!, overrides);
       } else {
@@ -244,6 +261,12 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           formalSpecComments: formalSpecConfiguration.comments,
           resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(options.cwd),
           workflowContext: context,
+          ...(options.initialTaskContext
+            ? { initialTaskContext: options.initialTaskContext }
+            : {}),
+          ...(carriedReferenceRunSlug === undefined
+            ? {}
+            : { initialReferenceRunSlug: carriedReferenceRunSlug }),
           ...overrides,
           ...(continued.sessionId ? { sessionId: continued.sessionId } : {}),
         });
@@ -276,6 +299,19 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         pendingHandoffHistory = currentConversation.snapshotHistory?.() ?? [];
       }
       pendingRebuild = true;
+    }
+
+    function isTellDisabledDuringPendingModeRebuild(text?: string): boolean {
+      if (!pendingRebuild || selectedMode === 'assistant') {
+        return false;
+      }
+      if (text === undefined) {
+        return true;
+      }
+      return matchSlashCommand(
+        text.trim(),
+        { ...currentConversation.commandAvailability, enableTellCommand: true },
+      )?.command === SlashCommand.Tell;
     }
 
     async function ensureCurrentConversation(): Promise<string | undefined> {
@@ -321,15 +357,27 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         return currentConversation.lang;
       },
       get commandAvailability() {
+        if (isTellDisabledDuringPendingModeRebuild()) {
+          return {
+            ...currentConversation.commandAvailability,
+            enableTellCommand: false,
+          };
+        }
         return currentConversation.commandAvailability;
       },
       get tracksResultSource() {
         return currentConversation.tracksResultSource;
       },
       isCommandLine(text: string): boolean {
+        if (isTellDisabledDuringPendingModeRebuild(text)) {
+          return false;
+        }
         return currentConversation.isCommandLine(text);
       },
       resolveLocalCommand(text: string) {
+        if (isTellDisabledDuringPendingModeRebuild(text)) {
+          return null;
+        }
         return currentConversation.resolveLocalCommand(text);
       },
       async submit(input: TuiSubmitInput): Promise<TuiSubmission> {
@@ -405,6 +453,13 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
             selectedEffort = undefined;
             temporaryModelActive = false;
             requestRebuild();
+            const capability = selectedMode === 'persona'
+              ? undefined
+              : resolveTaskStateMcp(provider, options.lang).unavailableNotice;
+            return {
+              kind: 'continue' as const,
+              ...(capability === undefined ? {} : { notice: capability }),
+            };
           }
           break;
         }
@@ -420,6 +475,37 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           }
           currentConversation.setEffort?.(text);
           break;
+        case 'tell':
+          {
+            if (text.trim().length === 0) {
+              const rebuildError = await ensureCurrentConversation();
+              if (rebuildError !== undefined) {
+                return {
+                  kind: 'continue' as const,
+                  notice: rebuildError,
+                };
+              }
+            }
+            const preferredRunSlug = currentConversation.getReferenceRunSlug === undefined
+              ? options.initialTellRunSlug
+              : currentConversation.getReferenceRunSlug();
+            const sessionContext = selectedEffort === undefined
+              ? currentPlan.ctx
+              : { ...currentPlan.ctx, effort: selectedEffort };
+            return {
+              kind: 'continue' as const,
+              notice: await runTellCommand({
+                cwd: options.cwd,
+                lang: options.lang,
+                inlineText: text,
+                history: conversationFacade.snapshotHistory?.() ?? [],
+                sessionContext,
+                ...(preferredRunSlug === undefined
+                  ? {}
+                  : { preferredRunSlug }),
+              }),
+            };
+          }
         default:
           throw new Error(`Unknown TUI hand-off: ${id}`);
       }

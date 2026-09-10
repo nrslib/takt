@@ -26,6 +26,7 @@ vi.mock('node:fs/promises', () => ({
 }));
 
 import { callCopilot, extractSessionIdFromShareFile } from '../infra/copilot/client.js';
+import { formatTaskStateReferenceMarker } from '../shared/task-state-reference.js';
 
 type SpawnScenario = {
   stdout?: string;
@@ -126,6 +127,7 @@ describe('callCopilot', () => {
     expect(args).toContain('--silent');
     expect(args).toContain('--no-color');
     expect(args).toContain('--no-auto-update');
+    expect(args).toContain('--output-format=json');
     expect(args).toContain('--model');
     expect(args).toContain('--resume');
     expect(args).toContain('--yolo');
@@ -636,6 +638,57 @@ describe('callCopilot', () => {
     expect(result.status).toBe('error');
     expect(result.content).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz1234567890');
     expect(result.content).toContain('[REDACTED]');
+  });
+
+  it('should forward Copilot MCP tool results as structured stream events', async () => {
+    const marker = formatTaskStateReferenceMarker('run-from-copilot');
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          type: 'tool.execution_start',
+          data: {
+            toolCallId: 'copilot-tool-1',
+            toolName: 'mcp__takt__takt_get_run',
+            mcpToolName: 'takt_get_run',
+            arguments: { runSlug: 'run-from-copilot' },
+          },
+        }),
+        JSON.stringify({
+          type: 'tool.execution_complete',
+          data: {
+            toolCallId: 'copilot-tool-1',
+            success: true,
+            result: { content: `run details\n${marker}` },
+          },
+        }),
+        JSON.stringify({
+          type: 'assistant.message',
+          data: { content: 'answer', sessionId: 'copilot-session' },
+        }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callCopilot('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer' });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_use',
+      data: {
+        id: 'copilot-tool-1',
+        tool: 'takt_get_run',
+        input: { runSlug: 'run-from-copilot' },
+      },
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_result',
+      data: {
+        id: 'copilot-tool-1',
+        content: `run details\n${marker}`,
+        isError: false,
+      },
+    });
   });
 });
 

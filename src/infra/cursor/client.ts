@@ -6,8 +6,16 @@ import type { AgentResponse } from '../../core/models/index.js';
 import { crossSpawn, getErrorMessage, guardChildProcessStreams, createLogger } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../shared/types/agent-failure.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
 import type { CursorCallOptions } from './types.js';
 import { formatProcessExitCause } from '../../shared/utils/process-exit.js';
+import {
+  emitStructuredEvents,
+  extractStructuredText,
+  firstNonEmptyString,
+  parseJsonLines,
+  toRecord,
+} from '../structured-cli-output.js';
 
 export type { CursorCallOptions } from './types.js';
 
@@ -61,7 +69,7 @@ function buildArgs(prompt: string, options: CursorCallOptions): string[] {
   // isolated root so Cursor CLI picks up the `.cursor/mcp.json` the adapter
   // wrote there (order.md:203-207). The adapter owns cleanup.
   const workspace = options.preparedMcp?.configRoot ?? options.cwd;
-  const args = ['-p', '--trust', '--output-format', 'json', '--workspace', workspace];
+  const args = ['-p', '--trust', '--output-format', 'stream-json', '--workspace', workspace];
 
   if (options.model) {
     args.push('--model', options.model);
@@ -255,63 +263,6 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
   });
 }
 
-function toRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function firstNonEmptyString(values: unknown[]): string | undefined {
-  for (const value of values) {
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (trimmed.length > 0) {
-        return trimmed;
-      }
-    }
-  }
-  return undefined;
-}
-
-function extractContent(payload: unknown): string | undefined {
-  if (typeof payload === 'string') {
-    const trimmed = payload.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }
-
-  if (Array.isArray(payload)) {
-    const parts = payload
-      .map((entry) => extractContent(entry))
-      .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
-    return parts.length > 0 ? parts.join('\n') : undefined;
-  }
-
-  const record = toRecord(payload);
-  if (!record) {
-    return undefined;
-  }
-
-  const direct = firstNonEmptyString([
-    record.content,
-    record.text,
-    record.output,
-    record.result,
-    record.message,
-  ]);
-  if (direct) {
-    return direct;
-  }
-
-  const nested = [record.data, record.response, record.payload]
-    .map((entry) => extractContent(entry))
-    .find((entry): entry is string => typeof entry === 'string' && entry.length > 0);
-  if (nested) {
-    return nested;
-  }
-
-  return undefined;
-}
-
 function extractSessionId(payload: unknown): string | undefined {
   const record = toRecord(payload);
   if (!record) {
@@ -440,30 +391,178 @@ function classifyExecutionError(error: CursorExecError, options: CursorCallOptio
   return getErrorMessage(error);
 }
 
-function parseCursorOutput(stdout: string): { content: string; sessionId?: string } | { error: string } {
+interface CursorToolCall {
+  readonly tool: string;
+  readonly input: Record<string, unknown>;
+  readonly result?: unknown;
+}
+
+function extractCursorToolCall(root: Record<string, unknown>): CursorToolCall | undefined {
+  const toolCall = toRecord(root.tool_call ?? root.toolCall);
+  if (toolCall === undefined) {
+    return undefined;
+  }
+
+  const entry = Object.entries(toolCall).find(([, value]) => toRecord(value) !== undefined);
+  if (entry === undefined) {
+    return undefined;
+  }
+
+  const [kind, rawDetails] = entry;
+  const details = toRecord(rawDetails);
+  if (details === undefined) {
+    return undefined;
+  }
+  const args = toRecord(details.args);
+  const nestedArgs = toRecord(args?.args ?? args?.input);
+  const tool = firstNonEmptyString([
+    args?.name,
+    args?.toolName,
+    details.name,
+    details.toolName,
+    kind === 'mcpToolCall' ? undefined : kind,
+  ]);
+  if (tool === undefined) {
+    return undefined;
+  }
+
+  return {
+    tool,
+    input: nestedArgs ?? args ?? toRecord(details.input) ?? {},
+    ...(Object.prototype.hasOwnProperty.call(details, 'result') ? { result: details.result } : {}),
+  };
+}
+
+function cursorToolResult(call: CursorToolCall): { content: string; isError: boolean } | undefined {
+  if (call.result === undefined) {
+    return undefined;
+  }
+  const result = toRecord(call.result);
+  const hasSuccess = result !== undefined && Object.prototype.hasOwnProperty.call(result, 'success');
+  const payload = hasSuccess ? result?.success : result?.error ?? call.result;
+  const content = extractStructuredText(payload) ?? '';
+  return {
+    content,
+    isError: result?.isError === true
+      || result?.error !== undefined
+      || (hasSuccess && result?.success === false),
+  };
+}
+
+function parseCursorStreamEvent(
+  value: unknown,
+  pendingTools: Map<string, CursorToolCall>,
+): { event?: StreamEvent; content?: string; sessionId?: string; terminalResult?: string } {
+  const root = toRecord(value);
+  if (root === undefined) {
+    return {};
+  }
+
+  const sessionId = extractSessionId(root);
+  if (root.type === 'tool_call') {
+    const id = firstNonEmptyString([root.call_id, root.callId]);
+    const call = extractCursorToolCall(root);
+    if (id === undefined) {
+      return { sessionId };
+    }
+    if (root.subtype === 'started') {
+      if (call === undefined) {
+        return { sessionId };
+      }
+      pendingTools.set(id, call);
+      return {
+        sessionId,
+        event: { type: 'tool_use', data: { id, tool: call.tool, input: call.input } },
+      };
+    }
+    if (root.subtype === 'completed') {
+      const pendingCall = pendingTools.get(id);
+      const completedCall = call === undefined
+        ? pendingCall
+        : { ...pendingCall, ...call };
+      if (completedCall === undefined) {
+        return { sessionId };
+      }
+      const result = cursorToolResult(completedCall);
+      pendingTools.delete(id);
+      return result === undefined
+        ? { sessionId }
+        : {
+          sessionId,
+          event: { type: 'tool_result', data: { id, content: result.content, isError: result.isError } },
+        };
+    }
+    return { sessionId };
+  }
+
+  if (root.type === 'result') {
+    const result = extractStructuredText(root.result);
+    return {
+      sessionId,
+      ...(result === undefined ? {} : { terminalResult: result }),
+    };
+  }
+
+  if (root.type === 'assistant') {
+    const message = toRecord(root.message);
+    const content = extractStructuredText(message?.content ?? message?.text);
+    return {
+      sessionId,
+      ...(content === undefined ? {} : { content }),
+    };
+  }
+
+  const legacyContent = extractStructuredText(root.content);
+  return {
+    sessionId,
+    ...(legacyContent === undefined ? {} : { terminalResult: legacyContent }),
+  };
+}
+
+function parseCursorOutput(
+  stdout: string,
+): { content: string; sessionId?: string; events: StreamEvent[] } | { error: string } {
   const trimmed = stdout.trim();
   if (!trimmed) {
     return { error: 'cursor-agent returned empty output' };
   }
 
-  let parsed: unknown;
+  let lines: unknown[];
   try {
-    parsed = JSON.parse(trimmed);
+    lines = parseJsonLines(stdout, 'cursor-agent');
   } catch {
     return {
       error: `Failed to parse cursor-agent JSON output: ${trimDetail(trimmed, '<empty>')}`,
     };
   }
 
-  const content = extractContent(parsed);
+  const pendingTools = new Map<string, CursorToolCall>();
+  const events: StreamEvent[] = [];
+  const assistantContent: string[] = [];
+  let content: string | undefined;
+  let sessionId: string | undefined;
+  for (const line of lines) {
+    const parsed = parseCursorStreamEvent(line, pendingTools);
+    sessionId = parsed.sessionId ?? sessionId;
+    if (parsed.event !== undefined) {
+      events.push(parsed.event);
+    }
+    if (parsed.content !== undefined) {
+      assistantContent.push(parsed.content);
+    }
+    if (parsed.terminalResult !== undefined) {
+      content = parsed.terminalResult;
+    }
+  }
+
+  content = content ?? assistantContent.join('');
   if (!content) {
     return {
       error: `Failed to extract assistant content from cursor-agent JSON output: ${trimDetail(trimmed, '<empty>')}`,
     };
   }
 
-  const sessionId = extractSessionId(parsed);
-  return { content, sessionId };
+  return { content, sessionId, events };
 }
 
 function toCursorExecError(rawError: unknown): CursorExecError {
@@ -532,6 +631,7 @@ export class CursorClient {
 
           const sessionId = parsed.sessionId ?? options.sessionId;
           if (options.onStream) {
+            emitStructuredEvents(options.onStream, parsed.events);
             options.onStream({ type: 'text', data: { text: parsed.content } });
             options.onStream({
               type: 'result',

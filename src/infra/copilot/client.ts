@@ -16,7 +16,15 @@ import {
   getErrorMessage,
   spawnManagedProcess,
 } from '../../shared/utils/index.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
 import type { CopilotCallOptions } from './types.js';
+import {
+  emitStructuredEvents,
+  extractStructuredText,
+  firstNonEmptyString,
+  parseJsonLines,
+  toRecord,
+} from '../structured-cli-output.js';
 
 const log = createLogger('copilot-client');
 
@@ -68,6 +76,7 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
     '--silent',
     '--no-color',
     '--no-auto-update',
+    '--output-format=json',
   ];
 
   if (options.model) {
@@ -243,11 +252,6 @@ function execCopilot(
       }
       const text = toText(chunk);
       appendChunk('stdout', text);
-      if (!overflowed && options.onStream) {
-        if (text) {
-          options.onStream({ type: 'text', data: { text } });
-        }
-      }
     });
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', toText(chunk)));
 
@@ -392,19 +396,118 @@ async function extractSessionId(shareFilePath: string): Promise<string | undefin
   }
 }
 
-/**
- * Parse Copilot CLI output.
- *
- * Since Copilot CLI does not support JSON output mode,
- * we use --silent --no-color and treat stdout as plain text content.
- */
-function parseCopilotOutput(stdout: string): { content: string } | { error: string } {
+interface CopilotParsedOutput {
+  readonly content: string;
+  readonly sessionId?: string;
+  readonly events: readonly StreamEvent[];
+}
+
+function extractCopilotEventData(root: Record<string, unknown>): Record<string, unknown> {
+  return toRecord(root.data) ?? root;
+}
+
+function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: string } {
   const trimmed = stdout.trim();
   if (!trimmed) {
     return { error: 'copilot returned empty output' };
   }
 
-  return { content: trimmed };
+  let lines: unknown[];
+  try {
+    lines = parseJsonLines(stdout, 'copilot');
+  } catch {
+    // Older Copilot CLI versions only emit text. Keep the response usable, but
+    // do not treat that displayed text as a structured MCP result.
+    return { content: trimmed, events: [] };
+  }
+
+  const events: StreamEvent[] = [];
+  let content: string | undefined;
+  let assistantMessageContent: string | undefined;
+  let assistantDeltaContent = '';
+  let sessionId: string | undefined;
+  for (const line of lines) {
+    const root = toRecord(line);
+    if (root === undefined) {
+      continue;
+    }
+    const data = extractCopilotEventData(root);
+    sessionId = firstNonEmptyString([
+      data.sessionId,
+      data.session_id,
+      root.sessionId,
+      root.session_id,
+    ]) ?? sessionId;
+    const type = typeof root.type === 'string' ? root.type : undefined;
+
+    if (type === 'tool.execution_start' || type === 'tool.user_requested') {
+      const id = firstNonEmptyString([data.toolCallId, data.tool_call_id, data.id]);
+      const tool = firstNonEmptyString([data.mcpToolName, data.toolName, data.tool_name]);
+      if (id !== undefined && tool !== undefined) {
+        const input = toRecord(data.arguments ?? data.input) ?? {};
+        events.push({ type: 'tool_use', data: { id, tool, input } });
+      }
+      continue;
+    }
+
+    if (type === 'tool.execution_complete') {
+      const id = firstNonEmptyString([data.toolCallId, data.tool_call_id, data.id]);
+      if (id === undefined) {
+        continue;
+      }
+      const result = toRecord(data.result);
+      const error = toRecord(data.error);
+      const resultContent = extractStructuredText(
+        result?.content
+          ?? result?.detailedContent
+          ?? result?.contents
+          ?? data.result
+          ?? error?.message
+          ?? data.error,
+      ) ?? '';
+      events.push({
+        type: 'tool_result',
+        data: {
+          id,
+          content: resultContent,
+          isError: data.success === false || error !== undefined,
+        },
+      });
+      continue;
+    }
+
+    if (type === 'assistant.message') {
+      const message = extractStructuredText(data.content ?? data.deltaContent);
+      if (message !== undefined && message.length > 0) {
+        assistantMessageContent = message;
+      }
+      continue;
+    }
+
+    if (type === 'assistant.message_delta') {
+      const message = extractStructuredText(data.content ?? data.deltaContent);
+      if (message !== undefined && message.length > 0) {
+        assistantDeltaContent += message;
+      }
+      continue;
+    }
+
+    if (type === 'result' || type === 'session.result') {
+      const result = extractStructuredText(data.result ?? data.content ?? root.result);
+      if (result !== undefined) {
+        content = result;
+      }
+    }
+  }
+
+  content = content ?? assistantMessageContent ?? assistantDeltaContent;
+  if (content === undefined || content.length === 0) {
+    return {
+      error: `Failed to extract assistant content from copilot JSONL output: ${trimDetail(trimmed, '<empty>')}`,
+    };
+  }
+
+  return { content, sessionId, events };
 }
 
 interface CopilotCallOutcome {
@@ -412,6 +515,7 @@ interface CopilotCallOutcome {
   readonly content: string;
   readonly sessionId?: string;
   readonly error?: string;
+  readonly events: readonly StreamEvent[];
 }
 
 function executionErrorOutcome(
@@ -423,6 +527,7 @@ function executionErrorOutcome(
     content: message,
     error: message,
     sessionId,
+    events: [],
   };
 }
 
@@ -445,7 +550,8 @@ async function executeCopilotCall(
     return {
       status: 'done',
       content: parsed.content,
-      sessionId: extractedSessionId ?? resumableSessionId,
+      sessionId: extractedSessionId ?? parsed.sessionId ?? resumableSessionId,
+      events: parsed.events,
     };
   } catch (rawError) {
     const error = rawError as CopilotExecError;
@@ -512,6 +618,10 @@ export class CopilotClient {
       shareFilePath,
     );
     const outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
+    emitStructuredEvents(options.onStream, outcome.events);
+    if (outcome.status === 'done') {
+      options.onStream?.({ type: 'text', data: { text: outcome.content } });
+    }
     emitResult(outcome, options);
     return {
       persona: agentType,

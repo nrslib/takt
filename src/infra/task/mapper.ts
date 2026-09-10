@@ -4,7 +4,7 @@ import { TaskFileSchema, type TaskFileData, type TaskRecord } from './schema.js'
 import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 import { buildTaskInstruction } from './instruction.js';
 import { firstLine } from './naming.js';
-import type { TaskInfo, TaskListItem } from './types.js';
+import type { TaskInfo, TaskListItem, TaskState } from './types.js';
 
 function toDisplayPath(projectDir: string, targetPath: string): string {
   const relativePath = path.relative(projectDir, targetPath);
@@ -169,4 +169,35 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
     case 'pr_failed':
       return toPrFailedTaskItem(projectDir, tasksFile, task);
   }
+}
+
+export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
+  return {
+    kind: task.status,
+    status: task.status,
+    name: task.name,
+    createdAt: task.created_at,
+    filePath: tasksFile,
+    ...(task.summary === undefined && task.content === undefined
+      ? {}
+      : { summary: task.summary ?? firstLine(task.content!) }),
+    taskDir: task.task_dir,
+    runSlug: task.run_slug,
+    sourceRunSlug: task.source_run_slug,
+    resumeMode: task.resume_mode,
+    branch: task.branch,
+    worktree: task.worktree,
+    worktreePath: task.worktree_path,
+    workflow: task.workflow,
+    prUrl: task.pr_url,
+    failure: task.failure,
+    startedAt: task.started_at ?? undefined,
+    completedAt: task.completed_at ?? undefined,
+    ownerPid: task.owner_pid ?? undefined,
+    issueNumber: task.issue,
+    exceededMaxSteps: task.exceeded_max_steps,
+    exceededCurrentIteration: task.exceeded_current_iteration,
+    source: task.source,
+    prNumber: task.pr_number,
+  };
 }

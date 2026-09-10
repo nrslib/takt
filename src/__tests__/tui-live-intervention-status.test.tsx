@@ -1,155 +1,123 @@
-import { render } from 'ink-testing-library';
 import type { ReactElement } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { TuiConversation } from '../features/tui/tuiConversation.js';
 
-const { mockInitializeSession, mockMountInk } = vi.hoisted(() => ({
-  mockInitializeSession: vi.fn(),
+const { mockMountInk } = vi.hoisted(() => ({
   mockMountInk: vi.fn(),
-}));
-
-vi.mock('../features/interactive/sessionInitialization.js', () => ({
-  initializeSession: (...args: unknown[]) => mockInitializeSession(...args),
 }));
 
 vi.mock('../features/tui/inkMount.js', () => ({
   mountInk: (...args: unknown[]) => mockMountInk(...args),
 }));
 
-import { runLiveInterventionMode } from '../features/tasks/list/liveInterventionMode.js';
-import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
+vi.mock('../features/tui/terminalColors.js', () => ({
+  resolveUserMessageColors: vi.fn(async () => ({
+    colors: { background: '#42454b', foreground: '#ffffff' },
+  })),
+}));
 
-type MountTree = (handlers: {
-  readonly settle: (value: unknown) => void;
-  readonly fail: (error: unknown) => void;
-}) => ReactElement;
+import { runTuiConversation } from '../features/tui/conversationRunner.js';
 
-function createDeferred<T>(): {
-  readonly promise: Promise<T>;
-  resolve(value: T): void;
-} {
-  let resolvePromise!: (value: T) => void;
-  const promise = new Promise<T>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return { promise, resolve: resolvePromise };
+interface MountedConversationProps {
+  readonly conversation: TuiConversation;
+  readonly initialEntries: readonly { readonly role: string; readonly content: string }[];
+  readonly onExit: (exit: unknown, carried: unknown) => void;
 }
 
-describe('live intervention status in the mounted TUI', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockInitializeSession.mockReturnValue({
-      provider: { getRuntimeInstructions: () => null, setup: vi.fn() },
-      providerType: 'mock',
-      model: 'mock-model',
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    });
-  });
+interface MountHandlers {
+  readonly settle: (value: unknown) => void;
+  readonly fail: (error: unknown) => void;
+}
 
+function mountedProps(element: ReactElement): MountedConversationProps {
+  const props = (element as ReactElement<MountedConversationProps>).props;
+  if (props === null || typeof props !== 'object') {
+    throw new Error('Conversation view props were not mounted');
+  }
+  return props;
+}
+
+function createConversation(): TuiConversation {
+  return {
+    lang: 'en',
+    commandAvailability: {},
+    tracksResultSource: false,
+    isCommandLine: vi.fn(() => true),
+    resolveLocalCommand: vi.fn(() => ({
+      kind: 'handoff',
+      id: 'tell',
+      text: 'skip Android support',
+    } as never)),
+    submit: vi.fn(),
+    createInstruction: vi.fn(),
+    resumeSession: vi.fn(),
+    pasteClipboardImage: vi.fn(),
+    sealImages: vi.fn(),
+    saveInlineImage: vi.fn(),
+  };
+}
+
+describe('resident conversation handoffs', () => {
   afterEach(() => {
-    vi.useRealTimers();
+    vi.clearAllMocks();
   });
 
-  it('passes the live reader through both TUI runners to one view at the production interval', async () => {
-    vi.useFakeTimers();
-    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-live-status-mode-'));
-    const worktreePath = join(projectCwd, '.takt', 'worktrees', 'live-task');
-    const runDirectory = join(worktreePath, '.takt', 'runs', 'live-run');
-    mkdirSync(join(runDirectory, 'logs'), { recursive: true });
-    mkdirSync(join(runDirectory, 'reports'), { recursive: true });
-    const metaPath = join(runDirectory, 'meta.json');
-    const writeMeta = (currentStep: string, phase: 1 | 2): void => {
-      writeFileSync(metaPath, JSON.stringify({
-        task: 'running task',
-        workflow: 'default',
-        runSlug: 'live-run',
-        runRoot: '.takt/runs/live-run',
-        reportDirectory: '.takt/runs/live-run/reports',
-        contextDirectory: '.takt/runs/live-run/context',
-        logsDirectory: '.takt/runs/live-run/logs',
-        status: 'running',
-        startTime: '2026-09-03T00:00:00.000Z',
-        currentStep,
-        phase,
-      }), 'utf8');
-    };
-    writeMeta('initial', 1);
-
-    const mounted = createDeferred<void>();
-    let mountedApp: ReturnType<typeof render> | undefined;
-    let settleMounted: ((value: unknown) => void) | undefined;
-    let mountSettled = false;
-    let liveStatusRefreshIntervalMs: number | undefined;
-    mockMountInk.mockImplementation(async (buildTree: MountTree) => {
-      let settle!: (value: unknown) => void;
-      let fail!: (error: unknown) => void;
-      const settled = new Promise<unknown>((resolve, reject) => {
-        settle = resolve;
-        fail = reject;
-      });
-      const element = buildTree({ settle, fail });
-      liveStatusRefreshIntervalMs = (element.props as {
-        readonly liveStatusRefreshIntervalMs?: number;
-      }).liveStatusRefreshIntervalMs;
-      const app = render(element);
-      mountedApp = app;
-      settleMounted = (value: unknown) => {
-        if (!mountSettled) {
-          mountSettled = true;
-          settle(value);
+  it('keeps the same conversation after /tell returns without sending', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-tell-handoff-'));
+    const conversation = createConversation();
+    const mounted: MountedConversationProps[] = [];
+    let mountCount = 0;
+    mockMountInk.mockImplementation(async (buildTree: (handlers: MountHandlers) => ReactElement) => {
+      mountCount += 1;
+      return new Promise<unknown>((resolve, reject) => {
+        const props = mountedProps(buildTree({ settle: resolve, fail: reject }));
+        mounted.push(props);
+        if (mountCount === 1) {
+          props.onExit(
+            { kind: 'handoff', id: 'tell', text: 'skip Android support' },
+            { history: ['prior question'], queue: [] },
+          );
+          return;
         }
-      };
-      mounted.resolve();
-      try {
-        return await settled;
-      } finally {
-        app.unmount();
-      }
+        props.onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: ['prior question'], queue: [] },
+        );
+      });
     });
-
-    const runPromise = runLiveInterventionMode(projectCwd, {
-      kind: 'running',
-      name: 'live-task',
-      createdAt: '2026-09-03T00:00:00.000Z',
-      filePath: join(projectCwd, '.takt', 'tasks.yaml'),
-      content: 'running task',
-      runSlug: 'live-run',
-      worktreePath,
-      data: { task: 'running task', workflow: 'default', worktree: true },
+    const onHandoff = vi.fn(async (id: string, text: string) => {
+      expect(id).toBe('tell');
+      expect(text).toBe('skip Android support');
+      return { kind: 'continue' as const, notice: 'The instruction was not sent.' };
     });
 
     try {
-      await mounted.promise;
-      const app = mountedApp;
-      if (app === undefined) {
-        throw new Error('TUI was not mounted');
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(app.lastFrame()).toContain('step=initial phase=1 pending=0');
-
-      await new LiveInterventionFileStore(projectCwd, 'live-run').issue('project-side pending instruction');
-      writeMeta('updated\u001b]0;terminal-title\u0007-step\nname\tend', 2);
-      await vi.advanceTimersByTimeAsync(500);
-
-      expect(liveStatusRefreshIntervalMs).toBe(500);
-      expect(app.lastFrame()).toContain('step=updated-step name end phase=2 pending=1');
-      expect(app.lastFrame()).not.toContain('\u001b');
-
-      settleMounted?.({
-        exit: { kind: 'result', result: { action: 'cancel', task: '' } },
-        carried: { history: [], queue: [] },
+      const result = await runTuiConversation({
+        cwd,
+        lang: 'en',
+        conversation,
+        initialEntries: [],
+        submitMode: 'chat',
+        autoSubmit: false,
+        modelLabel: () => 'mock/mock-model',
+        chooseAction: async () => ({ action: 'continue', task: '' }),
+        continuePrompt: 'continue',
+        onHandoff,
       });
-      await runPromise;
+
+      expect(result).toEqual({ action: 'cancel', task: '' });
+      expect(onHandoff).toHaveBeenCalledOnce();
+      expect(mounted).toHaveLength(2);
+      expect(mounted[1]?.conversation).toBe(conversation);
+      expect(mounted[1]?.initialEntries).toEqual([{
+        role: 'system',
+        content: 'The instruction was not sent.',
+      }]);
     } finally {
-      settleMounted?.({
-        exit: { kind: 'result', result: { action: 'cancel', task: '' } },
-        carried: { history: [], queue: [] },
-      });
-      rmSync(projectCwd, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
     }
   });
 });

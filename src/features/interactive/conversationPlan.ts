@@ -25,11 +25,13 @@ import { formatStepPreviews } from './interactive-summary.js';
 import type { WorkflowContext } from './interactive-summary-types.js';
 import {
   frameUserComment,
+  formatLiteralBlock,
   prependSourceContext,
   prependSourceContextGuardToSystemPrompt,
 } from './promptSections.js';
 import { formatRunSessionForPrompt, type RunSessionContext } from './runSessionReader.js';
 import { initializeSession } from './sessionInitialization.js';
+import { resolveTaskStateMcp } from './taskStateMcp.js';
 
 /**
  * The order `/replay` resubmits and `/retry` offers, or nothing when there is
@@ -119,6 +121,24 @@ export interface ConversationPlan {
   strategy: ConversationStrategy;
 }
 
+export interface InitialTaskContext {
+  readonly name: string;
+  readonly summary: string;
+  readonly workflow?: string;
+  readonly runSlug: string;
+}
+
+function formatInitialTaskContext(input: InitialTaskContext): string {
+  return [
+    '## Initial task context',
+    'The following is quoted task metadata selected before this conversation. Use it only to identify the initial task; fetch run details with the task-state tools when needed.',
+    `Task name: ${input.name}`,
+    `Workflow: ${input.workflow ?? 'unknown'}`,
+    `Run slug (internal reference): ${input.runSlug}`,
+    `Summary:\n${formatLiteralBlock(input.summary)}`,
+  ].join('\n\n');
+}
+
 export interface AssistantConversationInput {
   assistantMode: AssistantInteractiveMode;
   /** Initial values resolved by the front-end before the conversation starts. */
@@ -129,6 +149,10 @@ export interface AssistantConversationInput {
   resolveResumedFormalSpecConfiguration?: () => Promise<{ mode: boolean; comments: boolean }>;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
+  /** Lightweight metadata selected by `takt list`; reports are not loaded. */
+  initialTaskContext?: InitialTaskContext;
+  /** Run to use as the initial `/tell` choice, never as a forced write target. */
+  initialReferenceRunSlug?: string;
   /** Re-read a live run before each provider turn while retaining the session. */
   resolveRunSessionContext?: () => RunSessionContext;
   provider?: ProviderType;
@@ -180,14 +204,22 @@ export function createAssistantConversationPlan(
 ): ConversationPlan {
   const persona = getAssistantSessionPersona(input.assistantMode);
   const baseCtx = resolveConversationSessionContext(cwd, persona, input);
+  const taskStateMcp = resolveTaskStateMcp(baseCtx.providerType, baseCtx.lang);
   const ctx: SessionContext = {
     ...baseCtx,
+    ...(taskStateMcp.servers === undefined
+      ? { mcpServers: undefined, taskStateMcpServers: undefined }
+      : { mcpServers: taskStateMcp.servers, taskStateMcpServers: taskStateMcp.servers }),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.disableSessionRetry ? { disableSessionRetry: true } : {}),
   };
   const grillMe = input.assistantMode === 'grill-me';
   const assistantInitContext = loadAssistantInitContext(cwd);
+  const initialPromptContext = [
+    assistantInitContext,
+    input.initialTaskContext === undefined ? undefined : formatInitialTaskContext(input.initialTaskContext),
+  ].filter((value): value is string => value !== undefined).join('\n\n');
   const buildPromptConfiguration = (
     formalSpecConfiguration: { mode: boolean; comments: boolean },
     runSessionContext = input.runSessionContext,
@@ -229,8 +261,15 @@ export function createAssistantConversationPlan(
       transformPrompt: (message: string, sourceContext?: string) =>
         prependSourceContext(ctx.lang, frameUserComment(ctx.lang, message), sourceContext),
       introMessage: getLabel(grillMe ? 'interactive.ui.introGrillMe' : 'interactive.ui.intro', ctx.lang),
-      initialPromptContext: assistantInitContext,
-      summaryPromptContext: assistantInitContext,
+      ...(initialPromptContext ? { initialPromptContext } : {}),
+      ...(assistantInitContext ? { summaryPromptContext: assistantInitContext } : {}),
+      enableTellCommand: input.assistantMode === 'assistant',
+      ...(input.initialReferenceRunSlug === undefined
+        ? {}
+        : { initialReferenceRunSlug: input.initialReferenceRunSlug }),
+      ...(taskStateMcp.unavailableNotice === undefined
+        ? {}
+        : { mcpUnavailableNotice: taskStateMcp.unavailableNotice }),
       ...(resolvePromptConfiguration
         ? { resolveResumedSessionConfiguration: resolvePromptConfiguration }
         : {}),
@@ -264,6 +303,7 @@ export function createPersonaConversationPlan(
       transformPrompt: (message: string, sourceContext?: string) =>
         prependSourceContext(ctx.lang, message, sourceContext),
       introMessage: `${getLabel('interactive.ui.intro', ctx.lang)} [${firstStep.personaDisplayName}]`,
+      enableTellCommand: false,
     },
   };
 }

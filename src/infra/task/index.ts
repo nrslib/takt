@@ -12,6 +12,7 @@ export type {
   BranchListItem,
   SummarizeOptions,
   TaskListItem,
+  TaskState,
 } from './types.js';
 
 // Classes

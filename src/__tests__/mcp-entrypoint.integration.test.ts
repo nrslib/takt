@@ -6,6 +6,17 @@ import { describe, expect, it } from 'vitest';
 
 const SOURCE_STDIO_ENTRYPOINT_RUNNER = 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts';
 
+function firstTextContent(content: unknown): string {
+  if (!Array.isArray(content)) {
+    throw new Error('MCP result content is not an array');
+  }
+  const text = Reflect.get(content[0] as object, 'text');
+  if (typeof text !== 'string') {
+    throw new Error('MCP result does not contain text');
+  }
+  return text;
+}
+
 describe('MCP stdio entrypoint integration', () => {
   it('Given the source MCP entrypoint, When a stdio MCP client lists and calls tools, Then stdout remains valid MCP protocol', async () => {
     const cwd = mkdtempSync(join(process.cwd(), '.tmp-takt-mcp-stdio-'));
@@ -53,11 +64,30 @@ describe('MCP stdio entrypoint integration', () => {
         },
       });
 
-      expect(tools.tools.map((tool) => tool.name)).toEqual(['takt_enqueue_task']);
+      expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+        'takt_enqueue_task',
+        'takt_list_tasks',
+        'takt_get_run',
+        'takt_tell_run',
+      ]));
+      expect(tools.tools).toHaveLength(4);
       expect(result.isError).toBeUndefined();
-      expect(JSON.parse(String(result.content[0]?.text))).toEqual(expect.objectContaining({
+      expect(JSON.parse(firstTextContent(result.content))).toEqual(expect.objectContaining({
         tasksFile: join(cwd, '.takt', 'tasks.yaml'),
         workflow: 'default',
+      }));
+      const listed = await client.callTool({
+        name: 'takt_list_tasks',
+        arguments: { cwd },
+      });
+      expect(listed.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(listed.content))).toEqual(expect.objectContaining({
+        tasks: expect.arrayContaining([
+          expect.objectContaining({
+            status: 'pending',
+            workflow: 'default',
+          }),
+        ]),
       }));
       const stderr = Buffer.concat(stderrChunks).toString('utf-8');
       expect(stderr).not.toMatch(/(?:^|\n)(?:Error|TypeError|ReferenceError|SyntaxError):/u);

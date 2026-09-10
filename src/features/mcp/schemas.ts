@@ -66,4 +66,24 @@ const taskSaveOptionsSchema = z.object({
 
 export const enqueueTaskInputSchema = taskSaveOptionsSchema;
 
+export const listTasksInputSchema = z.object({
+  cwd: absolutePathSchema,
+}).strict();
+
+export const getRunInputSchema = z.object({
+  cwd: absolutePathSchema,
+  runSlug: z.string().trim().min(1).max(255),
+}).strict();
+
+export const tellRunInputSchema = z.object({
+  cwd: absolutePathSchema,
+  runSlug: z.string().trim().min(1).max(255),
+  content: z.string().max(MCP_TASK_MAX_LENGTH).refine((value) => value.trim().length > 0, {
+    message: 'content is required',
+  }).describe('Additional instruction to deliver to the selected running clone task.'),
+}).strict();
+
 export type EnqueueTaskInput = z.infer<typeof enqueueTaskInputSchema>;
+export type ListTasksInput = z.infer<typeof listTasksInputSchema>;
+export type GetRunInput = z.infer<typeof getRunInputSchema>;
+export type TellRunInput = z.infer<typeof tellRunInputSchema>;

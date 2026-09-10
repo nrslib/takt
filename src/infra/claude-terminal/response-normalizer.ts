@@ -48,6 +48,15 @@ function emitToolUseEvents(onStream: StreamCallback | undefined, events: ClaudeT
           id: event.id,
         },
       });
+    } else if (event.type === 'tool_result') {
+      onStream({
+        type: 'tool_result',
+        data: {
+          id: event.id,
+          content: event.content,
+          isError: event.isError,
+        },
+      });
     }
   }
 }

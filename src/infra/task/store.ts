@@ -1,8 +1,17 @@
 import * as fs from 'node:fs';
+import type { Stats } from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TasksFileSchema, serializeTasksFileData, type TasksFileData } from './schema.js';
 import { createLogger } from '../../shared/utils/index.js';
+import {
+  ensurePrivateDirectory,
+  PrivateArtifactPublicationConflictError,
+  readPrivateFileState,
+  writeNewPrivateFileWithMode,
+  writePrivateFileWithMode,
+  type PrivateFileReadSnapshot,
+} from '../../shared/utils/private-file.js';
 
 const log = createLogger('task-store');
 const LOCK_RETRY_DELAY_MS = 25;
@@ -12,6 +21,45 @@ const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 function isFileSystemError(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code;
+}
+
+function isExistingPrivateFileConflict(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('already exists');
+}
+
+function isLockCreationContention(error: unknown, lockPath: string): boolean {
+  if (error instanceof PrivateArtifactPublicationConflictError || isExistingPrivateFileConflict(error)) {
+    return true;
+  }
+  try {
+    const current = readPrivateFileState(lockPath);
+    return isExistingLockSnapshot(current);
+  } catch (readError) {
+    if (readError instanceof PrivateArtifactPublicationConflictError) {
+      return true;
+    }
+    throw readError;
+  }
+}
+
+interface ExistingLockSnapshot {
+  readonly state: {
+    readonly path: string;
+    readonly exists: true;
+    readonly stat: Stats;
+    readonly contentSha256: string;
+  };
+  readonly content: Buffer;
+}
+
+function isExistingLockSnapshot(snapshot: PrivateFileReadSnapshot): snapshot is ExistingLockSnapshot {
+  return snapshot.state.exists && 'content' in snapshot;
+}
+
+function hasSameLockSnapshot(left: ExistingLockSnapshot, right: ExistingLockSnapshot): boolean {
+  return left.state.stat.dev === right.state.stat.dev
+    && left.state.stat.ino === right.state.stat.ino
+    && left.content.toString('utf-8') === right.content.toString('utf-8');
 }
 
 function waitForLockRetry(): void {
@@ -35,7 +83,7 @@ export class TaskStore {
   }
 
   ensureDirs(): void {
-    fs.mkdirSync(this.taktDir, { recursive: true });
+    ensurePrivateDirectory(this.taktDir);
   }
 
   read(): TasksFileData {
@@ -54,17 +102,12 @@ export class TaskStore {
   private readUnsafe(): TasksFileData {
     this.ensureDirs();
 
-    if (!fs.existsSync(this.tasksFile)) {
+    const snapshot = readPrivateFileState(this.tasksFile);
+    if (!isExistingLockSnapshot(snapshot)) {
       return { tasks: [] };
     }
 
-    let raw: string;
-    try {
-      raw = fs.readFileSync(this.tasksFile, 'utf-8');
-    } catch (err) {
-      log.error('Failed to read tasks file', { file: this.tasksFile, error: String(err) });
-      throw err;
-    }
+    const raw = snapshot.content.toString('utf-8');
 
     try {
       const parsed = parseYaml(raw) as unknown;
@@ -80,10 +123,8 @@ export class TaskStore {
 
   private writeUnsafe(state: TasksFileData): void {
     this.ensureDirs();
-    const tempPath = `${this.tasksFile}.tmp-${process.pid}-${Date.now()}`;
     const yaml = stringifyYaml(serializeTasksFileData(state));
-    fs.writeFileSync(tempPath, yaml, 'utf-8');
-    fs.renameSync(tempPath, this.tasksFile);
+    writePrivateFileWithMode(this.tasksFile, yaml, 0o600);
   }
 
   private withLock<T>(fn: () => T): T {
@@ -91,16 +132,15 @@ export class TaskStore {
       throw new Error('TaskStore: reentrant lock detected');
     }
     this.locked = true;
-    let acquired = false;
+    let acquired: ExistingLockSnapshot | undefined;
     try {
       this.ensureDirs();
-      this.acquireFileLock();
-      acquired = true;
+      acquired = this.acquireFileLock();
       return fn();
     } finally {
       try {
-        if (acquired) {
-          this.releaseFileLock();
+        if (acquired !== undefined) {
+          this.releaseFileLock(acquired);
         }
       } finally {
         this.locked = false;
@@ -108,16 +148,19 @@ export class TaskStore {
     }
   }
 
-  private acquireFileLock(): void {
+  private acquireFileLock(): ExistingLockSnapshot {
     const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    const content = `${process.pid}\n`;
     while (true) {
       try {
-        const fd = fs.openSync(this.lockFile, 'wx', 0o600);
-        fs.writeSync(fd, `${process.pid}\n`);
-        fs.closeSync(fd);
-        return;
+        writeNewPrivateFileWithMode(this.lockFile, content, 0o600);
+        const acquired = readPrivateFileState(this.lockFile);
+        if (!isExistingLockSnapshot(acquired) || acquired.content.toString('utf-8') !== content) {
+          throw new Error(`TaskStore: lock identity changed after acquisition: ${this.lockFile}`);
+        }
+        return acquired;
       } catch (error) {
-        if (!isFileSystemError(error, 'EEXIST')) {
+        if (!isLockCreationContention(error, this.lockFile)) {
           throw error;
         }
       }
@@ -134,33 +177,30 @@ export class TaskStore {
     // A crashed holder cannot release its lock file. Steal immediately when the
     // recorded holder PID is no longer alive; fall back to an mtime threshold
     // when the lock content is unreadable or the holder cannot be probed.
-    if (this.isLockHolderDead()) {
-      this.unlinkLockFile();
-      return;
-    }
-    let modifiedAt: number;
+    let current: PrivateFileReadSnapshot;
     try {
-      modifiedAt = fs.statSync(this.lockFile).mtimeMs;
+      current = readPrivateFileState(this.lockFile);
     } catch (error) {
-      if (isFileSystemError(error, 'ENOENT')) {
+      if (error instanceof PrivateArtifactPublicationConflictError) {
         return;
       }
       throw error;
     }
-    if (Date.now() - modifiedAt <= LOCK_STALE_MS) {
+    if (!isExistingLockSnapshot(current)) {
       return;
     }
-    this.unlinkLockFile();
+    if (this.isLockHolderDead(current)) {
+      this.unlinkLockFile(current);
+      return;
+    }
+    if (Date.now() - current.state.stat.mtimeMs <= LOCK_STALE_MS) {
+      return;
+    }
+    this.unlinkLockFile(current);
   }
 
-  private isLockHolderDead(): boolean {
-    let content: string;
-    try {
-      content = fs.readFileSync(this.lockFile, 'utf-8');
-    } catch {
-      return false;
-    }
-    const pid = Number.parseInt(content.trim(), 10);
+  private isLockHolderDead(snapshot: ExistingLockSnapshot): boolean {
+    const pid = Number.parseInt(snapshot.content.toString('utf-8').trim(), 10);
     if (!Number.isSafeInteger(pid) || pid <= 0) {
       return false;
     }
@@ -172,7 +212,21 @@ export class TaskStore {
     }
   }
 
-  private unlinkLockFile(): void {
+  private unlinkLockFile(expected: ExistingLockSnapshot): void {
+    for (let verification = 0; verification < 2; verification += 1) {
+      let current: PrivateFileReadSnapshot;
+      try {
+        current = readPrivateFileState(this.lockFile);
+      } catch (error) {
+        if (error instanceof PrivateArtifactPublicationConflictError) {
+          return;
+        }
+        throw error;
+      }
+      if (!isExistingLockSnapshot(current) || !hasSameLockSnapshot(expected, current)) {
+        return;
+      }
+    }
     try {
       fs.unlinkSync(this.lockFile);
     } catch (error) {
@@ -182,7 +236,7 @@ export class TaskStore {
     }
   }
 
-  private releaseFileLock(): void {
-    this.unlinkLockFile();
+  private releaseFileLock(acquired: ExistingLockSnapshot): void {
+    this.unlinkLockFile(acquired);
   }
 }

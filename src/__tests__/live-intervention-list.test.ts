@@ -5,14 +5,24 @@ const {
   mockSelectOption,
   mockListAllTaskItems,
   mockForceFailRunningTask,
-  mockRunLiveInterventionMode,
+  mockRunTui,
   mockListTasksNonInteractive,
+  mockResolveConfigValues,
+  mockSelectAndExecuteTask,
+  mockCreateIssueAndSaveTask,
+  mockPromptLabelSelection,
+  mockSaveTaskFromInteractive,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
   mockListAllTaskItems: vi.fn(),
   mockForceFailRunningTask: vi.fn(),
-  mockRunLiveInterventionMode: vi.fn(),
+  mockRunTui: vi.fn(),
   mockListTasksNonInteractive: vi.fn(),
+  mockResolveConfigValues: vi.fn(),
+  mockSelectAndExecuteTask: vi.fn(),
+  mockCreateIssueAndSaveTask: vi.fn(),
+  mockPromptLabelSelection: vi.fn(),
+  mockSaveTaskFromInteractive: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -61,8 +71,27 @@ vi.mock('../features/tasks/list/listNonInteractive.js', () => ({
   listTasksNonInteractive: mockListTasksNonInteractive,
 }));
 
-vi.mock('../features/tasks/list/liveInterventionMode.js', () => ({
-  runLiveInterventionMode: mockRunLiveInterventionMode,
+vi.mock('../features/tui/runTui.js', () => ({
+  runTui: mockRunTui,
+}));
+
+vi.mock('../features/tui/index.js', () => ({
+  runTui: mockRunTui,
+}));
+
+vi.mock('../infra/config/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
+}));
+
+vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
+  selectAndExecuteTask: (...args: unknown[]) => mockSelectAndExecuteTask(...args),
+}));
+
+vi.mock('../features/tasks/add/index.js', () => ({
+  createIssueAndSaveTask: (...args: unknown[]) => mockCreateIssueAndSaveTask(...args),
+  promptLabelSelection: (...args: unknown[]) => mockPromptLabelSelection(...args),
+  saveTaskFromInteractive: (...args: unknown[]) => mockSaveTaskFromInteractive(...args),
 }));
 
 import { listTasks } from '../features/tasks/list/index.js';
@@ -81,29 +110,86 @@ const eligibleRunningTask: TaskListItem = {
   worktreePath: '/project/.takt/worktrees/running-task',
 };
 
-describe('live intervention task-list entry', () => {
+describe('running task-list conversation entry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSelectOption.mockResolvedValue(null);
-    mockRunLiveInterventionMode.mockResolvedValue(undefined);
-    mockListTasksNonInteractive.mockResolvedValue(undefined);
+  mockRunTui.mockResolvedValue({ kind: 'cancelled' });
+  mockListTasksNonInteractive.mockResolvedValue(undefined);
+  mockResolveConfigValues.mockReturnValue({ language: 'ja', interactivePreviewSteps: 3 });
+  mockSelectAndExecuteTask.mockResolvedValue(undefined);
+  mockCreateIssueAndSaveTask.mockResolvedValue(undefined);
+  mockPromptLabelSelection.mockResolvedValue(['enhancement']);
+  mockSaveTaskFromInteractive.mockResolvedValue(undefined);
   });
 
-  it('opens live intervention for a running task with run identity and worktree', async () => {
+  it('opens the normal TUI with the selected running task as initial context', async () => {
     mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
     mockSelectOption.mockResolvedValueOnce('running:0');
 
     await listTasks('/project');
 
-    expect(mockRunLiveInterventionMode).toHaveBeenCalledTimes(1);
-    expect(mockRunLiveInterventionMode.mock.calls[0]?.slice(0, 2)).toEqual([
-      '/project',
-      eligibleRunningTask,
-    ]);
+    expect(mockRunTui).toHaveBeenCalledTimes(1);
+    expect(mockRunTui).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/project',
+      lang: 'ja',
+      previewCount: 3,
+      userMessage: eligibleRunningTask.content,
+      initialTellRunSlug: eligibleRunningTask.runSlug,
+      initialTaskContext: {
+        name: eligibleRunningTask.name,
+        summary: eligibleRunningTask.content,
+        runSlug: eligibleRunningTask.runSlug,
+      },
+    }));
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
   });
 
-  it('keeps force-fail for a running task without live-run identity', async () => {
+  it.each(['execute', 'save_task', 'create_issue', 'cancel'] as const)(
+    'dispatches the TUI %s result to the matching list operation',
+    async (action) => {
+    const result = {
+      action,
+      task: 'confirmed task',
+      ...(action === 'execute' ? { interactiveMetadata: { confirmed: true, task: 'confirmed task' } } : {}),
+      ...(action === 'execute' ? { attachments: [{ placeholder: '{{image:1}}', path: '/tmp/image.png' }] } : {}),
+    } as never;
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce(null);
+    mockRunTui.mockImplementationOnce(async (input: { dispatch?: (workflow: string, value: typeof result) => Promise<void> }) => {
+      await input.dispatch?.('selected-workflow', result);
+      return { kind: 'selected' };
+    });
+
+    await listTasks('/project');
+
+    if (action === 'execute') {
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledWith('/project', 'confirmed task', expect.objectContaining({
+        workflow: 'selected-workflow',
+        interactiveUserInput: true,
+        interactiveMetadata: { confirmed: true, task: 'confirmed task' },
+        skipTaskList: true,
+        failureMode: 'return',
+        attachments: [{ placeholder: '{{image:1}}', path: '/tmp/image.png' }],
+      }), undefined);
+    } else if (action === 'save_task') {
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith('/project', 'confirmed task', 'selected-workflow', {});
+    } else if (action === 'create_issue') {
+      expect(mockPromptLabelSelection).toHaveBeenCalledWith('ja');
+      expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith('/project', 'confirmed task', 'selected-workflow', {
+        labels: ['enhancement'],
+      });
+    } else {
+      expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+      expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+      expect(mockCreateIssueAndSaveTask).not.toHaveBeenCalled();
+    }
+    },
+  );
+
+  it('keeps force-fail for a running task without clone identity', async () => {
     mockListAllTaskItems.mockReturnValue([runningTask]);
     mockSelectOption
       .mockResolvedValueOnce('running:0')
@@ -111,13 +197,13 @@ describe('live intervention task-list entry', () => {
 
     await listTasks('/project');
 
-    expect(mockRunLiveInterventionMode).not.toHaveBeenCalled();
+    expect(mockRunTui).not.toHaveBeenCalled();
     expect(mockForceFailRunningTask).toHaveBeenCalledWith(runningTask, '/project');
   });
 
-  it('offers force-fail when the live run cannot be opened', async () => {
+  it('offers force-fail when the normal TUI cannot be opened', async () => {
     mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
-    mockRunLiveInterventionMode.mockRejectedValueOnce(new Error('Run is no longer running'));
+    mockRunTui.mockRejectedValueOnce(new Error('Run is no longer running'));
     mockSelectOption
       .mockResolvedValueOnce('running:0')
       .mockResolvedValueOnce('force_fail');
@@ -136,6 +222,6 @@ describe('live intervention task-list entry', () => {
       format: 'json',
     });
     expect(mockSelectOption).not.toHaveBeenCalled();
-    expect(mockRunLiveInterventionMode).not.toHaveBeenCalled();
+    expect(mockRunTui).not.toHaveBeenCalled();
   });
 });

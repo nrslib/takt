@@ -283,7 +283,9 @@ steps:
 
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。
 
-TAKT 还提供两个客户端集成入口：`takt-acp` 通过 stdio JSON-RPC 作为 [Agent Client Protocol](./cli-reference.zh-CN.md#acp-agent) agent 运行；`takt-mcp` 作为 stdio [MCP server](./cli-reference.zh-CN.md#mcp-server) 运行，让 MCP 客户端（Codex、Claude Code 等）可以加入任务队列。使用 `takt run` 或 `takt watch` 执行待处理任务。
+TAKT 还提供两个客户端集成入口：`takt-acp` 通过 stdio JSON-RPC 作为 [Agent Client Protocol](./cli-reference.zh-CN.md#acp-agent) agent 运行；`takt-mcp` 作为 stdio [MCP server](./cli-reference.zh-CN.md#mcp-server) 运行，让 MCP 客户端（Codex、Claude Code 等）可以加入任务队列、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令。使用 `takt run` 或 `takt watch` 执行待处理任务。
+
+普通 `takt` assistant 对话在 provider 支持 MCP 时也可以只读查看相同的 task 状态。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标并确认后发送。
 
 ### 即时 exec 模式
 

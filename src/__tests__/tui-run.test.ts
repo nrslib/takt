@@ -35,6 +35,7 @@ const {
   mockLoadPersonaSessions,
   mockTakeSessionState,
   mockResolveAssistantProviderModel,
+  mockRunTellCommand,
   mockInfo,
   mockWatchProcessExit,
   mockReleaseProcessExit,
@@ -54,6 +55,7 @@ const {
   mockLoadPersonaSessions: vi.fn(),
   mockTakeSessionState: vi.fn(),
   mockResolveAssistantProviderModel: vi.fn(),
+  mockRunTellCommand: vi.fn(),
   mockInfo: vi.fn(),
   mockWatchProcessExit: vi.fn(),
   mockReleaseProcessExit: vi.fn(),
@@ -103,6 +105,10 @@ vi.mock('../features/interactive/providerSelection.js', () => ({
   selectInteractiveProvider: (...args: unknown[]) => mockSelectInteractiveProvider(...args),
 }));
 
+vi.mock('../features/interactive/tellCommand.js', () => ({
+  runTellCommand: (...args: unknown[]) => mockRunTellCommand(...args),
+}));
+
 vi.mock('../features/interactive/assistantConfig.js', () => ({
   resolveAssistantProviderModel: (...args: unknown[]) => mockResolveAssistantProviderModel(...args),
 }));
@@ -149,6 +155,7 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
 import { runTui } from '../features/tui/runTui.js';
 import { takeTerminalOwnership } from '../features/tui/terminalOwnership.js';
 import { ProviderNotConfiguredError } from '../features/interactive/sessionInitialization.js';
+import { getProvider } from '../infra/providers/index.js';
 
 const originalStdoutWrite = process.stdout.write;
 
@@ -283,6 +290,7 @@ beforeEach(() => {
     model: overrides?.model ?? 'mock-model',
   }));
   mockSelectRecentSession.mockResolvedValue(null);
+  mockRunTellCommand.mockResolvedValue('The instruction was sent.');
   mockSelectAction.mockResolvedValue('execute');
   mockLoadPersonaSessions.mockReturnValue({});
   mockTakeSessionState.mockReturnValue(null);
@@ -310,7 +318,7 @@ describe('runTui', () => {
     expect(tree.mounts.count).toBe(1);
     const intro = tree.conversationProps().initialEntries.map((entry) => entry.content).join('\n');
     expect(intro).toBe(
-      'Interactive mode - describe your task. When ready, use /go to create the instruction and run it.',
+      'Interactive mode - describe your task. When ready, use /go to create the instruction and run it, or /tell to send an additional instruction to a running task.',
     );
 
     tree.conversationProps().onExit({ kind: 'result', result: { action: 'execute', task: 'do it' } }, { history: [], queue: [] });
@@ -331,6 +339,55 @@ describe('runTui', () => {
     expect(mockDetermineWorkflow).toHaveBeenCalledWith('/repo', 'review');
     tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
     await expect(run).resolves.toMatchObject({ workflowId: 'review' });
+  });
+
+  it('should route the TUI /tell handoff through the current reference and resume the same conversation', async () => {
+    const currentReference = vi.fn(() => 'current-run');
+    const snapshotHistory = vi.fn(() => [
+      { role: 'user' as const, content: 'Inspect the authentication task.' },
+      { role: 'assistant' as const, content: 'The task is currently in review.' },
+    ]);
+    const conversation = createConversationDouble({
+      getReferenceRunSlug: currentReference,
+      snapshotHistory,
+    });
+    mockCreateTuiConversation.mockReturnValue(conversation);
+    const tree = scriptRender();
+    const run = startRun({ initialTellRunSlug: 'initial-run' });
+    await waitForMount(tree, 1);
+
+    tree.conversationProps().onExit(
+      { kind: 'handoff', id: 'tell', text: '' },
+      { history: ['carried by the view'], queue: [] },
+    );
+    await waitForMount(tree, 2);
+
+    expect(mockRunTellCommand).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/repo',
+      lang: 'en',
+      inlineText: '',
+      history: [
+        { role: 'user', content: 'Inspect the authentication task.' },
+        { role: 'assistant', content: 'The task is currently in review.' },
+      ],
+      preferredRunSlug: 'current-run',
+      sessionContext: expect.objectContaining({
+        providerType: 'mock',
+        lang: 'en',
+      }),
+    }));
+    expect(currentReference).toHaveBeenCalled();
+    expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+    expect(tree.conversationProps().initialEntries).toEqual([{
+      role: 'system',
+      content: 'The instruction was sent.',
+    }]);
+
+    tree.conversationProps().onExit(
+      { kind: 'result', result: { action: 'cancel', task: '' } },
+      { history: [], queue: [] },
+    );
+    await run;
   });
 
   it('should report a cancelled workflow selection without mounting Ink', async () => {
@@ -418,7 +475,15 @@ describe('runTui', () => {
         .mockReturnValueOnce(first)
         .mockReturnValueOnce(second);
       const tree = scriptRender();
-      const run = startRun();
+      const run = startRun({
+        initialTellRunSlug: 'initial-run',
+        initialTaskContext: {
+          name: 'authentication',
+          summary: 'Add login handling',
+          workflow: 'review-fix',
+          runSlug: 'initial-run',
+        },
+      });
       await waitForMount(tree, 1);
 
       expect(mockCreateTuiConversation).toHaveBeenCalledWith(expect.objectContaining({
@@ -437,6 +502,9 @@ describe('runTui', () => {
         ['assistant', 'grill-me', 'persona'],
       );
       expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+      expect(tree.conversationProps().conversation.commandAvailability.enableTellCommand).toBe(false);
+      expect(tree.conversationProps().conversation.isCommandLine('/tell do not change scope')).toBe(false);
+      expect(tree.conversationProps().conversation.resolveLocalCommand('/tell do not change scope')).toBeNull();
 
       await tree.conversationProps().conversation.submit(submitInput());
 
@@ -444,6 +512,12 @@ describe('runTui', () => {
       expect(mockCreateTuiConversation.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
         workflowContext: expect.objectContaining({ name: 'default' }),
         handoffHistory: history,
+        plan: expect.objectContaining({
+          strategy: expect.objectContaining({
+            initialReferenceRunSlug: 'initial-run',
+            initialPromptContext: expect.stringContaining('Task name: authentication'),
+          }),
+        }),
       }));
       expect(second.submit).toHaveBeenCalledTimes(1);
 
@@ -1133,6 +1207,93 @@ describe('runTui', () => {
         { history: [], queue: [] },
       );
       await run;
+    });
+
+    it('should notify after switching to an MCP-unsupported provider and accept the next input', async () => {
+      const initial = createConversationDouble();
+      const switched = createConversationDouble({
+        submit: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'continued after provider switch',
+        }),
+      });
+      mockCreateTuiConversation
+        .mockReturnValueOnce(initial)
+        .mockReturnValueOnce(switched);
+      mockSelectInteractiveProvider.mockResolvedValue('pi');
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'provider' },
+        { history: ['/provider'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      expect(tree.conversationProps().initialEntries).toEqual([{
+        role: 'system',
+        content: expect.stringContaining('MCP'),
+      }]);
+      expect(switched.submit).not.toHaveBeenCalled();
+
+      await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toEqual({
+        kind: 'assistant_response',
+        content: 'continued after provider switch',
+      });
+      expect(switched.submit).toHaveBeenCalledOnce();
+      expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.plan.ctx.providerType).toBe('pi');
+
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+    });
+
+    it('should retain real conversation history when switching to an MCP-unsupported provider', async () => {
+      realTuiConversation.current = true;
+      const piProvider = getProvider('pi');
+      const call = vi.fn(async (prompt: string) => ({
+        persona: 'interactive',
+        status: 'done' as const,
+        content: 'continued after provider switch',
+        timestamp: new Date(),
+        prompt,
+      }));
+      const setup = vi.spyOn(piProvider, 'setup').mockReturnValue({ call });
+      try {
+        mockSelectInteractiveProvider.mockResolvedValue('pi');
+        const tree = scriptRender();
+        const run = startRun({ userMessage: 'prior task context' });
+        await waitForMount(tree, 1);
+
+        tree.conversationProps().onExit(
+          { kind: 'handoff', id: 'provider' },
+          { history: ['/provider'], queue: [] },
+        );
+        await waitForMount(tree, 2);
+
+        expect(tree.conversationProps().initialEntries).toEqual([{
+          role: 'system',
+          content: expect.stringContaining('MCP'),
+        }]);
+
+        await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toMatchObject({
+          kind: 'assistant_response',
+          content: 'continued after provider switch',
+        });
+        expect(call).toHaveBeenCalledOnce();
+        expect(call.mock.calls[0]?.[0]).toContain('User: prior task context');
+
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
+      } finally {
+        setup.mockRestore();
+      }
     });
 
     it('should keep the resolved provider model visible during a later mode handoff', async () => {

@@ -65,6 +65,7 @@
     "eval:prompts:final-readiness-supervision": "node --test eval/providers/cli-review.test.mjs eval/asserts/prepare-dynamic-facet-composition.test.mjs && node eval/scripts/prepare.mjs final-readiness-supervision final-readiness-supervision-phase2 && node eval/scripts/run-evals.mjs final-readiness-supervision final-readiness-preservation --no-cache",
     "eval:prompts:initial-review-external-identity-wiring": "node eval/scripts/prepare.mjs initial-review-external-identity-wiring && node eval/scripts/run-evals.mjs initial-review-external-identity-wiring",
     "eval:prompts:final-readiness-precision": "node eval/scripts/prepare.mjs final-readiness-precision && node eval/scripts/run-evals.mjs final-readiness-precision",
+    "eval:tell": "vitest run --config vitest.config.tell-eval.ts",
     "test": "npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs",
     "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",
     "test:types": "tsc --noEmit -p tsconfig.tests.json",

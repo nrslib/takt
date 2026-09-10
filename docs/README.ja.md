@@ -289,7 +289,9 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。
 
-クライアント連携用のエントリポイントも 2 つ同梱しています。`takt-acp` は TAKT を stdio JSON-RPC 上の [Agent Client Protocol](./cli-reference.ja.md#acp-agent) エージェントとして起動し、`takt-mcp` は stdio の [MCP サーバー](./cli-reference.ja.md#mcp-server) として起動して、MCP クライアント（Codex、Claude Code など）から既存または新規 Issue を任意で紐付けたタスクを積めます。pending タスクの実行には `takt run` または `takt watch` を使用します。
+クライアント連携用のエントリポイントも 2 つ同梱しています。`takt-acp` は TAKT を stdio JSON-RPC 上の [Agent Client Protocol](./cli-reference.ja.md#acp-agent) エージェントとして起動し、`takt-mcp` は stdio の [MCP サーバー](./cli-reference.ja.md#mcp-server) として起動して、MCP クライアント（Codex、Claude Code など）からタスクを積み、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。pending タスクの実行には `takt run` または `takt watch` を使用します。
+
+通常の `takt` assistant 会話でも、MCP 対応 provider なら同じ task 状態を読み取り専用で確認できます。新しいタスクは `/go`、実行中 worktree clone への追加指示は `/tell` で対象を選び、確認してから送ります。
 
 ### インスタント exec モード
 

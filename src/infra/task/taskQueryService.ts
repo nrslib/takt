@@ -1,5 +1,12 @@
-import type { TaskInfo, TaskListItem } from './types.js';
-import { toExceededTaskItem, toFailedTaskItem, toPendingTaskItem, toTaskInfo, toTaskListItem } from './mapper.js';
+import type { TaskInfo, TaskListItem, TaskState } from './types.js';
+import {
+  toExceededTaskItem,
+  toFailedTaskItem,
+  toPendingTaskItem,
+  toTaskInfo,
+  toTaskListItem,
+  toTaskState,
+} from './mapper.js';
 import { TaskStore } from './store.js';
 
 export class TaskQueryService {
@@ -26,6 +33,11 @@ export class TaskQueryService {
   listAllTaskItems(): TaskListItem[] {
     const state = this.store.read();
     return state.tasks.map((task) => toTaskListItem(this.projectDir, this.tasksFile, task));
+  }
+
+  listTaskStateItems(): TaskState[] {
+    const state = this.store.read();
+    return state.tasks.map((task) => toTaskState(this.tasksFile, task));
   }
 
   listFailedTasks(): TaskListItem[] {

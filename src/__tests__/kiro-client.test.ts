@@ -24,6 +24,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { callKiro } from '../infra/kiro/client.js';
+import { formatTaskStateReferenceMarker } from '../shared/task-state-reference.js';
 
 type SpawnScenario = {
   stdout?: string;
@@ -234,6 +235,10 @@ describe('callKiro', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
+      '--engine',
+      'v2',
+      '--output-format',
+      'stream-json',
       '--trust-all-tools',
       '--resume-id',
       'sess-prev',
@@ -501,6 +506,10 @@ describe('callKiro', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
+      '--engine',
+      'v2',
+      '--output-format',
+      'stream-json',
       '--trust-tools=read,grep',
       '\n- fix the Kiro provider',
     ]);
@@ -521,7 +530,34 @@ describe('callKiro', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
+      '--engine',
+      'v2',
+      '--output-format',
+      'stream-json',
       '\n--help is part of the task text',
+    ]);
+  });
+
+  it('Given prompt contains an engine option string, When called, Then keeps the prompt separate from the fixed engine', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    const result = await callKiro('coder', 'Explain --engine v1 in the task text', {
+      cwd: '/repo',
+    });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toEqual([
+      'chat',
+      '--no-interactive',
+      '--engine',
+      'v2',
+      '--output-format',
+      'stream-json',
+      'Explain --engine v1 in the task text',
     ]);
   });
 
@@ -544,6 +580,10 @@ describe('callKiro', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
+      '--engine',
+      'v2',
+      '--output-format',
+      'stream-json',
       '--trust-tools=read,grep',
       'inspect & whoami | cat',
     ]);
@@ -1029,7 +1069,15 @@ describe('callKiro session ID resolution (issue #781)', () => {
       string[],
       { cwd?: string },
     ];
-    expect(firstArgs).toEqual(['chat', '--no-interactive', 'implement feature']);
+    expect(firstArgs).toEqual([
+      'chat',
+      '--no-interactive',
+      '--engine',
+      'v2',
+      '--output-format',
+      'stream-json',
+      'implement feature',
+    ]);
     expect(secondArgs).toEqual(['chat', '--list-sessions']);
     expect(secondOptions.cwd).toBe('/repo');
   });
@@ -1274,5 +1322,75 @@ describe('callKiro output cleanup (issue #781)', () => {
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('Implementation complete.');
+  });
+
+  it('Given stream-json MCP events, When called, Then forwards the tool result as structured events', async () => {
+    const marker = formatTaskStateReferenceMarker('run-from-kiro');
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          kind: 'AssistantMessage',
+          sessionId: 'kiro-session',
+          content: [{
+            kind: 'toolUse',
+            toolUseId: 'kiro-tool-1',
+            name: 'takt_get_run',
+            input: { runSlug: 'run-from-kiro' },
+          }],
+        }),
+        JSON.stringify({
+          kind: 'ToolResults',
+          sessionId: 'kiro-session',
+          content: [{
+            kind: 'toolResult',
+            toolUseId: 'kiro-tool-1',
+            status: 'success',
+            content: [{ kind: 'text', text: `run details\n${marker}` }],
+          }],
+        }),
+        JSON.stringify({
+          kind: 'AssistantMessage',
+          sessionId: 'kiro-session',
+          content: [{ kind: 'text', text: 'answer' }],
+        }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callKiro('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args.slice(0, 7)).toEqual([
+      'chat',
+      '--no-interactive',
+      '--engine',
+      'v2',
+      '--output-format',
+      'stream-json',
+      'inspect task',
+    ]);
+
+    expect(result).toMatchObject({
+      status: 'done',
+      content: 'answer',
+      sessionId: 'kiro-session',
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_use',
+      data: {
+        id: 'kiro-tool-1',
+        tool: 'takt_get_run',
+        input: { runSlug: 'run-from-kiro' },
+      },
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_result',
+      data: {
+        id: 'kiro-tool-1',
+        content: `run details\n${marker}`,
+        isError: false,
+      },
+    });
   });
 });

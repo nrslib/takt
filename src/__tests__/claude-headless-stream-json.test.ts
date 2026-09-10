@@ -5,6 +5,7 @@ import {
   aggregateResultFromStdout,
   tryExtractTextFromStreamJsonLine,
   tryExtractThinkingFromStreamJsonLine,
+  tryExtractToolResultFromStreamJsonLine,
   tryExtractToolUseFromStreamJsonLine,
 } from '../infra/claude-headless/stream-json-lines.js';
 
@@ -45,6 +46,47 @@ describe('claude-headless stream-json line parsing', () => {
       id: 'tool-2',
       input: { file_path: 'src/b.ts' },
     }]);
+  });
+
+  it('extracts successful and failed tool_result blocks from a user stream-json line', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool-1',
+            content: [{ type: 'text', text: '\u001eTAKT_TASK_REFERENCE_RUN_SLUG:run-a\u001f' }],
+          },
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool-2',
+            content: 'lookup failed',
+            is_error: true,
+          },
+        ],
+      },
+    });
+
+    expect(tryExtractToolResultFromStreamJsonLine(line)).toEqual([
+      {
+        id: 'tool-1',
+        content: '\u001eTAKT_TASK_REFERENCE_RUN_SLUG:run-a\u001f',
+        isError: false,
+      },
+      {
+        id: 'tool-2',
+        content: 'lookup failed',
+        isError: true,
+      },
+    ]);
+  });
+
+  it('does not infer tool results from an ordinary final result line', () => {
+    expect(tryExtractToolResultFromStreamJsonLine(JSON.stringify({
+      type: 'result',
+      result: '\u001eTAKT_TASK_REFERENCE_RUN_SLUG:displayed-text\u001f',
+    }))).toEqual([]);
   });
 
   it('extracts text from a stream-json text line', () => {
