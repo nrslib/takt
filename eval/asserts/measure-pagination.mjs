@@ -5,6 +5,10 @@ import { pathToFileURL } from 'node:url';
 export async function measurePagination(projectDirectory) {
   const { readHistoryPage } = await import(pathToFileURL(join(projectDirectory, 'src/history.mjs')).href);
   const { createRecordRepository } = await import(pathToFileURL(join(projectDirectory, 'src/repository.mjs')).href);
+  return measurePaginationAdapters(readHistoryPage, createRecordRepository);
+}
+
+export async function measurePaginationAdapters(readHistoryPage, createRecordRepository) {
   const measurements = [];
   for (const recordCount of [45, 2000]) {
     const database = new DatabaseSync(':memory:');

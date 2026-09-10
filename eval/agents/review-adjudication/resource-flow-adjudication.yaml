@@ -1,0 +1,39 @@
+description: '資源境界の一般化: adjudication'
+prompts:
+  - file://../../prompts/resource-flow-adjudication.phase1.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/resource-flow-adjudication
+      isolate_working_dir: true
+      disable_inherited_skills: true
+evaluateOptions:
+  maxConcurrency: 2
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/resource-flow-adjudication
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+tests:
+  - description: '取得・保持の欠陥と正当な全量処理を区別する'
+    vars:
+      task: file://../../cases/resource-flow-adjudication-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: resource-boundary/adjudication
+        value: |
+          FLOW-01 と FLOW-02 を今回の修正対象として維持すること。
+          応答は短い・一度に書くのは1ブロック・数値SLOや実障害がないという反論で免除しないこと。
+          FLOW-03、FLOW-04、FLOW-05 は修正対象から除外すること。全件転送、全入力の集計、上限16件の全件取得は正常な契約である。
+          deliver の修正は全データを貯めず逐次転送することであり、全件出力を途中で打ち切らないこと。
+          preview と deliver の異なる原因を1箇所の修正だけで解消した扱いにしないこと。

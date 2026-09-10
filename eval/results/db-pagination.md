@@ -1,5 +1,9 @@
 # Database pagination evaluation
 
+This records the initial, pagination-specific policy experiment. The subsequent
+[resource boundary generalization](resource-boundary.md) replaces that policy
+wording with shared architecture criteria and records the additional comparisons.
+
 Date: 2026-09-10. Base: `3778c4c8b5c5904a2661953cd99962b5b28ff445`.
 Actor: Codex CLI / SDK, `gpt-5.6-luna`, reasoning effort `max`, cache disabled.
 
@@ -14,7 +18,7 @@ measurements. This was a completed model decision, not an evaluator error.
 Exact excerpts from that response:
 
 > 判定: `out_of_scope`
-
+>
 > DB取得件数をページ相当へ制限することは妥当な性能改善だが、現在の要件・公開契約・実測証跡から必須条件とは確定できない。
 
 This is a fixed-report adjudication reproduction. The reviewer report describes

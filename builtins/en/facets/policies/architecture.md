@@ -14,6 +14,18 @@ Provide one source of truth for independent judgments about architecture.
 
 ## Architecture Criteria
 
+### Data Volume and Resource Boundaries
+
+Judge the operation's requirements, input bounds, and actual path from acquisition to consumption. Needing to process every item is different from needing to retain every item simultaneously.
+
+| Criterion | Decision |
+|-----------|----------|
+| An operation returns a subset but unnecessarily fetches and materializes an uncapped input in full before limiting it | REJECT |
+| A full-data operation supports incremental consumption but buffers everything before delivery without a contractual need | REJECT |
+| A resource remedy truncates a scan required for complete output or exact aggregation, dropping required results | REJECT |
+| A necessary full scan controls retained data and outstanding unconsumed work | OK |
+| An effective input bound exists, or a contract or algorithm justifies retaining the whole input | OK. Judge the confirmed retained volume and applicability conditions |
+
 ### Boundaries That Aggregate Multiple Failures
 
 | Criterion | Decision |

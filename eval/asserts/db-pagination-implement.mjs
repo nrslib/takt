@@ -10,7 +10,14 @@ export default function assertPagination(output) {
       if (JSON.stringify(sample.exportIds) !== JSON.stringify(expected)) failures.push('export behavior changed');
       continue;
     }
-    const ids = sample.page?.items?.map(({ id }) => id);
+    const items = sample.page?.items;
+    if (!Array.isArray(items)
+      || items.some((item) => item === null || typeof item !== 'object'
+        || !('id' in item) || !('title' in item))) {
+      failures.push(`page response: ${sample.recordCount}/${sample.offset}`);
+      continue;
+    }
+    const ids = items.map(({ id }) => id);
     if (JSON.stringify(ids) !== JSON.stringify(sample.expectedIds)
       || sample.page.hasMore !== sample.expectedHasMore) failures.push(`page response: ${sample.recordCount}/${sample.offset}`);
     if (sample.page?.items?.some(({ id, title }) => title !== `Record ${id}`)) {

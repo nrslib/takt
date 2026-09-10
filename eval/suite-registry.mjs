@@ -38,6 +38,8 @@ const CLASSIFICATIONS = [
       'db-pagination',
       'db-pagination-adjudication',
       'db-pagination-implement',
+      'resource-flow-review',
+      'resource-flow-adjudication',
       'evidence-judgment',
     ],
   },
@@ -139,6 +141,18 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'resource-flow-review': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: 'DB以外の取得・保持境界と正当な全量処理を設計レビューで比較する',
+  },
+  'resource-flow-adjudication': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '全量処理の誤検知を含めて資源境界の指摘を裁定する',
+  },
   'db-pagination-adjudication': {
     defaultEligible: false,
     credentials: ['codex'],

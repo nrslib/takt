@@ -439,6 +439,34 @@ export function createInitialState(): State {
 | Maintainability | Easy to modify and fix |
 | Observability | Logging and monitoring enabled |
 
+## Acquired, Processed, Retained, and Emitted Volume
+
+A small output does not imply that little data was acquired, processed, or retained to produce it. A limit's effect depends on whether it applies before the operation that grows the resource.
+
+| Observation | Distinction |
+|-------------|-------------|
+| Acquired volume | Data crossing from an external source into the application, separate from the final response count |
+| Processed volume | Total scanning, comparison, or aggregation; some computations require every input |
+| Retained volume | Data simultaneously held in memory; incremental processing can keep this small despite a large total |
+| Unconsumed volume | Queued work, prefetch, and parallel results accumulating when the consumer cannot keep up |
+| Emitted volume | Results delivered to the caller; this does not retroactively limit earlier acquisition or retention |
+
+Fetching every item before slicing a page reduces only the response count. Slicing after a source-enforced range limit also bounds acquisition. A `limit` argument or method name alone does not prove that the underlying query or SDK avoids full materialization.
+
+```typescript
+// NG: Materialize everything before selecting the returned range
+const all = await records.readAll();
+return all.slice(offset, offset + pageSize);
+
+// OK: Enforce the range at the actual source, then trim the bounded lookahead
+const page = await records.readRange({ offset, limit: pageSize + 1 });
+return page.slice(0, pageSize);
+```
+
+A stream or iterator still retains everything if its implementation fetches all data or accumulates an array before consumption. Incremental retention depends on input-unit size, prefetch count, concurrency, and waiting for consumption to complete. A bounded item count does not prove a byte bound when individual items are uncapped.
+
+A full export or exact aggregate may require scanning every input without retaining them all simultaneously. Fixed small collections, effectively bounded buffers, and algorithms requiring the whole input have different applicability conditions. Measuring returned rows is not measuring DB-internal scans or process memory; growth established from code is also distinct from a measured outage threshold.
+
 ## Big Picture
 
 Don't get lost in minor "clean code" nitpicks.

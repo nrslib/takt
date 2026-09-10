@@ -314,6 +314,23 @@ preserve the prepared snapshots and output JSON before editing facets.
 See [the recorded experiment](results/db-pagination.md) for stage-specific
 results and the limits of the reproduced adjudication failure.
 
+### Resource boundaries
+
+`npm run eval:prompts:resource-boundary` evaluates architecture review and
+adjudication on non-DB data paths. The fixture separates prefix acquisition,
+buffering before delivery, incremental full delivery, exact full-input aggregation,
+and an explicitly bounded manifest. The adjudication reports include valid findings
+and deliberate false positives against the three healthy paths.
+
+`npm run eval:prompts:resource-boundary:contracts` measures consumed data and the
+number of pulls before the first output. These establish the fixture's behavior,
+not process RSS. The model rubric checks the distinct acquisition/retention defects
+without turning necessary full scans into truncation requests.
+
+Record baseline and post-change runs separately. These are additional domain
+coverage for the architecture facets; a baseline pass is not a newly reproduced
+failure. See `results/resource-boundary.md` for the recorded comparison.
+
 ### General procedure
 
 This suite is used like TDD for prompts. When a reviewer misses something

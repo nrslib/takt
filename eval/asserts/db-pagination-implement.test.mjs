@@ -1,23 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { measurePagination } from './measure-pagination.mjs';
+import { measurePaginationAdapters } from './measure-pagination.mjs';
+import { createRecordRepository as originalRepository } from '../fixtures/page-query-implementation/src/repository.mjs';
 import assertPagination from './db-pagination-implement.mjs';
 
 async function measureImplementation(historySource, repositorySource) {
-  const project = mkdtempSync(join(tmpdir(), 'pagination-assertion-test-'));
-  try {
-    cpSync(fileURLToPath(new URL('../fixtures/page-query-implementation/', import.meta.url)), project, { recursive: true });
-    writeFileSync(join(project, 'src/history.mjs'), historySource);
-    if (repositorySource !== undefined) writeFileSync(join(project, 'src/repository.mjs'), repositorySource);
-    const measurement = await measurePagination(project);
-    return { measurement, judgment: assertPagination(JSON.stringify({ measurement })) };
-  } finally {
-    rmSync(project, { recursive: true, force: true });
-  }
+  const { readHistoryPage } = await import(`data:text/javascript,${encodeURIComponent(historySource)}`);
+  const createRecordRepository = repositorySource === undefined
+    ? originalRepository
+    : (await import(`data:text/javascript,${encodeURIComponent(repositorySource)}`)).createRecordRepository;
+  const measurement = await measurePaginationAdapters(readHistoryPage, createRecordRepository);
+  return { measurement, judgment: assertPagination(JSON.stringify({ measurement })) };
 }
 
 const boundedRepository = `export function createRecordRepository(database) {
@@ -81,3 +74,13 @@ test('measurement includes full-table loading during repository construction', a
 test('assertion rejects absent independent measurements', () => {
   assert.equal(assertPagination(JSON.stringify({ measurement: [] })).pass, false);
 });
+
+for (const items of [{}, [null], [42]]) {
+  test(`assertion rejects malformed items ${JSON.stringify(items)} without throwing`, async () => {
+    const result = await measureImplementation(`export function readHistoryPage() {
+      return { items: ${JSON.stringify(items)}, hasMore: false };
+    }`);
+    assert.equal(result.judgment.pass, false);
+    assert.match(result.judgment.reason, /page response/);
+  });
+}

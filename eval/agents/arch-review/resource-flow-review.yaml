@@ -1,0 +1,38 @@
+description: '資源境界の一般化: review'
+prompts:
+  - file://../../prompts/resource-flow-review.phase1.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/resource-flow
+      isolate_working_dir: true
+      disable_inherited_skills: true
+evaluateOptions:
+  maxConcurrency: 2
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/resource-flow
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+tests:
+  - description: '取得・保持の欠陥と正当な全量処理を区別する'
+    vars:
+      task: file://../../cases/resource-flow-review-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: resource-boundary/review
+        value: |
+          preview の全量ダウンロード後の切り出しと、deliver の全ブロック蓄積後の転送を、今回修正する別々の問題として検出すること。
+          relay の全量転送、summarize の全入力走査、上限16件の readManifest を資源量の問題にしないこと。
+          全量転送や正確な集計を壊す打ち切りを要求せず、必要な取得・保持境界だけを直すこと。
+          正常な出力や数値SLOの未指定だけで不具合を任意の最適化にしないこと。

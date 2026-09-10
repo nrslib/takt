@@ -107,7 +107,9 @@
     "lint": "eslint src/",
     "check:release": "node scripts/run-release-check.mjs",
     "prepublishOnly": "npm run lint && npm run build",
-    "canary:coder": "node scripts/canary-coder.mjs"
+    "canary:coder": "node scripts/canary-coder.mjs",
+    "eval:prompts:resource-boundary:contracts": "npm run eval:prompts:db-pagination:contracts && node --test eval/asserts/resource-flow-fixture.test.mjs",
+    "eval:prompts:resource-boundary": "npm run eval:prompts:resource-boundary:contracts && node eval/scripts/run-evals.mjs --prepare resource-flow-review resource-flow-adjudication --no-cache"
   },
   "keywords": [
     "ai",

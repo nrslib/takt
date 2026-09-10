@@ -39,6 +39,8 @@ const EVAL_LANGUAGE = 'ja';
 const TARGETS = [
   { id: 'coding-review', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/sample-project' },
   { id: 'arch-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/sample-project' },
+  { id: 'resource-flow-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/resource-flow', projectFromFixture: true },
+  { id: 'resource-flow-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/resource-flow-adjudication', projectFromFixture: true },
   {
     id: 'arch-failure-aggregation',
     workflow: 'peer-review',
