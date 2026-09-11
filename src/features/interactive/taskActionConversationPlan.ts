@@ -42,9 +42,9 @@ import {
   normalizeOrderRevisionSummary,
 } from './orderRevisionMode.js';
 import {
-  buildSummaryActionOptions,
   buildReplayHint,
-  selectSummaryAction,
+  createSelectActionWithoutExecute,
+  type ActionWithoutExecuteUIText,
 } from './interactive-summary.js';
 import { resolveMaxImageIndex } from '../tasks/orderRevision.js';
 import { SlashCommand } from '../../shared/constants.js';
@@ -156,21 +156,8 @@ function withOrderRevision(
   previousOrderContent?: string,
 ): ConversationStrategy {
   const selectRetryQueueAction = async (task: string, retryLang: 'en' | 'ja') => {
-    const ui = getLabelObject<InstructUIText>('retry.ui', retryLang);
-    return selectSummaryAction(
-      task,
-      ui.proposed,
-      ui.actionPrompt,
-      buildSummaryActionOptions(
-        {
-          execute: ui.actions.execute,
-          saveTask: ui.actions.saveTask,
-          continue: ui.actions.continue,
-        },
-        [],
-        ['execute', 'create_issue'],
-      ),
-    );
+    const ui = getLabelObject<ActionWithoutExecuteUIText>('retry.ui', retryLang);
+    return createSelectActionWithoutExecute(ui)(task, retryLang);
   };
   return {
     ...strategy,

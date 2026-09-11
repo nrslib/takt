@@ -180,7 +180,7 @@ describe('/retry slash command', () => {
     setupRawStdin(toRawInputs([
       '説明 /go の意味',
       '`/go`',
-      '```text /go ```',
+      '```text\n/go\n```',
       '/cancel',
     ]));
     const capture = setupProvider([

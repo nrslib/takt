@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface FakeEvent {
   readonly type: string;
@@ -39,7 +39,6 @@ class FakeNode {
   hidden = false;
   disabled = false;
   selected = false;
-  autofocus = false;
   open = false;
   inert = false;
   checked = false;
@@ -121,7 +120,9 @@ class FakeNode {
   }
 
   focus() {
-    this.ownerDocument.activeElement = this;
+    if (!this.disabled && this.ownerDocument.body.contains(this)) {
+      this.ownerDocument.activeElement = this;
+    }
   }
 
   contains(target: unknown): boolean {
@@ -146,7 +147,8 @@ class FakeNode {
     if (selector.includes(',')) return selector.split(',').some((part) => this.matches(part.trim()));
     const dataAttribute = selector.match(/^\[([^=\]]+)(?:="([^"]*)")?\]$/u);
     if (dataAttribute !== null) {
-      const [, name, expected] = dataAttribute;
+      const name = dataAttribute[1]!;
+      const expected = dataAttribute[2];
       const actual = name.startsWith('data-')
         ? this.dataset[name.slice(5).replace(/-([a-z])/gu, (_match, character: string) => character.toUpperCase())]
         : this.attributes[name];
@@ -157,7 +159,7 @@ class FakeNode {
     const classMatch = selector.match(/^(?:([a-z]+))?\.([\w-]+)$/iu);
     if (classMatch !== null) {
       return (classMatch[1] === undefined || this.tagName === classMatch[1].toUpperCase())
-        && this.classList.contains(classMatch[2]);
+        && this.classList.contains(classMatch[2]!);
     }
     return selector === this.tagName.toLowerCase();
   }
@@ -340,15 +342,57 @@ function flush() {
   return new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+function retryChatSession() {
+  return {
+    id: 'retry-session',
+    workflow: 'default',
+    mode: 'assistant',
+    intro: '',
+    provider: 'mock',
+    taskAction: {
+      taskId: 'task-1',
+      action: 'retry',
+      generation: 1,
+      retryStartOptions: {
+        defaultId: 'restart:plan',
+        options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+      },
+    },
+  };
+}
+
 describe('Web UI Retry 本番 DOM 経路', () => {
   const requests: RequestRecord[] = [];
   let document: FakeDocument;
-  let taskActionStarts = 0;
   let messageRequests = 0;
   let goRequests = 0;
   let cancelRequests = 0;
+  let failNextQueueRequest = false;
+  const task = {
+    projectId: 'project-1',
+    taskId: 'task-1',
+    task: 'original order',
+    status: 'failed',
+    workflow: 'default',
+    runs: [],
+  };
 
-  beforeAll(async () => {
+  async function startRetry() {
+    const options = harness.executionViewOptions;
+    if (options === undefined) throw new Error('execution view was not initialized');
+    const button = document.createElement('button');
+    const onAction = options.onAction as (targetTask: typeof task, action: string, button: FakeNode) => void;
+    onAction(task, 'retry', button);
+    await flush();
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    requests.length = 0;
+    messageRequests = 0;
+    goRequests = 0;
+    cancelRequests = 0;
+    failNextQueueRequest = false;
     document = createDocument();
     const window = {
       addEventListener: vi.fn(),
@@ -365,7 +409,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
       getPropertyValue: (property: string) => property === '--inspector-min-width' ? '280px' : '',
     }));
     vi.stubGlobal('requestAnimationFrame', (callback: (time: number) => void) => callback(0));
-    vi.stubGlobal('fetch', async (input: URL | RequestInfo, options?: RequestInit) => {
+    vi.stubGlobal('fetch', async (input: string | URL | Request, options?: RequestInit) => {
       const path = String(input);
       requests.push({ path, options });
       if (path === '/api/session') {
@@ -373,41 +417,20 @@ describe('Web UI Retry 本番 DOM 経路', () => {
       }
       if (path === '/api/projects') return jsonResponse({ projects: [], warnings: [] });
       if (path === '/api/tasks') {
-        return jsonResponse({
-          tasks: [{
-            projectId: 'project-1',
-            taskId: 'task-1',
-            task: 'original order',
-            status: 'failed',
-            workflow: 'default',
-            runs: [],
-          }],
-          warnings: [],
-        });
+        return jsonResponse({ tasks: [task], warnings: [] });
       }
       if (path === '/api/tasks/task-1/actions/retry') {
-        taskActionStarts += 1;
-        if (taskActionStarts < 3) {
+        const body = JSON.parse(String(options?.body ?? '{}')) as { input?: string };
+        if (body.input === undefined) {
           return jsonResponse({
             status: 'conversation',
             taskStatus: 'failed',
-            chatSession: {
-              id: 'retry-session',
-              workflow: 'default',
-              mode: 'assistant',
-              intro: '',
-              provider: 'mock',
-              taskAction: {
-                taskId: 'task-1',
-                action: 'retry',
-                generation: 1,
-                retryStartOptions: {
-                  defaultId: 'restart:plan',
-                  options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
-                },
-              },
-            },
+            chatSession: retryChatSession(),
           });
+        }
+        if (failNextQueueRequest) {
+          failNextQueueRequest = false;
+          return jsonResponse({ error: 'queue failed' }, 500);
         }
         return jsonResponse({ status: 'accepted', taskStatus: 'pending' });
       }
@@ -429,6 +452,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
           taskActionOptionId: 'restart:plan',
         });
       }
+      if (path === '/api/chat/sessions/retry-session/restart') return jsonResponse(retryChatSession());
       if (path === '/api/chat/sessions/retry-session/continue') return jsonResponse({ status: 'continued' });
       if (path === '/api/chat/sessions/retry-session/cancel') {
         cancelRequests += 1;
@@ -442,7 +466,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     await flush();
   });
 
-  afterAll(() => {
+  afterEach(() => {
     vi.unstubAllGlobals();
   });
 
@@ -450,25 +474,14 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     const html = readFileSync(new URL('../../web-ui/public/index.html', import.meta.url), 'utf8');
     expect(html).toContain('id="chat-form"');
     expect(html).toContain('id="chat-task-action-options"');
-    const options = harness.executionViewOptions;
-    if (options === undefined) throw new Error('execution view was not initialized');
-    const task = {
-      projectId: 'project-1',
-      taskId: 'task-1',
-      task: 'original order',
-      status: 'failed',
-      workflow: 'default',
-      runs: [],
-    };
-    const button = document.createElement('button');
-    const onAction = options.onAction as (task: typeof task, action: string, button: FakeNode) => void;
-    onAction(task, 'retry', button);
-    await flush();
+    await startRetry();
 
     const message = document.nodes.get('#chat-message');
     const form = document.nodes.get('#chat-form');
     const reviewOptions = document.nodes.get('#chat-task-action-options');
-    if (message === undefined || form === undefined || reviewOptions === undefined) {
+    const languageToggle = document.nodes.get('#language-toggle');
+    if (message === undefined || form === undefined || reviewOptions === undefined
+      || languageToggle === undefined) {
       throw new Error('Retry DOM elements were not initialized');
     }
     message.value = '/go';
@@ -482,10 +495,18 @@ describe('Web UI Retry 本番 DOM 経路', () => {
       '編集を続ける',
       'キャンセル',
     ]);
-    expect(reviewButtons[0]?.autofocus).toBe(true);
+    expect(document.activeElement).toBe(reviewButtons[0]);
+    const { t } = await import('../../web-ui/public/i18n.js');
+    expect(document.nodes.get('#chat-message-status')?.textContent).toBe(t('app.taskActionReviewPrompt'));
     expect(reviewOptions.querySelector('select')?.disabled).toBe(true);
     expect(requests.filter((request) => request.path.endsWith('/actions/retry'))).toHaveLength(1);
     expect(document.nodes.get('#chat-transcript')?.textContent).toContain('updated order');
+
+    message.focus();
+    languageToggle.dispatchEvent('click');
+    expect(document.activeElement).toBe(message);
+    languageToggle.dispatchEvent('click');
+    expect(document.activeElement).toBe(message);
 
     const reviewingRequestCount = requests.length;
     message.value = '説明文の /cancel 表記を修正';
@@ -540,8 +561,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     expect(reviewOptions.hidden).toBe(true);
     expect(message.value).toBe('');
 
-    onAction(task, 'retry', button);
-    await flush();
+    await startRetry();
     message.value = '/go';
     message.dispatchEvent('input');
     form.requestSubmit();
@@ -559,5 +579,63 @@ describe('Web UI Retry 本番 DOM 経路', () => {
       taskActionOptionId: 'restart:plan',
     });
     expect(messageRequests).toBe(5);
+  });
+
+  it('shows queue failures and allows restarting the Retry conversation and queueing again', async () => {
+    await startRetry();
+    const message = document.nodes.get('#chat-message');
+    const form = document.nodes.get('#chat-form');
+    const reviewOptions = document.nodes.get('#chat-task-action-options');
+    const restart = document.nodes.get('#chat-new-button');
+    const status = document.nodes.get('#chat-message-status');
+    if (message === undefined || form === undefined || reviewOptions === undefined
+      || restart === undefined || status === undefined) {
+      throw new Error('Retry DOM elements were not initialized');
+    }
+    message.value = '/go';
+    message.dispatchEvent('input');
+    form.requestSubmit();
+    await flush();
+
+    failNextQueueRequest = true;
+    const queue = reviewOptions.querySelector('button.chat-task-action-review-button');
+    expect(queue).not.toBeNull();
+    queue?.dispatchEvent('click');
+    expect(message.disabled).toBe(true);
+    expect(restart.disabled).toBe(true);
+    expect(reviewOptions.querySelector('select')?.disabled).toBe(true);
+    await flush();
+
+    expect(status.textContent).toBe('queue failed');
+    expect(reviewOptions.querySelectorAll('button.chat-task-action-review-button')).toHaveLength(0);
+    expect(reviewOptions.querySelector('select')?.disabled).toBe(false);
+    expect(message.disabled).toBe(false);
+    expect(restart.disabled).toBe(false);
+    expect(document.nodes.get('#chat-go-button')?.disabled).toBe(false);
+    expect(document.nodes.get('#chat-send-button')?.disabled).toBe(false);
+
+    restart.dispatchEvent('click');
+    await flush();
+    expect(requests.filter((request) => request.path.endsWith('/restart'))).toHaveLength(1);
+    expect(reviewOptions.querySelectorAll('button.chat-task-action-review-button')).toHaveLength(1);
+    expect(document.activeElement).toBe(message);
+    message.value = '/go';
+    message.dispatchEvent('input');
+    form.requestSubmit();
+    await flush();
+    const retryQueue = reviewOptions.querySelector('button.chat-task-action-review-button');
+    expect(retryQueue).not.toBeNull();
+    expect(document.activeElement).toBe(retryQueue);
+    retryQueue?.dispatchEvent('click');
+    await flush();
+
+    const queueRequests = requests.filter((request) => request.path.endsWith('/actions/retry')
+      && request.options?.body?.toString().includes('conversationId'));
+    expect(queueRequests).toHaveLength(2);
+    const { t } = await import('../../web-ui/public/i18n.js');
+    expect(status.textContent).toBe(t('app.taskActionCompleted'));
+    expect(message.disabled).toBe(true);
+    expect(restart.disabled).toBe(true);
+    expect(reviewOptions.querySelector('select')?.disabled).toBe(true);
   });
 });

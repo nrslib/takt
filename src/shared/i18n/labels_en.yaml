@@ -274,7 +274,6 @@ retry:
     proposed: "Updated task instruction:"
     actionPrompt: "What would you like to do?"
     actions:
-      execute: "Execute now"
       saveTask: "Save as Task"
       continue: "Continue editing"
     cancelled: "Cancelled"

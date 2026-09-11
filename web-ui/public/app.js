@@ -369,6 +369,19 @@ function taskActionSnapshotValue(value) {
   return typeof value === 'string' && value.length > 0 ? value : t('app.notAvailable');
 }
 
+function retryOptionSelectDisabled(state) {
+  return chatOperationInProgress
+    || state === 'reviewing'
+    || state === 'finalizing'
+    || state === 'accepted'
+    || taskActionSurface?.retryStartOptions?.length === 0;
+}
+
+function focusRetryReviewQueue() {
+  const queue = elements.chatTaskActionOptions.querySelector('button.chat-task-action-review-button');
+  if (queue !== null) queue.focus();
+}
+
 function renderTaskActionContext() {
   elements.chatTaskActionContext.replaceChildren();
   elements.chatTaskActionOptions.replaceChildren();
@@ -426,11 +439,7 @@ function renderTaskActionContext() {
     entry.selected = option.id === taskActionSurface.selectedOptionId;
     select.append(entry);
   }
-  select.disabled = finalizationState === 'finalizing'
-    || finalizationState === 'reviewing'
-    || chatOperationInProgress
-    || finalizationState === 'accepted'
-    || taskActionSurface.retryStartOptions.length === 0;
+  select.disabled = retryOptionSelectDisabled(finalizationState);
   select.addEventListener('change', () => {
     if (taskActionSurface === null) return;
     const selectedOptionId = select.value;
@@ -465,7 +474,6 @@ function renderTaskActionContext() {
     review.dataset.i18n = 'app.taskActionReviewPrompt';
     const queue = createElement('button', 'chat-task-action-review-button', t('app.taskActionQueue'));
     queue.type = 'button';
-    queue.autofocus = true;
     queue.addEventListener('click', () => { void finalizeReviewedTask(); });
     const continueEditing = createElement('button', 'chat-task-action-review-button', t('app.taskActionContinueEditing'));
     continueEditing.type = 'button';
@@ -510,11 +518,7 @@ function syncChatControls() {
     || taskAction && !taskActionCanRestart(taskActionSurface);
   const retryOptionSelect = elements.chatTaskActionOptions.querySelector('select');
   if (retryOptionSelect !== null) {
-    retryOptionSelect.disabled = chatOperationInProgress
-      || taskActionState === 'reviewing'
-      || taskActionState === 'finalizing'
-      || taskActionState === 'accepted'
-      || taskActionSurface?.retryStartOptions?.length === 0;
+    retryOptionSelect.disabled = retryOptionSelectDisabled(taskActionState);
   }
 }
 
@@ -1437,6 +1441,7 @@ async function submitChat(event) {
           appendChatEntry('assistant', instructionRoute.task);
           renderTaskActionContext();
           syncChatControls();
+          focusRetryReviewQueue();
           setChatStatusMessage('app.taskActionReviewPrompt');
         } else {
           taskActionFinalizationStarted = true;
@@ -1467,7 +1472,9 @@ async function submitChat(event) {
       appendChatEntry('system', reply.message);
     }
     responseCompleted = reply.kind !== 'error';
-    if (!taskActionFinalizationStarted) setChatStatusRaw('');
+    if (!taskActionFinalizationStarted && taskActionFinalizationState(taskActionSurface) !== 'reviewing') {
+      setChatStatusRaw('');
+    }
   } catch (error) {
     if (
       messageWasCleared

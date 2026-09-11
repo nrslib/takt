@@ -274,7 +274,6 @@ retry:
     proposed: "更新されたタスク指示:"
     actionPrompt: "どうしますか？"
     actions:
-      execute: "今すぐ実行する"
       saveTask: "タスクにつむ"
       continue: "編集を続ける"
     cancelled: "キャンセルしました"

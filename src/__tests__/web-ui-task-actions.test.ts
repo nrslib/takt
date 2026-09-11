@@ -115,12 +115,11 @@ describe('central Web UI task action policy', () => {
 
   it('resolves retry option ids and does not start a worker for Retry queueing', async () => {
     const task = makeTask('failed');
+    const { runId: _runId, ...taskWithoutRunId } = task;
     const queuedTask: CentralTaskRecord = {
-      ...task,
+      ...taskWithoutRunId,
       generation: task.generation + 1,
       status: 'pending',
-      runId: task.runId,
-      runIds: task.runIds,
     };
     const resetFailedTaskToPending = vi.fn(async (): Promise<CentralTaskRecord> => queuedTask);
     const spawnDecision = vi.fn(async () => ({
