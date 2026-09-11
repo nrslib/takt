@@ -23,7 +23,7 @@ import {
   emitStructuredEvents,
   extractStructuredText,
   firstNonEmptyString,
-  parseJsonLines,
+  parseValidJsonLines,
   toRecord,
 } from '../structured-cli-output.js';
 
@@ -417,10 +417,8 @@ function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: stri
     return { error: 'copilot returned empty output' };
   }
 
-  let lines: unknown[];
-  try {
-    lines = parseJsonLines(stdout, 'copilot');
-  } catch {
+  const lines = parseValidJsonLines(stdout);
+  if (lines.length === 0) {
     // Older Copilot CLI versions only emit text. Keep the response usable, but
     // do not treat that displayed text as a structured MCP result.
     return { content: trimmed, events: [] };

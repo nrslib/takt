@@ -300,17 +300,15 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       pendingRebuild = true;
     }
 
-    function isTellDisabledDuringPendingModeRebuild(text?: string): boolean {
-      if (!pendingRebuild || selectedMode === 'assistant') {
-        return false;
+    function matchTellDuringPendingRebuild(text: string) {
+      if (!pendingRebuild) {
+        return null;
       }
-      if (text === undefined) {
-        return true;
-      }
-      return matchSlashCommand(
+      const match = matchSlashCommand(
         text.trim(),
         { ...currentConversation.commandAvailability, enableTellCommand: true },
-      )?.command === SlashCommand.Tell;
+      );
+      return match?.command === SlashCommand.Tell ? match : null;
     }
 
     async function ensureCurrentConversation(): Promise<string | undefined> {
@@ -356,10 +354,10 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         return currentConversation.lang;
       },
       get commandAvailability() {
-        if (isTellDisabledDuringPendingModeRebuild()) {
+        if (pendingRebuild) {
           return {
             ...currentConversation.commandAvailability,
-            enableTellCommand: false,
+            enableTellCommand: selectedMode === 'assistant',
           };
         }
         return currentConversation.commandAvailability;
@@ -368,14 +366,17 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         return currentConversation.tracksResultSource;
       },
       isCommandLine(text: string): boolean {
-        if (isTellDisabledDuringPendingModeRebuild(text)) {
-          return false;
+        if (matchTellDuringPendingRebuild(text) !== null) {
+          return selectedMode === 'assistant';
         }
         return currentConversation.isCommandLine(text);
       },
       resolveLocalCommand(text: string) {
-        if (isTellDisabledDuringPendingModeRebuild(text)) {
-          return null;
+        const tell = matchTellDuringPendingRebuild(text);
+        if (tell !== null) {
+          return selectedMode === 'assistant'
+            ? { kind: 'handoff', id: 'tell', text: tell.text || undefined }
+            : null;
         }
         return currentConversation.resolveLocalCommand(text);
       },
@@ -476,14 +477,12 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           break;
         case 'tell':
           {
-            if (text.trim().length === 0) {
-              const rebuildError = await ensureCurrentConversation();
-              if (rebuildError !== undefined) {
-                return {
-                  kind: 'continue' as const,
-                  notice: rebuildError,
-                };
-              }
+            const rebuildError = await ensureCurrentConversation();
+            if (rebuildError !== undefined) {
+              return {
+                kind: 'continue' as const,
+                notice: rebuildError,
+              };
             }
             const preferredRunSlug = currentConversation.getReferenceRunSlug?.() ?? referenceRunSlug;
             const sessionContext = selectedEffort === undefined

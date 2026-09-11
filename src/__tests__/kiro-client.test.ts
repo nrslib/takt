@@ -1346,11 +1346,14 @@ describe('callKiro output cleanup (issue #781)', () => {
     expect(result).toMatchObject({ status: 'done', content: 'answer' });
   });
 
-  it('Given stream-json MCP events, When called, Then forwards the tool result as structured events', async () => {
+  it.each([
+    { label: 'clean output', warning: '' },
+    { label: 'a warning line', warning: 'Warning: update available\n' },
+  ])('preserves Kiro JSONL tools and response with $label', async ({ warning }) => {
     const marker = formatTaskStateReferenceMarker('run-from-kiro');
     const onStream = vi.fn();
     mockSpawnWithScenario({
-      stdout: [
+      stdout: warning + [
         JSON.stringify({
           kind: 'AssistantMessage',
           sessionId: 'kiro-session',

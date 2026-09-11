@@ -7,7 +7,7 @@ import {
   emitStructuredEvents,
   extractStructuredText,
   firstNonEmptyString,
-  parseJsonLines,
+  parseValidJsonLines,
   toRecord,
 } from '../structured-cli-output.js';
 
@@ -411,10 +411,8 @@ function parseKiroOutput(stdout: string): KiroParsedOutput | { error: string } {
     return { error: 'kiro-cli returned empty output' };
   }
 
-  let lines: unknown[];
-  try {
-    lines = parseJsonLines(stdout, 'kiro-cli');
-  } catch {
+  const lines = parseValidJsonLines(stdout);
+  if (lines.length === 0) {
     const content = cleanKiroOutput(stdout);
     return content.length === 0
       ? { error: 'kiro-cli returned empty output' }

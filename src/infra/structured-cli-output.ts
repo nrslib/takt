@@ -47,22 +47,16 @@ export function extractStructuredText(value: unknown): string | undefined {
   return undefined;
 }
 
-export function parseJsonLines(stdout: string, providerName: string): unknown[] {
-  const lines = stdout
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  if (lines.length === 0) {
-    throw new Error(`${providerName} returned empty output`);
-  }
-
-  return lines.map((line, index) => {
+export function parseValidJsonLines(stdout: string): unknown[] {
+  const lines: unknown[] = [];
+  for (const line of stdout.split(/\r?\n/u)) {
     try {
-      return JSON.parse(line) as unknown;
+      lines.push(JSON.parse(line) as unknown);
     } catch {
-      throw new Error(`Failed to parse ${providerName} JSONL output at line ${index + 1}`);
+      // CLIs may print banners or warnings alongside structured events.
     }
-  });
+  }
+  return lines;
 }
 
 export function emitStructuredEvents(

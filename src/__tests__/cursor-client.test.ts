@@ -488,6 +488,29 @@ describe('callCursor', () => {
     } });
   });
 
+  it('preserves the error text of failed Cursor tool results', async () => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          type: 'tool_call', subtype: 'completed', call_id: 'failed-lookup',
+          tool_call: { mcpToolCall: {
+            args: { name: 'takt_get_run', args: { runSlug: 'missing-run' } },
+            result: { success: false, error: 'lookup failed' },
+          } },
+        }),
+        JSON.stringify({ type: 'result', result: 'The run could not be found.' }),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'The run could not be found.' });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_result', data: {
+      id: 'failed-lookup', content: 'lookup failed', isError: true,
+    } });
+  });
+
   it('should forward Cursor MCP tool results as structured stream events', async () => {
     const marker = formatTaskStateReferenceMarker('run-from-cursor');
     const onStream = vi.fn();

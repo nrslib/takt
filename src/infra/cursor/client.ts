@@ -13,6 +13,7 @@ import {
   emitStructuredEvents,
   extractStructuredText,
   firstNonEmptyString,
+  parseValidJsonLines,
   toRecord,
 } from '../structured-cli-output.js';
 
@@ -438,7 +439,9 @@ function cursorToolResult(call: CursorToolCall): { content: string; isError: boo
   }
   const result = toRecord(call.result);
   const hasSuccess = result !== undefined && Object.prototype.hasOwnProperty.call(result, 'success');
-  const payload = hasSuccess ? result?.success : result?.error ?? call.result;
+  const payload = result?.success === false
+    ? result.error
+    : hasSuccess ? result?.success : result?.error ?? call.result;
   const content = extractStructuredText(payload) ?? '';
   return {
     content,
@@ -526,14 +529,7 @@ function parseCursorOutput(
     return { error: 'cursor-agent returned empty output' };
   }
 
-  const lines: unknown[] = [];
-  for (const line of stdout.split(/\r?\n/u)) {
-    try {
-      lines.push(JSON.parse(line) as unknown);
-    } catch {
-      // cursor-agent may print a banner or warning alongside its JSONL events.
-    }
-  }
+  const lines = parseValidJsonLines(stdout);
   if (lines.length === 0) {
     return { error: `Failed to parse cursor-agent JSON output: ${trimDetail(trimmed, '<empty>')}` };
   }

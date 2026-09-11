@@ -607,6 +607,53 @@ describe('runTui', () => {
       }
     });
 
+    it('rebuilds the assistant before a bodyful /tell immediately after leaving persona mode', async () => {
+      realTuiConversation.current = true;
+      mockSelectInteractiveMode.mockResolvedValueOnce('persona');
+      mockGetWorkflowDescription.mockReturnValue({
+        name: 'default', description: 'default workflow', workflowStructure: '1. review', stepPreviews: [],
+        firstStep: { personaContent: 'Review this change', personaDisplayName: 'Reviewer', allowedTools: ['Read'] },
+      });
+      const tree = scriptRender();
+      const run = startRun({
+        userMessage: 'Preserve this task context',
+        initialTellRunSlug: 'selected-run',
+        agentOverrides: { provider: 'mock' },
+      });
+      await waitForMount(tree, 1);
+      try {
+        expect(tree.conversationProps().conversation.commandAvailability.enableTellCommand).toBe(false);
+        mockSelectInteractiveMode.mockResolvedValueOnce('assistant');
+        tree.conversationProps().onExit({ kind: 'handoff', id: 'mode' }, { history: [], queue: [] });
+        await waitForMount(tree, 2);
+
+        const text = '/tell Continue the selected task';
+        const facade = tree.conversationProps().conversation;
+        expect(facade.commandAvailability.enableTellCommand).toBe(true);
+        expect(facade.isCommandLine(text)).toBe(true);
+        const command = facade.resolveLocalCommand(text);
+        expect(command).toEqual({ kind: 'handoff', id: 'tell', text: 'Continue the selected task' });
+        if (command?.kind !== 'handoff') throw new Error('Expected the real /tell handoff');
+        tree.conversationProps().onExit(command, { history: [], queue: [] });
+        await waitForMount(tree, 3);
+
+        expect(mockRunTellCommand).toHaveBeenCalledWith(expect.objectContaining({
+          inlineText: 'Continue the selected task',
+          preferredRunSlug: 'selected-run',
+          history: [{ role: 'user', content: 'Preserve this task context' }],
+          sessionContext: expect.objectContaining({
+            personaName: 'interactive',
+            providerType: 'mock',
+            mcpServers: expect.objectContaining({ takt: expect.any(Object) }),
+          }),
+        }));
+        expect(mockCreateTuiConversation).not.toHaveBeenCalled();
+      } finally {
+        tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+        await run;
+      }
+    });
+
     it('should rebuild the selected persona lazily with its prompt and tools', async () => {
       const history = [
         { role: 'user' as const, content: 'review this change' },

@@ -677,11 +677,15 @@ describe('callCopilot', () => {
     } });
   });
 
-  it('should forward Copilot MCP tool results as structured stream events', async () => {
+  it.each([
+    { label: 'clean output', warning: '' },
+    { label: 'a warning line', warning: 'Warning: update available\n' },
+  ])('preserves Copilot JSONL tools and response with $label', async ({ warning }) => {
     const marker = formatTaskStateReferenceMarker('run-from-copilot');
     const onStream = vi.fn();
+    mockReadFile.mockResolvedValue('No session ID in the share transcript.');
     mockSpawnWithScenario({
-      stdout: [
+      stdout: warning + [
         JSON.stringify({
           type: 'tool.execution_start',
           data: {
@@ -709,7 +713,7 @@ describe('callCopilot', () => {
 
     const result = await callCopilot('coder', 'inspect task', { cwd: '/repo', onStream });
 
-    expect(result).toMatchObject({ status: 'done', content: 'answer' });
+    expect(result).toMatchObject({ status: 'done', content: 'answer', sessionId: 'copilot-session' });
     expect(onStream).toHaveBeenCalledWith({
       type: 'tool_use',
       data: {
