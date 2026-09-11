@@ -1,12 +1,12 @@
 ```markdown
 # Repair Plan
 
-## Result: FIX PLAN CONFIRMED / REPLAN REQUIRED
+## Result: FIX PLAN CONFIRMED / INVESTIGATION REQUIRED / REPLAN REQUIRED / CANNOT PROCEED
 
 ## Findings and Repair Units
 | Finding ID / Source | Repair Unit | Evidence | Acceptance Criteria |
 |---------------------|-------------|----------|---------------------|
-| {ID and report name} | {Name for repairs sharing the same cause and completion criteria} | {Report or file:line} | {Observable completion conditions} |
+| {ID and report name} | {Name for repairs sharing the same cause and completion criteria} | {Report or file:line} | {Source-required states, operation, evaluation time, observation target, expected result} |
 
 ## Repair Units
 | Repair Unit | Cause | Condition to Preserve | Relevant Paths | Changes | Excluded Scope |
@@ -27,6 +27,9 @@
 | Repair Unit | Path or State to Check | Successful Example | Failure or Boundary Example | Method |
 |-------------|------------------------|--------------------|-----------------------------|--------|
 | {Name} | {Actual affected path or state} | {Concrete expected success} | {Concrete example that detects a violation} | {Test, reproduction, search, or code tracing} |
+
+## Additional Investigation
+{None, or finding ID, unresolved hypothesis, fixed conditions, single varied condition, observation target, execution method, existing investigation evidence}
 
 ## Replanning Items
 - {None, or evidence that the cause, requirement, or repair boundary cannot be established and the decision needed}

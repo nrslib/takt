@@ -1,0 +1,25 @@
+params:
+  fix_policy:
+    type: facet_ref[]
+    facet_kind: policy
+  fix_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+name: investigate
+capabilities: edit
+tags:
+  - coding
+edit: true
+persona: coder
+policy:
+  - contract-change
+  - $param: fix_policy
+knowledge:
+  $param: fix_knowledge
+required_permission_mode: edit
+pass_previous_response: false
+instruction: investigate-review-findings
+output_contracts:
+  report:
+    - name: fix-investigation.md
+      format: fix-investigation

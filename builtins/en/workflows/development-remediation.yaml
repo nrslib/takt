@@ -69,6 +69,18 @@ initial_step: fix-plan
 loop_monitors:
   - cycle:
       - fix-plan
+      - investigate
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: New evidence was obtained, or a concrete untried investigation is executable
+          next: fix-plan
+        - condition: The same hypotheses and evidence repeat with no executable next investigation
+          next: ABORT
+  - cycle:
+      - fix-plan
       - fix
     ignore_steps:
       - fix-verifier
@@ -117,8 +129,24 @@ steps:
     rules:
       - condition: Fix plan finalized
         next: fix
-      - condition: Whole-task replanning required
+      - condition: Confirming the plan requires executable cause investigation, and a concrete next investigation is possible within the current requirements and scope
+        next: investigate
+      - condition: Task-wide premises such as requirements or repair scope must change (an unexecuted local cause investigation alone does not qualify)
         return: need_replan
+      - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
+        next: ABORT
+  - name: investigate
+    uses: peer-review-investigate
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+    rules:
+      - condition: Investigation results and unresolved questions are recorded, and the next planning decision can proceed within the project
+        next: fix-plan
+      - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
+        next: ABORT
   - name: fix
     capabilities:
       - edit
