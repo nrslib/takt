@@ -45,7 +45,7 @@ export interface ConversationSessionStrategy {
    * mode disabled is text here too — not a command it happens to understand.
    */
   enabledCommands?: readonly SlashCommand[];
-  /** Enable the normal-assistant-only `/tell` command. */
+  /** Enable the `/tell` command. */
   enableTellCommand?: boolean;
   /** Run to use as the initial `/tell` choice. */
   initialReferenceRunSlug?: string;

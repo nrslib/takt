@@ -297,4 +297,48 @@ describe('instruct context for live intervention history', () => {
       expect(prompt).not.toContain('phase-value');
     }
   });
+
+  it.each([
+    {
+      lang: 'en' as const,
+      guidance: 'When an additional instruction for a named running task is ready, name that task and tell the user to use `/tell` to send it',
+    },
+    {
+      lang: 'ja' as const,
+      guidance: '名前のある実行中タスクへの追加指示の内容が固まったら、そのタスク名を挙げ、`/tell` で送れると案内する',
+    },
+  ])('renders tell guidance only when it is available ($lang)', async ({ lang, guidance }) => {
+    const actualPrompts = await vi.importActual<typeof import('../shared/prompts/index.js')>(
+      '../shared/prompts/index.js',
+    );
+    const variables = {
+      grillMe: false,
+      tellAvailable: true,
+      investigationPolicy: '{}',
+      formalSpec: false,
+      formalSpecComments: true,
+      formalSpecCommentsEnabled: false,
+      hasWorkflowPreview: false,
+      workflowStructure: '',
+      stepDetails: '',
+      hasRunSession: false,
+      runTask: '',
+      runWorkflow: '',
+      runStatus: '',
+      runCurrentStep: '',
+      runPhase: '',
+      runStepLogs: '',
+      runReports: '',
+      runLiveIntervention: '',
+    };
+
+    const availablePrompt = actualPrompts.loadTemplate('score_interactive_system_prompt', lang, variables);
+    const unavailablePrompt = actualPrompts.loadTemplate('score_interactive_system_prompt', lang, {
+      ...variables,
+      tellAvailable: false,
+    });
+
+    expect(availablePrompt).toContain(guidance);
+    expect(unavailablePrompt).not.toContain(guidance);
+  });
 });

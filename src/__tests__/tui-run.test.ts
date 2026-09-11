@@ -11,7 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskHistorySummaryItem } from '../features/interactive/interactive-summary-types.js';
 import type { ConversationViewProps } from '../features/tui/ConversationView.js';
 import type { RunTuiOptions } from '../features/tui/runTui.js';
-import type { TuiConversation } from '../features/tui/tuiConversation.js';
+import type { TuiConversation, TuiLocalCommand } from '../features/tui/tuiConversation.js';
+import { SlashCommand } from '../shared/constants.js';
+import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
+import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
 import {
   getSessionStatePath,
   saveSessionState,
@@ -251,6 +254,25 @@ function createConversationDouble(overrides: Partial<TuiConversation> = {}): Tui
   };
 }
 
+function createTellAwareConversation(
+  enableTellCommand: boolean | undefined,
+  overrides: Partial<TuiConversation> = {},
+): TuiConversation {
+  const commandAvailability = { enableTellCommand };
+  return createConversationDouble({
+    commandAvailability,
+    isCommandLine: vi.fn((text: string) =>
+      matchSlashCommand(text.trim(), commandAvailability) !== null),
+    resolveLocalCommand: vi.fn((text: string): TuiLocalCommand | null => {
+      const match = matchSlashCommand(text.trim(), commandAvailability);
+      return match?.command === SlashCommand.Tell
+        ? { kind: 'handoff', id: 'tell', text: match.text || undefined }
+        : null;
+    }),
+    ...overrides,
+  });
+}
+
 /** Waits until the tree the run mounts next is rendered and its props readable. */
 async function waitForMount(tree: MountedTree, expected: number): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -469,7 +491,7 @@ describe('runTui', () => {
         { role: 'user' as const, content: 'add auth' },
         { role: 'assistant' as const, content: 'Which method?' },
       ];
-      const first = createConversationDouble({ snapshotHistory: vi.fn(() => history) });
+      const first = createTellAwareConversation(true, { snapshotHistory: vi.fn(() => history) });
       const second = createConversationDouble();
       mockCreateTuiConversation
         .mockReturnValueOnce(first)
@@ -486,46 +508,52 @@ describe('runTui', () => {
       });
       await waitForMount(tree, 1);
 
-      expect(mockCreateTuiConversation).toHaveBeenCalledWith(expect.objectContaining({
-        enableSettingsCommands: true,
-      }));
+      try {
+        expect(mockCreateTuiConversation).toHaveBeenCalledWith(expect.objectContaining({
+          enableSettingsCommands: true,
+        }));
 
-      mockSelectInteractiveMode.mockResolvedValue('grill-me');
-      tree.conversationProps().onExit(
-        { kind: 'handoff', id: 'mode' },
-        { history: ['/interaction'], queue: [] },
-      );
-      await waitForMount(tree, 2);
+        mockSelectInteractiveMode.mockResolvedValue('grill-me');
+        tree.conversationProps().onExit(
+          { kind: 'handoff', id: 'mode' },
+          { history: ['/interaction'], queue: [] },
+        );
+        await waitForMount(tree, 2);
 
-      expect(mockSelectInteractiveMode).toHaveBeenLastCalledWith(
-        'en',
-        ['assistant', 'grill-me', 'persona'],
-      );
-      expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
-      expect(tree.conversationProps().conversation.commandAvailability.enableTellCommand).toBe(false);
-      expect(tree.conversationProps().conversation.isCommandLine('/tell do not change scope')).toBe(false);
-      expect(tree.conversationProps().conversation.resolveLocalCommand('/tell do not change scope')).toBeNull();
+        expect(mockSelectInteractiveMode).toHaveBeenLastCalledWith(
+          'en',
+          ['assistant', 'grill-me', 'persona'],
+        );
+        expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+        expect(tree.conversationProps().conversation.commandAvailability.enableTellCommand).toBe(true);
+        expect(tree.conversationProps().conversation.isCommandLine('/tell do not change scope')).toBe(true);
+        expect(tree.conversationProps().conversation.resolveLocalCommand('/tell do not change scope')).toEqual({
+          kind: 'handoff',
+          id: 'tell',
+          text: 'do not change scope',
+        });
 
-      await tree.conversationProps().conversation.submit(submitInput());
+        await tree.conversationProps().conversation.submit(submitInput());
 
-      expect(mockCreateTuiConversation).toHaveBeenCalledTimes(2);
-      expect(mockCreateTuiConversation.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
-        workflowContext: expect.objectContaining({ name: 'default' }),
-        handoffHistory: history,
-        plan: expect.objectContaining({
-          strategy: expect.objectContaining({
-            initialReferenceRunSlug: 'initial-run',
-            initialPromptContext: expect.stringContaining('Task name: authentication'),
+        expect(mockCreateTuiConversation).toHaveBeenCalledTimes(2);
+        expect(mockCreateTuiConversation.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+          workflowContext: expect.objectContaining({ name: 'default' }),
+          handoffHistory: history,
+          plan: expect.objectContaining({
+            strategy: expect.objectContaining({
+              initialReferenceRunSlug: 'initial-run',
+              initialPromptContext: expect.stringContaining('Task name: authentication'),
+            }),
           }),
-        }),
-      }));
-      expect(second.submit).toHaveBeenCalledTimes(1);
-
-      tree.conversationProps().onExit(
-        { kind: 'result', result: { action: 'cancel', task: '' } },
-        { history: [], queue: [] },
-      );
-      await run;
+        }));
+        expect(second.submit).toHaveBeenCalledTimes(1);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
+        await run;
+      }
     });
 
     it('should apply only the final mode after multiple switches', async () => {
@@ -622,7 +650,7 @@ describe('runTui', () => {
       });
       await waitForMount(tree, 1);
       try {
-        expect(tree.conversationProps().conversation.commandAvailability.enableTellCommand).toBe(false);
+        expect(tree.conversationProps().conversation.commandAvailability.enableTellCommand).toBe(true);
         mockSelectInteractiveMode.mockResolvedValueOnce('assistant');
         tree.conversationProps().onExit({ kind: 'handoff', id: 'mode' }, { history: [], queue: [] });
         await waitForMount(tree, 2);
@@ -650,6 +678,85 @@ describe('runTui', () => {
         expect(mockCreateTuiConversation).not.toHaveBeenCalled();
       } finally {
         tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+        await run;
+      }
+    });
+
+    it.each([
+      ['assistant', 'assistant'],
+      ['assistant', 'grill-me'],
+      ['assistant', 'persona'],
+      ['grill-me', 'assistant'],
+      ['grill-me', 'grill-me'],
+      ['grill-me', 'persona'],
+      ['persona', 'assistant'],
+      ['persona', 'grill-me'],
+      ['persona', 'persona'],
+    ] as const)('should keep /tell available when switching from %s to %s', async (initialMode, nextMode) => {
+      mockSelectInteractiveMode.mockResolvedValueOnce(initialMode);
+      mockGetWorkflowDescription.mockReturnValue({
+        name: 'default',
+        description: 'default workflow',
+        workflowStructure: '1. plan',
+        stepPreviews: [],
+        firstStep: {
+          personaContent: 'Review this change',
+          personaDisplayName: 'Reviewer',
+          allowedTools: ['Read'],
+        },
+      });
+      mockCreateTuiConversation.mockImplementation((input: { plan: { strategy: { enableTellCommand?: boolean } } }) =>
+        createTellAwareConversation(input.plan.strategy.enableTellCommand));
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      try {
+        expect(tree.conversationProps().conversation.commandAvailability.enableTellCommand).toBe(true);
+        expect(filterSlashCommands('/tell', tree.conversationProps().conversation.commandAvailability)).toEqual([{
+          command: SlashCommand.Tell,
+          labelKey: 'interactive.commands.tell',
+        }]);
+
+        mockSelectInteractiveMode.mockResolvedValueOnce(nextMode);
+        tree.conversationProps().onExit(
+          { kind: 'handoff', id: 'mode' },
+          { history: [], queue: [] },
+        );
+        await waitForMount(tree, 2);
+
+        const input = '/tell keep the selected task in scope';
+        const conversation = tree.conversationProps().conversation;
+        expect(conversation.commandAvailability.enableTellCommand).toBe(true);
+        expect(filterSlashCommands('/tell', conversation.commandAvailability)).toEqual([{
+          command: SlashCommand.Tell,
+          labelKey: 'interactive.commands.tell',
+        }]);
+        expect(conversation.isCommandLine(input)).toBe(true);
+        expect(conversation.resolveLocalCommand(input)).toEqual({
+          kind: 'handoff',
+          id: 'tell',
+          text: 'keep the selected task in scope',
+        });
+
+        const command = conversation.resolveLocalCommand(input);
+        if (command?.kind !== 'handoff') {
+          throw new Error('Expected the /tell handoff');
+        }
+        tree.conversationProps().onExit(
+          command,
+          { history: [], queue: [] },
+        );
+        await waitForMount(tree, 3);
+
+        expect(mockRunTellCommand).toHaveBeenCalledWith(expect.objectContaining({
+          inlineText: 'keep the selected task in scope',
+        }));
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } },
+          { history: [], queue: [] },
+        );
         await run;
       }
     });

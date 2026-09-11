@@ -253,7 +253,9 @@ function createPlan(
   const workflowContext = buildWorkflowContext(description);
   if (request.mode === 'persona' && description.firstStep !== undefined) {
     return {
-      plan: createPersonaConversationPlan(projectDirectory, description.firstStep),
+      plan: createPersonaConversationPlan(projectDirectory, description.firstStep, {
+        enableTellCommand: false,
+      }),
       workflowContext,
     };
   }
@@ -262,6 +264,7 @@ function createPlan(
   return {
     plan: createAssistantConversationPlan(projectDirectory, {
       assistantMode: request.mode === 'grill-me' ? 'grill-me' : 'assistant',
+      enableTellCommand: false,
       formalSpec: formalSpecConfiguration.mode,
       formalSpecComments: formalSpecConfiguration.comments,
       workflowContext,

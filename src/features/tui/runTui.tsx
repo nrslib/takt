@@ -36,8 +36,6 @@ import { selectInteractiveMode } from '../interactive/modeSelection.js';
 import { selectInteractiveProvider } from '../interactive/providerSelection.js';
 import { runTellCommand } from '../interactive/tellCommand.js';
 import { resolveTaskStateMcp } from '../interactive/taskStateMcp.js';
-import { SlashCommand } from '../../shared/constants.js';
-import { matchSlashCommand } from '../interactive/commandMatcher.js';
 import { formatSessionStatus } from '../interactive/interactive.js';
 import type { InteractiveModeResult, InteractiveUIText } from '../interactive/interactive.js';
 import {
@@ -300,17 +298,6 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       pendingRebuild = true;
     }
 
-    function matchTellDuringPendingRebuild(text: string) {
-      if (!pendingRebuild) {
-        return null;
-      }
-      const match = matchSlashCommand(
-        text.trim(),
-        { ...currentConversation.commandAvailability, enableTellCommand: true },
-      );
-      return match?.command === SlashCommand.Tell ? match : null;
-    }
-
     async function ensureCurrentConversation(): Promise<string | undefined> {
       if (!pendingRebuild) {
         return undefined;
@@ -354,30 +341,15 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         return currentConversation.lang;
       },
       get commandAvailability() {
-        if (pendingRebuild) {
-          return {
-            ...currentConversation.commandAvailability,
-            enableTellCommand: selectedMode === 'assistant',
-          };
-        }
         return currentConversation.commandAvailability;
       },
       get tracksResultSource() {
         return currentConversation.tracksResultSource;
       },
       isCommandLine(text: string): boolean {
-        if (matchTellDuringPendingRebuild(text) !== null) {
-          return selectedMode === 'assistant';
-        }
         return currentConversation.isCommandLine(text);
       },
       resolveLocalCommand(text: string) {
-        const tell = matchTellDuringPendingRebuild(text);
-        if (tell !== null) {
-          return selectedMode === 'assistant'
-            ? { kind: 'handoff', id: 'tell', text: tell.text || undefined }
-            : null;
-        }
         return currentConversation.resolveLocalCommand(text);
       },
       async submit(input: TuiSubmitInput): Promise<TuiSubmission> {
