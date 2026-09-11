@@ -5,10 +5,16 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockInitializeSession, mockLoadTemplate, mockLoadAssistantInitContext } = vi.hoisted(() => ({
+const {
+  mockInitializeSession,
+  mockLoadTemplate,
+  mockLoadAssistantInitContext,
+  mockCreateMcpAdapter,
+} = vi.hoisted(() => ({
   mockInitializeSession: vi.fn(),
   mockLoadTemplate: vi.fn(),
   mockLoadAssistantInitContext: vi.fn(),
+  mockCreateMcpAdapter: vi.fn(),
 }));
 
 vi.mock('../features/interactive/sessionInitialization.js', () => ({
@@ -21,6 +27,11 @@ vi.mock('../shared/prompts/index.js', () => ({
 
 vi.mock('../features/interactive/assistantInitFiles.js', () => ({
   loadAssistantInitContext: (...args: unknown[]) => mockLoadAssistantInitContext(...args),
+}));
+
+vi.mock('../infra/providers/mcp/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createMcpAdapter: (...args: unknown[]) => mockCreateMcpAdapter(...args),
 }));
 
 import {
@@ -55,6 +66,7 @@ beforeEach(() => {
   });
   mockLoadTemplate.mockReturnValue('rendered template');
   mockLoadAssistantInitContext.mockReturnValue(undefined);
+  mockCreateMcpAdapter.mockReturnValue({ validate: vi.fn() });
 });
 
 describe('interactive system prompt', () => {
@@ -151,7 +163,8 @@ describe('assistant conversation plan', () => {
     expect(strategy.allowedTools).toContain('Bash');
     expect(strategy.permissionMode).toBeUndefined();
     expect(strategy.introMessage).toContain('Interactive mode');
-    expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go']);
+    expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
+    expect(strategy.enableTellCommand).toBe(true);
   });
 
   it('should make Grill Me read-only and withhold Bash', () => {
@@ -167,6 +180,7 @@ describe('assistant conversation plan', () => {
     expect(strategy.permissionMode).toBe('readonly');
     expect(strategy.introMessage).toContain('Grill Me mode');
     expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go']);
+    expect(strategy.enableTellCommand).toBe(false);
   });
 
   it('should forward the CLI provider and model overrides and the resumed session', () => {
@@ -205,6 +219,28 @@ describe('assistant conversation plan', () => {
 
     expect(ctx.effort).toBe('custom-effort');
     expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'interactive');
+  });
+
+  it('should carry selected task metadata as quoted initial context and reference only', () => {
+    const { strategy } = createAssistantConversationPlan('/repo', {
+      assistantMode: 'assistant',
+      formalSpec: false,
+      formalSpecComments: true,
+      initialReferenceRunSlug: 'authentication-run',
+      initialTaskContext: {
+        name: 'authentication',
+        summary: 'Add login and session handling',
+        workflow: 'review-fix',
+        runSlug: 'authentication-run',
+      },
+    });
+
+    expect(strategy.initialReferenceRunSlug).toBe('authentication-run');
+    expect(strategy.initialPromptContext).toContain('Task name: authentication');
+    expect(strategy.initialPromptContext).toContain('Workflow: review-fix');
+    expect(strategy.initialPromptContext).toContain('Run slug (internal reference): authentication-run');
+    expect(strategy.initialPromptContext).toContain('Add login and session handling');
+    expect(strategy.initialPromptContext).toContain('quoted task metadata');
   });
 
   it('should rebuild from an already resolved session without re-resolving runtime settings', () => {

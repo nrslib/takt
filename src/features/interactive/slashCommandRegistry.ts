@@ -11,6 +11,7 @@ import { INTERACTIVE_SETTING_COMMANDS, SlashCommand } from '../../shared/constan
 const SLASH_COMMAND_LABEL_KEYS: Readonly<Record<SlashCommand, string>> = {
   '/accept': 'interactive.commands.accept',
   '/go': 'interactive.commands.go',
+  '/tell': 'interactive.commands.tell',
   '/retry': 'interactive.commands.retry',
   '/replay': 'interactive.commands.replay',
   '/cancel': 'interactive.commands.cancel',
@@ -44,6 +45,7 @@ export interface CommandAvailability {
   readonly enableSetupCommand?: boolean;
   readonly enableOpenCommand?: boolean;
   readonly enableSettingsCommands?: boolean;
+  readonly enableTellCommand?: boolean;
   readonly enabledCommands?: readonly SlashCommand[];
 }
 
@@ -61,6 +63,9 @@ export const filterSlashCommands = (
   const matches = SLASH_COMMAND_REGISTRY.filter((entry) => {
     if (!entry.command.startsWith(lower)) return false;
     if (availability?.enabledCommands && !availability.enabledCommands.includes(entry.command)) return false;
+    if (entry.command === SlashCommand.Tell && availability !== undefined && availability.enableTellCommand !== true) {
+      return false;
+    }
     if (entry.command === SlashCommand.Setup && availability?.enableSetupCommand !== true) return false;
     if (entry.command === SlashCommand.Open && availability?.enableOpenCommand !== true) return false;
     if (INTERACTIVE_SETTING_COMMANDS.has(entry.command) && availability?.enableSettingsCommands !== true) return false;

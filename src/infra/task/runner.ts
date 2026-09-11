@@ -1,5 +1,5 @@
 import type { TaskFileData, TaskFailure } from './schema.js';
-import type { TaskInfo, TaskResult, TaskListItem } from './types.js';
+import type { TaskInfo, TaskResult, TaskListItem, TaskState } from './types.js';
 import type { TaskStatus } from './schema.js';
 import { TaskStore } from './store.js';
 import { TaskLifecycleService } from './taskLifecycleService.js';
@@ -13,7 +13,7 @@ import {
   type TaskRetryOptions,
 } from './taskRetryService.js';
 
-export type { TaskInfo, TaskResult, TaskListItem };
+export type { TaskInfo, TaskResult, TaskListItem, TaskState };
 
 export interface TaskRunnerOptions {
   onWarning?: (warning: string) => void;
@@ -107,6 +107,10 @@ export class TaskRunner {
 
   listAllTaskItems(): TaskListItem[] {
     return this.query.listAllTaskItems();
+  }
+
+  listTaskStateItems(): TaskState[] {
+    return this.query.listTaskStateItems();
   }
 
   listFailedTasks(): TaskListItem[] {

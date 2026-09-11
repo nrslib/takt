@@ -98,3 +98,31 @@ export interface TaskListItem {
   source?: 'pr_review' | 'issue' | 'manual';
   prNumber?: number;
 }
+
+/** Task metadata used by state readers that must not resolve task content. */
+export interface TaskState {
+  kind: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
+  name: string;
+  createdAt: string;
+  filePath: string;
+  summary?: string;
+  taskDir?: string;
+  runSlug?: string;
+  sourceRunSlug?: string;
+  resumeMode?: RunResumeMode;
+  branch?: string;
+  worktree?: boolean | string;
+  worktreePath?: string;
+  workflow?: string;
+  prUrl?: string;
+  failure?: TaskFailure;
+  startedAt?: string;
+  completedAt?: string;
+  ownerPid?: number;
+  issueNumber?: number;
+  exceededMaxSteps?: number;
+  exceededCurrentIteration?: number;
+  source?: 'pr_review' | 'issue' | 'manual';
+  prNumber?: number;
+}

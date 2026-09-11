@@ -46,7 +46,9 @@ takt add #28
 
 ### 从 MCP 客户端保存任务
 
-MCP 客户端可以使用 `takt-mcp` stdio server 保存待处理任务，无需调用 shell 命令。`takt_enqueue_task` 将待处理记录写入 `.takt/tasks.yaml`；可选的 `issue` 对象可以关联已有 Issue，或通过已配置的 TAKT Issue provider 创建 Issue。如果创建 Issue 后保存任务失败且已解析到 Issue 编号，Issue 会保持打开，MCP 错误结果会返回编号以便重试；如果无法解析编号，结果可能提供 Issue URL。工具要求绝对路径 `cwd` 和非空任务正文。使用 `takt run` 执行，使用 `takt watch` 监视和持续执行。输入字段详见 [CLI 参考](./cli-reference.zh-CN.md#mcp-server)。
+MCP 客户端可以使用 `takt-mcp` stdio server 保存待处理任务、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令，无需调用 shell 命令。`takt_enqueue_task` 将待处理记录写入 `.takt/tasks.yaml`；`takt_list_tasks` 返回紧凑摘要，`takt_get_run` 读取一个 run 的详细信息，`takt_tell_run` 重新确认后只向正在运行的 clone 写入。如果创建 Issue 后保存任务失败且已解析到 Issue 编号，Issue 会保持打开，MCP 错误结果会返回编号以便重试；如果无法解析编号，结果可能提供 Issue URL。工具要求 server 允许的项目根目录内的绝对路径 `cwd`；enqueue 和 tell 还要求非空正文。使用 `takt run` 执行，使用 `takt watch` 监视和持续执行。输入字段详见 [CLI 参考](./cli-reference.zh-CN.md#mcp-server)。
+
+普通 assistant 对话在 provider 支持 MCP 时只接收只读的 task 状态工具。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标、查看内容并确认。不支持 MCP 的 provider 仍可继续对话，但无法查询 task 状态。
 
 ## 任务目录格式
 
@@ -131,7 +133,7 @@ takt run --ignore-exceed
 
 不使用 `--ignore-exceed` 时，达到 workflow `max_steps` 的任务会变为 `exceeded`，并保存 `exceeded_max_steps`、`exceeded_current_iteration` 和 `resume_point` 等重试元数据。该选项只忽略迭代限制，不写入 exceeded retry metadata。
 
-MCP 客户端只负责加入队列；请使用 `takt run` 或 `takt watch` 执行任务。
+MCP 客户端可以加入任务队列、读取 task/run 状态，并向正在运行的 clone 任务发送追加指令；请使用 `takt run` 或 `takt watch` 执行任务。
 
 ### 并行执行（Concurrency）
 
@@ -217,6 +219,8 @@ takt list
 | 操作 | 说明 |
 |------|------|
 | **Mark as failed** | 将卡住的 `running` 任务标记为 `failed` |
+
+选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务或讨论新任务。`/tell` 在确认后再次检查目标，只向确认时选中的任务写入；已完成、已删除、slug 不匹配或非 clone 的 run 不会成为候选，也不会接收指令。
 
 ### Exceeded 任务的操作
 

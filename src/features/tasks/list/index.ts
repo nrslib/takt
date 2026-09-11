@@ -6,6 +6,8 @@ import { selectOption } from '../../../shared/prompt/index.js';
 import { info, header, blankLine } from '../../../shared/ui/index.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
+import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
+import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
 import {
   type ListAction,
   showFullDiff,
@@ -22,7 +24,9 @@ import { forceFailRunningTask } from './taskForceFailActions.js';
 import * as taskRetryActions from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
-import { runLiveInterventionMode } from './liveInterventionMode.js';
+import { resolveConfigValues } from '../../../infra/config/index.js';
+import { runTui } from '../../tui/index.js';
+import type { InteractiveModeResult } from '../../interactive/interactive.js';
 
 export type { ListNonInteractiveOptions } from './listNonInteractive.js';
 
@@ -96,7 +100,7 @@ async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<Runni
     `Action for ${task.name}:`,
     [
       { label: 'Mark as failed', value: 'force_fail', description: 'Mark stuck running task as failed' },
-      ...(task.runSlug !== undefined && task.worktreePath !== undefined
+      ...(task.runSlug !== undefined && task.worktreePath !== undefined && task.data?.worktree !== false
         ? [{ label: 'Interactive', value: 'interactive' as const, description: 'Consult the running task and propose additional instructions' }]
         : []),
     ],
@@ -145,6 +149,42 @@ async function showCompletedTaskAndPromptAction(cwd: string, task: TaskListItem)
   blankLine();
 
   return await showDiffAndPromptActionForTask(cwd, task);
+}
+
+async function dispatchListConversation(
+  cwd: string,
+  lang: 'en' | 'ja',
+  workflowId: string,
+  result: InteractiveModeResult,
+  agentOverrides?: TaskExecutionOptions,
+): Promise<void> {
+  switch (result.action) {
+    case 'execute':
+      await selectAndExecuteTask(cwd, result.task, {
+        workflow: workflowId,
+        interactiveUserInput: true,
+        interactiveMetadata: { confirmed: true, task: result.task },
+        skipTaskList: true,
+        failureMode: 'return',
+        ...(result.attachments ? { attachments: result.attachments } : {}),
+      }, agentOverrides);
+      return;
+    case 'create_issue': {
+      const labels = await promptLabelSelection(lang);
+      await createIssueAndSaveTask(cwd, result.task, workflowId, {
+        labels,
+        ...(result.attachments ? { attachments: result.attachments } : {}),
+      });
+      return;
+    }
+    case 'save_task':
+      await saveTaskFromInteractive(cwd, result.task, workflowId, {
+        ...(result.attachments ? { attachments: result.attachments } : {}),
+      });
+      return;
+    case 'cancel':
+      return;
+  }
 }
 
 export async function listTasks(
@@ -207,9 +247,27 @@ export async function listTasks(
       const task = tasks[idx];
       if (!task) continue;
       const taskAction = await showRunningTaskAndPromptAction(task);
-      if (taskAction === 'interactive') {
+      if (taskAction === 'interactive' && task.runSlug !== undefined) {
         try {
-          await runLiveInterventionMode(cwd, task);
+          const config = resolveConfigValues(cwd, ['language', 'interactivePreviewSteps']);
+          await runTui({
+            cwd,
+            lang: config.language === 'ja' ? 'ja' : 'en',
+            previewCount: config.interactivePreviewSteps,
+            ...(options === undefined ? {} : { agentOverrides: options }),
+            taskHistory: [],
+            userMessage: task.content,
+            initialTellRunSlug: task.runSlug,
+            initialTaskContext: {
+              name: task.name,
+              summary: task.summary ?? task.content,
+              ...(task.data?.workflow === undefined ? {} : { workflow: task.data.workflow }),
+              runSlug: task.runSlug,
+            },
+            dispatch: async (workflowId, result) => {
+              await dispatchListConversation(cwd, config.language === 'ja' ? 'ja' : 'en', workflowId, result, options);
+            },
+          });
         } catch (error) {
           info(getErrorMessage(error));
         }

@@ -242,6 +242,7 @@ describe('a turn the caller has already moved past', () => {
       text: 'first question',
       abortSignal: controller.signal,
     });
+    await vi.waitFor(() => expect(mockCall).toHaveBeenCalledTimes(1));
     controller.abort();
 
     // The provider ignored the abort and answered anyway. Nothing of that answer
@@ -281,6 +282,7 @@ describe('a turn the caller has already moved past', () => {
       text: 'first question',
       abortSignal: controller.signal,
     });
+    await vi.waitFor(() => expect(mockCall).toHaveBeenCalledTimes(1));
     controller.abort();
 
     // An aborted call usually comes back as a failure, and a failure normally

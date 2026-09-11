@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { findRunningStepByRunSlug, readRunMeta } from '../core/workflow/run/run-meta.js';
+import { findRunningStepByRunSlug, readRunMeta, readRunMetaBySlug } from '../core/workflow/run/run-meta.js';
 
 function writeMeta(runRoot: string, slug: string, meta: Record<string, unknown>): void {
   const metaPath = path.join(runRoot, '.takt', 'runs', slug, 'meta.json');
@@ -395,5 +395,26 @@ describe('run-meta lookup', () => {
     });
 
     expect(findRunningStepByRunSlug(projectDir, '../20260409-run-a')).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === 'win32')('should reject a symlinked run metadata file', () => {
+    const slug = '20260409-run-symlink';
+    const metaPath = path.join(projectDir, '.takt', 'runs', slug, 'meta.json');
+    const targetPath = path.join(projectDir, 'external-meta.json');
+    fs.mkdirSync(path.dirname(metaPath), { recursive: true });
+    fs.writeFileSync(targetPath, JSON.stringify({
+      task: 'External metadata',
+      workflow: 'default',
+      runSlug: slug,
+      runRoot: `.takt/runs/${slug}`,
+      reportDirectory: `.takt/runs/${slug}/reports`,
+      contextDirectory: `.takt/runs/${slug}/context`,
+      logsDirectory: `.takt/runs/${slug}/logs`,
+      status: 'running',
+      startTime: '2026-04-09T00:00:00.000Z',
+    }), 'utf-8');
+    fs.symlinkSync(targetPath, metaPath);
+
+    expect(() => readRunMetaBySlug(projectDir, slug)).toThrow(/symlink|symbolic/i);
   });
 });

@@ -1,6 +1,7 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
+import { appendPrivateFile, readPrivateFileState } from '../../shared/utils/private-file.js';
 import { buildLiveInterventionPrompt } from '../../core/workflow/live-intervention/prompt.js';
 import {
   createLiveInterventionState,
@@ -138,12 +139,14 @@ function reduceEvents(raw: string): LiveInterventionState {
 }
 
 export class LiveInterventionFileStore implements LiveInterventionChannel {
+  private readonly runDirectory: string;
   private readonly filePath: string;
   private readonly lockPath: string;
 
   constructor(projectCwd: string, runSlug: string) {
     assertSafeRunSlug(runSlug);
-    this.filePath = join(projectCwd, '.takt', 'runs', runSlug, 'interventions.jsonl');
+    this.runDirectory = join(projectCwd, '.takt', 'runs', runSlug);
+    this.filePath = join(this.runDirectory, 'interventions.jsonl');
     this.lockPath = `${this.filePath}.lock`;
   }
 
@@ -152,13 +155,21 @@ export class LiveInterventionFileStore implements LiveInterventionChannel {
   }
 
   read(): LiveInterventionState {
-    if (!existsSync(this.filePath)) {
+    if (!this.hasExistingRunDirectory()) {
       return createLiveInterventionState();
     }
-    return reduceEvents(readFileSync(this.filePath, 'utf8'));
+    const snapshot = readPrivateFileState(this.filePath);
+    if (!('content' in snapshot)) {
+      return createLiveInterventionState();
+    }
+    return reduceEvents(snapshot.content.toString('utf8'));
   }
 
-  async issue(content: string, issuedAt = new Date().toISOString()): Promise<number> {
+  async issue(
+    content: string,
+    issuedAt = new Date().toISOString(),
+    beforeAppend?: () => void,
+  ): Promise<number> {
     if (typeof content !== 'string') {
       throw new Error('Live intervention content must be a string');
     }
@@ -167,6 +178,7 @@ export class LiveInterventionFileStore implements LiveInterventionChannel {
       if (state.terminalStatus !== undefined) {
         throw new Error('Cannot issue a live intervention after terminal state');
       }
+      beforeAppend?.();
       const instructionId = state.issuedTotal + 1;
       const event: LiveInterventionEvent = {
         type: 'issued',
@@ -240,12 +252,29 @@ export class LiveInterventionFileStore implements LiveInterventionChannel {
   }
 
   private append(event: LiveInterventionEvent): void {
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const fd = openSync(this.filePath, 'a');
-    try {
-      writeSync(fd, `${JSON.stringify(event)}\n`);
-    } finally {
-      closeSync(fd);
+    appendPrivateFile(this.filePath, `${JSON.stringify(event)}\n`);
+  }
+
+  private hasExistingRunDirectory(): boolean {
+    const directories = [dirname(dirname(this.runDirectory)), dirname(this.runDirectory), this.runDirectory];
+    for (const directory of directories) {
+      let stat;
+      try {
+        stat = lstatSync(directory);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') {
+          return false;
+        }
+        throw error;
+      }
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Private artifact path contains a symlink: ${directory}`);
+      }
+      if (!stat.isDirectory()) {
+        throw new Error(`Private artifact ancestor is unsafe: ${directory}`);
+      }
     }
+    return true;
   }
 }

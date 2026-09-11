@@ -15,11 +15,14 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
+import { createMcpAdapter, type PreparedProviderMcp, type ResolvedMcpServers } from '../../infra/providers/mcp/index.js';
+import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
-import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
+import type { StreamCallback, StreamEvent } from '../../shared/types/provider.js';
+import type { McpServerConfig, PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
+import { parseTaskStateReferenceMarker } from '../../shared/task-state-reference.js';
 import {
   providerSupportsAllowedTools,
   providerSupportsPermissionControls,
@@ -32,6 +35,8 @@ export interface CallAIResult {
   content: string;
   sessionId?: string;
   success: boolean;
+  /** Run confirmed by a successful `takt_get_run` MCP call in this turn. */
+  referenceRunSlug?: string;
 }
 
 /** Initialized session context for conversation loops */
@@ -43,6 +48,10 @@ export interface SessionContext {
   personaName: string;
   sessionId: string | undefined;
   providerOptions?: StepProviderOptions;
+  /** MCP servers available to this conversation. */
+  mcpServers?: Record<string, McpServerConfig>;
+  /** Internal identity for the TAKT-generated read-only task-state servers. */
+  taskStateMcpServers?: Record<string, McpServerConfig>;
   permissionMode?: PermissionMode;
   /** Free-form per-call effort override selected in the interactive TUI. */
   effort?: string;
@@ -67,6 +76,137 @@ interface CallAIWithRetryOptions {
   persistSession?: boolean | (() => boolean);
   /** Stream observer for callers that render the response themselves (`outputMode: 'silent'`). */
   onStream?: StreamCallback;
+}
+
+const TASK_GET_RUN_TOOL_NAMES = new Set([
+  'takt_get_run',
+  'mcp__takt__takt_get_run',
+  'takt__takt_get_run',
+]);
+
+function isTaskGetRunTool(tool: string): boolean {
+  return TASK_GET_RUN_TOOL_NAMES.has(tool);
+}
+
+function parseRunSlug(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const slug = value.trim();
+  return slug.length === 0 || slug === '.' || slug === '..' || /[\\/]/u.test(slug)
+    ? undefined
+    : slug;
+}
+
+interface RunReferenceTracker {
+  observe(event: StreamEvent): void;
+  getReferenceRunSlug(): string | undefined;
+}
+
+function createRunReferenceTracker(): RunReferenceTracker {
+  const pending = new Map<string, string>();
+  let referenceRunSlug: string | undefined;
+
+  const complete = (id: string | undefined): void => {
+    if (id === undefined) {
+      return;
+    }
+    const runSlug = pending.get(id);
+    if (runSlug !== undefined) {
+      referenceRunSlug = runSlug;
+      pending.delete(id);
+    }
+  };
+  const observeReferenceResult = (value: string): void => {
+    const runSlug = parseTaskStateReferenceMarker(value);
+    if (runSlug !== undefined) {
+      referenceRunSlug = runSlug;
+    }
+  };
+
+  return {
+    observe(event: StreamEvent): void {
+      if (event.type === 'tool_use' && isTaskGetRunTool(event.data.tool)) {
+        const runSlug = parseRunSlug(event.data.input.runSlug);
+        if (runSlug !== undefined) {
+          pending.set(event.data.id, runSlug);
+        }
+        return;
+      }
+      if (event.type === 'tool_result' && event.data.isError) {
+        pending.delete(event.data.id ?? '');
+        return;
+      }
+      if (event.type === 'tool_result' && !event.data.isError) {
+        if (event.data.id === undefined || !pending.has(event.data.id)) {
+          return;
+        }
+        observeReferenceResult(event.data.content);
+        complete(event.data.id);
+        return;
+      }
+      if (event.type === 'tool_output' && isTaskGetRunTool(event.data.tool)) {
+        const resultId = event.data.id ?? (pending.size === 1 ? pending.keys().next().value : undefined);
+        if (resultId === undefined || !pending.has(resultId)) {
+          return;
+        }
+        observeReferenceResult(event.data.output);
+        complete(resultId);
+        return;
+      }
+    },
+    getReferenceRunSlug(): string | undefined {
+      return referenceRunSlug;
+    },
+  };
+}
+
+function resolveConversationMcpServers(
+  servers: Record<string, McpServerConfig> | undefined,
+): ResolvedMcpServers | undefined {
+  if (servers === undefined || Object.keys(servers).length === 0) {
+    return undefined;
+  }
+  const serverNames = Object.keys(servers).sort();
+  return {
+    enabled: true,
+    servers,
+    serverNames,
+    identity: buildMcpServerSetIdentity(servers),
+  };
+}
+
+async function prepareConversationMcp(
+  ctx: SessionContext,
+  cwd: string,
+  abortSignal: AbortSignal,
+  permissionMode: PermissionMode | undefined,
+  servers: ResolvedMcpServers,
+): Promise<{ readonly servers: ResolvedMcpServers; readonly prepared: PreparedProviderMcp } | undefined> {
+  const adapter = createMcpAdapter(ctx.providerType);
+  adapter.validate(servers);
+  const prepared = await adapter.prepare(servers, {
+    cwd,
+    abortSignal,
+    ...(permissionMode === undefined ? {} : { permissionMode }),
+    ...(ctx.taskStateMcpServers === servers.servers
+      ? { taskStateMcpServers: ctx.taskStateMcpServers }
+      : {}),
+  });
+  return { servers, prepared };
+}
+
+async function disposeConversationMcp(
+  prepared: PreparedProviderMcp | undefined,
+): Promise<void> {
+  if (prepared === undefined) {
+    return;
+  }
+  try {
+    await prepared.dispose();
+  } catch (error) {
+    log.warn('Failed to dispose interactive MCP resources', { error: getErrorMessage(error) });
+  }
 }
 
 /**
@@ -108,6 +248,8 @@ export async function callAIWithRetry(
     options.abortSignal?.addEventListener('abort', onExternalAbort, { once: true });
   }
   let sigintCount = 0;
+  let forceExitRequested = false;
+  let cleanupCurrentAttempt: (() => Promise<void>) | undefined;
   const onSigInt = (): void => {
     sigintCount += 1;
     if (sigintCount === 1) {
@@ -116,9 +258,18 @@ export async function callAIWithRetry(
       abortController.abort();
       return;
     }
+    if (forceExitRequested) {
+      return;
+    }
     blankLine();
     error(getLabel('workflow.sigintForce', ctx.lang));
-    process.exit(EXIT_SIGINT);
+    forceExitRequested = true;
+    abortController.abort();
+    const exitTimer = setTimeout(() => process.exit(EXIT_SIGINT), 1_000);
+    void (cleanupCurrentAttempt?.() ?? Promise.resolve()).finally(() => {
+      clearTimeout(exitTimer);
+      process.exit(EXIT_SIGINT);
+    });
   };
   if (outputMode === 'terminal') {
     process.on('SIGINT', onSigInt);
@@ -164,40 +315,103 @@ export async function callAIWithRetry(
         options.onNotice?.(note);
       }
     }
-    const response = await agent.call(promptForProvider, {
+    const providerCallOptions = (
+      activeSessionId: string | undefined,
+      stream: StreamCallback | undefined,
+      conversationMcp: { readonly servers: ResolvedMcpServers; readonly prepared: PreparedProviderMcp } | undefined,
+    ) => ({
       cwd,
       model: ctx.model,
-      sessionId,
+      sessionId: activeSessionId,
       ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
       ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
       providerOptions: ctx.providerOptions,
       effort: ctx.effort,
       abortSignal: abortController.signal,
-      onStream: resolveStreamHandler(display),
+      onStream: stream,
       imageAttachments: nativeImageAttachments,
+      ...(conversationMcp === undefined ? {} : {
+        mcpServers: conversationMcp.servers.servers,
+        preparedMcp: conversationMcp.prepared,
+      }),
     });
+
+    const callProvider = async (
+      providerAgent: ReturnType<SessionContext['provider']['setup']>,
+      activeSessionId: string | undefined,
+      activeDisplay: StreamDisplay | undefined,
+    ): Promise<{ response: Awaited<ReturnType<typeof providerAgent.call>>; referenceRunSlug?: string }> => {
+      // Some provider clients dispose the prepared MCP material when their call
+      // ends. Prepare per attempt so a stale-session retry gets a live config.
+      const referenceTracker = createRunReferenceTracker();
+      const stream = resolveStreamHandler(activeDisplay);
+      const trackedStream: StreamCallback | undefined = stream === undefined
+        ? undefined
+        : (event) => {
+          referenceTracker.observe(event);
+          stream(event);
+        };
+      const resolvedMcpServers = resolveConversationMcpServers(ctx.mcpServers);
+      const preparation = resolvedMcpServers === undefined
+        ? Promise.resolve(undefined)
+        : prepareConversationMcp(
+          ctx,
+          cwd,
+          abortController.signal,
+          permissionModeForProvider,
+          resolvedMcpServers,
+        );
+      let disposal: Promise<void> | undefined;
+      const cleanup = (): Promise<void> => {
+        // Preparation failures are reported by the provider attempt below.
+        disposal ??= preparation.then(
+          (prepared) => disposeConversationMcp(prepared?.prepared),
+          () => {},
+        );
+        return disposal;
+      };
+      cleanupCurrentAttempt = cleanup;
+      try {
+        const conversationMcp = await preparation;
+        if (abortController.signal.aborted) {
+          throw abortController.signal.reason ?? new DOMException('The AI call was aborted', 'AbortError');
+        }
+        const response = await providerAgent.call(
+          promptForProvider,
+          providerCallOptions(activeSessionId, trackedStream, conversationMcp),
+        );
+        return {
+          response,
+          ...(response.status !== 'blocked' && response.status !== 'error'
+            && referenceTracker.getReferenceRunSlug() !== undefined
+            ? { referenceRunSlug: referenceTracker.getReferenceRunSlug() }
+            : {}),
+        };
+      } finally {
+        await cleanup();
+        cleanupCurrentAttempt = undefined;
+      }
+    };
+
+    const firstAttempt = await callProvider(agent, sessionId, display);
+    const response = firstAttempt.response;
     display?.flush();
     const success = response.status !== 'blocked' && response.status !== 'error';
 
-    if (!success && sessionId && ctx.effort === undefined && ctx.disableSessionRetry !== true) {
+    if (!abortController.signal.aborted
+      && !forceExitRequested
+      && !success
+      && sessionId
+      && ctx.effort === undefined
+      && ctx.disableSessionRetry !== true) {
       log.info('Session invalid, retrying without session');
       sessionId = undefined;
       const retryDisplay = outputMode === 'terminal'
         ? new StreamDisplay('assistant', isQuietMode())
         : undefined;
       const retryAgent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
-      const retry = await retryAgent.call(promptForProvider, {
-        cwd,
-        model: ctx.model,
-        sessionId: undefined,
-        ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
-        ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
-        providerOptions: ctx.providerOptions,
-        effort: ctx.effort,
-        abortSignal: abortController.signal,
-        onStream: resolveStreamHandler(retryDisplay),
-        imageAttachments: nativeImageAttachments,
-      });
+      const retryAttempt = await callProvider(retryAgent, undefined, retryDisplay);
+      const retry = retryAttempt.response;
       retryDisplay?.flush();
       if (retry.sessionId) {
         sessionId = retry.sessionId;
@@ -214,6 +428,11 @@ export async function callAIWithRetry(
           content: retrySucceeded ? retry.content : (retry.error ?? retry.content),
           sessionId: retry.sessionId,
           success: retrySucceeded,
+          ...(retrySucceeded && retryAttempt.referenceRunSlug === undefined
+            ? {}
+            : retrySucceeded
+              ? { referenceRunSlug: retryAttempt.referenceRunSlug }
+              : {}),
         },
         sessionId,
       };
@@ -230,6 +449,11 @@ export async function callAIWithRetry(
         content: success ? response.content : (response.error ?? response.content),
         sessionId: response.sessionId,
         success,
+        ...(success && firstAttempt.referenceRunSlug === undefined
+          ? {}
+          : success
+            ? { referenceRunSlug: firstAttempt.referenceRunSlug }
+            : {}),
       },
       sessionId,
     };

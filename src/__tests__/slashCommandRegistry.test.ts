@@ -90,6 +90,22 @@ describe('filterSlashCommands', () => {
     ]);
   });
 
+  it('should expose /tell with its i18n label', () => {
+    expect(filterSlashCommands('/tell')).toEqual([
+      {
+        command: '/tell',
+        labelKey: 'interactive.commands.tell',
+      },
+    ]);
+  });
+
+  it('should hide /tell for modes that do not enable it', () => {
+    expect(filterSlashCommands('/tell', { enableTellCommand: false })).toEqual([]);
+    expect(filterSlashCommands('/tell', { enableTellCommand: true })).toEqual([
+      { command: '/tell', labelKey: 'interactive.commands.tell' },
+    ]);
+  });
+
   it.each([
     ['/workflow', 'interactive.commands.workflow'],
     ['/interaction', 'interactive.commands.mode'],

@@ -43,6 +43,8 @@ takt hello
 
 **注意：** `--task` 会跳过交互模式并直接执行任务。Issue 引用（`#6`、`--issue`）会作为交互模式的初始输入。
 
+普通 assistant 对话也可以通过只读 MCP 工具读取任务和 run 的摘要。请用任务名称或摘要指代任务；只有在明确某个 run 后，才读取所需的详细日志或 report。新任务准备好后使用 `/go`，向正在 worktree clone 中运行的任务发送追加指令时使用 `/tell`。
+
 ### 流程
 
 1. 选择 workflow
@@ -68,6 +70,7 @@ takt hello
 | `/provider` | 选择另一个 provider。 |
 | `/model <value>` | 为当前会话指定任意 model 名称。 |
 | `/effort <value>` | 为当前会话指定任意推理强度。 |
+| `/tell [指令]` | 选择一个正在运行的 worktree clone 任务，确认追加指令后发送。省略指令时会根据完整会话生成可独立理解的追加指令正文。需要交互式终端；无法确认时不会发送指令。 |
 
 这些选择只在当前会话中有效，不会持久化。workflow、mode、provider 或 model 的更改会在下一条普通消息或 `/go` 时创建新的 AI session，并只将之前的对话作为参考上下文传递一次。仅更改 effort 时，会应用到当前 session 的下一次调用。更改 provider 会清除临时 model 和 effort。在下一次输入前执行多个设置命令时，每项设置只应用最后一次选择的值。会话 override 不影响 workflow 执行。
 
@@ -144,7 +147,7 @@ TAKT 当前支持 `initialize`、`session/new`、`session/prompt`、`session/can
 
 ## MCP Server
 
-`takt-mcp` 通过 stdio 启动 TAKT 的 Model Context Protocol server。若希望 MCP 客户端无需调用 `takt add` 就能加入 TAKT 任务队列，请在客户端中注册它。
+`takt-mcp` 通过 stdio 启动 TAKT 的 Model Context Protocol server。若希望 MCP 客户端无需直接调用 TAKT shell 命令就能加入任务队列、读取 task/run 状态，或向正在运行的 worktree clone 任务发送追加指令，请在客户端中注册它。
 
 ```bash
 takt-mcp
@@ -168,8 +171,13 @@ server 暴露以下工具：
 | 工具 | 说明 |
 |------|------|
 | `takt_enqueue_task` | 将待处理任务保存到 `.takt/tasks.yaml`，可选关联或创建 Issue。 |
+| `takt_list_tasks` | 不读取日志或 report 正文，返回任务和 run 的紧凑摘要。 |
+| `takt_get_run` | 返回一个 run 的当前 step、phase、日志、report 和追加指令投递状态。 |
+| `takt_tell_run` | 重新确认目标后，向一个正在运行的 worktree clone 任务发送追加指令。 |
 
 每个工具的 `cwd` 都会通过 `realpath` 解析，且必须位于 MCP server 允许的项目根目录内。默认允许的根目录是启动 `takt-mcp` 的目录。
+
+如果客户端只应读取 task 状态，请使用 `--tool-set read-only`。此模式只公开 `takt_list_tasks` 和 `takt_get_run`，不会公开 `takt_enqueue_task` 或 `takt_tell_run`。普通 assistant 对话会自动使用这个只读工具集。不支持 MCP 的 provider 仍会继续对话，并提示 task 状态查询不可用。
 
 ### `takt_enqueue_task`
 
@@ -199,7 +207,11 @@ server 暴露以下工具：
 
 `issue` 对象必须严格是 `{ "number": 123 }` 或 `{ "create": true, "title"?: "...", "labels"?: ["..."] }` 之一；混合 key、空标题、空标签和未知 key 都会被拒绝。Issue 关联的加入队列成功后会返回 `issueNumber`。如果创建 Issue 成功，但保存任务失败或在解析 Issue 编号后被取消，Issue 会保持打开状态；MCP 错误结果包含 `issueCreated`、`issueNumber`、可选的 `issueUrl`、`taskEnqueued`、`stage` 和已清理的 `error`。使用 `{ "issue": { "number": issueNumber } }` 重试可避免重复创建 Issue。如果 `stage` 是 `issue_number_parsing`，则无法得到 `issueNumber`；可以使用可选的 `issueUrl` 找到 Issue 并取得编号后再重试。
 
-MCP 只负责加入任务队列。请使用 `takt run` 执行待处理任务，使用 `takt watch` 持续监视并执行任务。
+MCP 可以加入任务队列、读取 task/run 状态，并向正在运行的 clone 任务发送追加指令。请使用 `takt run` 执行待处理任务，使用 `takt watch` 持续监视并执行任务。
+
+### `takt_list_tasks`、`takt_get_run` 和 `takt_tell_run`
+
+这三个工具都要求绝对路径的项目 `cwd`，并限制在 server 允许的项目根目录内。`takt_list_tasks` 返回名称、摘要、状态、workflow、run slug 和可用的当前 step，但不返回日志或 report 正文。`takt_get_run` 接收列表中的 `runSlug`，返回该 run 的 step 日志、report 和追加指令投递状态。`takt_tell_run` 接收非空 `content`，在写入前重新确认指定 slug 仍对应正在运行的 worktree clone 任务；已完成、已删除、slug 不匹配或非 clone 的 run 会被拒绝且不会写入，并返回原因。
 
 ## 即时 Exec 模式
 
@@ -310,6 +322,12 @@ takt list --non-interactive --format json
 ```
 
 `--action` 接受 `diff`、`sync`、`try`、`merge` 或 `delete`。非交互操作需要 `--branch`，`delete` 还需要 `--yes`。交互模式中的 **Merge from root** 会将根仓库 HEAD 合并到任务分支，并使用 AI 辅助解决冲突。
+
+#### 咨询运行中的任务
+
+在 `takt list` 中选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务、讨论新任务，并使用 `/go` 执行或保存。`/tell` 会显示任务名称、workflow、当前 step 和指令，确认后只向确认时选中的任务写入。没有交互式终端或无法取得确认时不会发送指令，并会显示原因；`/cancel` 会关闭对话或取消待处理操作。
+
+`/tell` 只列出 TAKT 管理的有效 worktree clone 中运行的任务。打开选择界面后还会再次确认目标，因此在此期间结束的任务不会收到指令。
 
 ### 任务目录工作流（创建 / 运行 / 验证）
 

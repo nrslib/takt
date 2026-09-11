@@ -13,7 +13,7 @@ interactive:
   noTranscript: "(No local transcript. Summarize the current session context.)"
   formalSpecPrompt: "Enable formal specification mode (Alloy, Quint)? Change the mode default with assistant.formal_spec.mode (or the legacy scalar assistant.formal_spec)."
   ui:
-    intro: "Interactive mode - describe your task. When ready, use /go to create the instruction and run it."
+    intro: "Interactive mode - describe your task. When ready, use /go to create the instruction and run it, or /tell to send an additional instruction to a running task."
     introGrillMe: "Grill Me mode - clarify requirements one question at a time with a recommended option. When ready, use /go to create the instruction and run it."
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your task first."
@@ -49,6 +49,7 @@ interactive:
     prompt: "Select a run to reference:"
     noRuns: "No previous runs found."
   continueNoSession: "No previous assistant session found. Starting a new session."
+  mcpUnavailable: "Task-state lookup is unavailable for provider {provider}; the conversation will continue without it. Reason: {error}"
   resumeSessionLoaded: "Session loaded. Subsequent AI calls will use this session."
   sessionSelector:
     prompt: "Resume from a recent session?"
@@ -66,6 +67,7 @@ interactive:
   commands:
     accept: "Accept latest assistant response"
     go: "Create instruction & run"
+    tell: "Send an additional instruction to a running task"
     retry: "Review & rerun with previous instructions"
     replay: "Rerun immediately with previous instructions"
     cancel: "Exit interactive mode"
@@ -333,5 +335,16 @@ tui:
     conversationRebuildFailed: "Failed to switch conversation settings: {error}"
     unsupportedCommand: "That command is not available in the TUI."
     settingNoArguments: "{command} does not accept an argument."
+    tellInstructionRequired: "Describe the additional instruction before using /tell."
+    tellGenerationFailed: "The additional instruction could not be generated: {error}"
+    tellRequiresTty: "The additional instruction was not sent: /tell requires an interactive terminal."
+    tellNoCandidates: "No running worktree-clone task can receive an additional instruction."
+    tellExcluded: "Running tasks excluded from /tell:\n{tasks}"
+    tellCancelled: "Additional instruction was not sent."
+    tellStale: "The additional instruction was not sent: {error}"
     settingValueRequired: "{command} requires a value."
     imagePasteFailed: "The image could not be pasted."
+  tell:
+    selectPrompt: "Select the running task to tell:"
+    confirm: "Send this additional instruction?\nTask: {task}\nSummary: {summary}\nWorkflow: {workflow}\nCurrent step: {step}\nRun slug: {runSlug}\nInstruction:\n{content}"
+    sent: "Additional instruction sent to {task} (instruction #{instructionId})."
