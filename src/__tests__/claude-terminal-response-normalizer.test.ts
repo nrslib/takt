@@ -93,6 +93,40 @@ describe('Claude terminal response normalizer', () => {
     });
   });
 
+  it('Given tool result events, When normalizing, Then result content, id, and failure state are emitted unchanged', () => {
+    const onStream = vi.fn();
+
+    normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [
+        {
+          type: 'tool_result',
+          id: 'tool-1',
+          content: 'run state',
+          isError: false,
+        },
+        {
+          type: 'tool_result',
+          id: 'tool-2',
+          content: 'lookup failed',
+          isError: true,
+        },
+      ],
+      onStream,
+    });
+
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'tool_result',
+      data: { id: 'tool-1', content: 'run state', isError: false },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'tool_result',
+      data: { id: 'tool-2', content: 'lookup failed', isError: true },
+    });
+  });
+
   it('Given assistant text contains a rate limit marker, When normalizing, Then rate_limited response is returned', () => {
     const result = normalizeClaudeTerminalResponse({
       agentName: 'coder',

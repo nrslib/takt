@@ -42,6 +42,7 @@ import {
 import { resolvePreviousOrder } from './conversationPlan.js';
 import { prependInitialPromptContext } from './promptSections.js';
 import type { PermissionMode } from '../../core/models/index.js';
+import { runTellCommand } from './tellCommand.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
@@ -174,6 +175,12 @@ export interface ConversationStrategy {
   enableOpenCommand?: boolean;
   /** Explicit slash-command allowlist for modes with a guarded execution path. */
   enabledCommands?: readonly SlashCommand[];
+  /** Enable the normal-assistant-only `/tell` command. */
+  enableTellCommand?: boolean;
+  /** Run to use as the initial `/tell` choice. */
+  initialReferenceRunSlug?: string;
+  /** Capability notice shown before the first user input. */
+  mcpUnavailableNotice?: string;
   /** Context prepended to the first regular prompt in this conversation. */
   initialPromptContext?: string;
   /** Context prepended to summary prompts. */
@@ -199,6 +206,7 @@ export async function runConversationLoop(
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
   const sourceContext = initialInput?.sourceContext;
+  let referenceRunSlug = strategy.initialReferenceRunSlug;
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
   let sessionId = ctx.sessionId;
   let activePromptConfiguration: ConversationPromptConfiguration = {
@@ -224,6 +232,9 @@ export async function runConversationLoop(
 
   try {
     info(strategy.introMessage);
+    if (strategy.mcpUnavailableNotice !== undefined) {
+      info(strategy.mcpUnavailableNotice);
+    }
     if (sessionId) {
       info(ui.resume);
     }
@@ -294,6 +305,9 @@ export async function runConversationLoop(
     const commandAvailability: CommandAvailability = {
       enableRetryCommand: strategy.enableRetryCommand,
       hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
+      ...(strategy.enableTellCommand === undefined
+        ? {}
+        : { enableTellCommand: strategy.enableTellCommand }),
       ...(strategy.enableOpenCommand === true ? { enableOpenCommand: true } : {}),
       enabledCommands: strategy.enabledCommands,
     };
@@ -339,6 +353,9 @@ export async function runConversationLoop(
         );
         if (result) {
           shouldSendInitialPromptContext = false;
+          if (result.referenceRunSlug !== undefined) {
+            referenceRunSlug = result.referenceRunSlug;
+          }
           if (!result.success) {
             error(result.content);
             blankLine();
@@ -490,6 +507,19 @@ export async function runConversationLoop(
         case SlashCommand.Cancel: {
           info(ui.cancelled);
           return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+        }
+
+        case SlashCommand.Tell: {
+          const notice = await runTellCommand({
+            cwd,
+            lang: ctx.lang,
+            inlineText: match.text,
+            history,
+            sessionContext: ctx,
+            ...(referenceRunSlug === undefined ? {} : { preferredRunSlug: referenceRunSlug }),
+          });
+          info(notice);
+          continue;
         }
 
         case SlashCommand.Resume: {

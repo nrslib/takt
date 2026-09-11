@@ -67,6 +67,7 @@ export type TuiHandoffId =
   | 'provider'
   | 'model'
   | 'effort'
+  | 'tell'
   | 'open'
   | 'exec-setup'
   | 'exec-go';
@@ -177,6 +178,8 @@ export interface TuiConversation {
   recordRejectedDraft?(task: string): void;
   /** Snapshot all user/assistant context needed by a recreated provider session. */
   snapshotHistory?(): readonly ConversationMessage[];
+  /** Latest run confirmed by a successful task-state lookup in this conversation. */
+  getReferenceRunSlug?(): string | undefined;
   /** Apply an effort override to future calls on the active session. */
   setEffort?(effort: string): void;
   /** Capture the clipboard image and return the placeholder to insert. */
@@ -219,6 +222,9 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
   const commandAvailability: CommandAvailability = {
     enableRetryCommand: strategy.enableRetryCommand === true,
     hasPreviousOrder: previousOrder !== undefined,
+    ...(strategy.enableTellCommand === undefined
+      ? {}
+      : { enableTellCommand: strategy.enableTellCommand }),
     ...(strategy.enableOpenCommand === true ? { enableOpenCommand: true } : {}),
     ...(options.enableSettingsCommands === true ? { enableSettingsCommands: true } : {}),
     ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
@@ -244,6 +250,10 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
 
     snapshotHistory(): readonly ConversationMessage[] {
       return session.snapshotHistory();
+    },
+
+    getReferenceRunSlug(): string | undefined {
+      return session.getReferenceRunSlug?.();
     },
 
     setEffort(effort: string): void {
@@ -302,6 +312,8 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
               };
         case SlashCommand.Open:
           return { kind: 'handoff', id: 'open', text: match.text || undefined };
+        case SlashCommand.Tell:
+          return { kind: 'handoff', id: 'tell', text: match.text || undefined };
         case SlashCommand.Go:
         case SlashCommand.Setup:
           return null;

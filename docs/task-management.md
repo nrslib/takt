@@ -46,7 +46,9 @@ You can also save tasks from interactive mode. After refining requirements throu
 
 ### Saving Tasks from MCP Clients
 
-MCP clients can use the `takt-mcp` stdio server to save pending tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`; its optional `issue` object links an existing issue or creates one through the configured TAKT issue provider. If saving fails after issue creation and the issue number was resolved, the issue remains open and the MCP error result returns its number for retry. If number extraction fails, the result can provide the issue URL instead. The tool requires an absolute `cwd` and a non-empty task body. Use `takt run` to execute pending tasks or `takt watch` to monitor and execute them continuously. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
+MCP clients can use the `takt-mcp` stdio server to save pending tasks, inspect task/run state, and send additional instructions to running worktree-clone tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`; `takt_list_tasks` returns compact summaries, `takt_get_run` reads one run's details, and `takt_tell_run` rechecks and writes only to a running clone. If saving fails after issue creation and the issue number was resolved, the issue remains open and the MCP error result returns its number for retry. If number extraction fails, the result can provide the issue URL instead. The tools require an absolute `cwd` inside the server's allowed project root; enqueue and tell also require non-empty task content. Use `takt run` to execute pending tasks or `takt watch` to monitor and execute them continuously. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
+
+The ordinary assistant conversation receives only the read-only task-state tools when its provider supports MCP. Use `/go` for a new task and `/tell` to select, review, and confirm an additional instruction for a running worktree clone. A provider without MCP support keeps the conversation available but cannot look up task state.
 
 ## Task Directory Format
 
@@ -131,7 +133,7 @@ The `run` command claims pending tasks and executes them through the configured 
 
 When a workflow reaches `max_steps`, the default `takt run` behavior stops the task with `exceeded` status and saves retry metadata such as `exceeded_max_steps`, `exceeded_current_iteration`, and `resume_point`. Passing `--ignore-exceed` makes `takt run` ignore only that iteration limit, continue the workflow, and skip writing exceeded retry metadata.
 
-MCP clients enqueue tasks only. Use `takt run` to execute pending tasks or `takt watch` for continuous monitoring and execution.
+MCP clients can enqueue tasks, inspect task/run state, and send additional instructions to running clone tasks. Use `takt run` to execute pending tasks or `takt watch` for continuous monitoring and execution.
 
 ### Parallel Execution (Concurrency)
 
@@ -207,7 +209,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 | Action | Description |
 |--------|-------------|
 | **Requeue** | Select a resume or restart position and return the task to `pending` without a conversation |
-| **Retry** | Open a retry conversation with failure context, then re-execute |
+| **Retry** | Open a retry conversation with failure context, review the revised instruction, then queue it as `pending` |
 | **Instruct** | Open an AI conversation against the run's working tree to craft additional instructions, then requeue |
 | **Create PR** | Commit, push, and create a pull request from the failed run's changes |
 | **Delete** | Remove the failed task record |
@@ -223,6 +225,8 @@ The list view shows all tasks organized by status (pending, running, completed, 
 | Action | Description |
 |--------|-------------|
 | **Mark as failed** | Mark a stuck `running` task as `failed` |
+
+Selecting a running task with a worktree clone opens the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks or discuss a new task. `/tell` rechecks the selected task after confirmation and writes only to that task; completed, missing, mismatched, and non-clone runs are not candidates or recipients.
 
 ### Actions for Exceeded Tasks
 
@@ -267,7 +271,7 @@ When you select **Retry** on a failed task, TAKT:
 
 After a requeue, execution uses a new namespace, so its ledger is not inherited and starts empty.
 
-After `/go`, the retry conversation offers the same choices as Instruct mode (**Save as Task** / **Continue editing**), with `/accept` and `/replay` for immediate re-execution and `/cancel` to abort. Both saving and immediate re-execution use the selected Resume or Restart position. Retry notes are appended to the task record, accumulating across multiple retry attempts.
+After `/go`, the retry conversation shows the revised instruction and offers **Save as Task** first (the default) or **Continue editing**. Saving updates the existing task and returns it to `pending`; it does not start a worker immediately. `/retry`, `/replay`, and immediate execution choices are unavailable in this Retry conversation. Use `/cancel` to abort without changing the task.
 
 ### Non-Interactive Mode (`--non-interactive`)
 

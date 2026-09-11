@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, utimesSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, symlinkSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -11,6 +11,16 @@ import type { AutoRequeueResult } from '../infra/task/index.js';
 import { buildTerminalTaskRecord } from '../infra/task/taskRecordMutations.js';
 import { buildWorkflowCallInvocationFixture } from './helpers/workflow-resume-fixture.js';
 import type { WorkflowRestartPoint, WorkflowResumePoint } from '../core/models/index.js';
+
+const { readFileSyncMock } = vi.hoisted(() => ({
+  readFileSyncMock: vi.fn(),
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  readFileSyncMock.mockImplementation(actual.readFileSync);
+  return { ...actual, readFileSync: readFileSyncMock };
+});
 
 function loadTasksFile(testDir: string): { tasks: Array<Record<string, unknown>> } {
   const raw = readFileSync(join(testDir, '.takt', 'tasks.yaml'), 'utf-8');
@@ -483,9 +493,12 @@ describe('TaskRunner (tasks.yaml)', () => {
       exceeded_max_steps: 90,
       exceeded_current_iteration: 59,
       resume_point: inheritedResumePoint,
-      resume_mode: 'requeue',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'requeue', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
     runner.updateRunningTaskExecution(task.name, {
       runSlug: '20260413-empty-run',
@@ -523,9 +536,12 @@ describe('TaskRunner (tasks.yaml)', () => {
     runner.addTask('Task A', {
       workflow: 'default',
       restart_point: restartPoint,
-      resume_mode: 'retry',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'retry', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
 
     runner.failTask({
@@ -549,9 +565,12 @@ describe('TaskRunner (tasks.yaml)', () => {
     runner.addTask('Task A', {
       workflow: 'default',
       restart_point: restartPoint,
-      resume_mode: 'requeue',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'requeue', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
     runner.updateRunningTaskExecution(task.name, {
       runSlug: '20260413-empty-restart-run',
@@ -601,9 +620,12 @@ describe('TaskRunner (tasks.yaml)', () => {
       exceeded_max_steps: 90,
       exceeded_current_iteration: 59,
       resume_point: inheritedResumePoint,
-      resume_mode: 'requeue',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'requeue', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
     runner.updateRunningTaskExecution(task.name, {
       runSlug: '20260413-progressed-run',
@@ -752,6 +774,42 @@ describe('TaskRunner (tasks.yaml)', () => {
     })]);
 
     expect(() => runner.listTasks()).toThrow(/ENOENT|no such file/i);
+  });
+
+  it('should list task state without resolving content_file', () => {
+    const contentRoot = mkdtempSync(join(tmpdir(), 'takt-task-content-'));
+    try {
+      const contentPath = join(contentRoot, 'external-task-content.txt');
+      writeFileSync(contentPath, 'EXTERNAL_TASK_CONTENT_SECRET\nprivate details', 'utf-8');
+      writeTasksFile(testDir, [createPendingRecord({
+        content: undefined,
+        content_file: contentPath,
+        summary: undefined,
+      })]);
+
+      readFileSyncMock.mockClear();
+      const taskState = runner.listTaskStateItems()[0];
+      expect(taskState).toEqual(expect.objectContaining({
+        name: 'task-a',
+        status: 'pending',
+      }));
+      expect(taskState).not.toHaveProperty('summary');
+      expect(taskState).not.toHaveProperty('content');
+      expect(JSON.stringify(taskState)).not.toContain('EXTERNAL_TASK_CONTENT_SECRET');
+      expect(readFileSyncMock.mock.calls.filter(([filePath]) => filePath === contentPath)).toHaveLength(0);
+    } finally {
+      rmSync(contentRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('should reject a symlinked tasks.yaml before reading task state', () => {
+    const targetPath = join(testDir, 'real-tasks.yaml');
+    const tasksPath = join(testDir, '.takt', 'tasks.yaml');
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    writeFileSync(targetPath, stringifyYaml({ tasks: [] }), 'utf-8');
+    symlinkSync(targetPath, tasksPath);
+
+    expect(() => runner.listTaskStateItems()).toThrow(/symlink|symbolic/i);
   });
 
   it('should keep completed task record in tasks.yaml', () => {
@@ -1588,7 +1646,7 @@ describe('TaskRunner (tasks.yaml)', () => {
   });
 
   it('should persist resume_point when requeueing and starting re-execution', () => {
-    const resumePoint = {
+    const resumePoint: WorkflowResumePoint = {
       version: 2 as const,
       stack: [
         {
@@ -1887,9 +1945,12 @@ describe('TaskRunner (tasks.yaml)', () => {
     runner.addTask('Task A', {
       workflow: 'default',
       restart_point: restartPoint,
-      resume_mode: 'retry',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'retry', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
 
     runner.completeTask({

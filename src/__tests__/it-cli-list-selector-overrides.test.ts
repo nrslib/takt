@@ -177,9 +177,11 @@ function createEnvironment(): TestEnvironment {
     throw new Error('TAKT_CONFIG_DIR must be set by test setup.');
   }
   writeFileSync(join(configDir, 'config.yaml'), `worktree_dir: ${join(projectDir, 'worktrees')}\n`);
+  const mockCallLogPath = join(projectDir, '.takt-mock-calls.ndjson');
+  writeFileSync(mockCallLogPath, '');
   return {
     projectDir,
-    mockCallLogPath: join(projectDir, '.takt-mock-calls.ndjson'),
+    mockCallLogPath,
   };
 }
 
@@ -281,6 +283,7 @@ describe('IT: CLI list selector overrides', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    selectOptionMock.mockReset();
     environment = createEnvironment();
     cliState.cwd = environment.projectDir;
     vi.mocked(rootCommand.opts as () => Record<string, unknown>).mockReturnValue({
@@ -292,7 +295,7 @@ describe('IT: CLI list selector overrides', () => {
       _message: string,
       options: Array<{ value: string }>,
     ) => options[0]?.value ?? null);
-    retryModeMock.mockResolvedValue({ action: 'execute', task: 'Retry with the CLI override.' });
+    retryModeMock.mockResolvedValue({ action: 'save_task', task: 'Retry with the CLI override.', source: 'go' });
     instructModeMock.mockResolvedValue({ action: 'execute', task: 'Instruct with the CLI override.' });
     process.env.TAKT_MOCK_CALL_LOG = environment.mockCallLogPath;
     invalidateGlobalConfigCache();
@@ -312,7 +315,7 @@ describe('IT: CLI list selector overrides', () => {
     rmSync(environment.projectDir, { recursive: true, force: true });
   });
 
-  it('should use one CLI override for retry preview, selector, and participants from the list command', async () => {
+  it('should apply the CLI override to retry preview and queue the revised order without executing participants', async () => {
     createTerminalTask(environment.projectDir, 'failed');
     selectOptionMock
       .mockResolvedValueOnce('failed:0')
@@ -326,12 +329,15 @@ describe('IT: CLI list selector overrides', () => {
     } | undefined;
     expect(retryContext).toBeDefined();
     expectCliSelectorPreview(retryContext!.workflowContext.stepPreviews);
-    const starts = readProviderStarts(environment.mockCallLogPath);
-    expect(starts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ personaName: DYNAMIC_PARALLEL_SELECTOR_PERSONA, provider: 'mock', model: CLI_MODEL }),
-      expect.objectContaining({ personaName: 'architecture', provider: 'mock', model: CLI_MODEL }),
-      expect.objectContaining({ personaName: 'frontend', provider: 'mock', model: CLI_MODEL }),
-    ]));
+    const tasks = new TaskRunner(environment.projectDir).listAllTaskItems();
+    expect(tasks).toHaveLength(1);
+    const queuedTask = tasks[0]!;
+    expect(queuedTask.kind).toBe('pending');
+    expect(queuedTask.runSlug).toBeUndefined();
+    expect(queuedTask.taskDir).toBeDefined();
+    const order = readFileSync(join(environment.projectDir, queuedTask.taskDir!, 'order.md'), 'utf-8');
+    expect(order.trim()).toBe('Retry with the CLI override.');
+    expect(readProviderStarts(environment.mockCallLogPath)).toEqual([]);
   }, 120_000);
 
   it('should use one CLI override for instruct preview, selector, and participants from the list command', async () => {

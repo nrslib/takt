@@ -3,6 +3,7 @@ import { statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 // New modules under test (implemented in the following `implement` step).
 import { createMcpAdapter, type ResolvedMcpServers, type ProviderMcpContext } from '../infra/providers/mcp/index.js';
+import { createTaskStateMcpServers } from '../features/interactive/taskStateMcp.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -278,6 +279,40 @@ describe('Copilot adapter (MCP-COPILOT)', () => {
     await expect(
       adapter.prepare(resolvedServers(), baseContext({ permissionMode: 'readonly' })),
     ).rejects.toThrow(/readonly permission mode/);
+  });
+
+  it('Given the generated read-only task-state server, When Copilot prepares it in readonly mode, Then the trusted server is allowed', async () => {
+    const adapter = createMcpAdapter('copilot');
+    const taskStateMcpServers = createTaskStateMcpServers();
+    const servers: ResolvedMcpServers = {
+      enabled: true,
+      servers: taskStateMcpServers,
+      serverNames: Object.keys(taskStateMcpServers),
+      identity: 'takt:stdio',
+    };
+    const prepared = await adapter.prepare(
+      servers,
+      baseContext({ permissionMode: 'readonly', taskStateMcpServers }),
+    );
+    try {
+      const args = (prepared as { args?: string[] }).args ?? [];
+      expect(args.find((a) => a.startsWith('--additional-mcp-config'))).toBeDefined();
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it('rejects an untrusted copy of task-state servers in Copilot readonly mode', async () => {
+    const adapter = createMcpAdapter('copilot');
+    const taskStateMcpServers = createTaskStateMcpServers();
+    const copiedServers = { ...taskStateMcpServers };
+
+    await expect(adapter.prepare({
+      enabled: true,
+      servers: copiedServers,
+      serverNames: Object.keys(copiedServers),
+      identity: 'takt:stdio',
+    }, baseContext({ permissionMode: 'readonly', taskStateMcpServers }))).rejects.toThrow(/readonly permission mode/);
   });
 
   it('Given the copilot adapter with edit permission mode, When prepared with servers, Then --additional-mcp-config is added (permission-consistent)', async () => {

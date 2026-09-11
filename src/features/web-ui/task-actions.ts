@@ -766,6 +766,13 @@ function assertTaskActionClaim(
   ) {
     throw new CentralTaskActionError('Task action conversation is stale', 409);
   }
+  if (
+    options.action === 'retry'
+    && claim.taskActionDraft !== undefined
+    && claim.taskActionDraft.task !== options.input?.trim()
+  ) {
+    throw new CentralTaskActionError('Retry instruction does not match the confirmed draft', 409);
+  }
   return claim;
 }
 
@@ -902,6 +909,18 @@ export async function executeCentralTaskAction(
       const input = requireActionInput(options.input);
       const claim = assertTaskActionClaim(options, task);
       const executionRequest = executionRequestForTaskAction(action, task, input, claim);
+      if (action === 'retry') {
+        const reset = await repository.resetFailedTaskToPending(task.taskId, {
+          task: input,
+          executionRequest,
+        });
+        return {
+          action,
+          taskId: task.taskId,
+          status: 'accepted',
+          taskStatus: projectCentralTaskStatus(reset),
+        };
+      }
       const decision = await repository.requeueTask(task.taskId, {
         task: input,
         executionRequest,

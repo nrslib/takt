@@ -45,6 +45,10 @@ export interface ConversationSessionStrategy {
    * mode disabled is text here too — not a command it happens to understand.
    */
   enabledCommands?: readonly SlashCommand[];
+  /** Enable the normal-assistant-only `/tell` command. */
+  enableTellCommand?: boolean;
+  /** Run to use as the initial `/tell` choice. */
+  initialReferenceRunSlug?: string;
 }
 
 export interface ConversationSessionOptions {
@@ -151,6 +155,8 @@ export interface InteractiveConversationSession extends ConversationSession {
   snapshotHistory(): readonly ConversationMessage[];
   /** Apply an effort override to subsequent calls without replacing the session. */
   setEffort(effort: string): void;
+  /** Latest run confirmed by a successful task-state lookup in this session. */
+  getReferenceRunSlug?(): string | undefined;
 }
 
 function prependHandoffHistory(
@@ -216,6 +222,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
   let formalSpecComments = options.formalSpecComments ?? options.strategy.formalSpecComments ?? true;
   let systemPrompt = options.strategy.systemPrompt;
   let ctx: SessionContext = { ...options.ctx };
+  let referenceRunSlug = options.strategy.initialReferenceRunSlug;
   let pendingHandoffHistory = options.handoffHistory && options.handoffHistory.length > 0
     ? options.handoffHistory.map((message) => ({ ...message }))
     : undefined;
@@ -244,6 +251,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
    * a disabled command from being re-read as a command down here.
    */
   const commandAvailability: CommandAvailability = {
+    enableTellCommand: options.strategy.enableTellCommand === true,
     ...(options.strategy.enabledCommands
       ? { enabledCommands: options.strategy.enabledCommands }
       : {}),
@@ -367,6 +375,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
       };
     }
     consumeHandoffHistory(providerPrompt.handoffHistory);
+    if (result.referenceRunSlug !== undefined) {
+      referenceRunSlug = result.referenceRunSlug;
+    }
     shouldSendInitialPromptContext = false;
     history = [...history, { role: 'assistant', content: result.content }];
     return {
@@ -493,6 +504,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
     setEffort(effort: string): void {
       ctx = { ...ctx, effort };
+    },
+    getReferenceRunSlug(): string | undefined {
+      return referenceRunSlug;
     },
     getLatestAssistantMessage(): string | null {
       for (let index = history.length - 1; index >= 0; index -= 1) {

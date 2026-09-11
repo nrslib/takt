@@ -1,10 +1,21 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { stringify as stringifyYaml } from 'yaml';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
+import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js';
 
 const RUN_SLUG = 'live-run';
 
@@ -120,6 +131,12 @@ describe('LiveInterventionFileStore integration', () => {
     projectDirectories.push(projectCwd);
     const tuiStore = createStore(projectCwd);
     const engineStore = createStore(projectCwd);
+
+    expect(engineStore.read()).toMatchObject({
+      instructions: [],
+      pending: 0,
+      issuedTotal: 0,
+    });
 
     await tuiStore.issue('Aを追加して', '2026-09-03T00:00:00.000Z');
     await tuiStore.issue('さっきのAはやっぱりなし', '2026-09-03T00:00:01.000Z');
@@ -375,5 +392,100 @@ describe('LiveInterventionFileStore integration', () => {
     expect(reopenedEngineStore.read().instructions).toEqual([
       expect.objectContaining({ content: 'survives clone removal', state: 'pending' }),
     ]);
+  });
+
+  it('rechecks the run status under the intervention lock before appending', async () => {
+    const projectCwd = createProjectDirectory();
+    projectDirectories.push(projectCwd);
+    const runSlug = 'race-run';
+    const cloneCwd = join(projectCwd, '.takt', 'worktrees', 'race-task');
+    const runDir = join(cloneCwd, '.takt', 'runs', runSlug);
+    const metaPath = join(runDir, 'meta.json');
+    mkdirSync(runDir, { recursive: true });
+    const meta = {
+      task: 'Race task',
+      workflow: 'default',
+      runSlug,
+      runRoot: `.takt/runs/${runSlug}`,
+      reportDirectory: `.takt/runs/${runSlug}/reports`,
+      contextDirectory: `.takt/runs/${runSlug}/context`,
+      logsDirectory: `.takt/runs/${runSlug}/logs`,
+      status: 'running',
+      startTime: '2026-09-03T00:00:00.000Z',
+      currentStep: 'implement',
+    } as const;
+    writeFileSync(metaPath, JSON.stringify(meta), 'utf8');
+    mkdirSync(join(projectCwd, '.takt', 'runs', runSlug), { recursive: true });
+    writeFileSync(join(projectCwd, '.takt', 'tasks.yaml'), stringifyYaml({
+      tasks: [{
+        name: 'race-task',
+        status: 'running',
+        content: 'Race task',
+        workflow: 'default',
+        worktree: true,
+        auto_pr: false,
+        created_at: meta.startTime,
+        started_at: meta.startTime,
+        completed_at: null,
+        run_slug: runSlug,
+        worktree_path: cloneCwd,
+      }],
+    }), 'utf8');
+
+    const store = new LiveInterventionFileStore(projectCwd, runSlug);
+    const lockPath = `${store.getFilePath()}.lock`;
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'test-holder' }), { mode: 0o600 });
+
+    const issuing = issueTellableRunningTask(projectCwd, runSlug, 'must not be appended');
+    writeFileSync(metaPath, JSON.stringify({ ...meta, status: 'completed' }), 'utf8');
+    unlinkSync(lockPath);
+
+    await expect(issuing).rejects.toThrow(/not running/);
+    expect(existsSync(store.getFilePath())).toBe(false);
+  });
+
+  function createSymlinkFixture() {
+    const projectCwd = createProjectDirectory();
+    const outside = createProjectDirectory();
+    projectDirectories.push(projectCwd, outside);
+    const store = new LiveInterventionFileStore(projectCwd, 'symlink-run');
+    const runDir = dirname(store.getFilePath());
+    mkdirSync(runDir, { recursive: true });
+    return { store, runDir, outside };
+  }
+
+  it.skipIf(process.platform === 'win32')('rejects a symlinked intervention file without touching its target', () => {
+    const { store, outside } = createSymlinkFixture();
+    const outsideFile = join(outside, 'interventions.jsonl');
+    writeFileSync(outsideFile, 'outside-file\n', 'utf8');
+    symlinkSync(outsideFile, store.getFilePath());
+
+    expect(() => store.read()).toThrow(/symlink|symbolic/i);
+    expect(readFileSync(outsideFile, 'utf8')).toBe('outside-file\n');
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects a symlinked intervention lock without touching its target', async () => {
+    const { store, outside } = createSymlinkFixture();
+    const outsideLock = join(outside, 'interventions.lock');
+    writeFileSync(outsideLock, 'outside-lock\n', 'utf8');
+    symlinkSync(outsideLock, `${store.getFilePath()}.lock`);
+
+    await expect(store.issue('must not follow the lock link')).rejects.toThrow(/symlink|symbolic/i);
+    expect(readFileSync(outsideLock, 'utf8')).toBe('outside-lock\n');
+    expect(lstatSync(`${store.getFilePath()}.lock`).isSymbolicLink()).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects a symlinked intervention run directory without touching its target', async () => {
+    const { store, runDir, outside } = createSymlinkFixture();
+    const outsideRunDir = join(outside, 'run');
+    mkdirSync(outsideRunDir, { recursive: true });
+    const outsideRunFile = join(outsideRunDir, 'interventions.jsonl');
+    writeFileSync(outsideRunFile, 'outside-run\n', 'utf8');
+    rmSync(runDir, { recursive: true, force: true });
+    symlinkSync(outsideRunDir, runDir, 'dir');
+
+    expect(() => store.read()).toThrow(/symlink|symbolic/i);
+    await expect(store.issue('must not follow the run link')).rejects.toThrow(/symlink|symbolic/i);
+    expect(readFileSync(outsideRunFile, 'utf8')).toBe('outside-run\n');
   });
 });

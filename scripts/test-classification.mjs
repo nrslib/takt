@@ -218,6 +218,8 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/initialization-runtime-provider.test.ts',
   'src/__tests__/initialization.test.ts',
   'src/__tests__/interactive-summary.test.ts',
+  'src/__tests__/it-conversation-task-state-mcp.test.ts',
+  'src/__tests__/it-tell-command-file-store.test.ts',
   'src/__tests__/knowledge.test.ts',
   'src/__tests__/listNonInteractive.test.ts',
   'src/__tests__/listTasks.test.ts',

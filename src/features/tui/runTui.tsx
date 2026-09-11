@@ -16,6 +16,7 @@ import {
   createAssistantConversationPlan,
   createPersonaConversationPlan,
   type ConversationPlan,
+  type InitialTaskContext,
 } from '../interactive/conversationPlan.js';
 import type { ConversationMessage } from '../interactive/interactiveApplication.js';
 import { displayAndClearSessionState } from '../interactive/conversationLoop.js';
@@ -33,6 +34,10 @@ import {
 import type { TaskHistorySummaryItem } from '../interactive/interactive-summary-types.js';
 import { selectInteractiveMode } from '../interactive/modeSelection.js';
 import { selectInteractiveProvider } from '../interactive/providerSelection.js';
+import { runTellCommand } from '../interactive/tellCommand.js';
+import { resolveTaskStateMcp } from '../interactive/taskStateMcp.js';
+import { SlashCommand } from '../../shared/constants.js';
+import { matchSlashCommand } from '../interactive/commandMatcher.js';
 import { formatSessionStatus } from '../interactive/interactive.js';
 import type { InteractiveModeResult, InteractiveUIText } from '../interactive/interactive.js';
 import {
@@ -61,6 +66,10 @@ export interface RunTuiOptions {
   agentOverrides?: TaskExecutionOptions;
   taskHistory: TaskHistorySummaryItem[];
   userMessage?: string;
+  /** Run selected by `takt list`, used as the initial conversation reference. */
+  initialTellRunSlug?: string;
+  /** Lightweight task metadata selected by `takt list`; reports are not loaded. */
+  initialTaskContext?: InitialTaskContext;
   sourceContext?: string;
   excludeActions?: readonly SummaryActionValue[];
   continueSession?: boolean;
@@ -139,6 +148,9 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     if (resumeNotice !== null) {
       entries.push({ role: 'system', content: resumeNotice });
     }
+    if (plan.strategy.mcpUnavailableNotice !== undefined) {
+      entries.push({ role: 'system', content: plan.strategy.mcpUnavailableNotice });
+    }
     if (personaFallback) {
       entries.push({
         role: 'system',
@@ -188,6 +200,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     let currentPlan: ConversationPlan;
     let currentConversation: TuiConversation;
     let pendingRebuild = false;
+    let referenceRunSlug = options.initialTellRunSlug;
     let pendingHandoffHistory: readonly ConversationMessage[] | undefined;
 
     async function createCurrentConversation(
@@ -232,6 +245,9 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           : {}),
       };
       let nextPlan: ConversationPlan;
+      if (!initial) {
+        referenceRunSlug = currentConversation.getReferenceRunSlug?.() ?? referenceRunSlug;
+      }
       if (usePersonaPlan) {
         nextPlan = createPersonaConversationPlan(options.cwd, description.firstStep!, overrides);
       } else {
@@ -244,6 +260,12 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           formalSpecComments: formalSpecConfiguration.comments,
           resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(options.cwd),
           workflowContext: context,
+          ...(options.initialTaskContext
+            ? { initialTaskContext: options.initialTaskContext }
+            : {}),
+          ...(referenceRunSlug === undefined
+            ? {}
+            : { initialReferenceRunSlug: referenceRunSlug }),
           ...overrides,
           ...(continued.sessionId ? { sessionId: continued.sessionId } : {}),
         });
@@ -276,6 +298,17 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         pendingHandoffHistory = currentConversation.snapshotHistory?.() ?? [];
       }
       pendingRebuild = true;
+    }
+
+    function matchTellDuringPendingRebuild(text: string) {
+      if (!pendingRebuild) {
+        return null;
+      }
+      const match = matchSlashCommand(
+        text.trim(),
+        { ...currentConversation.commandAvailability, enableTellCommand: true },
+      );
+      return match?.command === SlashCommand.Tell ? match : null;
     }
 
     async function ensureCurrentConversation(): Promise<string | undefined> {
@@ -321,15 +354,30 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         return currentConversation.lang;
       },
       get commandAvailability() {
+        if (pendingRebuild) {
+          return {
+            ...currentConversation.commandAvailability,
+            enableTellCommand: selectedMode === 'assistant',
+          };
+        }
         return currentConversation.commandAvailability;
       },
       get tracksResultSource() {
         return currentConversation.tracksResultSource;
       },
       isCommandLine(text: string): boolean {
+        if (matchTellDuringPendingRebuild(text) !== null) {
+          return selectedMode === 'assistant';
+        }
         return currentConversation.isCommandLine(text);
       },
       resolveLocalCommand(text: string) {
+        const tell = matchTellDuringPendingRebuild(text);
+        if (tell !== null) {
+          return selectedMode === 'assistant'
+            ? { kind: 'handoff', id: 'tell', text: tell.text || undefined }
+            : null;
+        }
         return currentConversation.resolveLocalCommand(text);
       },
       async submit(input: TuiSubmitInput): Promise<TuiSubmission> {
@@ -405,6 +453,13 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
             selectedEffort = undefined;
             temporaryModelActive = false;
             requestRebuild();
+            const capability = selectedMode === 'persona'
+              ? undefined
+              : resolveTaskStateMcp(provider, options.lang).unavailableNotice;
+            return {
+              kind: 'continue' as const,
+              ...(capability === undefined ? {} : { notice: capability }),
+            };
           }
           break;
         }
@@ -420,6 +475,33 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           }
           currentConversation.setEffort?.(text);
           break;
+        case 'tell':
+          {
+            const rebuildError = await ensureCurrentConversation();
+            if (rebuildError !== undefined) {
+              return {
+                kind: 'continue' as const,
+                notice: rebuildError,
+              };
+            }
+            const preferredRunSlug = currentConversation.getReferenceRunSlug?.() ?? referenceRunSlug;
+            const sessionContext = selectedEffort === undefined
+              ? currentPlan.ctx
+              : { ...currentPlan.ctx, effort: selectedEffort };
+            return {
+              kind: 'continue' as const,
+              notice: await runTellCommand({
+                cwd: options.cwd,
+                lang: options.lang,
+                inlineText: text,
+                history: conversationFacade.snapshotHistory?.() ?? [],
+                sessionContext,
+                ...(preferredRunSlug === undefined
+                  ? {}
+                  : { preferredRunSlug }),
+              }),
+            };
+          }
         default:
           throw new Error(`Unknown TUI hand-off: ${id}`);
       }

@@ -55,6 +55,8 @@ export function reconfigureChatSession(
   request: unknown,
 ): Promise<unknown>;
 export function restartChatSession(sessionId: string): Promise<unknown>;
+export function continueTaskAction(sessionId: string): Promise<unknown>;
+export function cancelTaskAction(sessionId: string): Promise<unknown>;
 export function sendChatMessage(
   sessionId: string,
   text: string,

@@ -2,12 +2,16 @@ import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskCasError, CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { saveCloneMeta } from '../infra/task/clone.js';
 import { launchTaktRun } from '../features/web-ui/launcher.js';
-import { getCentralTaskActions } from '../features/web-ui/task-actions.js';
+import {
+  executeCentralTaskAction,
+  getCentralTaskActions,
+} from '../features/web-ui/task-actions.js';
+import type { WebTaskActionClaim } from '../features/web-ui/chat.js';
 
 const temporaryDirectories = new Set<string>();
 
@@ -259,6 +263,150 @@ describe('central task CAS repository', () => {
       taskId: started.task.taskId,
       runIds: [started.runId, requeued.runId],
       executionRequest,
+    });
+  });
+
+  it('queues a failed task without creating a new execution reservation', async () => {
+    const { repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'retry me', workflow: 'default', worktree: false });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    await repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'failed',
+      failure: { code: 'workflow_failed', message: 'failed' },
+    });
+
+    const executionRequest = {
+      resumeMode: 'retry' as const,
+      sourceRunSlug: started.runId,
+      startStep: 'plan',
+      retryNote: 'retry with additional context',
+    };
+    const failed = await repository.readTask(started.task.taskId);
+    if (failed === undefined) throw new Error('failed task was not persisted');
+    const queued = await repository.resetFailedTaskToPending(started.task.taskId, {
+      task: 'retry with additional context',
+      executionRequest,
+    });
+
+    expect(queued).toMatchObject({
+      taskId: started.task.taskId,
+      generation: failed.generation + 1,
+      status: 'pending',
+      task: 'retry with additional context',
+      runIds: [started.runId],
+      executionRequest,
+    });
+    expect(queued.runId).toBeUndefined();
+    expect(queued.activeExecution).toBeUndefined();
+    await expect(repository.readTask(started.task.taskId)).resolves.toEqual(queued);
+  });
+
+  it('connects the Web Retry action to the save-only repository boundary', async () => {
+    const { globalConfigDirectory, project, repository } = await setup();
+    const started = await repository.enqueueAndClaim({ task: 'retry me', workflow: 'default', worktree: false });
+    const adopted = await repository.adopt({
+      taskId: started.task.taskId,
+      generation: started.task.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+    });
+    await repository.terminal({
+      taskId: adopted.taskId,
+      generation: adopted.generation,
+      executionId: started.executionId,
+      ownerToken: started.ownerToken,
+      status: 'failed',
+      failure: { code: 'workflow_failed', message: 'failed' },
+    });
+    const failedWithoutWorktree = await repository.readTask(started.task.taskId);
+    if (failedWithoutWorktree === undefined || failedWithoutWorktree.runId === undefined) {
+      throw new Error('failed task was not persisted');
+    }
+    const failedWithWorktree = {
+      ...failedWithoutWorktree,
+      worktree: true as const,
+      worktreePath: project.canonicalDirectory,
+      branch: 'feature/retry',
+    };
+    await writeFile(
+      repository.paths.tasksFile,
+      `${JSON.stringify({ version: 1, tasks: [failedWithWorktree] }, null, 2)}\n`,
+    );
+    const failed = await repository.readTask(started.task.taskId);
+    if (failed === undefined || failed.runId === undefined) throw new Error('failed task was not reloaded');
+    const retrySelection = {
+      kind: 'restart' as const,
+      restartPoint: {
+        stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' as const }],
+      },
+    };
+    const claim = {
+      reservationToken: 'reservation-token',
+      context: {
+        taskId: failed.taskId,
+        action: 'retry' as const,
+        projectId: project.id,
+        stateId: project.stateId,
+        projectDirectory: project.canonicalDirectory,
+        task: failed.task,
+        workflow: failed.workflow,
+        workflowInitialStep: 'plan',
+        status: failed.status,
+        attempt: failed.attempt,
+        runIds: failed.runIds,
+        generation: failed.generation,
+        runId: failed.runId,
+        sourceRunId: failed.runId,
+        worktreePath: failed.worktreePath,
+      },
+      retrySelection,
+      taskActionDraft: { task: 'updated retry instruction', taskActionOptionId: 'restart:plan' },
+    } satisfies WebTaskActionClaim;
+    const spawnDecision = vi.fn(async () => ({
+      pid: 123,
+      disposition: 'started' as const,
+      mode: 'run' as const,
+    }));
+
+    const result = await executeCentralTaskAction({
+      action: 'retry',
+      projectDirectory: project.canonicalDirectory,
+      globalConfigDirectory,
+      projectId: project.id,
+      task: failed,
+      repository,
+      conversationId: 'retry-session',
+      input: 'updated retry instruction',
+      taskActionClaim: claim,
+      spawnDecision,
+    });
+
+    expect(result).toMatchObject({
+      action: 'retry',
+      taskId: failed.taskId,
+      status: 'accepted',
+      taskStatus: 'pending',
+    });
+    expect(spawnDecision).not.toHaveBeenCalled();
+    expect(await repository.readTask(failed.taskId)).toMatchObject({
+      taskId: failed.taskId,
+      task: 'updated retry instruction',
+      status: 'pending',
+      runIds: failed.runIds,
+      executionRequest: {
+        resumeMode: 'retry',
+        sourceRunSlug: failed.runId,
+        restartPoint: retrySelection.restartPoint,
+      },
     });
   });
 
