@@ -529,8 +529,49 @@ eval/
 
 ### Development loop handoffs
 
-The standalone comparison uses fixed cases to compare an explicit baseline commit
-with the current builtins. It calls Claude Opus 5, Codex Astra at `xhigh`, and the
+The automatic implementation self-loop has been withdrawn. The fixed
+`development-loop-handoffs.yaml` cases and saved Phase 3 comparisons below retain
+their historical continuation expectations; they are not the acceptance criteria
+for the current completion design. Do not relabel those old responses as a new
+model evaluation after changing their expected destinations.
+
+The current action evaluation runs real tools in isolated fixture projects. One
+case separates an explicit required check from a narrower general gate; the other
+has executable verification left after implementation, without that gate conflict.
+The implementation instruction is resolved from the chosen builtins. The first
+case also transfers the chosen revision's project smoke-gate condition to a
+fixture artifact check. Expectations, fixture files, and prompts are frozen before
+each revision runs. Evaluate the baseline before preparing and running a candidate:
+
+```bash
+node eval/scripts/development-implementation-actions.mjs --prepare fc5eb2320ff0c8ddc34a45a47d86145f66aa2e68 .tmp/implementation-actions-before
+node eval/scripts/development-implementation-actions.mjs --run fc5eb2320ff0c8ddc34a45a47d86145f66aa2e68 .tmp/implementation-actions-before
+node eval/scripts/development-implementation-actions.mjs --prepare candidate .tmp/implementation-actions-after
+node eval/scripts/development-implementation-actions.mjs --run candidate .tmp/implementation-actions-after
+```
+
+This is a paid Claude/Codex/Kimi evaluation with local editing and command tools.
+The saved project contains the implementation, verification receipts, and actual
+output artifact. `provider-events.jsonl` retains tool invocations and results;
+the scorer requires the expected npm commands and their tool-result output as
+well as artifacts and unchanged check scripts. Command matching accepts only
+the fixture's fixed npm invocations, sequential separators, limited diagnostics,
+and literal script-name loops; unsupported shell syntax is unverified. Kimi's
+saved tool events omit individual exit codes. Its score combines command and
+success-output evidence with the unchanged checker and artifacts, and records
+`exit_code_unavailable`; it does not assert a directly observed zero exit code.
+Saved completed calls are reused; provider failures require a new
+output directory. Kimi prompt mode runs tools automatically and must not be
+combined with `--yolo` or `--auto`. It uses an empty skills directory and resolves
+`kimi` through PATH, or the executable set by `TAKT_EVAL_KIMI_BIN`. Codex uses
+`workspace-write` with network tools disabled and inherited skills disabled;
+Claude uses the explicit local tool list with `dontAsk`. All fixture projects
+are outside the repository. The fixture checks are small local checks, not the
+repository's full build or test gates. Japanese instructions are used for these
+two action cases. See the [evaluation record](results/development-loop-handoffs.md)
+for outcomes and the boundary between measured behavior and historical evidence.
+
+The historical standalone comparison calls Claude Opus 5, Codex Astra at `xhigh`, and the
 Kimi Code CLI's configured `kimi-code/k3` alias. All three CLIs must be installed
 and authenticated. This is an explicit, paid model evaluation, outside the default
 suite run.
@@ -584,7 +625,9 @@ The auxiliary `completion-scope-routing` and `completion-scope-structured` suite
 also compare fixed `expected_transition` values through the shared
 `asserts/completion-routing.mjs` scorer. Tag and structured candidate numbers are
 resolved against the workflow's noninteractive semantic candidates before
-comparing `next` or `return`.
+comparing `next` or `return`. Their active cases now expect ABORT for an
+unexpectedly unfinished implementation response, reflecting the removal of the
+self-loop; this expectation change is not a new live-model measurement.
 
 The structured suite also loads `completion-input-request-cases.mjs`, which
 reuses the fixed interactive input-request case from

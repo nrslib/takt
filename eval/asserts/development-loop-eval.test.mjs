@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { URL } from 'node:url';
 import Ajv from 'ajv';
 import { parse } from 'yaml';
@@ -33,7 +35,7 @@ async function configuredAssertion(configName, output, vars) {
 for (const config of ['completion-scope-routing', 'completion-scope-structured']) {
   for (const language of ['ja', 'en']) {
     for (const scenario of [
-      { workflow: 'development-implement-dynamic', tag: 'IMPLEMENT', number: 3, next: 'implement' },
+      { workflow: 'development-implement-dynamic', tag: 'IMPLEMENT', number: 3, next: 'ABORT' },
       { workflow: 'development-remediation-dynamic', tag: 'FIX-PLAN', number: 2, next: 'investigate' },
     ]) {
       test(`${config}/${language}/${scenario.workflow} scores the actual transition when the number stays the same`, async () => {
@@ -71,7 +73,7 @@ test('the same tag resolves to different real transitions before and after the c
     assert.deepEqual(scoreTransition('[IMPLEMENT:3]', before, { next: 'implement' }), {
       pass: false, reason: 'wrong_transition', transition: { return: 'need_replan' },
     });
-    assert.equal(scoreTransition('[IMPLEMENT:3]', after, { next: 'implement' }).pass, true);
+    assert.equal(scoreTransition('[IMPLEMENT:3]', after, { next: 'ABORT' }).pass, true);
   }
 });
 
@@ -179,4 +181,92 @@ test('handoff decisions reject extra top-level fields including claims of execut
   assert.equal(scoreHandoffDecision(output, { expected }).pass, false);
   assert.equal(scoreHandoffContent(`\`\`\`json\n${output}\n\`\`\``, { expected }).pass, false);
   assert.equal(scoreHandoffDecision(JSON.stringify({ acceptance: [], carry: [], run: ['npm test'] }), { expected }).pass, true);
+});
+
+test('action evaluation requires completed verification and rejects modified checks', async () => {
+  const { scoreActionArtifacts } = await import('../scripts/development-implementation-actions.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'takt-action-score-test-'));
+  const files = { 'scripts/check.mjs': 'original check', 'package.json': '{}', 'TASK.md': 'task', 'reports/plan.md': 'plan' };
+  const sample = { files, expected_checks: ['artifact'], expected_labels: ['LABEL'] };
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      mkdirSync(dirname(join(directory, name)), { recursive: true });
+      writeFileSync(join(directory, name), content);
+    }
+    mkdirSync(join(directory, 'output'));
+    writeFileSync(join(directory, 'output/labels.json'), '["LABEL"]');
+    assert.equal(scoreActionArtifacts(sample, directory).pass, false);
+    writeFileSync(join(directory, 'checks.jsonl'), '{"check":"artifact","success":false}\n');
+    assert.equal(scoreActionArtifacts(sample, directory).pass, false);
+    writeFileSync(join(directory, 'checks.jsonl'), '{"check":"artifact","success":true}\n');
+    assert.equal(scoreActionArtifacts(sample, directory).pass, false);
+    const command = JSON.stringify({ type: 'item.completed', item: { type: 'command_execution',
+      command: 'npm run test:artifact', aggregated_output: 'artifact passed\n', exit_code: 0 } });
+    assert.equal(scoreActionArtifacts(sample, directory, command, 'codex').pass, true);
+    const fake = command.replace('npm run test:artifact', 'node -e 0');
+    assert.equal(scoreActionArtifacts(sample, directory, fake, 'codex').pass, false);
+    writeFileSync(join(directory, 'scripts/check.mjs'), 'weakened check');
+    assert.equal(scoreActionArtifacts(sample, directory, command, 'codex').pass, false);
+    writeFileSync(join(directory, 'output/labels.json'), 'not json');
+    assert.equal(scoreActionArtifacts(sample, directory).pass, false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('action evidence requires a completed command result, not an assistant claim', async () => {
+  const { executionEvidence } = await import('../scripts/development-implementation-actions.mjs');
+  const claim = { type: 'item.completed', item: { type: 'agent_message', text: 'artifact passed' } };
+  const command = { type: 'item.completed', item: { type: 'command_execution',
+    command: 'npm run test:artifact', aggregated_output: 'artifact passed\n', exit_code: 0 } };
+  assert.equal(executionEvidence(JSON.stringify(claim), 'codex', ['artifact']).pass, false);
+  assert.equal(executionEvidence(JSON.stringify(command), 'codex', ['artifact']).pass, true);
+  assert.equal(executionEvidence(JSON.stringify({ ...command, item: { ...command.item, exit_code: 1 } }), 'codex', ['artifact']).pass, false);
+});
+
+test('action evidence rejects fake success output without an exact fixture check command', async () => {
+  const { executionEvidence } = await import('../scripts/development-implementation-actions.mjs');
+  for (const command of [
+    'node -e "console.log(\'artifact passed\')"',
+    'echo "npm run test:artifact; artifact passed"',
+    'cat "npm run test:artifact"',
+    'npm run test:artifact; echo "artifact passed"',
+    'npm run test:artifact || node -e "console.log(\'artifact passed\')"',
+  ]) {
+    const fake = { type: 'item.completed', item: { type: 'command_execution',
+      command, aggregated_output: 'artifact passed\n', exit_code: 0 } };
+    assert.equal(executionEvidence(JSON.stringify(fake), 'codex', ['artifact']).pass, false, command);
+  }
+});
+
+test('action evidence supports only fixed npm commands and literal sequential loops', async () => {
+  const { invokedChecks } = await import('../scripts/development-implementation-actions.mjs');
+  const expected = ['build', 'lint', 'unit', 'integration', 'artifact'];
+  assert.deepEqual(invokedChecks('npm run build && npm run lint && npm test && npm run test:it && npm run test:artifact'), expected);
+  assert.deepEqual(invokedChecks('/bin/zsh -lc \'npm run test:artifact\''), ['artifact']);
+  assert.deepEqual(invokedChecks('set -e; for s in build lint test test:it test:artifact; do echo "== npm run $s"; npm run --silent $s; echo "exit=$?"; done; cat output/labels.json; echo; tail -n 5 checks.jsonl'), expected);
+  for (const command of [
+    'npm run test:artifact > checks.jsonl',
+    'for s in test:artifact; do echo "artifact passed"; done',
+    'for s in $SCRIPTS; do npm run $s; done',
+    'for s in test:artifact; do npm run $s',
+    'npm run test:artifact\necho "artifact passed"',
+  ]) assert.deepEqual(invokedChecks(command), [], command);
+});
+
+test('Kimi action evidence records unavailable exit codes and rejects explicit failure output', async () => {
+  const { executionEvidence } = await import('../scripts/development-implementation-actions.mjs');
+  const call = { role: 'assistant', tool_calls: [{ id: 'check', function: { name: 'Bash',
+    arguments: JSON.stringify({ command: 'npm run test:artifact' }) } }] };
+  const response = content => [call, { role: 'tool', tool_call_id: 'check', content }].map(JSON.stringify).join('\n');
+  assert.equal(executionEvidence(JSON.stringify(call), 'kimi', ['artifact']).pass, false);
+  const evidence = executionEvidence(response('artifact passed\n'), 'kimi', ['artifact']);
+  assert.equal(evidence.pass, true);
+  assert.equal(evidence.evidence, 'command_and_checker_output_exit_code_unavailable');
+  assert.equal(evidence.commands[0].toolStatus, 'exit_code_unavailable');
+  assert.equal(evidence.commands[0].exitCode, null);
+  assert.equal(Object.hasOwn(evidence.commands[0], 'completed'), false);
+  for (const failure of ['Error: check failed', 'AssertionError [ERR_ASSERTION]: check failed', 'Process exit code: 1']) {
+    assert.equal(executionEvidence(response(`artifact passed\n${failure}\n`), 'kimi', ['artifact']).pass, false, failure);
+  }
 });

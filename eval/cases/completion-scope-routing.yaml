@@ -1,3 +1,6 @@
+# Current completion contract: executable mandatory work must finish within the
+# invocation. Unexpectedly unfinished responses stop; historical self-loop
+# expectations and model responses remain frozen in their saved manifests.
 - description: "既存lint: 無関係な失敗だけでは完了を阻まない"
   vars:
     expected_transition:
@@ -51,7 +54,7 @@
 - description: "必須未実行: スコープ除外で検証義務を免除しない"
   vars:
     expected_transition:
-      next: implement
+      next: ABORT
     report: |
       タスク: 無効トークンを401で拒否し、対象テストを完了前に実行すること。
       実装は完了したと報告されているが、対象テストは未実行。実行権限と環境はある。
@@ -60,7 +63,7 @@
 - description: "新規回帰: 既存失敗と混在しても変更起因の不具合を落とさない"
   vars:
     expected_transition:
-      next: implement
+      next: ABORT
     report: |
       タスク: 本人変更後も同一トークンを有効とする。
       無関係な既存lintエラー43件は変更前でも同じだった。
@@ -69,7 +72,7 @@
 - description: "既存依存: 今回の要件を満たせない既存問題は残件にする"
   vars:
     expected_transition:
-      next: implement
+      next: ABORT
     report: |
       タスク: 新しい入力経路を既存validatorへ接続し、不正な入力を拒否する。
       validatorは変更前から不正な入力を受け付ける。今回の入口も同じvalidatorに依存する。
@@ -78,7 +81,7 @@
 - description: "明示ゲート: 全体成功の要求がある場合は既存失敗も免除しない"
   vars:
     expected_transition:
-      next: implement
+      next: ABORT
     report: |
       タスク: CIのlint失敗を全件修正し、全体lintが成功することを受入条件とする。
       今回変更した関数のlintは成功したが、変更前からの別ファイルのエラーが残り全体lintは失敗。
@@ -86,7 +89,7 @@
 - description: "未分類: 原因不明の失敗を既存と決めつけない"
   vars:
     expected_transition:
-      next: implement
+      next: ABORT
     report: |
       タスク: 取得処理を修正し、正常終了と後片付けを必須テストで確認する。
       全体テストが終了せず停止した。変更前との比較はなく、停止原因も不明。
@@ -106,7 +109,7 @@
   vars:
     workflow: development-core
     expected_transition:
-      next: implement
+      next: ABORT
     report: |
       要件はログアウト後に同じ画面から業務操作へ進めないこと。
       Store単体テストは成功したが、画面側が古い認証値を保持する具体的な経路が見つかった。
@@ -171,7 +174,7 @@
 - description: "実ログ由来: E2E smokeだけ未実行なら有効な計画で継続"
   vars:
     expected_transition:
-      next: implement
+      next: ABORT
     report: |
       計画済みの4件を修正し、build、lint、対象テスト、全unit、light ITは正常終了した。
       必須のE2E smokeだけが未実行。実行環境は利用でき、次にnpm run test:e2e:smokeを実行する。

@@ -64,28 +64,27 @@ async function execute(config: WorkflowConfig, stepName: string, ruleIndex: numb
   return engine.runSingleIteration();
 }
 
-describe('shipped development continuation routes', () => {
-  it.each(variants(implementations))('$language/$name composes the instruction for its continuation route', ({ language, name }) => {
+describe('shipped development completion and investigation routes', () => {
+  it.each(variants(implementations))('$language/$name composes the instruction for completion within the invocation', ({ language, name }) => {
     const implementation = load(language, name).steps.find(step => step.name === 'implement');
-    expect(implementation?.instructionRef).toContain('development-implementation-continuation');
+    expect(implementation?.instructionRef).toContain('development-implementation-completion');
   });
 
-  it.each(variants(['simple', 'simple-core', 'simple-mini', 'mini-core']))('$language/$name does not inherit a continuation instruction without its route', ({ language, name }) => {
+  it.each(variants(['simple', 'simple-core', 'simple-mini', 'mini-core']))('$language/$name does not inherit the development-specific completion instruction', ({ language, name }) => {
     const implementation = load(language, name).steps.find(step => step.name === 'implement');
     expect(implementation).toBeDefined();
-    expect(implementation?.instructionRef).not.toContain('development-implementation-continuation');
+    expect(implementation?.instructionRef).not.toContain('development-implementation-completion');
   });
 
-  it.each(variants(implementations))('$language/$name continues unfinished valid work before completing', async ({ language, name }) => {
+  it.each(variants(implementations))('$language/$name stops an unexpectedly unfinished response instead of calling implementation again', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'implement');
     const pending = await execute(config, 'implement', 2);
-    expect(pending.nextStep).toBe('implement');
-    expect(pending.isComplete).toBe(false);
+    expect(pending.nextStep).toBe('ABORT');
+    expect(pending.isComplete).toBe(true);
     expect(pending.returnValue).toBeUndefined();
-    const done = await execute(config, 'implement', 0);
-    expect(done.nextStep).toBe('COMPLETE');
-    expect(done.isComplete).toBe(true);
+    expect(config.steps.find(step => step.name === 'implement')?.rules?.filter(rule => rule.next === 'implement'))
+      .toEqual([expect.objectContaining({ requiresUserInput: true, interactiveOnly: true })]);
   });
 
   it.each(variants(implementations))('$language/$name returns only an invalid plan to its caller', async ({ language, name }) => {

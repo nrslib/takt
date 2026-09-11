@@ -2,6 +2,8 @@
 
 2026-09-11に、基準コミット `fef072115677cc1b99e6416b05944ebdf8af0c53` と最初の修正案を比較した。元run全体の再実行ではなく、実ログを要約した資料と新規の別領域ケースによる固定入力評価である。最初の比較、Lunaレビュー後の同一性確認、CodeRabbit対応後の最終版評価は別の記録として扱う。
 
+その後、実装を再呼び出して未実行作業を処理する自己ループは撤回した。以下のPhase 3の28/28・30/30・108応答、引き継ぎ判断、および構造化providerの2応答は撤回前の方針に対する歴史結果であり、現在のモデル評価として扱わない。現在の主眼は、実行可能な必須作業を最初の呼び出し内で終えることである。末尾に実ツールを用いた別の評価を記録する。
+
 ## Phase 3の遷移
 
 修正案の作成後、期待する `next` / `return` をモデル比較の実行前に固定した14ケースについて、日英の判定条件で評価した。基準SHAから旧定義を読み込み、全モデルの旧定義評価が終了してから、新定義の評価を開始した。各モデル・言語・版につき1試行である。
@@ -120,7 +122,7 @@ PR #1554の初回head `e0407b6a719faaff79dbb1cb605e6ce86b136f16` への5指摘�
 
 引き継ぎ判断のPhase 1 instructionはこの対応で変更していない。保存済み12プロンプトの一致と、トップレベルキーを厳密化した採点で全36応答の合否不変を確認した。厳密形式と判断は32/36、内容監査は36/36のままである。証跡は `.tmp/development-loop-cr-handoff-audit.json`。この再採点も新たなモデル試行ではない。
 
-## CodeRabbit対応後の最終版評価
+## CodeRabbit対応時点の評価（自己ループ撤回前）
 
 改訂した境界条件の18応答がすべて成功してから、同じ最終文言で既存15ケースの90応答を新たに取得した。最終候補は合計108応答すべてが固定期待値に一致した。
 
@@ -160,3 +162,51 @@ Lunaの限定レビューで、`completion-scope-structured.yaml` のprovider JS
 - 既存タグ評価の再監査: `node .tmp/development-loop-cr-final-audit.mjs`。ログ `/private/tmp/takt-loop-schema-tag-audit.log` で36入力の不変と全108応答の採点一致を確認し、3モデルのタグ評価は再実行していない
 
 この2応答は構造化provider経由の入力要求境界を確認する追加試行である。構造化suite全ケースや他モデルを再評価した結果とは扱わない。RED→GREENは同一のローカルschema契約で確認し、旧schemaによる外部モデル呼び出しは行っていない。
+
+## 自己ループの撤回とPhase 1の完遂
+
+ユーザーの指摘を受け、未実行作業の行き先より先に、実装担当がなぜ応答を終えたかを再調査した。iteration 9のPhase 1ではsmokeが成功しており、後段で未完了になったのはDOM・永続化・競合などの契約別の不足だった。iteration 16は別で、Phase 1の92ツール呼び出しにsmokeの実行がなく、17:33:11 UTCの通常finalで追加修正の完了を宣言した。provider resultはsuccess=true、phase statusはdoneであり、時間上限や環境障害による打ち切りではなかった。Phase 2の完了契約表で、初めてsmoke未実行が明記された。
+
+iteration 16の計画にはsmokeが明示義務として含まれていた。一方、同じ投入プロンプトの末尾の一般quality gateには、特定の変更領域の場合だけ実行する限定があった。この衝突は確認できるが、当時のLunaが限定を採用したのか、単に義務を見落としたのかは断定しない。根拠は実runのJSONL行222・228・231と、provider-events行8857–9227。抽出した入力は `/private/tmp/takt-implementation-completion-evidence/16-prompt.md`、実コマンド一覧と終了状態は同ディレクトリの `16-execution-summary.json` に保存した。元runの全入力や個人パスは評価モデルへ送っていない。
+
+修正は次の範囲に限定した。
+
+- 日英の実装3系統は、開始時とfinal前に元要件・計画・品質ゲートを照合し、実行可能な義務を同じ呼び出し内で完遂する。未実行を「未確認範囲」に記録するだけで後段へ進めない。レポートの存在から初回・再実行を推定する指示は取り除いた。
+- `.takt/config.yaml` のimplement・fix・ai-antipattern-fixは、元要件または採用計画が明示する検証を一般的な全体検証の抑制やsmokeの変更領域限定で禁止しない。
+- 自動self-loopを撤回し、想定外に実行可能な義務を残して終了した場合は既存ABORTへ送る。ユーザー入力を受けて再開する対話ルールは維持する。局所調査、受入条件保持、有効証跡の再利用は独立した変更として維持する。
+
+固定した実ツール評価は2ケースで、比較基準は撤回前のhead `fc5eb2320ff0c8ddc34a45a47d86145f66aa2e68`。1件目は商品ラベル出力を題材に、明示された成果物検証と一般条件付きgateが競合する状態を移したもの。2件目は文書ラベルの実装がすでに正しく、実行可能な検証だけが未実行である状態で、条件付きgateとの競合は含めない。元runを再生したケースではなく、原因候補を別領域へ移した合成ケースである。
+
+各モデルは独立した一時projectで1回だけ実装を呼び出され、実ファイルの編集、Nodeによる検証、出力ファイルの生成と再読込を行う。ケース・期待値・検証スクリプトは旧版実行前に固定し、新旧で同一であることを確認した。プロンプトは配布用の実装instructionを実ローダーで解決し、1件目の条件付きgateは各版の実プロジェクト設定から取り出してfixtureのコマンド名・領域へ置き換える。2件とも日本語instructionを使い、全system prompt・policy・会話履歴や元の大規模リポジトリを再現する試験ではない。
+
+判定は最終応答の成功宣言だけに依存しない。変更禁止の検証スクリプト・package.json・要件・計画が不変であること、検証の成功記録、期待した実出力ファイルを確認する。加えてprovider-eventsの実コマンドを期待するnpm呼び出しと厳密に照合し、各検証の成功出力がそのツール結果に存在することを要求する。Codexではcommand_executionのexit_code=0、ClaudeではBashのtool_resultがエラーでないことも確認する。各providerは1回の呼び出しで終了しており、未完了を指摘する追加プロンプトは与えていない。
+
+Kimiの保存済みtoolイベントには個別コマンドのexit codeやis_errorがない。応答受信を正常終了と同一視せず、採点は `toolStatus: exit_code_unavailable` と `exitCode: null` を記録する。4応答とも期待する5つのnpmコマンドを `&&` で連結しており、最後まで進んだことは先行コマンドの成功を示す。最後の検証は成功出力、変更されていない有限のchecker、生成物を組み合わせた間接証拠であり、個別exit_code=0を直接取得した保証ではない。CLI全体の正常終了だけでも各ツールの成功は保証しない。明示的な失敗出力は採点で拒否する。
+
+旧版のCodexは、一般条件を理由に成果物検証を省略し、4ゲートの成功後に「必須だが未実行」とfinalへ記録した。実コマンド結果にも生成物にも成果物検証の証拠がなく、このケースはREDだった。条件競合のないケースは成功した。ClaudeとKimiは旧版でも2件とも実行しており、省略を再現したとは扱わない。
+
+| モデル | 旧版 | 修正版 | 条件競合ケース | 単純な未実行ケース |
+|--------|------|--------|----------------|--------------------|
+| Claude `claude-opus-5` | 2/2 | 2/2 | 成功→成功 | 成功→成功 |
+| Codex `gpt-6-astra` / `xhigh` | 1/2 | 2/2 | RED→GREEN | 成功→成功 |
+| Kimi Code `kimi-code/k3` | 2/2 | 2/2 | 成功→成功 | 成功→成功 |
+
+修正版Codexの条件競合ケースでは、`npm run test:artifact` の実行がcommand_executionとして記録され、exit_code=0、`artifact passed`、期待どおりの `output/labels.json` が揃ってから最終応答を返した。期待値を変更した再採点によるGREENではない。単純な作業漏れはこの固定2ケースでは旧版から再現せず、全モデルのそのケースは回帰確認に留まる。1回ずつの試行なので、確率的な失敗率や元run全体の収束時間を示す結果ではない。
+
+Kimiの初回起動は、CLIが `--prompt` と `--yolo` の併用を引数検証で拒否した。モデル応答ではないためREDに数えず、診断を保持したまま別ディレクトリで正式な `--prompt` 単独経路へ訂正した。インストール済みCLIはpromptモードでツールの自動実行を設定する。旧版Kimiの有効2応答が完了してから修正版を開始し、旧版全6応答の終了時刻が修正版最初の開始時刻以前であることも監査した。
+
+- 固定ケース: `eval/cases/development-implementation-actions.yaml`
+- 再現runner: `eval/scripts/development-implementation-actions.mjs`。実行方法は [README](../README.md#development-loop-handoffs)
+- 旧版Claude/Codexの有効4応答とKimiのCLI起動失敗: `.tmp/development-implementation-actions-baseline/`
+- 旧版Kimiの有効2応答: `.tmp/development-implementation-actions-baseline-kimi/`
+- 修正版全6応答: `.tmp/development-implementation-actions-candidate/`
+- 各manifest、個別の `provider-events.jsonl`、実projectのコピー、初回採点 `result.json`、`summary.json` を保持。初回REDを上書きしていない
+- 初回監査: `.tmp/development-implementation-actions-audit.mjs` と `.json`、ログ `/private/tmp/takt-implementation-actions-audit.log` を保持
+- 最新監査: `node .tmp/development-implementation-actions-audit-v2.mjs`。結果 `.tmp/development-implementation-actions-audit-v2.json`、ログ `/private/tmp/takt-action-scoring-audit-v2.log`。現在ソースと固定入力の一致、fixture・期待値の新旧同一性、全12応答の採点、実コマンド・成果物・実行時間順序を確認し、モデルは再呼び出ししない
+- 実行ログ: `/private/tmp/takt-implementation-actions-{baseline,baseline-kimi,candidate}.log`
+
+現変更後のbuild、unit 6,162件、light IT 2,490件、lint、smoke 19成功・1skip、変更heavy IT 84件、分類契約20件、eval契約21件、evalへの直接ESLint、`git diff --check` はすべて成功した。ログは `/private/tmp/takt-implementation-completion-{build,unit,light-it,lint,smoke,engine,classification,eval-final}.log`、直接ESLintは `/private/tmp/takt-implementation-actions-eslint-final.log`。補助Phase 3ケースの期待先は自己ループ撤回という仕様変更に合わせてABORTへ更新したが、過去応答の期待値だけを変えて現行モデル評価として数えていない。
+
+独立レビュー後、採点側に手書きの成功記録と生成物だけで通る穴と、任意の `node -e` の偽成功出力を受理する穴を確認した。先に固定した回帰テストは変更前22件中2件がREDで、厳密なコマンド照合とprovider結果・不変checker・成果物を組み合わせた修正後は24件すべてGREENになった。echo偽装、npm文字列を含むcat、不明なshell構文も拒否する。照合はfixtureの固定コマンド・直列連結・限定的な表示/読取・定数forループだけを扱い、汎用shell解析は行わない。Kimi実行ファイルも個人の絶対パスからPATHまたは `TAKT_EVAL_KIMI_BIN` へ変更した。
+
+この修正では本体、manifest、プロンプト、fixture、期待値、元応答、初回採点を変更せず、保存済み12応答を最新採点で再監査した。合否は上表のままで、Codex旧版のREDも維持した。追加モデル試行ではない。REDログは `/private/tmp/takt-action-scoring-red.log`、GREENは `/private/tmp/takt-action-scoring-green-final.log`、直接ESLintは `/private/tmp/takt-action-scoring-eslint.log`。評価採点だけの修正なので、直前に成功した広範囲の本体検証は繰り返していない。

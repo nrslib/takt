@@ -47,7 +47,7 @@ steps:
     uses: development-core-implement
     instruction:
       - $param: implementation_instruction
-      - development-implementation-continuation
+      - development-implementation-completion
     with:
       development_policy:
         $param: development_policy
@@ -64,8 +64,8 @@ steps:
         next: COMPLETE
       - condition: 今回必要な実装変更がなく、必須検証も完了した（レポート作成のみ。未着手の必須作業がある場合は除く）
         next: COMPLETE
-      - condition: 計画の前提・範囲・方法の変更を要する根拠はなく、必要な実装・検証・原因調査が残り、外部操作やユーザーの回答を待たず今実行できる具体的な次の作業がある（未実行の必須検証も含む）
-        next: implement
+      - condition: 実行可能な必須作業が未実行・未解消のまま実装の応答が終了している（計画変更や外部操作・ユーザー回答待ちではない）
+        next: ABORT
       - condition: 計画の前提・範囲・方法または検証能力に不備があり、プロジェクト内で実行可能な作業につながる計画変更が必要である（作業や証拠の不足だけ、または外部操作だけでしか進めない状態は除く）
         return: need_replan
       - condition: 現時点で実行できるプロジェクト内の必須作業がなく、必要な外部操作・外部回答または両立不能な条件が根拠とともに確認されている（判定候補にユーザー入力を求める選択肢があり、その回答で作業を進められる場合は除く。候補にその選択肢がない場合の外部回答待ちは停止対象）
