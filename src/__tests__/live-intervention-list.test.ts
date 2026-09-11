@@ -12,6 +12,7 @@ const {
   mockCreateIssueAndSaveTask,
   mockPromptLabelSelection,
   mockSaveTaskFromInteractive,
+  mockInfo,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
   mockListAllTaskItems: vi.fn(),
@@ -23,6 +24,7 @@ const {
   mockCreateIssueAndSaveTask: vi.fn(),
   mockPromptLabelSelection: vi.fn(),
   mockSaveTaskFromInteractive: vi.fn(),
+  mockInfo: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -38,7 +40,7 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
-  info: vi.fn(),
+  info: mockInfo,
   header: vi.fn(),
   blankLine: vi.fn(),
 }));
@@ -125,7 +127,7 @@ describe('running task-list conversation entry', () => {
 
   it('opens the normal TUI with the selected running task as initial context', async () => {
     mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
-    mockSelectOption.mockResolvedValueOnce('running:0');
+    mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('interactive');
 
     await listTasks('/project');
 
@@ -157,6 +159,7 @@ describe('running task-list conversation entry', () => {
     mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
     mockSelectOption
       .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('interactive')
       .mockResolvedValueOnce(null);
     mockRunTui.mockImplementationOnce(async (input: { dispatch?: (workflow: string, value: typeof result) => Promise<void> }) => {
       await input.dispatch?.('selected-workflow', result);
@@ -206,12 +209,61 @@ describe('running task-list conversation entry', () => {
     mockRunTui.mockRejectedValueOnce(new Error('Run is no longer running'));
     mockSelectOption
       .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('interactive')
+      .mockResolvedValueOnce('running:0')
       .mockResolvedValueOnce('force_fail');
 
     await listTasks('/project');
 
     expect(mockForceFailRunningTask).toHaveBeenCalledWith(eligibleRunningTask, '/project');
-    expect(mockSelectOption).toHaveBeenCalledTimes(3);
+    expect(mockInfo).toHaveBeenCalledWith('Run is no longer running');
+    expect(mockSelectOption).toHaveBeenCalledTimes(5);
+  });
+
+  it('shows the running task actions and returns to the list on cancellation', async () => {
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockSelectOption.mockResolvedValueOnce('running:0');
+
+    await listTasks('/project');
+
+    expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
+      expect.objectContaining({ label: 'Mark as failed', value: 'force_fail' }),
+      expect.objectContaining({ label: 'Interactive', value: 'interactive' }),
+    ]);
+    expect(mockSelectOption.mock.calls[2]?.[0]).toBe('List Tasks');
+    expect(mockRunTui).not.toHaveBeenCalled();
+    expect(mockForceFailRunningTask).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    runningTask,
+    { ...runningTask, runSlug: eligibleRunningTask.runSlug },
+    { ...runningTask, worktreePath: eligibleRunningTask.worktreePath },
+  ])('keeps only force-fail when live-run metadata is incomplete: %j', async (task) => {
+    mockListAllTaskItems.mockReturnValue([task]);
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('force_fail');
+
+    await listTasks('/project');
+
+    expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
+      expect.objectContaining({ value: 'force_fail' }),
+    ]);
+    expect(mockRunTui).not.toHaveBeenCalled();
+    expect(mockForceFailRunningTask).toHaveBeenCalledWith(task, '/project');
+  });
+
+  it('keeps force-fail available without opening an eligible live run', async () => {
+    mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('force_fail');
+
+    await listTasks('/project');
+
+    expect(mockForceFailRunningTask).toHaveBeenCalledWith(eligibleRunningTask, '/project');
+    expect(mockRunTui).not.toHaveBeenCalled();
   });
 
   it('keeps the non-interactive list path out of live intervention', async () => {

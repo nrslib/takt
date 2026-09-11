@@ -213,6 +213,25 @@ describe('listTasks interactive status actions', () => {
     expect(mockDeleteTask).not.toHaveBeenCalled();
   });
 
+  it.each(['completed', 'pr_failed'] as const)('%s タスクでは従来の Instruct を実行できる', async (kind) => {
+    const task: TaskListItem = {
+      ...completedTaskWithBranch,
+      kind,
+      runSlug: 'finished-run',
+      worktreePath: '/project/.takt/worktrees/completed-task',
+    };
+    mockListAllTaskItems.mockReturnValue([task]);
+    mockShowDiffAndPromptActionForTask.mockResolvedValueOnce('instruct');
+    mockSelectOption
+      .mockResolvedValueOnce(`${kind}:0`)
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockShowDiffAndPromptActionForTask).toHaveBeenCalledTimes(1);
+    expect(mockInstructBranch).toHaveBeenCalledWith('/project', task, undefined);
+  });
+
   describe('exceeded status action handling', () => {
     it('exceeded requeue 選択時は requeueExceededTask を呼ぶ', async () => {
       mockListAllTaskItems.mockReturnValue([exceededTask]);

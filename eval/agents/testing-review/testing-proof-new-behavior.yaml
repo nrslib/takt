@@ -1,0 +1,42 @@
+description: 'TAKT: testing review preserves implicit coverage obligations for new behavior'
+prompts:
+  - file://../../prompts/testing-proof-new-behavior.phase1.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      disable_inherited_skills: true
+      working_dir: fixtures/testing-proof-new-behavior
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/testing-proof-new-behavior
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+tests:
+  - description: 'new failure behavior lacks tests without an explicit testing directive'
+    vars:
+      task: file://../../cases/testing-proof-new-behavior-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        value: '/^(?:\*\*|`)?DISPOSITION: repair(?:\*\*|`)?\s*$/m.test(output) && !/^(?:\*\*|`)?DISPOSITION: close(?:\*\*|`)?\s*$/m.test(output)'
+        metric: review/new-behavior-test-required
+      - type: llm-rubric
+        metric: review/proof-basis
+        value: |
+          新しく追加された画面の通信断・一時的サービスエラー分岐に対し、代表的な失敗テストの追加を必須とすること。
+          成功テストしかなく、失敗時のエラー表示、画面・下書き・選択先の保持、確定処理未実行が未検証であることを根拠にすること。
+          要求にテスト方式の明記がないことや現行ソースに不具合がないことだけを理由に、この新規振る舞いのテスト不足を免除しないこと。
+          現行の配送クライアントが一時的エラーで route を消す不具合を捏造せず、内部の全状態や再送テストまでは必須にしないこと。
+          既存で未変更の ROUTE_RETIRED 処理への追加テストや、経路廃止後の再送テストも必須にしないこと。既存契約が要件に書かれているだけでは今回の変更によるテスト追加義務にはならない。

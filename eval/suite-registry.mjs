@@ -31,10 +31,21 @@ const CLASSIFICATIONS = [
       'scope-architecture-search-unrelated',
       'scope-architecture-boundary',
       'review-adjudication',
+      'review-proof-boundary',
+      'testing-proof-boundary',
+      'testing-proof-new-behavior',
+      'review-proof-required-check',
+      'review-proof-actual-regression',
+      'review-proof-missing-failure',
       'review-adjudication-report',
       'review-adjudication-binding',
       'security-review-method',
       'review-impact-path-coverage',
+      'db-pagination',
+      'db-pagination-adjudication',
+      'db-pagination-implement',
+      'resource-flow-review',
+      'resource-flow-adjudication',
       'evidence-judgment',
     ],
   },
@@ -45,6 +56,9 @@ const CLASSIFICATIONS = [
       'initial-plan-contract-closure',
       'implement-contract-traceability',
       'implementation-report-contract-traceability',
+      'completion-scope-routing',
+      'completion-scope-structured',
+      'implement-scope-actions',
     ],
   },
   {
@@ -133,6 +147,54 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'resource-flow-review': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: 'DB以外の取得・保持境界と正当な全量処理を設計レビューで比較する',
+  },
+  'resource-flow-adjudication': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '全量処理の誤検知を含めて資源境界の指摘を裁定する',
+  },
+  'db-pagination-adjudication': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: 'DB全件取得の指摘を性能要件の不在だけで免除しないか裁定を比較する',
+  },
+  'db-pagination-implement': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '隔離したSQLiteプロジェクトで生成コードの返却件数とDB取得行数を比較する',
+  },
+  'db-pagination': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: 'DB取得境界の検出と有界な切り出しの許容を実モデルで比較する',
+  },
+  'implement-scope-actions': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '隔離した書き込み可能なプロジェクトで実装・検証の行動を実モデル評価する',
+  },
+  'completion-scope-structured': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '本番の構造化応答で実装完了と再計画のスコープ判定を比較する',
+  },
+  'completion-scope-routing': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'standard',
+    reason: '実装完了と再計画のスコープ判定を固定レポートで比較する',
+  },
   'evidence-judgment': {
     defaultEligible: false,
     credentials: ['codex'],
@@ -235,6 +297,30 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
   },
+  'review-proof-required-check': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '証拠境界の変更が必要な修正を抑制しないことを測る対照評価',
+  },
+  'review-proof-actual-regression': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '証拠境界の変更が必要な修正を抑制しないことを測る対照評価',
+  },
+  'review-proof-missing-failure': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '証拠境界の変更が必要な修正を抑制しないことを測る対照評価',
+  },
+  'testing-proof-new-behavior': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '明示テスト要求がなくても新規振る舞いの未検証条件を維持する対照評価',
+  },
+  'testing-proof-boundary': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '修正後レビューが元のテスト契約を拡張しないことを測る',
+  },
+  'review-proof-boundary': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: 'Luna Maxで裁定の証拠境界を比較する明示選択の評価',
+  },
   'review-adjudication': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -328,6 +414,8 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'completion-scope-structured': [],
+  'completion-scope-routing': [],
   'evidence-judgment': [],
   coding: ['coding-review'],
   arch: ['arch-review'],

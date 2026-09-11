@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnManagedProcess } from '../../dist/shared/utils/spawn.js';
+import { buildCodexSkillConfig } from '../../dist/infra/codex/skill-config.js';
 
 const evalDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -129,6 +130,14 @@ export async function runCliReview(config, prompt, { cwd, abortSignal }) {
   return session.run(prompt);
 }
 
+export function codexSkillOverrides(config, cwd, env = process.env) {
+  if (!config.disable_inherited_skills) return [];
+  const skills = buildCodexSkillConfig({ cwd, env, inheritance: { repo: false, user: false } })?.skills?.config;
+  if (skills === undefined) return [];
+  const entries = skills.map(({ path, enabled }) => `{ path = ${JSON.stringify(path)}, enabled = ${enabled} }`);
+  return ['-c', `skills.config=[${entries.join(', ')}]`];
+}
+
 function readCodexSessionId(output) {
   for (const line of output.split(/\r?\n/)) {
     if (line.length === 0) continue;
@@ -171,6 +180,7 @@ export function createCliReviewSession(config, { cwd, abortSignal }) {
   }
 
   if (config.cli === 'codex') {
+    const skillOverrides = codexSkillOverrides(config, cwd);
     let sessionId;
     return {
       run: async (prompt) => {
@@ -185,6 +195,7 @@ export function createCliReviewSession(config, { cwd, abortSignal }) {
               '-s', 'read-only',
               '--skip-git-repo-check',
               '-c', `model_reasoning_effort=${config.reasoning_effort}`,
+              ...skillOverrides,
               '--json',
               '-o', outputPath,
               '-',
@@ -194,6 +205,7 @@ export function createCliReviewSession(config, { cwd, abortSignal }) {
               '-m', config.model,
               '--skip-git-repo-check',
               '-c', `model_reasoning_effort=${config.reasoning_effort}`,
+              ...skillOverrides,
               '-o', outputPath,
               '-',
             ];

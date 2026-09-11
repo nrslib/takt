@@ -68,6 +68,24 @@ The independent `evidence-based-judgment` policy contains the shared principles;
 `contract-change` and `review-common` consume it, while `finding-validity`
 contains only submitted-finding tracking and disposition rules.
 
+The `review-proof-boundary` and `testing-proof-boundary` suites check whether
+adjudication and testing review distinguish a required behavioral test from an
+additional observation method justified only by a hypothetical mutation. They
+assemble the live `peer-review` step facets and read an isolated delivery-editor
+fixture with seeded prior reports. Four controls preserve explicit test
+obligations (`review-proof-required-check`), actual defects
+(`review-proof-actual-regression`), and missing tests for new failure behavior
+(`review-proof-missing-failure`), including a new behavior without an explicit
+testing directive (`testing-proof-new-behavior`). Run them explicitly with
+`npm run eval:prompts -- review-proof-boundary testing-proof-boundary review-proof-required-check review-proof-actual-regression review-proof-missing-failure testing-proof-new-behavior --no-cache`.
+They use Luna Max, an exact disposition assertion, and a semantic rubric. The
+rubric and independent fixture behavior tests are outside the model's isolated
+working directory. `npm run eval:prompts:contracts` verifies the fixture's actual
+retry behavior, shared finding-policy composition for both roles, and disposition
+parsing with Markdown decoration and conflicting-label rejection. These are individual agent evaluations with seeded reports,
+not an end-to-end review loop. See [the experiment record](experiments/review-proof-boundary.md)
+for baseline conditions and the limits of comparative claims.
+
 The `remediation-evidence` suite checks five fixed-input completion decisions:
 an effective alternative guard, a guard after prohibited effects, an explicit
 method requirement, absent optional execution records, and a missing required
@@ -215,6 +233,12 @@ remain excluded.
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking problems and checks the complete affected scope of each |
 | `initial-review-external-identity-wiring` | takt-development-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
 | `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
+| `review-proof-boundary` | peer-review / review-adjudication | review-proof-boundary | whether adjudication closes a fulfilled finding without requiring another observation justified only by a hypothetical mutation |
+| `testing-proof-boundary` | peer-review / follow-up testing-review | testing-proof-boundary | whether testing review preserves the original acceptance conditions when assessing an added observation demand |
+| `review-proof-required-check` | peer-review / review-adjudication | review-proof-required-check | control: retain an explicitly required verification that is still missing |
+| `review-proof-actual-regression` | peer-review / review-adjudication | review-proof-actual-regression | control: retain a confirmed implementation defect despite passing existing tests |
+| `review-proof-missing-failure` | peer-review / review-adjudication | review-proof-missing-failure | control: retain missing tests for representative new failure behavior |
+| `testing-proof-new-behavior` | peer-review / initial testing-review | testing-proof-new-behavior | control: require tests for new failure behavior without an explicit testing directive |
 | `state-after-event-plan` | default / plan | state-after-event-plan | paired applicable and non-applicable cases: whether the plan applies same-entity before -> change -> after evidence only when the request names a change and asks behavior to continue following the state, including artifacts created before the change |
 | `state-after-event-plan-config` | default / plan | state-after-event-plan-config | paired applicable and non-applicable cases for a configuration change: whether the plan applies same-entity evidence to a named running configuration update, including artifacts created before the change, while keeping process-restart persistence separate |
 | `state-after-event-write-tests` | default / write_tests | state-after-event-write-tests (work copy) | whether mutable tests observe one connection before and after a named state change, including the pre-change status, and the test report records applicable continuous-execution and ownership evidence |
@@ -277,6 +301,61 @@ and the report phase separately verify `permissionMode: readonly`, an empty
 tool allowance, and rejection of emitted tool events.
 
 ## Improvement workflow (red -> green)
+
+### Database pagination
+
+`npm run eval:prompts:db-pagination` checks three distinct stages with Codex Luna
+Max: implementation (`db-pagination-implement`), backend review (`db-pagination`),
+and adjudication (`db-pagination-adjudication`). The reviewer opts out of inherited
+user/repository skills. Adjudication compares both disabled and enabled skill
+inheritance; the inherited profile depends on local configuration. Disabling
+skills does not disable every source of Codex context, such as memories.
+The implementation provider disables skill inheritance and creates a fresh
+writable fixture for each call, including `--repeat`.
+
+The implementation assertion executes generated code against SQLite and measures
+rows returned to the application, including repository construction. This is not
+a measurement of rows scanned internally by SQLite or process memory usage.
+It checks page contents, continuation, tenant isolation, bounded reads, and the
+preserved full-export behavior. Its assertions live outside the agent's fixture.
+The fixture budget is 22 returned rows (20 items, one lookahead, one scalar count).
+Exceeding that budget is an evaluation failure; inspect the source and measurements
+before claiming it proves unbounded materialization rather than bounded overfetch.
+Raw prompts, generated projects, agent actions, and measurements are saved under
+`eval/.results/db-pagination-implement/`.
+
+The review fixture contains an unbounded DB read followed by array slicing,
+a bounded DB read with one lookahead row, and a fixed local vocabulary. Its normal
+response tests pass for all three; separate fixture tests demonstrate the actual
+read-volume difference. The adjudication fixture adds a valid finding and a
+synthetic implementation report arguing that correct responses suffice without a
+numeric performance requirement. A failure at that stage is an adjudication miss,
+not proof that the implementation agent generated the defect.
+
+Use `npm run eval:prompts:db-pagination:contracts` for deterministic checks only.
+For a repeated model comparison, run the full script with `-- --repeat 3` and
+preserve the prepared snapshots and output JSON before editing facets.
+See [the recorded experiment](results/db-pagination.md) for stage-specific
+results and the limits of the reproduced adjudication failure.
+
+### Resource boundaries
+
+`npm run eval:prompts:resource-boundary` evaluates architecture review and
+adjudication on non-DB data paths. The fixture separates prefix acquisition,
+buffering before delivery, incremental full delivery, exact full-input aggregation,
+and an explicitly bounded manifest. The adjudication reports include valid findings
+and deliberate false positives against the three healthy paths.
+
+`npm run eval:prompts:resource-boundary:contracts` measures consumed data and the
+number of pulls before the first output. These establish the fixture's behavior,
+not process RSS. The model rubric checks the distinct acquisition/retention defects
+without turning necessary full scans into truncation requests.
+
+Record baseline and post-change runs separately. These are additional domain
+coverage for the architecture facets; a baseline pass is not a newly reproduced
+failure. See `results/resource-boundary.md` for the recorded comparison.
+
+### General procedure
 
 This suite is used like TDD for prompts. When a reviewer misses something
 (or a coder does something wrong) in real TAKT runs, that miss becomes a new

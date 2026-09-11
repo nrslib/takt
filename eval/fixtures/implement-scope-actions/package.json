@@ -1,0 +1,11 @@
+{
+  "name": "scope-action-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node --check src/label.js",
+    "test:app": "node --test tests/label.test.js",
+    "test:integration": "node --test mock-server/tests/fixture.test.js",
+    "test": "npm run test:app && npm run test:integration"
+  }
+}

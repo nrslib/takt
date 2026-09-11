@@ -14,6 +14,17 @@ providers:
       skip_git_repo_check: true
       model_reasoning_effort: low
 
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/testing-review-observable-evidence
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
 tests:
   - description: 'initial testing review: distinguish covered multi-module behavior from an uncovered coupling failure'
     vars:

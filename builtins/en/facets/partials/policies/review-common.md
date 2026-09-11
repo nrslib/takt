@@ -86,7 +86,7 @@ Encourage local Boy Scout improvements within that causal scope. Do not use the 
 
 First confirm causal scope under Scope Determination. Within that scope, REJECT if any of the following apply.
 
-Apply the next three test-related REJECT conditions only when all four facts are identified: the source-of-truth acceptance criterion or observable contract, a concrete failure reachable through a real path, evidence that existing tests cannot detect that failure, and the smallest layer that owns its verification. If any fact is absent, do not reject or require another test.
+Apply the next three test-related REJECT conditions only when all five facts are identified: an obligation to add that verification in this task (an explicit verification requirement, addition or modification of the behavior or condition being verified itself, or a confirmed defect), the source-of-truth acceptance criterion or observable contract, a concrete failure reachable through a real path, evidence that existing tests cannot detect that failure, and the smallest layer that owns its verification. If any fact is absent, do not reject or require another test.
 
 - New observable behavior whose regression existing tests cannot detect, without a test at the smallest contract-owning layer
 - Boundary changes (permissions, rejection paths, external execution, shared state, state transitions) whose main allow/deny, success/failure, or isolation/release behavior cannot be verified at any layer, including existing evidence
@@ -135,14 +135,14 @@ Approve when all REJECT criteria are cleared and quality standards are met. Neve
 
 ## Judging Behavior Evidence
 
-Checks that only inspect configuration values, logs, snapshots, or the last observed state are supplementary evidence. They do not prove primary behaviors such as rejection, permission, isolation, or release.
+Reading configuration values, logs, snapshots, or internal state as a proxy for a different required effect does not prove that effect. When the contract is a state transition or preservation itself, a test that exercises the relevant operation and condition and observes the resulting state is direct evidence for that contract. If a separate effect or subsequent operation is also required, state values alone do not substitute for verifying it.
 
 | Evidence | Judgment |
 |----------|----------|
 | Expected behavior is observed in execution results | OK |
 | Deterministic tests cover the main boundary conditions | OK |
 | Only external-environment E2E exists, with no reproducible verification of the main boundary | Warning or REJECT |
-| Behavior is approved from configuration values, logs, or snapshots only | REJECT |
+| A required effect is not observed and configuration values, logs, or internal state substitute for it | REJECT |
 
 Do not close an individual finding from supplied verification evidence alone. Cross-check the current code, the original acceptance criteria, and the conditions directly observed by the evidence. Do not report the absence of a quality-gate record as an issue. Do not infer and require an unrecorded gate from other information.
 
