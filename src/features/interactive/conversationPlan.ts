@@ -82,6 +82,8 @@ function serializeInvestigationPolicy(
 
 export interface InteractiveSystemPromptInput {
   grillMe: boolean;
+  /** Whether this front-end can hand off a running task with `/tell`. */
+  enableTellCommand?: boolean;
   formalSpec?: boolean;
   formalSpecComments?: boolean;
   workflowContext?: WorkflowContext;
@@ -100,9 +102,12 @@ export function buildInteractiveSystemPrompt(
   const investigationPolicy = input.grillMe
     ? INTERACTIVE_INVESTIGATION_POLICIES.grillMe
     : INTERACTIVE_INVESTIGATION_POLICIES.assistant;
+  const enableTellCommand = input.enableTellCommand ?? true;
+  const tellAvailable = !input.grillMe && enableTellCommand;
 
   return loadTemplate('score_interactive_system_prompt', lang, {
     grillMe: input.grillMe,
+    tellAvailable,
     investigationPolicy: serializeInvestigationPolicy(investigationPolicy),
     formalSpec: input.formalSpec ?? false,
     formalSpecComments: input.formalSpecComments ?? true,
@@ -141,6 +146,8 @@ function formatInitialTaskContext(input: InitialTaskContext): string {
 
 export interface AssistantConversationInput {
   assistantMode: AssistantInteractiveMode;
+  /** Whether this front-end can hand off a running task with `/tell`. */
+  enableTellCommand?: boolean;
   /** Initial values resolved by the front-end before the conversation starts. */
   formalSpec: boolean;
   /** Whether formal notation blocks must include natural-language meaning comments. */
@@ -172,6 +179,8 @@ interface ConversationSessionResolution {
 }
 
 interface ConversationSessionOverrides extends ConversationSessionResolution {
+  /** Whether this front-end can hand off a running task with `/tell`. */
+  enableTellCommand?: boolean;
   effort?: string;
   disableSessionRetry?: boolean;
 }
@@ -215,6 +224,7 @@ export function createAssistantConversationPlan(
     ...(input.disableSessionRetry ? { disableSessionRetry: true } : {}),
   };
   const grillMe = input.assistantMode === 'grill-me';
+  const enableTellCommand = input.enableTellCommand ?? true;
   const assistantInitContext = loadAssistantInitContext(cwd);
   const initialPromptContext = [
     assistantInitContext,
@@ -228,6 +238,7 @@ export function createAssistantConversationPlan(
     formalSpecComments: formalSpecConfiguration.comments,
     systemPrompt: buildInteractiveSystemPrompt(ctx.lang, {
       grillMe,
+      enableTellCommand,
       formalSpec: formalSpecConfiguration.mode,
       formalSpecComments: formalSpecConfiguration.comments,
       ...(input.workflowContext ? { workflowContext: input.workflowContext } : {}),
@@ -260,10 +271,15 @@ export function createAssistantConversationPlan(
       ...(grillMe ? { permissionMode: 'readonly' as const } : {}),
       transformPrompt: (message: string, sourceContext?: string) =>
         prependSourceContext(ctx.lang, frameUserComment(ctx.lang, message), sourceContext),
-      introMessage: getLabel(grillMe ? 'interactive.ui.introGrillMe' : 'interactive.ui.intro', ctx.lang),
+      introMessage: getLabel(
+        grillMe
+          ? (enableTellCommand ? 'interactive.ui.introGrillMe' : 'interactive.ui.introGrillMeWithoutTell')
+          : (enableTellCommand ? 'interactive.ui.intro' : 'interactive.ui.introWithoutTell'),
+        ctx.lang,
+      ),
       ...(initialPromptContext ? { initialPromptContext } : {}),
       ...(assistantInitContext ? { summaryPromptContext: assistantInitContext } : {}),
-      enableTellCommand: input.assistantMode === 'assistant',
+      enableTellCommand,
       ...(input.initialReferenceRunSlug === undefined
         ? {}
         : { initialReferenceRunSlug: input.initialReferenceRunSlug }),
@@ -286,6 +302,7 @@ export function createPersonaConversationPlan(
   overrides: ConversationSessionOverrides = {},
 ): ConversationPlan {
   const baseCtx = resolveConversationSessionContext(cwd, 'persona-interactive', overrides);
+  const enableTellCommand = overrides.enableTellCommand ?? true;
   const ctx: SessionContext = {
     ...baseCtx,
     ...(overrides.effort ? { effort: overrides.effort } : {}),
@@ -302,8 +319,11 @@ export function createPersonaConversationPlan(
         : DEFAULT_INTERACTIVE_TOOLS,
       transformPrompt: (message: string, sourceContext?: string) =>
         prependSourceContext(ctx.lang, message, sourceContext),
-      introMessage: `${getLabel('interactive.ui.intro', ctx.lang)} [${firstStep.personaDisplayName}]`,
-      enableTellCommand: false,
+      introMessage: `${getLabel(
+        enableTellCommand ? 'interactive.ui.intro' : 'interactive.ui.introWithoutTell',
+        ctx.lang,
+      )} [${firstStep.personaDisplayName}]`,
+      enableTellCommand,
     },
   };
 }

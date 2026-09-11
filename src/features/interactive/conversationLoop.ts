@@ -175,7 +175,7 @@ export interface ConversationStrategy {
   enableOpenCommand?: boolean;
   /** Explicit slash-command allowlist for modes with a guarded execution path. */
   enabledCommands?: readonly SlashCommand[];
-  /** Enable the normal-assistant-only `/tell` command. */
+  /** Enable the `/tell` command. */
   enableTellCommand?: boolean;
   /** Run to use as the initial `/tell` choice. */
   initialReferenceRunSlug?: string;

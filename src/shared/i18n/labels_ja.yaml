@@ -14,7 +14,9 @@ interactive:
   formalSpecPrompt: "形式仕様モード（Alloy, Quint）を有効にしますか？ モードの既定値は assistant.formal_spec.mode（または旧 scalar 形式の assistant.formal_spec）で変更できます。"
   ui:
     intro: "対話モード - タスク内容を入力してください。準備ができたら /go で指示書を作成・実行し、実行中タスクへの追加指示は /tell で送信します。"
-    introGrillMe: "Grill Meモード - 推奨案付きの質問を1問ずつ行い、要件を固めます。準備ができたら /go で指示書を作成・実行します。"
+    introGrillMe: "Grill Meモード - 推奨案付きの質問を1問ずつ行い、要件を固めます。準備ができたら /go で指示書を作成・実行するか、/tell で実行中タスクへ追加指示を送信します。"
+    introWithoutTell: "対話モード - タスク内容を入力してください。準備ができたら /go で指示書を作成・実行します。"
+    introGrillMeWithoutTell: "Grill Meモード - 推奨案付きの質問を1問ずつ行い、要件を固めます。準備ができたら /go で指示書を作成・実行します。"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
     thinking: "アシスタントが応答を作成中..."

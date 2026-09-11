@@ -84,6 +84,7 @@ describe('interactive system prompt', () => {
       runStatus: '',
       runStepLogs: '',
       runReports: '',
+      tellAvailable: true,
     });
   });
 
@@ -97,6 +98,17 @@ describe('interactive system prompt', () => {
       grillMe: true,
       hasWorkflowPreview: false,
       workflowStructure: '1. plan',
+    });
+  });
+
+  it('should hide tell guidance when the front-end disables the command', () => {
+    buildInteractiveSystemPrompt('en', {
+      grillMe: false,
+      enableTellCommand: false,
+    });
+
+    expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
+      tellAvailable: false,
     });
   });
 
@@ -165,6 +177,22 @@ describe('assistant conversation plan', () => {
     expect(strategy.introMessage).toContain('Interactive mode');
     expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
     expect(strategy.enableTellCommand).toBe(true);
+    expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
+      tellAvailable: true,
+    });
+  });
+
+  it('should propagate a disabled tell capability to the assistant system prompt', () => {
+    createAssistantConversationPlan('/repo', {
+      assistantMode: 'assistant',
+      enableTellCommand: false,
+      formalSpec: false,
+      formalSpecComments: true,
+    });
+
+    expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
+      tellAvailable: false,
+    });
   });
 
   it('should make Grill Me read-only and withhold Bash', () => {
@@ -179,8 +207,43 @@ describe('assistant conversation plan', () => {
     expect(strategy.allowedTools).not.toContain('Bash');
     expect(strategy.permissionMode).toBe('readonly');
     expect(strategy.introMessage).toContain('Grill Me mode');
-    expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go']);
-    expect(strategy.enableTellCommand).toBe(false);
+    expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
+    expect(strategy.enableTellCommand).toBe(true);
+    expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
+      tellAvailable: false,
+    });
+  });
+
+  it.each(['en', 'ja'] as const)('should select the Grill Me intro for the resolved tell capability (%s)', (lang) => {
+    mockInitializeSession.mockReturnValue({
+      provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+      providerType: 'mock',
+      model: 'mock-model',
+      lang,
+      personaName: 'grill-me-interactive',
+      sessionId: undefined,
+    });
+
+    const withTell = createAssistantConversationPlan('/repo', {
+      assistantMode: 'grill-me',
+      formalSpec: false,
+      formalSpecComments: true,
+      enableTellCommand: true,
+    });
+    const withoutTell = createAssistantConversationPlan('/repo', {
+      assistantMode: 'grill-me',
+      formalSpec: false,
+      formalSpecComments: true,
+      enableTellCommand: false,
+    });
+
+    expect(withTell.strategy.introMessage).toContain('/tell');
+    expect(withoutTell.strategy.introMessage).not.toContain('/tell');
+    expect(withTell.strategy.enableTellCommand).toBe(true);
+    expect(withoutTell.strategy.enableTellCommand).toBe(false);
+    expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
+      tellAvailable: false,
+    });
   });
 
   it('should forward the CLI provider and model overrides and the resumed session', () => {
@@ -308,6 +371,7 @@ describe('persona conversation plan', () => {
     expect(strategy.systemPrompt).toContain('You are the reviewer.');
     expect(strategy.introMessage).toContain('[Reviewer]');
     expect(strategy.introMessage).not.toContain('/workflow');
+    expect(strategy.enableTellCommand).toBe(true);
     expect(strategy.resolveResumedSessionConfiguration).toBeUndefined();
   });
 
@@ -337,5 +401,17 @@ describe('persona conversation plan', () => {
       model: 'custom-model',
     });
     expect(ctx.effort).toBe('custom-effort');
+  });
+
+  it('should select the intro without tell when the persona front-end cannot hand off a task', () => {
+    const { strategy } = createPersonaConversationPlan('/repo', {
+      personaContent: 'You are the reviewer.',
+      personaDisplayName: 'Reviewer',
+      allowedTools: ['Read'],
+    }, { enableTellCommand: false });
+
+    expect(strategy.introMessage).not.toContain('/tell');
+    expect(strategy.introMessage).toContain('[Reviewer]');
+    expect(strategy.enableTellCommand).toBe(false);
   });
 });
