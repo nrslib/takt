@@ -268,7 +268,17 @@ instruct:
 # ===== Retry Mode UI (takt list -> retry) =====
 retry:
   ui:
-    intro: "Retry mode - describe additional instructions. Commands: /go (create instruction & run), /retry (rerun previous order), /cancel (exit)"
+    intro: "Retry mode - enter additional instructions. Use /go to review the update, then queue it or continue editing. Use /cancel to exit."
+    resume: "Resuming previous session"
+    noConversation: "No conversation yet. Please enter additional instructions first."
+    summarizeFailed: "Failed to create the instruction. Please try again."
+    continuePrompt: "Continue entering additional instructions."
+    proposed: "Updated task instruction:"
+    actionPrompt: "What would you like to do?"
+    actions:
+      saveTask: "Save as Task"
+      continue: "Continue editing"
+    cancelled: "Cancelled"
   usePreviousWorkflowConfirm: "Use previous workflow \"{workflow}\"?"
 
 orderRevision:

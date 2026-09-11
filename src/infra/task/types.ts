@@ -83,6 +83,7 @@ export interface TaskListItem {
   summary?: string;
   taskDir?: string;
   runSlug?: string;
+  sourceRunSlug?: string;
   branch?: string;
   worktreePath?: string;
   prUrl?: string;

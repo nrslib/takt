@@ -203,7 +203,7 @@ takt list
 | 操作 | 说明 |
 |------|------|
 | **Requeue** | 选择 resume 或 restart 位置，将任务重新置为 `pending`，不打开对话 |
-| **Retry** | 打开带失败上下文的 retry 对话，然后重新执行 |
+| **Retry** | 打开带失败上下文的 retry 对话，确认更新后的指示并将任务放回 `pending` |
 | **Instruct** | 针对该 run 的工作树打开 AI 对话编写追加指令，然后 requeue |
 | **Create PR** | 将失败 run 的修改提交并 push，创建 pull request |
 | **Delete** | 删除失败任务记录 |
@@ -265,7 +265,7 @@ takt list
 
 重新排队后，执行使用新的 namespace，因此不会继承原有 ledger，而是从空 ledger 开始。
 
-`/go` 后 retry 对话提供与 Instruct 相同的 **Save as Task** / **Continue editing**，以及立即重新执行的 `/accept` 和 `/replay`；`/cancel` 会取消。Retry note 会追加到任务记录，并在多次 retry 中累积。
+`/go` 后 retry 对话会显示更新后的指示，提供 **Save as Task**（首项且默认）和 **Continue editing**。选择 Save as Task 会更新原任务并将其放回 `pending`，但不会立即启动 worker。Retry 对话不提供 `/retry`、`/replay` 或立即执行选项；使用 `/cancel` 可在不修改任务的情况下退出。
 
 ### 非交互模式（`--non-interactive`）
 
