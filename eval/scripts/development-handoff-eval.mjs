@@ -24,7 +24,9 @@ export function scoreHandoffDecision(output, sample) {
     return { pass: false, reason: 'invalid_json' };
   }
   const fields = ['run', 'carry', 'acceptance'];
-  if (!actual || !fields.every(field => Array.isArray(actual[field]))) {
+  if (!actual || typeof actual !== 'object' || Array.isArray(actual)
+    || Object.keys(actual).length !== fields.length
+    || !fields.every(field => Array.isArray(actual[field]))) {
     return { pass: false, reason: 'invalid_decision' };
   }
   if (!actual.run.every(command => typeof command === 'string')

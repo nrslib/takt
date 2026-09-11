@@ -47,6 +47,7 @@ export default function buildCompletionRoutingPrompt({ vars }) {
   }));
   return new StatusJudgmentBuilder({ name: step.name, rules }, {
     language: vars.language,
+    interactive: vars.interactive === true,
     structuredOutput: vars.judgment_mode === 'structured',
     inputSource: 'report',
     reportContent: vars.report,

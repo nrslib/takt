@@ -12,6 +12,8 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
+import { determineRuleTransition } from '../core/workflow/engine/transitions.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowLoader.js';
 import {
@@ -41,7 +43,7 @@ function load(language: string, name: string): WorkflowConfig {
   return loadWorkflowFromFile(resolve(resourceRoot, 'workflows', `${name}.yaml`), directory, { resourceRoot });
 }
 
-function start(config: WorkflowConfig, initialStep: string): void {
+function start(config: WorkflowConfig, initialStep: string, options: Pick<WorkflowEngineOptions, 'interactive' | 'onUserInput'> = {}): void {
   // Keep the shipped graph and return contract; replace agent execution details only.
   engine = new WorkflowEngine({
     ...config,
@@ -50,6 +52,7 @@ function start(config: WorkflowConfig, initialStep: string): void {
   }, directory, 'Complete required work without losing the accepted contract', {
     projectCwd: directory,
     reportDirName: 'reports',
+    ...options,
   });
 }
 
@@ -96,7 +99,32 @@ describe('shipped development continuation routes', () => {
     start(config, 'implement');
     const result = await execute(config, 'implement', 4);
     expect(result.nextStep).toBe('ABORT');
+    expect(result.isComplete).toBe(true);
     expect(result.returnValue).toBeUndefined();
+  });
+
+  it.each(variants(implementations))('$language/$name collects an available user answer and resumes implementation', async ({ language, name }) => {
+    const config = load(language, name);
+    const implementation = config.steps.find(step => step.name === 'implement');
+    if (!implementation) throw new Error('Missing implementation step');
+    expect(determineRuleTransition(implementation, 5)).toMatchObject({ nextStep: 'implement', requiresUserInput: true });
+    const onUserInput = vi.fn().mockResolvedValueOnce('Use the requested export target.');
+    start(config, 'implement', { interactive: true, onUserInput });
+    const waiting = await execute(config, 'implement', 5);
+    expect(waiting).toMatchObject({ nextStep: 'implement', isComplete: false });
+    expect(waiting.returnValue).toBeUndefined();
+    expect(onUserInput).toHaveBeenCalledOnce();
+    expect((await execute(config, 'implement', 0)).nextStep).toBe('COMPLETE');
+  });
+
+  it.each(variants(implementations))('$language/$name stops without requesting input when interactive mode is unavailable', async ({ language, name }) => {
+    const config = load(language, name);
+    const onUserInput = vi.fn();
+    start(config, 'implement', { interactive: false, onUserInput });
+    const result = await execute(config, 'implement', 4);
+    expect(result).toMatchObject({ nextStep: 'ABORT', isComplete: true });
+    expect(result.returnValue).toBeUndefined();
+    expect(onUserInput).not.toHaveBeenCalled();
   });
 
   it.each(variants(remediations))('$language/$name investigates locally and resumes the same repair plan', async ({ language, name }) => {
@@ -109,6 +137,20 @@ describe('shipped development continuation routes', () => {
     expect(pending.returnValue).toBeUndefined();
     expect((await execute(config, 'investigate', 0)).nextStep).toBe('fix-plan');
     expect((await execute(config, 'fix-plan', 0)).nextStep).toBe('fix');
+  });
+
+  it.each(variants(remediations))('$language/$name returns a task-wide plan defect to its caller', async ({ language, name }) => {
+    const config = load(language, name);
+    start(config, 'fix-plan');
+    expect(await execute(config, 'fix-plan', 2)).toMatchObject({ isComplete: true, returnValue: 'need_replan' });
+  });
+
+  it.each(variants(remediations).flatMap(variant => ['fix-plan', 'investigate'].map(stepName => ({ ...variant, stepName }))))('$language/$name/$stepName stops at a confirmed external blocker', async ({ language, name, stepName }) => {
+    const config = load(language, name);
+    start(config, stepName);
+    const result = await execute(config, stepName, stepName === 'fix-plan' ? 3 : 1);
+    expect(result).toMatchObject({ nextStep: 'ABORT', isComplete: true });
+    expect(result.returnValue).toBeUndefined();
   });
 
   it.each(variants(remediations))('$language/$name monitors repeated local investigations without overriding an exit', ({ language, name }) => {

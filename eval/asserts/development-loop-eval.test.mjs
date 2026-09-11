@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
+import Ajv from 'ajv';
 import { parse } from 'yaml';
-import { loadCompletionRoutingStep } from '../completion-routing-prompt.mjs';
+import buildCompletionRoutingPrompt, { loadCompletionRoutingStep } from '../completion-routing-prompt.mjs';
 import { parseKimiAssistantOutput } from '../scripts/development-loop-eval.mjs';
 import { scoreTransition } from './completion-routing.mjs';
 
@@ -11,6 +13,14 @@ const baseline_revision = 'fef072115677cc1b99e6416b05944ebdf8af0c53';
 async function configuredAssertion(configName, output, vars) {
   const configUrl = new URL(`../agents/implement/${configName}.yaml`, import.meta.url);
   const config = parse(readFileSync(configUrl, 'utf8'));
+  const schema = config.providers[0].config.output_schema;
+  if (schema) {
+    try {
+      if (!new Ajv().validate(schema, JSON.parse(output))) return { pass: false, reason: 'invalid_provider_schema' };
+    } catch {
+      return { pass: false, reason: 'invalid_provider_schema' };
+    }
+  }
   const assertion = config.defaultTest.assert[0];
   const context = { vars: { ...config.defaultTest.vars, ...vars } };
   if (assertion.value.startsWith('file://')) {
@@ -89,6 +99,44 @@ test('routing uses the production tag parser and excludes interactive-only candi
   assert.equal(scoreTransition('• [IMPLEMENT:1]\nExplanation', step, { next: 'COMPLETE' }).pass, true);
 });
 
+test('interactive evaluation includes the user-input candidate and preserves its transition flag', async () => {
+  const step = loadCompletionRoutingStep({ language: 'en', workflow: 'development-implement' });
+  const expected = { next: 'implement', requires_user_input: true };
+  assert.equal(scoreTransition('[IMPLEMENT:6]', step, expected, true).pass, true);
+  assert.equal(scoreTransition('[IMPLEMENT:6]', step, expected, false).pass, false);
+  assert.equal(scoreTransition('[IMPLEMENT:6]', step, { next: 'implement' }, true).pass, false);
+  const vars = { language: 'en', workflow: 'development-implement', report: 'An answer can unblock this work.' };
+  assert.ok(buildCompletionRoutingPrompt({ vars: { ...vars, interactive: true } }).includes('[IMPLEMENT:6]'));
+  assert.ok(!buildCompletionRoutingPrompt({ vars: { ...vars, interactive: false } }).includes('[IMPLEMENT:6]'));
+  const output = JSON.stringify({ step: 6, reason: 'An available answer unblocks this work.' });
+  assert.equal((await configuredAssertion('completion-scope-structured', output, {
+    ...vars, interactive: true, expected_transition: expected,
+  })).pass, true);
+  assert.equal((await configuredAssertion('completion-scope-structured', output, {
+    ...vars, interactive: false, expected_transition: expected,
+  })).pass, false);
+});
+
+test('the structured config connects fixed input-request cases through its provider schema', async () => {
+  const configUrl = new URL('../agents/implement/completion-scope-structured.yaml', import.meta.url);
+  const config = parse(readFileSync(configUrl, 'utf8'));
+  const caseFile = config.tests.find(file => file.endsWith('.mjs'));
+  const cases = (await import(new URL(caseFile.slice('file://'.length), configUrl).href)).default();
+  assert.equal(cases.length, 1);
+  for (const language of config.defaultTest.vars.language) {
+    const vars = { ...cases[0].vars, language };
+    const decision = { step: 6, reason: 'A user answer unblocks the planned local work.' };
+    assert.equal((await configuredAssertion('completion-scope-structured', JSON.stringify(decision), vars)).pass, true);
+    for (const invalid of [
+      { ...decision, step: 7 }, { ...decision, step: 5.5 }, { ...decision, extra: true },
+    ]) {
+      assert.deepEqual(await configuredAssertion('completion-scope-structured', JSON.stringify(invalid), vars), {
+        pass: false, reason: 'invalid_provider_schema',
+      });
+    }
+  }
+});
+
 test('Kimi JSON events preserve only actual assistant content', () => {
   const jsonl = [
     { role: 'meta', type: 'system.version', version: 'test' },
@@ -122,4 +170,13 @@ test('content audit separates explanation formatting from the fixed decision exp
   assert.equal(scoreHandoffContent(output, { expected }).pass, true);
   assert.equal(scoreHandoffContent(output.replace('npm test', 'npm run build'), { expected }).pass, false);
   assert.equal(scoreHandoffContent(`${output}\n${output}`, { expected }).pass, false);
+});
+
+test('handoff decisions reject extra top-level fields including claims of execution', async () => {
+  const { scoreHandoffDecision, scoreHandoffContent } = await import('../scripts/development-handoff-eval.mjs');
+  const expected = { run: ['npm test'], carry: [], acceptance: [] };
+  const output = JSON.stringify({ ...expected, executed: true });
+  assert.equal(scoreHandoffDecision(output, { expected }).pass, false);
+  assert.equal(scoreHandoffContent(`\`\`\`json\n${output}\n\`\`\``, { expected }).pass, false);
+  assert.equal(scoreHandoffDecision(JSON.stringify({ acceptance: [], carry: [], run: ['npm test'] }), { expected }).pass, true);
 });

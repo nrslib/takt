@@ -33,7 +33,7 @@ function digest(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function prepareManifest(baselineRevision, casesPath) {
+export function prepareManifest(baselineRevision, casesPath) {
   const source = readFileSync(casesPath, 'utf8');
   const cases = parse(source);
   const ids = new Set();
@@ -46,6 +46,7 @@ function prepareManifest(baselineRevision, casesPath) {
       for (const language of ['ja', 'en']) {
         const vars = {
           workflow: test.workflow, report: test.report, language,
+          interactive: test.interactive === true,
           ...(revision === 'baseline' ? { baseline_revision: baselineRevision } : {}),
         };
         const step = loadCompletionRoutingStep(vars);
@@ -164,5 +165,5 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const casesPath = process.argv[4] === undefined
     ? join(repoRoot, 'eval/cases/development-loop-handoffs.yaml') : resolve(process.argv[4]);
   await runComparison(prepareManifest(process.argv[2], casesPath), resolve(process.argv[3]),
-    (output, sample) => scoreTransition(output, sample.step, sample.expected));
+    (output, sample) => scoreTransition(output, sample.step, sample.expected, sample.interactive === true));
 }

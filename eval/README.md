@@ -586,6 +586,25 @@ also compare fixed `expected_transition` values through the shared
 resolved against the workflow's noninteractive semantic candidates before
 comparing `next` or `return`.
 
+The structured suite also loads `completion-input-request-cases.mjs`, which
+reuses the fixed interactive input-request case from
+`cases/development-loop-input-boundaries.yaml`. Its provider JSON Schema accepts
+candidate 6; the shared scorer still rejects that candidate in headless mode.
+The local contract validates the actual provider schema before scoring. The
+focused Codex SDK check and its saved schema responses are documented in
+[the evaluation record](results/development-loop-handoffs.md#構造化providerの入力要求候補).
+
+Fixed cases can set `interactive: true` to include the production user-input
+candidate. The prompt builder and scorer use the same mode; the expected
+transition includes `requires_user_input: true` when an answer is requested.
+`cases/development-loop-input-boundaries.yaml` pairs identical target-selection
+reports with and without this candidate and adds an external verification
+permission control. Compare the pre-review PR head with the current candidate:
+
+```bash
+node eval/scripts/development-loop-eval.mjs e0407b6a719faaff79dbb1cb605e6ce86b136f16 .tmp/development-loop-input-boundaries eval/cases/development-loop-input-boundaries.yaml
+```
+
 To rescore fully saved Phase 3 responses after a composition refactor changes
 the manifest's raw step metadata, use the frozen manifest explicitly. This
 command checks that every response exists before rescoring and makes no model
