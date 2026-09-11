@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { URL } from 'node:url';
@@ -208,7 +208,9 @@ test('action evaluation requires completed verification and rejects modified che
     writeFileSync(join(directory, 'scripts/check.mjs'), 'weakened check');
     assert.equal(scoreActionArtifacts(sample, directory, command, 'codex').pass, false);
     writeFileSync(join(directory, 'output/labels.json'), 'not json');
-    assert.equal(scoreActionArtifacts(sample, directory).pass, false);
+    const malformed = scoreActionArtifacts(sample, directory);
+    assert.equal(malformed.pass, false);
+    assert.equal(malformed.reason, 'malformed_artifacts');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -268,5 +270,96 @@ test('Kimi action evidence records unavailable exit codes and rejects explicit f
   assert.equal(Object.hasOwn(evidence.commands[0], 'completed'), false);
   for (const failure of ['Error: check failed', 'AssertionError [ERR_ASSERTION]: check failed', 'Process exit code: 1']) {
     assert.equal(executionEvidence(response(`artifact passed\n${failure}\n`), 'kimi', ['artifact']).pass, false, failure);
+  }
+});
+
+test('action gates reject absent configuration with an explicit preparation error', async () => {
+  const { actionGateCondition } = await import('../scripts/development-implementation-actions.mjs');
+  for (const config of [null, {}, { workflow_overrides: { steps: { implement: { quality_gates: {} } } } }]) {
+    assert.throws(() => actionGateCondition(JSON.stringify(config), 'candidate'), {
+      code: 'ERR_ASSERTION', message: /candidate: .*no implement quality gate for npm run test:e2e:smoke/,
+    });
+  }
+});
+
+test('action gates ignore command objects and validate the selected string condition', async () => {
+  const { actionGateCondition } = await import('../scripts/development-implementation-actions.mjs');
+  const config = quality_gates => JSON.stringify({ workflow_overrides: { steps: { implement: { quality_gates } } } });
+  const gate = 'Run npm run test:e2e:smoke only when CLI startup, workflow execution, or config loading changes, and verify success.';
+  assert.equal(actionGateCondition(config([{ command: 'npm test' }, null, gate]), 'candidate'),
+    'only when tools/platform, command startup, or configuration loading changes');
+  assert.throws(() => actionGateCondition(config([{ command: 'npm run test:e2e:smoke' }]), 'candidate'), {
+    code: 'ERR_ASSERTION', message: /no implement quality gate/,
+  });
+  assert.throws(() => actionGateCondition(config(['Run npm run test:e2e:smoke.']), 'candidate'), {
+    code: 'ERR_ASSERTION', message: /candidate: smoke gate wording does not match/,
+  });
+});
+
+test('Codex action evidence counts non-JSON diagnostics while retaining command results', async () => {
+  const { executionEvidence } = await import('../scripts/development-implementation-actions.mjs');
+  const event = JSON.stringify({ type: 'item.completed', item: { type: 'command_execution',
+    command: 'npm run test:artifact', aggregated_output: 'artifact passed\n', exit_code: 0 } });
+  const evidence = executionEvidence(`diagnostic before\n${event}\ndiagnostic after\n`, 'codex', ['artifact']);
+  assert.equal(evidence.pass, true);
+  assert.equal(evidence.unparsedLines, 2);
+  assert.equal(executionEvidence('diagnostics only\n', 'codex', ['artifact']).pass, false);
+  for (const cli of ['claude', 'kimi']) {
+    assert.throws(() => executionEvidence(`diagnostic\n${event}`, cli, ['artifact']), SyntaxError);
+  }
+});
+
+for (const cli of ['codex', 'kimi']) {
+  test(`${cli} action evidence rejects missing or non-string output without throwing`, async () => {
+    const { executionEvidence } = await import('../scripts/development-implementation-actions.mjs');
+    for (const output of [undefined, null, { text: 'artifact passed' }, ['artifact passed']]) {
+      const events = cli === 'codex' ? [{ type: 'item.completed', item: { type: 'command_execution',
+        command: 'npm run test:artifact', aggregated_output: output, exit_code: 0 } }] : [
+        { role: 'assistant', tool_calls: [{ id: 'check', function: { name: 'Bash',
+          arguments: JSON.stringify({ command: 'npm run test:artifact' }) } }] },
+        { role: 'tool', tool_call_id: 'check', content: output },
+      ];
+      const evidence = executionEvidence(events.map(JSON.stringify).join('\n'), cli, ['artifact']);
+      assert.equal(evidence.pass, false);
+      assert.equal(evidence.commands[0].output, '');
+    }
+  });
+}
+
+test('action restart archives incomplete samples and protects completed records', async () => {
+  const { prepareActionSample } = await import('../scripts/development-implementation-actions.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'takt-action-restart-test-'));
+  const sampleRoot = join(directory, 'codex-sample');
+  const workspaces = [];
+  try {
+    const original = {
+      'working-directory.txt': '/original-workspace', 'private-error.txt': 'original diagnostic',
+      'project/partial.txt': 'unfinished work', 'provider-events.jsonl': 'original events',
+    };
+    for (const [name, content] of Object.entries(original)) {
+      mkdirSync(dirname(join(sampleRoot, name)), { recursive: true });
+      writeFileSync(join(sampleRoot, name), content);
+    }
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const cwd = prepareActionSample(sampleRoot, { 'TASK.md': 'fixed task' });
+      workspaces.push(cwd);
+      assert.equal(readFileSync(join(sampleRoot, 'working-directory.txt'), 'utf8'), cwd);
+      assert.equal(readFileSync(join(cwd, 'TASK.md'), 'utf8'), 'fixed task');
+      assert.equal(existsSync(join(sampleRoot, 'private-error.txt')), false);
+      const archives = readdirSync(directory).filter(name => name.startsWith('codex-sample.interrupted-'));
+      assert.equal(archives.length, attempt);
+      if (attempt === 1) {
+        for (const [name, content] of Object.entries(original)) {
+          assert.equal(readFileSync(join(directory, archives[0], 'sample', name), 'utf8'), content);
+        }
+      }
+    }
+    writeFileSync(join(sampleRoot, 'result.json'), '{"pass":true}');
+    assert.throws(() => prepareActionSample(sampleRoot, {}), /completed action sample/);
+    assert.equal(readFileSync(join(sampleRoot, 'result.json'), 'utf8'), '{"pass":true}');
+    assert.equal(readdirSync(directory).filter(name => name.startsWith('codex-sample.interrupted-')).length, 2);
+  } finally {
+    for (const workspace of workspaces) rmSync(workspace, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
   }
 });

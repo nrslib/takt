@@ -202,7 +202,8 @@ Kimiの初回起動は、CLIが `--prompt` と `--yolo` の併用を引数検証
 - 修正版全6応答: `.tmp/development-implementation-actions-candidate/`
 - 各manifest、個別の `provider-events.jsonl`、実projectのコピー、初回採点 `result.json`、`summary.json` を保持。初回REDを上書きしていない
 - 初回監査: `.tmp/development-implementation-actions-audit.mjs` と `.json`、ログ `/private/tmp/takt-implementation-actions-audit.log` を保持
-- 最新監査: `node .tmp/development-implementation-actions-audit-v2.mjs`。結果 `.tmp/development-implementation-actions-audit-v2.json`、ログ `/private/tmp/takt-action-scoring-audit-v2.log`。現在ソースと固定入力の一致、fixture・期待値の新旧同一性、全12応答の採点、実コマンド・成果物・実行時間順序を確認し、モデルは再呼び出ししない
+- コマンド照合修正後の監査: `.tmp/development-implementation-actions-audit-v2.mjs` と `.json`、ログ `/private/tmp/takt-action-scoring-audit-v2.log` を保持
+- 最新監査: `node .tmp/development-implementation-actions-audit-v3.mjs`。結果 `.tmp/development-implementation-actions-audit-v3.json`、ログ `/private/tmp/takt-action-cr-final-audit.log`。現在ソースと固定入力の一致、fixture・期待値の新旧同一性、全12応答の採点、実コマンド・成果物・実行時間順序を確認し、モデルは再呼び出ししない
 - 実行ログ: `/private/tmp/takt-implementation-actions-{baseline,baseline-kimi,candidate}.log`
 
 現変更後のbuild、unit 6,162件、light IT 2,490件、lint、smoke 19成功・1skip、変更heavy IT 84件、分類契約20件、eval契約21件、evalへの直接ESLint、`git diff --check` はすべて成功した。ログは `/private/tmp/takt-implementation-completion-{build,unit,light-it,lint,smoke,engine,classification,eval-final}.log`、直接ESLintは `/private/tmp/takt-implementation-actions-eslint-final.log`。補助Phase 3ケースの期待先は自己ループ撤回という仕様変更に合わせてABORTへ更新したが、過去応答の期待値だけを変えて現行モデル評価として数えていない。
@@ -210,3 +211,7 @@ Kimiの初回起動は、CLIが `--prompt` と `--yolo` の併用を引数検証
 独立レビュー後、採点側に手書きの成功記録と生成物だけで通る穴と、任意の `node -e` の偽成功出力を受理する穴を確認した。先に固定した回帰テストは変更前22件中2件がREDで、厳密なコマンド照合とprovider結果・不変checker・成果物を組み合わせた修正後は24件すべてGREENになった。echo偽装、npm文字列を含むcat、不明なshell構文も拒否する。照合はfixtureの固定コマンド・直列連結・限定的な表示/読取・定数forループだけを扱い、汎用shell解析は行わない。Kimi実行ファイルも個人の絶対パスからPATHまたは `TAKT_EVAL_KIMI_BIN` へ変更した。
 
 この修正では本体、manifest、プロンプト、fixture、期待値、元応答、初回採点を変更せず、保存済み12応答を最新採点で再監査した。合否は上表のままで、Codex旧版のREDも維持した。追加モデル試行ではない。REDログは `/private/tmp/takt-action-scoring-red.log`、GREENは `/private/tmp/takt-action-scoring-green-final.log`、直接ESLintは `/private/tmp/takt-action-scoring-eslint.log`。評価採点だけの修正なので、直前に成功した広範囲の本体検証は繰り返していない。
+
+続くCodeRabbitの5指摘も評価コード内で対応した。不正なlabels JSONは既存の処理が正しく拒否していたため、テストで `reason: malformed_artifacts` を直接確認するよう強化した。設定欠落・非文字列ゲート、Codexの非JSON診断行、Codex/Kimiの出力欠落、中断後の再開は、既存処理の機械的な関数抽出後に30件中6件のREDを確認した。修正後は設定形状と条件文言を明示的に検証し、Codexだけ非JSON行を読み飛ばして `unparsedLines` に件数を記録する。欠落または非文字列のコマンド出力は空文字列へ正規化して成功証拠にしない。中断ディレクトリは削除せず `.interrupted-*/sample` へ移し、成功済みの結果は保護する。テストは複数回の中断再開でも元の診断・実行記録・作業成果が残ることを確認する。
+
+対象契約30/30、直接ESLint、`git diff --check` が成功した。ログは `/private/tmp/takt-action-cr-final-{red,green,eslint}.log`。v3監査でも全12保存応答の合否、プロンプト・fixture・期待値の一致を維持した。追加のモデル呼び出し、本体変更、広範囲の本体テストの反復は行っていない。

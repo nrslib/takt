@@ -560,8 +560,14 @@ and literal script-name loops; unsupported shell syntax is unverified. Kimi's
 saved tool events omit individual exit codes. Its score combines command and
 success-output evidence with the unchanged checker and artifacts, and records
 `exit_code_unavailable`; it does not assert a directly observed zero exit code.
-Saved completed calls are reused; provider failures require a new
-output directory. Kimi prompt mode runs tools automatically and must not be
+Codex non-JSON diagnostic lines are skipped and counted in `execution.unparsedLines`;
+Claude and Kimi retain strict JSONL parsing. Missing or non-string command output
+does not provide success evidence. Preparation requires a string smoke gate with
+the expected condition wording and reports an explicit error if it is absent.
+Saved completed calls are reused. On restart, an incomplete sample directory is
+preserved under `<sample>.interrupted-*/sample` before a fresh sample is created;
+its diagnostics, tool events, project copy, and original workspace reference are
+retained. Kimi prompt mode runs tools automatically and must not be
 combined with `--yolo` or `--auto`. It uses an empty skills directory and resolves
 `kimi` through PATH, or the executable set by `TAKT_EVAL_KIMI_BIN`. Codex uses
 `workspace-write` with network tools disabled and inherited skills disabled;

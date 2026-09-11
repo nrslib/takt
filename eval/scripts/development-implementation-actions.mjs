@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +55,19 @@ function fixture(sample) {
   return files;
 }
 
+export function actionGateCondition(projectConfig, revision) {
+  const qualityGates = parse(projectConfig)?.workflow_overrides?.steps?.implement?.quality_gates;
+  const smokeGate = Array.isArray(qualityGates)
+    ? qualityGates.find(gate => typeof gate === 'string' && gate.includes('npm run test:e2e:smoke')) : undefined;
+  assert.equal(typeof smokeGate, 'string',
+    `${revision}: .takt/config.yaml has no implement quality gate for npm run test:e2e:smoke`);
+  const condition = smokeGate.match(/((?:only )?when .+), and verify/);
+  assert.ok(condition, `${revision}: smoke gate wording does not match the expected condition pattern`);
+  return condition[1]
+    .replace('CLI startup, workflow execution', 'tools/platform, command startup')
+    .replace('config loading', 'configuration loading');
+}
+
 export function buildActionManifest(revision) {
   if (!/^[a-f0-9]{40}$/.test(revision) && revision !== 'candidate') throw new Error('Use a full SHA or candidate');
   const resourceBase = revision === 'candidate' ? root : mkdtempSync(join(tmpdir(), 'takt-actions-baseline-'));
@@ -65,11 +78,7 @@ export function buildActionManifest(revision) {
   const cases = readFileSync(join(root, 'eval/cases/development-implementation-actions.yaml'), 'utf8');
   const projectConfig = revision === 'candidate' ? readFileSync(join(root, '.takt/config.yaml'), 'utf8')
     : execFileSync('git', ['show', `${revision}:.takt/config.yaml`], { cwd: root, encoding: 'utf8' });
-  const smokeGate = parse(projectConfig).workflow_overrides.steps.implement.quality_gates
-    .find(gate => gate.includes('npm run test:e2e:smoke'));
-  const gateCondition = smokeGate.match(/((?:only )?when .+), and verify/)[1]
-    .replace('CLI startup, workflow execution', 'tools/platform, command startup')
-    .replace('config loading', 'configuration loading');
+  const gateCondition = actionGateCondition(projectConfig, revision);
   const resourceRoot = join(resourceBase, 'builtins/ja');
   const loaderCwd = mkdtempSync(join(tmpdir(), 'takt-actions-loader-'));
   const workflow = loadWorkflowFromFile(join(resourceRoot, 'workflows/development-implement.yaml'), loaderCwd, { resourceRoot });
@@ -162,8 +171,16 @@ export function invokedChecks(command) {
 export function executionEvidence(raw, cli, expectedChecks) {
   const pending = new Map();
   const commands = [];
+  let unparsedLines = 0;
   for (const line of raw.split('\n').filter(Boolean)) {
-    const event = JSON.parse(line);
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch (error) {
+      if (cli !== 'codex') throw error;
+      unparsedLines++;
+      continue;
+    }
     if (cli === 'codex' && event.type === 'item.completed' && event.item?.type === 'command_execution') {
       commands.push({ command: event.item.command, output: event.item.aggregated_output,
         toolStatus: event.item.exit_code === 0 ? 'success' : 'failure', exitCode: event.item.exit_code });
@@ -187,12 +204,15 @@ export function executionEvidence(raw, cli, expectedChecks) {
       }
     }
   }
-  for (const command of commands) command.invokedChecks = invokedChecks(command.command);
+  for (const command of commands) {
+    command.output = typeof command.output === 'string' ? command.output : '';
+    command.invokedChecks = invokedChecks(command.command);
+  }
   const verifiedChecks = expectedChecks.filter(check => commands.some(command => command.toolStatus !== 'failure'
     && !/(?:^|\n)(?:\w*Error\b|npm (?:ERR!|error)\b|.*(?:exit code|exit status)\s*[:=]?\s*[1-9]\d*\b)/i.test(command.output)
     && command.invokedChecks.includes(check)
     && command.output.split('\n').some(line => line.trim() === `${check} passed`)));
-  return { pass: verifiedChecks.length === expectedChecks.length, verifiedChecks, commands,
+  return { pass: verifiedChecks.length === expectedChecks.length, verifiedChecks, commands, unparsedLines,
     evidence: cli === 'kimi' ? 'command_and_checker_output_exit_code_unavailable' : 'command_and_provider_tool_result' };
 }
 
@@ -215,6 +235,22 @@ async function callModel(model, prompt, cwd) {
     '--output-format', 'stream-json', '-p', prompt], { ...options, input: undefined });
 }
 
+export function prepareActionSample(sampleRoot, files) {
+  assert.ok(!existsSync(join(sampleRoot, 'result.json')), 'Cannot replace a completed action sample');
+  if (existsSync(sampleRoot)) {
+    const archive = mkdtempSync(`${sampleRoot}.interrupted-`);
+    renameSync(sampleRoot, join(archive, 'sample'));
+  }
+  mkdirSync(sampleRoot, { recursive: true });
+  const cwd = mkdtempSync(join(tmpdir(), 'takt-actions-project-'));
+  writeFileSync(join(sampleRoot, 'working-directory.txt'), cwd, { flag: 'wx' });
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(cwd, name)), { recursive: true });
+    writeFileSync(join(cwd, name), content, { flag: 'wx' });
+  }
+  return cwd;
+}
+
 export async function runActionEvaluation(manifest, directory) {
   mkdirSync(directory, { recursive: true });
   const path = join(directory, 'manifest.json');
@@ -233,13 +269,7 @@ export async function runActionEvaluation(manifest, directory) {
         rows.push(saved);
         continue;
       }
-      mkdirSync(sampleRoot, { recursive: true });
-      const cwd = mkdtempSync(join(tmpdir(), 'takt-actions-project-'));
-      writeFileSync(join(sampleRoot, 'working-directory.txt'), cwd, { flag: 'wx' });
-      for (const [name, content] of Object.entries(sample.files)) {
-        mkdirSync(dirname(join(cwd, name)), { recursive: true });
-        writeFileSync(join(cwd, name), content, { flag: 'wx' });
-      }
+      const cwd = prepareActionSample(sampleRoot, sample.files);
       const startedAt = new Date().toISOString();
       const start = Date.now();
       let raw;
