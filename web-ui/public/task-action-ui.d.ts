@@ -48,6 +48,8 @@ export interface TaskActionSurfaceModel {
   readonly retryStartOptions: readonly TaskActionRetryOption[];
   readonly selectedOptionId?: string;
   readonly canFinalizeRetry: boolean;
+  readonly reviewedTask?: string;
+  readonly reviewedTaskActionOptionId?: string;
   readonly finalizationState: TaskActionFinalizationState;
   readonly snapshot: {
     readonly taskId: string;
@@ -58,7 +60,7 @@ export interface TaskActionSurfaceModel {
   };
 }
 
-export type TaskActionFinalizationState = 'active' | 'finalizing' | 'accepted' | 'failed';
+export type TaskActionFinalizationState = 'active' | 'reviewing' | 'finalizing' | 'accepted' | 'failed';
 
 export function taskActionFinalizationState(
   surface: { readonly finalizationState: TaskActionFinalizationState } | null | undefined,
@@ -72,6 +74,16 @@ export function taskActionSurfaceWithState<T extends object>(
 export function taskActionCanRestart(
   surface: { readonly finalizationState: TaskActionFinalizationState } | null | undefined,
 ): boolean;
+
+export function taskActionSurfaceWithReview<T extends object>(
+  surface: T | null | undefined,
+  task: string,
+  taskActionOptionId?: string,
+): (T & {
+  readonly reviewedTask: string;
+  readonly reviewedTaskActionOptionId?: string;
+  readonly finalizationState: 'reviewing';
+}) | null;
 
 export function taskActionSurfaceModel(
   session: {

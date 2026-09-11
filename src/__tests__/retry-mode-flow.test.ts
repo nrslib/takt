@@ -25,6 +25,7 @@ import {
   type MockProviderCapture,
 } from './helpers/stdinSimulator.js';
 import { makeFileRunMetaPathFields } from './test-helpers.js';
+import { selectOption } from '../shared/prompt/index.js';
 
 // --- Mocks (infrastructure only) ---
 
@@ -58,8 +59,8 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   takeSessionState: vi.fn(() => null),
 }));
 
-vi.mock('../shared/ui/index.js', () => ({
-  info: vi.fn(),
+vi.mock('../shared/ui/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   error: vi.fn(),
   blankLine: vi.fn(),
   StreamDisplay: vi.fn().mockImplementation(() => ({
@@ -69,7 +70,7 @@ vi.mock('../shared/ui/index.js', () => ({
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
-  selectOption: vi.fn().mockResolvedValue('execute'),
+  selectOption: vi.fn().mockResolvedValue('save_task'),
 }));
 
 vi.mock('../shared/prompt/confirm.js', () => ({
@@ -165,12 +166,24 @@ describe('E2E: Retry mode with failure context injection', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('should execute retry mode after assistant response', async () => {
+  it.each([
+    'Fix review timeout by increasing the limit.',
+    'Fix review timeout by adding diagnostics.',
+  ])('should queue and display the revised task: %s', async (revisedTask) => {
     setupRawStdin(toRawInputs(['what went wrong?', '/go']));
     const capture = setupProvider([
       'The review step failed due to a timeout.',
-      'Fix review timeout by increasing the limit.',
+      revisedTask,
     ]);
+
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let outputAtSelectionStart: string[] = [];
+    vi.mocked(selectOption).mockImplementationOnce(async () => {
+      outputAtSelectionStart = consoleLogSpy.mock.calls
+        .flatMap((args) => args)
+        .map((value) => String(value));
+      return 'save_task';
+    });
 
     const retryContext: RetryContext = {
       failure: {
@@ -196,11 +209,20 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runTaskRetryMode(tmpDir, retryContext);
+    let result: Awaited<ReturnType<typeof runTaskRetryMode>>;
+    try {
+      result = await runTaskRetryMode(tmpDir, retryContext);
+    } finally {
+      consoleLogSpy.mockRestore();
+    }
 
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('Fix review timeout by increasing the limit.');
+    expect(result.action).toBe('save_task');
+    expect(result.task).toBe(revisedTask);
     expect(capture.callCount).toBe(2);
+    const options = vi.mocked(selectOption).mock.calls.at(-1)?.[1] as Array<{ value: string }>;
+    expect(options.map((option) => option.value)).toEqual(['save_task', 'continue']);
+    expect(options.map((option) => option.value)).not.toContain('execute');
+    expect(outputAtSelectionStart.join('\n')).toContain(revisedTask);
   });
 
   it('should summarize inline /go task without prior conversation', async () => {
@@ -235,7 +257,7 @@ describe('E2E: Retry mode with failure context injection', () => {
 
     const result = await runTaskRetryMode(tmpDir, retryContext);
 
-    expect(result.action).toBe('execute');
+    expect(result.action).toBe('save_task');
     expect(result.task).toBe('Inspect the failing logs and summarize the timeout root cause.');
     expect(capture.callCount).toBe(1);
     expect(mockConfirm).not.toHaveBeenCalled();
@@ -275,12 +297,12 @@ describe('E2E: Retry mode with failure context injection', () => {
 
     const result = await runTaskRetryMode(tmpDir, retryContext);
 
-    expect(result.action).toBe('execute');
+    expect(result.action).toBe('save_task');
     expect(result.task).toBe('Inspect the failing logs from the retry context and summarize the timeout root cause.');
     expect(capture.callCount).toBe(1);
   });
 
-  it('should execute retry mode with run session context', async () => {
+  it('should queue the revised task with run session context', async () => {
     // Create run fixture with logs and reports
     createRunFixture(tmpDir, 'run-failed', {
       meta: { task: 'Build login page', status: 'failed' },
@@ -338,7 +360,7 @@ describe('E2E: Retry mode with failure context injection', () => {
 
     const result = await runTaskRetryMode(tmpDir, retryContext);
 
-    expect(result.action).toBe('execute');
+    expect(result.action).toBe('save_task');
     expect(result.task).toBe('Fix CSS imports in login component.');
   });
 
@@ -376,9 +398,51 @@ describe('E2E: Retry mode with failure context injection', () => {
     expect(result.task).toBe('');
   });
 
-  it('should refuse /replay and /retry when the previous order is empty', async () => {
+  it('should continue the same Retry conversation after rejecting a proposed order', async () => {
+    vi.mocked(selectOption)
+      .mockResolvedValueOnce('continue')
+      .mockResolvedValueOnce('save_task');
+    setupRawStdin(toRawInputs(['inspect the failure', '/go', 'include the workaround', '/go']));
+    const capture = setupProvider([
+      'The failure is caused by a timeout.',
+      'Increase the timeout and add diagnostics.',
+      'I will include the workaround and diagnostics.',
+      'Increase the timeout, add diagnostics, and include the workaround.',
+    ]);
+
+    const result = await runTaskRetryMode(tmpDir, {
+      failure: {
+        taskName: 'some-task',
+        taskContent: 'Complete some task',
+        createdAt: '2026-02-15T12:00:00Z',
+        failedStep: 'plan',
+        error: 'Unknown error',
+        lastMessage: '',
+        retryNote: '',
+      },
+      subject: { kind: 'branch', value: 'takt/some-task' },
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      previousOrderContent: '# Previous order',
+    });
+
+    expect(result).toMatchObject({
+      action: 'save_task',
+      task: 'Increase the timeout, add diagnostics, and include the workaround.',
+      source: 'go',
+    });
+    expect(capture.callCount).toBe(4);
+    expect(vi.mocked(selectOption)).toHaveBeenCalledTimes(2);
+  });
+
+  it('should treat /replay and /retry as ordinary text in task Retry mode', async () => {
     setupRawStdin(toRawInputs(['/replay', '/retry', '/cancel']));
-    const capture = setupProvider([]);
+    const capture = setupProvider(['not a command', 'also not a command']);
 
     const retryContext: RetryContext = {
       failure: {
@@ -401,15 +465,15 @@ describe('E2E: Retry mode with failure context injection', () => {
         stepPreviews: [],
       },
       run: null,
-      // An order file that exists but holds nothing is no order to resubmit.
-      previousOrderContent: '',
+      previousOrderContent: '# Previous order',
     };
 
     const result = await runTaskRetryMode(tmpDir, retryContext);
 
     expect(result.action).toBe('cancel');
     expect(result.task).toBe('');
-    expect(capture.callCount).toBe(0);
+    expect(capture.callCount).toBe(2);
+    expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
   });
 
   it('should handle conversation before /go with failure context', async () => {
@@ -450,7 +514,7 @@ describe('E2E: Retry mode with failure context injection', () => {
 
     const result = await runTaskRetryMode(tmpDir, retryContext);
 
-    expect(result.action).toBe('execute');
+    expect(result.action).toBe('save_task');
     expect(result.task).toBe('Increase review timeout to 600s and add retry logic.');
     expect(capture.callCount).toBe(3);
   });

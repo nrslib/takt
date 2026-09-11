@@ -207,7 +207,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 | Action | Description |
 |--------|-------------|
 | **Requeue** | Select a resume or restart position and return the task to `pending` without a conversation |
-| **Retry** | Open a retry conversation with failure context, then re-execute |
+| **Retry** | Open a retry conversation with failure context, review the revised instruction, then queue it as `pending` |
 | **Instruct** | Open an AI conversation against the run's working tree to craft additional instructions, then requeue |
 | **Create PR** | Commit, push, and create a pull request from the failed run's changes |
 | **Delete** | Remove the failed task record |
@@ -267,7 +267,7 @@ When you select **Retry** on a failed task, TAKT:
 
 After a requeue, execution uses a new namespace, so its ledger is not inherited and starts empty.
 
-After `/go`, the retry conversation offers the same choices as Instruct mode (**Save as Task** / **Continue editing**), with `/accept` and `/replay` for immediate re-execution and `/cancel` to abort. Both saving and immediate re-execution use the selected Resume or Restart position. Retry notes are appended to the task record, accumulating across multiple retry attempts.
+After `/go`, the retry conversation shows the revised instruction and offers **Save as Task** first (the default) or **Continue editing**. Saving updates the existing task and returns it to `pending`; it does not start a worker immediately. `/retry`, `/replay`, and immediate execution choices are unavailable in this Retry conversation. Use `/cancel` to abort without changing the task.
 
 ### Non-Interactive Mode (`--non-interactive`)
 

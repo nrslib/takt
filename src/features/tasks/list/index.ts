@@ -115,7 +115,7 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
     `Action for ${task.name}:`,
     [
       { label: 'Requeue', value: 'requeue', description: 'Requeue without conversation' },
-      { label: 'Retry', value: 'retry', description: 'Analyze failure in conversation, then re-run' },
+      { label: 'Retry', value: 'retry', description: 'Review the revised instruction in conversation, then queue it' },
       { label: 'Create PR', value: 'create_pr', description: 'Commit, push, and create a pull request' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
     ],

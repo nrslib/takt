@@ -266,7 +266,17 @@ instruct:
 # ===== Retry Mode UI (takt list -> retry) =====
 retry:
   ui:
-    intro: "リトライモード - 追加指示を入力してください。コマンド: /go（指示書作成・実行）, /retry（前回の指示書で再実行）, /cancel（終了）"
+    intro: "リトライモード - 追加指示を入力してください。/go で更新内容を確認し、タスクにつむか編集を続けます。/cancel で終了します。"
+    resume: "前回のセッションを再開します"
+    noConversation: "まだ会話がありません。まず追加指示を入力してください。"
+    summarizeFailed: "指示書の作成に失敗しました。再度お試しください。"
+    continuePrompt: "続けて追加指示を入力してください。"
+    proposed: "更新されたタスク指示:"
+    actionPrompt: "どうしますか？"
+    actions:
+      saveTask: "タスクにつむ"
+      continue: "編集を続ける"
+    cancelled: "キャンセルしました"
   usePreviousWorkflowConfirm: "前回のワークフロー \"{workflow}\" を使用しますか？"
 
 orderRevision:

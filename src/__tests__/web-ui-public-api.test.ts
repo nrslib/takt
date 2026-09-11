@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  cancelTaskAction,
+  continueTaskAction,
   getSession,
   runTaskAction,
   sendChatMessage,
@@ -195,6 +197,27 @@ describe('Web UI public API response handling', () => {
     expect(body).not.toHaveProperty('startStep');
     expect(body).not.toHaveProperty('resumePoint');
     expect(body).not.toHaveProperty('restartPoint');
+  });
+
+  it('routes Retry review choices to their session endpoints', async () => {
+    await initializeSession();
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ status: 'continued' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ status: 'cancelled' }) });
+
+    await expect(continueTaskAction('session/1')).resolves.toEqual({ status: 'continued' });
+    await expect(cancelTaskAction('session/1')).resolves.toEqual({ status: 'cancelled' });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/chat/sessions/session%2F1/continue',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/chat/sessions/session%2F1/cancel',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
   it('preserves HTTP status for a chat request rejected before streaming', async () => {

@@ -1,7 +1,7 @@
 /**
  * Retry actions for failed tasks.
  *
- * Uses the existing worktree (clone) for conversation and direct re-execution.
+ * Uses the existing worktree (clone) for conversation and queue persistence.
  * The worktree is preserved after initial execution, so no clone creation is needed.
  */
 
@@ -13,7 +13,6 @@ import {
 import { loadWorkflowByIdentifier, resolveWorkflowConfigValue, getWorkflowDescription } from '../../../infra/config/index.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
-import { createLogger } from '../../../shared/utils/index.js';
 import type { WorkflowConfig, WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
 import { readRunMetaBySlug, type RunMeta } from '../../../core/workflow/run/run-meta.js';
 import {
@@ -34,7 +33,6 @@ import {
   resolveTaskOrderContent,
   type PersistedTaskOrderRevision,
 } from '../orderRevision.js';
-import { executeAndCompleteTask } from '../execute/taskExecution.js';
 import {
   appendRetryNote,
   buildAutoRequeueNote,
@@ -43,20 +41,17 @@ import {
   resolveSelectedWorkflowOverride,
   selectWorkflowWithOptionalReuse,
 } from './requeueHelpers.js';
-import { prepareTaskForExecution } from './prepareTaskForExecution.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
 import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
-import type { TaskExecutionOptions } from '../execute/types.js';
 import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
+import type { TaskExecutionOptions } from '../execute/types.js';
 import {
   selectTaskRetryStart,
   resolveTaskRetryStartOwnership,
   type TaskRetryStartSelection,
 } from './taskRetryStartSelection.js';
-
-const log = createLogger('list-tasks');
 
 interface FailedTaskRetrySelection {
   worktreePath: string;
@@ -371,10 +366,10 @@ export async function requeueFailedTask(
 /**
  * Retry a failed task.
  *
- * Runs the retry conversation in the existing worktree, then directly
- * re-executes the task there (auto-commit + push + status update).
+ * Runs the retry conversation in the existing worktree, then persists the
+ * revised order and returns the task to the queue without starting a worker.
  *
- * @returns true if task was re-executed successfully, false if cancelled or failed
+ * @returns true if the revised task was queued, false if cancelled
  */
 export async function retryFailedTask(
   task: TaskListItem,
@@ -431,7 +426,6 @@ export async function retryFailedTask(
       : task.data?.retry_note;
     let revision: PersistedTaskOrderRevision | undefined;
     const runner = new TaskRunner(projectDir);
-    let taskInfo: ReturnType<TaskRunner['startReExecution']> | undefined;
     try {
       assertReusableWorktreePath(projectDir, selection.worktreePath);
       if (retryResult.source === 'go') {
@@ -443,35 +437,19 @@ export async function retryFailedTask(
           retryResult.attachments,
         );
       }
-      const taskDir = revision?.taskDirRelative ?? task.taskDir;
       assertReusableWorktreePath(projectDir, selection.worktreePath);
-      if (retryResult.action === 'save_task') {
-        runner.requeueTask(
-          task.name,
-          ['failed'],
-          {
-            startStep: selection.startStep,
-            retryNote: executionRetryNote,
-            resumePoint: selection.selectedResumePoint,
-            workflow: selection.selectedWorkflowOverride,
-            taskDir,
-            sourceRunSlug: selection.matchedSlug ?? undefined,
-            restartPoint: selection.selectedRestartPoint,
-          },
-        );
-        info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
-        return true;
+      if (retryResult.action !== 'save_task') {
+        throw new Error('Retry must finish by queueing the revised task.');
       }
-      taskInfo = runner.startReExecution(
+      runner.requeueTask(
         task.name,
         ['failed'],
-        'retry',
         {
           startStep: selection.startStep,
           retryNote: executionRetryNote,
           resumePoint: selection.selectedResumePoint,
           workflow: selection.selectedWorkflowOverride,
-          taskDir,
+          taskDir: revision?.taskDirRelative ?? task.taskDir,
           sourceRunSlug: selection.matchedSlug ?? undefined,
           restartPoint: selection.selectedRestartPoint,
         },
@@ -480,19 +458,8 @@ export async function retryFailedTask(
       cleanupPersistedTaskOrderRevision(revision);
       throw error;
     }
-    if (taskInfo === undefined) {
-      throw new Error('Retry task execution did not produce task state.');
-    }
-    const taskForExecution = prepareTaskForExecution(taskInfo, selection.selectedWorkflow);
-
-    log.info('Starting re-execution of failed task', {
-      name: task.name,
-      worktreePath: selection.worktreePath,
-      startStep: selection.startStep,
-      restartPoint: selection.selectedRestartPoint,
-    });
-
-    return executeAndCompleteTask(taskForExecution, runner, projectDir, agentOverrides);
+    info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
+    return true;
   } finally {
     cleanupInteractiveResultAttachments(retryResult);
   }
