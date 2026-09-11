@@ -1,0 +1,136 @@
+# Expected transitions are fixed before either revision is evaluated.
+# Reports are concise reconstructions, not verbatim runtime replay.
+- id: log-required-smoke
+  origin: runtime-derived
+  source: "20260910-123610-implement-using-only-the-files-spbd50: iterations 17–18; JSONL 120/231 contains the old incomplete rule"
+  workflow: development-implement-dynamic
+  expected: { next: implement }
+  report: |
+    計画済みの4件を修正し、build、lint、対象テスト、全unit、light ITは正常終了した。
+    必須のE2E smokeだけが未実行。実行環境は利用でき、次にnpm run test:e2e:smokeを実行する。
+    受入条件、変更範囲、実装方法に不備は見つかっていない。実装変更は不要。
+- id: log-local-timing-investigation
+  origin: runtime-derived
+  source: "20260910-123610-implement-using-only-the-files-spbd50: iterations 7/14; JSONL 91/200/206–208"
+  workflow: development-remediation-dynamic
+  expected: { next: investigate }
+  report: |
+    7件の指摘と受入条件、修正範囲は確定。並行テスト失敗の原因だけ未確定。
+    読み取り工程ではテスト実行していない。次は同じfixtureと環境を固定し、worker数だけ変えて各条件を反復し失敗プロセスのログを採取する。
+    現環境で実行可能。調査結果が出るまで修正方法は確定しない。元の要求や範囲の変更は不要。
+- id: log-output-observation-gap
+  origin: runtime-derived
+  source: "20260910-123610-implement-using-only-the-files-spbd50: iterations 14/16/20; JSONL 200/301"
+  workflow: development-implement-dynamic
+  expected: { return: need_replan }
+  report: |
+    受入条件は選択前に実際のコンソールへ一覧が表示されること。
+    現計画はmockInfoの引数だけのassertionで完了としているが、LogManagerが実際の出力を抑止する経路を観測できない。
+    引数のテストは成功したが計画の検証方法では要求違反を検出できない。実出力を観測するよう計画変更が必要。
+- id: transfer-import-remaining
+  origin: held-out-domain
+  source: "New CSV import scenario, created after the facet edits; no source-run terminology"
+  workflow: development-implement
+  expected: { next: implement }
+  report: |
+    元要件はCSV取込で、空欄・引用符内改行・重複行をすべて処理すること。
+    計画は3状態を列挙し、行パーサーとストレージを順に変更する。空欄と改行は実装・検証済み。
+    重複行のキー比較と該当テストの追加は未着手。現在のAPIで実装できることをコードで確認した。
+    次の作業は計画どおりキー比較を実装して重複行の検証を実行すること。他の前提や範囲を変更する必要はない。
+- id: transfer-revoked-session-proof
+  origin: held-out-domain
+  source: "New session revocation scenario, created after the facet edits"
+  workflow: development-implement-team
+  expected: { next: implement }
+  report: |
+    要件はセッションの有効時と失効後に、同じブラウザーから注文操作がそれぞれ成功・拒否されること。
+    計画は両状態のブラウザー操作とHTTP応答を観測する。実装済みで、有効時の証跡は取得した。
+    失効後の操作はまだ実行していない。計画どおりローカルのブラウザーハーネスで今すぐ実行できる。
+    未実行の状態を完了とはしない。方式・境界・観測方法に不足はなく、その残りの確認を実行する。
+- id: transfer-binary-reproduction
+  origin: held-out-domain
+  source: "New binary codec scenario, created after the facet edits"
+  workflow: development-remediation
+  expected: { next: investigate }
+  report: |
+    採用指摘は圧縮後のデータに末尾1バイトが欠けること。要求と修正境界は既存codec内で確定している。
+    入力長の端数とストリーム終端のどちらが原因か、読み取りだけでは確定できなかった。
+    同じデータを固定しチャンク幅だけを変える比較を、ローカルの再現プログラムで実行できる。
+    計測は未実行。原因が分かるまで修正案は確定しない。全体の要件や修正範囲の変更を示す証拠はない。
+- id: transfer-layout-reproduction
+  origin: held-out-domain
+  source: "New document renderer scenario, created after the facet edits"
+  workflow: development-remediation-team
+  expected: { next: investigate }
+  report: |
+    採用された指摘は見出しが次ページの本文に重なること。対象は既存の帳票レイアウト関数。
+    フォント幅と改ページ境界のどちらに欠陥があるか未確認であり、修正方法はまだ決められない。
+    同じ文書とフォントを固定し余白だけを変え、出力PDFの座標を比較する再現を手元で実行できる。
+    計画工程で読み取っただけなので、この実行証拠を次に集める。要求や責務の変更は不要。
+- id: transfer-parser-reproduction
+  origin: held-out-domain
+  source: "New protocol parser scenario, created after the facet edits"
+  workflow: review-remediation
+  expected: { next: investigate }
+  report: |
+    指摘はパケット分割時にヘッダーを取り落とす不具合。原因はヘッダー長の計算かバッファの連結か未確定。
+    現在採用されている指摘と受入条件は変わらず、修正範囲は同じパーサーである。
+    同じパケット列を固定し分割位置だけを変える再現とログ採取を、既存テスト環境で実行できる。
+    読み取りで不足した原因の証拠を得る必要があり、修正計画はまだ確定していない。
+- id: control-complete-unrelated-failure
+  origin: control
+  source: "Guard against unnecessary continuation or replanning"
+  workflow: development-implement
+  expected: { next: COMPLETE }
+  report: |
+    画像変換の要件は回転後も縦横比を保つこと。実装と全必須検証は完了し、出力画像の寸法も一致した。
+    任意で実行した別機能のメール配信テストは失敗したが、変更前の同じ環境でも同じ失敗を再現した。
+    画像変換は配信機能に依存せず、今回による影響拡大・新規露出はない。全体テスト成功の要求はない。
+    残作業はこの無関係な既存失敗だけである。
+- id: control-no-change-verified
+  origin: control
+  source: "Guard against unnecessary work when existing behavior satisfies all obligations"
+  workflow: development-implement-team
+  expected: { next: COMPLETE }
+  report: |
+    要件は色コードの大文字と小文字を同じ値として扱うこと。既存コードが既に満たすため編集はなかった。
+    明示された大小混在・不正値・空値の検証と型検査を今回実行し、すべて正常終了した。
+    必須作業や未確認事項は残らず、成果物は確認結果の報告だけである。
+- id: control-observation-before-operation
+  origin: control
+  source: "Guard against accepting evidence that drops the required evaluation time"
+  workflow: development-implement
+  expected: { return: need_replan }
+  report: |
+    要件は下書きを公開する前に利用者が閲覧できないこと。現計画は公開操作の後のGET成功だけで完了とする。
+    その検証は成功したが、公開前に誤って取得できる実装を検出しないことが分かった。
+    未実行の検証が残るだけではなく、計画から公開前という必須状態と観測時点が欠けている。
+    公開前GETの拒否確認を計画に加える必要がある。ローカルのHTTP環境で検証できる。
+- id: control-remediation-global-boundary
+  origin: control
+  source: "Guard against local investigation when the task-wide boundary is invalid"
+  workflow: review-remediation
+  expected: { return: need_replan }
+  report: |
+    調査で、同じ予約が別ホストから同時作成されることを確認した。現修正計画はプロセス内Mapによる排他を前提にしている。
+    明示要件は複数ホストにまたがる重複拒否なので、局所修正では達成できない。原因は既に判明している。
+    共有データベースは利用でき、実現可能だが、タスク全体の保存境界と修正範囲の再計画が必要。
+- id: control-confirmed-plan
+  origin: control
+  source: "Guard against repeating investigation after sufficient evidence exists"
+  workflow: development-remediation-dynamic
+  expected: { next: fix }
+  report: |
+    全指摘の原因を現行コードと再現実験で確認し、別の原因候補を否定した。対象と実行条件は現在も同じ。
+    要求される全状態・操作・時点・出力を検証する修正方法、成立例、反例、影響経路が確定した。
+    未確認事項はなく、現行要求と範囲内で修正を実行できる。修正計画は確定した。
+- id: control-external-hardware
+  origin: control
+  source: "Guard against infinite local work or false completion at a confirmed external dependency"
+  workflow: development-implement-dynamic
+  expected: { next: ABORT }
+  report: |
+    明示要件は指定された実機プリンターによる出力確認まで必須とする。実装とプロジェクト内の全検証は完了した。
+    現環境にはその実機も接続権限もなく、管理者だけが現地で設置できることを確認した。
+    代替シミュレーターは成功したが必須実機確認の代わりにはならない。コード変更やローカル調査では解決できない。
+    残る操作は管理者が実機を設置し指定シナリオを実行することだけである。

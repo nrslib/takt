@@ -15,3 +15,6 @@ Meet these requirements:
 - If project-scoped changes or investigation cannot resolve the issue and only an external environment change or user action remains, state the evidence and the required external action
 - If the attempted approaches and confirmed constraints establish that the requirements are mutually unsatisfiable, state that evidence
 - Do not conclude that the issue is unresolvable merely because it is uncertain, uninvestigated, or tests cannot be run
+- If only mandatory checks remain unexecuted, retain the implementation method and carry those checks plus the location, target, and execution conditions of valid existing evidence into the next plan.
+
+{{include:instructions/preserve-acceptance-conditions}}

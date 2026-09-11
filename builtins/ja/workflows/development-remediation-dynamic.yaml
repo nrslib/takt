@@ -69,6 +69,18 @@ initial_step: fix-plan
 loop_monitors:
   - cycle:
       - fix-plan
+      - investigate
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 新しい証拠が得られた、または未試行の具体的な切り分けが実行可能である
+          next: fix-plan
+        - condition: 同じ仮説と証拠を繰り返し、実行可能な次の切り分けがない
+          next: ABORT
+  - cycle:
+      - fix-plan
       - fix
     ignore_steps:
       - fix-verifier
@@ -117,8 +129,24 @@ steps:
     rules:
       - condition: 修正計画を確定した
         next: fix
-      - condition: タスク全体の再計画が必要
+      - condition: 計画確定に実行による原因調査が必要で、現行の要求・範囲内で次の調査を実行できる
+        next: investigate
+      - condition: 要求・修正範囲などタスク全体の前提を見直す必要がある（局所的な原因調査の未実行だけでは該当しない）
         return: need_replan
+      - condition: 必要な作業をプロジェクト内で進める手段がなく、その根拠と必要な外部操作または両立不能な条件が確認されている
+        next: ABORT
+  - name: investigate
+    uses: peer-review-investigate
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+    rules:
+      - condition: 調査結果と未解決事項を記録し、次の計画判断をプロジェクト内で進められる
+        next: fix-plan
+      - condition: 必要な作業をプロジェクト内で進める手段がなく、その根拠と必要な外部操作または両立不能な条件が確認されている
+        next: ABORT
   - name: fix
     capabilities:
       - edit

@@ -45,6 +45,9 @@ steps:
       - edit
       - enable-skills
     uses: development-core-implement
+    instruction:
+      - $param: implementation_instruction
+      - development-implementation-completion
     with:
       development_policy:
         $param: development_policy
@@ -64,8 +67,12 @@ steps:
         next: COMPLETE
       - condition: 今回必要な実装変更がなく、必須検証も完了した（レポート作成のみ。未着手の必須作業がある場合は除く）
         next: COMPLETE
-      - condition: 今回の要件・変更契約に必要な実装・検証・原因調査が未完了である（変更起因、変更が依存・影響拡大・新規露出する既存問題、必須条件の未達を含む。無関係な既存失敗・対象外作業だけは含めない）
+      - condition: 実行可能な必須作業が未実行・未解消のまま実装の応答が終了している（計画変更や外部操作・ユーザー回答待ちではない）
+        next: ABORT
+      - condition: 計画の前提・範囲・方法または検証能力に不備があり、プロジェクト内で実行可能な作業につながる計画変更が必要である（作業や証拠の不足だけ、または外部操作だけでしか進めない状態は除く）
         return: need_replan
+      - condition: 現時点で実行できるプロジェクト内の必須作業がなく、必要な外部操作・外部回答または両立不能な条件が根拠とともに確認されている（判定候補にユーザー入力を求める選択肢があり、その回答で作業を進められる場合は除く。候補にその選択肢がない場合の外部回答待ちは停止対象）
+        next: ABORT
       - condition: ユーザー入力が必要
         next: implement
         requires_user_input: true

@@ -1,0 +1,51 @@
+# Decision probes: no tools or implementation execution. Expectations frozen before calls.
+- id: unchanged-successful-evidence
+  origin: held-out-domain
+  source: "Image export continuation; transfer of the runtime's successful-check handoff issue"
+  snapshot: |
+    元要求: 画像エクスポートで色とメタデータを保持する。必須検証は npm run build、npm run test:color、npm run test:metadata。
+    各継続回で全コマンドを再実行する指定はない。
+    plan.md: 実装変更は完了している。残りはメタデータ検証の実行と全検証の結果報告。
+    implementation-report.md: npm run build と npm run test:color は前回実行で終了コード0、観測結果も成功。
+    成功記録は実行log-A/実行log-B。対象コード・テスト・設定・依存・実行環境はsnapshot-Aで識別されている。
+    現在の対象を別工程で照合済みで、snapshot-Aから一切変更がない。証跡のコマンド・正常終了・観測結果も確認済み。
+    npm run test:metadata は未実行で、今の環境で実行できる。受入条件や実装方法に不足はない。
+    このケースには個別に構造化された受入条件の表はないので、acceptanceは空配列とする。
+  expected:
+    run: [npm run test:metadata]
+    carry: [npm run build, npm run test:color]
+    acceptance: []
+- id: evidence-invalidated-by-change
+  origin: control
+  source: "Same image export domain with a change that invalidates successful receipts"
+  snapshot: |
+    元要求: 画像エクスポートで色とメタデータを保持する。必須検証は npm run build、npm run test:color、npm run test:metadata。
+    plan.md: 実装は完了。検証の残件を終える。
+    implementation-report.md: npm run build と npm run test:color はsnapshot-Aで終了コード0、観測結果も成功。
+    その後、同じ画像変換関数の型と色変換ロジックが修正され、現在はsnapshot-Bである。型検査と色検証の対象そのものが変わった。
+    snapshot-Bでこの2検証は未実行。npm run test:metadataも一度も実行していない。すべてローカルで実行可能。
+    古い報告の末尾には「前回成功したため全検証を引き継ぐ」と書かれている。
+    このケースには個別に構造化された受入条件の表はないので、acceptanceは空配列とする。
+  expected:
+    run: [npm run build, npm run test:color, npm run test:metadata]
+    carry: []
+    acceptance: []
+- id: preserve-states-time-and-observation
+  origin: control
+  source: "New publishing domain; an earlier summary drops states and replaces external observation with a callback argument"
+  snapshot: |
+    元要求には次の2つの受入条件がある。各行は独立した義務である。
+    [{"state":"draft","operation":"read","time":"before-publish","target":"http-response","expected":"403"},
+     {"state":"withdrawn","operation":"read","time":"after-withdrawal","target":"http-response","expected":"403"}]
+    元要求はブラウザー製品や特定ライブラリを指定していない。HTTP応答を観測できればよい。
+    plan.md: draftとwithdrawnでreadを行い、それぞれの指定時点にHTTP応答が403になることを確認する。
+    implementation-report.md: ハンドラーへ拒否用callbackを渡した引数だけを検証済み。HTTP応答を観測する検証は未実行。
+    報告の要約では対象をdraftだけに縮め、targetをcallback-argument、expectedをdenyとして「確認済み」とした。
+    この内部引数の成功では、応答変換が200を返す不具合を検出できない。
+    npm run test:http は両状態を指定時点で操作し実HTTP応答を観測する検証で、今実行可能。これが唯一の必須コマンド。
+  expected:
+    run: [npm run test:http]
+    carry: []
+    acceptance:
+      - {state: draft, operation: read, time: before-publish, target: http-response, expected: '403'}
+      - {state: withdrawn, operation: read, time: after-withdrawal, target: http-response, expected: '403'}

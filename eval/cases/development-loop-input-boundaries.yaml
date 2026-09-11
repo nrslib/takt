@@ -1,0 +1,33 @@
+# Fixed before the CodeRabbit follow-up comparison. The paired reports are identical;
+# only the runtime's interactive candidate availability changes.
+- id: control-answer-unblocks-interactive
+  origin: control
+  source: "New report-export target selection; interactive answer can unblock local implementation"
+  workflow: development-implement
+  interactive: true
+  expected: { next: implement, requires_user_input: true }
+  report: &target-selection |
+    要件は帳票を既存の2つの出力先のうち依頼者が選んだ方へ保存し、保存結果を検証すること。
+    両方の実装経路とローカル検証環境は利用できるが、依頼者の選択がまだない。
+    根拠なく一方を決めることは禁止されている。コード変更、原因調査、計画の書き直しだけでは依頼者の希望を決められない。
+    現在進められる実装作業はなく、次に必要な外部判断は依頼者が出力先を回答することだけ。
+    その回答を受け取れば計画済みの設定と検証を実行できる。権限付与や設備の準備は不要。
+- id: control-answer-unblocks-headless
+  origin: control
+  source: "Same target-selection facts without an available interactive user-input candidate"
+  workflow: development-implement
+  interactive: false
+  expected: { next: ABORT }
+  report: *target-selection
+- id: control-external-verification-capability
+  origin: control
+  source: "New external verification permission blocker; a user answer cannot grant the missing capability"
+  workflow: development-implement-team
+  interactive: true
+  expected: { next: ABORT }
+  report: |
+    必須条件は外部の検証環境へ実際に接続できること。ローカル実装と全ローカルテストは完了した。
+    検証能力に不備があり、検証環境側の接続権限がないことを管理記録で確認した。
+    権限変更は別の管理者が外部の管理画面で行う必要がある。ユーザーから回答を受けるだけでは権限は付与されない。
+    プロジェクト内の実装修正、調査、計画変更では解消できず、代替検証で明示条件を免除することもできない。
+    残作業は管理者による外部の権限変更だけであり、今すぐ実行できるプロジェクト内作業はない。

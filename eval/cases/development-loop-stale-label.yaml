@@ -1,0 +1,13 @@
+- id: control-stale-replan-label
+  origin: control
+  source: "Runtime-derived adversarial summary: iteration 7 fix-plan's task-wide replan label despite only unexecuted local investigation"
+  workflow: development-remediation-dynamic
+  expected: { next: investigate }
+  report: |
+    # 修正計画
+    ## 結果: タスク全体の再計画が必要
+    裁定された7件の修正境界と実在経路を整理した。1件の予約状態の確認不足をコードで確認したが、
+    条件を固定した反復による競合原因の検証記録がなく、修正方法の最終確定を留保する。
+    他の修正対象を追加・除外する理由はない。本工程ではソース編集・テスト実行を行っていない。
+    必要なのは同じ入力・環境で並行度だけを変えた比較、反復と失敗プロセスのログ採取であり、手元で実行できる。
+    元の要求・タスク全体の修正範囲を見直す必要がある証拠はない。原因調査が未実行なので、結果欄では再計画とした。

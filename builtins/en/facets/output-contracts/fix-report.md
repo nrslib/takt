@@ -12,7 +12,7 @@
 ## Completion Checks
 | Repair Unit | Condition | Path or State Checked | Violation-Detection Method | Result | Evidence |
 |-------------|-----------|-----------------------|----------------------------|--------|----------|
-| {Name from the plan} | {Acceptance criterion or existing condition to preserve} | {Actual path or state} | {Failure example, boundary case, search, or code tracing} | {Satisfied / Violated / Unverified} | {file:line, test, or reproduction result} |
+| {Name from the plan} | {Source-required states, operation, evaluation time, observation target, and expected result} | {Actual path or state} | {Failure example, boundary case, search, or code tracing} | {Satisfied / Violated / Unverified} | {file:line, test, or reproduction result} |
 
 ## Evidence Revised After Rejection
 | Repair Unit | Reported Gap | Reassessment with Evidence and Counterevidence | Required Repair or Basis for Confirmation Only | Scope Rechecked with the Same Method |

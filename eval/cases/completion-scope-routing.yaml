@@ -1,6 +1,10 @@
+# Current completion contract: executable mandatory work must finish within the
+# invocation. Unexpectedly unfinished responses stop; historical self-loop
+# expectations and model responses remain frozen in their saved manifests.
 - description: "既存lint: 無関係な失敗だけでは完了を阻まない"
   vars:
-    expected_rule: 1
+    expected_transition:
+      next: COMPLETE
     report: |
       タスク: 日付表示を短縮する。必須検証は表示関数の単体テストと型検査。
       実装と必須検証は完了し、指定の表示と既存の空値処理を直接検証して成功した。
@@ -10,7 +14,8 @@
       品質ゲート: 型検査成功、対象テスト成功、全体lint失敗。未確認範囲: なし。
 - description: "同一ファイル: 無関係な既存エラーを近接性で必須化しない"
   vars:
-    expected_rule: 1
+    expected_transition:
+      next: COMPLETE
     report: |
       タスク: formatDateの出力を変更する。実装・必須テスト・型検査は完了した。
       同じファイルの別関数formatCurrencyにlintエラーがあり、変更前でも同じ失敗を再現した。
@@ -18,7 +23,8 @@
       全体lint成功は要求されていない。品質ゲート: lint失敗。既存問題の修正は未実施。
 - description: "対象外依存: 使わないモック基盤の失敗で差し戻さない"
   vars:
-    expected_rule: 1
+    expected_transition:
+      next: COMPLETE
     report: |
       タスク: アプリ内モックの本人変更APIを実装する。別プロセスのモックサーバーは明示的に対象外。
       アプリ内モックでログイン→本人変更→同じトークンの業務APIを直接実行し成功した。
@@ -27,7 +33,8 @@
       品質ゲート: モックサーバーテスト失敗。依存インストールは未実施。
 - description: "既存非終了: 対象契約を検証済みなら無関係なhandle調査を強制しない"
   vars:
-    expected_rule: 1
+    expected_transition:
+      next: COMPLETE
     report: |
       タスク: 集計関数の丸め処理を修正する。必須対象テストと型検査は正常終了し成功した。
       任意の全体テストでは全assertion成功後に終了せず、手動停止して終了コード130となった。
@@ -36,7 +43,8 @@
       全体テストの正常終了自体は今回の受入条件ではない。全体実行を成功扱いにはしない。
 - description: "任意手動確認: 必須検証済みの追加シナリオを義務化しない"
   vars:
-    expected_rule: 1
+    expected_transition:
+      next: COMPLETE
     report: |
       タスク: CSV出力の日付形式を変更し、出力ファイルの統合テストで検証する。
       本番出力関数から生成したファイルを読み、要求された日付を確認する必須テストが成功した。型検査も成功。
@@ -45,7 +53,8 @@
       未確認範囲として手動確認を記録する。他に必要な実装・検証はない。
 - description: "必須未実行: スコープ除外で検証義務を免除しない"
   vars:
-    expected_rule: 3
+    expected_transition:
+      next: ABORT
     report: |
       タスク: 無効トークンを401で拒否し、対象テストを完了前に実行すること。
       実装は完了したと報告されているが、対象テストは未実行。実行権限と環境はある。
@@ -53,7 +62,8 @@
       実装担当は「既存問題を除外すれば完了」としたが、必須テストの実行証拠はない。
 - description: "新規回帰: 既存失敗と混在しても変更起因の不具合を落とさない"
   vars:
-    expected_rule: 3
+    expected_transition:
+      next: ABORT
     report: |
       タスク: 本人変更後も同一トークンを有効とする。
       無関係な既存lintエラー43件は変更前でも同じだった。
@@ -61,7 +71,8 @@
       この失敗は今回の認証世代更新が原因と確認済み。修正は未完了。
 - description: "既存依存: 今回の要件を満たせない既存問題は残件にする"
   vars:
-    expected_rule: 3
+    expected_transition:
+      next: ABORT
     report: |
       タスク: 新しい入力経路を既存validatorへ接続し、不正な入力を拒否する。
       validatorは変更前から不正な入力を受け付ける。今回の入口も同じvalidatorに依存する。
@@ -69,14 +80,16 @@
       実装担当はvalidatorを編集していないので対象外と報告したが、要件は未達である。
 - description: "明示ゲート: 全体成功の要求がある場合は既存失敗も免除しない"
   vars:
-    expected_rule: 3
+    expected_transition:
+      next: ABORT
     report: |
       タスク: CIのlint失敗を全件修正し、全体lintが成功することを受入条件とする。
       今回変更した関数のlintは成功したが、変更前からの別ファイルのエラーが残り全体lintは失敗。
       未修正のエラーもユーザーが明示した全件修正の対象である。
 - description: "未分類: 原因不明の失敗を既存と決めつけない"
   vars:
-    expected_rule: 3
+    expected_transition:
+      next: ABORT
     report: |
       タスク: 取得処理を修正し、正常終了と後片付けを必須テストで確認する。
       全体テストが終了せず停止した。変更前との比較はなく、停止原因も不明。
@@ -85,7 +98,8 @@
 - description: "再計画対象外: 任意の未試行作業があっても独立レビューへ進む"
   vars:
     workflow: development-core
-    expected_rule: 2
+    expected_transition:
+      next: peer-review
     report: |
       現行実装は元の要求・受入条件を満たし、必須の対象テストと型検査が成功した。
       差し戻し理由は全体lintの既存エラーのみ。変更前にも同一の失敗があり、今回の変更への依存・影響はない。
@@ -94,7 +108,8 @@
 - description: "再計画必要: 変更契約の未検証経路を具体化したら実装へ戻す"
   vars:
     workflow: development-core
-    expected_rule: 1
+    expected_transition:
+      next: ABORT
     report: |
       要件はログアウト後に同じ画面から業務操作へ進めないこと。
       Store単体テストは成功したが、画面側が古い認証値を保持する具体的な経路が見つかった。
@@ -103,7 +118,8 @@
 - description: "外部必須: 明示された端末検証を対象外にしない"
   vars:
     workflow: development-core
-    expected_rule: 3
+    expected_transition:
+      next: ABORT
     report: |
       元要件は特定の実機での検証完了を明示的に必須としている。
       実装とプロジェクト内の必須検証は完了した。代替検証でも問題はないが、実機検証は未実施。
@@ -111,7 +127,8 @@
       残作業は所有者が実機で指定シナリオを実行することだけである。
 - description: "未完了ラベル: 無関係な既存失敗を根拠とする自己判定を引き継がない"
   vars:
-    expected_rule: 1
+    expected_transition:
+      next: COMPLETE
     report: |
       # 実装完了証跡
       元要件: 日付表示を短縮する。表示関数の単体テストと型検査を実行する。
@@ -131,7 +148,8 @@
 - description: "再計画ラベル: 要求と無関係な修正計画だけで実装へ戻さない"
   vars:
     workflow: development-core
-    expected_rule: 2
+    expected_transition:
+      next: peer-review
     report: |
       # 再計画
       元要件は表示形式の変更と、その対象テスト・型検査。現行実装とこれらの検証は全て完了した。
@@ -145,9 +163,54 @@
       プロジェクト内で実行可能な未試行の変更と検証手順を具体化した。実装へ戻る。
 - description: "変更不要: 既存実装が要求を満たし必須検証も済んだ場合はレポートのみで完了する"
   vars:
-    expected_rule: 2
+    expected_transition:
+      next: COMPLETE
     report: |
       タスク: 正規化関数が前後空白を除去することを保証し、対象テストと型検査を実行する。
       現行実装が既に要求を満たしていることを確認したため、今回コード変更は行っていない。
       必須の対象テストと型検査を今回実行し、正常終了・成功した。未実施の必須作業はない。
       成果物は確認結果のレポートだけである。
+
+- description: "実ログ由来: E2E smokeだけ未実行なら有効な計画で継続"
+  vars:
+    expected_transition:
+      next: ABORT
+    report: |
+      計画済みの4件を修正し、build、lint、対象テスト、全unit、light ITは正常終了した。
+      必須のE2E smokeだけが未実行。実行環境は利用でき、次にnpm run test:e2e:smokeを実行する。
+      受入条件、変更範囲、実装方法に不備は見つかっていない。実装変更は不要。
+- description: "検証能力の欠陥: 外部出力を内部引数だけで代用する計画は見直す"
+  vars:
+    expected_transition:
+      return: need_replan
+    report: |
+      受入条件は選択前に実際のコンソールへ一覧が表示されること。
+      現計画はmockInfoの引数だけのassertionで完了としているが、LogManagerが実際の出力を抑止する経路を観測できない。
+      引数のテストは成功したが計画の検証方法では要求違反を検出できない。実出力を観測するよう計画変更が必要。
+- description: "局所調査: readonlyで反復実験できないだけなら全体再計画しない"
+  vars:
+    workflow: development-remediation-dynamic
+    expected_transition:
+      next: investigate
+    report: |
+      7件の指摘と受入条件、修正範囲は確定。並行テスト失敗の原因だけ未確定。
+      読み取り工程ではテスト実行していない。次は同じfixtureと環境を固定し、worker数だけ変えて各条件を反復し失敗プロセスのログを採取する。
+      現環境で実行可能。調査結果が出るまで修正方法は確定しない。元の要求や範囲の変更は不要。
+- description: "全体前提の欠陥: 原因調査が済んでも要求範囲の見直しが必要"
+  vars:
+    workflow: development-remediation-dynamic
+    expected_transition:
+      return: need_replan
+    report: |
+      原因調査は完了した。局所ロックの修正計画は単一プロセス所有を前提としていたが、明示要件は複数ホスト間の排他である。
+      指摘への局所修正では達成できず、タスク全体の共有永続化境界と実装範囲を再計画する必要がある。
+      実現可能な共有ストレージは提供されており、要件自体は両立可能。
+- description: "調査完了: 証拠が揃った修正計画を追加調査へ戻さない"
+  vars:
+    workflow: development-remediation-dynamic
+    expected_transition:
+      next: fix
+    report: |
+      全指摘の原因を現在のコードと反復実験で確認し、代替原因を否定した。対象コード・実行条件は現在も同一。
+      受入条件の全状態・操作・観測対象を保持した修正方法、成立例、反例、影響経路、依存順が確定した。
+      未確認事項なし。現行要求・範囲内で修正を実行できる。

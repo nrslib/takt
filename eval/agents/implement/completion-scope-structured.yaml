@@ -3,10 +3,10 @@ prompts:
   - file://../../completion-routing-prompt.mjs
 providers:
   - id: openai:codex-sdk
-    label: codex-astra-medium-structured
+    label: codex-astra-xhigh-structured
     config:
       model: gpt-6-astra
-      model_reasoning_effort: medium
+      model_reasoning_effort: xhigh
       working_dir: ../../fixtures/remediation-evidence
       sandbox_mode: read-only
       approval_policy: never
@@ -17,7 +17,7 @@ providers:
           step:
             type: integer
             minimum: 1
-            maximum: 3
+            maximum: 6
           reason:
             type: string
         required:
@@ -35,8 +35,7 @@ defaultTest:
     judgment_mode: structured
   assert:
     - type: javascript
-      value: |-
-        const result = JSON.parse(output);
-        const pass = result.step === Number(context.vars.expected_rule) && typeof result.reason === 'string' && result.reason.trim().length > 0;
-        return { pass, score: pass ? 1 : 0, reason: `Expected rule ${context.vars.expected_rule}; got ${result.step}: ${result.reason}` };
-tests: file://../../cases/completion-scope-routing.yaml
+      value: file://../../asserts/completion-routing.mjs
+tests:
+  - file://../../cases/completion-scope-routing.yaml
+  - file://../../completion-input-request-cases.mjs

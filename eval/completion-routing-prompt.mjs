@@ -12,10 +12,14 @@ const workflows = new Set([
   'development-implement-dynamic',
   'development-implement-team',
   'development-core',
+  'development-remediation',
+  'development-remediation-dynamic',
+  'development-remediation-team',
+  'review-remediation',
 ]);
 
 // Evaluate shipped Phase 3 rules with fixed reports, without running implementation tools.
-export default function buildCompletionRoutingPrompt({ vars }) {
+export function loadCompletionRoutingStep(vars) {
   if (!['ja', 'en'].includes(vars.language)) throw new Error(`Unknown language: ${vars.language}`);
   if (!workflows.has(vars.workflow)) throw new Error(`Unknown workflow: ${vars.workflow}`);
   const relativePath = `builtins/${vars.language}/workflows/${vars.workflow}.yaml`;
@@ -26,16 +30,24 @@ export default function buildCompletionRoutingPrompt({ vars }) {
     ? readFileSync(join(repoRoot, relativePath), 'utf8')
     : execFileSync('git', ['show', `${vars.baseline_revision}:${relativePath}`], { cwd: repoRoot, encoding: 'utf8' });
   const definition = parse(body);
-  const stepName = vars.workflow === 'development-core' ? 'replan' : 'implement';
+  const stepName = vars.workflow === 'development-core'
+    ? 'replan'
+    : vars.workflow.includes('remediation') ? 'fix-plan' : 'implement';
   const step = definition.steps.find(candidate => candidate.name === stepName);
   if (!step) throw new Error(`Missing step: ${stepName}`);
+  return step;
+}
+
+export default function buildCompletionRoutingPrompt({ vars }) {
+  const step = loadCompletionRoutingStep(vars);
   const rules = step.rules.map(rule => ({
     condition: parseWorkflowRuleCondition(rule.condition),
     interactiveOnly: rule.interactive_only,
     appendix: rule.appendix,
   }));
-  return new StatusJudgmentBuilder({ name: stepName, rules }, {
+  return new StatusJudgmentBuilder({ name: step.name, rules }, {
     language: vars.language,
+    interactive: vars.interactive === true,
     structuredOutput: vars.judgment_mode === 'structured',
     inputSource: 'report',
     reportContent: vars.report,

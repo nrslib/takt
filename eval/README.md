@@ -526,3 +526,155 @@ eval/
   promptfoo-friendly (assert the emitted `[STEP:N]` tag).
 - Language note: eval prompts are always exported in Japanese. English prompt
   variants are not generated for the same eval case.
+
+### Development loop handoffs
+
+The automatic implementation self-loop has been withdrawn. The fixed
+`development-loop-handoffs.yaml` cases and saved Phase 3 comparisons below retain
+their historical continuation expectations; they are not the acceptance criteria
+for the current completion design. Do not relabel those old responses as a new
+model evaluation after changing their expected destinations.
+
+The current action evaluation runs real tools in isolated fixture projects. One
+case separates an explicit required check from a narrower general gate; the other
+has executable verification left after implementation, without that gate conflict.
+The implementation instruction is resolved from the chosen builtins. The first
+case also transfers the chosen revision's project smoke-gate condition to a
+fixture artifact check. Expectations, fixture files, and prompts are frozen before
+each revision runs. Evaluate the baseline before preparing and running a candidate:
+
+```bash
+node eval/scripts/development-implementation-actions.mjs --prepare fc5eb2320ff0c8ddc34a45a47d86145f66aa2e68 .tmp/implementation-actions-before
+node eval/scripts/development-implementation-actions.mjs --run fc5eb2320ff0c8ddc34a45a47d86145f66aa2e68 .tmp/implementation-actions-before
+node eval/scripts/development-implementation-actions.mjs --prepare candidate .tmp/implementation-actions-after
+node eval/scripts/development-implementation-actions.mjs --run candidate .tmp/implementation-actions-after
+```
+
+This is a paid Claude/Codex/Kimi evaluation with local editing and command tools.
+The saved project contains the implementation, verification receipts, and actual
+output artifact. `provider-events.jsonl` retains tool invocations and results;
+the scorer requires the expected npm commands and their tool-result output as
+well as artifacts and unchanged check scripts. Command matching accepts only
+the fixture's fixed npm invocations, sequential separators, limited diagnostics,
+and literal script-name loops; unsupported shell syntax is unverified. Kimi's
+saved tool events omit individual exit codes. Its score combines command and
+success-output evidence with the unchanged checker and artifacts, and records
+`exit_code_unavailable`; it does not assert a directly observed zero exit code.
+Codex non-JSON diagnostic lines are skipped and counted in `execution.unparsedLines`;
+Claude and Kimi retain strict JSONL parsing. Missing or non-string command output
+does not provide success evidence. Preparation requires a string smoke gate with
+the expected condition wording and reports an explicit error if it is absent.
+Saved completed calls are reused. On restart, an incomplete sample directory is
+preserved under `<sample>.interrupted-*/sample` before a fresh sample is created;
+its diagnostics, tool events, project copy, and original workspace reference are
+retained. Kimi prompt mode runs tools automatically and must not be
+combined with `--yolo` or `--auto`. It uses an empty skills directory and resolves
+`kimi` through PATH, or the executable set by `TAKT_EVAL_KIMI_BIN`. Codex uses
+`workspace-write` with network tools disabled and inherited skills disabled;
+Claude uses the explicit local tool list with `dontAsk`. All fixture projects
+are outside the repository. The fixture checks are small local checks, not the
+repository's full build or test gates. Japanese instructions are used for these
+two action cases. See the [evaluation record](results/development-loop-handoffs.md)
+for outcomes and the boundary between measured behavior and historical evidence.
+
+The historical standalone comparison calls Claude Opus 5, Codex Astra at `xhigh`, and the
+Kimi Code CLI's configured `kimi-code/k3` alias. All three CLIs must be installed
+and authenticated. This is an explicit, paid model evaluation, outside the default
+suite run.
+
+```bash
+npm run build
+node --test eval/asserts/development-loop-eval.test.mjs
+node eval/scripts/development-loop-eval.mjs fef072115677cc1b99e6416b05944ebdf8af0c53 .tmp/development-loop-comparison
+node eval/scripts/development-loop-eval.mjs fef072115677cc1b99e6416b05944ebdf8af0c53 .tmp/development-loop-stale-label eval/cases/development-loop-stale-label.yaml
+node eval/scripts/development-handoff-eval.mjs fef072115677cc1b99e6416b05944ebdf8af0c53 .tmp/development-handoff-comparison
+node eval/scripts/development-handoff-eval.mjs --audit-content .tmp/development-handoff-comparison
+```
+
+The first command compares actual `next` / `return` values resolved from each
+revision's YAML after a model selects a Phase 3 tag. The same tag number can name
+different transitions in the two revisions. Tag selection uses the production
+`detectCandidateIndex` parser, including its handling of explanatory text and the
+last matching tag. Runtime-derived summaries, new
+cross-domain cases, and precision controls are identified in the case file;
+source-run metadata is not sent to models. The reports are fixed Japanese text
+under both Japanese and English judgment instructions.
+
+The optional case-file argument selects a supplemental fixed case, such as the
+stale replanning label above, without changing the main case set.
+
+The handoff comparison loads the resolved implementation instruction with the
+production workflow loader. Its fixed snapshots ask which checks to execute,
+which successful evidence to carry forward, and which acceptance criteria to
+retain. This measures decisions under the instruction text. It does not run
+implementation tools, test generated changes, or reproduce the full Phase 1
+persona, policy, knowledge, session history, or runtime environment. Its snapshots
+and output adapter are held constant across revisions. The evaluation adapter is
+English and the fixed snapshots are Japanese for both instruction languages.
+The separate `--audit-content` command reads existing responses only. It checks a
+single JSON code block against the same expectations even when explanatory prose
+follows it, and records those content results in `content-audit.json`. It retains
+the initial format-sensitive scores; multiple JSON blocks remain ambiguous.
+
+Both scripts freeze prompts and expectations in `manifest.json` before calling
+models, finish all baseline calls before candidate calls, and save each result
+separately. Reusing an output directory resumes completed identical inputs;
+saved responses are rescored without model calls and the latest scores are saved
+in `scored-results.json`. The original per-call responses and initial scores are
+retained. Changed inputs require a new directory. Provider errors stop the comparison and
+are retained, with raw diagnostics in private files. Preserve those errors and
+use a new directory for a retry. Do not publish the private diagnostics. Each
+case is sampled once per model, revision, and language; these results do not
+estimate stochastic error rates or end-to-end completion time.
+
+The auxiliary `completion-scope-routing` and `completion-scope-structured` suites
+also compare fixed `expected_transition` values through the shared
+`asserts/completion-routing.mjs` scorer. Tag and structured candidate numbers are
+resolved against the workflow's noninteractive semantic candidates before
+comparing `next` or `return`. Their active cases now expect ABORT for an
+unexpectedly unfinished implementation response, reflecting the removal of the
+self-loop; this expectation change is not a new live-model measurement.
+
+The structured suite also loads `completion-input-request-cases.mjs`, which
+reuses the fixed interactive input-request case from
+`cases/development-loop-input-boundaries.yaml`. Its provider JSON Schema accepts
+candidate 6; the shared scorer still rejects that candidate in headless mode.
+The local contract validates the actual provider schema before scoring. The
+focused Codex SDK check and its saved schema responses are documented in
+[the evaluation record](results/development-loop-handoffs.md#構造化providerの入力要求候補).
+
+Fixed cases can set `interactive: true` to include the production user-input
+candidate. The prompt builder and scorer use the same mode; the expected
+transition includes `requires_user_input: true` when an answer is requested.
+`cases/development-loop-input-boundaries.yaml` pairs identical target-selection
+reports with and without this candidate and adds an external verification
+permission control. Compare the pre-review PR head with the current candidate:
+
+```bash
+node eval/scripts/development-loop-eval.mjs e0407b6a719faaff79dbb1cb605e6ce86b136f16 .tmp/development-loop-input-boundaries eval/cases/development-loop-input-boundaries.yaml
+```
+
+To rescore fully saved Phase 3 responses after a composition refactor changes
+the manifest's raw step metadata, use the frozen manifest explicitly. This
+command checks that every response exists before rescoring and makes no model
+calls. It does not establish that current prompts still match the saved prompts;
+that requires a separate comparison before reusing the evidence.
+
+```bash
+node --input-type=module <<'JS'
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { providers, runComparison } from './eval/scripts/development-loop-eval.mjs';
+import { scoreTransition } from './eval/asserts/completion-routing.mjs';
+for (const directory of ['.tmp/development-loop-comparison', '.tmp/development-loop-stale-label']) {
+  const manifest = JSON.parse(readFileSync(`${directory}/manifest.json`, 'utf8'));
+  assert.deepEqual(manifest.providers, providers);
+  for (const provider of providers) {
+    for (const sample of manifest.samples) {
+      assert.ok(existsSync(`${directory}/${provider.cli}-${sample.revision}-${sample.language}-${sample.id}.json`));
+    }
+  }
+  await runComparison(manifest, directory, (output, sample) => scoreTransition(output, sample.step, sample.expected));
+}
+JS
+```

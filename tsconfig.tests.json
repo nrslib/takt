@@ -47,6 +47,7 @@
     "src/__tests__/conversationSession.test.ts",
     "src/__tests__/copilot-client.test.ts",
     "src/__tests__/cursor-client.test.ts",
+    "src/__tests__/development-loop-routing.integration.test.ts",
     "src/__tests__/e2e-terminal-output.test.ts",
     "src/__tests__/engine-capabilities-provider-options.test.ts",
     "src/__tests__/engine-team-leader.test.ts",

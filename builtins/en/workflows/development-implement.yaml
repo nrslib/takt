@@ -45,6 +45,9 @@ steps:
       - edit
       - enable-skills
     uses: development-core-implement
+    instruction:
+      - $param: implementation_instruction
+      - development-implementation-completion
     with:
       development_policy:
         $param: development_policy
@@ -61,8 +64,12 @@ steps:
         next: COMPLETE
       - condition: No implementation change is needed for this task and mandatory verification is complete (report-only work; excludes any required work that has not been performed)
         next: COMPLETE
-      - condition: Implementation, verification, or investigation required by this task or its changed contracts remains incomplete (includes regressions, pre-existing problems the change depends on, amplifies, or newly exposes, and unmet mandatory conditions; excludes unrelated pre-existing failures and out-of-scope work alone)
+      - condition: The implementation response ended with executable mandatory work still unexecuted or unresolved, without requiring a plan change, external action, or user answer
+        next: ABORT
+      - condition: The plan premises, scope, method, or verification capability are defective and require a plan change that enables executable project-local work (excludes unfinished work or missing evidence alone, and states that can only be unblocked by external action)
         return: need_replan
+      - condition: No required project-local action can be executed now, with evidence identifying the necessary external action, external answer, or incompatible requirements (exclude a case unblocked by an answer only when the available judgment candidates include a user-input option; waiting for an external answer without that option requires stopping)
+        next: ABORT
       - condition: User input is required
         next: implement
         requires_user_input: true
