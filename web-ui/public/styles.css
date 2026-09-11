@@ -2479,12 +2479,18 @@ body[data-inspector-resizing="true"] * {
   text-transform: uppercase;
 }
 
-.chat-entry p,
-.chat-entry pre {
+.chat-entry > p,
+.chat-entry > pre {
   margin: 0;
 }
 
-.chat-entry pre {
+.chat-entry-user > p,
+.chat-entry-system > p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-entry > pre {
   font-family: var(--font-mono);
   font-size: 12px;
   white-space: pre-wrap;

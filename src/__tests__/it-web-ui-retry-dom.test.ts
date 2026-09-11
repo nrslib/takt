@@ -293,6 +293,31 @@ function streamResponse(reply: unknown) {
   };
 }
 
+const assistantMarkdown = [
+  '# 見出し',
+  '',
+  '- 箇条書き',
+  '- 二つ目',
+  '',
+  '1. 番号付き',
+  '2. 二つ目',
+  '',
+  '**太字** と `インライン` と [リンク](https://example.com)',
+  '続き',
+  '',
+  '```js',
+  'const value = 1;',
+  '```',
+].join('\n');
+
+const fencedCodeCases = [
+  ['言語名付き', '```js\n# 見出し\n- 項目\n**太字**\n```'],
+  ['言語名なし', '```\n# 見出し\n- 項目\n**太字**\n```'],
+  ['閉じられていない', '```\n# 見出し\n- 項目\n**太字**'],
+] as const;
+
+const literalMessage = '# 通知\n**原文**\n- 項目\n次の行';
+
 function createDocument() {
   const document = new FakeDocument();
   const selectors = [
@@ -376,6 +401,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
   let failNextQueueRequest = false;
   let continueRequestGate: Promise<void> | undefined;
   let cancelRequestGate: Promise<void> | undefined;
+  let nextAssistantReply = assistantMarkdown;
   const task = {
     projectId: 'project-1',
     taskId: 'task-1',
@@ -403,6 +429,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     failNextQueueRequest = false;
     continueRequestGate = undefined;
     cancelRequestGate = undefined;
+    nextAssistantReply = assistantMarkdown;
     document = createDocument();
     const window = {
       addEventListener: vi.fn(),
@@ -450,6 +477,12 @@ describe('Web UI Retry 本番 DOM 経路', () => {
         if (body.text === '/retry' || body.text === '/replay') {
           return streamResponse({ kind: 'assistant_response', content: `${body.text} handled in chat` });
         }
+        if (body.text === '/system') {
+          return streamResponse({ kind: 'error', message: literalMessage });
+        }
+        if (body.text === '/markdown' || body.text === '/code' || body.text === '/inline-code') {
+          return streamResponse({ kind: 'assistant_response', content: nextAssistantReply });
+        }
         if (body.text !== '/go') {
           return streamResponse({ kind: 'assistant_response', content: 'additional response' });
         }
@@ -480,8 +513,108 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     await flush();
   });
 
+  async function submitChat(text: string) {
+    const message = document.nodes.get('#chat-message');
+    const form = document.nodes.get('#chat-form');
+    if (message === undefined || form === undefined) {
+      throw new Error('Chat DOM elements were not initialized');
+    }
+    message.value = text;
+    form.requestSubmit();
+    await flush();
+  }
+
+  function chatTranscript() {
+    const transcript = document.nodes.get('#chat-transcript');
+    if (transcript === undefined) throw new Error('Chat transcript was not initialized');
+    return transcript;
+  }
+
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('renders assistant responses with the existing Markdown elements', async () => {
+    await startRetry();
+    await submitChat('/markdown');
+
+    const entry = chatTranscript().querySelector('article.chat-entry-assistant');
+    if (entry === null) throw new Error('Assistant chat entry was not rendered');
+    const markdown = entry.querySelector('.markdown-view');
+    if (markdown === null) throw new Error('Assistant Markdown view was not rendered');
+
+    expect(markdown.querySelector('h1')?.textContent).toBe('見出し');
+    expect(markdown.querySelector('ul')?.querySelectorAll('li').map((item) => item.textContent))
+      .toEqual(['箇条書き', '二つ目']);
+    expect(markdown.querySelector('ol')?.querySelectorAll('li').map((item) => item.textContent))
+      .toEqual(['番号付き', '二つ目']);
+    expect(markdown.querySelector('strong')?.textContent).toBe('太字');
+    expect(markdown.querySelectorAll('code')[0]?.textContent).toBe('インライン');
+    const link = markdown.querySelector('a');
+    if (link === null) throw new Error('Markdown link was not rendered');
+    expect(link.textContent).toBe('リンク');
+    expect(Reflect.get(link, 'href')).toBe('https://example.com');
+    expect(markdown.querySelector('p')?.textContent).toBe('太字 と インライン と リンク 続き');
+    expect(markdown.querySelector('pre')?.querySelector('code')?.textContent)
+      .toBe('const value = 1;');
+  });
+
+  it.each(fencedCodeCases)('keeps Markdown syntax inside %s fenced code', async (_caseName, source) => {
+    nextAssistantReply = source;
+    await startRetry();
+    await submitChat('/code');
+
+    const entry = chatTranscript().querySelector('article.chat-entry-assistant');
+    if (entry === null) throw new Error('Assistant chat entry was not rendered');
+    const markdown = entry.querySelector('.markdown-view');
+    if (markdown === null) throw new Error('Assistant Markdown view was not rendered');
+
+    expect(markdown.querySelectorAll('h1')).toHaveLength(0);
+    expect(markdown.querySelectorAll('ul')).toHaveLength(0);
+    expect(markdown.querySelectorAll('strong')).toHaveLength(0);
+    expect(markdown.querySelector('pre')?.querySelector('code')?.textContent)
+      .toBe('# 見出し\n- 項目\n**太字**');
+  });
+
+  it('keeps emphasis syntax inside inline code as code text', async () => {
+    nextAssistantReply = '`**太字**`';
+    await startRetry();
+    await submitChat('/inline-code');
+
+    const entry = chatTranscript().querySelector('article.chat-entry-assistant');
+    if (entry === null) throw new Error('Assistant chat entry was not rendered');
+    const markdown = entry.querySelector('.markdown-view');
+    if (markdown === null) throw new Error('Assistant Markdown view was not rendered');
+
+    expect(markdown.querySelectorAll('strong')).toHaveLength(0);
+    expect(markdown.querySelector('code')?.textContent).toBe('**太字**');
+  });
+
+  it('keeps Markdown syntax and line breaks literal for user messages', async () => {
+    await startRetry();
+    await submitChat(literalMessage);
+
+    const entry = chatTranscript().querySelector('article.chat-entry-user');
+    if (entry === null) throw new Error('User chat entry was not rendered');
+    expect(entry.querySelector('.markdown-view')).toBeNull();
+    expect(entry.querySelector('p')?.textContent).toBe(literalMessage);
+    expect(entry.querySelectorAll('h1')).toHaveLength(0);
+    expect(entry.querySelectorAll('strong')).toHaveLength(0);
+    expect(entry.querySelectorAll('ul')).toHaveLength(0);
+  });
+
+  it('keeps Markdown syntax and line breaks literal for system messages', async () => {
+    await startRetry();
+    await submitChat('/system');
+
+    const entries = chatTranscript().querySelectorAll('article.chat-entry-system');
+    const entry = entries.at(-1);
+    if (entry === undefined) throw new Error('System chat entry was not rendered');
+    expect(entry.querySelector('.markdown-view')).toBeNull();
+    expect(entry.querySelector('p')?.textContent).toBe(literalMessage);
+    expect(entry.querySelectorAll('h1')).toHaveLength(0);
+    expect(entry.querySelectorAll('strong')).toHaveLength(0);
+    expect(entry.querySelectorAll('ul')).toHaveLength(0);
   });
 
   it('connects Queue, Continue, Cancel, and prose input through the production app and API modules', async () => {

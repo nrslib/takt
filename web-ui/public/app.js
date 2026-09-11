@@ -20,6 +20,7 @@ import {
 } from './api.js';
 import { createExecutionView } from './execution-view.js';
 import { subscribeRun, subscribeTasks } from './live-stream.js';
+import { renderMarkdown } from './markdown-view.js';
 import {
   buildTaskActionDialogModel,
   taskActionGoState,
@@ -887,7 +888,7 @@ function appendChatEntry(role, content) {
   roleLabel.dataset.i18n = roleKey;
   entry.append(
     roleLabel,
-    createElement('p', '', content),
+    role === 'assistant' ? renderMarkdown(content) : createElement('p', '', content),
   );
   elements.chatTranscript.querySelector('.chat-placeholder')?.remove();
   elements.chatTranscript.append(entry);
