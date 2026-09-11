@@ -364,17 +364,15 @@ function collectKiroStructuredEvents(
   const kind = normalizedEventKind(record.kind ?? record.type ?? record.blockType);
   const data = toRecord(record.data);
   if (kind === 'assistantmessage' || kind === 'assistant') {
+    const content = record.content ?? record.message ?? data?.content ?? data?.message;
     collectKiroStructuredEvents(
-      record.content ?? record.message ?? data?.content ?? data?.message,
+      content,
       events,
       assistantText,
       terminalContent,
     );
-    if (typeof record.content === 'string') {
-      assistantText.push(record.content);
-    }
-    if (typeof data?.content === 'string') {
-      assistantText.push(data.content);
+    if (typeof content === 'string') {
+      assistantText.push(content);
     }
     return;
   }
@@ -402,11 +400,8 @@ function collectKiroStructuredEvents(
     return;
   }
 
-  for (const [key, nested] of Object.entries(record)) {
-    if (key === 'sessionId' || key === 'session_id' || key === 'sessionID') {
-      continue;
-    }
-    collectKiroStructuredEvents(nested, events, assistantText, terminalContent);
+  for (const key of ['content', 'message', 'data', 'results']) {
+    collectKiroStructuredEvents(record[key], events, assistantText, terminalContent);
   }
 }
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/types.js';
+import type { InteractiveModeResult } from '../features/interactive/interactive.js';
 
 const {
   mockSelectOption,
@@ -73,10 +74,6 @@ vi.mock('../features/tasks/list/listNonInteractive.js', () => ({
   listTasksNonInteractive: mockListTasksNonInteractive,
 }));
 
-vi.mock('../features/tui/runTui.js', () => ({
-  runTui: mockRunTui,
-}));
-
 vi.mock('../features/tui/index.js', () => ({
   runTui: mockRunTui,
 }));
@@ -116,13 +113,13 @@ describe('running task-list conversation entry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSelectOption.mockResolvedValue(null);
-  mockRunTui.mockResolvedValue({ kind: 'cancelled' });
-  mockListTasksNonInteractive.mockResolvedValue(undefined);
-  mockResolveConfigValues.mockReturnValue({ language: 'ja', interactivePreviewSteps: 3 });
-  mockSelectAndExecuteTask.mockResolvedValue(undefined);
-  mockCreateIssueAndSaveTask.mockResolvedValue(undefined);
-  mockPromptLabelSelection.mockResolvedValue(['enhancement']);
-  mockSaveTaskFromInteractive.mockResolvedValue(undefined);
+    mockRunTui.mockResolvedValue({ kind: 'cancelled' });
+    mockListTasksNonInteractive.mockResolvedValue(undefined);
+    mockResolveConfigValues.mockReturnValue({ language: 'ja', interactivePreviewSteps: 3 });
+    mockSelectAndExecuteTask.mockResolvedValue(undefined);
+    mockCreateIssueAndSaveTask.mockResolvedValue(undefined);
+    mockPromptLabelSelection.mockResolvedValue(['enhancement']);
+    mockSaveTaskFromInteractive.mockResolvedValue(undefined);
   });
 
   it('opens the normal TUI with the selected running task as initial context', async () => {
@@ -150,47 +147,68 @@ describe('running task-list conversation entry', () => {
   it.each(['execute', 'save_task', 'create_issue', 'cancel'] as const)(
     'dispatches the TUI %s result to the matching list operation',
     async (action) => {
-    const result = {
-      action,
-      task: 'confirmed task',
-      ...(action === 'execute' ? { interactiveMetadata: { confirmed: true, task: 'confirmed task' } } : {}),
-      ...(action === 'execute' ? { attachments: [{ placeholder: '{{image:1}}', path: '/tmp/image.png' }] } : {}),
-    } as never;
+      const result: InteractiveModeResult = {
+        action,
+        task: 'confirmed task',
+        ...(action === 'execute' ? { attachments: [{ placeholder: '{{image:1}}', tempPath: '/tmp/image.png', fileName: 'image.png' }] } : {}),
+      };
+      mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('running:0')
+        .mockResolvedValueOnce('interactive')
+        .mockResolvedValueOnce(null);
+      mockRunTui.mockImplementationOnce(async (input: { dispatch?: (workflow: string, value: typeof result) => Promise<void> }) => {
+        await input.dispatch?.('selected-workflow', result);
+        return { kind: 'selected' };
+      });
+
+      await listTasks('/project');
+
+      if (action === 'execute') {
+        expect(mockSelectAndExecuteTask).toHaveBeenCalledWith('/project', 'confirmed task', expect.objectContaining({
+          workflow: 'selected-workflow',
+          interactiveUserInput: true,
+          interactiveMetadata: { confirmed: true, task: 'confirmed task' },
+          skipTaskList: true,
+          failureMode: 'return',
+          attachments: [{ placeholder: '{{image:1}}', tempPath: '/tmp/image.png', fileName: 'image.png' }],
+        }), undefined);
+      } else if (action === 'save_task') {
+        expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith('/project', 'confirmed task', 'selected-workflow', {});
+      } else if (action === 'create_issue') {
+        expect(mockPromptLabelSelection).toHaveBeenCalledWith('ja');
+        expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith('/project', 'confirmed task', 'selected-workflow', {
+          labels: ['enhancement'],
+        });
+      } else {
+        expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+        expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+        expect(mockCreateIssueAndSaveTask).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(['save_task', 'create_issue'] as const)('reports a %s failure without opening recovery actions', async (action) => {
+    const failure = new Error('Unable to save the new task');
+    mockSaveTaskFromInteractive.mockRejectedValueOnce(failure);
+    mockCreateIssueAndSaveTask.mockRejectedValueOnce(failure);
     mockListAllTaskItems.mockReturnValue([eligibleRunningTask]);
-    mockSelectOption
-      .mockResolvedValueOnce('running:0')
-      .mockResolvedValueOnce('interactive')
-      .mockResolvedValueOnce(null);
-    mockRunTui.mockImplementationOnce(async (input: { dispatch?: (workflow: string, value: typeof result) => Promise<void> }) => {
-      await input.dispatch?.('selected-workflow', result);
+    mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('interactive');
+    mockRunTui.mockImplementationOnce(async (input: {
+      dispatch: (workflow: string, result: InteractiveModeResult) => Promise<void>;
+    }) => {
+      await input.dispatch('selected-workflow', { action, task: 'new task' });
       return { kind: 'selected' };
     });
 
     await listTasks('/project');
 
-    if (action === 'execute') {
-      expect(mockSelectAndExecuteTask).toHaveBeenCalledWith('/project', 'confirmed task', expect.objectContaining({
-        workflow: 'selected-workflow',
-        interactiveUserInput: true,
-        interactiveMetadata: { confirmed: true, task: 'confirmed task' },
-        skipTaskList: true,
-        failureMode: 'return',
-        attachments: [{ placeholder: '{{image:1}}', path: '/tmp/image.png' }],
-      }), undefined);
-    } else if (action === 'save_task') {
-      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith('/project', 'confirmed task', 'selected-workflow', {});
-    } else if (action === 'create_issue') {
-      expect(mockPromptLabelSelection).toHaveBeenCalledWith('ja');
-      expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith('/project', 'confirmed task', 'selected-workflow', {
-        labels: ['enhancement'],
-      });
-    } else {
-      expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
-      expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
-      expect(mockCreateIssueAndSaveTask).not.toHaveBeenCalled();
-    }
-    },
-  );
+    expect(mockInfo).toHaveBeenCalledWith(failure.message);
+    expect(mockSelectOption.mock.calls.map(([prompt]) => prompt)).toEqual([
+      'List Tasks', 'Action for running-task:', 'List Tasks',
+    ]);
+    expect(mockForceFailRunningTask).not.toHaveBeenCalled();
+  });
 
   it('keeps force-fail for a running task without clone identity', async () => {
     mockListAllTaskItems.mockReturnValue([runningTask]);

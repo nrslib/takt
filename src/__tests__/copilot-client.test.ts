@@ -640,6 +640,43 @@ describe('callCopilot', () => {
     expect(result.content).toContain('[REDACTED]');
   });
 
+  it('streams complete JSONL events before process completion and flushes the final partial line once', async () => {
+    const child = createMockChildProcess();
+    mockSpawn.mockReturnValue(child);
+    const onStream = vi.fn();
+    const call = callCopilot('coder', 'inspect task', { cwd: '/repo', onStream });
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledOnce());
+    try {
+      const toolUse = JSON.stringify({ type: 'tool.execution_start', data: {
+        toolCallId: 'tool-1', toolName: 'takt_get_run', arguments: { runSlug: 'selected-run' },
+      } });
+      child.stdout.emit('data', Buffer.from(toolUse.slice(0, 30)));
+      expect(onStream).not.toHaveBeenCalled();
+      child.stdout.emit('data', Buffer.from(`${toolUse.slice(30)}\n`));
+      expect(onStream).toHaveBeenCalledWith({ type: 'tool_use', data: {
+        id: 'tool-1', tool: 'takt_get_run', input: { runSlug: 'selected-run' },
+      } });
+      const delta = Buffer.from(JSON.stringify({ type: 'assistant.message_delta', data: { deltaContent: '答え' } }) + '\n');
+      const split = delta.indexOf(Buffer.from('答')) + 1;
+      child.stdout.emit('data', delta.subarray(0, split));
+      child.stdout.emit('data', delta.subarray(split));
+      expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: '答え' } });
+      child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'tool.execution_complete', data: {
+        toolCallId: 'tool-1', success: true, result: { content: 'run details' },
+      } })));
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'tool_result')).toHaveLength(0);
+    } finally {
+      child.emit('close', 0, null);
+    }
+    const result = await call;
+
+    expect(result).toMatchObject({ status: 'done', content: '答え' });
+    expect(onStream.mock.calls.map(([event]) => event.type)).toEqual(['tool_use', 'text', 'tool_result', 'result']);
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_result', data: {
+      id: 'tool-1', content: 'run details', isError: false,
+    } });
+  });
+
   it('should forward Copilot MCP tool results as structured stream events', async () => {
     const marker = formatTaskStateReferenceMarker('run-from-copilot');
     const onStream = vi.fn();

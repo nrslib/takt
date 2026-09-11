@@ -1,3 +1,4 @@
+import { firstTextContent } from './helpers/mcp-content.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -6,16 +7,6 @@ import { describe, expect, it } from 'vitest';
 
 const SOURCE_STDIO_ENTRYPOINT_RUNNER = 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts';
 
-function firstTextContent(content: unknown): string {
-  if (!Array.isArray(content)) {
-    throw new Error('MCP result content is not an array');
-  }
-  const text = Reflect.get(content[0] as object, 'text');
-  if (typeof text !== 'string') {
-    throw new Error('MCP result does not contain text');
-  }
-  return text;
-}
 
 describe('MCP stdio entrypoint integration', () => {
   it('Given the source MCP entrypoint, When a stdio MCP client lists and calls tools, Then stdout remains valid MCP protocol', async () => {

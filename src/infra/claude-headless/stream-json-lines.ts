@@ -169,7 +169,7 @@ function stringifyToolResultBlock(block: unknown): string {
     return record.text;
   }
   const serialized = JSON.stringify(block);
-  return serialized ?? String(block);
+  return serialized ?? '';
 }
 
 function normalizeToolResultContent(content: unknown): string {

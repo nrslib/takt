@@ -247,7 +247,7 @@ export async function listTasks(
       const task = tasks[idx];
       if (!task) continue;
       const taskAction = await showRunningTaskAndPromptAction(task);
-      if (taskAction === 'interactive') {
+      if (taskAction === 'interactive' && task.runSlug !== undefined) {
         try {
           const config = resolveConfigValues(cwd, ['language', 'interactivePreviewSteps']);
           await runTui({

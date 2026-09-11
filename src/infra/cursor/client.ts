@@ -13,7 +13,6 @@ import {
   emitStructuredEvents,
   extractStructuredText,
   firstNonEmptyString,
-  parseJsonLines,
   toRecord,
 } from '../structured-cli-output.js';
 
@@ -512,7 +511,7 @@ function parseCursorStreamEvent(
     };
   }
 
-  const legacyContent = extractStructuredText(root.content);
+  const legacyContent = root.type === undefined ? extractStructuredText(root.content) : undefined;
   return {
     sessionId,
     ...(legacyContent === undefined ? {} : { terminalResult: legacyContent }),
@@ -527,13 +526,16 @@ function parseCursorOutput(
     return { error: 'cursor-agent returned empty output' };
   }
 
-  let lines: unknown[];
-  try {
-    lines = parseJsonLines(stdout, 'cursor-agent');
-  } catch {
-    return {
-      error: `Failed to parse cursor-agent JSON output: ${trimDetail(trimmed, '<empty>')}`,
-    };
+  const lines: unknown[] = [];
+  for (const line of stdout.split(/\r?\n/u)) {
+    try {
+      lines.push(JSON.parse(line) as unknown);
+    } catch {
+      // cursor-agent may print a banner or warning alongside its JSONL events.
+    }
+  }
+  if (lines.length === 0) {
+    return { error: `Failed to parse cursor-agent JSON output: ${trimDetail(trimmed, '<empty>')}` };
   }
 
   const pendingTools = new Map<string, CursorToolCall>();

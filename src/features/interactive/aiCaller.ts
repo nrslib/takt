@@ -146,7 +146,7 @@ function createRunReferenceTracker(): RunReferenceTracker {
         return;
       }
       if (event.type === 'tool_output' && isTaskGetRunTool(event.data.tool)) {
-        const resultId = event.data.id ?? [...pending.keys()].at(-1);
+        const resultId = event.data.id ?? (pending.size === 1 ? pending.keys().next().value : undefined);
         if (resultId === undefined || !pending.has(resultId)) {
           return;
         }
@@ -249,6 +249,7 @@ export async function callAIWithRetry(
   }
   let sigintCount = 0;
   let forceExitRequested = false;
+  let cleanupCurrentAttempt: (() => Promise<void>) | undefined;
   const onSigInt = (): void => {
     sigintCount += 1;
     if (sigintCount === 1) {
@@ -257,10 +258,18 @@ export async function callAIWithRetry(
       abortController.abort();
       return;
     }
+    if (forceExitRequested) {
+      return;
+    }
     blankLine();
     error(getLabel('workflow.sigintForce', ctx.lang));
     forceExitRequested = true;
     abortController.abort();
+    const exitTimer = setTimeout(() => process.exit(EXIT_SIGINT), 1_000);
+    void (cleanupCurrentAttempt?.() ?? Promise.resolve()).finally(() => {
+      clearTimeout(exitTimer);
+      process.exit(EXIT_SIGINT);
+    });
   };
   if (outputMode === 'terminal') {
     process.on('SIGINT', onSigInt);
@@ -343,16 +352,27 @@ export async function callAIWithRetry(
           stream(event);
         };
       const resolvedMcpServers = resolveConversationMcpServers(ctx.mcpServers);
-      const conversationMcp = resolvedMcpServers === undefined
-        ? undefined
-        : await prepareConversationMcp(
+      const preparation = resolvedMcpServers === undefined
+        ? Promise.resolve(undefined)
+        : prepareConversationMcp(
           ctx,
           cwd,
           abortController.signal,
           permissionModeForProvider,
           resolvedMcpServers,
         );
+      let disposal: Promise<void> | undefined;
+      const cleanup = (): Promise<void> => {
+        // Preparation failures are reported by the provider attempt below.
+        disposal ??= preparation.then(
+          (prepared) => disposeConversationMcp(prepared?.prepared),
+          () => {},
+        );
+        return disposal;
+      };
+      cleanupCurrentAttempt = cleanup;
       try {
+        const conversationMcp = await preparation;
         if (abortController.signal.aborted) {
           throw abortController.signal.reason ?? new DOMException('The AI call was aborted', 'AbortError');
         }
@@ -368,7 +388,8 @@ export async function callAIWithRetry(
             : {}),
         };
       } finally {
-        await disposeConversationMcp(conversationMcp?.prepared);
+        await cleanup();
+        cleanupCurrentAttempt = undefined;
       }
     };
 
@@ -448,9 +469,6 @@ export async function callAIWithRetry(
     options.abortSignal?.removeEventListener('abort', onExternalAbort);
     if (outputMode === 'terminal') {
       process.removeListener('SIGINT', onSigInt);
-    }
-    if (forceExitRequested) {
-      process.exit(EXIT_SIGINT);
     }
   }
 }

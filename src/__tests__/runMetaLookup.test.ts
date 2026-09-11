@@ -397,7 +397,7 @@ describe('run-meta lookup', () => {
     expect(findRunningStepByRunSlug(projectDir, '../20260409-run-a')).toBeUndefined();
   });
 
-  it('should reject a symlinked run metadata file', () => {
+  it.skipIf(process.platform === 'win32')('should reject a symlinked run metadata file', () => {
     const slug = '20260409-run-symlink';
     const metaPath = path.join(projectDir, '.takt', 'runs', slug, 'meta.json');
     const targetPath = path.join(projectDir, 'external-meta.json');
@@ -415,6 +415,6 @@ describe('run-meta lookup', () => {
     }), 'utf-8');
     fs.symlinkSync(targetPath, metaPath);
 
-    expect(() => readRunMetaBySlug(projectDir, slug)).toThrow(/symlink/i);
+    expect(() => readRunMetaBySlug(projectDir, slug)).toThrow(/symlink|symbolic/i);
   });
 });

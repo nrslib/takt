@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import type { Stats } from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { guardTaskStoreLock } from './task-store-lock.js';
 import { TasksFileSchema, serializeTasksFileData, type TasksFileData } from './schema.js';
 import { createLogger } from '../../shared/utils/index.js';
 import {
@@ -132,19 +133,18 @@ export class TaskStore {
       throw new Error('TaskStore: reentrant lock detected');
     }
     this.locked = true;
-    let acquired: ExistingLockSnapshot | undefined;
     try {
       this.ensureDirs();
-      acquired = this.acquireFileLock();
-      return fn();
-    } finally {
-      try {
-        if (acquired !== undefined) {
+      return guardTaskStoreLock(this.lockFile, () => {
+        const acquired = this.acquireFileLock();
+        try {
+          return fn();
+        } finally {
           this.releaseFileLock(acquired);
         }
-      } finally {
-        this.locked = false;
-      }
+      });
+    } finally {
+      this.locked = false;
     }
   }
 
@@ -176,7 +176,7 @@ export class TaskStore {
   private removeStaleLock(): void {
     // A crashed holder cannot release its lock file. Steal immediately when the
     // recorded holder PID is no longer alive; fall back to an mtime threshold
-    // when the lock content is unreadable or the holder cannot be probed.
+    // only for invalid PID content. A live or unprobeable holder stays locked.
     let current: PrivateFileReadSnapshot;
     try {
       current = readPrivateFileState(this.lockFile);
@@ -193,6 +193,10 @@ export class TaskStore {
       this.unlinkLockFile(current);
       return;
     }
+    const holderPid = Number(current.content.toString('utf-8').trim());
+    if (Number.isSafeInteger(holderPid) && holderPid > 0) {
+      return;
+    }
     if (Date.now() - current.state.stat.mtimeMs <= LOCK_STALE_MS) {
       return;
     }
@@ -200,7 +204,7 @@ export class TaskStore {
   }
 
   private isLockHolderDead(snapshot: ExistingLockSnapshot): boolean {
-    const pid = Number.parseInt(snapshot.content.toString('utf-8').trim(), 10);
+    const pid = Number(snapshot.content.toString('utf-8').trim());
     if (!Number.isSafeInteger(pid) || pid <= 0) {
       return false;
     }
@@ -213,19 +217,17 @@ export class TaskStore {
   }
 
   private unlinkLockFile(expected: ExistingLockSnapshot): void {
-    for (let verification = 0; verification < 2; verification += 1) {
-      let current: PrivateFileReadSnapshot;
-      try {
-        current = readPrivateFileState(this.lockFile);
-      } catch (error) {
-        if (error instanceof PrivateArtifactPublicationConflictError) {
-          return;
-        }
-        throw error;
-      }
-      if (!isExistingLockSnapshot(current) || !hasSameLockSnapshot(expected, current)) {
+    let current: PrivateFileReadSnapshot;
+    try {
+      current = readPrivateFileState(this.lockFile);
+    } catch (error) {
+      if (error instanceof PrivateArtifactPublicationConflictError) {
         return;
       }
+      throw error;
+    }
+    if (!isExistingLockSnapshot(current) || !hasSameLockSnapshot(expected, current)) {
+      return;
     }
     try {
       fs.unlinkSync(this.lockFile);

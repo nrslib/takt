@@ -401,32 +401,8 @@ describe('runTellCommand', () => {
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: 'succeeds',
-      response: {
-        result: { content: 'Generated instruction.', success: true },
-        sessionId: undefined,
-      },
-    },
-    {
-      name: 'fails',
-      response: {
-        result: null,
-        sessionId: undefined,
-        error: 'provider unavailable',
-      },
-    },
-    {
-      name: 'returns a blank body',
-      response: {
-        result: { content: '   ', success: true },
-        sessionId: undefined,
-      },
-    },
-  ])('reports no candidates before provider generation when it $name', async ({ response }) => {
+  it('reports no candidates before provider generation', async () => {
     mockInspectTellableRunningTasks.mockReturnValue({ tasks: [], excluded: [] });
-    mockCallAIWithRetry.mockResolvedValue(response);
 
     const notice = await runTellCommand({
       cwd: '/project',

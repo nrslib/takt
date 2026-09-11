@@ -455,6 +455,39 @@ describe('callCursor', () => {
     });
   });
 
+  it.each(['system', 'init', 'error'])('ignores content in an unknown typed %s event after the final result', async (type) => {
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({ type: 'result', result: 'assistant answer' }),
+        JSON.stringify({ type, content: 'unrelated diagnostic' }),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'done', content: 'assistant answer' });
+  });
+
+  it('keeps assistant content and tool events when JSONL includes banner lines', async () => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        'Cursor agent starting...',
+        JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: 'tool-1',
+          tool_call: { mcpToolCall: { args: { name: 'takt_get_run', args: { runSlug: 'selected-run' } } } } }),
+        'Warning: optional integration unavailable',
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'answer' }] } }),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer' });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_use', data: {
+      id: 'tool-1', tool: 'takt_get_run', input: { runSlug: 'selected-run' },
+    } });
+  });
+
   it('should forward Cursor MCP tool results as structured stream events', async () => {
     const marker = formatTaskStateReferenceMarker('run-from-cursor');
     const onStream = vi.fn();

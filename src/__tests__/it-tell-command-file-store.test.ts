@@ -11,13 +11,15 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
 
-const { mockConfirm, mockSelectOptionWithDefault } = vi.hoisted(() => ({
+const { mockConfirm, mockSelectOption, mockSelectOptionWithDefault } = vi.hoisted(() => ({
   mockConfirm: vi.fn(),
+  mockSelectOption: vi.fn(),
   mockSelectOptionWithDefault: vi.fn(),
 }));
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
+  selectOption: (...args: unknown[]) => mockSelectOption(...args),
   confirm: (...args: unknown[]) => mockConfirm(...args),
   selectOptionWithDefault: (...args: unknown[]) => mockSelectOptionWithDefault(...args),
 }));
@@ -82,6 +84,9 @@ describe('tell command and live intervention file store', () => {
     process.env.TAKT_NO_TTY = '0';
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-tell-file-store-'));
+    mockSelectOption.mockReset().mockImplementation(() => {
+      throw new Error('Unexpected selectOption call');
+    });
     mockConfirm.mockReset();
     mockSelectOptionWithDefault.mockReset();
     mockConfirm.mockResolvedValue(true);

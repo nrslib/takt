@@ -573,6 +573,40 @@ describe('runTui', () => {
       await run;
     });
 
+    it('retains the latest run reference across assistant, persona, and assistant conversations', async () => {
+      const assistant = createConversationDouble({ getReferenceRunSlug: vi.fn(() => 'latest-run') });
+      const persona = createConversationDouble({ getReferenceRunSlug: vi.fn(() => undefined) });
+      const resumed = createConversationDouble();
+      mockCreateTuiConversation.mockReturnValueOnce(assistant).mockReturnValueOnce(persona).mockReturnValueOnce(resumed);
+      mockGetWorkflowDescription.mockReturnValue({
+        name: 'default', description: 'default workflow', workflowStructure: '1. review', stepPreviews: [],
+        firstStep: { personaContent: 'Review this change', personaDisplayName: 'Reviewer', allowedTools: ['Read'] },
+      });
+      const tree = scriptRender();
+      const run = startRun({ initialTellRunSlug: 'initial-run' });
+      await waitForMount(tree, 1);
+      try {
+        mockSelectInteractiveMode.mockResolvedValueOnce('persona');
+        tree.conversationProps().onExit({ kind: 'handoff', id: 'mode' }, { history: [], queue: [] });
+        await waitForMount(tree, 2);
+        await tree.conversationProps().conversation.submit(submitInput());
+        expect(persona.submit).toHaveBeenCalledOnce();
+        tree.conversationProps().onExit({ kind: 'handoff', id: 'tell', text: 'Continue the selected task' }, { history: [], queue: [] });
+        await waitForMount(tree, 3);
+        expect(mockRunTellCommand).toHaveBeenCalledWith(expect.objectContaining({ preferredRunSlug: 'latest-run' }));
+        mockSelectInteractiveMode.mockResolvedValueOnce('assistant');
+        tree.conversationProps().onExit({ kind: 'handoff', id: 'mode' }, { history: [], queue: [] });
+        await waitForMount(tree, 4);
+        await tree.conversationProps().conversation.submit(submitInput());
+
+        expect(resumed.submit).toHaveBeenCalledOnce();
+        expect(mockCreateTuiConversation.mock.calls[2]?.[0].plan.strategy.initialReferenceRunSlug).toBe('latest-run');
+      } finally {
+        tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+        await run;
+      }
+    });
+
     it('should rebuild the selected persona lazily with its prompt and tools', async () => {
       const history = [
         { role: 'user' as const, content: 'review this change' },

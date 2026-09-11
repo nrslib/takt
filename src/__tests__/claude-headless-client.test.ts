@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 
 const { mkdtempMock, chmodMock, writeFileMock, rmMock } = vi.hoisted(() => ({
-  mkdtempMock: vi.fn(),
-  chmodMock: vi.fn(),
-  writeFileMock: vi.fn(),
-  rmMock: vi.fn(),
+  mkdtempMock: vi.fn<typeof import('node:fs/promises').mkdtemp>(),
+  chmodMock: vi.fn<typeof import('node:fs/promises').chmod>(),
+  writeFileMock: vi.fn<typeof import('node:fs/promises').writeFile>(),
+  rmMock: vi.fn<typeof import('node:fs/promises').rm>(),
 }));
 
 const { assertClaudeSkillsDisableSupportedMock } = vi.hoisted(() => ({
@@ -107,11 +108,11 @@ describe('callClaudeHeadless', () => {
         capturedMcpConfigContent = readFileSync(capturedMcpConfigPath!, 'utf-8');
         capturedMcpConfigMode = statSync(capturedMcpConfigPath!).mode & 0o777;
       }
-      const stdout = new EventEmitter();
-      const stderr = new EventEmitter();
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
       const proc = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
-      proc.stdout = stdout as NodeJS.ReadableStream;
-      proc.stderr = stderr as NodeJS.ReadableStream;
+      proc.stdout = stdout;
+      proc.stderr = stderr;
       lastKill = vi.fn();
       proc.kill = lastKill as unknown as ChildProcess['kill'];
 

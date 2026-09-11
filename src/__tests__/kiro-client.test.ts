@@ -1324,6 +1324,28 @@ describe('callKiro output cleanup (issue #781)', () => {
     expect(result.content).toBe('Implementation complete.');
   });
 
+  it('uses a single assistant content source when an envelope repeats content', async () => {
+    mockSpawnWithScenario({ stdout: JSON.stringify({
+      kind: 'AssistantMessage', content: 'answer', data: { content: 'answer' },
+    }) });
+
+    const result = await callKiro('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer' });
+  });
+
+  it('ignores text in diagnostic fields while traversing recognized content containers', async () => {
+    mockSpawnWithScenario({ stdout: JSON.stringify({
+      kind: 'envelope', diagnostics: { kind: 'text', text: 'not assistant output' },
+      input: { kind: 'text', text: 'not assistant output either' },
+      message: { kind: 'AssistantMessage', content: [{ kind: 'text', text: 'answer' }] },
+    }) });
+
+    const result = await callKiro('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer' });
+  });
+
   it('Given stream-json MCP events, When called, Then forwards the tool result as structured events', async () => {
     const marker = formatTaskStateReferenceMarker('run-from-kiro');
     const onStream = vi.fn();

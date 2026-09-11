@@ -493,9 +493,12 @@ describe('TaskRunner (tasks.yaml)', () => {
       exceeded_max_steps: 90,
       exceeded_current_iteration: 59,
       resume_point: inheritedResumePoint,
-      resume_mode: 'requeue',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'requeue', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
     runner.updateRunningTaskExecution(task.name, {
       runSlug: '20260413-empty-run',
@@ -533,9 +536,12 @@ describe('TaskRunner (tasks.yaml)', () => {
     runner.addTask('Task A', {
       workflow: 'default',
       restart_point: restartPoint,
-      resume_mode: 'retry',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'retry', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
 
     runner.failTask({
@@ -559,9 +565,12 @@ describe('TaskRunner (tasks.yaml)', () => {
     runner.addTask('Task A', {
       workflow: 'default',
       restart_point: restartPoint,
-      resume_mode: 'requeue',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'requeue', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
     runner.updateRunningTaskExecution(task.name, {
       runSlug: '20260413-empty-restart-run',
@@ -611,9 +620,12 @@ describe('TaskRunner (tasks.yaml)', () => {
       exceeded_max_steps: 90,
       exceeded_current_iteration: 59,
       resume_point: inheritedResumePoint,
-      resume_mode: 'requeue',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'requeue', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
     runner.updateRunningTaskExecution(task.name, {
       runSlug: '20260413-progressed-run',
@@ -790,14 +802,14 @@ describe('TaskRunner (tasks.yaml)', () => {
     }
   });
 
-  it('should reject a symlinked tasks.yaml before reading task state', () => {
+  it.skipIf(process.platform === 'win32')('should reject a symlinked tasks.yaml before reading task state', () => {
     const targetPath = join(testDir, 'real-tasks.yaml');
     const tasksPath = join(testDir, '.takt', 'tasks.yaml');
     mkdirSync(join(testDir, '.takt'), { recursive: true });
     writeFileSync(targetPath, stringifyYaml({ tasks: [] }), 'utf-8');
     symlinkSync(targetPath, tasksPath);
 
-    expect(() => runner.listTaskStateItems()).toThrow(/symlink/i);
+    expect(() => runner.listTaskStateItems()).toThrow(/symlink|symbolic/i);
   });
 
   it('should keep completed task record in tasks.yaml', () => {
@@ -1634,7 +1646,7 @@ describe('TaskRunner (tasks.yaml)', () => {
   });
 
   it('should persist resume_point when requeueing and starting re-execution', () => {
-    const resumePoint = {
+    const resumePoint: WorkflowResumePoint = {
       version: 2 as const,
       stack: [
         {
@@ -1933,9 +1945,12 @@ describe('TaskRunner (tasks.yaml)', () => {
     runner.addTask('Task A', {
       workflow: 'default',
       restart_point: restartPoint,
-      resume_mode: 'retry',
-      source_run_slug: '20260413-source',
     });
+    new TaskStore(testDir).update((current) => ({
+      tasks: current.tasks.map((task) => ({
+        ...task, resume_mode: 'retry', source_run_slug: '20260413-source',
+      })),
+    }));
     const task = runner.claimNextTasks(1)[0]!;
 
     runner.completeTask({

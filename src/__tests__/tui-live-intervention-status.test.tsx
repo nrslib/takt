@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { TuiConversation } from '../features/tui/tuiConversation.js';
+import type { TuiConversation, TuiLocalCommand } from '../features/tui/tuiConversation.js';
 
 const { mockMountInk } = vi.hoisted(() => ({
   mockMountInk: vi.fn(),
@@ -23,6 +23,8 @@ import { runTuiConversation } from '../features/tui/conversationRunner.js';
 
 interface MountedConversationProps {
   readonly conversation: TuiConversation;
+  readonly liveStatusReader?: () => string;
+  readonly liveStatusRefreshIntervalMs?: number;
   readonly initialEntries: readonly { readonly role: string; readonly content: string }[];
   readonly onExit: (exit: unknown, carried: unknown) => void;
 }
@@ -46,11 +48,11 @@ function createConversation(): TuiConversation {
     commandAvailability: {},
     tracksResultSource: false,
     isCommandLine: vi.fn(() => true),
-    resolveLocalCommand: vi.fn(() => ({
+    resolveLocalCommand: vi.fn((): TuiLocalCommand => ({
       kind: 'handoff',
       id: 'tell',
       text: 'skip Android support',
-    } as never)),
+    })),
     submit: vi.fn(),
     createInstruction: vi.fn(),
     resumeSession: vi.fn(),
@@ -68,6 +70,7 @@ describe('resident conversation handoffs', () => {
   it('keeps the same conversation after /tell returns without sending', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-tell-handoff-'));
     const conversation = createConversation();
+    const liveStatusReader = vi.fn(() => "run: running");
     const mounted: MountedConversationProps[] = [];
     let mountCount = 0;
     mockMountInk.mockImplementation(async (buildTree: (handlers: MountHandlers) => ReactElement) => {
@@ -106,12 +109,18 @@ describe('resident conversation handoffs', () => {
         chooseAction: async () => ({ action: 'continue', task: '' }),
         continuePrompt: 'continue',
         onHandoff,
+        liveStatusReader,
+        liveStatusRefreshIntervalMs: 250,
       });
 
       expect(result).toEqual({ action: 'cancel', task: '' });
       expect(onHandoff).toHaveBeenCalledOnce();
       expect(mounted).toHaveLength(2);
       expect(mounted[1]?.conversation).toBe(conversation);
+      for (const props of mounted) {
+        expect(props.liveStatusReader).toBe(liveStatusReader);
+        expect(props.liveStatusRefreshIntervalMs).toBe(250);
+      }
       expect(mounted[1]?.initialEntries).toEqual([{
         role: 'system',
         content: 'The instruction was not sent.',

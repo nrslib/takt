@@ -200,6 +200,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
     let currentPlan: ConversationPlan;
     let currentConversation: TuiConversation;
     let pendingRebuild = false;
+    let referenceRunSlug = options.initialTellRunSlug;
     let pendingHandoffHistory: readonly ConversationMessage[] | undefined;
 
     async function createCurrentConversation(
@@ -244,11 +245,9 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           : {}),
       };
       let nextPlan: ConversationPlan;
-      const carriedReferenceRunSlug = initial
-        ? options.initialTellRunSlug
-        : currentConversation.getReferenceRunSlug === undefined
-          ? options.initialTellRunSlug
-          : currentConversation.getReferenceRunSlug();
+      if (!initial) {
+        referenceRunSlug = currentConversation.getReferenceRunSlug?.() ?? referenceRunSlug;
+      }
       if (usePersonaPlan) {
         nextPlan = createPersonaConversationPlan(options.cwd, description.firstStep!, overrides);
       } else {
@@ -264,9 +263,9 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           ...(options.initialTaskContext
             ? { initialTaskContext: options.initialTaskContext }
             : {}),
-          ...(carriedReferenceRunSlug === undefined
+          ...(referenceRunSlug === undefined
             ? {}
-            : { initialReferenceRunSlug: carriedReferenceRunSlug }),
+            : { initialReferenceRunSlug: referenceRunSlug }),
           ...overrides,
           ...(continued.sessionId ? { sessionId: continued.sessionId } : {}),
         });
@@ -486,9 +485,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
                 };
               }
             }
-            const preferredRunSlug = currentConversation.getReferenceRunSlug === undefined
-              ? options.initialTellRunSlug
-              : currentConversation.getReferenceRunSlug();
+            const preferredRunSlug = currentConversation.getReferenceRunSlug?.() ?? referenceRunSlug;
             const sessionContext = selectedEffort === undefined
               ? currentPlan.ctx
               : { ...currentPlan.ctx, effort: selectedEffort };

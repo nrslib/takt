@@ -1,6 +1,7 @@
+import { firstTextContent } from './helpers/mcp-content.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -22,16 +23,6 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, readFileSync: readFileSyncMock };
 });
 
-function firstTextContent(content: unknown): string {
-  if (!Array.isArray(content)) {
-    throw new Error('MCP result content is not an array');
-  }
-  const text = Reflect.get(content[0] as object, 'text');
-  if (typeof text !== 'string') {
-    throw new Error('MCP result does not contain text');
-  }
-  return text;
-}
 
 function writeRunFixture(
   baseCwd: string,
@@ -63,7 +54,7 @@ function writeRunFixture(
 
 function writeCloneOwnershipMetadata(projectCwd: string, branch: string, clonePath: string): void {
   const metadataPath = getCloneMetaPath(projectCwd, branch);
-  mkdirSync(join(projectCwd, '.takt', 'clone-meta'), { recursive: true });
+  mkdirSync(dirname(metadataPath), { recursive: true });
   writeFileSync(metadataPath, JSON.stringify({ branch, clonePath }), 'utf-8');
 }
 

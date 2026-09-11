@@ -82,6 +82,17 @@ describe('claude-headless stream-json line parsing', () => {
     ]);
   });
 
+  it('normalizes an error tool result with omitted content to empty text', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'failed-tool', is_error: true }] },
+    });
+
+    expect(tryExtractToolResultFromStreamJsonLine(line)).toEqual([{
+      id: 'failed-tool', content: '', isError: true,
+    }]);
+  });
+
   it('does not infer tool results from an ordinary final result line', () => {
     expect(tryExtractToolResultFromStreamJsonLine(JSON.stringify({
       type: 'result',

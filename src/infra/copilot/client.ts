@@ -7,6 +7,7 @@
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import type { AgentResponse } from '../../core/models/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { formatProcessExitCause } from '../../shared/utils/process-exit.js';
@@ -149,6 +150,7 @@ function createExecError(
 function execCopilot(
   args: string[],
   options: CopilotCallOptions,
+  onStdout: (text: string) => void,
 ): Promise<CopilotExecResult> {
   return new Promise<CopilotExecResult>((resolve, reject) => {
     let stdout = '';
@@ -209,8 +211,8 @@ function execCopilot(
       reject(error);
     };
 
-    const toText = (chunk: Buffer | string): string =>
-      typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
 
     const appendChunk = (target: 'stdout' | 'stderr', text: string): void => {
       if (overflowed || settled) {
@@ -230,6 +232,7 @@ function execCopilot(
           return;
         }
         stdout += text;
+        onStdout(text);
         return;
       }
 
@@ -250,13 +253,15 @@ function execCopilot(
       if (overflowed || settled) {
         return;
       }
-      const text = toText(chunk);
+      const text = typeof chunk === 'string' ? chunk : stdoutDecoder.write(chunk);
       appendChunk('stdout', text);
     });
-    child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', toText(chunk)));
+    child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', typeof chunk === 'string' ? chunk : stderrDecoder.write(chunk)));
 
     void managed.wait().then(
       ({ code, signal }) => {
+        appendChunk('stdout', stdoutDecoder.end());
+        appendChunk('stderr', stderrDecoder.end());
         if (code === 0) {
           resolveOnce({ stdout, stderr });
           return;
@@ -421,6 +426,16 @@ function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: stri
     return { content: trimmed, events: [] };
   }
 
+  const parsed = collectCopilotOutput(lines);
+  if (parsed.content.length === 0) {
+    return {
+      error: `Failed to extract assistant content from copilot JSONL output: ${trimDetail(trimmed, '<empty>')}`,
+    };
+  }
+  return parsed;
+}
+
+function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
   const events: StreamEvent[] = [];
   let content: string | undefined;
   let assistantMessageContent: string | undefined;
@@ -500,14 +515,7 @@ function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: stri
     }
   }
 
-  content = content ?? assistantMessageContent ?? assistantDeltaContent;
-  if (content === undefined || content.length === 0) {
-    return {
-      error: `Failed to extract assistant content from copilot JSONL output: ${trimDetail(trimmed, '<empty>')}`,
-    };
-  }
-
-  return { content, sessionId, events };
+  return { content: content ?? assistantMessageContent ?? assistantDeltaContent, sessionId, events };
 }
 
 interface CopilotCallOutcome {
@@ -515,7 +523,6 @@ interface CopilotCallOutcome {
   readonly content: string;
   readonly sessionId?: string;
   readonly error?: string;
-  readonly events: readonly StreamEvent[];
 }
 
 function executionErrorOutcome(
@@ -527,7 +534,6 @@ function executionErrorOutcome(
     content: message,
     error: message,
     sessionId,
-    events: [],
   };
 }
 
@@ -539,11 +545,48 @@ async function executeCopilotCall(
   const resumableSessionId = options.sessionId;
   try {
     const args = buildArgs(prompt, { ...options, shareFilePath });
-    const { stdout } = await execCopilot(args, options);
+    let pendingLine = '';
+    let streamedContent = '';
+    const emitText = (content: string): void => {
+      const remaining = content.startsWith(streamedContent) ? content.slice(streamedContent.length) : content;
+      if (remaining.length > 0) {
+        options.onStream?.({ type: 'text', data: { text: remaining } });
+      }
+      streamedContent = content;
+    };
+    const processLine = (line: string): void => {
+      let value: unknown;
+      try {
+        value = JSON.parse(line) as unknown;
+      } catch {
+        // Plain-text CLI responses are handled by the final output parser.
+        return;
+      }
+      const parsed = collectCopilotOutput([value]);
+      emitStructuredEvents(options.onStream, parsed.events);
+      const root = toRecord(value);
+      if (root?.type === 'assistant.message_delta') {
+        emitText(streamedContent + parsed.content);
+      } else if (root?.type === 'assistant.message') {
+        emitText(parsed.content);
+      }
+    };
+    const { stdout } = await execCopilot(args, options, (text) => {
+      pendingLine += text;
+      let newline: number;
+      while ((newline = pendingLine.indexOf('\n')) !== -1) {
+        processLine(pendingLine.slice(0, newline));
+        pendingLine = pendingLine.slice(newline + 1);
+      }
+    });
+    if (pendingLine.trim().length > 0) {
+      processLine(pendingLine);
+    }
     const parsed = parseCopilotOutput(stdout);
     if ('error' in parsed) {
       return executionErrorOutcome(parsed.error, resumableSessionId);
     }
+    emitText(parsed.content);
     const extractedSessionId = shareFilePath === undefined
       ? undefined
       : await extractSessionId(shareFilePath);
@@ -551,7 +594,6 @@ async function executeCopilotCall(
       status: 'done',
       content: parsed.content,
       sessionId: extractedSessionId ?? parsed.sessionId ?? resumableSessionId,
-      events: parsed.events,
     };
   } catch (rawError) {
     const error = rawError as CopilotExecError;
@@ -618,10 +660,6 @@ export class CopilotClient {
       shareFilePath,
     );
     const outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
-    emitStructuredEvents(options.onStream, outcome.events);
-    if (outcome.status === 'done') {
-      options.onStream?.({ type: 'text', data: { text: outcome.content } });
-    }
     emitResult(outcome, options);
     return {
       persona: agentType,

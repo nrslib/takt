@@ -202,6 +202,8 @@ interface RenderOverrides {
   readonly initialQueue?: readonly string[];
   readonly modelLabel?: () => string;
   readonly residentSession?: boolean;
+  readonly liveStatusReader?: () => string;
+  readonly liveStatusRefreshIntervalMs?: number;
   readonly userMessageColors?: ConversationViewProps['userMessageColors'];
   readonly finalizeTranscript?: ConversationViewProps['finalizeTranscript'];
 }
@@ -228,6 +230,8 @@ function renderConversation(
       initialDraft={overrides.initialDraft}
       initialQueue={overrides.initialQueue ?? []}
       residentSession={overrides.residentSession ?? false}
+      liveStatusReader={overrides.liveStatusReader}
+      liveStatusRefreshIntervalMs={overrides.liveStatusRefreshIntervalMs}
       modelLabel={overrides.modelLabel ?? (() => MODEL_LABEL)}
       finalizeTranscript={overrides.finalizeTranscript ?? (() => undefined)}
       onExit={onExit}
@@ -451,6 +455,35 @@ describe('TranscriptEntryView', () => {
 });
 
 describe('ConversationView', () => {
+  it('refreshes workflow status without replacing the conversation and stops on unmount', async () => {
+    vi.useFakeTimers();
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    let status = 'run: running';
+    const reader = vi.fn(() => status);
+    const view = renderConversation(conversation, 'chat', vi.fn(), {
+      liveStatusReader: reader,
+      liveStatusRefreshIntervalMs: 250,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(50);
+      expect(view.lastFrame()).toContain('run: running');
+      status = 'run: completed';
+      await vi.advanceTimersByTimeAsync(250);
+      expect(view.lastFrame()).toContain('run: completed');
+      expect(view.lastFrame()).not.toContain('run: running');
+      expect(reader).toHaveBeenCalledTimes(2);
+      expect(conversation.submitCalls).toEqual([]);
+      view.unmount();
+      await vi.advanceTimersByTimeAsync(50);
+      const readsAfterUnmount = reader.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(reader).toHaveBeenCalledTimes(readsAfterUnmount);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ['/workflow', { kind: 'handoff', id: 'workflow' }],
     ['/interaction', { kind: 'handoff', id: 'mode' }],

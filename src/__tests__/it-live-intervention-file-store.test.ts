@@ -444,38 +444,46 @@ describe('LiveInterventionFileStore integration', () => {
     expect(existsSync(store.getFilePath())).toBe(false);
   });
 
-  it.skipIf(process.platform === 'win32')('rejects symlinked intervention, lock, and run paths without touching targets', async () => {
+  function createSymlinkFixture() {
     const projectCwd = createProjectDirectory();
-    projectDirectories.push(projectCwd);
-    const runSlug = 'symlink-run';
-    const store = new LiveInterventionFileStore(projectCwd, runSlug);
+    const outside = createProjectDirectory();
+    projectDirectories.push(projectCwd, outside);
+    const store = new LiveInterventionFileStore(projectCwd, 'symlink-run');
     const runDir = dirname(store.getFilePath());
     mkdirSync(runDir, { recursive: true });
+    return { store, runDir, outside };
+  }
 
-    const outside = createProjectDirectory();
-    projectDirectories.push(outside);
+  it.skipIf(process.platform === 'win32')('rejects a symlinked intervention file without touching its target', () => {
+    const { store, outside } = createSymlinkFixture();
     const outsideFile = join(outside, 'interventions.jsonl');
-    const outsideLock = join(outside, 'interventions.lock');
     writeFileSync(outsideFile, 'outside-file\n', 'utf8');
-    writeFileSync(outsideLock, 'outside-lock\n', 'utf8');
-
     symlinkSync(outsideFile, store.getFilePath());
+
     expect(() => store.read()).toThrow(/symlink|symbolic/i);
     expect(readFileSync(outsideFile, 'utf8')).toBe('outside-file\n');
-    unlinkSync(store.getFilePath());
+  });
 
+  it.skipIf(process.platform === 'win32')('rejects a symlinked intervention lock without touching its target', async () => {
+    const { store, outside } = createSymlinkFixture();
+    const outsideLock = join(outside, 'interventions.lock');
+    writeFileSync(outsideLock, 'outside-lock\n', 'utf8');
     symlinkSync(outsideLock, `${store.getFilePath()}.lock`);
+
     await expect(store.issue('must not follow the lock link')).rejects.toThrow(/symlink|symbolic/i);
     expect(readFileSync(outsideLock, 'utf8')).toBe('outside-lock\n');
     expect(lstatSync(`${store.getFilePath()}.lock`).isSymbolicLink()).toBe(true);
-    unlinkSync(`${store.getFilePath()}.lock`);
+  });
 
+  it.skipIf(process.platform === 'win32')('rejects a symlinked intervention run directory without touching its target', async () => {
+    const { store, runDir, outside } = createSymlinkFixture();
     const outsideRunDir = join(outside, 'run');
     mkdirSync(outsideRunDir, { recursive: true });
     const outsideRunFile = join(outsideRunDir, 'interventions.jsonl');
     writeFileSync(outsideRunFile, 'outside-run\n', 'utf8');
     rmSync(runDir, { recursive: true, force: true });
     symlinkSync(outsideRunDir, runDir, 'dir');
+
     expect(() => store.read()).toThrow(/symlink|symbolic/i);
     await expect(store.issue('must not follow the run link')).rejects.toThrow(/symlink|symbolic/i);
     expect(readFileSync(outsideRunFile, 'utf8')).toBe('outside-run\n');

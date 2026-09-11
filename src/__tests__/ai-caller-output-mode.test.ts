@@ -188,6 +188,66 @@ describe('AI call output ownership', () => {
     expect(providerCall).not.toHaveBeenCalled();
   });
 
+  it('cancels on the first SIGINT without requesting a forced exit', async () => {
+    let started!: () => void;
+    const callStarted = new Promise<void>((resolve) => { started = resolve; });
+    const ctx = createContext();
+    vi.spyOn(ctx.provider, 'setup').mockReturnValue({
+      call: async (_prompt, options) => {
+        started();
+        await new Promise<void>((resolve) => options.abortSignal?.addEventListener('abort', () => resolve(), { once: true }));
+        return { persona: 'interactive', status: 'blocked', content: 'cancelled', timestamp: new Date() };
+      },
+    });
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    try {
+      const call = callAIWithRetry('prompt', 'system', ['Read'], '/repo', ctx);
+      await callStarted;
+      process.emit('SIGINT');
+
+      expect((await call).result?.success).toBe(false);
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      exit.mockRestore();
+    }
+  });
+
+  it('forces exit within a bounded time when both the provider and MCP cleanup are pending', async () => {
+    vi.useFakeTimers();
+    let started!: () => void;
+    let finishCall!: () => void;
+    let finishCleanup!: () => void;
+    const callStarted = new Promise<void>((resolve) => { started = resolve; });
+    const callCompletion = new Promise<void>((resolve) => { finishCall = resolve; });
+    const cleanupCompletion = new Promise<void>((resolve) => { finishCleanup = resolve; });
+    const ctx = createContext([], async () => {
+      started();
+      await callCompletion;
+      return { persona: 'interactive', status: 'done', content: 'answer', timestamp: new Date() };
+    });
+    ctx.mcpServers = { takt: { type: 'stdio', command: 'takt-mcp' } };
+    const prepared = { dispose: vi.fn(() => cleanupCompletion) };
+    mockCreateMcpAdapter.mockReturnValue({ validate: vi.fn(), prepare: vi.fn().mockResolvedValue(prepared) });
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const call = callAIWithRetry('prompt', 'system', ['Read'], '/repo', ctx);
+    try {
+      await callStarted;
+      process.emit('SIGINT');
+      expect(exit).not.toHaveBeenCalled();
+      process.emit('SIGINT');
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(prepared.dispose).toHaveBeenCalledOnce();
+      expect(exit).toHaveBeenCalledWith(EXIT_SIGINT);
+    } finally {
+      finishCleanup();
+      finishCall();
+      await call;
+      exit.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('should dispose MCP resources before a forced SIGINT exit', async () => {
     const events: string[] = [];
     let markCallStarted!: () => void;
@@ -235,7 +295,9 @@ describe('AI call output ownership', () => {
       );
       await callStarted;
       process.emit('SIGINT');
+      expect(exit).not.toHaveBeenCalled();
       process.emit('SIGINT');
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(EXIT_SIGINT));
       releaseCall();
 
       const result = await call;
@@ -244,6 +306,7 @@ describe('AI call output ownership', () => {
       expect(exit).toHaveBeenCalledWith(EXIT_SIGINT);
       expect(events).toEqual(['dispose', `exit:${EXIT_SIGINT}`]);
     } finally {
+      releaseCall();
       exit.mockRestore();
     }
   });
@@ -348,6 +411,55 @@ describe('AI call output ownership', () => {
       expect(prepared.dispose).toHaveBeenCalledOnce();
     },
   );
+
+  it.each([
+    { idless: true, expected: undefined },
+    { idless: false, expected: 'run-b' },
+  ])('matches parallel tool outputs only when their IDs are unambiguous: $idless', async ({ idless, expected }) => {
+    const ctx = createContext();
+    vi.spyOn(ctx.provider, 'setup').mockReturnValue({
+      call: async (_prompt, options) => {
+        for (const id of ['a', 'b']) {
+          options.onStream?.({ type: 'tool_use', data: {
+            id, tool: 'takt_get_run', input: { runSlug: `run-${id}` },
+          } });
+        }
+        for (const id of ['a', 'b']) {
+          options.onStream?.({ type: 'tool_output', data: {
+            ...(idless ? {} : { id }), tool: 'takt_get_run', output: formatTaskStateReferenceMarker(`run-${id}`),
+          } });
+        }
+        return { persona: 'interactive', status: 'done', content: 'answer', timestamp: new Date() };
+      },
+    });
+
+    const { result } = await callAIWithRetry('prompt', 'system', ['Read'], '/repo', ctx, {
+      outputMode: 'silent', onStream: vi.fn(),
+    });
+
+    expect(result?.referenceRunSlug).toBe(expected);
+  });
+
+  it('accepts an ID-less tool output when only one run is pending', async () => {
+    const ctx = createContext();
+    vi.spyOn(ctx.provider, 'setup').mockReturnValue({
+      call: async (_prompt, options) => {
+        options.onStream?.({ type: 'tool_use', data: {
+          id: 'only-call', tool: 'takt_get_run', input: { runSlug: 'only-run' },
+        } });
+        options.onStream?.({ type: 'tool_output', data: {
+          tool: 'takt_get_run', output: formatTaskStateReferenceMarker('only-run'),
+        } });
+        return { persona: 'interactive', status: 'done', content: 'answer', timestamp: new Date() };
+      },
+    });
+
+    const { result } = await callAIWithRetry('prompt', 'system', ['Read'], '/repo', ctx, {
+      outputMode: 'silent', onStream: vi.fn(),
+    });
+
+    expect(result?.referenceRunSlug).toBe('only-run');
+  });
 
   it('should not derive a run reference from displayed text or the final response', async () => {
     const marker = formatTaskStateReferenceMarker('displayed-text-is-not-authoritative');
