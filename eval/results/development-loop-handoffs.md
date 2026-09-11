@@ -203,7 +203,7 @@ Kimiの初回起動は、CLIが `--prompt` と `--yolo` の併用を引数検証
 - 各manifest、個別の `provider-events.jsonl`、実projectのコピー、初回採点 `result.json`、`summary.json` を保持。初回REDを上書きしていない
 - 初回監査: `.tmp/development-implementation-actions-audit.mjs` と `.json`、ログ `/private/tmp/takt-implementation-actions-audit.log` を保持
 - コマンド照合修正後の監査: `.tmp/development-implementation-actions-audit-v2.mjs` と `.json`、ログ `/private/tmp/takt-action-scoring-audit-v2.log` を保持
-- 最新監査: `node .tmp/development-implementation-actions-audit-v3.mjs`。結果 `.tmp/development-implementation-actions-audit-v3.json`、ログ `/private/tmp/takt-action-cr-final-audit.log`。現在ソースと固定入力の一致、fixture・期待値の新旧同一性、全12応答の採点、実コマンド・成果物・実行時間順序を確認し、モデルは再呼び出ししない
+- 前回修正時点の監査: `.tmp/development-implementation-actions-audit-v3.mjs` と `.json`、ログ `/private/tmp/takt-action-cr-final-audit.log`。当時のソースと固定入力の一致、fixture・期待値の新旧同一性、全12応答の採点、実コマンド・成果物・実行時間順序を確認した。後述の指示文修正後の入力とは異なる
 - 実行ログ: `/private/tmp/takt-implementation-actions-{baseline,baseline-kimi,candidate}.log`
 
 現変更後のbuild、unit 6,162件、light IT 2,490件、lint、smoke 19成功・1skip、変更heavy IT 84件、分類契約20件、eval契約21件、evalへの直接ESLint、`git diff --check` はすべて成功した。ログは `/private/tmp/takt-implementation-completion-{build,unit,light-it,lint,smoke,engine,classification,eval-final}.log`、直接ESLintは `/private/tmp/takt-implementation-actions-eslint-final.log`。補助Phase 3ケースの期待先は自己ループ撤回という仕様変更に合わせてABORTへ更新したが、過去応答の期待値だけを変えて現行モデル評価として数えていない。
@@ -215,3 +215,35 @@ Kimiの初回起動は、CLIが `--prompt` と `--yolo` の併用を引数検証
 続くCodeRabbitの5指摘も評価コード内で対応した。不正なlabels JSONは既存の処理が正しく拒否していたため、テストで `reason: malformed_artifacts` を直接確認するよう強化した。設定欠落・非文字列ゲート、Codexの非JSON診断行、Codex/Kimiの出力欠落、中断後の再開は、既存処理の機械的な関数抽出後に30件中6件のREDを確認した。修正後は設定形状と条件文言を明示的に検証し、Codexだけ非JSON行を読み飛ばして `unparsedLines` に件数を記録する。欠落または非文字列のコマンド出力は空文字列へ正規化して成功証拠にしない。中断ディレクトリは削除せず `.interrupted-*/sample` へ移し、成功済みの結果は保護する。テストは複数回の中断再開でも元の診断・実行記録・作業成果が残ることを確認する。
 
 対象契約30/30、直接ESLint、`git diff --check` が成功した。ログは `/private/tmp/takt-action-cr-final-{red,green,eslint}.log`。v3監査でも全12保存応答の合否、プロンプト・fixture・期待値の一致を維持した。追加のモデル呼び出し、本体変更、広範囲の本体テストの反復は行っていない。
+
+## 実行機構への言及を除いた指示の再評価
+
+`4022af9eeb5529f56da2d0869d31c5aaf2b34b24` の後、実装instructionの「今回の呼び出し」「この工程」「後続のレポート出力・判定フェーズ」「次の呼び出し」を、実行可能な必須作業を完遂してから結果を報告する直接的な手順へ置き換えた。日本語を正本として英語にも反映し、正常終了の確認、明示された検証義務、証跡引継ぎの条件、実行禁止・外部操作・回答待ちの区別は維持した。workflowの判定条件や遷移は変更していない。
+
+同じ2ケースと期待値を使い、新しい日本語合成プロンプトを `.tmp/development-implementation-actions-direct/manifest.json` に固定して、Claude Opus 5、Codex Astra xhigh、Kimi Code k3を各2件実行した。manifestのSHA256は `8c71ed71729c51a43c60a710ee24138d9a0756a8554d0e6d686bff13ef796d44`。送信前の `preflight.json` にfixture・期待値・モデル設定の一致を記録した。旧baselineの6応答とCodexのREDは保存済みのものを維持し、再実行していない。前回の候補6応答を新候補の結果として流用しない。英語instructionは意味の一致と配線を確認する範囲で、今回の実モデル評価は日本語に限る。
+
+Claudeの2応答は、限定したshell構文の自動照合では不合格だった。1件目は `npm run -s $s` と `tail -5`、2件目は無引用の `echo ----` が未対応である。採点器や期待値は変更せず、不合格の初回結果を保持する。実行記録の手動確認では、定数forに5つのscriptがすべて列挙され、Bashの非エラー結果に各検証の成功出力と `exit=0` があり、検証スクリプト・package.json・元要件・計画は不変、生成物も期待値と一致していた。自動採点と、実際に確認できた検証行動を分けて記録する。
+
+自動採点は次のとおり。旧版は既存baseline応答の再監査であり、新たなモデル試行ではない。
+
+| モデル | 保存済み旧baseline | 新しい指示文 |
+|--------|--------------------|---------------|
+| Claude Opus 5 | 2/2 | 0/2（対応外構文） |
+| Codex Astra xhigh | 1/2 | 2/2 |
+| Kimi Code k3 | 2/2 | 2/2 |
+
+実provider記録とファイルの手動確認は、上の自動採点とは別の観測結果である。各件で固定された5検証の実行記録、不変のcheckerと入力資料、期待する生成物、検証結果の取得後に結果を報告した順序を確認した。
+
+| モデル | 確認件数 | 終了結果の証拠範囲 |
+|--------|----------|----------------------|
+| Claude Opus 5 | 2件 | 固定forに全5script、非エラーのBash結果、各検証の成功出力と `exit=0` |
+| Codex Astra xhigh | 2件 | 全5コマンドのcommand_executionに `exit_code: 0` と成功出力 |
+| Kimi Code k3 | 2件 | 全5コマンドの `&&` 連結と成功出力。個別exit codeは取得不可で、最後の検証は不変checkerと生成物を併せた間接証拠 |
+
+Codexでは、旧baselineで明示義務を残して終了した同じ条件競合ケースに対し、新しい指示文でも成果物検証まで実行した。直前の指示文でも同ケースは成功していたため、今回の言い換え単独による改善を示すRED→GREENとは扱わない。単純な未実行ケースも回帰確認である。2つの小さな固定ケースによる結果であり、元runの再実行や一般的な失敗率・時間削減の測定ではない。
+
+新しい保存先は `.tmp/development-implementation-actions-direct/`。`manifest.json`、`preflight.json`、各モデルの `provider-events.jsonl`・`project/`・初回 `result.json`、`summary.json` を保持する。`node .tmp/development-implementation-actions-direct/audit.mjs` の結果は同ディレクトリの `audit.json` に保存し、現ソースとの一致、旧新のfixture・期待値の同一性、保存済み旧6応答と新6応答の採点を確認した。`manual-observations.mjs` と `manual-observations.json` は、手動確認したコマンド・成功出力・元JSONLの行番号・結果報告との順序を抽出した別の記録であり、自動採点を上書きしない。実行ログは `/private/tmp/takt-direct-completion-{prepare,models,audit,manual}.log`。
+
+本体検証はbuild、unit 6,162件、lint、対象routing 84件、eval契約30件、smoke 19成功・1skipが成功した。通常のlight ITは2回とも2,490件が成功した一方、Vitest workerの `Timeout calling "onTaskUpdate"` が各1件残った。終了コードは0だったが、通常並列ゲートが問題なく成功したとは扱わず、両方のログを保持した。切り分けのため `npm run test:it:light -- --maxWorkers=1` も実行し、2,490件成功・終了コード0・同じ通信エラー1件という結果だった。通信エラーの原因は未確定であり、この文面修正でrunnerやtimeout設定は変更していない。追加の試行は行わない。
+
+検証ログは `/private/tmp/takt-direct-completion-{build,unit,lint,routing,eval,smoke,light-it,light-it-retry,light-it-serial}.log`。最終差分の `git diff --check` も成功した。
