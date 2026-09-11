@@ -2,6 +2,7 @@
  * Cursor Agent CLI integration for agent interactions
  */
 
+import { StringDecoder } from 'node:string_decoder';
 import type { AgentResponse } from '../../core/models/index.js';
 import { crossSpawn, getErrorMessage, guardChildProcessStreams, createLogger } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
@@ -132,8 +133,16 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
     let stderr = '';
     let stdoutBytes = 0;
     let stderrBytes = 0;
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
     let settled = false;
     let abortTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const finishOutput = (): CursorExecResult => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
+      return { stdout, stderr };
+    };
 
     const abortHandler = (): void => {
       if (settled) return;
@@ -175,35 +184,33 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
     };
 
     const appendChunk = (target: 'stdout' | 'stderr', chunk: Buffer | string): void => {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
-      const byteLength = Buffer.byteLength(text);
+      if (settled) return;
+      const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
 
       if (target === 'stdout') {
-        stdoutBytes += byteLength;
+        stdoutBytes += bytes.length;
         if (stdoutBytes > CURSOR_MAX_BUFFER_BYTES) {
           child.kill('SIGTERM');
           rejectOnce(createExecError('cursor-agent stdout exceeded buffer limit', {
             code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
-            stdout,
-            stderr,
+            ...finishOutput(),
           }));
           return;
         }
-        stdout += text;
+        stdout += stdoutDecoder.write(bytes);
         return;
       }
 
-      stderrBytes += byteLength;
+      stderrBytes += bytes.length;
       if (stderrBytes > CURSOR_MAX_BUFFER_BYTES) {
         child.kill('SIGTERM');
         rejectOnce(createExecError('cursor-agent stderr exceeded buffer limit', {
           code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
-          stdout,
-          stderr,
+          ...finishOutput(),
         }));
         return;
       }
-      stderr += text;
+      stderr += stderrDecoder.write(bytes);
     };
 
     child.stdout?.on('data', (chunk: Buffer | string) => appendChunk('stdout', chunk));
@@ -213,32 +220,30 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
       if (source === 'process') {
         rejectOnce(createExecError(error.message, {
           code: (error as NodeJS.ErrnoException).code,
-          stdout,
-          stderr,
+          ...finishOutput(),
         }));
         return;
       }
       rejectOnce(createExecError(`cursor-agent ${source} stream error: ${error.message}`, {
-        stdout,
-        stderr,
+        ...finishOutput(),
       }), true);
     });
 
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
+      const output = finishOutput();
 
       if (options.abortSignal?.aborted) {
         rejectOnce(createExecError(CURSOR_ABORTED_MESSAGE, {
           name: 'AbortError',
-          stdout,
-          stderr,
+          ...output,
           signal,
         }));
         return;
       }
 
       if (code === 0) {
-        resolveOnce({ stdout, stderr });
+        resolveOnce(output);
         return;
       }
 
@@ -246,8 +251,7 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
         `cursor-agent exited with ${formatProcessExitCause(code, signal)}`,
         {
           ...(typeof code === 'number' ? { code } : {}),
-          stdout,
-          stderr,
+          ...output,
           signal,
         },
       ));
@@ -439,9 +443,16 @@ function cursorToolResult(call: CursorToolCall): { content: string; isError: boo
   }
   const result = toRecord(call.result);
   const hasSuccess = result !== undefined && Object.prototype.hasOwnProperty.call(result, 'success');
-  const payload = result?.success === false
-    ? result.error
-    : hasSuccess ? result?.success : result?.error ?? call.result;
+  let payload: unknown;
+  if (result?.success === true) {
+    payload = result;
+  } else if (result?.success === false) {
+    payload = result.error;
+  } else if (hasSuccess) {
+    payload = result?.success;
+  } else {
+    payload = result?.error ?? call.result;
+  }
   const content = extractStructuredText(payload) ?? '';
   return {
     content,
