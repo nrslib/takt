@@ -62,6 +62,7 @@
     "src/__tests__/it-central-task-process.test.ts",
     "src/__tests__/it-cli-dynamic-import-error.test.ts",
     "src/__tests__/it-cli-entrypoint-lazy-loading.test.ts",
+    "src/__tests__/it-cli-list-selector-overrides.test.ts",
     "src/__tests__/it-web-ui-retry-dom.test.ts",
     "src/__tests__/it-workflow-all-steps-rules.test.ts",
     "src/__tests__/loopAnalysis.test.ts",

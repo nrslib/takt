@@ -1507,7 +1507,8 @@ async function submitChat(event) {
 
 async function finalizeReviewedTask() {
   if (
-    taskActionSurface === null
+    chatOperationInProgress
+    || taskActionSurface === null
     || taskActionSurface.action !== 'retry'
     || taskActionFinalizationState(taskActionSurface) !== 'reviewing'
     || typeof taskActionSurface.reviewedTask !== 'string'
@@ -1550,7 +1551,8 @@ async function finalizeReviewedTask() {
 
 async function continueReviewedTask() {
   if (
-    taskActionSurface === null
+    chatOperationInProgress
+    || taskActionSurface === null
     || taskActionSurface.action !== 'retry'
     || taskActionFinalizationState(taskActionSurface) !== 'reviewing'
     || chatSession === null
@@ -1573,7 +1575,7 @@ async function continueReviewedTask() {
 }
 
 async function cancelTaskActionConversation() {
-  if (chatSession === null || taskActionSurface === null) return;
+  if (chatOperationInProgress || chatSession === null || taskActionSurface === null) return;
   setChatOperationInProgress(true);
   try {
     await cancelTaskAction(chatSession.id);

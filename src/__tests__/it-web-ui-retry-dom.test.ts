@@ -342,6 +342,12 @@ function flush() {
   return new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+function deferResponse() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+}
+
 function retryChatSession() {
   return {
     id: 'retry-session',
@@ -368,6 +374,8 @@ describe('Web UI Retry 本番 DOM 経路', () => {
   let goRequests = 0;
   let cancelRequests = 0;
   let failNextQueueRequest = false;
+  let continueRequestGate: Promise<void> | undefined;
+  let cancelRequestGate: Promise<void> | undefined;
   const task = {
     projectId: 'project-1',
     taskId: 'task-1',
@@ -393,6 +401,8 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     goRequests = 0;
     cancelRequests = 0;
     failNextQueueRequest = false;
+    continueRequestGate = undefined;
+    cancelRequestGate = undefined;
     document = createDocument();
     const window = {
       addEventListener: vi.fn(),
@@ -453,9 +463,13 @@ describe('Web UI Retry 本番 DOM 経路', () => {
         });
       }
       if (path === '/api/chat/sessions/retry-session/restart') return jsonResponse(retryChatSession());
-      if (path === '/api/chat/sessions/retry-session/continue') return jsonResponse({ status: 'continued' });
+      if (path === '/api/chat/sessions/retry-session/continue') {
+        if (continueRequestGate !== undefined) await continueRequestGate;
+        return jsonResponse({ status: 'continued' });
+      }
       if (path === '/api/chat/sessions/retry-session/cancel') {
         cancelRequests += 1;
+        if (cancelRequestGate !== undefined) await cancelRequestGate;
         return cancelRequests === 1
           ? jsonResponse({ error: 'cancel failed' }, 409)
           : jsonResponse({ status: 'cancelled' });
@@ -579,6 +593,64 @@ describe('Web UI Retry 本番 DOM 経路', () => {
       taskActionOptionId: 'restart:plan',
     });
     expect(messageRequests).toBe(5);
+  });
+
+  it.each(['continue', 'cancel'] as const)('sends only one request while %s is pending and allows another operation afterward', async (action) => {
+    await startRetry();
+    const message = document.nodes.get('#chat-message');
+    const form = document.nodes.get('#chat-form');
+    const reviewOptions = document.nodes.get('#chat-task-action-options');
+    if (message === undefined || form === undefined || reviewOptions === undefined) {
+      throw new Error('Retry DOM elements were not initialized');
+    }
+    message.value = '/go';
+    message.dispatchEvent('input');
+    form.requestSubmit();
+    await flush();
+
+    const response = deferResponse();
+    if (action === 'continue') continueRequestGate = response.promise;
+    else cancelRequestGate = response.promise;
+    const buttonIndex = action === 'continue' ? 1 : 2;
+    const reviewButtons = reviewOptions.querySelectorAll('button.chat-task-action-review-button');
+    expect(reviewButtons).toHaveLength(3);
+    const requestsBeforeAction = requests.length;
+    try {
+      reviewButtons[buttonIndex]!.dispatchEvent('click');
+      reviewButtons[buttonIndex]!.dispatchEvent('click');
+      for (const button of reviewButtons) button.dispatchEvent('click');
+      await flush();
+
+      expect(requests.slice(requestsBeforeAction).map((request) => request.path))
+        .toEqual([`/api/chat/sessions/retry-session/${action}`]);
+      expect(reviewOptions.querySelectorAll('button.chat-task-action-review-button')).toHaveLength(3);
+      expect(reviewOptions.querySelector('select')?.disabled).toBe(true);
+    } finally {
+      response.release();
+      await flush();
+    }
+
+    if (action === 'continue') {
+      expect(reviewOptions.querySelector('select')?.disabled).toBe(false);
+      message.value = '/go';
+      message.dispatchEvent('input');
+      form.requestSubmit();
+      await flush();
+    } else {
+      expect(document.nodes.get('#chat-message-status')?.textContent).toBe('cancel failed');
+    }
+    const nextButtons = reviewOptions.querySelectorAll('button.chat-task-action-review-button');
+    expect(nextButtons).toHaveLength(3);
+    nextButtons[buttonIndex]!.dispatchEvent('click');
+    await flush();
+
+    expect(requests.filter((request) => request.path.endsWith(`/${action}`))).toHaveLength(2);
+    if (action === 'continue') {
+      expect(reviewOptions.querySelector('select')?.disabled).toBe(false);
+      expect(document.activeElement).toBe(message);
+    } else {
+      expect(reviewOptions.hidden).toBe(true);
+    }
   });
 
   it('shows queue failures and allows restarting the Retry conversation and queueing again', async () => {
