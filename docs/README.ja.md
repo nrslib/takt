@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode`、`pi` などの SDK 経由 provider は Node.js と認証情報で動きます。`deepseek-harness` は Python 3.10+ と公式 SDK/runtime wheel も必要です。CLI 経由 provider を使う場合は対応する外部 CLI が必要です。
+初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode`、`pi` などの SDK 経由 provider は Node.js と認証情報で動きます。`deepseek-harness` は対応 platform で `takt deepseek-harness install` が作成する uv-managed environment も必要です。CLI 経由 provider を使う場合は対応する外部 CLI が必要です。
 
 ### 動画チュートリアル
 
@@ -114,13 +114,13 @@ TAKT の実行には Node.js `>=22.22.0` が必要です。
 - `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-`deepseek-harness` は公式 Python SDK を非公開 JSON-RPC bridge 経由で使用します。Python 3.10+ に対応する SDK/runtime をインストールしてください。
+`deepseek-harness` は TAKT が `uv` で用意する managed environment を、非公開 JSON-RPC bridge 経由で使用します。対応 platform では初回利用前に `takt deepseek-harness install` を一度実行してください。npm install と npm lifecycle hook は環境を構築せず、install 中に provider を起動する場合は installer lock を待たないため未対応です。
 
-```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
-```
+managed environment は uv-managed CPython 3.12 と、同梱の `pyproject.toml` / `uv.lock` に固定された SDK/runtime を使用します。対応 platform は Linux x64/arm64 と macOS arm64 です。Windows と macOS x64 は fail fast し、別 provider へ暗黙 fallback しません。system Python の準備は不要です。package index への接続に proxy、証明書、認証などが必要な場合は `UV_INDEX_URL` や uv 標準の proxy / certificate 環境変数を設定してください。TAKT はそれらを install に渡しますが、`--locked` により同梱 lock を正本として扱います。install の preflight は `uv >= 0.11.0` を要求し、uv が未導入、版を解析できない、または古い場合は既存 managed environment を削除せず停止します。
 
-公式 runtime wheel の対応 platform は Linux x64/arm64 と macOS arm64 です。Windows と macOS x64 は fail fast し、別 provider へ暗黙 fallback しません。`DEEPSEEK_API_KEY` と、任意で `DEEPSEEK_BASE_URL` を環境変数に設定します。SDK と `deepseek-harness-runtime-bin` は対応する release を使用してください。この provider は developer preview の互換性境界であり、matching release 間でも upstream API/event vocabulary が変わる可能性があります。新しい SDK/runtime の組み合わせを使う前に configuration guide の opt-in live smoke を実行してください。
+以前 `pip` で package index を設定していた場合は、uv 標準の `UV_INDEX_URL`、proxy、certificate 環境変数へ移行してください。`uv sync --locked` は同梱 lock を依存関係の正本として使います。
+
+install の `--python` オプションと provider の `python_path` オプションは、managed environment だけを使用する契約のため削除されています。`DEEPSEEK_API_KEY` と、任意で `DEEPSEEK_BASE_URL` を環境変数に設定します。この provider は developer preview の互換性境界であり、新しい SDK/runtime の組み合わせを使う前に configuration guide の opt-in live smoke を実行してください。
 
 次のプロバイダーを使う場合は外部 CLI のインストールが必要です:
 
@@ -315,7 +315,7 @@ run metadata、session、trace、report などの run artifact は `.takt/runs/<
 
 最小設定に加えて `config.yaml`（legacy モード）では内部エージェントの上書き（`takt_providers`）と候補プールから step ごとに provider/model を選択する `auto_routing`（`cost` / `balanced` / `performance` 戦略）を設定できます。オートルーティングの決定は `.takt/events/` に NDJSON としてローカル記録できます。記録はオプトイン（`takt telemetry enable` または `telemetry.routing_decisions`）で、TAKT がルーティング決定をアップロードすることはありません。runtime モードでは provider/model/options と routing を `runtime.yaml` に置きます（後述）。
 
-provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude、Codex、OpenCode、Pi が対象）。`deepseek-harness` は Python 3.10+ と公式 SDK/runtime wheel を別途必要とします。
+provider の認証情報を直接使う場合は CLI のインストールは不要です（Claude、Codex、OpenCode、Pi が対象）。`deepseek-harness` は対応 platform で `takt deepseek-harness install` を実行した managed environment を必要とします。
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)

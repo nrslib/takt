@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-首次运行时，请在 `~/.takt/config.yaml` 中配置 provider，或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`opencode` 和 `pi` 等 SDK provider 可在 Node.js 中运行；`deepseek-harness` 还需要 Python 3.10+ 和官方 runtime wheel。CLI provider 还需要对应的外部 CLI。
+首次运行时，请在 `~/.takt/config.yaml` 中配置 provider，或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`opencode` 和 `pi` 等 SDK provider 可在 Node.js 中运行；`deepseek-harness` 还需要在支持平台上由 `takt deepseek-harness install` 创建的 uv-managed environment。CLI provider 还需要对应的外部 CLI。
 
 ### 视频教程
 
@@ -112,13 +112,13 @@ TAKT 需要 Node.js `>=22.22.0`。
 - `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-`deepseek-harness` 通过私有 JSON-RPC bridge 使用官方 Python SDK。请在 Python 3.10+ 中安装匹配的 SDK/runtime 包：
+`deepseek-harness` 使用 TAKT 通过 `uv` 构建的 managed environment，并通过私有 JSON-RPC bridge 运行官方 Python SDK。在支持的平台上，首次使用前请运行一次 `takt deepseek-harness install`。npm install 和 npm lifecycle hook 不会构建环境；install 期间启动 provider 不受支持，因为 provider 不会等待 installer lock。
 
-```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
-```
+managed environment 使用 uv-managed CPython 3.12，以及同捆 `pyproject.toml` / `uv.lock` 中固定的 SDK/runtime 版本。支持 Linux x64/arm64 和 macOS arm64；Windows 和 macOS x64 会快速失败，TAKT 不会静默切换到其他 provider，也不需要准备 system Python。若 package index 需要 proxy、证书或认证，请设置 `UV_INDEX_URL` 及 uv 标准的 proxy / certificate 环境变量；TAKT 会将这些设置传给 install，而 `--locked` 会让同捆 lock 保持权威。install preflight 要求 `uv >= 0.11.0`；未安装、无法解析版本或版本过低时，会在删除现有 managed environment 之前停止。
 
-官方 runtime 当前支持 Linux x64/arm64 和 macOS arm64。Windows 和 macOS x64 会快速失败；TAKT 不会静默切换到其他 provider。请设置 `DEEPSEEK_API_KEY`，也可以设置 `DEEPSEEK_BASE_URL`。Python SDK 与 `deepseek-harness-runtime-bin` 必须来自匹配的版本。这是 developer-preview 兼容性边界；使用新的 SDK/runtime 组合前，请按照配置指南执行 opt-in live smoke。
+如果之前通过 `pip` 配置 package index，请迁移到 uv 标准的 `UV_INDEX_URL`、proxy 和 certificate 环境变量；`uv sync --locked` 将同捆 lock 作为依赖来源。
+
+install 的 `--python` 选项和 provider 的 `python_path` 选项已删除，因为只支持 managed environment。请设置 `DEEPSEEK_API_KEY`，也可以设置 `DEEPSEEK_BASE_URL`。这是 developer-preview 兼容性边界；使用新的 SDK/runtime 组合前，请按照配置指南执行 opt-in live smoke。
 
 以下 provider 需要外部 CLI：
 
@@ -359,7 +359,7 @@ auto_routing:
 
 更完整的配置、provider profile、model 解析和 `runtime.yaml` 说明请参阅[配置指南](./configuration.zh-CN.md)。
 
-TAKT 也可以直接使用 provider 凭据（当对应 SDK/runtime 已安装时不需要 CLI）：
+TAKT 也可以直接使用 provider 凭据（claude-sdk、Codex、OpenCode 和 Pi 不需要安装 CLI；DeepSeek Harness 仍需先运行 `takt deepseek-harness install` 创建 uv-managed environment）：
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic（Claude）

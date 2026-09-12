@@ -29,6 +29,16 @@
 
 全局配置目录默认为 `~/.takt/`，可通过 `TAKT_CONFIG_DIR` 环境变量修改。
 
+## DeepSeek Harness managed environment
+
+| 命令 | 说明 |
+|------|------|
+| `takt deepseek-harness install` | 在 `<global TAKT dir>/deepseek-harness/` 下创建或修复 uv-managed CPython 3.12 环境 |
+
+install 会复制同捆的 `pyproject.toml` 和 `uv.lock`，然后只执行一次 `uv sync --locked` project sync。它不接受 `--python` 或 `--uv-path`，provider 的 `python_path` 选项也不受支持；interpreter 由 managed environment 固定。选择 `deepseek-harness` provider 前请先运行一次 `takt deepseek-harness install`。npm install 和 npm lifecycle hook 不会构建或修复环境；install 期间启动 provider 可能失败，因为 provider 不会等待 installer lock。
+
+managed environment 支持 Linux x64/arm64 和 macOS arm64。Windows 和 macOS x64 会快速失败，也不需要准备 system Python。受限 package index 需要 proxy、证书或认证时，请使用 uv 标准的 `UV_INDEX_URL`、proxy 和 certificate 环境变量。如果之前通过 `pip` 配置 package index，请迁移到这些 uv 设置；`uv sync --locked` 会让同捆 lock 保持权威。install preflight 要求 `uv >= 0.11.0`；uv 未安装、版本无法解析或版本过低时，会在删除现有 managed environment 之前停止。
+
 ## 交互模式
 
 交互模式会先与 AI 对话来完善任务内容，然后再执行。当需求不明确，或希望在咨询 AI 的同时明确内容时，这种模式很有用。

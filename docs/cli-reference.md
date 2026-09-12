@@ -29,6 +29,16 @@ This document provides a complete reference for all TAKT CLI commands and option
 
 The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
 
+## DeepSeek Harness managed environment
+
+| Command | Description |
+|---------|-------------|
+| `takt deepseek-harness install` | Create or repair the uv-managed CPython 3.12 environment under `<global TAKT dir>/deepseek-harness/` |
+
+The install command copies the shipped `pyproject.toml` and `uv.lock`, then runs one `uv sync --locked` for the project. It does not accept `--python` or `--uv-path`, and the provider `python_path` option is not supported; the interpreter is fixed by the managed environment. Run `takt deepseek-harness install` once before selecting the `deepseek-harness` provider. npm install and npm lifecycle hooks do not build or repair this environment; a provider started during installation may fail because it does not wait for the installer lock.
+
+The managed environment supports Linux x64/arm64 and macOS arm64. Windows and macOS x64 fail fast, and a system Python installation is not required. Use uv's standard network configuration (`UV_INDEX_URL`, proxy, and certificate variables) for restricted package indexes. If package-index access was previously configured with `pip`, migrate to those uv settings; `uv sync --locked` keeps the shipped lock authoritative.
+
 ## Web UI execution boundary
 
 Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.

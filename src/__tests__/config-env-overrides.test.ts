@@ -109,6 +109,18 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('ignores the removed DeepSeek Python path environment override', () => {
+    const projectDir = join(testRoot, 'project-deepseek-python-path-removed');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: deepseek-harness\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH = '/tmp/removed-python';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions?.deepseekHarness).toBeUndefined();
+  });
+
   it.each([
     { configValue: true, envValue: 'false', expectedValue: false },
     { configValue: false, envValue: 'true', expectedValue: true },

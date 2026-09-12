@@ -49,7 +49,6 @@ describe('DeepSeekHarnessProvider', () => {
       sessionId: 'session-1',
       providerOptions: {
         deepseekHarness: {
-          pythonPath: '/usr/bin/python3',
           requestTimeoutMs: 12_000,
         },
       },
@@ -62,7 +61,6 @@ describe('DeepSeekHarnessProvider', () => {
       model: 'deepseek-v4-flash',
       sessionId: 'session-1',
       providerOptions: {
-        pythonPath: '/usr/bin/python3',
         requestTimeoutMs: 12_000,
       },
       abortSignal: abortController.signal,
@@ -75,7 +73,7 @@ describe('DeepSeekHarnessProvider', () => {
   it.each([
     ['permissionMode', { permissionMode: 'readonly' as const }],
     ['bypassPermissions', { bypassPermissions: true }],
-    ['allowedTools', { allowedTools: ['Read'] }],
+    ['allowedTools', { allowedTools: ['Read'] as string[] }],
   ] as const)('returns an error before bridge invocation for unsupported %s constraints', async (_name, constraint) => {
     mockCallDeepSeekHarness.mockClear();
 

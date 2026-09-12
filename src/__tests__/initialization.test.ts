@@ -56,7 +56,7 @@ describe('initialization', () => {
   });
 
   describe('promptProviderSelection', () => {
-    it('should include supported CLI provider choices and return the selected provider', async () => {
+    it('should label the DeepSeek provider as a managed environment and return the selected provider', async () => {
       vi.mocked(selectOptionWithDefault).mockResolvedValueOnce('kiro');
 
       const result = await promptProviderSelection();
@@ -67,7 +67,7 @@ describe('initialization', () => {
         expect.arrayContaining([
           { label: 'Claude Code terminal (experimental)', value: 'claude-terminal' },
           { label: 'Kiro CLI', value: 'kiro' },
-          { label: 'DeepSeek Harness (official Python SDK, developer preview)', value: 'deepseek-harness' },
+          { label: 'DeepSeek Harness (managed environment via uv, official Python SDK, developer preview)', value: 'deepseek-harness' },
         ]),
         'claude',
       );

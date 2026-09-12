@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -10,19 +10,17 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanBuildOutput } from '../../scripts/clean-build-output.mjs';
 import { resolveNpmInvocation } from '../../scripts/npm-invocation.mjs';
 
-interface PackFile {
-  readonly path: string;
+interface PackResult {
+  readonly filename?: string;
 }
 
-interface PackResult {
-  readonly files: readonly PackFile[];
-}
+const deepSeekHarnessAssetNames = ['pyproject.toml', 'uv.lock'] as const;
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const buildTimeoutMs = 60_000;
@@ -91,7 +89,7 @@ describe('build output cleanup', () => {
     expect(readFileSync(join(root, 'source.ts'), 'utf8')).toBe('export const current = true;\n');
   });
 
-  it('excludes stale dist artifacts from the built package', () => {
+  it('packs managed runtime assets and excludes stale dist artifacts', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-build-package-clean-'));
     roots.push(root);
     const projectRoot = join(root, 'project');
@@ -110,21 +108,37 @@ describe('build output cleanup', () => {
     runNpm(projectRoot, npmCache, ['run', 'build'], buildTimeoutMs);
     const packOutput = runNpm(projectRoot, npmCache, [
       'pack',
-      '--dry-run',
       '--json',
       '--ignore-scripts',
+      '--pack-destination',
+      root,
       '--cache',
       npmCache,
     ], packTimeoutMs);
     const packResults = JSON.parse(packOutput) as readonly PackResult[];
     const packResult = packResults[0];
-    if (packResult === undefined) {
-      throw new Error('npm pack did not return a package result');
+    const archiveName = packResult?.filename;
+    if (archiveName === undefined) {
+      throw new Error('npm pack did not produce an archive');
     }
-    const packageEntries = packResult.files.map((file) => file.path);
 
-    expect(packResults).toHaveLength(1);
-    expect(packageEntries).toContain('dist/index.js');
-    expect(packageEntries).not.toContain(staleArtifact);
+    const packageExtractRoot = join(root, 'package-extract');
+    mkdirSync(packageExtractRoot);
+    const archivePath = isAbsolute(archiveName) ? archiveName : join(root, archiveName);
+    execFileSync('tar', ['-xzf', archivePath, '-C', packageExtractRoot], { stdio: 'ignore' });
+
+    const packagedRoot = join(packageExtractRoot, 'package');
+    expect(existsSync(join(packagedRoot, 'dist', 'index.js'))).toBe(true);
+    const packagedHarnessRoot = join(
+      packagedRoot,
+      'dist',
+      'infra',
+      'deepseek-harness',
+    );
+    for (const assetName of deepSeekHarnessAssetNames) {
+      expect(readFileSync(join(packagedHarnessRoot, assetName), 'utf8'))
+        .toBe(readFileSync(join(projectRoot, 'src', 'infra', 'deepseek-harness', assetName), 'utf8'));
+    }
+    expect(existsSync(join(packagedRoot, staleArtifact))).toBe(false);
   });
 });

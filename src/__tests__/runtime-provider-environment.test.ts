@@ -227,7 +227,7 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
     });
   });
 
-  it('allows a DeepSeek Python executable override from a global runtime profile', () => {
+  it('rejects the removed DeepSeek Python executable override from a global runtime profile', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },
       profiles: {
@@ -235,21 +235,15 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
           provider: 'deepseek-harness',
           model: 'deepseek-v4-flash',
           options: {
-            python_path: '/opt/user-python',
+            python_path: '/opt/removed-python',
             base_url: 'https://proxy.example.test/v1',
           },
         },
       },
     };
 
-    const env = compileRuntimeProviderEnvironment(section, globalRuntimeResolutionContext);
-
-    expect(env.providerOptions).toEqual({
-      deepseekHarness: {
-        pythonPath: '/opt/user-python',
-        baseUrl: 'https://proxy.example.test/v1',
-      },
-    });
+    expect(() => compileRuntimeProviderEnvironment(section, globalRuntimeResolutionContext))
+      .toThrow('python_path');
   });
 
   it('resolves relative paths from a trusted global runtime profile before execution', () => {
@@ -445,7 +439,7 @@ describe('compileRuntimeProviderEnvironment (auto routing)', () => {
       { step: { name: 'wf/persona', personaKey: 'coder' }, poolName: 'persona-pool', candidate: 'persona', model: 'm-persona' },
       { step: { name: 'wf/tag', tags: ['high-stakes'] }, poolName: 'tag-pool', candidate: 'tag', model: 'm-tag' },
       { step: { name: 'execute' }, poolName: 'main', candidate: 'low', model: 'pool-model' },
-    ] as const;
+    ];
     for (const target of routedTargets) {
       expect(selectRoutingCandidate({
         autoRouting: env.autoRouting!,
@@ -684,7 +678,7 @@ describe('collectLegacyProviderSignals', () => {
       personaProviders: undefined,
       providerRouting: undefined,
       autoRouting: undefined,
-      providerOptions: { codex: { network_access: true } },
+      providerOptions: { codex: { network_access: true } } as unknown as LegacyProviderEnvironmentInput['providerOptions'],
     };
     expect(collectLegacyProviderSignals(legacy, 'global').map((s) => s.setting))
       .toContain('provider_options');

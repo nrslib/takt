@@ -105,8 +105,8 @@ def _error_message(error: BaseException) -> str:
 
 def _start_harness(config: dict[str, Any]) -> Any:
     python_version = (sys.version_info.major, sys.version_info.minor)
-    if python_version < (3, 10):
-        raise RuntimeError("DeepSeek Harness requires Python 3.10 or newer")
+    if sys.implementation.name != "cpython" or python_version != (3, 12):
+        raise RuntimeError("DeepSeek Harness requires managed CPython 3.12")
 
     try:
         from deepseek_harness import DeepSeekHarness

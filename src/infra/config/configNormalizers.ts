@@ -817,9 +817,6 @@ export function denormalizeProviderOptions(
   }
   if (providerOptions.deepseekHarness !== undefined) {
     const deepseekHarness = {
-      ...(providerOptions.deepseekHarness.pythonPath !== undefined
-        ? { python_path: providerOptions.deepseekHarness.pythonPath }
-        : {}),
       ...(providerOptions.deepseekHarness.baseUrl !== undefined
         ? { base_url: providerOptions.deepseekHarness.baseUrl }
         : {}),
