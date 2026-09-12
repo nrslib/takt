@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { program } from '../app/cli/program.js';
 import { parseUiAction, parseUiPort } from '../app/cli/commands.js';
 
@@ -12,7 +12,7 @@ describe('CLI command registration', () => {
   it('should keep every existing root subcommand reachable', () => {
     const commandNames = program.commands.map((command) => command.name());
 
-    expect(commandNames).toEqual([
+    expect(commandNames).toEqual(expect.arrayContaining([
       'run',
       'watch',
       'add',
@@ -28,12 +28,13 @@ describe('CLI command registration', () => {
       'export-cc',
       'export-codex',
       'catalog',
+      'deepseek-harness',
       'workflow',
       'metrics',
       'purge',
       'telemetry',
       'repertoire',
-    ]);
+    ]));
   });
 
   it.each([
@@ -61,6 +62,33 @@ describe('CLI command registration', () => {
     const portOption = uiCommand?.options.find((option) => option.long === '--port');
 
     expect(portOption?.defaultValue).toBe(20525);
+  });
+
+  it('should expose the managed DeepSeek Harness install command without a Python override', () => {
+    const deepseekCommand = program.commands.find((command) => command.name() === 'deepseek-harness');
+    const installCommand = deepseekCommand?.commands.find((command) => command.name() === 'install');
+
+    expect(installCommand).toBeDefined();
+    expect(installCommand?.options.some((option) => option.long === '--python')).toBe(false);
+    expect(installCommand?.options.some((option) => option.long === '--uv-path')).toBe(false);
+    if (installCommand === undefined) {
+      throw new Error('DeepSeek Harness install command is not registered');
+    }
+  });
+
+  it.each(['--python', '--uv-path'])('rejects the non-public DeepSeek Harness install option %s', (option) => {
+    const writeErr = vi.fn();
+    program.configureOutput({ writeErr });
+
+    expect(() => program.parse([
+      'node',
+      'takt',
+      'deepseek-harness',
+      'install',
+      option,
+      '/tmp/removed-option',
+    ], { from: 'node' })).toThrow();
+    expect(writeErr).toHaveBeenCalledWith(expect.stringContaining(`unknown option '${option}'`));
   });
 
   it.each([

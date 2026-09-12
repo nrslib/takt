@@ -143,13 +143,13 @@ function acquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock {
 /** Wait without blocking other users of the same file in this process. */
 export async function runPrivateFileExclusiveAsync<Result>(
   lockPath: string,
-  action: () => Result,
+  action: () => Result | PromiseLike<Result>,
 ): Promise<Result> {
   ensurePrivateDirectory(dirname(lockPath));
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   while (true) {
     const acquired = tryAcquirePrivateFileLock(lockPath);
-    if (acquired !== undefined) return runWithAcquiredLock(lockPath, acquired, action);
+    if (acquired !== undefined) return runWithAcquiredLockAsync(lockPath, acquired, action);
     assertLockDeadline(lockPath, deadline);
     await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
   }
@@ -163,37 +163,76 @@ export function runPrivateFileExclusive<Result>(
   return runWithAcquiredLock(lockPath, acquired, action);
 }
 
+function releasePrivateFileLock(
+  lockPath: string,
+  acquired: AcquiredPrivateFileLock,
+): unknown {
+  try {
+    if (!removeLockIfUnchanged(lockPath, acquired)) {
+      throw new Error(`Private file lock ownership changed before release: ${lockPath}`);
+    }
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+function combineLockActionErrors(
+  lockPath: string,
+  actionFailed: boolean,
+  actionError: unknown,
+  releaseError: unknown,
+): never | undefined {
+  const releaseFailed = releaseError !== undefined;
+  if (actionFailed && releaseFailed) {
+    throw new AggregateError(
+      [actionError, releaseError],
+      `Private file action and lock release both failed: ${lockPath}`,
+    );
+  }
+  if (actionFailed) {
+    throw actionError;
+  }
+  if (releaseFailed) {
+    throw releaseError;
+  }
+  return undefined;
+}
+
 function runWithAcquiredLock<Result>(
   lockPath: string,
   acquired: AcquiredPrivateFileLock,
   action: () => Result,
 ): Result {
   let result!: Result;
+  let actionFailed = false;
   let actionError: unknown;
   try {
     result = action();
   } catch (error) {
+    actionFailed = true;
     actionError = error;
   }
-  let releaseError: unknown;
+  const releaseError = releasePrivateFileLock(lockPath, acquired);
+  combineLockActionErrors(lockPath, actionFailed, actionError, releaseError);
+  return result;
+}
+
+async function runWithAcquiredLockAsync<Result>(
+  lockPath: string,
+  acquired: AcquiredPrivateFileLock,
+  action: () => Result | PromiseLike<Result>,
+): Promise<Result> {
+  let result!: Result;
+  let actionFailed = false;
+  let actionError: unknown;
   try {
-    if (!removeLockIfUnchanged(lockPath, acquired)) {
-      throw new Error(`Private file lock ownership changed before release: ${lockPath}`);
-    }
+    result = await action();
   } catch (error) {
-    releaseError = error;
+    actionFailed = true;
+    actionError = error;
   }
-  if (actionError !== undefined && releaseError !== undefined) {
-    throw new AggregateError(
-      [actionError, releaseError],
-      `Private file action and lock release both failed: ${lockPath}`,
-    );
-  }
-  if (actionError !== undefined) {
-    throw actionError;
-  }
-  if (releaseError !== undefined) {
-    throw releaseError;
-  }
+  const releaseError = releasePrivateFileLock(lockPath, acquired);
+  combineLockActionErrors(lockPath, actionFailed, actionError, releaseError);
   return result;
 }

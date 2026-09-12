@@ -188,7 +188,7 @@ export TAKT_OPENCODE_API_KEY=...
 # Pi 用
 # Pi SDK の credential store または provider-native 環境変数を使用
 
-# 公式 DeepSeek Harness SDK 用（Python 3.10+。公式名のためプレフィックス規則の例外）
+# 公式 DeepSeek Harness SDK 用 managed environment（uv-managed CPython 3.12）
 export DEEPSEEK_API_KEY=...
 # 任意: export DEEPSEEK_BASE_URL=https://...
 
@@ -204,7 +204,7 @@ export TAKT_KIRO_API_KEY=...
 
 優先順位: 環境変数は `config.yaml` の設定よりも優先されます。
 
-> **注意**: SDK provider（Claude SDK、Codex、OpenCode、Pi）の認証情報を設定すれば、対応する CLI のインストールは不要です。TAKT が API を直接呼び出します。`deepseek-harness` はさらに Python 3.10+、対応する `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` package、Linux x64/arm64 または macOS arm64 が必要です。Windows と macOS x64 は未対応です。Cursor、Copilot、Kiro は CLI のインストールが必要です。
+> **注意**: SDK provider（Claude SDK、Codex、OpenCode、Pi）の認証情報を設定すれば、対応する CLI のインストールは不要です。TAKT が API を直接呼び出します。`deepseek-harness` は `takt deepseek-harness install` で作成する uv-managed environment と、Linux x64/arm64 または macOS arm64 が必要です。Windows と macOS x64 は未対応で、system Python は不要です。Cursor、Copilot、Kiro は CLI のインストールが必要です。
 
 ## コストに関する注意
 

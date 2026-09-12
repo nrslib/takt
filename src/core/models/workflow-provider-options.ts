@@ -133,7 +133,6 @@ export interface CursorProviderOptions {
 
 /** Configuration for the DeepSeek Harness Python SDK bridge. */
 export interface DeepSeekHarnessProviderOptions {
-  pythonPath?: string;
   baseUrl?: string;
   sessionRoot?: string;
   cordis?: string;

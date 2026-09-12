@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { runPrivateFileExclusiveAsync } from '../shared/utils/private-file-lock.js';
 
 const TEST_TMPDIR = realpathSync(tmpdir());
 
@@ -508,6 +509,51 @@ describe('private file artifacts', () => {
 
     expect(existsSync(unexpectedFile)).toBe(false);
     expect(readFileSync(file, 'utf8')).toBe(replacement);
+  });
+
+  it('should recover a stale private-file lock owned by a dead process', async () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-stale-lock-'));
+    roots.push(root);
+    const lockPath = join(root, 'install.lock');
+    const owner = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+    if (owner.pid === undefined) {
+      throw new Error('stale lock fixture process has no PID');
+    }
+    await new Promise<void>((resolve) => owner.once('exit', () => resolve()));
+    writeFileSync(lockPath, JSON.stringify({ pid: owner.pid, token: 'stale-token' }));
+
+    await expect(runPrivateFileExclusiveAsync(lockPath, async () => 'recovered'))
+      .resolves.toBe('recovered');
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('should hold an async private-file lock until the action settles', async () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-async-lock-'));
+    roots.push(root);
+    const lockPath = join(root, 'install.lock');
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstActionFinished = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = runPrivateFileExclusiveAsync(lockPath, async () => {
+      events.push('first-start');
+      await firstActionFinished;
+      events.push('first-end');
+    });
+    await vi.waitFor(() => expect(events).toEqual(['first-start']));
+
+    const second = runPrivateFileExclusiveAsync(lockPath, async () => {
+      events.push('second-start');
+      events.push('second-end');
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(events).toEqual(['first-start']);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
   });
 
   it('should retain both the write and cleanup errors when both operations fail', () => {

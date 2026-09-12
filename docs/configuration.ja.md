@@ -293,8 +293,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     extensions: [npm:pi-fff]
 #     no_skills: true
 #   deepseek_harness:
-#     # python_path と cordis は trusted global / env 専用。project config
-#     # では既定の python3 を使い、Cordis の実行設定は選択できません。
+#     # managed environment は `takt deepseek-harness install` で作成します。
 #     base_url: http://127.0.0.1:8787/v1
 #     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
@@ -467,7 +466,7 @@ export TAKT_OPENCODE_API_KEY=...
 # Pi 用
 # Pi SDK の credential store または provider-native 環境変数を使用
 
-# 公式 DeepSeek Harness SDK 用（Python 3.10+ runtime）
+# 公式 DeepSeek Harness SDK 用（uv-managed CPython 3.12）
 export DEEPSEEK_API_KEY=...
 # 任意: export DEEPSEEK_BASE_URL=https://...
 
@@ -514,7 +513,7 @@ kiro_api_key: ...              # Kiro CLI 用
 - 環境変数の使用を検討してください。
 - 必要に応じて `~/.takt/config.yaml` をグローバル `.gitignore` に追加してください。
 - Cursor provider は `cursor-agent login` が済んでいれば API キーなしでも動作できます。
-- 認証情報を設定すれば、対応する CLI ツール（Claude Code、Codex、OpenCode、Pi）のインストールは不要です。TAKT が対応する API を直接呼び出します。DeepSeek Harness は Python 3.10+、対応する `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` package、Linux x64/arm64 または macOS arm64 が必要です。Windows と macOS x64 は未対応です。
+- 認証情報を設定すれば、対応する CLI ツール（Claude Code、Codex、OpenCode、Pi）のインストールは不要です。TAKT が対応する API を直接呼び出します。DeepSeek Harness は `takt deepseek-harness install` で用意する uv-managed environment と、Linux x64/arm64 または macOS arm64 が必要です。Windows と macOS x64 は未対応で、system Python は不要です。
 - DeepSeek API key は Python bridge の環境変数にだけ渡し、command argument や workflow 生成 config には渡しません。
 - Copilot provider は `copilot` CLI のインストールが必要です。GitHub トークンは認証に使用されます。
 - Kiro provider は `kiro-cli` CLI のインストールが必要です。`TAKT_KIRO_API_KEY` / `kiro_api_key` は子プロセスの `KIRO_API_KEY` として渡されます。どちらも未設定の場合は公式の `KIRO_API_KEY` 環境変数を使用します。
@@ -1187,15 +1186,15 @@ workflow と project config での `base_url` は local proxy 用に限定され
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-`deepseek-harness` は公式の `deepseek-harness-sdk` を Python 3.10+ の子プロセスで起動し、非公開の行指向 JSON-RPC bridge で通信します。SDK と対応する `deepseek-harness-runtime-bin` wheel は別途インストールしてください。
+`deepseek-harness` は TAKT が `uv` で構築する managed environment を使い、公式の `deepseek-harness-sdk` を非公開の行指向 JSON-RPC bridge 経由で起動します。初回の provider 呼び出し前に `takt deepseek-harness install` を一度実行してください。npm install と npm lifecycle hook は環境を構築・修復せず、install 中に起動した provider は installer lock を待たないため未対応です。
 
-```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
-```
+managed environment は uv-managed CPython 3.12 と、同梱の `pyproject.toml` / `uv.lock` に固定された対応 SDK/runtime を使用します。Linux x64/arm64 と macOS arm64 に対応し、Windows と macOS x64 は fail fast します。TAKT は別 provider へ暗黙 fallback せず、system Python の準備も不要です。制限付き package index へ接続する場合は uv 標準の `UV_INDEX_URL`、proxy、certificate 環境変数を設定してください。TAKT はそれらを渡し、`uv sync --locked` により配布された lock を正本にします。install の preflight は `uv >= 0.11.0` を要求し、uv が未導入、版を解析できない、または古い場合は既存 managed environment を削除する前に停止します。
 
-確認済みの公式 runtime wheel は Linux x64/arm64 と macOS arm64 に対応します。Windows と macOS x64 は未対応で fail fast し、TAKT は別 provider へ暗黙 fallback しません。認証情報は意図的に環境変数だけで渡します: `DEEPSEEK_API_KEY` と、任意の `DEEPSEEK_BASE_URL` を設定してください。API key は workflow/config や command argument に書き込みません。
+以前 `pip` で package index を設定していた場合は、uv 標準の `UV_INDEX_URL`、proxy、certificate 環境変数へ移行してください。`uv sync --locked` は配布された lock を依存関係の正本として使います。
 
-この provider は developer preview の互換性境界です。SDK と runtime wheel は対応する release の組み合わせを使い、upstream の API/event vocabulary が release 間で変わる可能性を考慮してください。DeepSeek API quota を意図的に消費するときだけ live smoke を実行してください。通常の unit、integration、mock E2E suite は DeepSeek を呼び出しません。
+install の `--python` オプションと provider の `python_path` オプションは、managed interpreter だけを使用するため削除されています。認証情報は引き続き環境変数だけで渡します: `DEEPSEEK_API_KEY` と、任意の `DEEPSEEK_BASE_URL` を設定してください。API key は workflow/config や command argument に書き込みません。
+
+この provider は developer preview の互換性境界です。DeepSeek API quota を意図的に消費するときだけ live smoke を実行してください。通常の unit、integration、mock E2E suite は DeepSeek を呼び出しません。
 
 opt-in live smoke（対応する Linux/macOS のみ）:
 
@@ -1235,11 +1234,11 @@ bridge 起動前に拒否されます。空白だけの route または model �
 bridge/SDK に渡します。SDK が拒否した場合は、入力された参照と bridge/SDK で
 失敗した箇所を含むエラーになります。
 
-credential safety のため、`python_path` は信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH` からのみ設定できます。workflow と project-local provider options では既定の `python3` executable を使用してください。`cordis` も実行する tool composition を選択するため、信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` からのみ設定できます。上の例では両方の項目を意図的に省略しています。同じ制約は project の `runtime.yaml` profile にも適用されます。global runtime profile では信頼できる値を選択できます。project runtime profile の `base_url` は loopback のみ使用できます。
+credential safety のため、`cordis` は実行する tool composition を選択するため、信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` からのみ設定できます。上の例では省略しています。managed interpreter は install command が固定し、provider option から選択できません。同じ制約は project の `runtime.yaml` profile にも適用されます。global runtime profile では信頼できる値を選択できます。project runtime profile の `base_url` は loopback のみ使用できます。
 
 `session_root` と `cordis` は設定された作業ディレクトリからの相対パスとして解決されます。workflow が `session_key` を指定するとセッションを再利用し、one-shot call は bridge を直ちに close します。`request_timeout_ms` は Python bridge request 全体を終了させ、TAKT call の abort は bridge の process tree を終了させます。公式 `session.event` notification は TAKT の text、thinking、tool-use、tool-result、error、result event へ変換されます。system prompt、TAKT の `allowed_tools`、MCP server map、画像添付、structured output、permission mode、`maxTurns` は公式 SDK の call に存在しないため warning とともに無視されます。system/tool composition は Cordis で設定してください。
 
-対応する環境変数 override は `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`、`_BASE_URL`、`_SESSION_ROOT`、`_CORDIS`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
+対応する環境変数 override は `_BASE_URL`、`_SESSION_ROOT`、`_CORDIS`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
 
 #### ネットワークアクセス (`network_access`)
 

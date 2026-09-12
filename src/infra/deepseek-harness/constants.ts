@@ -1,2 +1,8 @@
 export const DEEPSEEK_HARNESS_DEFAULT_PROVIDER = 'deepseek-official';
 export const DEEPSEEK_HARNESS_DEFAULT_MODEL = 'deepseek-v4-flash';
+
+export const DEEPSEEK_HARNESS_PYTHON_VERSION = '3.12';
+export const DEEPSEEK_HARNESS_PYTHON_REQUIRES = '>=3.12,<3.13';
+export const DEEPSEEK_HARNESS_SDK_VERSION = '0.1.5rc1';
+export const DEEPSEEK_HARNESS_RUNTIME_VERSION = '0.1.5rc1';
+export const DEEPSEEK_HARNESS_MIN_UV_VERSION = '0.11.0';

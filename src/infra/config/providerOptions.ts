@@ -86,7 +86,6 @@ type RawProviderOptions = {
     guards?: RawProviderGuardOptions;
   };
   deepseek_harness?: {
-    python_path?: string;
     base_url?: string;
     session_root?: string;
     cordis?: string;
@@ -108,13 +107,11 @@ type RawProviderOptions = {
 };
 
 type ProviderBaseUrlTrust = 'trusted' | 'loopback-only' | 'local-loopback-only';
-type ProviderPythonPathTrust = 'trusted' | 'untrusted' | 'local-untrusted';
 type ProviderPathTrust = 'trusted' | 'untrusted' | 'local-untrusted';
 type ProviderCordisTrust = 'trusted' | 'untrusted' | 'local-untrusted';
 
 export interface NormalizeProviderOptionsOptions {
   baseUrlTrust?: ProviderBaseUrlTrust;
-  pythonPathTrust?: ProviderPythonPathTrust;
   pathTrust?: ProviderPathTrust;
   cordisTrust?: ProviderCordisTrust;
   pathPrefix?: string;
@@ -192,31 +189,6 @@ function assertAllowedProviderBaseUrl(
   throw new Error(
     `Configuration error: ${path} must use a loopback base_url when defined by workflow or project config. `
     + 'Move non-loopback provider base URLs to global config or TAKT_PROVIDER_OPTIONS_*_BASE_URL.',
-  );
-}
-
-function assertAllowedProviderPythonPath(
-  path: string,
-  value: string | undefined,
-  options: NormalizeProviderOptionsOptions,
-): void {
-  if (value === undefined) {
-    return;
-  }
-  const trust = options.pythonPathTrust ?? 'trusted';
-  if (trust === 'trusted') {
-    return;
-  }
-  if (trust === 'local-untrusted') {
-    const origin = options.getOrigin?.(path) ?? 'default';
-    if (origin !== 'local' && origin !== 'default') {
-      return;
-    }
-  }
-
-  throw new Error(
-    `Configuration error: ${path} may only be set by trusted user configuration. `
-    + 'Use global config or TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH.',
   );
 }
 
@@ -478,11 +450,6 @@ export function normalizeProviderOptions(
       options.deepseek_harness.base_url,
       normalizationOptions,
     );
-    assertAllowedProviderPythonPath(
-      `${deepseekOptionsPath}.python_path`,
-      options.deepseek_harness.python_path,
-      normalizationOptions,
-    );
     assertTrustedProjectPath(
       `${deepseekOptionsPath}.session_root`,
       options.deepseek_harness.session_root,
@@ -494,9 +461,6 @@ export function normalizeProviderOptions(
       normalizationOptions,
     );
     const deepseekHarness: DeepSeekHarnessProviderOptions = {
-      ...(options.deepseek_harness.python_path !== undefined
-        ? { pythonPath: options.deepseek_harness.python_path }
-        : {}),
       ...(options.deepseek_harness.base_url !== undefined
         ? { baseUrl: options.deepseek_harness.base_url }
         : {}),
@@ -1139,12 +1103,6 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.kiro?.agent,
     resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
   );
-  const deepseekHarnessPythonPath = selectProviderValue(
-    resolvedConfigOptions.deepseekHarness?.pythonPath,
-    personaOptions?.deepseekHarness?.pythonPath,
-    stepOptions?.deepseekHarness?.pythonPath,
-    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.pythonPath', source),
-  );
   const deepseekHarnessBaseUrl = selectProviderValueByScope(
     resolvedConfigOptions.deepseekHarness?.baseUrl,
     personaOptions?.deepseekHarness?.baseUrl,
@@ -1399,8 +1357,7 @@ export function resolveEffectiveProviderOptions(
     ...(cursorCallTimeoutMs !== undefined
       ? { cursor: { guards: { callTimeoutMs: cursorCallTimeoutMs } } }
       : {}),
-    ...(deepseekHarnessPythonPath !== undefined
-      || deepseekHarnessBaseUrl !== undefined
+    ...(deepseekHarnessBaseUrl !== undefined
       || deepseekHarnessSessionRoot !== undefined
       || deepseekHarnessCordis !== undefined
       || deepseekHarnessMaxTokens !== undefined
@@ -1409,7 +1366,6 @@ export function resolveEffectiveProviderOptions(
       || deepseekHarnessRuntimeMode !== undefined
       ? {
           deepseekHarness: {
-            ...(deepseekHarnessPythonPath !== undefined ? { pythonPath: deepseekHarnessPythonPath } : {}),
             ...(deepseekHarnessBaseUrl !== undefined ? { baseUrl: deepseekHarnessBaseUrl } : {}),
             ...(deepseekHarnessSessionRoot !== undefined ? { sessionRoot: deepseekHarnessSessionRoot } : {}),
             ...(deepseekHarnessCordis !== undefined ? { cordis: deepseekHarnessCordis } : {}),
@@ -1616,7 +1572,6 @@ export const PROVIDER_OPTION_PATHS = [
   'kiro.agent',
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
-  'deepseekHarness.pythonPath',
   'deepseekHarness.baseUrl',
   'deepseekHarness.sessionRoot',
   'deepseekHarness.cordis',

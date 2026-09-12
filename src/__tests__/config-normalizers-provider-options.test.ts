@@ -463,7 +463,6 @@ describe('buildRawTaktProvidersOrThrow', () => {
         provider: 'deepseek-harness',
         providerOptions: {
           deepseekHarness: {
-            pythonPath: '/usr/bin/python3',
             maxTokens: 4096,
           },
         },
@@ -475,7 +474,6 @@ describe('buildRawTaktProvidersOrThrow', () => {
         provider: 'deepseek-harness',
         provider_options: {
           deepseek_harness: {
-            python_path: '/usr/bin/python3',
             max_tokens: 4096,
           },
         },
@@ -534,6 +532,12 @@ describe('buildRawTaktProvidersOrThrow', () => {
       providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
     }],
     ['an invalid selector effort type', { providerOptions: { codex: { reasoningEffort: 42 } } }],
+    ['a removed DeepSeek Python path option', {
+      providerOptions: { deepseekHarness: { pythonPath: '/tmp/removed-python' } },
+    }],
+    ['an internal uv path option leaked into provider configuration', {
+      providerOptions: { deepseekHarness: { uvPath: '/tmp/uv' } },
+    }],
     ['a blank selector model', { model: '   ' }],
     ['a snake_case selector alias', { provider_options: { codex: { reasoning_effort: 'medium' } } }],
     ['a snake_case nested option alias', { providerOptions: { codex: { reasoning_effort: 'medium' } } }],

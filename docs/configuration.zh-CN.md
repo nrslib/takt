@@ -290,8 +290,7 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 #     extensions: [npm:pi-fff]
 #     no_skills: true
 #   deepseek_harness:
-#     # python_path 和 cordis 仅允许受信任的全局配置/环境变量；项目配置
-#     # 使用默认 python3，不能选择 Cordis 可执行配置。
+#     # managed environment 由 `takt deepseek-harness install` 创建。
 #     base_url: http://127.0.0.1:8787/v1
 #     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
@@ -405,7 +404,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 
 ## API Key 配置
 
-TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot 和 Kiro provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 使用官方 `DEEPSEEK_API_KEY`，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
+TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot 和 Kiro provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 使用 `takt deepseek-harness install` 准备的 uv-managed environment 和官方 `DEEPSEEK_API_KEY`，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
 
 全局配置 schema 还保留了一些当前不能作为顶层 provider 选择的 legacy 或 provider integration API key 字段。这些字段本身不会启用 provider；请根据所选 provider，使用下文记录的认证环境变量或配置 key。
 
@@ -424,7 +423,7 @@ export TAKT_OPENCODE_API_KEY=...
 # Pi
 # 使用 Pi SDK credential store 或 provider 原生环境变量
 
-# 官方 DeepSeek Harness SDK（Python 3.10+ runtime）
+# 官方 DeepSeek Harness SDK（uv-managed CPython 3.12）
 export DEEPSEEK_API_KEY=...
 # 可选：export DEEPSEEK_BASE_URL=https://...
 
@@ -896,13 +895,13 @@ provider_options:
 
 #### DeepSeek Harness（`deepseek-harness`）
 
-`deepseek-harness` 在 Python 3.10+ 子进程中启动官方 `deepseek-harness-sdk`，通过逐行 JSON-RPC bridge 通信。请单独安装匹配的 runtime：
+`deepseek-harness` 使用 TAKT 通过 `uv` 构建的 managed environment，在其中启动官方 `deepseek-harness-sdk`，并通过逐行 JSON-RPC bridge 通信。首次调用 provider 前请运行一次 `takt deepseek-harness install`。npm install 和 npm lifecycle hook 不会构建或修复环境；install 期间启动 provider 不受支持，因为 provider 不会等待 installer lock。
 
-```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
-```
+managed environment 使用 uv-managed CPython 3.12，以及同捆 `pyproject.toml` / `uv.lock` 中固定的匹配 SDK/runtime 版本。官方 runtime wheel 支持 Linux x64/arm64 和 macOS arm64；Windows 与 macOS x64 会快速失败，TAKT 不会 fallback，也不需要准备 system Python。受限 package index 需要 proxy、证书或认证时，请使用 uv 标准的 `UV_INDEX_URL`、proxy 和 certificate 环境变量；TAKT 会传递这些设置，而 `uv sync --locked` 会保持同捆 lock 权威。install preflight 要求 `uv >= 0.11.0`；uv 未安装、版本无法解析或版本过低时，会在删除现有 managed environment 之前停止。
 
-官方 runtime wheel 支持 Linux x64/arm64 和 macOS arm64；Windows 与 macOS x64 会快速失败，TAKT 不会 fallback。认证使用环境变量 `DEEPSEEK_API_KEY`，可选 `DEEPSEEK_BASE_URL`；API key 不会写入 workflow/config 或命令参数。
+如果之前通过 `pip` 配置 package index，请迁移到 uv 标准的 `UV_INDEX_URL`、proxy 和 certificate 环境变量；`uv sync --locked` 将同捆 lock 作为依赖来源。
+
+install 的 `--python` 选项和 provider 的 `python_path` 选项已删除，因为只支持 managed interpreter。认证使用环境变量 `DEEPSEEK_API_KEY`，可选 `DEEPSEEK_BASE_URL`；API key 不会写入 workflow/config 或命令参数。
 
 ```bash
 export DEEPSEEK_API_KEY=your-key
@@ -937,7 +936,7 @@ allowlist，也不转换 provider alias。route 和 model 两部分都会按原�
 provider 和 model 字段传给 bridge/SDK；若 SDK 拒绝，错误会标明原始引用以及
 bridge/SDK 的失败位置。
 
-`python_path` 和 `cordis` 只允许来自受信任的全局配置或对应环境变量；项目设置使用默认 `python3`。`session_root` 和 `cordis` 相对配置的工作目录解析。带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、TAKT `allowed_tools`、MCP server map、图片附件、structured output、permission mode 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略；工具组合请通过 Cordis 配置。
+`cordis` 会选择可执行的 tool composition，因此只允许来自受信任的全局配置或 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS`；上面的示例省略了它。managed interpreter 由 install command 固定，不能通过 provider option 选择。`session_root` 和 `cordis` 相对配置的工作目录解析。带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、TAKT `allowed_tools`、MCP server map、图片附件、structured output、permission mode 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略；工具组合请通过 Cordis 配置。
 
 #### 网络访问（`network_access`）
 
