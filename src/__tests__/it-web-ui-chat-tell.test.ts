@@ -163,6 +163,10 @@ describe('Web UI chat tell capability', () => {
   it.each([
     ['assistant', 'persona'],
     ['persona', 'assistant'],
+    ['assistant', 'grill-me'],
+    ['grill-me', 'assistant'],
+    ['grill-me', 'persona'],
+    ['persona', 'grill-me'],
   ] as const)(
     'keeps /tell as a regular message through %s create, %s reconfigure, and restart',
     async (initialMode, reconfiguredMode) => {

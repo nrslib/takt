@@ -299,7 +299,32 @@ describe('instruct context for live intervention history', () => {
   });
 
   it.each([true, false] as const)(
-    'propagates the /tell capability to the real TUI command matcher (%s)',
+    'publishes /tell availability in the TUI command candidates (%s)',
+    (enableTellCommand) => {
+      const cwd = mkdtempSync(join(tmpdir(), 'takt-live-instruct-command-'));
+
+      try {
+        const plan = createAssistantConversationPlan(cwd, {
+          assistantMode: 'assistant',
+          enableTellCommand,
+          formalSpec: false,
+          formalSpecComments: true,
+        });
+        const conversation = createTuiConversation({
+          cwd,
+          plan,
+          attachmentStore: createSessionImageAttachmentStore(cwd),
+        });
+
+        expect(conversation.commandAvailability.enableTellCommand).toBe(enableTellCommand);
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([true, false] as const)(
+    'recognizes and resolves /tell through the TUI command matcher (%s)',
     (enableTellCommand) => {
       const cwd = mkdtempSync(join(tmpdir(), 'takt-live-instruct-command-'));
 
@@ -317,7 +342,6 @@ describe('instruct context for live intervention history', () => {
         });
         const input = '/tell update the running task';
 
-        expect(conversation.commandAvailability.enableTellCommand).toBe(enableTellCommand);
         expect(conversation.isCommandLine(input)).toBe(enableTellCommand);
         expect(conversation.resolveLocalCommand(input)).toEqual(enableTellCommand
           ? { kind: 'handoff', id: 'tell', text: 'update the running task' }
