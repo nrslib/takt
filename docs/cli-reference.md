@@ -86,6 +86,8 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 | `/effort <value>` | Use a free-form reasoning effort override for this conversation. |
 | `/tell [instruction]` | Select a running worktree-clone task, review an additional instruction, and send it after confirmation. With no inline instruction, the full conversation is converted into a standalone additional-instruction body. An interactive terminal is required; no instruction is sent when confirmation is unavailable. |
 
+`/tell` is available in the ordinary CLI/TUI `assistant`, `grill-me`, and `persona` conversations, including after switching between those modes. It still requires a running task backed by a valid TAKT-managed worktree clone when selecting a recipient. The Web UI does not execute the local `/tell` handoff; text such as `/tell review this task` is sent to the assistant as a regular message. Dedicated Retry and Instruct conversations do not expose `/tell`; use their task-action controls instead.
+
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
 
 ### Execution Example

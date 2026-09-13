@@ -103,7 +103,7 @@ export function buildInteractiveSystemPrompt(
     ? INTERACTIVE_INVESTIGATION_POLICIES.grillMe
     : INTERACTIVE_INVESTIGATION_POLICIES.assistant;
   const enableTellCommand = input.enableTellCommand ?? true;
-  const tellAvailable = !input.grillMe && enableTellCommand;
+  const tellAvailable = enableTellCommand;
 
   return loadTemplate('score_interactive_system_prompt', lang, {
     grillMe: input.grillMe,

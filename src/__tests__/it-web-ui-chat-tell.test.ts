@@ -111,7 +111,7 @@ describe('Web UI chat tell capability', () => {
         content: ++callCount === 1 ? 'assistant response' : 'generated instruction',
         timestamp: new Date(),
       }));
-      const { provider, setup } = createProvider(providerCall);
+      const { provider } = createProvider(providerCall);
       mockGetProvider.mockReturnValue(provider);
 
       const service = createWebChatService();
@@ -124,7 +124,6 @@ describe('Web UI chat tell capability', () => {
       });
       expect(providerCall).toHaveBeenCalledOnce();
       expect(providerCall.mock.calls[0]?.[0]).toContain('/tell keep this task in scope');
-      expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('/tell');
 
       await expect(service.send(created.id, '/go create a new task')).resolves.toEqual({
         kind: 'task_instruction',
@@ -142,7 +141,7 @@ describe('Web UI chat tell capability', () => {
       content: 'assistant response',
       timestamp: new Date(),
     }));
-    const { provider, setup } = createProvider(providerCall);
+    const { provider } = createProvider(providerCall);
     mockGetProvider.mockReturnValue(provider);
 
     const service = createWebChatService();
@@ -159,18 +158,15 @@ describe('Web UI chat tell capability', () => {
     });
     expect(providerCall).toHaveBeenCalledTimes(2);
     expect(providerCall.mock.calls[0]?.[0]).toContain('/tell keep this task in scope');
-    expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('/tell');
   });
 
   it.each([
-    ['assistant', true],
-    ['grill-me', true],
-    ['persona', true],
-    ['persona', false],
+    ['assistant', 'persona'],
+    ['persona', 'assistant'],
   ] as const)(
-    'keeps tell disabled through %s create, reconfigure, and restart (%s first step)',
-    async (mode, includeFirstStep) => {
-      mockGetWorkflowDescription.mockImplementation(() => workflowDescription(includeFirstStep));
+    'keeps /tell as a regular message through %s create, %s reconfigure, and restart',
+    async (initialMode, reconfiguredMode) => {
+      mockGetWorkflowDescription.mockImplementation(() => workflowDescription(true));
       const providerCall = vi.fn<ProviderAgentCall>(async () => ({
         persona: 'web-chat-test',
         status: 'done',
@@ -181,13 +177,16 @@ describe('Web UI chat tell capability', () => {
       mockGetProvider.mockReturnValue(provider);
 
       const service = createWebChatService();
-      const created = service.create(projectDirectory, { workflow: 'default', mode });
+      const created = service.create(projectDirectory, { workflow: 'default', mode: initialMode });
       await expect(service.send(created.id, '/tell during create')).resolves.toEqual({
         kind: 'assistant_response',
         content: 'assistant response',
       });
 
-      const reconfigured = service.reconfigure(created.id, { workflow: 'changed', mode });
+      const reconfigured = service.reconfigure(created.id, {
+        workflow: 'changed',
+        mode: reconfiguredMode,
+      });
       await expect(service.send(reconfigured.id, '/tell during reconfigure')).resolves.toEqual({
         kind: 'assistant_response',
         content: 'assistant response',
@@ -202,6 +201,12 @@ describe('Web UI chat tell capability', () => {
       expect(created.intro).not.toContain('/tell');
       expect(reconfigured.intro).not.toContain('/tell');
       expect(restarted.intro).not.toContain('/tell');
+      expect(created.intro.includes('[Reviewer]')).toBe(initialMode === 'persona');
+      expect(reconfigured.intro.includes('[Reviewer]')).toBe(reconfiguredMode === 'persona');
+      expect(restarted.intro.includes('[Reviewer]')).toBe(reconfiguredMode === 'persona');
+      expect(created.mode).toBe(initialMode);
+      expect(reconfigured.mode).toBe(reconfiguredMode);
+      expect(restarted.mode).toBe(reconfiguredMode);
       expect(providerCall).toHaveBeenCalledTimes(3);
       expect(providerCall.mock.calls.map(([prompt]) => prompt)).toEqual([
         expect.stringContaining('/tell during create'),
@@ -209,7 +214,6 @@ describe('Web UI chat tell capability', () => {
         expect.stringContaining('/tell during restart'),
       ]);
       expect(setup).toHaveBeenCalledTimes(3);
-      for (const [config] of setup.mock.calls) expect(config.systemPrompt).not.toContain('/tell');
     },
   );
 });

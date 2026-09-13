@@ -298,47 +298,33 @@ describe('instruct context for live intervention history', () => {
     }
   });
 
-  it.each([
-    {
-      lang: 'en' as const,
-      guidance: 'When an additional instruction for a named running task is ready, name that task and tell the user to use `/tell` to send it',
-    },
-    {
-      lang: 'ja' as const,
-      guidance: '名前のある実行中タスクへの追加指示の内容が固まったら、そのタスク名を挙げ、`/tell` で送れると案内する',
-    },
-  ])('renders tell guidance only when it is available ($lang)', async ({ lang, guidance }) => {
-    const actualPrompts = await vi.importActual<typeof import('../shared/prompts/index.js')>(
-      '../shared/prompts/index.js',
-    );
-    const variables = {
-      grillMe: false,
-      tellAvailable: true,
-      investigationPolicy: '{}',
-      formalSpec: false,
-      formalSpecComments: true,
-      formalSpecCommentsEnabled: false,
-      hasWorkflowPreview: false,
-      workflowStructure: '',
-      stepDetails: '',
-      hasRunSession: false,
-      runTask: '',
-      runWorkflow: '',
-      runStatus: '',
-      runCurrentStep: '',
-      runPhase: '',
-      runStepLogs: '',
-      runReports: '',
-      runLiveIntervention: '',
-    };
+  it.each([true, false] as const)(
+    'propagates the /tell capability to the real TUI command matcher (%s)',
+    (enableTellCommand) => {
+      const cwd = mkdtempSync(join(tmpdir(), 'takt-live-instruct-command-'));
 
-    const availablePrompt = actualPrompts.loadTemplate('score_interactive_system_prompt', lang, variables);
-    const unavailablePrompt = actualPrompts.loadTemplate('score_interactive_system_prompt', lang, {
-      ...variables,
-      tellAvailable: false,
-    });
+      try {
+        const plan = createAssistantConversationPlan(cwd, {
+          assistantMode: 'assistant',
+          enableTellCommand,
+          formalSpec: false,
+          formalSpecComments: true,
+        });
+        const conversation = createTuiConversation({
+          cwd,
+          plan,
+          attachmentStore: createSessionImageAttachmentStore(cwd),
+        });
+        const input = '/tell update the running task';
 
-    expect(availablePrompt).toContain(guidance);
-    expect(unavailablePrompt).not.toContain(guidance);
-  });
+        expect(conversation.commandAvailability.enableTellCommand).toBe(enableTellCommand);
+        expect(conversation.isCommandLine(input)).toBe(enableTellCommand);
+        expect(conversation.resolveLocalCommand(input)).toEqual(enableTellCommand
+          ? { kind: 'handoff', id: 'tell', text: 'update the running task' }
+          : null);
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 });

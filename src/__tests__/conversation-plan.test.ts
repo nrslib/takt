@@ -40,8 +40,8 @@ import {
   createPersonaConversationPlan,
 } from '../features/interactive/conversationPlan.js';
 
-function templateVarsFor(name: string): Record<string, unknown> {
-  const call = mockLoadTemplate.mock.calls.find((args) => args[0] === name);
+function templateVarsFor(name: string, occurrence = 0): Record<string, unknown> {
+  const call = mockLoadTemplate.mock.calls.filter((args) => args[0] === name)[occurrence];
   if (!call) {
     throw new Error(`template ${name} was not rendered`);
   }
@@ -210,7 +210,7 @@ describe('assistant conversation plan', () => {
     expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
     expect(strategy.enableTellCommand).toBe(true);
     expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
-      tellAvailable: false,
+      tellAvailable: true,
     });
   });
 
@@ -241,7 +241,10 @@ describe('assistant conversation plan', () => {
     expect(withoutTell.strategy.introMessage).not.toContain('/tell');
     expect(withTell.strategy.enableTellCommand).toBe(true);
     expect(withoutTell.strategy.enableTellCommand).toBe(false);
-    expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
+    expect(templateVarsFor('score_interactive_system_prompt', 0)).toMatchObject({
+      tellAvailable: true,
+    });
+    expect(templateVarsFor('score_interactive_system_prompt', 1)).toMatchObject({
       tellAvailable: false,
     });
   });
