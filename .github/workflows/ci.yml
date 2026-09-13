@@ -106,6 +106,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
       - run: npm run build
       - run: npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/6
 

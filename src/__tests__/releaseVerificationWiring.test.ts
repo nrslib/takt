@@ -518,12 +518,12 @@ describe('release verification wiring', () => {
     },
     {
       target: 'src/__tests__/it-web-ui-retry-dom.test.ts',
-      script: 'test:it:light',
+      script: 'test:it:heavy:parallel',
       normalized: 'src/__tests__/it-web-ui-retry-dom.test.ts',
     },
     {
       target: 'it-web-ui-retry-dom.test.ts',
-      script: 'test:it:light',
+      script: 'test:it:heavy:parallel',
       normalized: 'src/__tests__/it-web-ui-retry-dom.test.ts',
     },
     {

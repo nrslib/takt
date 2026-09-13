@@ -100,6 +100,8 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/interactive.test.ts',
   'src/__tests__/it-central-task-process.test.ts',
   'src/__tests__/it-report-inheritance-task-resume.test.ts',
+  // Launches a real Chrome/Chromium child process for browser layout assertions.
+  'src/__tests__/it-web-ui-retry-dom.test.ts',
   'src/__tests__/kiro-config.test.ts',
   'src/__tests__/mock-call-log.test.ts',
   'src/__tests__/opencode-client-cleanup.test.ts',
@@ -344,7 +346,6 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-run-session-instruct.test.ts',
   'src/__tests__/it-system-enqueue-effect-duplicate.test.ts',
   'src/__tests__/it-task-restart-point.test.ts',
-  'src/__tests__/it-web-ui-retry-dom.test.ts',
   'src/__tests__/it-workflow-loader.test.ts',
   'src/__tests__/it-workflow-policy.test.ts',
   'src/__tests__/kiro-provider-integration.test.ts',

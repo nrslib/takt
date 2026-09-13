@@ -201,6 +201,7 @@
     "eslint": "^9.0.0",
     "ink-testing-library": "^4.0.0",
     "node-pty": "^1.2.0-beta.15",
+    "playwright": "1.61.1",
     "promptfoo": "^0.121.17",
     "tsx": "4.22.4",
     "typescript": "^5.5.0",

@@ -1,5 +1,12 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chromium, type Browser } from 'playwright';
+import type { WebChatService, WebChatSessionDescription } from '../features/web-ui/chat.js';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { createWebUiServer, listenWebUiServer } from '../features/web-ui/server.js';
+import type { WebWorkflowCatalog } from '../features/web-ui/workflow-catalog.js';
 
 interface FakeEvent {
   readonly type: string;
@@ -318,6 +325,72 @@ const fencedCodeCases = [
 
 const literalMessage = '# 通知\n**原文**\n- 項目\n次の行';
 
+const BROWSER_CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const BROWSER_EXECUTABLE_CANDIDATES = [
+  BROWSER_CHROME_PATH,
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+] as const;
+const BROWSER_LITERAL_USER_MESSAGE = '# user\n**raw**\n- item\nnext line';
+const BROWSER_LITERAL_SYSTEM_MESSAGE = '# system\n**raw**\n- item\nnext line';
+
+interface BrowserLiteralRange {
+  setStart(node: object, offset: number): void;
+  setEnd(node: object, offset: number): void;
+  getBoundingClientRect(): { readonly top: number };
+}
+
+interface BrowserLiteralElement {
+  readonly textContent: string | null;
+  readonly firstChild: object | null;
+  readonly ownerDocument: {
+    readonly defaultView: {
+      getComputedStyle(node: BrowserLiteralElement): { readonly whiteSpace: string };
+    } | null;
+    createRange(): BrowserLiteralRange;
+  };
+}
+
+interface BrowserLiteralObservation {
+  readonly textContent: string;
+  readonly whiteSpace: string;
+  readonly lineTops: readonly number[];
+}
+
+function measureBrowserLiteralParagraph(node: unknown): BrowserLiteralObservation {
+  const element = node as BrowserLiteralElement;
+  const text = element.textContent;
+  const textNode = element.firstChild;
+  if (text === null || textNode === null || element.ownerDocument.defaultView === null) {
+    throw new Error('Literal paragraph has no measurable text node');
+  }
+  const lineTops: number[] = [];
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    const range = element.ownerDocument.createRange();
+    range.setStart(textNode, offset);
+    range.setEnd(textNode, offset + line.length);
+    lineTops.push(Math.round(range.getBoundingClientRect().top));
+    offset += line.length + 1;
+  }
+  return {
+    textContent: text,
+    whiteSpace: element.ownerDocument.defaultView.getComputedStyle(element).whiteSpace,
+    lineTops,
+  };
+}
+
+function browserExecutablePath(): string | undefined {
+  const configuredPath = process.env.TAKT_BROWSER_EXECUTABLE_PATH;
+  if (configuredPath !== undefined) return configuredPath;
+  const hostBrowser = BROWSER_EXECUTABLE_CANDIDATES.find((path) => existsSync(path));
+  if (hostBrowser !== undefined) return hostBrowser;
+  const bundledPath = chromium.executablePath();
+  return existsSync(bundledPath) ? bundledPath : undefined;
+}
+
 function createDocument() {
   const document = new FakeDocument();
   const selectors = [
@@ -615,6 +688,133 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     expect(entry.querySelectorAll('h1')).toHaveLength(0);
     expect(entry.querySelectorAll('strong')).toHaveLength(0);
     expect(entry.querySelectorAll('ul')).toHaveLength(0);
+  });
+
+  const browserRegressionTest = process.env.CI === undefined
+    ? it.skipIf(browserExecutablePath() === undefined)
+    : it;
+
+  browserRegressionTest(
+    'preserves user and system line breaks in the rendered browser',
+    async () => {
+      const executablePath = browserExecutablePath();
+      if (executablePath === undefined) {
+        throw new Error('A Chrome or Playwright browser executable is required for this regression test');
+      }
+      const globalConfigDirectory = mkdtempSync(join(tmpdir(), 'takt-browser-global-'));
+      const projectDirectory = mkdtempSync(join(tmpdir(), 'takt-browser-project-'));
+      let server: Awaited<ReturnType<typeof createWebUiServer>> | undefined;
+      let browser: Browser | undefined;
+      try {
+        const project = await registerProject({
+          globalConfigDirectory,
+          projectDirectory,
+          command: 'ui',
+        });
+        const session: WebChatSessionDescription = {
+          id: 'browser-session',
+          workflow: 'default',
+          mode: 'assistant',
+          intro: '',
+          provider: 'mock',
+        };
+        const chat: WebChatService = {
+          create: (_projectDirectory, _request) => session,
+          reconfigure: (_sessionId, _request) => session,
+          restart: (_sessionId) => session,
+          send: async (_sessionId, text) => text === '/system'
+            ? { kind: 'error', message: BROWSER_LITERAL_SYSTEM_MESSAGE }
+            : { kind: 'assistant_response', content: 'assistant response' },
+          commitTaskAction: (_sessionId, _reservationToken) => undefined,
+          releaseTaskAction: (_sessionId, _reservationToken) => undefined,
+        };
+        const catalog: WebWorkflowCatalog = {
+          categories: [{
+            id: 'default',
+            label: 'Default',
+            workflows: [{ id: 'default', description: 'Browser verification', source: 'builtin' }],
+          }],
+          warnings: [],
+        };
+        server = await createWebUiServer({
+          globalConfigDirectory,
+          launch: async () => ({ pid: 1, disposition: 'started' as const, mode: 'run' as const }),
+          chat,
+          getWorkflowCatalog: () => catalog,
+        });
+        const origin = await listenWebUiServer(server, 0);
+        browser = await chromium.launch({ executablePath, headless: true });
+        const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+        const pageErrors: string[] = [];
+        page.on('pageerror', (error) => pageErrors.push(error.message));
+
+        await page.goto(origin, { waitUntil: 'domcontentloaded' });
+        await page.selectOption('#project', project.id);
+        await page.locator('#workflow option[value="default"]').waitFor({ state: 'attached', timeout: 5000 });
+        await page.waitForFunction(
+          '() => !document.querySelector("#chat-message")?.disabled',
+          undefined,
+          { timeout: 5000 },
+        );
+        await page.click('#new-task-button');
+
+        const sendMessage = async (text: string): Promise<void> => {
+          await page.locator('#chat-message').fill(text);
+          await page.click('#chat-send-button');
+        };
+        const waitForNextAssistantResponse = async (): Promise<void> => {
+          await page.locator('article.chat-entry-assistant').last().waitFor();
+          await page.waitForFunction(
+            '() => !document.querySelector("#chat-send-button")?.disabled',
+            undefined,
+            { timeout: 5000 },
+          );
+        };
+
+        await sendMessage(BROWSER_LITERAL_USER_MESSAGE);
+        const userParagraph = page.locator('article.chat-entry-user').last().locator('p');
+        await userParagraph.waitFor();
+        await waitForNextAssistantResponse();
+        const userObservation = await userParagraph.evaluate(measureBrowserLiteralParagraph);
+
+        await sendMessage('/system');
+        const systemParagraph = page.locator('article.chat-entry-system').last().locator('p');
+        await systemParagraph.waitFor();
+        const systemObservation = await systemParagraph.evaluate(measureBrowserLiteralParagraph);
+
+        expect(userObservation.textContent).toBe(BROWSER_LITERAL_USER_MESSAGE);
+        expect(userObservation.whiteSpace).toBe('pre-wrap');
+        expect(new Set(userObservation.lineTops).size)
+          .toBe(BROWSER_LITERAL_USER_MESSAGE.split('\n').length);
+        expect(systemObservation.textContent).toBe(BROWSER_LITERAL_SYSTEM_MESSAGE);
+        expect(systemObservation.whiteSpace).toBe('pre-wrap');
+        expect(new Set(systemObservation.lineTops).size)
+          .toBe(BROWSER_LITERAL_SYSTEM_MESSAGE.split('\n').length);
+        expect(pageErrors).toEqual([]);
+      } finally {
+        await browser?.close();
+        if (server?.listening === true) {
+          server.closeAllConnections();
+          await new Promise<void>((resolvePromise, rejectPromise) => {
+            server?.close((error) => error === undefined
+              ? resolvePromise()
+              : rejectPromise(error));
+          });
+        }
+        rmSync(globalConfigDirectory, { recursive: true, force: true });
+        rmSync(projectDirectory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('renders retry task instructions as literal assistant text', async () => {
+    await startRetry();
+    await submitChat('/go');
+
+    const entry = chatTranscript().querySelector('article.chat-entry-assistant');
+    if (entry === null) throw new Error('Retry instruction chat entry was not rendered');
+    expect(entry.querySelector('.markdown-view')).toBeNull();
+    expect(entry.querySelector('p')?.textContent).toBe('updated order');
   });
 
   it('connects Queue, Continue, Cancel, and prose input through the production app and API modules', async () => {
