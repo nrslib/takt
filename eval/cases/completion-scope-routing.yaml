@@ -1,8 +1,8 @@
 # Current completion contract: executable mandatory work must finish through the
 # implementation call. A valid plan with executable remaining work goes to
-# reimplement; only a defective plan or an external-only blocker leaves that
-# route. Historical expectations and model responses remain frozen in saved
-# manifests.
+# reimplement; a plan defect or confirmed external constraint is handed to the
+# planning step, where a confirmed external-only blocker may stop. Historical
+# expectations and model responses remain frozen in saved manifests.
 - description: "既存lint: 無関係な失敗だけでは完了を阻まない"
   vars:
     expected_transition:

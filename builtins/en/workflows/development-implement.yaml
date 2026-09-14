@@ -72,8 +72,8 @@ steps:
         next: reimplement
       - condition: The accepted plan's premises, scope, method, or verification capability is defective; changing the plan would enable concrete project-local work, and leaving it unchanged prevents the requirement from being executed or verified (unexecuted, failed, unresolved, or unsupported work alone does not qualify; external-only work is excluded)
         return: need_replan
-      - condition: No mandatory work can be executed under the current plan or remediation, and evidence confirms that only an external action, external answer, or incompatible requirement remains (choose the user-input route only when a user-input option is available and its answer would unblock the work; when it is unavailable, including non-interactive runs, or its answer cannot unblock the work, treat the case as waiting for an external answer)
-        next: ABORT
+      - condition: No mandatory work can be executed under the current plan or remediation, and evidence confirms that only an external action or external answer remains, or provides a basis to believe the conditions are incompatible. Report the external constraint and unmet obligations, and pass the final continuation, replanning, or stopping decision to the planning step (choose the user-input route only when a user-input option is available and its answer would unblock the work)
+        return: need_replan
       - condition: User input is required
         next: implement
         requires_user_input: true
@@ -106,8 +106,8 @@ steps:
         next: reimplement
       - condition: The accepted plan's premises, scope, method, or verification capability is defective; changing the plan would enable concrete project-local work, and leaving it unchanged prevents the requirement from being executed or verified (unexecuted, failed, unresolved, or unsupported work alone does not qualify; external-only work is excluded)
         return: need_replan
-      - condition: No mandatory work can be executed under the current plan or remediation, and evidence confirms that only an external action, external answer, or incompatible requirement remains (choose the user-input route only when a user-input option is available and its answer would unblock the work; when it is unavailable, including non-interactive runs, or its answer cannot unblock the work, treat the case as waiting for an external answer)
-        next: ABORT
+      - condition: No mandatory work can be executed under the current plan or remediation, and evidence confirms that only an external action or external answer remains, or provides a basis to believe the conditions are incompatible. Report the external constraint and unmet obligations, and pass the final continuation, replanning, or stopping decision to the planning step (choose the user-input route only when a user-input option is available and its answer would unblock the work)
+        return: need_replan
       - condition: User input is required
         next: reimplement
         requires_user_input: true

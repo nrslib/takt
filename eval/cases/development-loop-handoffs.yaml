@@ -128,7 +128,7 @@
   origin: control
   source: "Guard against infinite local work or false completion at a confirmed external dependency"
   workflow: development-implement-dynamic
-  expected: { next: ABORT }
+  expected: { return: need_replan }
   report: |
     明示要件は指定された実機プリンターによる出力確認まで必須とする。実装とプロジェクト内の全検証は完了した。
     現環境にはその実機も接続権限もなく、管理者だけが現地で設置できることを確認した。

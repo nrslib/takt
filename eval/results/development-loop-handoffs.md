@@ -1,8 +1,37 @@
 # 開発ループの引き継ぎ評価
 
-## 2026-09-14: `reimplement` への変更と独立レビュー
+## 2026-09-14: 実装側の停止経路を計画側へ移す
 
-現行の実装終了判定は、採用済み計画で補える不足を `reimplement` へ送り、計画の前提・方法・検証能力を変える必要がある場合だけ `need_replan` を返す。完了確認専用のstepは追加していない。レビュー修正の具体的な原因調査は `fix` 内で実行し、独立した `investigate` は撤去した。
+日英3variantの `implement/reimplement` から `ABORT` 遷移を撤去した。計画内で補える不足は `reimplement` を繰り返し、計画不備に加えて外部制約・外部回答待ち・条件の衝突も、根拠と未完了義務を添えて `need_replan` へ渡す。親の実装workflow呼び出しが子の `ABORT` 結果を受けた場合も `replan` へ進む。続行可能な作業の具体化と停止の判断は計画側が担い、回答で進められる対話時は同じ `replan` で入力を受けて再評価する。
+
+Luna maxの実装後、新しい別セッションのLuna maxが `d34719f` からの追加差分を独立レビューし、修正が必要な問題はなかった。
+
+### 実モデルで確認した遷移
+
+固定reportと期待遷移を送信前に保存し、配布YAMLと実際の `StatusJudgmentBuilder` から判定プロンプトを生成した。`gpt-5.6-luna` / `max` の応答タグを実際の候補と遷移へ解決して採点し、期待値はモデルに渡していない。
+
+- 初回16ケースの実装側12件はすべて一致した。実装・検証・調査の不足は `reimplement`、観測方法の不備や外部制約は `need_replan`、対話回答は入力要求、完了と有効な成功証跡は `COMPLETE` だった。
+- 計画側4件のうち、非対話の外部回答待ち1件が `ABORT` ではなく `implement` に進んだ。回答後なら作業可能という記述を、今実行可能な作業として扱う誤分岐だった。
+- replanの実装復帰条件に「ユーザー入力や外部操作を待たずに実行可能」を明示し、停止条件に外部回答待ちを含めた。同じreport・期待値の計画側4件だけを再評価し、外部操作待ち・非対話の外部回答待ち・対話入力・実行可能な計画のすべてが一致した。
+
+初回の失敗応答とmanifestはそのまま保全した。実装側12件を修正後に再呼び出ししたとは扱わない。最終ソースから生成した実装側12件・再評価した計画側4件のプロンプト、routing step、定義全体が各評価manifestと一致すること、保存応答のmanifestHashと再採点が一致することを監査した。
+
+| 記録 | 保存先 | manifest SHA256 |
+|------|--------|-----------------|
+| 初回16件（実装12件一致・計画3件一致） | `/private/tmp/takt-planning-stop-boundaries-ul18rjxd/` | `f2acb24dbb2ad07de453e3b9d94519f2663b23c7de37729e45183b8bfebb0496` |
+| 修正後の計画4件（一致） | `/private/tmp/takt-planning-stop-replan-retry-w_49746v/` | `11e3db77d16c136f0c9d92d6702f17c9e4bd6c001adb2945d795e8b56bf22129` |
+
+初回cases SHA256は `ff0236ea9b0f2604b7662347e3c7fc0444df5cb8791adb78d1af2e6d1412188a`、計画側再評価は `5ab59c91677564ab83a809e51d99c545694748b7c9e760142fc2f5b286956c8d`。最終監査は `/private/tmp/takt-planning-stop-source-audit-ogFk5y/audit.json`、監査スクリプトは `/private/tmp/takt-planning-stop-source-audit.mjs`。
+
+### 追加差分の検証と限界
+
+build・lint、routing IT 86件、workflow-call異常系3件、分類契約20件、eval契約29件、日英8workflowのdoctor、`git diff --check` が成功した。独立レビューでもrouting ITとeval契約を確認した。
+
+今回の実モデル評価はPhase 3の単発判断を対象とし、変更した実装・再実装・再計画instruction全体の実ツール再評価ではない。以下の `d34719f` の18件と実ツールfixture 2件は、実装側に外部制約のABORT経路を残していた旧版の結果として保持する。旧期待値を変更して現行の成功に再分類しない。全workflowの再走・収束時間は未測定で、下記のlight ITとOpenCode probeの既知タイムアウトも今回再実行・修正していない。
+
+## 2026-09-14: `reimplement` への変更と独立レビュー（`d34719f` 時点）
+
+この時点の実装終了判定は、採用済み計画で補える不足を `reimplement` へ送り、計画の前提・方法・検証能力を変える必要がある場合だけ `need_replan` を返していた。外部制約は実装側の `ABORT` に残していたが、上記の追加修正で撤去した。完了確認専用のstepは追加していない。レビュー修正の具体的な原因調査は `fix` 内で実行し、独立した `investigate` は撤去した。以下の「最終ソース」「最終instruction」は `d34719f` 時点を指す。
 
 Luna maxの実装後、別セッションのLuna maxが差分と呼び出し経路を独立レビューした。調査を含む修正計画を `fix` の条件へ明示する修正と、補完instructionが通常の実装手順を継承する `{extends:implement}` の追加を反映した。
 

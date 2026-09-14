@@ -634,16 +634,20 @@ also compare fixed `expected_transition` values through the shared
 `asserts/completion-routing.mjs` scorer. Tag and structured candidate numbers are
 resolved against the workflow's noninteractive semantic candidates before
 comparing `next` or `return`. Their active cases route executable remaining
-implementation, investigation, and verification work to `reimplement` or `fix`;
-only a defective plan or an external-only blocker routes elsewhere. The direct
+implementation, investigation, and verification work to `reimplement` or `fix`.
+Implementation and reimplementation pass confirmed external constraints and
+unmet obligations to the planning step with `need_replan`; the planning step
+alone may stop when it confirms that only an external action or external answer
+remains, or that requirements are incompatible. The direct
 `step_name` option lets deterministic checks inspect the `reimplement` rules
 without confusing them with the initial `implement` step. These expectation
 changes are routing contract checks, not new live-model measurements.
 
 The structured suite also loads `completion-input-request-cases.mjs`, which
-reuses the fixed interactive input-request case from
+reuses the fixed interactive input-request cases from
 `cases/development-loop-input-boundaries.yaml`. Its provider JSON Schema accepts
-candidate 6; the shared scorer still rejects that candidate in headless mode.
+candidate 6 for implementation and candidate 4 for the replan step; the shared
+scorer still rejects each interactive-only candidate in headless mode.
 The local contract validates the actual provider schema before scoring. The
 focused Codex SDK check and its saved schema responses are documented in
 [the evaluation record](results/development-loop-handoffs.md#構造化providerの入力要求候補).

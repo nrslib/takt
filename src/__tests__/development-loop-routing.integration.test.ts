@@ -99,14 +99,22 @@ describe('shipped development completion and remediation routes', () => {
     expect((await execute(config, 'reimplement', 3)).returnValue).toBe('need_replan');
   });
 
-  it.each(variants(implementations))('$language/$name stops work requiring unavailable external action at either implementation step', async ({ language, name }) => {
+  it.each(variants(implementations))('$language/$name passes an external blocker to planning at either implementation step', async ({ language, name }) => {
     const config = load(language, name);
     for (const stepName of ['implement', 'reimplement']) {
       start(config, stepName);
       const result = await execute(config, stepName, 4);
-      expect(result.nextStep).toBe('ABORT');
-      expect(result.isComplete).toBe(true);
-      expect(result.returnValue).toBeUndefined();
+      expect(result).toMatchObject({ isComplete: true, returnValue: 'need_replan' });
+      expect(result.nextStep).toBe('COMPLETE');
+    }
+  });
+
+  it.each(variants(implementations))('$language/$name has no semantic ABORT route in implement or reimplement', ({ language, name }) => {
+    const config = load(language, name);
+    for (const stepName of ['implement', 'reimplement']) {
+      const step = config.steps.find(candidate => candidate.name === stepName);
+      expect(step?.rules?.some(rule => rule.next === 'ABORT')).toBe(false);
+      expect(step?.rules?.filter(rule => rule.returnValue === 'need_replan')).toHaveLength(2);
     }
   });
 
@@ -126,16 +134,39 @@ describe('shipped development completion and remediation routes', () => {
     }
   });
 
-  it.each(variants(implementations))('$language/$name stops without requesting external input when interactive mode is unavailable', async ({ language, name }) => {
+  it.each(variants(implementations))('$language/$name passes a headless external blocker to planning without requesting input', async ({ language, name }) => {
     const config = load(language, name);
     for (const stepName of ['implement', 'reimplement']) {
       const onUserInput = vi.fn();
       start(config, stepName, { interactive: false, onUserInput });
       const result = await execute(config, stepName, 4);
-      expect(result).toMatchObject({ nextStep: 'ABORT', isComplete: true });
-      expect(result.returnValue).toBeUndefined();
+      expect(result).toMatchObject({ isComplete: true, returnValue: 'need_replan' });
+      expect(result.nextStep).toBe('COMPLETE');
       expect(onUserInput).not.toHaveBeenCalled();
     }
+  });
+
+  it.each(variants(['development-core']))('$language routes an implementation workflow ABORT result to replan for final planning judgment', ({ language, name }) => {
+    const config = load(language, name);
+    const implementation = config.steps.find(step => step.name === 'implement');
+    const abortRule = implementation?.rules?.find(rule => rule.condition.kind === 'semantic' && rule.condition.label === 'ABORT');
+    expect(abortRule?.next).toBe('replan');
+  });
+
+  it.each(variants(['development-core']))('$language lets replan request an answer only when it can unblock project work', async ({ language, name }) => {
+    const config = load(language, name);
+    const replan = config.steps.find(step => step.name === 'replan');
+    if (!replan) throw new Error('Missing replan step');
+    expect(determineRuleTransition(replan, 3)).toMatchObject({ nextStep: 'replan', requiresUserInput: true });
+
+    const onUserInput = vi.fn().mockResolvedValueOnce('Use the requested export target.');
+    start(config, 'replan', { interactive: true, onUserInput });
+    expect(await execute(config, 'replan', 3)).toMatchObject({ nextStep: 'replan', isComplete: false });
+    expect(onUserInput).toHaveBeenCalledOnce();
+    expect((await execute(config, 'replan', 0)).nextStep).toBe('implement');
+
+    start(config, 'replan', { interactive: false });
+    expect(await execute(config, 'replan', 2)).toMatchObject({ nextStep: 'ABORT', isComplete: true });
   });
 
   it.each(variants(remediations))('$language/$name executes plan-scoped investigation in fix and preserves the repair path', async ({ language, name }) => {

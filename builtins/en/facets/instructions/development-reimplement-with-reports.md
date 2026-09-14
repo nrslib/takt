@@ -9,7 +9,7 @@ Reconcile the accepted plan with the missing work recorded in the preceding impl
 - When executing plan-scoped investigation, record fixed conditions, the varied condition, observation target, and result, then continue with the required implementation and verification
 
 If the plan's premises, scope, method, or verification capability itself is invalid, changing the plan would enable concrete project-local work, and leaving it unchanged prevents the requirement from being executed or verified, do not claim unfinished work as successful; report the fact and evidence. Do not treat work as a plan defect merely because it is unexecuted, failed, unresolved, or lacks evidence.
-When no work is executable within the plan and only an external action or answer remains, request user input only when a user-input option is available and its answer would unblock the work. When the input candidate is unavailable, including non-interactive runs, or an answer cannot resolve the required permission or equipment, report the external constraint and unmet obligations.
+When no work is executable within the plan and only an external action or answer remains, report the external constraint and unmet obligations with facts and evidence. Request an answer only when a user-input option is available and the answer would unblock the work. When the input candidate is unavailable, including non-interactive runs, or an answer cannot resolve the required permission or equipment, do not conclude that implementation cannot continue or should stop; record the facts so the planning step can decide.
 
 {{include:instructions/development-input-reports}}
 

@@ -99,6 +99,19 @@ test('the candidate loader exposes direct reimplementation routing and preserves
   }
 });
 
+test('implementation external constraints return to planning without an ABORT transition', () => {
+  for (const language of ['ja', 'en']) {
+    for (const workflow of ['development-implement', 'development-implement-dynamic', 'development-implement-team']) {
+      const implement = loadCompletionRoutingStep({ language, workflow });
+      const reimplement = loadCompletionRoutingStep({ language, workflow, step_name: 'reimplement' });
+      assert.equal(scoreTransition('[IMPLEMENT:5]', implement, { return: 'need_replan' }).pass, true);
+      assert.equal(scoreTransition('[REIMPLEMENT:5]', reimplement, { return: 'need_replan' }).pass, true);
+      assert.equal(implement.rules.some(rule => rule.next === 'ABORT'), false);
+      assert.equal(reimplement.rules.some(rule => rule.next === 'ABORT'), false);
+    }
+  }
+});
+
 test('missing, out-of-range, and user-input results cannot count as automatic continuation', () => {
   const step = { name: 'implement', rules: [{ condition: 'Needs user input', next: 'implement', requires_user_input: true }] };
   for (const output of ['[IMPLEMENT:0]', '[IMPLEMENT:2]', '[OTHER:1]']) {
@@ -135,22 +148,35 @@ test('interactive evaluation includes the user-input candidate and preserves its
   })).pass, false);
 });
 
+test('replan exposes the same answer-request path and keeps headless external stopping', () => {
+  for (const language of ['ja', 'en']) {
+    const step = loadCompletionRoutingStep({ language, workflow: 'development-core' });
+    const expected = { next: 'replan', requires_user_input: true };
+    assert.equal(scoreTransition('[REPLAN:4]', step, expected, true).pass, true);
+    assert.equal(scoreTransition('[REPLAN:4]', step, expected, false).pass, false);
+    assert.equal(scoreTransition('[REPLAN:3]', step, { next: 'ABORT' }, false).pass, true);
+  }
+});
+
 test('the structured config connects fixed input-request cases through its provider schema', async () => {
   const configUrl = new URL('../agents/implement/completion-scope-structured.yaml', import.meta.url);
   const config = parse(readFileSync(configUrl, 'utf8'));
   const caseFile = config.tests.find(file => file.endsWith('.mjs'));
   const cases = (await import(new URL(caseFile.slice('file://'.length), configUrl).href)).default();
-  assert.equal(cases.length, 1);
+  assert.equal(cases.length, 2);
   for (const language of config.defaultTest.vars.language) {
-    const vars = { ...cases[0].vars, language };
-    const decision = { step: 6, reason: 'A user answer unblocks the planned local work.' };
-    assert.equal((await configuredAssertion('completion-scope-structured', JSON.stringify(decision), vars)).pass, true);
-    for (const invalid of [
-      { ...decision, step: 7 }, { ...decision, step: 5.5 }, { ...decision, extra: true },
-    ]) {
-      assert.deepEqual(await configuredAssertion('completion-scope-structured', JSON.stringify(invalid), vars), {
-        pass: false, reason: 'invalid_provider_schema',
-      });
+    for (const sample of cases) {
+      const vars = { ...sample.vars, language };
+      const inputStep = sample.vars.workflow === 'development-core' ? 4 : 6;
+      const decision = { step: inputStep, reason: 'A user answer unblocks the planned local work.' };
+      assert.equal((await configuredAssertion('completion-scope-structured', JSON.stringify(decision), vars)).pass, true);
+      for (const invalid of [
+        { ...decision, step: 7 }, { ...decision, step: 5.5 }, { ...decision, extra: true },
+      ]) {
+        assert.deepEqual(await configuredAssertion('completion-scope-structured', JSON.stringify(invalid), vars), {
+          pass: false, reason: 'invalid_provider_schema',
+        });
+      }
     }
   }
 });
