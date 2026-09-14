@@ -46,6 +46,7 @@ export function prepareManifest(baselineRevision, casesPath) {
       for (const language of ['ja', 'en']) {
         const vars = {
           workflow: test.workflow, report: test.report, language,
+          ...(test.step_name === undefined ? {} : { step_name: test.step_name }),
           interactive: test.interactive === true,
           ...(revision === 'baseline' ? { baseline_revision: baselineRevision } : {}),
         };

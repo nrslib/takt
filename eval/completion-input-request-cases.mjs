@@ -9,6 +9,7 @@ export default function inputRequestCases() {
       description: sample.id,
       vars: {
         workflow: sample.workflow,
+        ...(sample.step_name === undefined ? {} : { step_name: sample.step_name }),
         interactive: sample.interactive,
         report: sample.report,
         expected_transition: sample.expected,

@@ -529,11 +529,13 @@ eval/
 
 ### Development loop handoffs
 
-The automatic implementation self-loop has been withdrawn. The fixed
-`development-loop-handoffs.yaml` cases and saved Phase 3 comparisons below retain
-their historical continuation expectations; they are not the acceptance criteria
-for the current completion design. Do not relabel those old responses as a new
-model evaluation after changing their expected destinations.
+The initial implementation self-loop has been replaced by the dedicated
+`reimplement` step. The checked-in `development-loop-handoffs.yaml` cases and
+the completion routing cases below use the current `reimplement` / `fix`
+destinations. Saved Phase 3 comparisons retain their historical inputs and
+responses, including the former `investigate` and self-loop routes; they are
+not acceptance evidence for the current design. Do not relabel those old
+responses as a new model evaluation after changing their expected destinations.
 
 The current action evaluation runs real tools in isolated fixture projects. One
 case separates an explicit required check from a narrower general gate; the other
@@ -631,9 +633,12 @@ The auxiliary `completion-scope-routing` and `completion-scope-structured` suite
 also compare fixed `expected_transition` values through the shared
 `asserts/completion-routing.mjs` scorer. Tag and structured candidate numbers are
 resolved against the workflow's noninteractive semantic candidates before
-comparing `next` or `return`. Their active cases now expect ABORT for an
-unexpectedly unfinished implementation response, reflecting the removal of the
-self-loop; this expectation change is not a new live-model measurement.
+comparing `next` or `return`. Their active cases route executable remaining
+implementation, investigation, and verification work to `reimplement` or `fix`;
+only a defective plan or an external-only blocker routes elsewhere. The direct
+`step_name` option lets deterministic checks inspect the `reimplement` rules
+without confusing them with the initial `implement` step. These expectation
+changes are routing contract checks, not new live-model measurements.
 
 The structured suite also loads `completion-input-request-cases.mjs`, which
 reuses the fixed interactive input-request case from

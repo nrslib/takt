@@ -30,9 +30,10 @@ export function loadCompletionRoutingStep(vars) {
     ? readFileSync(join(repoRoot, relativePath), 'utf8')
     : execFileSync('git', ['show', `${vars.baseline_revision}:${relativePath}`], { cwd: repoRoot, encoding: 'utf8' });
   const definition = parse(body);
-  const stepName = vars.workflow === 'development-core'
+  const stepName = vars.step_name ?? (vars.workflow === 'development-core'
     ? 'replan'
-    : vars.workflow.includes('remediation') ? 'fix-plan' : 'implement';
+    : vars.workflow.includes('remediation') ? 'fix-plan' : 'implement');
+  if (typeof stepName !== 'string' || stepName.length === 0) throw new Error('step_name must be a non-empty string');
   const step = definition.steps.find(candidate => candidate.name === stepName);
   if (!step) throw new Error(`Missing step: ${stepName}`);
   return step;

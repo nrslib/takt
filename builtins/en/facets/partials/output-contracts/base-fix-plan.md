@@ -1,7 +1,7 @@
 ```markdown
 # Repair Plan
 
-## Result: FIX PLAN CONFIRMED / INVESTIGATION REQUIRED / REPLAN REQUIRED / CANNOT PROCEED
+## Result: FIX PLAN CONFIRMED / REPLAN REQUIRED / CANNOT PROCEED
 
 ## Findings and Repair Units
 | Finding ID / Source | Repair Unit | Evidence | Acceptance Criteria |
@@ -28,8 +28,8 @@
 |-------------|------------------------|--------------------|-----------------------------|--------|
 | {Name} | {Actual affected path or state} | {Concrete expected success} | {Concrete example that detects a violation} | {Test, reproduction, search, or code tracing} |
 
-## Additional Investigation
-{None, or finding ID, unresolved hypothesis, fixed conditions, single varied condition, observation target, execution method, existing investigation evidence}
+## Plan-scoped Investigation
+{None, or the finding ID, unresolved hypothesis, fixed conditions, single varied condition, observation target, execution method, and result-dependent repair and verification to execute as a repair unit}
 
 ## Replanning Items
 - {None, or evidence that the cause, requirement, or repair boundary cannot be established and the decision needed}

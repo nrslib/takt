@@ -64,10 +64,14 @@ async function execute(config: WorkflowConfig, stepName: string, ruleIndex: numb
   return engine.runSingleIteration();
 }
 
-describe('shipped development completion and investigation routes', () => {
-  it.each(variants(implementations))('$language/$name composes the instruction for completion within the invocation', ({ language, name }) => {
-    const implementation = load(language, name).steps.find(step => step.name === 'implement');
+describe('shipped development completion and remediation routes', () => {
+  it.each(variants(implementations))('$language/$name composes completion and reimplementation instructions within the invocation', ({ language, name }) => {
+    const config = load(language, name);
+    const implementation = config.steps.find(step => step.name === 'implement');
+    const reimplementation = config.steps.find(step => step.name === 'reimplement');
     expect(implementation?.instructionRef).toContain('development-implementation-completion');
+    expect(reimplementation?.instructionRef).toContain('development-reimplement-with-reports');
+    expect(reimplementation?.instructionRef).toContain('development-implementation-completion');
   });
 
   it.each(variants(['simple', 'simple-core', 'simple-mini', 'mini-core']))('$language/$name does not inherit the development-specific completion instruction', ({ language, name }) => {
@@ -76,94 +80,102 @@ describe('shipped development completion and investigation routes', () => {
     expect(implementation?.instructionRef).not.toContain('development-implementation-completion');
   });
 
-  it.each(variants(implementations))('$language/$name stops an unexpectedly unfinished response instead of calling implementation again', async ({ language, name }) => {
+  it.each(variants(implementations))('$language/$name sends executable incompleteness to reimplement and repeats until complete', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'implement');
     const pending = await execute(config, 'implement', 2);
-    expect(pending.nextStep).toBe('ABORT');
-    expect(pending.isComplete).toBe(true);
+    expect(pending.nextStep).toBe('reimplement');
+    expect(pending.isComplete).toBe(false);
     expect(pending.returnValue).toBeUndefined();
-    expect(config.steps.find(step => step.name === 'implement')?.rules?.filter(rule => rule.next === 'implement'))
-      .toEqual([expect.objectContaining({ requiresUserInput: true, interactiveOnly: true })]);
+    expect((await execute(config, 'reimplement', 2)).nextStep).toBe('reimplement');
+    expect((await execute(config, 'reimplement', 0)).nextStep).toBe('COMPLETE');
   });
 
   it.each(variants(implementations))('$language/$name returns only an invalid plan to its caller', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'implement');
     expect((await execute(config, 'implement', 3)).returnValue).toBe('need_replan');
+    start(config, 'reimplement');
+    expect((await execute(config, 'reimplement', 3)).returnValue).toBe('need_replan');
   });
 
-  it.each(variants(implementations))('$language/$name stops work requiring unavailable external action', async ({ language, name }) => {
+  it.each(variants(implementations))('$language/$name stops work requiring unavailable external action at either implementation step', async ({ language, name }) => {
     const config = load(language, name);
-    start(config, 'implement');
-    const result = await execute(config, 'implement', 4);
-    expect(result.nextStep).toBe('ABORT');
-    expect(result.isComplete).toBe(true);
-    expect(result.returnValue).toBeUndefined();
+    for (const stepName of ['implement', 'reimplement']) {
+      start(config, stepName);
+      const result = await execute(config, stepName, 4);
+      expect(result.nextStep).toBe('ABORT');
+      expect(result.isComplete).toBe(true);
+      expect(result.returnValue).toBeUndefined();
+    }
   });
 
-  it.each(variants(implementations))('$language/$name collects an available user answer and resumes implementation', async ({ language, name }) => {
+  it.each(variants(implementations))('$language/$name collects an available user answer and resumes the same implementation step', async ({ language, name }) => {
     const config = load(language, name);
-    const implementation = config.steps.find(step => step.name === 'implement');
-    if (!implementation) throw new Error('Missing implementation step');
-    expect(determineRuleTransition(implementation, 5)).toMatchObject({ nextStep: 'implement', requiresUserInput: true });
-    const onUserInput = vi.fn().mockResolvedValueOnce('Use the requested export target.');
-    start(config, 'implement', { interactive: true, onUserInput });
-    const waiting = await execute(config, 'implement', 5);
-    expect(waiting).toMatchObject({ nextStep: 'implement', isComplete: false });
-    expect(waiting.returnValue).toBeUndefined();
-    expect(onUserInput).toHaveBeenCalledOnce();
-    expect((await execute(config, 'implement', 0)).nextStep).toBe('COMPLETE');
+    for (const stepName of ['implement', 'reimplement']) {
+      const implementation = config.steps.find(step => step.name === stepName);
+      if (!implementation) throw new Error(`Missing ${stepName} step`);
+      expect(determineRuleTransition(implementation, 5)).toMatchObject({ nextStep: stepName, requiresUserInput: true });
+      const onUserInput = vi.fn().mockResolvedValueOnce('Use the requested export target.');
+      start(config, stepName, { interactive: true, onUserInput });
+      const waiting = await execute(config, stepName, 5);
+      expect(waiting).toMatchObject({ nextStep: stepName, isComplete: false });
+      expect(waiting.returnValue).toBeUndefined();
+      expect(onUserInput).toHaveBeenCalledOnce();
+      expect((await execute(config, stepName, 0)).nextStep).toBe('COMPLETE');
+    }
   });
 
-  it.each(variants(implementations))('$language/$name stops without requesting input when interactive mode is unavailable', async ({ language, name }) => {
+  it.each(variants(implementations))('$language/$name stops without requesting external input when interactive mode is unavailable', async ({ language, name }) => {
     const config = load(language, name);
-    const onUserInput = vi.fn();
-    start(config, 'implement', { interactive: false, onUserInput });
-    const result = await execute(config, 'implement', 4);
-    expect(result).toMatchObject({ nextStep: 'ABORT', isComplete: true });
-    expect(result.returnValue).toBeUndefined();
-    expect(onUserInput).not.toHaveBeenCalled();
+    for (const stepName of ['implement', 'reimplement']) {
+      const onUserInput = vi.fn();
+      start(config, stepName, { interactive: false, onUserInput });
+      const result = await execute(config, stepName, 4);
+      expect(result).toMatchObject({ nextStep: 'ABORT', isComplete: true });
+      expect(result.returnValue).toBeUndefined();
+      expect(onUserInput).not.toHaveBeenCalled();
+    }
   });
 
-  it.each(variants(remediations))('$language/$name investigates locally and resumes the same repair plan', async ({ language, name }) => {
+  it.each(variants(remediations))('$language/$name executes plan-scoped investigation in fix and preserves the repair path', async ({ language, name }) => {
     const config = load(language, name);
-    const investigation = config.steps.find(step => step.name === 'investigate');
-    expect(investigation).toMatchObject({ edit: true });
+    expect(config.steps.find(step => step.name === 'investigate')).toBeUndefined();
     start(config, 'fix-plan');
-    const pending = await execute(config, 'fix-plan', 1);
-    expect(pending.nextStep).toBe('investigate');
+    const pending = await execute(config, 'fix-plan', 0);
+    expect(pending.nextStep).toBe('fix');
     expect(pending.returnValue).toBeUndefined();
-    expect((await execute(config, 'investigate', 0)).nextStep).toBe('fix-plan');
-    expect((await execute(config, 'fix-plan', 0)).nextStep).toBe('fix');
+    expect((await execute(config, 'fix', 0)).nextStep).toBe('fix-verifier');
+    expect((await execute(config, 'fix-verifier', 0)).nextStep).toBe('COMPLETE');
+    expect(config.loopMonitors?.every(monitor => !monitor.cycle.includes('investigate'))).toBe(true);
   });
 
   it.each(variants(remediations))('$language/$name returns a task-wide plan defect to its caller', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'fix-plan');
-    expect(await execute(config, 'fix-plan', 2)).toMatchObject({ isComplete: true, returnValue: 'need_replan' });
+    expect(await execute(config, 'fix-plan', 1)).toMatchObject({ isComplete: true, returnValue: 'need_replan' });
   });
 
-  it.each(variants(remediations).flatMap(variant => ['fix-plan', 'investigate'].map(stepName => ({ ...variant, stepName }))))('$language/$name/$stepName stops at a confirmed external blocker', async ({ language, name, stepName }) => {
+  it.each(variants(remediations))('$language/$name stops at a confirmed external blocker', async ({ language, name }) => {
     const config = load(language, name);
-    start(config, stepName);
-    const result = await execute(config, stepName, stepName === 'fix-plan' ? 3 : 1);
+    start(config, 'fix-plan');
+    const result = await execute(config, 'fix-plan', 2);
     expect(result).toMatchObject({ nextStep: 'ABORT', isComplete: true });
     expect(result.returnValue).toBeUndefined();
   });
 
-  it.each(variants(remediations))('$language/$name monitors repeated local investigations without overriding an exit', ({ language, name }) => {
+  it.each(variants(remediations))('$language/$name retains only the existing repair loop monitors', ({ language, name }) => {
     const config = load(language, name);
     const detector = new CycleDetector(config.loopMonitors);
+    expect(config.loopMonitors?.some(monitor => monitor.cycle.includes('investigate')) ?? false).toBe(false);
     for (let cycle = 1; cycle <= 4; cycle++) {
-      expect(detector.recordAndCheck('fix-plan', 'investigate').triggered).toBe(false);
-      const result = detector.recordAndCheck('investigate', 'fix-plan');
+      expect(detector.recordAndCheck('fix-plan', 'fix').triggered).toBe(false);
+      const result = detector.recordAndCheck('fix', 'fix-plan');
       expect(result.triggered).toBe(cycle === 4);
       if (result.triggered) {
-        expect(result.monitor?.judge.rules.map(rule => rule.next)).toEqual(['fix-plan', 'ABORT']);
+        expect(result.monitor?.judge.rules.map(rule => rule.next)).toEqual(['fix-plan', 'fix-plan', 'fix-plan', 'ABORT']);
       }
     }
-    expect(detector.recordAndCheck('fix-plan', 'fix').triggered).toBe(false);
   });
 
 });

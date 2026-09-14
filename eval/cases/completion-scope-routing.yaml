@@ -1,6 +1,8 @@
-# Current completion contract: executable mandatory work must finish within the
-# invocation. Unexpectedly unfinished responses stop; historical self-loop
-# expectations and model responses remain frozen in their saved manifests.
+# Current completion contract: executable mandatory work must finish through the
+# implementation call. A valid plan with executable remaining work goes to
+# reimplement; only a defective plan or an external-only blocker leaves that
+# route. Historical expectations and model responses remain frozen in saved
+# manifests.
 - description: "既存lint: 無関係な失敗だけでは完了を阻まない"
   vars:
     expected_transition:
@@ -54,7 +56,7 @@
 - description: "必須未実行: スコープ除外で検証義務を免除しない"
   vars:
     expected_transition:
-      next: ABORT
+      next: reimplement
     report: |
       タスク: 無効トークンを401で拒否し、対象テストを完了前に実行すること。
       実装は完了したと報告されているが、対象テストは未実行。実行権限と環境はある。
@@ -63,16 +65,16 @@
 - description: "新規回帰: 既存失敗と混在しても変更起因の不具合を落とさない"
   vars:
     expected_transition:
-      next: ABORT
+      next: reimplement
     report: |
       タスク: 本人変更後も同一トークンを有効とする。
       無関係な既存lintエラー43件は変更前でも同じだった。
       今回の変更で本人変更後のトークンが401になり、対象統合テストが失敗した。変更前は成功する。
       この失敗は今回の認証世代更新が原因と確認済み。修正は未完了。
-- description: "既存依存: 今回の要件を満たせない既存問題は残件にする"
+- description: "既存依存: 要件未達の既存問題も計画内の補完対象にする"
   vars:
     expected_transition:
-      next: ABORT
+      next: reimplement
     report: |
       タスク: 新しい入力経路を既存validatorへ接続し、不正な入力を拒否する。
       validatorは変更前から不正な入力を受け付ける。今回の入口も同じvalidatorに依存する。
@@ -81,7 +83,7 @@
 - description: "明示ゲート: 全体成功の要求がある場合は既存失敗も免除しない"
   vars:
     expected_transition:
-      next: ABORT
+      next: reimplement
     report: |
       タスク: CIのlint失敗を全件修正し、全体lintが成功することを受入条件とする。
       今回変更した関数のlintは成功したが、変更前からの別ファイルのエラーが残り全体lintは失敗。
@@ -89,7 +91,7 @@
 - description: "未分類: 原因不明の失敗を既存と決めつけない"
   vars:
     expected_transition:
-      next: ABORT
+      next: reimplement
     report: |
       タスク: 取得処理を修正し、正常終了と後片付けを必須テストで確認する。
       全体テストが終了せず停止した。変更前との比較はなく、停止原因も不明。
@@ -109,7 +111,7 @@
   vars:
     workflow: development-core
     expected_transition:
-      next: ABORT
+      next: implement
     report: |
       要件はログアウト後に同じ画面から業務操作へ進めないこと。
       Store単体テストは成功したが、画面側が古い認証値を保持する具体的な経路が見つかった。
@@ -171,10 +173,10 @@
       必須の対象テストと型検査を今回実行し、正常終了・成功した。未実施の必須作業はない。
       成果物は確認結果のレポートだけである。
 
-- description: "実ログ由来: E2E smokeだけ未実行なら有効な計画で継続"
+- description: "実ログ由来: E2E smokeだけ未実行なら有効な計画で補完"
   vars:
     expected_transition:
-      next: ABORT
+      next: reimplement
     report: |
       計画済みの4件を修正し、build、lint、対象テスト、全unit、light ITは正常終了した。
       必須のE2E smokeだけが未実行。実行環境は利用でき、次にnpm run test:e2e:smokeを実行する。
@@ -191,7 +193,7 @@
   vars:
     workflow: development-remediation-dynamic
     expected_transition:
-      next: investigate
+      next: fix
     report: |
       7件の指摘と受入条件、修正範囲は確定。並行テスト失敗の原因だけ未確定。
       読み取り工程ではテスト実行していない。次は同じfixtureと環境を固定し、worker数だけ変えて各条件を反復し失敗プロセスのログを採取する。

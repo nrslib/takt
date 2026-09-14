@@ -1,8 +1,45 @@
 # 開発ループの引き継ぎ評価
 
+## 2026-09-14: `reimplement` への変更と独立レビュー
+
+現行の実装終了判定は、採用済み計画で補える不足を `reimplement` へ送り、計画の前提・方法・検証能力を変える必要がある場合だけ `need_replan` を返す。完了確認専用のstepは追加していない。レビュー修正の具体的な原因調査は `fix` 内で実行し、独立した `investigate` は撤去した。
+
+Luna maxの実装後、別セッションのLuna maxが差分と呼び出し経路を独立レビューした。調査を含む修正計画を `fix` の条件へ明示する修正と、補完instructionが通常の実装手順を継承する `{extends:implement}` の追加を反映した。
+
+### 終了判定の実モデル確認
+
+固定13ケースは当初から期待遷移と一致した。一方、既存の原因未確定ケースを追加確認すると、英語版 `development-remediation` の `transfer-binary-reproduction` が、実行可能な局所調査を残したまま `need_replan` を選んだ。追加5ケースの他4件は `fix` だった。失敗時の入力・応答は `/private/tmp/takt-reimplement-remediation-probes-PBpBXO/` に保全した（manifest SHA256: `d70b0df51907ede7570904302d29f3b4e1019d8b84620c0b3d32e658ebfddc4f`）。
+
+独立レビューで既存の第1分岐に計画内の具体的な調査を含めた後、同じreportと期待遷移を維持した18ケースを `gpt-5.6-luna` / `max` で再評価し、全件一致した。実装不足、未実行検証、原因調査、環境準備、計画の観測能力の不備、外部制約、対話入力、完了、有効な成功証跡の引き継ぎを含む。`StatusJudgmentBuilder` が生成した日英の候補と実際のタグから遷移を採点し、期待値はモデルに渡していない。
+
+- 証跡: `/private/tmp/takt-reimplement-reviewed-prompts-yb9tcyv8/`
+- cases SHA256: `710f6ea1c33bc4bc452acf3f6fc406e5030d0840d61fe1fcd3b1dcd32ad5c13d`
+- manifest SHA256: `cd345dc86da7573bbe106be34c37cd848b45e1de66fa3369db45fb26936ce1cb`
+- 最終ソースから再生成した18入力と保存manifestは一致した。監査: `/private/tmp/takt-reimplement-source-audit-pst624_n/phase3/manifest.json`
+
+### 補完instructionの実ツール確認
+
+通常の実装手順を継承した最終instructionを実ローダーで解決し、実装修正が残る場合と検証だけ残る場合の既存fixtureを各1件、Luna maxで実行した。2件とも、必須5コマンドの正常終了をproviderのtool resultで確認し、checker・package・TASK・planの不変と実成果物の一致を確認した。報告の完了宣言だけでは採点していない。
+
+最終instructionの固定manifestは `/private/tmp/takt-reimplement-reviewed-actions-to8wgwp3/manifest.json`、SHA256は `5d47819ec09bc362dae1481809d1dde441bc0dc0f1cb8ad8abe6e9b2e7d4c8c9`。同ディレクトリにsummary・個別結果・provider events・fixtureの最終状態を保存した。最終ソースから再生成したmanifest（`/private/tmp/takt-reimplement-source-audit-pst624_n/actions/manifest.json`）との一致も確認した。継承追加前に成功した2件（`/private/tmp/takt-reimplement-final-actions-0luotlg1/`）は、最終instructionの成功証跡には流用していない。
+
+### ローカル検証と限界
+
+build、lint、unit、対象routing IT、分類契約、eval契約、変更workflow 16本のdoctor、`git diff --check` は成功した。継承追加後にもbuildとrouting ITを実施し、routing ITは76件成功した。
+
+light ITは全2,490テストが成功表示で終了コード0だった一方、Vitestの `Timeout calling "onTaskUpdate"` が1件残った。再実行・直列実行・先行PR版の保存ログにも同じエラーがあり、全検証がエラーなく成功したとは扱わない。根本原因と対象テストは未特定。証跡: `/private/tmp/takt-direct-completion-light-it{,-retry,-serial}.log`、`/private/tmp/takt-implementation-completion-light-it.log`。
+
+`npm run test:opencode-probe` はlocalhost待受のsandbox制限を解除して実行したが、11ケース中 `prompt-capture` が実行段階の30秒タイムアウトで失敗した。失敗部分だけを同じ隔離環境・入力・タイムアウトで再実行しても再現した。probe・依存・provider実装に本PRの変更はなく、原因は未特定。証跡: `/private/tmp/takt-reimplement-final-opencode-authorized.log`、`/private/tmp/takt-reimplement-opencode-capture-retry.log`。
+
+`npm run test:e2e:smoke` は19件成功・1件skip、終了コード0。証跡: `/private/tmp/takt-reimplement-final-smoke.log`。
+
+実モデルの確認は固定入力の単発Phase 3判定と補完instruction単体の動作であり、全workflow、Phase 2の報告生成、全providerの評価ではない。元の31 iterations・526分38秒のrun全体は再実行しておらず、収束回数・時間短縮は未測定。以下の過去結果は各時点の入力・方針に対する履歴であり、現行設計の成功率へ流用しない。
+
+## 以前の設計の評価記録
+
 2026-09-11に、基準コミット `fef072115677cc1b99e6416b05944ebdf8af0c53` と最初の修正案を比較した。元run全体の再実行ではなく、実ログを要約した資料と新規の別領域ケースによる固定入力評価である。最初の比較、Lunaレビュー後の同一性確認、CodeRabbit対応後の最終版評価は別の記録として扱う。
 
-その後、実装を再呼び出して未実行作業を処理する自己ループは撤回した。以下のPhase 3の28/28・30/30・108応答、引き継ぎ判断、および構造化providerの2応答は撤回前の方針に対する歴史結果であり、現在のモデル評価として扱わない。現在の主眼は、実行可能な必須作業を最初の呼び出し内で終えることである。末尾に実ツールを用いた別の評価を記録する。
+その後、初回実装を再呼び出す自己ループはいったん撤回し、実行可能な必須作業を最初の呼び出し内で終える方針を評価した。以下のPhase 3の28/28・30/30・108応答、引き継ぎ判断、および構造化providerの2応答はそれぞれ当時の方針に対する歴史結果であり、現在のモデル評価として扱わない。
 
 ## Phase 3の遷移
 
@@ -146,6 +183,29 @@ PR #1554の初回head `e0407b6a719faaff79dbb1cb605e6ce86b136f16` への5指摘�
 CodeRabbit対応後はbuild、srcのlint、変更したeval全5ファイルへの直接ESLint、エンジン84件、eval契約18件、分類契約20件、既存eval契約38件、`git diff --check` が成功した。REDは `/private/tmp/takt-loop-cr-red-eslint.log` と `/private/tmp/takt-loop-cr-red-handoff.log`、最終の対応するGREENは `/private/tmp/takt-loop-cr-eval-eslint-final.log` と `/private/tmp/takt-loop-cr-v2-eval.log`。エンジン最終結果は `/private/tmp/takt-loop-cr-v2-engine.log`。
 
 最終版も固定入力の単発評価であり、実コマンド行動や元run全体の収束時間は未測定という限界は変わらない。
+
+## `reimplement` 配線の限定確認（独立レビュー前の途中版）
+
+現行方針へ作り直した後、独立レビュー前のスナップショットに対して、
+`StatusJudgmentBuilder` が実行時と同じ候補を生成する固定10ケースを
+`gpt-5.6-luna` / `max` で判定した。期待遷移は送信前に固定し、10件すべて
+一致した。証跡は `/private/tmp/takt-reimplement-prompts-retry.9IQfxv/`、
+cases SHA256 は `f1cb8432244b4e4b0a35ab3fb045a2d12db53acbdf5cc88fcba05e524887c7f0`、
+manifest SHA256 は `f5da23ea1a2904308251da928b6fbb3e9067f030782bce0fde1aa93dadbe4911`。
+
+同じスナップショット時点の実ツール確認では、実ローダーで解決した補完
+instructionと既存action fixtureを使い、追加実装が残るケースと検証だけが
+残るケースを各1件実行した。2件とも必須5検証の成功記録、checker・package・
+TASK・planの不変、期待ラベルを確認した。証跡は
+`/private/tmp/takt-reimplement-actions.37byAH/`、manifest SHA256 は
+`812a1430c4058395680fa34a535a9e191a30273201714b7b9fb882b0322350b1`。
+
+これらは現行配線の意味判定と補完instruction単体の限定確認であり、旧版との
+成功率比較、全workflow再実行、全provider評価ではない。評価後に
+`development-implementation-completion` の合成、入力候補の境界文言、既存欄の
+出力契約を更新しているため、上記結果を最終instructionの評価済み証跡や
+現行成功率として流用しない。独立レビュー後に固定入力との同一性を確認し、
+必要な再評価を別記録として扱う。
 
 ## 構造化providerの入力要求候補
 

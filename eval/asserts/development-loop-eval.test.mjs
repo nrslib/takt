@@ -35,8 +35,7 @@ async function configuredAssertion(configName, output, vars) {
 for (const config of ['completion-scope-routing', 'completion-scope-structured']) {
   for (const language of ['ja', 'en']) {
     for (const scenario of [
-      { workflow: 'development-implement-dynamic', tag: 'IMPLEMENT', number: 3, next: 'ABORT' },
-      { workflow: 'development-remediation-dynamic', tag: 'FIX-PLAN', number: 2, next: 'investigate' },
+      { workflow: 'development-implement-dynamic', tag: 'IMPLEMENT', number: 3, next: 'reimplement' },
     ]) {
       test(`${config}/${language}/${scenario.workflow} scores the actual transition when the number stays the same`, async () => {
         const vars = {
@@ -70,17 +69,34 @@ test('the same tag resolves to different real transitions before and after the c
     const vars = { language, workflow: 'development-implement-dynamic' };
     const before = loadCompletionRoutingStep({ ...vars, baseline_revision });
     const after = loadCompletionRoutingStep(vars);
-    assert.deepEqual(scoreTransition('[IMPLEMENT:3]', before, { next: 'implement' }), {
+    assert.deepEqual(scoreTransition('[IMPLEMENT:3]', before, { next: 'reimplement' }), {
       pass: false, reason: 'wrong_transition', transition: { return: 'need_replan' },
     });
-    assert.equal(scoreTransition('[IMPLEMENT:3]', after, { next: 'ABORT' }).pass, true);
+    assert.equal(scoreTransition('[IMPLEMENT:3]', after, { next: 'reimplement' }).pass, true);
   }
 });
 
-test('local investigation is absent before the change; old rule 2 is a full replan', () => {
+test('plan-scoped remediation now enters fix; old rule 2 was a full replan', () => {
   const before = loadCompletionRoutingStep({ language: 'ja', workflow: 'development-remediation-dynamic', baseline_revision });
-  assert.equal(scoreTransition('[FIX-PLAN:2]', before, { next: 'investigate' }).pass, false);
-  assert.deepEqual(scoreTransition('[FIX-PLAN:2]', before, { next: 'investigate' }).transition, { return: 'need_replan' });
+  const after = loadCompletionRoutingStep({ language: 'ja', workflow: 'development-remediation-dynamic' });
+  assert.deepEqual(scoreTransition('[FIX-PLAN:2]', before, { return: 'need_replan' }), {
+    pass: true, reason: 'expected_transition', transition: { return: 'need_replan' },
+  });
+  assert.equal(scoreTransition('[FIX-PLAN:1]', after, { next: 'fix' }).pass, true);
+  assert.equal(after.rules.some(rule => rule.next === 'investigate'), false);
+});
+
+test('the candidate loader exposes direct reimplementation routing and preserves input gating', () => {
+  for (const language of ['ja', 'en']) {
+    const step = loadCompletionRoutingStep({
+      language, workflow: 'development-implement-dynamic', step_name: 'reimplement',
+    });
+    assert.equal(step.name, 'reimplement');
+    assert.equal(scoreTransition('[REIMPLEMENT:3]', step, { next: 'reimplement' }).pass, true);
+    assert.equal(scoreTransition('[REIMPLEMENT:4]', step, { return: 'need_replan' }).pass, true);
+    assert.equal(scoreTransition('[REIMPLEMENT:6]', step, { next: 'reimplement', requires_user_input: true }, true).pass, true);
+    assert.equal(scoreTransition('[REIMPLEMENT:6]', step, { next: 'reimplement', requires_user_input: true }, false).pass, false);
+  }
 });
 
 test('missing, out-of-range, and user-input results cannot count as automatic continuation', () => {

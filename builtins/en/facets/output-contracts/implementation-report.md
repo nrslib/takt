@@ -19,7 +19,7 @@
 ## Unverified Scope
 | Item | Reason | Deterministic Alternative Verification | Remaining Risk and Effect on This Task’s Completion |
 |------|--------|----------------------------------------|-----------------------------------------------------|
-| {unverified item, or "none"} | {incomplete implementation, failed verification, environmental limitation, etc.} | {alternative verification performed, or "none"} | {remaining risk, whether required for this task or out of scope, evidence, and next action} |
+| {unverified item, or "none"} | {incomplete implementation, failed verification, environmental limitation, etc.; state whether it is executable within the current plan (yes / no) and the concrete basis} | {alternative verification performed, or "none"} | {remaining risk, whether required for this task or out of scope, evidence, and next action; when identifying a plan defect, state why the current plan cannot execute or verify it, which premise, scope, method, or verification capability must change, and what concrete work becomes possible after the change} |
 
 `Verified` is allowed only when all applicable contract and impact-path evidence succeeded. Record every failed or unexecuted item under Unverified Scope with its reason, deterministic alternative verification, and remaining risk.
 ```

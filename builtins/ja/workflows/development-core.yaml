@@ -90,6 +90,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: development-implement-with-reports
+    reimplementation_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: development-reimplement-with-reports
     scope_report_format:
       type: facet_ref
       facet_kind: report_format
@@ -233,6 +237,8 @@ steps:
         $param: development_knowledge
       implementation_instruction:
         $param: implementation_instruction
+      reimplementation_instruction:
+        $param: reimplementation_instruction
       scope_report_format:
         $param: scope_report_format
     rules:

@@ -4,7 +4,7 @@
   origin: runtime-derived
   source: "20260910-123610-implement-using-only-the-files-spbd50: iterations 17–18; JSONL 120/231 contains the old incomplete rule"
   workflow: development-implement-dynamic
-  expected: { next: implement }
+  expected: { next: reimplement }
   report: |
     計画済みの4件を修正し、build、lint、対象テスト、全unit、light ITは正常終了した。
     必須のE2E smokeだけが未実行。実行環境は利用でき、次にnpm run test:e2e:smokeを実行する。
@@ -13,7 +13,7 @@
   origin: runtime-derived
   source: "20260910-123610-implement-using-only-the-files-spbd50: iterations 7/14; JSONL 91/200/206–208"
   workflow: development-remediation-dynamic
-  expected: { next: investigate }
+  expected: { next: fix }
   report: |
     7件の指摘と受入条件、修正範囲は確定。並行テスト失敗の原因だけ未確定。
     読み取り工程ではテスト実行していない。次は同じfixtureと環境を固定し、worker数だけ変えて各条件を反復し失敗プロセスのログを採取する。
@@ -31,7 +31,7 @@
   origin: held-out-domain
   source: "New CSV import scenario, created after the facet edits; no source-run terminology"
   workflow: development-implement
-  expected: { next: implement }
+  expected: { next: reimplement }
   report: |
     元要件はCSV取込で、空欄・引用符内改行・重複行をすべて処理すること。
     計画は3状態を列挙し、行パーサーとストレージを順に変更する。空欄と改行は実装・検証済み。
@@ -41,7 +41,7 @@
   origin: held-out-domain
   source: "New session revocation scenario, created after the facet edits"
   workflow: development-implement-team
-  expected: { next: implement }
+  expected: { next: reimplement }
   report: |
     要件はセッションの有効時と失効後に、同じブラウザーから注文操作がそれぞれ成功・拒否されること。
     計画は両状態のブラウザー操作とHTTP応答を観測する。実装済みで、有効時の証跡は取得した。
@@ -51,7 +51,7 @@
   origin: held-out-domain
   source: "New binary codec scenario, created after the facet edits"
   workflow: development-remediation
-  expected: { next: investigate }
+  expected: { next: fix }
   report: |
     採用指摘は圧縮後のデータに末尾1バイトが欠けること。要求と修正境界は既存codec内で確定している。
     入力長の端数とストリーム終端のどちらが原因か、読み取りだけでは確定できなかった。
@@ -61,7 +61,7 @@
   origin: held-out-domain
   source: "New document renderer scenario, created after the facet edits"
   workflow: development-remediation-team
-  expected: { next: investigate }
+  expected: { next: fix }
   report: |
     採用された指摘は見出しが次ページの本文に重なること。対象は既存の帳票レイアウト関数。
     フォント幅と改ページ境界のどちらに欠陥があるか未確認であり、修正方法はまだ決められない。
@@ -71,7 +71,7 @@
   origin: held-out-domain
   source: "New protocol parser scenario, created after the facet edits"
   workflow: review-remediation
-  expected: { next: investigate }
+  expected: { next: fix }
   report: |
     指摘はパケット分割時にヘッダーを取り落とす不具合。原因はヘッダー長の計算かバッファの連結か未確定。
     現在採用されている指摘と受入条件は変わらず、修正範囲は同じパーサーである。
