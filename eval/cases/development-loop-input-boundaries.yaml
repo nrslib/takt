@@ -31,17 +31,3 @@
     権限変更は別の管理者が外部の管理画面で行う必要がある。ユーザーから回答を受けるだけでは権限は付与されない。
     プロジェクト内の実装修正、調査、計画変更では解消できず、代替検証で明示条件を免除することもできない。
     残作業は管理者による外部の権限変更だけであり、今すぐ実行できるプロジェクト内作業はない。
-- id: control-answer-unblocks-replan
-  origin: control
-  source: "The planning handoff can request the same answer when implementation had no interactive candidate"
-  workflow: development-core
-  interactive: true
-  expected: { next: replan, requires_user_input: true }
-  report: *target-selection
-- id: control-answer-does-not-unblock-headless-replan
-  origin: control
-  source: "The planning handoff preserves the external stop when no input candidate is available"
-  workflow: development-core
-  interactive: false
-  expected: { next: ABORT }
-  report: *target-selection

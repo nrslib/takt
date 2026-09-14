@@ -646,8 +646,8 @@ changes are routing contract checks, not new live-model measurements.
 The structured suite also loads `completion-input-request-cases.mjs`, which
 reuses the fixed interactive input-request cases from
 `cases/development-loop-input-boundaries.yaml`. Its provider JSON Schema accepts
-candidate 6 for implementation and candidate 4 for the replan step; the shared
-scorer still rejects each interactive-only candidate in headless mode.
+candidate 6 for implementation; the shared scorer still rejects that
+interactive-only candidate in headless mode.
 The local contract validates the actual provider schema before scoring. The
 focused Codex SDK check and its saved schema responses are documented in
 [the evaluation record](results/development-loop-handoffs.md#構造化providerの入力要求候補).

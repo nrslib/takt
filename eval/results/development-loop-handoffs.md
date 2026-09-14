@@ -1,6 +1,21 @@
 # 開発ループの引き継ぎ評価
 
-## 2026-09-14: 実装側の停止経路を計画側へ移す
+## 2026-09-14: `replan` の入力要求ルートを撤去
+
+日英 `development-core` の `replan` から入力要求による自己ループを撤去した。実行可能な計画は `implement`、完了は `peer-review`、確認済みの根拠から外部操作・外部回答待ちだけが残る場合や要件が両立不能な場合は `ABORT` の3分岐とする。実装・再実装からのABORT撤去は維持し、削除した候補を前提とするinstruction・active eval・説明・テストを整理した。別セッションのLuna maxによる独立レビューは指摘なしだった。
+
+外部設備待ち、対話モードの外部回答待ち、非対話モードの外部回答待ち、今実行可能な検証計画の4境界を、日英の判定候補で新規評価した。実際の `StatusJudgmentBuilder` から生成したプロンプトを `gpt-5.6-luna` / `max` に渡し、8件すべてが固定した期待遷移と一致した。reportは直前の4ケースと同じ日本語資料を使い、入力要求を期待していたケースだけを新仕様の `ABORT` に変更して実行前に固定した。旧応答は再分類していない。
+
+- 新規評価: `/private/tmp/takt-replan-without-input-r_p8c5u3/`（cases、manifest、個別応答・採点、summary）
+- cases SHA256: `a2bd5c2f797b2fbec58077596098605fa4cc2e486fc62c4f6dd4bab610eef85b`
+- manifest SHA256: `5be34836271bebf478a1f1b83e659d9f91862eec941b9c909c6a2c12163e6492`
+- 最終監査: `/private/tmp/takt-replan-no-input-source-audit-RS6Sud/audit.json`。新規8件のプロンプト・routing step・定義全体と最終ソース、保存応答のmanifestHash・採点が一致した。前段の実装側12件も入力・配線が不変であることを照合したが、再呼び出しはしていない。
+
+今回の追加差分はbuild・lint、routing IT 84件、分類契約20件、eval契約28件、日英core doctor、`git diff --check` が成功した。実モデル確認は固定reportによるPhase 3の単発判断であり、変更したinstruction全体の実ツール評価や全workflowの再走ではない。以下の計画側4件は、入力要求ルートを持っていた `e5a81b5` 時点の履歴として保持する。
+
+## 2026-09-14: 実装側の停止経路を計画側へ移す（`e5a81b5` 時点）
+
+以下の「最終ソース」と計画側の対話入力は `e5a81b5` 時点を指す。`replan` の入力要求ルートは上記の追加修正で撤去した。
 
 日英3variantの `implement/reimplement` から `ABORT` 遷移を撤去した。計画内で補える不足は `reimplement` を繰り返し、計画不備に加えて外部制約・外部回答待ち・条件の衝突も、根拠と未完了義務を添えて `need_replan` へ渡す。親の実装workflow呼び出しが子の `ABORT` 結果を受けた場合も `replan` へ進む。続行可能な作業の具体化と停止の判断は計画側が担い、回答で進められる対話時は同じ `replan` で入力を受けて再評価する。
 

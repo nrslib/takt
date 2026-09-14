@@ -193,12 +193,8 @@ steps:
         next: implement
       - condition: The current implementation satisfies this task’s requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation necessary for this task remains (includes cases where only unrelated pre-existing issues or out-of-scope work remain; a plan entry or incomplete label alone does not make them mandatory)
         next: peer-review
-      - condition: For a mandatory condition of this task, confirmed evidence shows that project-scoped changes or investigation cannot resolve the blocker, and because no user-input option is available or its answer cannot resolve it, only an external action or external answer remains, or the requirements are confirmed incompatible
+      - condition: For a mandatory condition of this task, confirmed evidence shows that project-scoped changes or investigation cannot resolve the blocker, leaving only an external action or external answer, or confirming that the requirements are incompatible
         next: ABORT
-      - condition: A user-input option is available, and receiving its answer would enable project-scoped work within the plan (exclude non-interactive runs and external permission or equipment gaps that an answer cannot resolve)
-        next: replan
-        requires_user_input: true
-        interactive_only: true
 
   - name: write_tests
     capabilities:

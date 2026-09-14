@@ -153,22 +153,6 @@ describe('shipped development completion and remediation routes', () => {
     expect(abortRule?.next).toBe('replan');
   });
 
-  it.each(variants(['development-core']))('$language lets replan request an answer only when it can unblock project work', async ({ language, name }) => {
-    const config = load(language, name);
-    const replan = config.steps.find(step => step.name === 'replan');
-    if (!replan) throw new Error('Missing replan step');
-    expect(determineRuleTransition(replan, 3)).toMatchObject({ nextStep: 'replan', requiresUserInput: true });
-
-    const onUserInput = vi.fn().mockResolvedValueOnce('Use the requested export target.');
-    start(config, 'replan', { interactive: true, onUserInput });
-    expect(await execute(config, 'replan', 3)).toMatchObject({ nextStep: 'replan', isComplete: false });
-    expect(onUserInput).toHaveBeenCalledOnce();
-    expect((await execute(config, 'replan', 0)).nextStep).toBe('implement');
-
-    start(config, 'replan', { interactive: false });
-    expect(await execute(config, 'replan', 2)).toMatchObject({ nextStep: 'ABORT', isComplete: true });
-  });
-
   it.each(variants(remediations))('$language/$name executes plan-scoped investigation in fix and preserves the repair path', async ({ language, name }) => {
     const config = load(language, name);
     expect(config.steps.find(step => step.name === 'investigate')).toBeUndefined();
