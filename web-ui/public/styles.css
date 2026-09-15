@@ -2484,8 +2484,7 @@ body[data-inspector-resizing="true"] * {
   margin: 0;
 }
 
-.chat-entry-user > p,
-.chat-entry-system > p {
+.chat-entry > p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

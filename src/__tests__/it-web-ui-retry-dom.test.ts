@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import type { WebChatService, WebChatSessionDescription } from '../features/web-ui/chat.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { createWebUiServer, listenWebUiServer } from '../features/web-ui/server.js';
 import type { WebWorkflowCatalog } from '../features/web-ui/workflow-catalog.js';
 
@@ -335,6 +336,13 @@ const BROWSER_EXECUTABLE_CANDIDATES = [
 ] as const;
 const BROWSER_LITERAL_USER_MESSAGE = '# user\n**raw**\n- item\nnext line';
 const BROWSER_LITERAL_SYSTEM_MESSAGE = '# system\n**raw**\n- item\nnext line';
+const BROWSER_LITERAL_RETRY_MESSAGE = [
+  '# retry',
+  '**raw**',
+  '- item',
+  'next line with a deliberately long unbroken token: retry-instruction-wrap-check-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+].join('\n');
+const BROWSER_ASSISTANT_MARKDOWN = '# assistant\n\n**rendered**\nsecond line';
 
 interface BrowserLiteralRange {
   setStart(node: object, offset: number): void;
@@ -347,7 +355,10 @@ interface BrowserLiteralElement {
   readonly firstChild: object | null;
   readonly ownerDocument: {
     readonly defaultView: {
-      getComputedStyle(node: BrowserLiteralElement): { readonly whiteSpace: string };
+      getComputedStyle(node: BrowserLiteralElement): {
+        readonly whiteSpace: string;
+        readonly overflowWrap: string;
+      };
     } | null;
     createRange(): BrowserLiteralRange;
   };
@@ -356,16 +367,26 @@ interface BrowserLiteralElement {
 interface BrowserLiteralObservation {
   readonly textContent: string;
   readonly whiteSpace: string;
+  readonly overflowWrap: string;
   readonly lineTops: readonly number[];
+}
+
+function readBrowserWhiteSpace(node: unknown): string {
+  const element = node as BrowserLiteralElement;
+  const defaultView = element.ownerDocument.defaultView;
+  if (defaultView === null) throw new Error('Markdown paragraph has no measurable document');
+  return defaultView.getComputedStyle(element).whiteSpace;
 }
 
 function measureBrowserLiteralParagraph(node: unknown): BrowserLiteralObservation {
   const element = node as BrowserLiteralElement;
   const text = element.textContent;
   const textNode = element.firstChild;
-  if (text === null || textNode === null || element.ownerDocument.defaultView === null) {
+  const defaultView = element.ownerDocument.defaultView;
+  if (text === null || textNode === null || defaultView === null) {
     throw new Error('Literal paragraph has no measurable text node');
   }
+  const style = defaultView.getComputedStyle(element);
   const lineTops: number[] = [];
   let offset = 0;
   for (const line of text.split('\n')) {
@@ -377,7 +398,8 @@ function measureBrowserLiteralParagraph(node: unknown): BrowserLiteralObservatio
   }
   return {
     textContent: text,
-    whiteSpace: element.ownerDocument.defaultView.getComputedStyle(element).whiteSpace,
+    whiteSpace: style.whiteSpace,
+    overflowWrap: style.overflowWrap,
     lineTops,
   };
 }
@@ -695,7 +717,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
     : it;
 
   browserRegressionTest(
-    'preserves user and system line breaks in the rendered browser',
+    'preserves Markdown rendering and literal line breaks in the rendered browser',
     async () => {
       const executablePath = browserExecutablePath();
       if (executablePath === undefined) {
@@ -711,6 +733,43 @@ describe('Web UI Retry 本番 DOM 経路', () => {
           projectDirectory,
           command: 'ui',
         });
+        const repository = await CentralTaskRepository.open({
+          globalConfigDirectory,
+          stateId: project.stateId,
+          locationId: project.locationId,
+          canonicalDirectory: project.canonicalDirectory,
+          displayName: project.displayName,
+          fingerprint: project.fingerprint,
+        });
+        const handle = await repository.enqueueAndClaim({
+          task: 'original order',
+          workflow: 'default',
+          worktree: true,
+          branch: 'codex/browser-retry',
+          baseBranch: 'main',
+        });
+        const runningTask = await repository.adopt({
+          taskId: handle.task.taskId,
+          generation: handle.task.generation,
+          executionId: handle.executionId,
+          ownerToken: handle.ownerToken,
+          pid: process.pid,
+        });
+        const contextualTask = await repository.updateExecutionContext({
+          taskId: runningTask.taskId,
+          generation: runningTask.generation,
+          executionId: handle.executionId,
+          ownerToken: handle.ownerToken,
+          worktreePath: join(projectDirectory, 'takt-worktree'),
+        });
+        const failedTask = await repository.terminal({
+          taskId: contextualTask.taskId,
+          generation: contextualTask.generation,
+          executionId: handle.executionId,
+          ownerToken: handle.ownerToken,
+          status: 'failed',
+          failure: { code: 'browser_fixture', message: 'browser fixture task' },
+        });
         const session: WebChatSessionDescription = {
           id: 'browser-session',
           workflow: 'default',
@@ -718,13 +777,43 @@ describe('Web UI Retry 本番 DOM 経路', () => {
           intro: '',
           provider: 'mock',
         };
+        const retrySession: WebChatSessionDescription = {
+          id: 'browser-retry-session',
+          workflow: 'default',
+          mode: 'assistant',
+          intro: '',
+          provider: 'mock',
+          taskAction: {
+            sessionId: 'browser-retry-session',
+            taskId: failedTask.taskId,
+            action: 'retry',
+            generation: failedTask.generation,
+            retryStartOptions: {
+              defaultId: 'restart:plan',
+              options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+            },
+          },
+        };
         const chat: WebChatService = {
           create: (_projectDirectory, _request) => session,
           reconfigure: (_sessionId, _request) => session,
           restart: (_sessionId) => session,
-          send: async (_sessionId, text) => text === '/system'
-            ? { kind: 'error', message: BROWSER_LITERAL_SYSTEM_MESSAGE }
-            : { kind: 'assistant_response', content: 'assistant response' },
+          send: async (sessionId, text) => {
+            if (sessionId === retrySession.id && text === '/go') {
+              return {
+                kind: 'task_instruction',
+                task: BROWSER_LITERAL_RETRY_MESSAGE,
+                taskAction: {
+                  sessionId: retrySession.id,
+                  taskId: failedTask.taskId,
+                  action: 'retry',
+                },
+                taskActionOptionId: 'restart:plan',
+              };
+            }
+            if (text === '/system') return { kind: 'error', message: BROWSER_LITERAL_SYSTEM_MESSAGE };
+            return { kind: 'assistant_response', content: BROWSER_ASSISTANT_MARKDOWN };
+          },
           commitTaskAction: (_sessionId, _reservationToken) => undefined,
           releaseTaskAction: (_sessionId, _reservationToken) => undefined,
         };
@@ -739,6 +828,17 @@ describe('Web UI Retry 本番 DOM 経路', () => {
         server = await createWebUiServer({
           globalConfigDirectory,
           launch: async () => ({ pid: 1, disposition: 'started' as const, mode: 'run' as const }),
+          taskActionConversation: async (_projectDirectory, taskId, action) => {
+            if (taskId !== failedTask.taskId || action !== 'retry') {
+              throw new Error('Unexpected browser task action');
+            }
+            return {
+              action: 'retry',
+              taskId,
+              status: 'conversation' as const,
+              chatSession: retrySession,
+            };
+          },
           chat,
           getWorkflowCatalog: () => catalog,
         });
@@ -776,6 +876,13 @@ describe('Web UI Retry 本番 DOM 経路', () => {
         await userParagraph.waitFor();
         await waitForNextAssistantResponse();
         const userObservation = await userParagraph.evaluate(measureBrowserLiteralParagraph);
+        const assistantEntry = page.locator('article.chat-entry-assistant').last();
+        const assistantMarkdown = assistantEntry.locator('.markdown-view');
+        await assistantMarkdown.waitFor();
+        expect(await assistantMarkdown.locator('h1').textContent()).toBe('assistant');
+        expect(await assistantMarkdown.locator('strong').textContent()).toBe('rendered');
+        expect(await assistantMarkdown.locator('p').evaluate(readBrowserWhiteSpace))
+          .toBe('normal');
 
         await sendMessage('/system');
         const systemParagraph = page.locator('article.chat-entry-system').last().locator('p');
@@ -790,6 +897,45 @@ describe('Web UI Retry 本番 DOM 経路', () => {
         expect(systemObservation.whiteSpace).toBe('pre-wrap');
         expect(new Set(systemObservation.lineTops).size)
           .toBe(BROWSER_LITERAL_SYSTEM_MESSAGE.split('\n').length);
+
+        await page.click('#chat-collapse-button');
+        await page.waitForFunction(
+          '() => document.body.dataset.screen === "viewer"',
+          undefined,
+          { timeout: 5000 },
+        );
+        const taskCard = page.locator(`article.task-card[data-task-id="${failedTask.taskId}"]`);
+        await taskCard.waitFor();
+        await taskCard.locator('details.task-actions > summary').click();
+        const retryButton = taskCard.locator('button.task-action-retry');
+        await retryButton.click();
+        await page.waitForFunction(
+          '() => document.body.dataset.screen === "task"'
+            + ' && document.querySelector("#chat-surface")?.dataset.open === "true"'
+            + ' && document.querySelector("#chat-task-action-context")?.hidden === false',
+          undefined,
+          { timeout: 5000 },
+        );
+        await page.waitForFunction(
+          '() => !document.querySelector("#chat-message")?.disabled',
+          undefined,
+          { timeout: 5000 },
+        );
+
+        await sendMessage('/markdown');
+        const retryAssistantEntry = page.locator('article.chat-entry-assistant').last();
+        await retryAssistantEntry.locator('.markdown-view').waitFor();
+        await waitForNextAssistantResponse();
+
+        await sendMessage('/go');
+        const retryParagraph = page.locator('article.chat-entry-assistant').last().locator(':scope > p');
+        await retryParagraph.waitFor();
+        const retryObservation = await retryParagraph.evaluate(measureBrowserLiteralParagraph);
+        expect(retryObservation.textContent).toBe(BROWSER_LITERAL_RETRY_MESSAGE);
+        expect(retryObservation.whiteSpace).toBe('pre-wrap');
+        expect(retryObservation.overflowWrap).toBe('anywhere');
+        expect(new Set(retryObservation.lineTops).size)
+          .toBe(BROWSER_LITERAL_RETRY_MESSAGE.split('\n').length);
         expect(pageErrors).toEqual([]);
       } finally {
         await browser?.close();
