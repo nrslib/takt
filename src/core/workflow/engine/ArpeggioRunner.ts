@@ -26,6 +26,14 @@ import { createLogger, delay } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import type { PhaseName, PhasePromptParts, RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
+import type {
+  LiveInterventionChannel,
+  PreparedLiveInterventionDelivery,
+} from '../live-intervention/types.js';
+import {
+  createLiveInterventionDeliveryCommitter,
+  type LiveInterventionDeliveryCommitter,
+} from '../live-intervention/delivery.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
 import type { InstructionContext } from '../instruction/instruction-context.js';
 import { preparePreviousResponseContent } from '../instruction/InstructionBuilder.js';
@@ -48,6 +56,8 @@ const log = createLogger('arpeggio-runner');
 export interface ArpeggioRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
+  readonly liveIntervention?: LiveInterventionChannel;
+  readonly getAbortSignal?: () => AbortSignal | undefined;
   readonly getCwd: () => string;
   readonly getReportDir: () => string;
   readonly getReportsRootDir: () => string;
@@ -140,6 +150,7 @@ async function executeBatchWithRetry(
   observability: ArpeggioBatchObservability,
   instructionContext: InstructionContext,
   runtime?: RuntimeStepResolution,
+  additionalPrompt?: string,
 ): Promise<BatchResult> {
   const prompt = buildArpeggioPrompt(
     template,
@@ -149,6 +160,7 @@ async function executeBatchWithRetry(
     agentOptions.language ?? 'en',
     instructionContext,
     runtime,
+    additionalPrompt,
   );
   let lastError: string | undefined;
   let lastFailureCategory: AgentResponse['failureCategory'];
@@ -259,6 +271,17 @@ function getBatchResultStatus(result: BatchResult): string {
   return result.rateLimitedResponse?.status ?? (result.success ? 'done' : 'error');
 }
 
+function hasPendingOutsideDeliveries(
+  channel: LiveInterventionChannel | undefined,
+  deliveries: readonly PreparedLiveInterventionDelivery[],
+): boolean {
+  if (channel === undefined) return false;
+  const deliveredIds = new Set(deliveries.flatMap((delivery) => delivery.instructionIds));
+  return channel.read().instructions.some((instruction) => (
+    instruction.state === 'pending' && !deliveredIds.has(instruction.instructionId)
+  ));
+}
+
 function buildArpeggioPrompt(
   template: string,
   batch: DataBatch,
@@ -267,6 +290,7 @@ function buildArpeggioPrompt(
   language: NonNullable<RunAgentOptions['language']>,
   instructionContext: InstructionContext,
   runtime?: RuntimeStepResolution,
+  additionalPrompt?: string,
 ): string {
   const prompt = expandTemplate(template, batch);
   const gitRules = buildGitRules(allowGitCommit, language, 'phase1');
@@ -287,6 +311,7 @@ function buildArpeggioPrompt(
     renderedRules.noticeBeforeInstructionRules,
     renderedRules.beforeInstructionRules,
     prompt,
+    additionalPrompt,
   ]
     .filter((part): part is string => typeof part === 'string' && part.length > 0)
     .join('\n\n');
@@ -491,14 +516,99 @@ export class ArpeggioRunner {
     instructionContext: InstructionContext,
     runtime?: RuntimeStepResolution,
   ): Promise<BatchResult[]> {
+    const liveIntervention = this.deps.liveIntervention;
+    const liveDeliveries: PreparedLiveInterventionDelivery[] = [];
+    if (liveIntervention !== undefined && liveIntervention.read().pending > 0) {
+      liveDeliveries.push(await liveIntervention.prepareDelivery({
+        language: agentOptions.language,
+        mode: 'batch_boundary',
+        step: step.name,
+        phase: 1,
+        processedBatchCount: 0,
+        runningBatchIndexes: [],
+        appliesToBatchIndexes: batches.map((batch) => batch.batchIndex),
+      }));
+    }
+    const completedBatchIndexes = new Set<number>();
+    const runningBatchIndexes = new Set<number>();
+    const deliveryCommitters = new Map<
+      PreparedLiveInterventionDelivery,
+      LiveInterventionDeliveryCommitter
+    >();
+    let boundaryPreparation: Promise<PreparedLiveInterventionDelivery | undefined> | undefined;
+    const getDeliveryCommitter = (
+      delivery: PreparedLiveInterventionDelivery | undefined,
+    ): LiveInterventionDeliveryCommitter | undefined => {
+      if (liveIntervention === undefined || delivery === undefined) {
+        return undefined;
+      }
+      const existing = deliveryCommitters.get(delivery);
+      if (existing !== undefined) {
+        return existing;
+      }
+      const created = createLiveInterventionDeliveryCommitter(liveIntervention, delivery);
+      if (created === undefined) {
+        return undefined;
+      }
+      deliveryCommitters.set(delivery, created);
+      return created;
+    };
+    const batchAbortSignal = agentOptions.abortSignal
+      ?? this.deps.getAbortSignal?.()
+      ?? new AbortController().signal;
+    const prepareBoundaryDelivery = async (): Promise<PreparedLiveInterventionDelivery | undefined> => {
+      const previousDelivery = liveDeliveries.at(-1);
+      if (boundaryPreparation !== undefined) {
+        const preparedDelivery = await boundaryPreparation;
+        return preparedDelivery ?? previousDelivery;
+      }
+      const preparation = (async (): Promise<PreparedLiveInterventionDelivery | undefined> => {
+        if (
+          liveIntervention === undefined
+          || !hasPendingOutsideDeliveries(liveIntervention, liveDeliveries)
+        ) {
+          return undefined;
+        }
+        const appliesToBatchIndexes = batches
+          .filter((batch) => !completedBatchIndexes.has(batch.batchIndex)
+            && !runningBatchIndexes.has(batch.batchIndex))
+          .map((batch) => batch.batchIndex);
+        if (appliesToBatchIndexes.length === 0) {
+          return undefined;
+        }
+        const preparedDelivery = await liveIntervention.prepareDelivery({
+          language: agentOptions.language,
+          mode: 'batch_boundary',
+          step: step.name,
+          phase: 1,
+          processedBatchCount: completedBatchIndexes.size,
+          runningBatchIndexes: [...runningBatchIndexes].sort((left, right) => left - right),
+          appliesToBatchIndexes,
+        });
+        liveDeliveries.push(preparedDelivery);
+        return preparedDelivery;
+      })();
+      boundaryPreparation = preparation;
+      try {
+        const preparedDelivery = await preparation;
+        return preparedDelivery ?? previousDelivery;
+      } finally {
+        if (boundaryPreparation === preparation) {
+          boundaryPreparation = undefined;
+        }
+      }
+    };
     const promises = batches.map(async (batch) => {
       await semaphore.acquire();
       try {
+        const liveDelivery = await prepareBoundaryDelivery();
+        runningBatchIndexes.add(batch.batchIndex);
         let didEmitPhaseStart = false;
         let resolvedPromptParts: PhasePromptParts | undefined;
         const phaseExecutionId = `${step.name}:1:${stepIteration}:${batch.batchIndex}`;
         const batchAgentOptions: RunAgentOptions = {
           ...agentOptions,
+          abortSignal: batchAbortSignal,
           onPromptResolved: (promptParts) => {
             if (didEmitPhaseStart) return;
             resolvedPromptParts = promptParts;
@@ -506,46 +616,67 @@ export class ArpeggioRunner {
             didEmitPhaseStart = true;
           },
         };
-        const result = await executeBatchWithRetry(
-          batch,
-          template,
-          step.allowGitCommit,
-          step.persona,
-          batchAgentOptions,
-          config.maxRetries,
-          config.retryDelayMs,
-          {
-            enabled: this.deps.observabilityEnabled,
-            runId: this.deps.observabilityRunId,
-            workflowName: this.deps.getWorkflowName(),
-            step,
-            iteration,
+        const deliveryCommitter = getDeliveryCommitter(liveDelivery);
+        const batchCallOptions: RunAgentOptions = deliveryCommitter === undefined
+          ? batchAgentOptions
+          : {
+              ...batchAgentOptions,
+              onDispatch: (permissionMode) => {
+                batchAgentOptions.onDispatch?.(permissionMode);
+                deliveryCommitter.onDispatch(permissionMode);
+              },
+            };
+        try {
+          const result = await executeBatchWithRetry(
+            batch,
+            template,
+            step.allowGitCommit,
+            step.persona,
+            batchCallOptions,
+            config.maxRetries,
+            config.retryDelayMs,
+            {
+              enabled: this.deps.observabilityEnabled,
+              runId: this.deps.observabilityRunId,
+              workflowName: this.deps.getWorkflowName(),
+              step,
+              iteration,
+              phaseExecutionId,
+              workflowStack: this.deps.getCurrentWorkflowStack?.(),
+              sanitizeText: this.deps.sanitizeObservabilityText,
+              providerInfo,
+              getPromptParts: () => resolvedPromptParts,
+            },
+            instructionContext,
+            runtime,
+            liveDelivery?.prompt,
+          );
+          if (!didEmitPhaseStart) {
+            throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
+          }
+          this.deps.onPhaseComplete?.(
+            step, 1, 'execute',
+            result.content,
+            getBatchResultStatus(result),
+            result.error,
             phaseExecutionId,
-            workflowStack: this.deps.getCurrentWorkflowStack?.(),
-            sanitizeText: this.deps.sanitizeObservabilityText,
-            providerInfo,
-            getPromptParts: () => resolvedPromptParts,
-          },
-          instructionContext,
-          runtime,
-        );
-        if (!didEmitPhaseStart) {
-          throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
+            iteration,
+          );
+          await deliveryCommitter?.settle();
+          completedBatchIndexes.add(batch.batchIndex);
+          runningBatchIndexes.delete(batch.batchIndex);
+          await prepareBoundaryDelivery();
+          return result;
+        } finally {
+          await deliveryCommitter?.settle();
         }
-        this.deps.onPhaseComplete?.(
-          step, 1, 'execute',
-          result.content,
-          getBatchResultStatus(result),
-          result.error,
-          phaseExecutionId,
-          iteration,
-        );
-        return result;
       } finally {
+        runningBatchIndexes.delete(batch.batchIndex);
         semaphore.release();
       }
     });
 
-    return Promise.all(promises);
+    const results = await Promise.all(promises);
+    return results;
   }
 }

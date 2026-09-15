@@ -79,7 +79,7 @@ takt run
 takt list
 ```
 
-If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `opencode`, and `pi` can run with Node.js; `deepseek-harness` additionally requires Python 3.10+ and its official runtime wheel; CLI-based providers require their external CLIs.
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `opencode`, and `pi` can run with Node.js; `deepseek-harness` additionally requires the uv-managed environment created by `takt deepseek-harness install` on a supported platform; CLI-based providers require their external CLIs.
 
 ### Video Tutorial
 
@@ -114,13 +114,13 @@ These providers run via SDK (no CLI required, Node.js only):
 - `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-The `deepseek-harness` provider uses the official Python SDK through a private JSON-RPC bridge. Install the matching SDK/runtime packages with Python 3.10+:
+The `deepseek-harness` provider uses a managed environment that TAKT builds with `uv` and runs through a private JSON-RPC bridge. On a supported platform, run `takt deepseek-harness install` once before first use. npm install and npm lifecycle hooks never build this environment, and starting the provider during an install is unsupported because the provider does not wait for the installer lock.
 
-```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
-```
+The managed environment uses uv-managed CPython 3.12 and the fixed SDK/runtime versions declared in the shipped `pyproject.toml` and `uv.lock`. Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0` are supported; Windows, macOS x64, Linux musl, older Linux glibc, and older macOS fail fast, and TAKT does not silently fall back to another provider. A system Python installation is not required. Configure the standard `uv` network settings, such as `UV_INDEX_URL`, proxy, and certificate variables, when access to the package index requires them; TAKT passes those settings to the install command while `--locked` keeps the shipped lock authoritative. Install preflight requires `uv >= 0.11.0` and rejects a missing, unparseable, or older uv before deleting the existing managed environment.
 
-The official runtime currently supports Linux x64/arm64 and macOS arm64 only. Windows and macOS x64 fail fast; TAKT does not silently fall back to another provider. Set `DEEPSEEK_API_KEY` and optionally `DEEPSEEK_BASE_URL` in the environment. The Python SDK and bundled `deepseek-harness-runtime-bin` must come from matching releases. This provider is a developer-preview compatibility surface: upstream API/event vocabulary may change between matching releases, so use the opt-in live smoke procedure in the configuration guide before relying on a new SDK/runtime pair.
+If package-index access was previously configured with `pip`, migrate to uv's standard `UV_INDEX_URL`, proxy, and certificate environment variables; `uv sync --locked` uses the shipped lock as the dependency source.
+
+The install `--python` option and provider `python_path` option have been removed because the managed environment is the only supported interpreter. Set `DEEPSEEK_API_KEY` and optionally `DEEPSEEK_BASE_URL` in the environment. This provider is a developer-preview compatibility surface; use the opt-in live smoke procedure in the configuration guide before relying on a new SDK/runtime pair.
 
 These providers require an external CLI:
 
@@ -293,7 +293,9 @@ visit. Viewer focuses on execution status, the observed execution path, live log
 and reports. Create a task opens the dedicated conversation surface for `/setup`
 and `/go`.
 
-TAKT also ships two client-integration entrypoints: `takt-acp` runs TAKT as an [Agent Client Protocol](./docs/cli-reference.md#acp-agent) agent over stdio JSON-RPC, and `takt-mcp` runs it as a stdio [MCP server](./docs/cli-reference.md#mcp-server) so an MCP client (Codex, Claude Code, …) can enqueue tasks with an optional existing or newly created issue. Use `takt run` or `takt watch` to execute pending tasks.
+TAKT also ships two client-integration entrypoints: `takt-acp` runs TAKT as an [Agent Client Protocol](./docs/cli-reference.md#acp-agent) agent over stdio JSON-RPC, and `takt-mcp` runs it as a stdio [MCP server](./docs/cli-reference.md#mcp-server) so an MCP client (Codex, Claude Code, …) can enqueue tasks, inspect task/run state, and send additional instructions to running worktree-clone tasks. Use `takt run` or `takt watch` to execute pending tasks.
+
+The ordinary `takt` assistant conversation has the same read-only task-state view when its provider supports MCP. Use `/go` to turn a new task into an execution or queued task, and `/tell` to select and confirm an additional instruction for a running worktree clone.
 
 ### Instant exec mode
 
@@ -319,7 +321,7 @@ state and reports.
 
 Beyond these basics, `config.yaml` (legacy mode) supports internal-agent overrides (`takt_providers`) and `auto_routing`, which selects a provider/model per step from candidate pools with a `cost` / `balanced` / `performance` strategy. Auto-routing decisions can be recorded locally as NDJSON under `.takt/events/`; recording is opt-in (`takt telemetry enable` or `telemetry.routing_decisions`) and TAKT never uploads routing decisions. In runtime mode, provider/model/options and routing move to `runtime.yaml` (see below).
 
-Or use provider credentials directly (no CLI installation required for claude-sdk, Codex, OpenCode, Pi, or DeepSeek Harness when its Python SDK/runtime is installed):
+Or use provider credentials directly (no CLI installation is required for claude-sdk, Codex, OpenCode, or Pi). DeepSeek Harness additionally requires the uv-managed environment created by `takt deepseek-harness install`:
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)

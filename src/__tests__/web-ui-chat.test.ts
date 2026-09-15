@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StreamCallback } from '../shared/types/provider.js';
+import type { ConversationSessionResult } from '../features/interactive/conversationSession.js';
 
 const {
   mockCreateAssistantConversationPlan,
@@ -74,7 +75,7 @@ function createPlan(workflow: string, model: string | null = `model-${workflow}`
 function createSessionDouble(history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }> = []) {
   return {
     snapshotHistory: vi.fn(() => history),
-    handleUserMessage: vi.fn(async (_input: { text: string; onStream?: StreamCallback }) => ({
+    handleUserMessage: vi.fn(async (_input: { text: string; onStream?: StreamCallback }): Promise<ConversationSessionResult> => ({
       kind: 'assistant_response' as const,
       content: 'response',
     })),
@@ -84,6 +85,47 @@ function createSessionDouble(history: ReadonlyArray<{ role: 'user' | 'assistant'
     setSessionId: vi.fn(),
     setPromptConfiguration: vi.fn(),
     setEffort: vi.fn(),
+  };
+}
+
+function createTaskInstructionSession(task = 'updated order') {
+  const session = createSessionDouble();
+  session.handleUserMessage.mockResolvedValue({
+    kind: 'workflow_execution_requested',
+    task,
+    interactiveMetadata: { confirmed: true, task },
+  });
+  return session;
+}
+
+function createRetryContext(taskId = 'task-retry'): WebTaskActionContext {
+  return {
+    taskId,
+    action: 'retry',
+    projectId: 'project-1',
+    stateId: 'state-1',
+    projectDirectory: '/repo',
+    task: 'original order',
+    workflow: 'default',
+    status: 'failed',
+    attempt: 1,
+    runIds: ['run-1'],
+    generation: 1,
+    runId: 'run-1',
+    sourceRunId: 'run-1',
+    retryStartOptions: {
+      defaultId: 'restart:plan',
+      options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+    },
+    retryStartSelections: [{
+      id: 'restart:plan',
+      selection: {
+        kind: 'restart',
+        restartPoint: {
+          stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
+        },
+      },
+    }],
   };
 }
 
@@ -130,7 +172,167 @@ describe('Web UI chat input', () => {
       .toThrow('taskActionOptionId is invalid');
   });
 
+  it('keeps a Retry task-action conversation available after showing a revised order', async () => {
+    const session = createSessionDouble();
+    session.handleUserMessage
+      .mockResolvedValueOnce({
+        kind: 'workflow_execution_requested',
+        task: 'revised order',
+        interactiveMetadata: { confirmed: true, task: 'revised order' },
+      })
+      .mockResolvedValueOnce({ kind: 'assistant_response', content: 'continue editing' });
+    mockCreateConversationSession.mockReturnValue(session);
+    const service = createWebChatService();
+    const created = service.createTaskAction?.('/repo', {
+      taskId: 'task-1',
+      action: 'retry',
+      projectId: 'project-1',
+      stateId: 'state-1',
+      projectDirectory: '/repo',
+      task: 'original order',
+      workflow: 'default',
+      status: 'failed',
+      attempt: 1,
+      runIds: ['run-1'],
+      generation: 1,
+      runId: 'run-1',
+      sourceRunId: 'run-1',
+      retryStartOptions: {
+        defaultId: 'restart:plan',
+        options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+      },
+      retryStartSelections: [{
+        id: 'restart:plan',
+        selection: {
+          kind: 'restart',
+          restartPoint: {
+            stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
+          },
+        },
+      }],
+    });
+    if (created === undefined) throw new Error('retry task-action chat was not created');
+
+    await expect(service.send(created.id, '/go')).resolves.toMatchObject({
+      kind: 'task_instruction',
+      task: 'revised order',
+      taskAction: { sessionId: created.id, taskId: 'task-1', action: 'retry' },
+    });
+    expect(service.getTaskActionContext?.(created.id)).toMatchObject({
+      taskId: 'task-1',
+      task: 'original order',
+      status: 'failed',
+    });
+    await expect(service.send(created.id, 'さらに修正')).resolves.toEqual({
+      kind: 'assistant_response',
+      content: 'continue editing',
+    });
+    expect(session.handleUserMessage).toHaveBeenNthCalledWith(1, { text: '/go' });
+    expect(session.handleUserMessage).toHaveBeenNthCalledWith(2, { text: 'さらに修正' });
+  });
+
+  it('rejects Continue and Cancel while a Retry finalization reservation is held', async () => {
+    const session = createSessionDouble();
+    session.handleUserMessage.mockResolvedValueOnce({
+      kind: 'workflow_execution_requested',
+      task: 'revised order',
+      interactiveMetadata: { confirmed: true, task: 'revised order' },
+    });
+    mockCreateConversationSession.mockReturnValue(session);
+    const service = createWebChatService();
+    if (
+      service.createTaskAction === undefined
+      || service.claimTaskAction === undefined
+      || service.continueTaskAction === undefined
+      || service.cancelTaskAction === undefined
+      || service.releaseTaskAction === undefined
+    ) {
+      throw new Error('Retry task-action state support is unavailable');
+    }
+    const created = service.createTaskAction('/repo', createRetryContext());
+    await expect(service.send(created.id, '/go', undefined, 'restart:plan'))
+      .resolves.toMatchObject({ kind: 'task_instruction', task: 'revised order' });
+
+    const claim = service.claimTaskAction(created.id, 'restart:plan');
+    expect(claim.taskActionDraft).toEqual({
+      task: 'revised order',
+      taskActionOptionId: 'restart:plan',
+    });
+    expect(() => service.continueTaskAction!(created.id)).toThrow('already been finalized or reserved');
+    expect(() => service.cancelTaskAction!(created.id)).toThrow('already been finalized or reserved');
+
+    service.releaseTaskAction(created.id, claim.reservationToken);
+    expect(service.continueTaskAction(created.id)).toEqual({
+      task: 'revised order',
+      taskActionOptionId: 'restart:plan',
+    });
+  });
+
+  it('closes a Retry conversation without changing the task after draft review', async () => {
+    const session = createSessionDouble();
+    session.handleUserMessage.mockResolvedValueOnce({
+      kind: 'workflow_execution_requested',
+      task: 'revised order',
+      interactiveMetadata: { confirmed: true, task: 'revised order' },
+    });
+    mockCreateConversationSession.mockReturnValue(session);
+    const service = createWebChatService();
+    if (service.createTaskAction === undefined || service.cancelTaskAction === undefined) {
+      throw new Error('Retry task-action cancellation support is unavailable');
+    }
+    const created = service.createTaskAction('/repo', createRetryContext('task-cancel'));
+    await expect(service.send(created.id, '/go', undefined, 'restart:plan'))
+      .resolves.toMatchObject({ kind: 'task_instruction', task: 'revised order' });
+
+    service.cancelTaskAction(created.id);
+    expect(service.getTaskActionContext?.(created.id)).toMatchObject({
+      taskId: 'task-cancel',
+      task: 'original order',
+      status: 'failed',
+    });
+    expect(service.getTaskActionDraft?.(created.id)).toBeUndefined();
+    expect(() => service.cancelTaskAction!(created.id)).toThrow('already been finalized or reserved');
+  });
+
+  it('requires the Retry claim option to match the server-held draft', async () => {
+    const session = createTaskInstructionSession();
+    mockCreateConversationSession.mockReturnValue(session);
+    const service = createWebChatService();
+    if (service.createTaskAction === undefined || service.claimTaskAction === undefined) {
+      throw new Error('Retry task-action chat support is unavailable');
+    }
+    const baseContext = createRetryContext('task-option-binding');
+    const context: WebTaskActionContext = {
+      ...baseContext,
+      retryStartOptions: {
+        ...baseContext.retryStartOptions!,
+        options: [
+          ...baseContext.retryStartOptions!.options,
+          { id: 'restart:review', label: 'review', selectable: true },
+        ],
+      },
+      retryStartSelections: [
+        ...baseContext.retryStartSelections!,
+        {
+          id: 'restart:review',
+          selection: baseContext.retryStartSelections![0]!.selection,
+        },
+      ],
+    };
+    const created = service.createTaskAction('/repo', context);
+
+    expect(() => service.claimTaskAction!(created.id, 'restart:plan'))
+      .toThrow('shown for confirmation');
+    await expect(service.send(created.id, '/go', undefined, 'restart:plan'))
+      .resolves.toMatchObject({ kind: 'task_instruction', task: 'updated order' });
+    expect(() => service.claimTaskAction!(created.id, 'restart:review'))
+      .toThrow('shown for confirmation');
+    expect(service.claimTaskAction(created.id, 'restart:plan').retrySelection)
+      .toMatchObject({ kind: 'restart' });
+  });
+
   it('binds task-action options to a process-local single-use claim', async () => {
+    mockCreateConversationSession.mockReturnValue(createTaskInstructionSession());
     const service = createWebChatService();
     const context: WebTaskActionContext = {
       taskId: 'task-1',
@@ -169,6 +371,8 @@ describe('Web UI chat input', () => {
     ) {
       throw new Error('task-action chat support is unavailable');
     }
+    await expect(service.send(created.id, '/go', undefined, 'restart:plan'))
+      .resolves.toMatchObject({ kind: 'task_instruction', task: 'updated order' });
     const firstClaim = service.claimTaskAction(created.id, 'restart:plan');
     expect(firstClaim).toMatchObject({
       context: { taskId: 'task-1', projectId: 'project-1', stateId: 'state-1', generation: 2 },
@@ -210,7 +414,8 @@ describe('Web UI chat input', () => {
       .toThrow('Chat session not found');
   });
 
-  it('protects a reserved task-action session from bounded-session eviction', () => {
+  it('protects a reserved task-action session from bounded-session eviction', async () => {
+    mockCreateConversationSession.mockReturnValue(createTaskInstructionSession());
     const service = createWebChatService();
     if (service.createTaskAction === undefined || service.claimTaskAction === undefined) {
       throw new Error('task-action chat support is unavailable');
@@ -235,6 +440,8 @@ describe('Web UI chat input', () => {
       }],
     };
     const reserved = service.createTaskAction('/repo', context);
+    await expect(service.send(reserved.id, '/go', undefined, 'restart:plan'))
+      .resolves.toMatchObject({ kind: 'task_instruction', task: 'updated order' });
     const claim = service.claimTaskAction(reserved.id, 'restart:plan');
 
     for (let index = 0; index < 20; index += 1) {
@@ -266,7 +473,8 @@ describe('Web UI chat input', () => {
     await expect(pending).resolves.toEqual({ kind: 'assistant_response', content: 'response' });
   });
 
-  it('rejects creation when every existing session is protected', () => {
+  it('rejects creation when every existing session is protected', async () => {
+    mockCreateConversationSession.mockImplementation(() => createTaskInstructionSession());
     const service = createWebChatService();
     if (service.createTaskAction === undefined || service.claimTaskAction === undefined) {
       throw new Error('task-action chat support is unavailable');
@@ -291,6 +499,8 @@ describe('Web UI chat input', () => {
       }],
     }));
     for (const session of sessions) {
+      await expect(service.send(session.id, '/go', undefined, 'restart:plan'))
+        .resolves.toMatchObject({ kind: 'task_instruction', task: 'updated order' });
       service.claimTaskAction(session.id, 'restart:plan');
     }
 
@@ -374,6 +584,56 @@ describe('Web UI chat session settings', () => {
       content: 'response',
     });
     expect(initialSession.handleUserMessage).toHaveBeenCalledWith({ text: '続ける' });
+  });
+
+  it('discards a Retry draft only after a successful restart and accepts a new draft', async () => {
+    const initialSession = createTaskInstructionSession('old instruction');
+    const restartedSession = createTaskInstructionSession('new instruction');
+    mockCreateConversationSession
+      .mockReturnValueOnce(initialSession)
+      .mockReturnValueOnce(restartedSession);
+    const service = createWebChatService();
+    if (
+      service.createTaskAction === undefined
+      || service.getTaskActionDraft === undefined
+      || service.claimTaskAction === undefined
+    ) {
+      throw new Error('Retry task-action draft support is unavailable');
+    }
+    const created = service.createTaskAction('/repo', createRetryContext('task-restart'));
+
+    await expect(service.send(created.id, '/go', undefined, 'restart:plan')).resolves.toMatchObject({
+      kind: 'task_instruction',
+      task: 'old instruction',
+    });
+    expect(service.getTaskActionDraft(created.id)).toEqual({
+      task: 'old instruction',
+      taskActionOptionId: 'restart:plan',
+    });
+
+    mockCreateRetryConversationPlan.mockImplementationOnce(() => {
+      throw new Error('restart failed');
+    });
+    expect(() => service.restart(created.id)).toThrow('restart failed');
+    expect(service.getTaskActionDraft(created.id)).toEqual({
+      task: 'old instruction',
+      taskActionOptionId: 'restart:plan',
+    });
+
+    service.restart(created.id);
+    expect(initialSession.recordRejectedDraft).not.toHaveBeenCalled();
+    expect(service.getTaskActionDraft(created.id)).toBeUndefined();
+    expect(() => service.claimTaskAction!(created.id, 'restart:plan'))
+      .toThrow('Retry must be finalized from the instruction shown for confirmation');
+
+    await expect(service.send(created.id, '/go', undefined, 'restart:plan')).resolves.toMatchObject({
+      kind: 'task_instruction',
+      task: 'new instruction',
+    });
+    expect(service.claimTaskAction(created.id, 'restart:plan').taskActionDraft).toEqual({
+      task: 'new instruction',
+      taskActionOptionId: 'restart:plan',
+    });
   });
 
   it('forwards only provider thinking events to the Web UI stream', async () => {

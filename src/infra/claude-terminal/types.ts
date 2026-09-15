@@ -39,6 +39,12 @@ export type ClaudeTerminalEvent =
       input: Record<string, unknown>;
     }
   | {
+      type: 'tool_result';
+      id: string;
+      content: string;
+      isError: boolean;
+    }
+  | {
       type: 'permission_request';
       tool: string;
       input: Record<string, unknown>;

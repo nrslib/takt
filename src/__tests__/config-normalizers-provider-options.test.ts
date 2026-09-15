@@ -8,15 +8,28 @@ import { normalizeProviderOptions } from '../infra/config/providerOptions.js';
 import { StepProviderOptionsObjectSchema } from '../core/models/schema-base.js';
 import type { StepProviderOptions } from '../core/models/workflow-provider-options.js';
 
-describe('Codex fast mode provider option schema', () => {
-  it.each([true, false])('accepts an explicit boolean value: %s', (fastMode) => {
+describe('provider option schema', () => {
+  it.each([true, false])('accepts an explicit Codex boolean value: %s', (fastMode) => {
     expect(StepProviderOptionsObjectSchema.parse({ codex: { fast_mode: fastMode } })).toEqual({
       codex: { fast_mode: fastMode },
     });
   });
 
-  it('rejects a non-boolean fast mode value', () => {
+  it('rejects a non-boolean Codex fast mode value', () => {
     expect(() => StepProviderOptionsObjectSchema.parse({ codex: { fast_mode: 'true' } })).toThrow();
+  });
+
+  it.each(['high', 'thikning'])('accepts a non-empty Pi thinking_level string: %s', (thinkingLevel) => {
+    expect(StepProviderOptionsObjectSchema.parse({ pi: { thinking_level: thinkingLevel } })).toEqual({
+      pi: { thinking_level: thinkingLevel },
+    });
+  });
+
+  it.each([
+    ['non-string', true],
+    ['empty string', ''],
+  ])('rejects a %s Pi thinking_level value', (_label, thinkingLevel) => {
+    expect(() => StepProviderOptionsObjectSchema.parse({ pi: { thinking_level: thinkingLevel } })).toThrow();
   });
 });
 
@@ -324,10 +337,11 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
-  it('should round-trip Pi SDK resource options through normalize and denormalize', () => {
+  it('should round-trip Pi SDK resource and thinking options through normalize and denormalize', () => {
     const rawProviderOptions = {
       pi: {
         extensions: ['npm:example-extension'],
+        thinking_level: 'high',
         no_extensions: true,
         no_skills: false,
         no_prompt_templates: false,
@@ -342,6 +356,7 @@ describe('denormalizeProviderOptions', () => {
     expect(normalizedProviderOptions).toEqual({
       pi: {
         extensions: ['npm:example-extension'],
+        thinkingLevel: 'high',
         noExtensions: true,
         noSkills: false,
         noPromptTemplates: false,
@@ -424,13 +439,30 @@ describe('buildRawTaktProvidersOrThrow', () => {
     });
   });
 
+  it('should round-trip Pi thinking level through selector provider options', () => {
+    const normalized = normalizeTaktSelectorProvider({
+      provider: 'pi',
+      provider_options: { pi: { thinking_level: 'high' } },
+    });
+
+    expect(normalized).toEqual({
+      provider: 'pi',
+      providerOptions: { pi: { thinkingLevel: 'high' } },
+    });
+    expect(buildRawTaktProvidersOrThrow({ selector: normalized })).toEqual({
+      selector: {
+        provider: 'pi',
+        provider_options: { pi: { thinking_level: 'high' } },
+      },
+    });
+  });
+
   it('should preserve DeepSeek Harness selector options through the strict normalized schema', () => {
     const result = buildRawTaktProvidersOrThrow({
       selector: {
         provider: 'deepseek-harness',
         providerOptions: {
           deepseekHarness: {
-            pythonPath: '/usr/bin/python3',
             maxTokens: 4096,
           },
         },
@@ -442,7 +474,6 @@ describe('buildRawTaktProvidersOrThrow', () => {
         provider: 'deepseek-harness',
         provider_options: {
           deepseek_harness: {
-            python_path: '/usr/bin/python3',
             max_tokens: 4096,
           },
         },
@@ -501,6 +532,12 @@ describe('buildRawTaktProvidersOrThrow', () => {
       providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
     }],
     ['an invalid selector effort type', { providerOptions: { codex: { reasoningEffort: 42 } } }],
+    ['a removed DeepSeek Python path option', {
+      providerOptions: { deepseekHarness: { pythonPath: '/tmp/removed-python' } },
+    }],
+    ['an internal uv path option leaked into provider configuration', {
+      providerOptions: { deepseekHarness: { uvPath: '/tmp/uv' } },
+    }],
     ['a blank selector model', { model: '   ' }],
     ['a snake_case selector alias', { provider_options: { codex: { reasoning_effort: 'medium' } } }],
     ['a snake_case nested option alias', { providerOptions: { codex: { reasoning_effort: 'medium' } } }],

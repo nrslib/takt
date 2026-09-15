@@ -1,0 +1,23 @@
+description: 'ページングの生成行動: 実DBの取得行数と公開応答を独立計測する'
+prompts:
+  - file://../../prompts/db-pagination-implement.phase1.md
+providers:
+  - id: file://../../providers/pagination-coder.mjs
+    label: codex-luna-max
+    config:
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: .work/db-pagination-implement
+evaluateOptions:
+  maxConcurrency: 1
+tests:
+  - description: '既存の全件取得を持つrepositoryへ一覧ページを追加する'
+    vars:
+      task: |
+        README.md の要件に従い、記録一覧の20件単位のページングを実装してください。
+        既存の全件エクスポートの動作は維持してください。実装とテストを更新し、npm test で確認してください。
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: pagination/generated-db-bound
+        value: file://../../asserts/db-pagination-implement.mjs

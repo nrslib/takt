@@ -48,6 +48,7 @@ import type { WorkflowStepParticipationIndex } from './workflow-step-participati
 import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-command-runner.js';
 import type { McpAssignmentSection } from '../../infra/config/runtime-provider/mcp-assignment.js';
 import type { CompanionDiffReader } from './companion/diff-reader.js';
+import type { LiveInterventionChannel } from './live-intervention/types.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
@@ -532,6 +533,10 @@ export type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent
 /** Options for workflow engine */
 export interface WorkflowEngineOptions {
   abortSignal?: AbortSignal;
+  /** Project-side append-only channel for instructions issued during a live run. */
+  liveIntervention?: LiveInterventionChannel;
+  /** Called when a terminal run leaves live intervention instructions unconsumed. */
+  onLiveInterventionWarning?: (count: number) => void;
   /** Callback for streaming real-time output */
   onStream?: StreamCallback;
   onProviderStream?: (context: ProviderStreamContext, event: StreamEvent) => void;

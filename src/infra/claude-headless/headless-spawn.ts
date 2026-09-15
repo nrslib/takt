@@ -4,6 +4,7 @@ import { containsRateLimitMarker } from '../rate-limit/detection.js';
 import {
   tryExtractTextFromStreamJsonLine,
   tryExtractThinkingFromStreamJsonLine,
+  tryExtractToolResultFromStreamJsonLine,
   tryExtractToolUseFromStreamJsonLine,
 } from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
@@ -193,6 +194,10 @@ export function runHeadlessCli(
         const toolUses = tryExtractToolUseFromStreamJsonLine(line);
         for (const toolUse of toolUses) {
           options.onStream({ type: 'tool_use', data: toolUse });
+        }
+        const toolResults = tryExtractToolResultFromStreamJsonLine(line);
+        for (const toolResult of toolResults) {
+          options.onStream({ type: 'tool_result', data: toolResult });
         }
         const thinking = tryExtractThinkingFromStreamJsonLine(line);
         if (thinking) {

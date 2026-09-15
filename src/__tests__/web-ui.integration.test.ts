@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   readRunCollection,
   readRunDetail,
@@ -158,7 +158,11 @@ async function createGitProjectFixture() {
 }
 
 async function createCompletedGitTask(
-  options: { readonly branch?: string; readonly worktree?: string } = {},
+  options: {
+    readonly branch?: string;
+    readonly worktree?: string;
+    readonly status?: 'completed' | 'failed';
+  } = {},
 ) {
   const fixture = await createGitProjectFixture();
   const branch = options.branch ?? 'feature/action';
@@ -204,7 +208,10 @@ async function createCompletedGitTask(
     generation: adopted.generation,
     executionId: reserved.executionId,
     ownerToken: reserved.ownerToken,
-    status: 'completed',
+    status: options.status ?? 'completed',
+    ...(options.status === 'failed'
+      ? { failure: { code: 'workflow_failed', message: 'fixture failed' } }
+      : {}),
   });
   const task = await fixture.repository.readTask(reserved.task.taskId);
   if (task === undefined) throw new Error('fixture task was not persisted');
@@ -3128,6 +3135,332 @@ describe('Web UI HTTP boundary', () => {
     });
     expect(duplicate.status).toBe(409);
     expect(calls).toHaveLength(1);
+  });
+
+  it('holds Retry draft ownership until queueing succeeds and releases it after failure', async () => {
+    const fixture = await createCompletedGitTask({ status: 'failed' });
+    const context: WebTaskActionContext = {
+      taskId: fixture.task.taskId,
+      action: 'retry',
+      projectId: fixture.project.id,
+      stateId: fixture.project.stateId,
+      projectDirectory: fixture.project.canonicalDirectory,
+      task: fixture.task.task,
+      workflow: fixture.task.workflow,
+      workflowInitialStep: 'plan',
+      status: 'failed',
+      attempt: fixture.task.attempt,
+      runIds: fixture.task.runIds,
+      generation: fixture.task.generation,
+      runId: fixture.task.runId,
+      sourceRunId: fixture.task.runId,
+      worktreePath: fixture.task.worktreePath,
+      retryStartSelections: [{
+        id: 'restart:plan',
+        selection: {
+          kind: 'restart',
+          restartPoint: {
+            stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
+          },
+        },
+      }],
+    };
+    let draft: { readonly task: string; readonly taskActionOptionId: string } | undefined = {
+      task: 'updated order',
+      taskActionOptionId: 'restart:plan',
+    };
+    let reserved = false;
+    let resolveActionStarted!: () => void;
+    let rejectAction!: (error: unknown) => void;
+    const actionStarted = new Promise<void>((resolve) => {
+      resolveActionStarted = resolve;
+    });
+    const pendingAction = new Promise<{
+      readonly action: 'retry';
+      readonly taskId: string;
+      readonly status: 'accepted';
+      readonly taskStatus: 'pending';
+    }>((_resolve, reject) => {
+      rejectAction = reject;
+    });
+    const chat: WebChatService = {
+      create: () => ({ id: 'ordinary', workflow: 'default', mode: 'assistant', intro: '', provider: 'mock' }),
+      reconfigure: (id, request) => ({ id, ...request, intro: '', provider: 'mock' }),
+      restart: (id) => ({ id, workflow: 'default', mode: 'assistant', intro: '', provider: 'mock' }),
+      send: async () => ({ kind: 'assistant_response', content: 'ok' }),
+      createTaskAction: (_directory, actionContext) => ({
+        id: 'retry-chat',
+        workflow: actionContext.workflow,
+        mode: 'assistant',
+        intro: 'existing task',
+        provider: 'mock',
+      }),
+      getTaskActionContext: () => context,
+      getTaskActionDraft: () => draft,
+      claimTaskAction: () => {
+        if (reserved || draft === undefined) throw new WebChatInputError(409, 'Retry draft is unavailable');
+        reserved = true;
+        return {
+          reservationToken: 'retry-reservation',
+          context,
+          retrySelection: context.retryStartSelections![0]!.selection,
+          taskActionDraft: draft,
+        };
+      },
+      continueTaskAction: () => {
+        if (reserved) throw new WebChatInputError(409, 'Task action conversation has already been reserved');
+        if (draft === undefined) throw new WebChatInputError(409, 'Retry draft is unavailable');
+        const continued = draft;
+        draft = undefined;
+        return continued;
+      },
+      cancelTaskAction: () => {
+        if (reserved) throw new WebChatInputError(409, 'Task action conversation has already been reserved');
+        draft = undefined;
+      },
+      commitTaskAction: () => {
+        reserved = false;
+        draft = undefined;
+      },
+      releaseTaskAction: () => {
+        reserved = false;
+      },
+    };
+    const server = await createWebUiServer({
+      globalConfigDirectory: fixture.globalConfigDirectory,
+      launch: async () => ({ pid: 1, disposition: 'started' as const, mode: 'run' as const }),
+      taskActionConversation: async (_directory, taskId, action) => ({
+        action,
+        taskId,
+        status: 'conversation' as const,
+        taskStatus: 'failed' as const,
+        chatSession: {
+          id: 'retry-chat',
+          workflow: 'default',
+          mode: 'assistant' as const,
+          intro: 'existing task',
+          provider: 'mock',
+        },
+      }),
+      taskAction: async () => {
+        resolveActionStarted();
+        return pendingAction;
+      },
+      chat,
+    });
+    servers.push(server);
+    const origin = await listenWebUiServer(server, 0);
+    const token = (await (await fetch(`${origin}/api/session`)).json() as { token: string }).token;
+    const headers = { 'Content-Type': 'application/json', 'X-TAKT-Web-Token': token };
+    const actionUrl = `${origin}/api/tasks/${fixture.task.taskId}/actions/retry`;
+    const start = await fetch(actionUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ projectId: fixture.project.id }),
+    });
+    expect(start.status).toBe(200);
+    await expect(start.json()).resolves.toMatchObject({
+      status: 'conversation',
+      chatSession: { id: 'retry-chat' },
+    });
+
+    const finalization = fetch(actionUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        projectId: fixture.project.id,
+        input: 'updated order',
+        conversationId: 'retry-chat',
+        taskActionOptionId: 'restart:plan',
+      }),
+    });
+    await actionStarted;
+
+    const continueWhileReserved = await fetch(`${origin}/api/chat/sessions/retry-chat/continue`, {
+      method: 'POST',
+      headers,
+      body: '{}',
+    });
+    expect(continueWhileReserved.status).toBe(409);
+    const cancelWhileReserved = await fetch(`${origin}/api/chat/sessions/retry-chat/cancel`, {
+      method: 'POST',
+      headers,
+      body: '{}',
+    });
+    expect(cancelWhileReserved.status).toBe(409);
+
+    rejectAction(new CentralTaskActionError('queue persistence failed', 409));
+    const failedFinalization = await finalization;
+    expect(failedFinalization.status).toBe(409);
+    await expect(failedFinalization.json()).resolves.toEqual({ error: 'queue persistence failed' });
+
+    const continueAfterFailure = await fetch(`${origin}/api/chat/sessions/retry-chat/continue`, {
+      method: 'POST',
+      headers,
+      body: '{}',
+    });
+    expect(continueAfterFailure.status).toBe(200);
+    await expect(continueAfterFailure.json()).resolves.toMatchObject({ status: 'continued' });
+    await expect(fixture.repository.readTask(fixture.task.taskId)).resolves.toMatchObject({
+      task: fixture.task.task,
+      status: 'failed',
+    });
+  });
+
+  it('blocks Retry conversation mutations while availability is checked before claim', async () => {
+    const fixture = await createCompletedGitTask({ status: 'failed' });
+    const context: WebTaskActionContext = {
+      taskId: fixture.task.taskId,
+      action: 'retry',
+      projectId: fixture.project.id,
+      stateId: fixture.project.stateId,
+      projectDirectory: fixture.project.canonicalDirectory,
+      task: fixture.task.task,
+      workflow: fixture.task.workflow,
+      status: 'failed',
+      attempt: fixture.task.attempt,
+      runIds: fixture.task.runIds,
+      generation: fixture.task.generation,
+      runId: fixture.task.runId,
+      sourceRunId: fixture.task.runId,
+      worktreePath: fixture.task.worktreePath,
+      retryStartSelections: [{
+        id: 'restart:plan',
+        selection: {
+          kind: 'restart',
+          restartPoint: {
+            stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
+          },
+        },
+      }],
+    };
+    const draft = { task: 'updated order', taskActionOptionId: 'restart:plan' } as const;
+    let claimCount = 0;
+    let continueCount = 0;
+    let cancelCount = 0;
+    let messageCount = 0;
+    const chat: WebChatService = {
+      create: () => ({ id: 'ordinary', workflow: 'default', mode: 'assistant', intro: '', provider: 'mock' }),
+      reconfigure: (id, request) => ({ id, ...request, intro: '', provider: 'mock' }),
+      restart: (id) => ({ id, workflow: 'default', mode: 'assistant', intro: '', provider: 'mock' }),
+      send: async () => {
+        messageCount += 1;
+        return { kind: 'assistant_response', content: 'unexpected' };
+      },
+      createTaskAction: (_directory, actionContext) => ({
+        id: 'retry-chat-race',
+        workflow: actionContext.workflow,
+        mode: 'assistant',
+        intro: 'existing task',
+        provider: 'mock',
+      }),
+      getTaskActionContext: () => context,
+      getTaskActionDraft: () => draft,
+      claimTaskAction: () => {
+        claimCount += 1;
+        return {
+          reservationToken: 'retry-race-reservation',
+          context,
+          retrySelection: context.retryStartSelections![0]!.selection,
+          taskActionDraft: draft,
+        };
+      },
+      continueTaskAction: () => {
+        continueCount += 1;
+        return draft;
+      },
+      cancelTaskAction: () => {
+        cancelCount += 1;
+      },
+      commitTaskAction: () => {},
+      releaseTaskAction: () => {},
+    };
+    const server = await createWebUiServer({
+      globalConfigDirectory: fixture.globalConfigDirectory,
+      launch: async () => ({ pid: 1, disposition: 'started' as const, mode: 'run' as const }),
+      taskActionConversation: async (_directory, taskId, action) => ({
+        action,
+        taskId,
+        status: 'conversation' as const,
+        taskStatus: 'failed' as const,
+        chatSession: {
+          id: 'retry-chat-race',
+          workflow: 'default',
+          mode: 'assistant' as const,
+          intro: 'existing task',
+          provider: 'mock',
+        },
+      }),
+      taskAction: async (_directory, taskId, action) => ({
+        action,
+        taskId,
+        status: 'accepted' as const,
+        taskStatus: 'pending' as const,
+      }),
+      chat,
+    });
+    servers.push(server);
+    const origin = await listenWebUiServer(server, 0);
+    const token = (await (await fetch(`${origin}/api/session`)).json() as { token: string }).token;
+    const headers = { 'Content-Type': 'application/json', 'X-TAKT-Web-Token': token };
+    const actionUrl = `${origin}/api/tasks/${fixture.task.taskId}/actions/retry`;
+    const start = await fetch(actionUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ projectId: fixture.project.id }),
+    });
+    expect(start.status).toBe(200);
+
+    const originalOpenByState = CentralTaskRepository.openByState.bind(CentralTaskRepository);
+    let releaseAvailability!: () => void;
+    let resolveAvailabilityEntered!: () => void;
+    const availabilityEntered = new Promise<void>((resolve) => {
+      resolveAvailabilityEntered = resolve;
+    });
+    const availabilityReleased = new Promise<void>((resolve) => {
+      releaseAvailability = resolve;
+    });
+    const openByStateSpy = vi.spyOn(CentralTaskRepository, 'openByState').mockImplementationOnce(async (options) => {
+      resolveAvailabilityEntered();
+      await availabilityReleased;
+      return originalOpenByState(options);
+    });
+    try {
+      const finalization = fetch(actionUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          projectId: fixture.project.id,
+          input: draft.task,
+          conversationId: 'retry-chat-race',
+          taskActionOptionId: draft.taskActionOptionId,
+        }),
+      });
+      await availabilityEntered;
+
+      const continueResponse = await fetch(`${origin}/api/chat/sessions/retry-chat-race/continue`, {
+        method: 'POST', headers, body: '{}',
+      });
+      const cancelResponse = await fetch(`${origin}/api/chat/sessions/retry-chat-race/cancel`, {
+        method: 'POST', headers, body: '{}',
+      });
+      const messageResponse = await fetch(`${origin}/api/chat/sessions/retry-chat-race/messages`, {
+        method: 'POST', headers, body: JSON.stringify({ text: 'edit while checking' }),
+      });
+      expect(continueResponse.status).toBe(409);
+      expect(cancelResponse.status).toBe(409);
+      expect(messageResponse.status).toBe(409);
+      expect(continueCount).toBe(0);
+      expect(cancelCount).toBe(0);
+      expect(messageCount).toBe(0);
+      expect(claimCount).toBe(0);
+
+      releaseAvailability();
+      await expect(finalization).resolves.toMatchObject({ status: 202 });
+      expect(claimCount).toBe(1);
+    } finally {
+      openByStateSpy.mockRestore();
+    }
   });
 
   it('keeps the task action error when reservation release also fails', async () => {

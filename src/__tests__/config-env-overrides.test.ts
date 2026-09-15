@@ -51,6 +51,8 @@ describe('config traced env overrides', () => {
       .toBe('TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS');
     expect(envVarNameFromPath('provider_options.codex.fast_mode'))
       .toBe('TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE');
+    expect(envVarNameFromPath('provider_options.pi.thinking_level'))
+      .toBe('TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL');
   });
 
   it('global config はホワイトリストされた env のみを反映する', () => {
@@ -105,6 +107,18 @@ describe('config traced env overrides', () => {
     expect(config.providerOptions).toEqual({
       codex: { networkAccess: true },
     });
+  });
+
+  it('ignores the removed DeepSeek Python path environment override', () => {
+    const projectDir = join(testRoot, 'project-deepseek-python-path-removed');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: deepseek-harness\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH = '/tmp/removed-python';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions?.deepseekHarness).toBeUndefined();
   });
 
   it.each([
@@ -390,6 +404,41 @@ describe('config traced env overrides', () => {
 
     expect(config.providerOptions).toEqual({
       pi: { extensions: ['npm:example-extension'] },
+    });
+  });
+
+  it('project config は pi.thinking_level を読み込む', () => {
+    const projectDir = join(testRoot, 'project-pi-thinking-level-config');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  pi:', '    thinking_level: medium'].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      pi: { thinkingLevel: 'medium' },
+    });
+  });
+
+  it('project config は pi.thinking_level の env override を traced-config 経由で反映する', () => {
+    const projectDir = join(testRoot, 'project-pi-thinking-level-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  pi:', '    thinking_level: low'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL = 'high';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      pi: { thinkingLevel: 'high' },
     });
   });
 

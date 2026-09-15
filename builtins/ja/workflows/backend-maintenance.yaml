@@ -41,7 +41,7 @@ steps:
         - security
         - architecture
         - existing-system
-      implementation_instruction: implement-maintenance
+      implementation_instruction: development-maintenance-with-reports
       review_policy_additions:
         - existing-system-respect
       review_policy:

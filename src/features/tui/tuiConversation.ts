@@ -73,6 +73,8 @@ export type TuiHandoffId =
   | 'provider'
   | 'model'
   | 'effort'
+  | 'tell'
+  | 'open'
   | 'exec-setup'
   | 'exec-go';
 
@@ -115,6 +117,10 @@ function createCommandAvailability(
   return resolveFormalSpecCommandAvailability({
     enableRetryCommand: strategy.enableRetryCommand === true,
     hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
+    ...(strategy.enableTellCommand === undefined
+      ? {}
+      : { enableTellCommand: strategy.enableTellCommand }),
+    ...(strategy.enableOpenCommand === true ? { enableOpenCommand: true } : {}),
     ...(enableSettingsCommands ? { enableSettingsCommands: true } : {}),
     ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
   }, formalSpec);
@@ -195,6 +201,8 @@ export interface TuiConversation {
   recordRejectedDraft?(task: string): void;
   /** Snapshot all user/assistant context needed by a recreated provider session. */
   snapshotHistory?(): readonly ConversationMessage[];
+  /** Latest run confirmed by a successful task-state lookup in this conversation. */
+  getReferenceRunSlug?(): string | undefined;
   /** Apply an effort override to future calls on the active session. */
   setEffort?(effort: string): void;
   /** Capture the clipboard image and return the placeholder to insert. */
@@ -265,6 +273,10 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
       return session.snapshotHistory();
     },
 
+    getReferenceRunSlug(): string | undefined {
+      return session.getReferenceRunSlug?.();
+    },
+
     setEffort(effort: string): void {
       session.setEffort(effort);
     },
@@ -325,7 +337,11 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
             : {
               kind: 'notice',
               message: getLabel('tui.errors.settingValueRequired', ctx.lang, { command: match.command }),
-            };
+              };
+        case SlashCommand.Open:
+          return { kind: 'handoff', id: 'open', text: match.text || undefined };
+        case SlashCommand.Tell:
+          return { kind: 'handoff', id: 'tell', text: match.text || undefined };
         case SlashCommand.Go:
         case SlashCommand.Setup:
         case SlashCommand.Verify:

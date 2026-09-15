@@ -6,6 +6,56 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.65.0] - 2026-09-11
+
+### Added
+
+- 実行中の worktree clone タスクへのライブ介入 (#1531, #1545)。`takt list` で実行中タスクを選ぶと状態別のアクションメニューが表示され、新しい **Interactive** を選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。新しい `/tell [instruction]` コマンドは実行中の worktree clone タスクを選択し、タスク名・ワークフロー・現在のステップ・追加指示を表示して、確認後に `.takt/runs/<slug>/interventions.jsonl` へ指示を記録します。実行中のエンジンは run を止めずに、次のステップ境界（`arpeggio` ステップでは次のバッチ境界）で保留中の指示を配信します。指示を省略した場合は会話全体を独立した指示本文へ変換します。対象は確認後に再検証されるため、完了した・clone がない・差し替えられたタスクには何も送られません。対話型ターミナルが必要です。
+- MCP のタスク状態ツール (#1545)。`takt-mcp` に `takt_list_tasks`（ログ・レポート本文を含まないタスク/run の要約）、`takt_get_run`（1つの run の現在のステップ・フェーズ・ログ・レポート・ライブ介入の配信状態）、`takt_tell_run`（実行中の worktree clone タスク1件へ再検証のうえ追加指示を送信）が追加されました。`takt-mcp --tool-set read-only` は読み取り2ツールだけを公開します。通常の `takt` assistant 会話は provider が MCP をサポートする場合にこの読み取り専用セットを自動で使い、タスクや run の状態について答えられます。MCP 非対応の provider では会話は継続し、タスク状態の参照が利用できない旨を報告します。
+
+### Changed
+
+- `takt list` の Retry 会話は、更新した指示をその場で再実行せずキューへ戻します (#1546)。`/go` 後の確認画面に更新後の指示が表示され、**Save as Task**（既定）または **Continue editing** を選びます。保存すると既存のタスクレコードが更新されて `pending` に戻り、`takt run` / `takt watch` の対象になります。Retry 会話では `/replay` と即時実行の選択肢が使えなくなり、`/cancel` はタスクを変更しません。Web UI（experimental）の Retry ダイアログも同じ流れに従います。
+- ビルトインのレビュー・裁定・修正プロンプトは、指摘を義務として扱う前にその前提を検証します (#1541, #1551)。共通の evidence-based-judgment ポリシーを計画・実装・テスト作成・レビュー・裁定・Companion・修正検証へ適用し、提案方式や過去の指摘を根拠の再確認なしに要件へ昇格させず、支持証拠だけでなく既存の防御や反証も確認し、前提が反証された指摘は ID を残したまま確認のみで完了します。修正後レビューは、元の受入条件を満たした指摘に新しいテスト要求を追加して未完了のままにすることをやめ、テスト追加要求には明示的な検証義務・変更した振る舞いの未検証条件・確認済みの欠陥のいずれかの根拠が必要になります。
+- ビルトインのアーキテクチャポリシー・ナレッジ・裁定が取得と保持の資源境界を一般的に扱います (#1550)。レビューは現在の要求・入力上限・実在する経路から不要な全件取得や全件蓄積を判定し、取得量・処理量・保持量・未消費量・出力量（ページング、バッファ、バックプレッシャー）を区別し、必要な全件出力や正確な集計を壊す打ち切りも拒否します。裁定は、数値目標や障害実測がないという理由だけで確認済みの欠陥を免除しなくなりました。
+- ビルトインの実装完了・再計画判定が無関係な既存失敗を無視します (#1547)。完了は元要件と必須検証の充足、および変更と失敗の因果関係で判定されるため、無関係な既存失敗を含む実装レポートや要求外の未試行作業の列挙が再計画の繰り返しを招かなくなりました。変更が依存・拡大・新規露出する既存問題、必須検証の未達、新規回帰、原因不明の失敗は引き続き残件として扱います。日英の通常・dynamic・team 実装ワークフローに適用されます。
+
+### Fixed
+
+- 注入レポートがサブワークフローと Phase 2 へ引き継がれます (#1538)。`workflow_call` サブワークフロー内の実装担当にも、ビルトインの development / maintenance instruction が参照する親の計画・テスト報告が届くようになり、Phase 1 で解決した report の参照名・scope・本文が Phase 2（初回・複数 report・新規セッション再試行・fallback）へ引き継がれます。これにより report フェーズが上流の契約 ID を参照でき、完了済みの実装を再計画が必要と誤報告しなくなりました。#1535 の残りの受入条件は未対応のためオープンのままです。
+
+## [0.64.1] - 2026-09-05
+
+### Internal
+
+- プロバイダ SDK を更新しました (#1534)。`@anthropic-ai/claude-agent-sdk` 0.3.206 → 0.3.261、`@openai/codex-sdk` 0.147.0 → 0.153.3、`@opencode-ai/sdk` 1.18.2 → 1.18.28。
+
+## [0.64.0] - 2026-09-01
+
+### Added
+
+- `takt make` が対話型 Workflow Maker を起動します (#1507)。TTY 専用で、会話の前に New workflow、または project / global / builtin / repertoire のワークフローを読み取り専用のベースとして選びます。選択したソースが編集されることはありません。会話中は `/workflow` でベースを差し替え、`/go` で完全な実装指示を準備します。承認画面には作成先の `.takt/make/<timestamp>/` パスが表示され、Execute・Continue editing・Cancel だけを提示します。承認された実行は静的に到達可能な依存クロージャを独立ディレクトリ（`workflows/`、`steps/`、`facet-pools/`、`facets/`）へコピーし、参照をコピー先へ書き換えたうえで、そのディレクトリを作業ディレクトリとして builtin の `workflow-maker` ワークフローを直接実行します。タスク・worktree・コミット・push・プルリクエストは作成しません。動的または未解決の依存は実行前に失敗し、完了・失敗した実行は表示されたパスにそのまま残ります。
+- グローバル設定とプロジェクト設定のパス衝突を起動時に検出します (#1505)。グローバル設定ディレクトリ（`TAKT_CONFIG_DIR` または `~/.takt`）とプロジェクトの `.takt` が同一の実体パスに解決される場合 — ホームディレクトリでの実行やシンボリックリンク経由 — 、CLI はプロジェクト初期化の前に、両方のパス・原因・対処を示すエラーで終了します。グローバル設定がプロジェクト設定として誤読されることはなくなりました。
+- DeepSeek Harness が route 付き model 参照をサポートします (#1485)。`model` フィールドは `openai/gpt-5.4` や `my-gateway/org/custom-model` のような `<route>/<model>` 形式を受け付けます。最初の `/` より前が provider route となり、残りは opaque な model ID としてそのまま公式 SDK へ渡されます（2つ目以降の `/` や `:` は保持されます）。route なしの model は後方互換の `deepseek-official` route を使います。`/gpt-5.4`、`openai/`、空値のような不正な参照はブリッジ起動前に拒否されます。TAKT は route の allowlist を持たず、未知の route や model ID の検証は SDK に委ねます。
+
+### Changed
+
+- **BREAKING:** Pi の thinking level は model 参照のサフィックスではなく `provider_options.pi.thinking_level` で設定します (#1493)。受け付ける値は `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`（環境変数 `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL` で上書き可能）で、不正な値は失敗し、未設定時は Pi SDK のデフォルト `medium` が使われます。設定された level は再利用セッションのターンを含む毎ターンの前に適用されます。Pi の model 参照は `/` でのみ分割されるようになり、model ID 中の `:` はリテラルです。`model: provider/model:high` は thinking level を選択せず、`model:high` を model ID として送信します。サフィックスを削除し、代わりに `provider_options.pi.thinking_level` を設定してください。
+- Companion の指摘修正はデフォルトで advisory な1ターンのみ実行します (#1503)。新設の `companion.fix_policy` は `single`（デフォルト）と `loop` を受け付けます。`single` ではレビューを1回実行し、accept された指摘を参考情報として同じ実装セッションへ渡して修正ターンを1回だけ実行し（対応の要否は実装側が判断）、再レビューせずに終了します。accept された指摘が0件なら修正ターンも実行しません。従来のレビュー→修正→再レビューのループは `fix_policy: loop` として残り、新たに accept される指摘がなくなったラウンドで終了します。設定はグローバル粒度のみで、`completion` / `live` 両方の review mode に適用され、project 値が global 値を上書きします。
+- Codex への権限委譲時に `network_access` を無視します (#1504)。`provider_options.codex.permission_control: codex` のとき、解決された `network_access` 値は警告なしに受理され、Codex の権限フィールドに対しては出所を問わず無視されます。従来はこの組み合わせで fail fast していました。`reasoning_effort`、`fast_mode`、`skills` のような権限以外のオプションは引き続き適用されます。
+- ビルトインの fix-plan プロンプトが、実装前に独立した修復パスを閉じます (#1519)。受け入れ基準が対象とする各結果について、単独で結果を変え得る入力・状態を列挙し、各パスを実際のエントリから観測可能な結果まで辿り、パスごとに成功例1つと違反を検出する反例1つを記録します。fix-plan レポートには Impact Paths テーブルが加わり、検証できないパスが残る間は計画を確定しません。
+- ビルトインの ai-antipattern policy が、契約根拠のない文言固定テストを検出します (#1525)。宣言された機械可読な契約根拠なしに人間向け文言を完全一致で固定するテストを AI アンチパターンとして報告します（正本は testing policy）。宣言された契約トークンへのアサーションは検出対象になりません。
+- Ink TUI が起動時に過去 run の結果を通知しなくなりました (#1509)。別ターミナルで完了した `takt run` など、以前の実行が保存した結果は TUI 起動時に黙って破棄されます。プレーンリーダーは従来どおり1回表示し、TUI セッション自身が開始したワークフローの完了通知は引き続き行われます。
+- Web UI（experimental）の実行グラフを永続化された証跡から描画します (#1517)。observed participant / observed boundary のラベルはライフサイクルレコード由来で、`PREV` / `NEXT` はステップや境界のポートを示し、並列呼び出しは境界のポートを通る1つの fork と1つの join として描画されます。イベントの記録順で参加者同士が連結されることはありません。
+
+### Fixed
+
+- Retry が `-prompts.jsonl` をセッションログとして誤選択しなくなりました (#1516)。セッションログの探索が per-run のサイドカーログ（prompts、provider events、usage events、OTLP shadow）を除外するようになり、per-run のプロンプト/レスポンスデバッグログが存在する状態でも、retry がデバッグファイルで失敗せずタスクを再実行します。
+
+### Internal
+
+- E2E スモークテスト、eject rollback テスト、operation-journal store テストを Windows で動作するようにし (#1510)、DeepSeek Harness クライアントテストのプラットフォーム判定と Python 判定を分離しました (#1528)。
+
 ## [0.63.0] - 2026-08-27
 
 ### Added

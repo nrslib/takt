@@ -47,4 +47,5 @@ OPENCODE_CONFIG_CONTENT
 eval/prompts/
 eval/fixtures/*/.takt/
 eval/.work/
+eval/.results/
 .tmp/

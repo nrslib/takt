@@ -9,4 +9,8 @@
 - Verify observable contracts in tests. When the task supplies test-related judgment criteria, follow them as well.
 - After implementation, run the build or type check and relevant tests, mapping direct evidence to each changed contract. Record environment-limited verification separately instead of guessing that it is an implementation defect.
 
+**Handoff for completion judgment:**
+- Record failed or unexecuted checks separately from their effect on completion of this task. Identify the original requirement or changed contract and causal relationship; unrelated pre-existing failures or out-of-scope work alone do not make the implementation incomplete.
+- Do not exclude an item merely because someone calls it pre-existing or out of scope. Provide evidence from baseline records, the diff, or impact paths. Pre-existing problems the change depends on, amplifies, or newly exposes, and unmet mandatory verification remain required work. Investigate unclear causality as needed, and never relabel failed or unexecuted checks as successful.
+
 {{include:instructions/post-edit-self-scan}}

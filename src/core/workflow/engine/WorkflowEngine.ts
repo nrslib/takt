@@ -424,7 +424,7 @@ export class WorkflowEngine extends EventEmitter {
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
           runQualityGates,
           persistPreviousResponseSnapshot: this.stepExecutor.persistPreviousResponseSnapshot.bind(this.stepExecutor),
-          buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
+          prepareInstruction: this.stepCoordinator.prepareInstruction.bind(this.stepCoordinator),
           buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
           prepareNormalStepExecution: this.stepCoordinator.prepareNormalStepExecution.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
@@ -851,8 +851,44 @@ export class WorkflowEngine extends EventEmitter {
     }
   }
 
+  private async recordLiveInterventionTerminal(
+    status: 'completed' | 'failed',
+  ): Promise<void> {
+    const liveIntervention = this.options.liveIntervention;
+    if (liveIntervention === undefined) {
+      return;
+    }
+    let unconsumedCount: number;
+    try {
+      unconsumedCount = await liveIntervention.recordTerminal(status);
+    } catch (error) {
+      log.warn('Failed to record live intervention terminal state', {
+        error: getErrorMessage(error),
+      });
+      return;
+    }
+    if (unconsumedCount > 0) {
+      try {
+        this.options.onLiveInterventionWarning?.(unconsumedCount);
+      } catch (error) {
+        log.warn('Failed to report unconsumed live intervention warning', {
+          error: getErrorMessage(error),
+        });
+      }
+    }
+  }
+
   async run(): Promise<WorkflowState & { returnValue?: string }> {
-    const result = await getWorkflowRunExecutor(this)();
+    let result: WorkflowRunResult;
+    try {
+      result = await getWorkflowRunExecutor(this)();
+    } catch (error) {
+      await this.recordLiveInterventionTerminal('failed');
+      throw error;
+    }
+    await this.recordLiveInterventionTerminal(
+      result.state.status === 'completed' ? 'completed' : 'failed',
+    );
     return {
       ...snapshotWorkflowState(result.state),
       ...(result.returnValue !== undefined ? { returnValue: result.returnValue } : {}),
@@ -901,7 +937,7 @@ export class WorkflowEngine extends EventEmitter {
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
           runQualityGates,
           persistPreviousResponseSnapshot: this.stepExecutor.persistPreviousResponseSnapshot.bind(this.stepExecutor),
-          buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
+          prepareInstruction: this.stepCoordinator.prepareInstruction.bind(this.stepCoordinator),
           buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
           prepareNormalStepExecution: this.stepCoordinator.prepareNormalStepExecution.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),

@@ -3,7 +3,7 @@
 
 Analyze the implementation task and, if decomposition is appropriate, split into multiple parts for parallel execution.
 
-**Important:** Use the original task and the engine-provided previous response below as the primary sources. The parent Team Leader must not use tools or fill in facts that are not present in them.
+**Important:** Use the original task, upstream artifacts explicitly supplied in the input, and the engine-provided previous response below as the primary sources. The parent Team Leader must not use tools or fill in facts that are not present in them.
 
 {previous_response}
 
@@ -30,6 +30,7 @@ Analyze the implementation task and, if decomposition is appropriate, split into
      - **Reference-only files** (read-only, modification prohibited)
      - **Implementation task** (what and how to implement)
      - **Completion criteria** (implementation of responsible files is complete)
+     - **Upstream obligations and evidence requirements** (include the relevant contents for the assigned scope, preserving existing input IDs and their meaning; do not assume the parent plan is automatically inherited by parts)
    - If tests are already written, instruct parts to implement so existing tests pass
    - Refer to Quality Gates and plan any required verification in a later feedback batch
    - Do not make parallel implementation parts run duplicate full-build or full-test checks

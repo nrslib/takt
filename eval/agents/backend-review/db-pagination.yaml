@@ -1,0 +1,47 @@
+description: 'DB一覧の取得境界: 全件ロードの検出と有界な切り出しの許容'
+prompts:
+  - file://../../prompts/db-pagination.phase1.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/page-query
+      isolate_working_dir: true
+      disable_inherited_skills: true
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../fixtures/page-query
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+tests:
+  - description: 'DB取得の上限とAPI返却の上限を区別する'
+    vars:
+      task: file://../../cases/db-pagination-review-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: pagination/unbounded-read
+        value: |
+          src/history.mjs の readHistoryPage が DB から対象テナントの全行を all() で
+          実体化した後に slice() する欠陥を、今回必要な修正として報告した場合だけ合格。
+          API応答が20件でもDB取得量・アプリのメモリ使用がテナントの総件数に依存し、
+          DBクエリ側で範囲と取得上限を適用する必要があることを説明すること。
+          任意の性能改善・将来の提案として扱うだけ、またはAPPROVEなら不合格。
+          表現、finding ID、具体的なSQL構文は固定しない。
+      - type: llm-rubric
+        metric: pagination/bounded-precision
+        value: |
+          src/directory.mjs の LIMIT 21 OFFSET による取得後の slice(0,20) と、
+          src/categories.mjs の固定6項目の切り出しを、メモリページング欠陥として
+          差し戻していない場合だけ合格。slice や all の字面だけを理由に禁止したり、
+          固定カテゴリにDB導入やSQLページングを要求したりしないこと。

@@ -19,6 +19,8 @@ import {
   type MockProviderCapture,
 } from './helpers/stdinSimulator.js';
 
+const mockRunTellCommand = vi.hoisted(() => vi.fn());
+
 // --- Infrastructure mocks (same pattern as instructMode.test.ts) ---
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -59,6 +61,10 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../shared/prompt/index.js', () => ({
   selectOption: vi.fn().mockResolvedValue('execute'),
+}));
+
+vi.mock('../features/interactive/tellCommand.js', () => ({
+  runTellCommand: (...args: unknown[]) => mockRunTellCommand(...args),
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
@@ -110,6 +116,7 @@ async function runInteractive() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSelectOption.mockResolvedValue('execute');
+  mockRunTellCommand.mockResolvedValue('The instruction was sent.');
 });
 
 afterEach(() => {
@@ -288,6 +295,44 @@ describe('/cancel command', () => {
 
     expect(result.action).toBe('cancel');
     expect(capture.callCount).toBe(2);
+  });
+});
+
+describe('/tell command', () => {
+  it('delegates to the tell flow without calling the assistant and continues the loop', async () => {
+    setupRawStdin(toRawInputs(['/tell skip Android support', '/cancel']));
+    const capture = setupProvider([]);
+
+    const result = await runInteractive();
+
+    expect(result.action).toBe('cancel');
+    expect(capture.callCount).toBe(0);
+    expect(mockRunTellCommand).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/test',
+      inlineText: 'skip Android support',
+      history: [],
+    }));
+  });
+
+  it('passes the complete readline conversation and resolved provider context to the tell flow', async () => {
+    setupRawStdin(toRawInputs(['describe the task', '/tell', '/cancel']));
+    setupProvider(['The task is ready to send.']);
+
+    const result = await runInteractive();
+
+    expect(result.action).toBe('cancel');
+    expect(mockRunTellCommand).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/test',
+      inlineText: '',
+      history: [
+        { role: 'user', content: 'describe the task' },
+        { role: 'assistant', content: 'The task is ready to send.' },
+      ],
+      sessionContext: expect.objectContaining({
+        providerType: 'mock',
+        lang: 'en',
+      }),
+    }));
   });
 });
 

@@ -35,10 +35,12 @@ export {
   appendNdjsonLine,
   initNdjsonLog,
   loadNdjsonLog,
+  parseNdjsonLogContent,
   generateSessionId,
   generateReportDir,
   createSessionLog,
   finalizeSessionLog,
   loadSessionLog,
+  parseNdjsonRecordWithPath,
   parseNdjsonRecord,
 } from './session.js';

@@ -11,6 +11,7 @@ import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } f
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
 import type { TaskReviewScope } from './review-scope.js';
+import type { InjectedReport } from './instruction/prepared-instruction.js';
 export {
   generateReportPhase,
   runReportPhase,
@@ -103,6 +104,7 @@ export interface BasePhaseRunnerContext {
 }
 
 export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
+  injectedReports?: readonly InjectedReport[];
   /** Get persona session ID */
   getSessionId: (persona: string) => string | undefined;
   /** Resolve the session key shared by Phase 1 and resume phases */

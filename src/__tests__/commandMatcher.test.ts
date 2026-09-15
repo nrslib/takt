@@ -33,6 +33,22 @@ describe('start-of-line detection', () => {
     expect(result).toEqual({ command: '/go', text: 'also check security' });
   });
 
+  it('should detect /tell without note and with user note', () => {
+    expect(matchSlashCommand('/tell')).toEqual({ command: '/tell', text: '' });
+    expect(matchSlashCommand('/tell skip Android support')).toEqual({
+      command: '/tell',
+      text: 'skip Android support',
+    });
+  });
+
+  it('should gate /tell by the conversation mode availability', () => {
+    expect(matchSlashCommand('/tell skip Android support', { enableTellCommand: false })).toBeNull();
+    expect(matchSlashCommand('/tell skip Android support', { enableTellCommand: true })).toEqual({
+      command: '/tell',
+      text: 'skip Android support',
+    });
+  });
+
   it('should detect /cancel', () => {
     const result = matchSlashCommand('/cancel');
     expect(result).toEqual({ command: '/cancel', text: '' });
@@ -102,6 +118,11 @@ describe('end-of-line detection', () => {
     const result = matchSlashCommand('この内容で採用 /accept');
     expect(result).toEqual({ command: '/accept', text: 'この内容で採用' });
   });
+
+  it('should detect /tell at the end with preceding text as user note', () => {
+    const result = matchSlashCommand('Android 対応は不要と伝えて /tell');
+    expect(result).toEqual({ command: '/tell', text: 'Android 対応は不要と伝えて' });
+  });
 });
 
 // =================================================================
@@ -148,6 +169,10 @@ describe('middle-of-text (not recognized)', () => {
 
   it('should not detect /accept in the middle of text', () => {
     expect(matchSlashCommand('I will /accept that once it is ready')).toBeNull();
+  });
+
+  it('should not detect /tell in the middle of text', () => {
+    expect(matchSlashCommand('please /tell the running task about this later')).toBeNull();
   });
 });
 

@@ -43,10 +43,23 @@ import { resolvePiActiveTools } from '../providers/pi-tool-policy.js';
 
 const PI_THINKING_LEVEL_VALUES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 type PiThinkingLevel = (typeof PI_THINKING_LEVEL_VALUES)[number];
+const PI_SDK_DEFAULT_THINKING_LEVEL: PiThinkingLevel = 'medium';
 const PI_THINKING_LEVELS = new Set<string>(PI_THINKING_LEVEL_VALUES);
 
 function isPiThinkingLevel(value: string): value is PiThinkingLevel {
   return PI_THINKING_LEVELS.has(value);
+}
+
+function resolvePiThinkingLevel(value: string | undefined): PiThinkingLevel | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (isPiThinkingLevel(value)) {
+    return value;
+  }
+  throw new Error(
+    `Invalid Pi thinking level "${value}". Allowed values: ${PI_THINKING_LEVEL_VALUES.join(', ')}`,
+  );
 }
 
 function isAbortRequested(signal: AbortSignal | undefined): boolean {
@@ -58,6 +71,7 @@ interface PiSessionRecord {
   runtime: ModelRuntime;
   cwd: string;
   configurationFingerprint: string;
+  thinkingLevelOverrideActive: boolean;
   extensionErrors: string[];
   operationTail: Promise<void>;
   activeOperations: number;
@@ -151,27 +165,24 @@ async function createModelRuntime(agentDir: string): Promise<ModelRuntime> {
 function splitModelReference(modelReference: string): {
   provider?: string;
   modelId: string;
-  thinkingLevel?: PiThinkingLevel;
 } {
   const trimmed = modelReference.trim();
-  const colonIndex = trimmed.lastIndexOf(':');
-  const suffix = colonIndex >= 0 ? trimmed.slice(colonIndex + 1) : '';
-  const modelWithThinking = colonIndex >= 0 && isPiThinkingLevel(suffix)
-    ? trimmed.slice(0, colonIndex)
-    : trimmed;
-  const slashIndex = modelWithThinking.indexOf('/');
+  const slashIndex = trimmed.indexOf('/');
 
   return {
-    provider: slashIndex > 0 ? modelWithThinking.slice(0, slashIndex) : undefined,
-    modelId: slashIndex > 0 ? modelWithThinking.slice(slashIndex + 1) : modelWithThinking,
-    ...(suffix && isPiThinkingLevel(suffix) ? { thinkingLevel: suffix } : {}),
+    provider: slashIndex > 0 ? trimmed.slice(0, slashIndex) : undefined,
+    modelId: slashIndex > 0 ? trimmed.slice(slashIndex + 1) : trimmed,
   };
+}
+
+function validatePiThinkingConfiguration(thinkingLevelOption: string | undefined): void {
+  resolvePiThinkingLevel(thinkingLevelOption);
 }
 
 function resolvePiModel(
   modelReference: string | undefined,
   runtime: ModelRuntime,
-): { model?: Model<Api>; thinkingLevel?: PiThinkingLevel } {
+): { model?: Model<Api> } {
   if (!modelReference?.trim()) {
     return {};
   }
@@ -180,7 +191,7 @@ function resolvePiModel(
   if (parsed.provider) {
     const model = runtime.getModel(parsed.provider, parsed.modelId);
     if (model) {
-      return { model, thinkingLevel: parsed.thinkingLevel };
+      return { model };
     }
     throw new Error(
       `Pi model "${modelReference}" was not found. Use provider/model format or configure the model in Pi.`,
@@ -189,7 +200,7 @@ function resolvePiModel(
 
   const matches = runtime.getModels().filter((model) => model.id === parsed.modelId);
   if (matches.length === 1) {
-    return { model: matches[0], thinkingLevel: parsed.thinkingLevel };
+    return { model: matches[0] };
   }
 
   throw new Error(
@@ -839,10 +850,18 @@ function stableJsonValue(value: unknown): unknown {
 }
 
 function buildSessionConfigurationFingerprint(options: PiCallOptions, agentDir: string): string {
+  const providerOptionEntries = options.providerOptions === undefined
+    ? []
+    : Object.entries(options.providerOptions)
+      .filter(([key]) => key !== 'thinkingLevel');
+  const fingerprintProviderOptions = providerOptionEntries.length === 0
+    ? undefined
+    : Object.fromEntries(providerOptionEntries);
+
   return JSON.stringify({
     agentDir: normalizeSessionCwd(agentDir),
     systemPrompt: options.systemPrompt,
-    providerOptions: stableJsonValue(options.providerOptions),
+    providerOptions: stableJsonValue(fingerprintProviderOptions),
     childProcessEnv: stableEnvironment(options.childProcessEnv),
   });
 }
@@ -887,10 +906,12 @@ function registerPendingExtensionProviders(
   }
 }
 
-async function applyPiModel(record: PiSessionRecord, modelReference: string | undefined): Promise<void> {
-  if (!modelReference?.trim()) {
-    return;
-  }
+async function applyPiModel(
+  record: PiSessionRecord,
+  modelReference: string | undefined,
+  thinkingLevelOption: string | undefined,
+): Promise<void> {
+  const configuredThinkingLevel = resolvePiThinkingLevel(thinkingLevelOption);
   const resolved = resolvePiModel(modelReference, record.runtime);
   const currentModel = record.session.model;
   if (resolved.model !== undefined && (
@@ -899,8 +920,12 @@ async function applyPiModel(record: PiSessionRecord, modelReference: string | un
   )) {
     await record.session.setModel(resolved.model);
   }
-  if (resolved.thinkingLevel !== undefined) {
-    record.session.setThinkingLevel(resolved.thinkingLevel);
+  if (configuredThinkingLevel !== undefined) {
+    record.session.setThinkingLevel(configuredThinkingLevel);
+    record.thinkingLevelOverrideActive = true;
+  } else if (record.thinkingLevelOverrideActive) {
+    record.session.setThinkingLevel(PI_SDK_DEFAULT_THINKING_LEVEL);
+    record.thinkingLevelOverrideActive = false;
   }
 }
 
@@ -1055,6 +1080,7 @@ async function createPiSession(
       runtime,
       cwd: options.cwd,
       configurationFingerprint,
+      thinkingLevelOverrideActive: false,
       extensionErrors,
       operationTail: Promise.resolve(),
       activeOperations: 0,
@@ -1062,7 +1088,7 @@ async function createPiSession(
       retired: false,
       disposed: false,
     };
-    await applyPiModel(record, options.model);
+    await applyPiModel(record, options.model, options.providerOptions?.thinkingLevel);
     return record;
   } catch (error) {
     await shutdownPiSession(result.session).catch(() => undefined);
@@ -1377,6 +1403,7 @@ export async function callPi(
     if (isAbortRequested(options.abortSignal)) {
       throw new Error('Pi session aborted');
     }
+    validatePiThinkingConfiguration(options.providerOptions?.thinkingLevel);
     const record = await getOrCreatePiSession(options);
     const activeSessionId = record.session.sessionId;
     sessionId = activeSessionId;
@@ -1389,7 +1416,7 @@ export async function callPi(
       if (record.extensionErrors.length > 0) {
         throw new Error(`Pi extension failed: ${record.extensionErrors.splice(0).join('; ')}`);
       }
-      await applyPiModel(record, options.model);
+      await applyPiModel(record, options.model, options.providerOptions?.thinkingLevel);
       applyPiTools(session, options);
       const state: PiTurnState = {
         responseText: '',

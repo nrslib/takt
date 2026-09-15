@@ -313,6 +313,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     ...phaseRelay,
     getFacetPool: (name: string) => params.config.facetPools?.[name],
     dynamicFacetSelectorCoordinator: dynamicFacetSelector,
+    liveIntervention: params.options.liveIntervention,
   });
 
   const workflowCallRunner = new WorkflowCallRunner({
@@ -405,6 +406,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const arpeggioRunner = new ArpeggioRunner({
     optionsBuilder,
     stepExecutor,
+    liveIntervention: params.options.liveIntervention,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     getCwd: params.getCwd,
     getReportDir: params.getReportDir,
     getReportsRootDir: () => params.runPaths.reportsRootAbs,

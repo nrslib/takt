@@ -48,7 +48,11 @@ describe('PiProvider', () => {
       allowedTools: ['Read', 'Glob'],
       imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image.png' }],
       providerOptions: {
-        pi: { extensions: ['npm:trusted-extension'], noSkills: true },
+        pi: {
+          extensions: ['npm:trusted-extension'],
+          noSkills: true,
+          thinkingLevel: 'high',
+        },
       },
       abortSignal: abortController.signal,
       onStream,
@@ -62,7 +66,11 @@ describe('PiProvider', () => {
       permissionMode: 'readonly',
       allowedTools: ['Read', 'Glob'],
       imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image.png' }],
-      providerOptions: { extensions: ['npm:trusted-extension'], noSkills: true },
+      providerOptions: {
+        extensions: ['npm:trusted-extension'],
+        noSkills: true,
+        thinkingLevel: 'high',
+      },
       abortSignal: abortController.signal,
       systemPrompt: 'Be concise.',
       onStream,

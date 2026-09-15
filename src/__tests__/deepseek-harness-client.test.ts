@@ -2,12 +2,16 @@ import { execFileSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
 import {
   callDeepSeekHarness,
   closeDeepSeekHarnessProcesses,
 } from '../infra/deepseek-harness/index.js';
+import {
+  DEEPSEEK_HARNESS_RUNTIME_VERSION,
+  DEEPSEEK_HARNESS_SDK_VERSION,
+} from '../infra/deepseek-harness/constants.js';
 
 function isSupportedPythonVersion(version: readonly [number, number]): boolean {
   const minimum: readonly [number, number] = [3, 10];
@@ -15,8 +19,7 @@ function isSupportedPythonVersion(version: readonly [number, number]): boolean {
     || (version[0] === minimum[0] && version[1] >= minimum[1]);
 }
 
-function findPython(): string | undefined {
-  const candidates = process.platform === 'win32' ? ['python'] : ['python3', 'python'];
+function findPython(candidates: readonly string[]): string | undefined {
   for (const candidate of candidates) {
     try {
       const details = execFileSync(candidate, [
@@ -46,12 +49,18 @@ function findPython(): string | undefined {
   return undefined;
 }
 
-const supportedRuntime = (
+function findLifecyclePython(): string | undefined {
+  const candidates = process.platform === 'win32' ? ['python'] : ['python3', 'python'];
+  return findPython(candidates);
+}
+
+const supportedPlatform = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
   || (process.platform === 'darwin' && process.arch === 'arm64')
-) && findPython() !== undefined;
+);
+const lifecycleRuntimeSupported = supportedPlatform && findLifecyclePython() !== undefined;
 
-it.skipIf(supportedRuntime)('DeepSeek Harness fails fast with an actionable unsupported-platform error', async () => {
+it.skipIf(supportedPlatform)('DeepSeek Harness fails fast with an actionable unsupported-platform error', async () => {
   const response = await callDeepSeekHarness('worker', 'hello', { cwd: process.cwd() });
 
   expect(response.status).toBe('error');
@@ -59,16 +68,26 @@ it.skipIf(supportedRuntime)('DeepSeek Harness fails fast with an actionable unsu
   expect(response.content).toContain('no provider fallback is available');
 });
 
-describe.skipIf(!supportedRuntime)('DeepSeek Harness bridge lifecycle', () => {
+describe.skipIf(!lifecycleRuntimeSupported)('DeepSeek Harness bridge lifecycle', () => {
   let root: string;
-  let pythonPath: string;
+  let globalConfigDir: string;
+  let managedPythonPath: string;
 
   beforeEach(async () => {
-    const python = findPython();
+    const python = findLifecyclePython();
     if (python === undefined) {
       throw new Error('Python 3.10+ was detected during suite selection but is unavailable');
     }
     root = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-harness-'));
+    globalConfigDir = path.join(root, 'global');
+    managedPythonPath = path.join(
+      globalConfigDir,
+      'deepseek-harness',
+      'venv',
+      process.platform === 'win32' ? 'Scripts' : 'bin',
+      process.platform === 'win32' ? 'python.exe' : 'python',
+    );
+    vi.stubEnv('TAKT_CONFIG_DIR', globalConfigDir);
     const moduleDir = path.join(root, 'deepseek_harness');
     await mkdir(moduleDir);
     await writeFile(path.join(moduleDir, '__init__.py'), `
@@ -95,7 +114,18 @@ class JsonRpcError(Exception):
     pass
 
 class DeepSeekHarness:
-    def __init__(self, **kwargs):
+    def __init__(self, provider, model, cwd, runtime_cwd, max_tokens=None, session_root=None, cordis=None, request_timeout_seconds=None, shutdown_timeout_seconds=None):
+        kwargs = {
+            'provider': provider,
+            'model': model,
+            'cwd': cwd,
+            'runtime_cwd': runtime_cwd,
+            'max_tokens': max_tokens,
+            'session_root': session_root,
+            'cordis': cordis,
+            'request_timeout_seconds': request_timeout_seconds,
+            'shutdown_timeout_seconds': shutdown_timeout_seconds,
+        }
         self.kwargs = kwargs
         self.closed = False
         config_file = os.path.join(kwargs['cwd'], 'bridge-start-configs.jsonl')
@@ -119,11 +149,11 @@ class DeepSeekHarness:
                 counter.write('initialized\\n')
 
     def start(self):
-        if os.path.basename(self.kwargs.get('cordis', '')) == 'FAKE_START_FAILURE':
+        if os.path.basename(self.kwargs.get('cordis') or '') == 'FAKE_START_FAILURE':
             raise RuntimeError('startup failure')
 
     def close(self):
-        if os.path.basename(self.kwargs.get('cordis', '')) == 'FAKE_CLOSE_HANG':
+        if os.path.basename(self.kwargs.get('cordis') or '') == 'FAKE_CLOSE_HANG':
             time.sleep(30)
         self.closed = True
 
@@ -180,6 +210,32 @@ class DeepSeekHarness:
                 {'type': 'assistant/message', 'data': {'message': {'content': [{'type': 'text', 'text': 'second'}]}}},
                 {'type': 'turn/end', 'data': {'reason': {'kind': 'completed'}}},
             ]
+        if input.startswith('typed-stream:'):
+            events = [
+                {'type': 'assistant/chunk', 'data': {'chunk': {'type': kind, 'text': value}}}
+                for kind, value in json.loads(input.split(':', 1)[1])
+            ] + [{'type': 'turn/end', 'data': {'reason': {'kind': 'completed'}}}]
+        if input == 'split-secret-events':
+            midpoint = len(secret) // 2
+            events = [
+                {'type': 'assistant/chunk', 'data': {'chunk': {'type': 'reasoning-delta', 'text': secret[:midpoint]}}},
+                {'type': 'assistant/chunk', 'data': {'chunk': {'type': 'reasoning-delta', 'text': secret[midpoint:]}}},
+                {'type': 'tool/call', 'data': {'callId': 'call-split', 'name': 'read', 'arguments': tool_arguments}},
+                {'type': 'tool/result', 'data': {'message': {'source': {'callId': 'call-split'}, 'content': [{'type': 'tool-result', 'toolCallId': 'call-split', 'content': [{'type': 'text', 'text': secret}]}]}}},
+                {'type': 'assistant/chunk', 'data': {'chunk': {'type': 'text-delta', 'text': secret[:midpoint]}}},
+                {'type': 'assistant/chunk', 'data': {'chunk': {'type': 'text-delta', 'text': secret[midpoint:]}}},
+                {'type': 'turn/end', 'data': {'reason': {'kind': 'completed'}}},
+            ]
+        if input == 'safe-credential-boundary':
+            events = [
+                {'type': 'assistant/chunk', 'data': {'chunk': {'type': 'text-delta', 'text': 'api_key=provider-config'}}},
+                {'type': 'turn/end', 'data': {'reason': {'kind': 'completed'}}},
+            ]
+        if input == 'pending-secret':
+            events = [
+                {'type': 'assistant/chunk', 'data': {'chunk': {'type': 'text-delta', 'text': secret[:-1]}}},
+                {'type': 'turn/end', 'data': {'reason': {'kind': 'completed'}}},
+            ]
         if input == 'malformed-frame':
             events = [
                 {'type': 'assistant/chunk', 'data': {'chunk': {'type': 'text-delta', 'text': float('nan')}}},
@@ -208,16 +264,62 @@ class DeepSeekHarness:
             else:
                 for event in events:
                     on_notification(Notification('session.event', {'sessionId': active_session, 'event': event}))
-        final_response = 'firstsecond' if input == 'message-events' else (secret if secret_events else 'hello')
+        final_response = 'firstsecond' if input == 'message-events' else (secret if secret_events or input == 'split-secret-events' else 'hello')
         return Result(active_session, final_response, result_finish_reason)
 `, 'utf8');
-    pythonPath = path.join(root, 'python-wrapper.sh');
-    await writeFile(pythonPath, `#!/bin/sh\nPYTHONPATH="${root}:${'${PYTHONPATH:-}'}" exec "${python}" "$@"\n`, 'utf8');
-    await chmod(pythonPath, 0o755);
+    await writeFile(path.join(root, 'sitecustomize.py'), `
+import os
+import sys
+import time
+import types
+
+if sys.argv and sys.argv[0] == '-c' and os.environ.get('FAKE_PROBE_HANG') == '1':
+    with open(${JSON.stringify(path.join(root, 'probe-started.marker'))}, 'w', encoding='utf-8') as marker:
+        marker.write(str(os.getpid()) + '\\n')
+    while not os.path.exists(${JSON.stringify(path.join(root, 'probe-release'))}):
+        time.sleep(0.01)
+
+VersionInfo = type('VersionInfo', (tuple,), {
+    'major': property(lambda self: self[0]),
+    'minor': property(lambda self: self[1]),
+    'micro': property(lambda self: self[2]),
+})
+sys.version_info = VersionInfo((3, 12, 9, 'final', 0))
+sys.implementation = types.SimpleNamespace(
+    name='cpython',
+    cache_tag='cpython-312',
+    version=sys.version_info,
+    hexversion=0x30C0000,
+    _multiarch='test',
+)
+`, 'utf8');
+    const sdkInfoDir = path.join(root, `deepseek_harness_sdk-${DEEPSEEK_HARNESS_SDK_VERSION}.dist-info`);
+    const runtimeInfoDir = path.join(root, `deepseek_harness_runtime_bin-${DEEPSEEK_HARNESS_RUNTIME_VERSION}.dist-info`);
+    await mkdir(sdkInfoDir, { recursive: true });
+    await mkdir(runtimeInfoDir, { recursive: true });
+    await writeFile(path.join(sdkInfoDir, 'METADATA'), [
+      'Metadata-Version: 2.1',
+      'Name: deepseek-harness-sdk',
+      `Version: ${DEEPSEEK_HARNESS_SDK_VERSION}`,
+      'Requires-Python: >=3.12,<3.13',
+      `Requires-Dist: deepseek-harness-runtime-bin==${DEEPSEEK_HARNESS_RUNTIME_VERSION}`,
+      '',
+    ].join('\n'), 'utf8');
+    await writeFile(path.join(runtimeInfoDir, 'METADATA'), [
+      'Metadata-Version: 2.1',
+      'Name: deepseek-harness-runtime-bin',
+      `Version: ${DEEPSEEK_HARNESS_RUNTIME_VERSION}`,
+      '',
+    ].join('\n'), 'utf8');
+    await mkdir(path.dirname(managedPythonPath), { recursive: true });
+    await mkdir(path.join(globalConfigDir, 'deepseek-harness', 'dsh-home'), { recursive: true });
+    await writeFile(managedPythonPath, `#!/bin/sh\nPYTHONPATH="${root}:${'${PYTHONPATH:-}'}" exec "${python}" "$@"\n`, 'utf8');
+    await chmod(managedPythonPath, 0o755);
   });
 
   afterEach(async () => {
     await closeDeepSeekHarnessProcesses();
+    vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
   });
 
@@ -226,10 +328,9 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       providerOptions: {
-        pythonPath,
         requestTimeoutMs: 10_000,
       },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
 
     expect(response).toMatchObject({ status: 'done', content: 'hello', sessionId: 'generated-session' });
@@ -255,6 +356,55 @@ class DeepSeekHarness:
     });
   });
 
+  it('propagates all DeepSeek provider options to the SDK and bridge environment', async () => {
+    const sessionRoot = path.join(root, 'configured-session-root');
+    const cordis = path.join(root, 'configured-cordis.yml');
+    const baseUrl = 'https://deepseek.example/v1';
+    const responses: Array<Awaited<ReturnType<typeof callDeepSeekHarness>>> = [];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      responses.push(await callDeepSeekHarness('worker', 'inspect-env', {
+        cwd: root,
+        model: 'openai/gpt-5.4',
+        providerOptions: {
+          baseUrl,
+          sessionRoot,
+          cordis,
+          maxTokens: 4096,
+          requestTimeoutMs: 120_000,
+          shutdownTimeoutMs: 2_000,
+          runtimeMode: 'node',
+        },
+      }));
+    }
+    const [configuration] = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const bridgeEnvironment = JSON.parse(await readFile(path.join(root, 'bridge-env.json'), 'utf8')) as Record<string, string>;
+
+    expect(responses.map((response) => response.status)).toEqual(['done', 'done']);
+    expect(configuration).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5.4',
+      cwd: root,
+      runtime_cwd: root,
+      max_tokens: 4096,
+      session_root: sessionRoot,
+      cordis,
+      request_timeout_seconds: 120,
+      shutdown_timeout_seconds: 2,
+    });
+    expect((await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>))
+      .toHaveLength(2);
+    expect(bridgeEnvironment).toMatchObject({
+      DEEPSEEK_BASE_URL: baseUrl,
+      DSH_RUNTIME_MODE: 'node',
+    });
+  });
+
   it.each([
     ['openai/gpt-5.4', 'openai', 'gpt-5.4'],
     ['my-gateway/org/custom-model', 'my-gateway', 'org/custom-model'],
@@ -267,7 +417,7 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       model,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
     const [configuration] = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
       .trim()
@@ -287,7 +437,7 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       model,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
@@ -327,8 +477,8 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       model: reference,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
     const [configuration] = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
       .trim()
@@ -364,8 +514,8 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       model: reference,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
 
     expect(response.status).toBe('error');
@@ -392,19 +542,20 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       model: reference,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
     expect(response.content).toContain('Unable to start DeepSeek Harness Python bridge');
-    expect(response.content).toContain('Install Python 3.10+ and deepseek-harness-sdk');
+    expect(response.content).toMatch(/managed environment|install/i);
+    expect(response.content).not.toMatch(/python_path|Python 3\.10/iu);
   });
 
   it('preserves multiple assistant messages when the SDK omits chunk events', async () => {
     const textEvents: string[] = [];
     const response = await callDeepSeekHarness('worker', 'message-events', {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
       onStream: (event) => {
         if (event.type === 'text') {
           textEvents.push(event.data.text);
@@ -421,7 +572,7 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'fail-secret', {
       cwd: root,
       childProcessEnv: { DEEPSEEK_API_KEY: secret },
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
@@ -443,9 +594,9 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'secret-events', {
       cwd: root,
       childProcessEnv: { DEEPSEEK_API_KEY: secret },
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
       onStream: (event) => {
-        events.push(event as { type: string; data: Record<string, unknown> });
+        events.push(event as unknown as { type: string; data: Record<string, unknown> });
         logger.logEvent({
           provider: 'deepseek-harness',
           providerModel: 'deepseek-v4-flash',
@@ -462,13 +613,146 @@ class DeepSeekHarness:
     expect(persisted).toContain('[REDACTED]');
   });
 
+  it('redacts secrets split across text and thinking stream events before logging them', async () => {
+    const secret = 'deepseek-output-secret-456';
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const response = await callDeepSeekHarness('worker', 'split-secret-events', {
+      cwd: root,
+      childProcessEnv: { DEEPSEEK_API_KEY: secret },
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: '[REDACTED]' });
+    expect(JSON.stringify(events)).not.toContain(secret);
+    expect(JSON.stringify(events)).toContain('[REDACTED]');
+    expect(events.filter((event) => event.type === 'text' || event.type === 'thinking'))
+      .toEqual(expect.arrayContaining([
+        { type: 'thinking', data: { thinking: '[REDACTED]' } },
+        { type: 'text', data: { text: '[REDACTED]' } },
+      ]));
+  });
+
+  it.each([
+    [['reasoning-delta', 'Let us'], ['text-delta', 'Answer']],
+    [['text-delta', 'Let us'], ['reasoning-delta', 'Answer']],
+    [['reasoning-delta', 'Let us'], ['text-delta', 'k-review'], ['reasoning-delta', ' safely'], ['text-delta', 'Answer']],
+  ])('keeps delayed safe output in its original stream: %j', async (...chunks) => {
+    const events: Array<{ type: string; text: string }> = [];
+    const response = await callDeepSeekHarness('worker', `typed-stream:${JSON.stringify(chunks)}`, {
+      cwd: root,
+      childProcessEnv: { DEEPSEEK_API_KEY: 'sk-review-fixture-123' },
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => {
+        if (event.type === 'text' || event.type === 'thinking') {
+          const text = event.type === 'text' ? event.data.text : event.data.thinking;
+          if (text.length > 0) events.push({ type: event.type, text });
+        }
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(events).toEqual(chunks.map(([kind, text]) => ({
+      type: kind === 'reasoning-delta' ? 'thinking' : 'text',
+      text,
+    })));
+  });
+
+  it('drains long safe prefixes without losing the type of the retained suffix', async () => {
+    const thinkingChunk = `${'a'.repeat(300)}s`;
+    const chunks = [...Array.from({ length: 40 }, () => ['reasoning-delta', thinkingChunk]), ['text-delta', 'Answer']];
+    let thinking = '';
+    let text = '';
+    const response = await callDeepSeekHarness('worker', `typed-stream:${JSON.stringify(chunks)}`, {
+      cwd: root,
+      childProcessEnv: { DEEPSEEK_API_KEY: 'sk-review-fixture-123' },
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => {
+        if (event.type === 'thinking') thinking += event.data.thinking;
+        if (event.type === 'text') text += event.data.text;
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(thinking).toBe(thinkingChunk.repeat(40));
+    expect(text).toBe('Answer');
+  });
+
+  it.each(['reasoning-delta', 'text-delta'] as const)('redacts a secret split across three alternating chunks starting with %s', async (firstKind) => {
+    const secondKind = firstKind === 'reasoning-delta' ? 'text-delta' : 'reasoning-delta';
+    const chunks = [[firstKind, 'Before sk-review'], [secondKind, '-fixture'], [firstKind, '-123 after']];
+    const events: Array<{ type: string; text: string }> = [];
+    const logsDir = path.join(root, 'logs');
+    await mkdir(logsDir);
+    const logger = createProviderEventLogger({
+      logsDir, sessionId: 'typed-stream-session', runId: 'typed-stream-run', enabled: true,
+    });
+    const response = await callDeepSeekHarness('worker', `typed-stream:${JSON.stringify(chunks)}`, {
+      cwd: root,
+      childProcessEnv: { DEEPSEEK_API_KEY: 'sk-review-fixture-123' },
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => {
+        logger.logEvent({ provider: 'deepseek-harness', providerModel: 'deepseek-v4-flash', step: 'redaction' }, event);
+        if (event.type === 'text' || event.type === 'thinking') {
+          const text = event.type === 'text' ? event.data.text : event.data.thinking;
+          if (text.length > 0) events.push({ type: event.type, text });
+        }
+      },
+    });
+
+    expect(response.status).toBe('done');
+    const firstType = firstKind === 'reasoning-delta' ? 'thinking' : 'text';
+    expect(events).toEqual([
+      { type: firstType, text: 'Before [REDACTED]' },
+      { type: firstType === 'thinking' ? 'text' : 'thinking', text: '[REDACTED]' },
+      { type: firstType, text: '[REDACTED] after' },
+    ]);
+    const log = await readFile(logger.filepath, 'utf8');
+    for (const fragment of ['sk-review', '-fixture', '-123']) {
+      expect(log).not.toContain(fragment);
+    }
+  });
+
+  it('flushes a safe credential-boundary pending response at turn end', async () => {
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const response = await callDeepSeekHarness('worker', 'safe-credential-boundary', {
+      cwd: root,
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'hello' });
+    expect(events).toContainEqual({ type: 'text', data: { text: 'api_key=[REDACTED]' } });
+    expect(JSON.stringify(events)).not.toContain('provider-config');
+  });
+
+  it('does not flush a known-secret pending response at successful turn end', async () => {
+    const secret = 'pending-secret-value-123';
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const response = await callDeepSeekHarness('worker', 'pending-secret', {
+      cwd: root,
+      childProcessEnv: { DEEPSEEK_API_KEY: secret },
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'hello' });
+    expect(JSON.stringify(events)).not.toContain(secret);
+    expect(JSON.stringify(events)).not.toContain(secret.slice(0, -1));
+    const nonEmptyStreamText = events
+      .filter((event) => event.type === 'text' || event.type === 'thinking')
+      .map((event) => event.type === 'text' ? event.data.text : event.data.thinking)
+      .filter((text): text is string => typeof text === 'string' && text.length > 0);
+    expect(nonEmptyStreamText).toEqual([]);
+  });
+
   it('rejects session identifiers that contain a known secret', async () => {
     const secret = 'deepseek-session-secret-789';
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       sessionId: `session-${secret}`,
       childProcessEnv: { DEEPSEEK_API_KEY: secret },
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
@@ -482,7 +766,6 @@ class DeepSeekHarness:
       cwd: root,
       sessionId: `session-${embeddedSecret}`,
       providerOptions: {
-        pythonPath,
         baseUrl: `https://deepseek-user:${embeddedSecret}@deepseek.example/v1`,
         requestTimeoutMs: 10_000,
       },
@@ -501,7 +784,6 @@ class DeepSeekHarness:
       cwd: root,
       sessionId: `session-${encodedUsername}`,
       providerOptions: {
-        pythonPath,
         baseUrl: `https://${encodedUsername}:${encodedPassword}@deepseek.example/v1`,
         requestTimeoutMs: 10_000,
       },
@@ -518,7 +800,7 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'secret-tool-id', {
       cwd: root,
       childProcessEnv: { DEEPSEEK_API_KEY: secret },
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
@@ -534,7 +816,7 @@ class DeepSeekHarness:
   ] as const)('maps the official %s finish reason without reporting success', async (reason, status, message) => {
     const response = await callDeepSeekHarness('worker', `reason:${reason}`, {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe(status);
@@ -546,8 +828,8 @@ class DeepSeekHarness:
     const events: Array<{ type: string; data: Record<string, unknown> }> = [];
     const response = await callDeepSeekHarness('worker', 'reason:aborted', {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
 
     expect(response).toMatchObject({
@@ -579,8 +861,8 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'reason:error', {
       cwd: root,
       ...(model === undefined ? {} : { model }),
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
-      onStream: (event) => events.push(event as { type: string; data: Record<string, unknown> }),
+      providerOptions: { requestTimeoutMs: 10_000 },
+      onStream: (event) => events.push(event as unknown as { type: string; data: Record<string, unknown> }),
     });
 
     expect(response).toMatchObject({
@@ -608,7 +890,7 @@ class DeepSeekHarness:
   it('rejects an unknown finish reason as a provider stream protocol error', async () => {
     const response = await callDeepSeekHarness('worker', 'reason:future-reason', {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
@@ -620,7 +902,6 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       providerOptions: {
-        pythonPath,
         cordis: 'FAKE_START_FAILURE',
         requestTimeoutMs: 10_000,
       },
@@ -634,7 +915,7 @@ class DeepSeekHarness:
   it('keeps SDK stdout noise off the bridge protocol stream', async () => {
     const response = await callDeepSeekHarness('worker', 'malformed-json', {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response).toMatchObject({ status: 'done', content: 'hello' });
@@ -643,7 +924,7 @@ class DeepSeekHarness:
   it('maps malformed JSON bridge output to a stream protocol error', async () => {
     const response = await callDeepSeekHarness('worker', 'malformed-frame', {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
@@ -654,7 +935,7 @@ class DeepSeekHarness:
   it('maps a malformed notification frame to a stream protocol error', async () => {
     const response = await callDeepSeekHarness('worker', 'malformed-notification', {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
@@ -665,7 +946,7 @@ class DeepSeekHarness:
   it('serializes concurrent SDK notifications without corrupting JSONL frames', async () => {
     const response = await callDeepSeekHarness('worker', 'concurrent-events', {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response).toMatchObject({ status: 'done', content: 'hello' });
@@ -676,7 +957,7 @@ class DeepSeekHarness:
     async (input) => {
       const response = await callDeepSeekHarness('worker', input, {
         cwd: root,
-        providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+        providerOptions: { requestTimeoutMs: 10_000 },
       });
 
       expect(response.status).toBe('error');
@@ -691,7 +972,7 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', prompt, {
       cwd: root,
       childProcessEnv: { DEEPSEEK_API_KEY: secret },
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('done');
@@ -709,7 +990,7 @@ class DeepSeekHarness:
         HOME: 'unrelated-home',
         DSH_RUNTIME_MODE: 'node',
       },
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
     const bridgeEnvironment = JSON.parse(await readFile(path.join(root, 'bridge-env.json'), 'utf8')) as Record<string, string | null>;
 
@@ -725,7 +1006,7 @@ class DeepSeekHarness:
   it('maps an SDK JSON-RPC failure to a provider error', async () => {
     const response = await callDeepSeekHarness('worker', 'jsonrpc-failure', {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
@@ -736,7 +1017,7 @@ class DeepSeekHarness:
   it('maps an unexpected bridge exit to a provider error without hanging', async () => {
     const response = await callDeepSeekHarness('worker', 'unexpected-exit', {
       cwd: root,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(response.status).toBe('error');
@@ -750,7 +1031,7 @@ class DeepSeekHarness:
       const response = await callDeepSeekHarness('worker', 'hello', {
         cwd: root,
         sessionId,
-        providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+        providerOptions: { requestTimeoutMs: 10_000 },
       });
 
       expect(response.status).toBe('error');
@@ -763,12 +1044,12 @@ class DeepSeekHarness:
     const first = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       sessionId: 'persistent-session',
-      providerOptions: { pythonPath, sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+      providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
     });
     const second = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       sessionId: 'persistent-session',
-      providerOptions: { pythonPath, sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+      providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
     });
 
     expect(first).toMatchObject({ status: 'done', sessionId: 'persistent-session' });
@@ -782,13 +1063,13 @@ class DeepSeekHarness:
       cwd: root,
       model: 'deepseek-v4-flash',
       sessionId: 'default-route-session',
-      providerOptions: { pythonPath, sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+      providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
     });
     const second = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       model: 'deepseek-official/deepseek-v4-flash',
       sessionId: 'default-route-session',
-      providerOptions: { pythonPath, sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+      providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
     });
 
     expect(first.status).toBe('done');
@@ -809,7 +1090,7 @@ class DeepSeekHarness:
         cwd: root,
         model,
         sessionId,
-        providerOptions: { pythonPath, sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+        providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
       });
       expect(response.status).toBe('done');
     }
@@ -832,7 +1113,6 @@ class DeepSeekHarness:
       const response = await callDeepSeekHarness('worker', 'hello', {
         cwd: root,
         providerOptions: {
-          pythonPath,
           sessionRoot: 'session-link',
           requestTimeoutMs: 10_000,
         },
@@ -858,7 +1138,6 @@ class DeepSeekHarness:
       const response = await callDeepSeekHarness('worker', 'hello', {
         cwd: root,
         providerOptions: {
-          pythonPath,
           cordis: 'cordis-link.yml',
           requestTimeoutMs: 10_000,
         },
@@ -886,7 +1165,6 @@ class DeepSeekHarness:
         cwd: root,
         sessionId: 'canonical-alias-session',
         providerOptions: {
-          pythonPath,
           sessionRoot: sharedSessionFile,
           requestTimeoutMs: 10_000,
         },
@@ -895,7 +1173,6 @@ class DeepSeekHarness:
         cwd: projectAlias,
         sessionId: 'canonical-alias-session',
         providerOptions: {
-          pythonPath,
           sessionRoot: aliasedSessionFile,
           requestTimeoutMs: 10_000,
         },
@@ -921,7 +1198,6 @@ class DeepSeekHarness:
         cwd: root,
         sessionId: 'shared-root-owner',
         providerOptions: {
-          pythonPath,
           sessionRoot: sharedSessionFile,
           requestTimeoutMs: 10_000,
         },
@@ -930,7 +1206,6 @@ class DeepSeekHarness:
         cwd: otherRoot,
         sessionId: 'different-project',
         providerOptions: {
-          pythonPath,
           sessionRoot: aliasedSessionFile,
           requestTimeoutMs: 10_000,
         },
@@ -951,11 +1226,11 @@ class DeepSeekHarness:
       const sessionRoot = path.join(root, 'shared-one-shot-sessions');
       const first = await callDeepSeekHarness('worker', 'hello', {
         cwd: root,
-        providerOptions: { pythonPath, sessionRoot, requestTimeoutMs: 10_000 },
+        providerOptions: { sessionRoot, requestTimeoutMs: 10_000 },
       });
       const second = await callDeepSeekHarness('worker', 'hello', {
         cwd: otherRoot,
-        providerOptions: { pythonPath, sessionRoot, requestTimeoutMs: 10_000 },
+        providerOptions: { sessionRoot, requestTimeoutMs: 10_000 },
       });
 
       expect(first.status).toBe('done');
@@ -973,12 +1248,12 @@ class DeepSeekHarness:
       const first = await callDeepSeekHarness('worker', 'hello', {
         cwd: root,
         sessionId: 'cross-project-session',
-        providerOptions: { pythonPath, sessionRoot, requestTimeoutMs: 10_000 },
+        providerOptions: { sessionRoot, requestTimeoutMs: 10_000 },
       });
       const second = await callDeepSeekHarness('worker', 'hello', {
         cwd: otherRoot,
         sessionId: 'cross-project-session',
-        providerOptions: { pythonPath, sessionRoot, requestTimeoutMs: 10_000 },
+        providerOptions: { sessionRoot, requestTimeoutMs: 10_000 },
       });
 
       expect(first.status).toBe('done');
@@ -994,7 +1269,6 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'hang', {
       cwd: root,
       providerOptions: {
-        pythonPath,
         requestTimeoutMs: 100,
       },
     });
@@ -1010,7 +1284,6 @@ class DeepSeekHarness:
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       providerOptions: {
-        pythonPath,
         cordis: 'FAKE_CLOSE_HANG',
         requestTimeoutMs: 10_000,
         shutdownTimeoutMs: 100,
@@ -1021,13 +1294,52 @@ class DeepSeekHarness:
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
+  it('terminates the probe and does not start the bridge when startup is aborted', async () => {
+    vi.stubEnv('FAKE_PROBE_HANG', '1');
+    const probeStartedPath = path.join(root, 'probe-started.marker');
+    const controller = new AbortController();
+    const call = callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      abortSignal: controller.signal,
+      providerOptions: { requestTimeoutMs: 10_000 },
+    });
+
+    await vi.waitFor(async () => {
+      await expect(readFile(probeStartedPath, 'utf8')).resolves.toMatch(/\d+\n/u);
+    });
+    controller.abort(new Error('cancelled during runtime probe'));
+
+    const response = await call;
+    expect(response.status).toBe('error');
+    expect(response.failureCategory).toBe('external_abort');
+    expect(response.content).toContain('cancelled during runtime probe');
+    await expect(readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('times out a hung runtime probe without starting the bridge', async () => {
+    vi.stubEnv('FAKE_PROBE_HANG', '1');
+    const startedAt = Date.now();
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      providerOptions: { requestTimeoutMs: 100 },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.failureCategory).toBe('part_timeout');
+    expect(response.content).toContain('timed out');
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    await expect(readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('terminates the Python bridge when the caller aborts a running SDK turn', async () => {
     const controller = new AbortController();
     const startedAt = Date.now();
     const call = callDeepSeekHarness('worker', 'hang', {
       cwd: root,
       abortSignal: controller.signal,
-      providerOptions: { pythonPath, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
     setTimeout(() => controller.abort(new Error('cancelled by test')), 100).unref();
 

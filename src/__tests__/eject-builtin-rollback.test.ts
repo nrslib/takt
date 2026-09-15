@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolve } from 'node:path';
+
+const builtinWorkflowsDir = resolve('builtin', 'workflows');
+const projectDir = resolve('project');
 
 const mocks = vi.hoisted(() => ({
   copyFragments: vi.fn(),
@@ -36,7 +40,7 @@ vi.mock('node:fs', async (importOriginal) => {
 });
 
 vi.mock('../infra/config/index.js', () => ({
-  getBuiltinWorkflowsDir: () => '/builtin/workflows',
+  getBuiltinWorkflowsDir: () => builtinWorkflowsDir,
   getGlobalStepsDir: () => '/global/steps',
   getGlobalWorkflowsDir: () => '/global/workflows',
   getLanguage: () => 'en',
@@ -64,15 +68,16 @@ describe('ejectBuiltin rollback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     let workflowDirCreated = false;
+    const workflowDir = resolve(projectDir, '.takt', 'workflows');
     mocks.existsSync.mockImplementation((path: string) => (
-      path === '/builtin/workflows/default.yaml'
-      || (path === '/project/.takt/workflows' && workflowDirCreated)
+      path === resolve(builtinWorkflowsDir, 'default.yaml')
+      || (path === workflowDir && workflowDirCreated)
     ));
     mocks.pathExistsForEject.mockImplementation((path: string) => (
-      path === '/project/.takt/workflows' && workflowDirCreated
+      path === resolve(workflowDir, 'default.yaml') && workflowDirCreated
     ));
     mocks.mkdirSync.mockImplementation((path: string) => {
-      if (path === '/project/.takt/workflows') {
+      if (path === workflowDir) {
         workflowDirCreated = true;
       }
     });
@@ -86,7 +91,7 @@ describe('ejectBuiltin rollback', () => {
   });
 
   it('should delegate workflow cleanup to the safe writer when the workflow write fails', async () => {
-    await expect(ejectBuiltin('default', { projectDir: '/project' })).rejects.toThrow('simulated workflow write failure');
+    await expect(ejectBuiltin('default', { projectDir })).rejects.toThrow('simulated workflow write failure');
 
     expect(mocks.copyFragments.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.rmSync).not.toHaveBeenCalled();
@@ -100,7 +105,7 @@ describe('ejectBuiltin rollback', () => {
     const stepFragmentRollback = vi.fn();
     mocks.copyFragments.mockReturnValue(stepFragmentRollback);
 
-    await expect(ejectBuiltin('default', { projectDir: '/project' })).rejects.toThrow('simulated pool copy failure');
+    await expect(ejectBuiltin('default', { projectDir })).rejects.toThrow('simulated pool copy failure');
 
     expect(stepFragmentRollback).toHaveBeenCalledOnce();
   });

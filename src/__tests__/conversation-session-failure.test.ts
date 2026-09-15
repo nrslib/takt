@@ -17,7 +17,7 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
 }));
 
 import { updatePersonaSession } from '../infra/config/index.js';
-import { createConversationSession } from '../features/interactive/conversationSession.js';
+import { createConversationSession, type ConversationSessionStrategy } from '../features/interactive/conversationSession.js';
 import { makeProvider, makeSessionContext } from './test-helpers.js';
 
 const mockUpdatePersonaSession = vi.mocked(updatePersonaSession);
@@ -29,6 +29,7 @@ interface SessionOptions {
   model?: string;
   formalSpec?: boolean;
   persistSession?: boolean;
+  resolveCurrentPromptConfiguration?: ConversationSessionStrategy['resolveCurrentPromptConfiguration'];
 }
 
 function createSession({
@@ -38,6 +39,7 @@ function createSession({
   model,
   formalSpec = false,
   persistSession,
+  resolveCurrentPromptConfiguration,
 }: SessionOptions = {}) {
   return createConversationSession({
     cwd: '/repo',
@@ -55,6 +57,7 @@ function createSession({
       systemPrompt: 'system',
       allowedTools: [],
       transformPrompt: (message: string) => message,
+      resolveCurrentPromptConfiguration,
     },
     resolveImageAttachments: () => [
       { placeholder: '[Image #1]', path: '/tmp/shot.png' },
@@ -81,6 +84,40 @@ describe('a turn the caller has already moved past', () => {
     });
     return { settle, promise };
   }
+
+  it.each(['message', 'go'] as const)('invalidates the previous turn while %s refreshes its prompt', async (kind) => {
+    const interrupted = createPendingCall();
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    const configuration = { systemPrompt: 'current prompt', formalSpec: false };
+    const resolveCurrentPromptConfiguration = vi.fn()
+      .mockReturnValueOnce(configuration)
+      .mockImplementationOnce(async () => {
+        await refreshGate;
+        return configuration;
+      });
+    mockCall.mockImplementationOnce(() => interrupted.promise);
+    const session = createSession({ resolveCurrentPromptConfiguration });
+    const abandoned = session.handleUserMessage({ text: 'first question' });
+    await vi.waitFor(() => expect(mockCall).toHaveBeenCalledTimes(1));
+
+    mockCall.mockResolvedValueOnce({
+      persona: 'interactive', status: 'done', content: 'current answer', timestamp: new Date(),
+    });
+    const replacement = kind === 'message'
+      ? session.handleUserMessage({ text: 'second question' })
+      : session.createTaskInstruction({ userNote: 'ship it' });
+    interrupted.settle({
+      persona: 'interactive', status: 'done', content: 'stale answer',
+      sessionId: 'stale-session', timestamp: new Date(),
+    });
+    await abandoned;
+
+    expect(session.snapshotHistory()).toEqual([{ role: 'user', content: 'first question' }]);
+    expect(mockUpdatePersonaSession).not.toHaveBeenCalled();
+    releaseRefresh();
+    await replacement;
+  });
 
   it('should not let a late completion undo the turn that replaced it', async () => {
     const interrupted = createPendingCall();
@@ -207,6 +244,7 @@ describe('a turn the caller has already moved past', () => {
       text: 'first question',
       abortSignal: controller.signal,
     });
+    await vi.waitFor(() => expect(mockCall).toHaveBeenCalledTimes(1));
     controller.abort();
 
     // The provider ignored the abort and answered anyway. Nothing of that answer
@@ -246,6 +284,7 @@ describe('a turn the caller has already moved past', () => {
       text: 'first question',
       abortSignal: controller.signal,
     });
+    await vi.waitFor(() => expect(mockCall).toHaveBeenCalledTimes(1));
     controller.abort();
 
     // An aborted call usually comes back as a failure, and a failure normally

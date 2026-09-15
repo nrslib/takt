@@ -30,7 +30,11 @@ export function createLocalRepo(): LocalRepo {
   return {
     path: repoPath,
     cleanup: () => {
-      rmSync(repoPath, { recursive: true, force: true });
+      try {
+        rmSync(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch {
+        // Best-effort cleanup: Windows may retain transient Git/process handles.
+      }
     },
   };
 }
@@ -114,7 +118,7 @@ export function createOfflineTestRepo(options?: CreateTestRepoOptions): TestRepo
     branch: currentBranch,
     cleanup: () => {
       try {
-        rmSync(sandboxPath, { recursive: true, force: true });
+        rmSync(sandboxPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       } catch {
         // Best-effort cleanup
       }
@@ -237,7 +241,7 @@ export function createTestRepo(options?: CreateTestRepoOptions): TestRepo {
 
       // Delete local directory last
       try {
-        rmSync(repoPath, { recursive: true, force: true });
+        rmSync(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       } catch {
         // Best-effort cleanup
       }

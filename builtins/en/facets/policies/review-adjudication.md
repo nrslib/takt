@@ -2,6 +2,8 @@
 
 Decide separately whether a submitted finding is technically correct and whether the current change must repair it. Select only necessary repairs.
 
+{{include:policies/finding-validity}}
+
 ## Decision Criteria
 
 | Situation | Treatment |
@@ -23,5 +25,6 @@ Decide separately whether a submitted finding is technically correct and whether
 - Group findings when their cause, violated observable condition, and acceptance criteria are the same. Keep problems separate when their conditions differ even if they share a responsible location
 - For each problem selected for repair, inspect actual paths affected by the same cause from the defining source through consumers to externally observable results
 - Do not add atomicity, transactions, rollback, resource limits, compatibility paths, or similar requirements when they are unnecessary to resolve the verified defect
+- Do not dismiss a defect established by the requirements, changed boundary, and applicable design criteria solely because numeric targets or measured outages are absent. Judge correct final results separately from whether intermediate processing satisfies design conditions. If applicability or the impact path is unknown, identify the missing evidence rather than asserting a defect
 - Do not dismiss an undecidable concern by assumption; record the information needed as an unresolved premise
 - Decide every submitted finding ID once and do not omit the remainder after finding the first repair target

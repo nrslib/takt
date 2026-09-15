@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../shared/utils/private-file.js', async (importOriginal) => ({
@@ -155,8 +156,9 @@ function runStoreProcess(
   const storeModule = resolve(
     'src/infra/workflow/operation-journal-store.ts',
   );
+  const storeModuleUrl = pathToFileURL(storeModule).href;
   const script = `
-    import { createOperationJournalStore } from ${JSON.stringify(storeModule)};
+    import { createOperationJournalStore } from ${JSON.stringify(storeModuleUrl)};
     const waitForParentMessage = (expected) =>
       new Promise((resolveMessage, rejectMessage) => {
         const onMessage = (message) => {
@@ -207,9 +209,10 @@ function runInternalStoreProcess(journalPath: string, body: string): ManagedChil
   const storeModule = resolve(
     'src/infra/workflow/operation-journal-store.ts',
   );
+  const storeModuleUrl = pathToFileURL(storeModule).href;
   const script = `
     import { existsSync } from 'node:fs';
-    import { createOperationJournalStore } from ${JSON.stringify(storeModule)};
+    import { createOperationJournalStore } from ${JSON.stringify(storeModuleUrl)};
     const waitForFile = (path, timeoutMs = 5_000) => {
       const deadline = Date.now() + timeoutMs;
       while (!existsSync(path)) {
@@ -344,7 +347,9 @@ describe('operation journal store', () => {
     const reopened = createOperationJournalStore(journalPath);
     expect(reopened.getParent('parent-1').children).toHaveLength(2);
     expect(reopened.listParents().map((parent) => parent.id)).toEqual(['parent-1']);
-    expect(statSync(journalPath).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect(statSync(journalPath).mode & 0o777).toBe(0o600);
+    }
     expect(existsSync(`${journalPath}.lock`)).toBe(false);
   });
 

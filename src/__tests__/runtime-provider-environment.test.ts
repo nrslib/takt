@@ -115,13 +115,18 @@ describe('compileRuntimeProviderEnvironment (profile path)', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'child' },
       profiles: {
-        parent: { provider: 'codex', model: 'inherited-m' },
+        parent: {
+          provider: 'pi',
+          model: 'inherited-m',
+          options: { thinking_level: 'high' },
+        },
         child: { extends: 'parent' },
       },
     };
     const env = compileRuntimeProviderEnvironment(section);
-    expect(env.provider).toBe('codex');
+    expect(env.provider).toBe('pi');
     expect(env.model).toBe('inherited-m');
+    expect(env.providerOptions).toEqual({ pi: { thinkingLevel: 'high' } });
   });
 });
 
@@ -147,6 +152,46 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
     const env = compileRuntimeProviderEnvironment(section);
     expect(env.personaProviders).toEqual({
       coder: { provider: 'codex', model: 'persona-m', providerOptions: { codex: { reasoningEffort: 'low' } } },
+    });
+  });
+
+  it('carries Pi thinking_level through defaults and persona/tag/step routing entries', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'pi', model: 'base-m', options: { thinking_level: 'medium' } },
+        persona: { provider: 'pi', model: 'persona-m', options: { thinking_level: 'low' } },
+        tag: { provider: 'pi', model: 'tag-m', options: { thinking_level: 'high' } },
+        step: { provider: 'pi', model: 'step-m', options: { thinking_level: 'xhigh' } },
+      },
+      targets: {
+        personas: { coder: { profile: 'persona' } },
+        tags: { 'high-stakes': { profile: 'tag' } },
+        steps: { 'wf/impl': { profile: 'step' } },
+      },
+    };
+
+    const env = compileRuntimeProviderEnvironment(section);
+
+    expect(env.providerOptions).toEqual({ pi: { thinkingLevel: 'medium' } });
+    expect(env.personaProviders).toEqual({
+      coder: { provider: 'pi', model: 'persona-m', providerOptions: { pi: { thinkingLevel: 'low' } } },
+    });
+    expect(env.providerRouting).toEqual({
+      tags: {
+        'high-stakes': {
+          provider: 'pi',
+          model: 'tag-m',
+          providerOptions: { pi: { thinkingLevel: 'high' } },
+        },
+      },
+      steps: {
+        'wf/impl': {
+          provider: 'pi',
+          model: 'step-m',
+          providerOptions: { pi: { thinkingLevel: 'xhigh' } },
+        },
+      },
     });
   });
 
@@ -182,7 +227,7 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
     });
   });
 
-  it('allows a DeepSeek Python executable override from a global runtime profile', () => {
+  it('rejects the removed DeepSeek Python executable override from a global runtime profile', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },
       profiles: {
@@ -190,21 +235,15 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
           provider: 'deepseek-harness',
           model: 'deepseek-v4-flash',
           options: {
-            python_path: '/opt/user-python',
+            python_path: '/opt/removed-python',
             base_url: 'https://proxy.example.test/v1',
           },
         },
       },
     };
 
-    const env = compileRuntimeProviderEnvironment(section, globalRuntimeResolutionContext);
-
-    expect(env.providerOptions).toEqual({
-      deepseekHarness: {
-        pythonPath: '/opt/user-python',
-        baseUrl: 'https://proxy.example.test/v1',
-      },
-    });
+    expect(() => compileRuntimeProviderEnvironment(section, globalRuntimeResolutionContext))
+      .toThrow('python_path');
   });
 
   it('resolves relative paths from a trusted global runtime profile before execution', () => {
@@ -400,7 +439,7 @@ describe('compileRuntimeProviderEnvironment (auto routing)', () => {
       { step: { name: 'wf/persona', personaKey: 'coder' }, poolName: 'persona-pool', candidate: 'persona', model: 'm-persona' },
       { step: { name: 'wf/tag', tags: ['high-stakes'] }, poolName: 'tag-pool', candidate: 'tag', model: 'm-tag' },
       { step: { name: 'execute' }, poolName: 'main', candidate: 'low', model: 'pool-model' },
-    ] as const;
+    ];
     for (const target of routedTargets) {
       expect(selectRoutingCandidate({
         autoRouting: env.autoRouting!,
@@ -639,7 +678,7 @@ describe('collectLegacyProviderSignals', () => {
       personaProviders: undefined,
       providerRouting: undefined,
       autoRouting: undefined,
-      providerOptions: { codex: { network_access: true } },
+      providerOptions: { codex: { network_access: true } } as unknown as LegacyProviderEnvironmentInput['providerOptions'],
     };
     expect(collectLegacyProviderSignals(legacy, 'global').map((s) => s.setting))
       .toContain('provider_options');

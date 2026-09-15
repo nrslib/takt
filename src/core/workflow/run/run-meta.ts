@@ -1,5 +1,12 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import {
+  assertAncestorIdentities,
+  assertSafePath,
+  hasMatchingIdentity,
+  inspectPrivateArtifactPath,
+  lstatOrUndefined,
+} from '../../../shared/utils/private-path-identity.js';
+import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
 import { isPathInside, isValidReportDirName } from '../../../shared/utils/index.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import type { WorkflowResumePoint } from '../../models/types.js';
@@ -148,20 +155,44 @@ function emitRunMetaWarning(
 }
 
 export function readRunMeta(metaPath: string, onWarning?: RunMetaWarningHandler): RunMeta | null {
-  if (!existsSync(metaPath)) {
+  const raw = readVerifiedRunMetaContent(metaPath);
+  if (raw === null) {
     return null;
   }
-
-  const raw = readFileSync(metaPath, 'utf-8').trim();
-  if (!raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
     return null;
   }
 
   try {
-    return normalizeRunMeta(JSON.parse(raw) as unknown);
+    return normalizeRunMeta(JSON.parse(trimmed) as unknown);
   } catch (error) {
     return emitRunMetaWarning(metaPath, error, onWarning);
   }
+}
+
+function readVerifiedRunMetaContent(metaPath: string): string | null {
+  assertSafePath(metaPath, false);
+  let inspection: ReturnType<typeof inspectPrivateArtifactPath>;
+  try {
+    inspection = inspectPrivateArtifactPath(metaPath, 'file');
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Private artifact ancestor does not exist:')) {
+      return null;
+    }
+    throw error;
+  }
+  if (inspection.expectedStat === undefined) {
+    return null;
+  }
+
+  const content = readRegularFileNoFollow(metaPath, inspection.expectedStat);
+  assertAncestorIdentities(inspection.ancestorIdentities);
+  const verifiedStat = lstatOrUndefined(metaPath);
+  if (verifiedStat === undefined || !hasMatchingIdentity(inspection.expectedStat, verifiedStat)) {
+    throw new Error(`Run metadata identity changed while reading: ${metaPath}`);
+  }
+  return content.toString('utf-8');
 }
 
 function parseRawRunMeta(value: unknown): RawRunMeta {
@@ -418,6 +449,23 @@ export function readRunMetaBySlug(
   const metaPath = resolve(runsDir, slug, 'meta.json');
   if (!isPathInside(runsDir, metaPath)) {
     return null;
+  }
+
+  assertSafePath(metaPath, false);
+  const runsStat = lstatOrUndefined(runsDir);
+  if (runsStat === undefined) {
+    return null;
+  }
+  if (runsStat.isSymbolicLink() || !runsStat.isDirectory()) {
+    throw new Error(`Run metadata runs directory is not a regular directory: ${runsDir}`);
+  }
+  const runDirectory = resolve(runsDir, slug);
+  const runStat = lstatOrUndefined(runDirectory);
+  if (runStat === undefined) {
+    return null;
+  }
+  if (runStat.isSymbolicLink() || !runStat.isDirectory()) {
+    throw new Error(`Run metadata run directory is not a regular directory: ${runDirectory}`);
   }
 
   const meta = readRunMeta(metaPath, onWarning);

@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   let listener: ((event: unknown) => void) | undefined;
   let promptOptions: unknown;
+  let currentThinkingLevel: string | undefined;
+  let promptThinkingLevels: Array<string | undefined> = [];
   let loaderOptions: unknown;
   let extensionLoadErrors: Array<{ path: string; error: string }> = [];
   let loadedExtensions: Array<{ path: string }> = [];
@@ -30,7 +32,9 @@ const mocks = vi.hoisted(() => {
     messages: [],
     setActiveToolsByName: vi.fn(),
     setModel: vi.fn(async () => undefined),
-    setThinkingLevel: vi.fn(),
+    setThinkingLevel: vi.fn((level: string) => {
+      currentThinkingLevel = level;
+    }),
     getAllTools: vi.fn(() => [
       { name: 'read', sourceInfo: { source: 'builtin' } },
       { name: 'grep', sourceInfo: { source: 'builtin' } },
@@ -50,6 +54,7 @@ const mocks = vi.hoisted(() => {
       return vi.fn();
     }),
     prompt: vi.fn(async (_prompt: string, options?: unknown) => {
+      promptThinkingLevels.push(currentThinkingLevel);
       promptOptions = options;
       listener?.({
         type: 'message_update',
@@ -120,11 +125,14 @@ const mocks = vi.hoisted(() => {
     sessionManager,
     getAgentDir: vi.fn(() => path.join(tmpdir(), 'pi-agent-test')),
     getPromptOptions: () => promptOptions,
+    getPromptThinkingLevels: () => [...promptThinkingLevels],
     getLoaderOptions: () => loaderOptions,
     emit: (event: unknown) => listener?.(event),
     resetTransient: () => {
       listener = undefined;
       promptOptions = undefined;
+      currentThinkingLevel = undefined;
+      promptThinkingLevels = [];
       loaderOptions = undefined;
       extensionLoadErrors = [];
       loadedExtensions = [];
@@ -132,6 +140,7 @@ const mocks = vi.hoisted(() => {
       mocks.session.setActiveToolsByName.mockClear();
       mocks.session.bindExtensions.mockClear();
       mocks.session.setModel.mockClear();
+      mocks.session.setThinkingLevel.mockClear();
       mocks.session.prompt.mockClear();
       mocks.session.abort.mockClear();
       mocks.session.dispose.mockClear();
@@ -1374,6 +1383,171 @@ describe('Pi SDK client', () => {
     } finally {
       mocks.session.model = previousModel;
     }
+  });
+
+  it('rejects an invalid thinking level before Pi resources or extensions start', async () => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'validate Pi thinking configuration', {
+      ...sessionOptions('pi-sdk-invalid-thinking-level-preflight'),
+      providerOptions: { thinkingLevel: 'thikning' },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.error).toContain(
+      'Invalid Pi thinking level "thikning". Allowed values: off, minimal, low, medium, high, xhigh, max',
+    );
+    expect(mocks.resourceLoader).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+    expect(mocks.session.bindExtensions).not.toHaveBeenCalled();
+    expect(mocks.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it('applies an explicit thinking level on every turn', async () => {
+    mocks.resetTransient();
+    const options = {
+      ...sessionOptions('pi-sdk-explicit-thinking-level'),
+      providerOptions: { thinkingLevel: 'low' },
+    };
+
+    const first = await callPi('worker', 'use a lower thinking level', options);
+    const thinkingLevelApplicationsAfterFirstTurn = mocks.session.setThinkingLevel.mock.calls.length;
+    expect(first.status).toBe('done');
+    expect(mocks.createAgentSession).toHaveBeenCalledTimes(1);
+
+    const second = await callPi('worker', 'continue with the lower thinking level', options);
+
+    expect(second.status).toBe('done');
+    expect(mocks.createAgentSession).toHaveBeenCalledTimes(1);
+    expect(mocks.getPromptThinkingLevels()).toEqual(['low', 'low']);
+    expect(mocks.session.setThinkingLevel).toHaveBeenNthCalledWith(1, 'low');
+    expect(mocks.session.setThinkingLevel.mock.calls.slice(thinkingLevelApplicationsAfterFirstTurn)).toEqual([
+      ['low'],
+    ]);
+  });
+
+  it('passes a recognized colon-containing model identifier literally with a thinking option', async () => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'use a literal model identifier', {
+      ...sessionOptions('pi-sdk-literal-colon-model'),
+      model: 'test/model:high',
+      providerOptions: { thinkingLevel: 'low' },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.modelRuntime.getModel).toHaveBeenCalledWith('test', 'model:high');
+    expect(mocks.session.setModel).toHaveBeenCalledWith({
+      provider: 'test',
+      id: 'model:high',
+    });
+    expect(mocks.getPromptThinkingLevels()).toEqual(['low']);
+  });
+
+  it.each([
+    { modelReference: 'test/model', modelId: 'model' },
+    { modelReference: 'test/model:high', modelId: 'model:high' },
+    { modelReference: 'test/model:high:variant', modelId: 'model:high:variant' },
+    { modelReference: 'test/model:', modelId: 'model:' },
+    { modelReference: '  test/model:high  ', modelId: 'model:high' },
+  ])('keeps $modelReference literal when no thinking option is set', async ({ modelReference, modelId }) => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'use a literal model reference', {
+      ...sessionOptions(`pi-sdk-literal-no-option-${modelReference}`),
+      model: modelReference,
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.modelRuntime.getModel).toHaveBeenCalledWith('test', modelId);
+    expect(mocks.session.setThinkingLevel).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to a base model when a literal colon-containing model ID is missing', async () => {
+    mocks.resetTransient();
+    mocks.modelRuntime.getModel.mockImplementationOnce((provider: string, modelId: string) => (
+      modelId === 'model' ? { provider, id: modelId } : undefined
+    ));
+
+    const response = await callPi('worker', 'reject a missing literal model ID', {
+      ...sessionOptions('pi-sdk-no-colon-model-fallback'),
+      model: 'test/model:high',
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.error).toContain('Pi model "test/model:high" was not found');
+    expect(mocks.modelRuntime.getModel).toHaveBeenCalledWith('test', 'model:high');
+    expect(mocks.session.setModel).not.toHaveBeenCalledWith({
+      provider: 'test',
+      id: 'model',
+    });
+    expect(mocks.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it('resolves a bare colon-containing model ID without suffix interpretation', async () => {
+    mocks.resetTransient();
+    const configuredModel = {
+      provider: 'test',
+      id: 'model:high',
+    };
+    mocks.modelRuntime.getModels
+      .mockReturnValueOnce([configuredModel])
+      .mockReturnValueOnce([configuredModel]);
+
+    const response = await callPi('worker', 'use a bare literal model ID', {
+      ...sessionOptions('pi-sdk-bare-literal-colon-model'),
+      model: 'model:high',
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.session.setModel).toHaveBeenCalledWith({
+      provider: 'test',
+      id: 'model:high',
+    });
+    expect(mocks.session.setThinkingLevel).not.toHaveBeenCalled();
+  });
+
+  it('does not set a thinking level on a turn without a model reference', async () => {
+    mocks.resetTransient();
+    const { model: _model, ...withoutModel } = sessionOptions('pi-sdk-no-model-thinking-level');
+
+    const response = await callPi('worker', 'use the SDK default', withoutModel);
+
+    expect(response.status).toBe('done');
+    expect(mocks.session.setThinkingLevel).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid thinking level with every allowed value listed', async () => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'use an invalid thinking level', {
+      ...sessionOptions('pi-sdk-invalid-thinking-level'),
+      providerOptions: { thinkingLevel: 'thikning' },
+    });
+
+    expect(response.status).toBe('error');
+    for (const level of ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(response.error).toContain(level);
+    }
+    expect(mocks.session.setThinkingLevel).not.toHaveBeenCalled();
+    expect(mocks.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it('keeps resource-loading options independent from the thinking level option', async () => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'use resources with an explicit thinking level', {
+      ...sessionOptions('pi-sdk-resource-and-thinking-options'),
+      providerOptions: {
+        noSkills: true,
+        thinkingLevel: 'high',
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.getLoaderOptions()).toMatchObject({ noSkills: true });
+    expect(mocks.getLoaderOptions()).not.toHaveProperty('thinkingLevel');
+    expect(mocks.getPromptThinkingLevels()).toEqual(['high']);
   });
 
   it('does not fall back to a different provider for a qualified model', async () => {

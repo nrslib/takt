@@ -1,5 +1,5 @@
 const CONFIRMATION_ACTIONS = new Set(['delete', 'force_fail', 'try', 'merge']);
-const TASK_ACTION_FINALIZATION_STATES = new Set(['active', 'finalizing', 'accepted', 'failed']);
+const TASK_ACTION_FINALIZATION_STATES = new Set(['active', 'reviewing', 'finalizing', 'accepted', 'failed']);
 
 export function taskActionButtonModel(task, action) {
   return {
@@ -74,9 +74,26 @@ export function taskActionCanRestart(surface) {
   return state === 'active' || state === 'failed';
 }
 
+export function taskActionSurfaceWithReview(surface, task, taskActionOptionId) {
+  if (surface === null || surface === undefined) return null;
+  return {
+    ...surface,
+    reviewedTask: task,
+    ...(taskActionOptionId === undefined ? {} : { reviewedTaskActionOptionId: taskActionOptionId }),
+    finalizationState: 'reviewing',
+  };
+}
+
 export function taskActionGoState(surface, text) {
-  const goCommand = /(?:^|\s)\/go(?:\s|$)/u.test(text.trim());
+  const normalizedText = text.trim();
+  const goCommand = /(?:^|\s)\/go(?:\s|$)/u.test(normalizedText);
   const state = taskActionFinalizationState(surface);
+  if (state === 'reviewing') {
+    if (surface?.action === 'retry' && normalizedText === '/cancel') {
+      return { goCommand: false, canSubmit: true };
+    }
+    return { goCommand, canSubmit: false, reasonKey: 'app.taskActionReviewRequired' };
+  }
   if (!goCommand) {
     if (state === 'accepted') {
       return { goCommand: false, canSubmit: false, reasonKey: 'app.taskActionAccepted' };

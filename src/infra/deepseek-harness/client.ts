@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { createInterface, type Interface } from 'node:readline';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,8 +31,17 @@ import {
   sanitizeSensitiveValueWithKnownValues,
   createSensitiveTextStreamRedactor,
 } from '../../shared/utils/sensitiveText.js';
+import {
+  collectEmbeddedSensitiveValues,
+  hasPotentialSensitiveTextSuffix,
+  SENSITIVE_TEXT_BOUNDARY_WINDOW,
+} from '../../shared/utils/sensitive-text.js';
+import { collectSensitiveStringValues } from '../../shared/utils/sensitive-value.js';
 import type { DeepSeekHarnessProviderOptions } from '../../core/models/workflow-types.js';
 import { DEEPSEEK_HARNESS_DEFAULT_MODEL } from './constants.js';
+import { getDeepSeekHarnessManagedPaths } from './managed-venv.js';
+import { assertSupportedDeepSeekHarnessPlatform } from './platform.js';
+import { validateDeepSeekHarnessRuntime } from './runtime.js';
 import { parseDeepSeekHarnessModelReference } from './model-reference.js';
 import type { DeepSeekHarnessCallOptions } from './types.js';
 const DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS = 30_000;
@@ -40,8 +49,10 @@ const DEEPSEEK_HARNESS_CALL_TIMEOUT_MS = 3_600_000;
 const DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS = 1_000;
 const DEEPSEEK_HARNESS_MAX_STDERR_BYTES = 32 * 1024;
 const DEEPSEEK_HARNESS_MAX_ERROR_BYTES = 8 * 1024;
+const DEEPSEEK_HARNESS_MAX_PENDING_RESPONSE_LENGTH = 10_000;
 const DEEPSEEK_HARNESS_MAX_NODE_TIMER_MS = 2_147_483_647;
 const DEEPSEEK_HARNESS_BRIDGE_PROTOCOL_VERSION = 1;
+const DEEPSEEK_HARNESS_INSTALL_INSTRUCTION = 'Run "takt deepseek-harness install" and retry';
 const DEEPSEEK_HARNESS_RUNTIME_ENV_NAMES = ['PATH'] as const;
 const DEEPSEEK_HARNESS_BRIDGE_PATH = new URL('./bridge.py', import.meta.url);
 
@@ -75,11 +86,24 @@ interface HarnessRunResult {
   finishReason: string | null;
 }
 
+interface ResponseTextChunk {
+  field: 'text' | 'thinking';
+  text: string;
+}
+
+interface ResponseRedactionContext {
+  pendingText: string;
+  pendingChunks: ResponseTextChunk[];
+  failClosed: boolean;
+}
+
 interface HarnessStreamState {
   initializedSessions: Set<string>;
+  sawSessionEvent: boolean;
   sawTextBySession: Set<string>;
   pendingTextDeltasBySession: Set<string>;
   pendingThinkingDeltasBySession: Set<string>;
+  responseRedactionContext: ResponseRedactionContext;
   emittedToolUses: Set<string>;
   emittedToolResults: Set<string>;
   finishReason?: string;
@@ -277,21 +301,6 @@ function assertOpaqueToolId(id: string, knownSecrets: Record<string, string>): v
   assertOpaqueProtocolIdentifier(id, knownSecrets, 'tool ID');
 }
 
-function assertSupportedPlatform(): void {
-  const supported = (
-    (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
-    || (process.platform === 'darwin' && process.arch === 'arm64')
-  );
-  if (supported) {
-    return;
-  }
-  throw new Error(
-    'Provider "deepseek-harness" requires the official DeepSeek Harness runtime on '
-    + 'Linux x64/arm64 or macOS arm64. Windows, macOS x64, and other platforms are not supported; '
-    + 'no provider fallback is available.',
-  );
-}
-
 function resolveBridgeConfiguration(
   options: DeepSeekHarnessCallOptions,
   providerOptions: DeepSeekHarnessProviderOptions | undefined,
@@ -428,6 +437,7 @@ function getProcessNestedObservabilityFingerprint(
 function resolveProcessEnvironment(
   providerOptions: DeepSeekHarnessProviderOptions | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
+  dshHomeDir: string,
 ): ProcessEnvironmentResolution {
   const env: NodeJS.ProcessEnv = {};
   for (const name of DEEPSEEK_HARNESS_RUNTIME_ENV_NAMES) {
@@ -448,6 +458,7 @@ function resolveProcessEnvironment(
   if (configuredBaseUrl !== undefined) {
     env.DEEPSEEK_BASE_URL = configuredBaseUrl;
   }
+  env.DSH_HOME = dshHomeDir;
   if (providerOptions?.runtimeMode !== undefined) {
     env.DSH_RUNTIME_MODE = providerOptions.runtimeMode;
   }
@@ -555,6 +566,33 @@ function getBridgePath(): string {
   return fileURLToPath(DEEPSEEK_HARNESS_BRIDGE_PATH);
 }
 
+function assertManagedPathType(
+  pathValue: string,
+  description: string,
+  expected: 'directory' | 'regular file',
+): void {
+  try {
+    const stats = statSync(pathValue);
+    const matchesExpectedType = expected === 'directory'
+      ? stats.isDirectory()
+      : stats.isFile();
+    if (!matchesExpectedType) {
+      throw new Error(
+        `Unable to start DeepSeek Harness: ${description} must be a ${expected}. `
+        + `${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}.`,
+      );
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      throw new Error(
+        `Unable to start DeepSeek Harness: ${description} is missing. ${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}.`,
+      );
+    }
+    throw error;
+  }
+}
+
 function refChildStream(stream: NodeJS.ReadableStream | NodeJS.WritableStream | null): void {
   if (stream === null) {
     return;
@@ -571,12 +609,182 @@ function unrefChildStream(stream: NodeJS.ReadableStream | NodeJS.WritableStream 
   candidate.unref?.();
 }
 
+function longestKnownSecretPrefixSuffix(
+  text: string,
+  knownSecrets: Record<string, string>,
+): string {
+  let longest = '';
+  for (const value of Object.values(knownSecrets)) {
+    if (value.length < 2) {
+      continue;
+    }
+    const maximumLength = Math.min(value.length - 1, text.length);
+    for (let length = maximumLength; length > longest.length; length -= 1) {
+      const suffix = value.slice(0, length);
+      if (text.endsWith(suffix)) {
+        longest = suffix;
+        break;
+      }
+    }
+  }
+  return longest;
+}
+
+function hasSensitiveCredentialBoundary(text: string): boolean {
+  return /(?:api[_-]?key|token|password|secret|credential|authorization|cookie|session[_-]?id)(?:\s*[:=]|\s*$)/iu.test(text);
+}
+
+function drainResponseRedactedChunks(
+  context: ResponseRedactionContext,
+  knownSecrets: Record<string, string>,
+  length = context.pendingText.length,
+): ResponseTextChunk[] {
+  const { values, exhausted } = collectSensitiveStringValues(knownSecrets);
+  context.failClosed ||= exhausted;
+  if (context.failClosed) {
+    const chunks = context.pendingChunks.map((chunk) => ({ field: chunk.field, text: '[REDACTED]' }));
+    context.pendingText = '';
+    context.pendingChunks = [];
+    return chunks;
+  }
+  collectEmbeddedSensitiveValues(context.pendingText, values);
+  // Mark source positions before replacing secrets: a replacement may span
+  // several chunks, but safe text must stay in the stream that produced it.
+  const sensitive = new Uint8Array(context.pendingText.length);
+  for (const value of values) {
+    if (value.length === 0) continue;
+    let offset = context.pendingText.indexOf(value);
+    while (offset >= 0) {
+      sensitive.fill(1, offset, offset + value.length);
+      offset = context.pendingText.indexOf(value, offset + 1);
+    }
+  }
+  // Never drain half of a redacted value and leave its unrecognizable suffix.
+  while (length > 0 && sensitive[length - 1] === 1 && sensitive[length] === 1) length -= 1;
+  let offset = 0;
+  const chunks: ResponseTextChunk[] = [];
+  const pendingChunks: ResponseTextChunk[] = [];
+  for (const chunk of context.pendingChunks) {
+    const consumed = Math.min(chunk.text.length, Math.max(0, length - offset));
+    let text = '';
+    let redacting = false;
+    for (let index = 0; index < consumed; index += 1) {
+      const redact = sensitive[offset + index] === 1;
+      if (redact) {
+        if (!redacting) text += '[REDACTED]';
+      } else {
+        text += chunk.text[index];
+      }
+      redacting = redact;
+    }
+    if (text.length > 0) chunks.push({ field: chunk.field, text });
+    if (consumed < chunk.text.length) {
+      pendingChunks.push({ field: chunk.field, text: chunk.text.slice(consumed) });
+    }
+    offset += chunk.text.length;
+  }
+  context.pendingText = context.pendingText.slice(length);
+  context.pendingChunks = pendingChunks;
+  return chunks;
+}
+
+function responseTextEvent(chunk: ResponseTextChunk): StreamEvent {
+  return chunk.field === 'text'
+    ? { type: 'text', data: { text: chunk.text } }
+    : { type: 'thinking', data: { thinking: chunk.text } };
+}
+
+function writeResponseRedactedChunks(
+  context: ResponseRedactionContext,
+  text: string,
+  field: ResponseTextChunk['field'],
+  knownSecrets: Record<string, string>,
+): ResponseTextChunk[] {
+  const combined = context.pendingText + text;
+  context.pendingText = combined;
+  const previous = context.pendingChunks.at(-1);
+  if (previous?.field === field) {
+    previous.text += text;
+  } else {
+    context.pendingChunks.push({ field, text });
+  }
+  context.failClosed ||= combined.length > DEEPSEEK_HARNESS_MAX_PENDING_RESPONSE_LENGTH
+    && (Object.values(knownSecrets).some((value) => value.length > 0) || hasPotentialSensitiveTextSuffix(combined));
+  if (context.failClosed) return drainResponseRedactedChunks(context, knownSecrets);
+  const knownPrefixSuffix = longestKnownSecretPrefixSuffix(combined, knownSecrets);
+  const containsKnownSecret = Object.values(knownSecrets)
+    .some((value) => value.length > 0 && combined.includes(value));
+  const shouldHold = knownPrefixSuffix.length > 0
+    || (
+      !containsKnownSecret
+      && hasSensitiveCredentialBoundary(combined)
+      && hasPotentialSensitiveTextSuffix(combined)
+    );
+  if (!shouldHold) {
+    return drainResponseRedactedChunks(context, knownSecrets);
+  }
+  if (Object.values(knownSecrets).some((value) => value.length > 0)) {
+    const retainedLength = Math.max(SENSITIVE_TEXT_BOUNDARY_WINDOW, knownPrefixSuffix.length);
+    return drainResponseRedactedChunks(context, knownSecrets, Math.max(0, combined.length - retainedLength));
+  }
+  return [];
+}
+
+function redactCrossBoundaryFinalValue(
+  value: string,
+  pendingText: string,
+  knownSecrets: Record<string, string>,
+): string {
+  let continuationLength = 0;
+  for (const secret of Object.values(knownSecrets)) {
+    if (secret.length < 2) {
+      continue;
+    }
+    for (let split = 1; split < secret.length; split += 1) {
+      if (
+        pendingText.endsWith(secret.slice(0, split))
+        && value.startsWith(secret.slice(split))
+      ) {
+        continuationLength = Math.max(continuationLength, secret.length - split);
+      }
+    }
+  }
+  if (continuationLength > 0) {
+    return '[REDACTED]' + sanitizeSensitiveTextWithKnownValues(
+      value.slice(continuationLength),
+      knownSecrets,
+    );
+  }
+  const combined = pendingText + value;
+  if (
+    pendingText.length > 0
+    && sanitizeSensitiveTextWithKnownValues(pendingText, knownSecrets) === pendingText
+    && sanitizeSensitiveTextWithKnownValues(combined, knownSecrets) !== combined
+  ) {
+    return '[REDACTED]';
+  }
+  return sanitizeSensitiveTextWithKnownValues(value, knownSecrets);
+}
+
 function invokeStream(
   onStream: StreamCallback | undefined,
   event: StreamEvent,
   knownSecrets: Record<string, string>,
   preserveValidatedField?: 'sessionId' | 'id',
+  responseRedactionContext?: ResponseRedactionContext,
+  streamField?: 'text' | 'thinking',
 ): void {
+  if (responseRedactionContext !== undefined && streamField !== undefined) {
+    const eventData = event.data as unknown as Record<string, unknown>;
+    const streamValue = eventData[streamField];
+    if (typeof streamValue === 'string') {
+      const chunks = writeResponseRedactedChunks(responseRedactionContext, streamValue, streamField, knownSecrets);
+      for (const chunk of chunks) {
+        invokeStream(onStream, responseTextEvent(chunk), knownSecrets);
+      }
+      return;
+    }
+  }
   const sanitized = sanitizeSensitiveValueWithKnownValues(event, knownSecrets) as StreamEvent;
   if (preserveValidatedField === undefined) {
     onStream?.(sanitized);
@@ -594,6 +802,40 @@ function invokeStream(
       [preserveValidatedField]: value,
     },
   } as unknown as StreamEvent);
+}
+
+function flushHarnessResponseRedactor(
+  state: HarnessStreamState,
+  onStream: StreamCallback | undefined,
+  knownSecrets: Record<string, string>,
+  discardPending = false,
+): void {
+  const context = state.responseRedactionContext;
+  const hadPending = context.pendingText.length > 0;
+  const hasKnownSecretPending = hadPending
+    && longestKnownSecretPrefixSuffix(context.pendingText, knownSecrets).length > 0;
+  if (hasKnownSecretPending && !discardPending) {
+    return;
+  }
+  if (discardPending && hadPending) {
+    context.pendingText = '';
+    context.pendingChunks = [];
+    return;
+  }
+  for (const chunk of drainResponseRedactedChunks(context, knownSecrets)) {
+    invokeStream(onStream, responseTextEvent(chunk), knownSecrets);
+  }
+}
+
+function redactFinalResponse(
+  context: ResponseRedactionContext,
+  value: string,
+  knownSecrets: Record<string, string>,
+): string {
+  const finalResponse = redactCrossBoundaryFinalValue(value, context.pendingText, knownSecrets);
+  context.pendingText = '';
+  context.pendingChunks = [];
+  return finalResponse;
 }
 
 function eventData(event: Record<string, unknown>): Record<string, unknown> {
@@ -669,6 +911,7 @@ function normalizeHarnessEvent(
   onStream: StreamCallback | undefined,
   knownSecrets: Record<string, string>,
 ): void {
+  state.sawSessionEvent = true;
   const type = requireString(event.type, 'session event type');
   if (type === 'assistant/chunk') {
     const data = eventData(event);
@@ -679,13 +922,27 @@ function normalizeHarnessEvent(
       if (text.length > 0) {
         state.sawTextBySession.add(sessionId);
         state.pendingTextDeltasBySession.add(sessionId);
-        invokeStream(onStream, { type: 'text', data: { text } }, knownSecrets);
+        invokeStream(
+          onStream,
+          { type: 'text', data: { text } },
+          knownSecrets,
+          undefined,
+          state.responseRedactionContext,
+          'text',
+        );
       }
     } else if (chunkType === 'reasoning-delta') {
       const thinking = requireString(chunk.text, 'assistant reasoning delta');
       if (thinking.length > 0) {
         state.pendingThinkingDeltasBySession.add(sessionId);
-        invokeStream(onStream, { type: 'thinking', data: { thinking } }, knownSecrets);
+        invokeStream(
+          onStream,
+          { type: 'thinking', data: { thinking } },
+          knownSecrets,
+          undefined,
+          state.responseRedactionContext,
+          'thinking',
+        );
       }
     }
     return;
@@ -699,7 +956,14 @@ function normalizeHarnessEvent(
     const text = textFromContentBlocks(blocks);
     if (!hasTextDelta && text.length > 0) {
       state.sawTextBySession.add(sessionId);
-      invokeStream(onStream, { type: 'text', data: { text } }, knownSecrets);
+      invokeStream(
+        onStream,
+        { type: 'text', data: { text } },
+        knownSecrets,
+        undefined,
+        state.responseRedactionContext,
+        'text',
+      );
     }
     const hasThinkingDelta = state.pendingThinkingDeltasBySession.delete(sessionId);
     const thinking = blocks
@@ -707,7 +971,14 @@ function normalizeHarnessEvent(
       .map((block) => requireString(block.text, 'reasoning content block'))
       .join('');
     if (!hasThinkingDelta && thinking.length > 0) {
-      invokeStream(onStream, { type: 'thinking', data: { thinking } }, knownSecrets);
+      invokeStream(
+        onStream,
+        { type: 'thinking', data: { thinking } },
+        knownSecrets,
+        undefined,
+        state.responseRedactionContext,
+        'thinking',
+      );
     }
     for (const block of blocks) {
       if (block.type === 'tool-call') {
@@ -778,6 +1049,7 @@ function normalizeHarnessEvent(
         recordFailureReason(state, reason);
       }
     }
+    flushHarnessResponseRedactor(state, onStream, knownSecrets);
   }
 }
 
@@ -827,6 +1099,7 @@ class DeepSeekHarnessProcess {
 
   constructor(
     private readonly configuration: ResolvedBridgeConfiguration,
+    private readonly managedEnvironmentDir: string,
     private readonly pythonPath: string,
     private readonly environment: ProcessEnvironmentResolution,
   ) {}
@@ -848,7 +1121,7 @@ class DeepSeekHarnessProcess {
       return;
     }
     if (this.startPromise === undefined) {
-      this.startPromise = this.startInternal();
+      this.startPromise = this.startInternal(abortSignal);
     }
     try {
       await waitForAbortable(this.startPromise, abortSignal);
@@ -861,9 +1134,44 @@ class DeepSeekHarnessProcess {
     }
   }
 
-  private async startInternal(): Promise<void> {
-    assertSupportedPlatform();
+  private async startInternal(abortSignal?: AbortSignal): Promise<void> {
+    assertSupportedDeepSeekHarnessPlatform();
     if (this.closed) {
+      throw new DeepSeekHarnessTransportError('DeepSeek Harness bridge is closed');
+    }
+    assertManagedPathType(this.managedEnvironmentDir, 'managed environment', 'directory');
+    assertManagedPathType(this.pythonPath, 'managed interpreter', 'regular file');
+    const dshHomeDir = this.pythonEnvironment.DSH_HOME;
+    if (dshHomeDir === undefined) {
+      throw new Error(
+        `Unable to start DeepSeek Harness: managed dsh-home is missing. ${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}.`,
+      );
+    }
+    assertManagedPathType(dshHomeDir, 'managed dsh-home', 'directory');
+    try {
+      await validateDeepSeekHarnessRuntime(
+        this.pythonPath,
+        this.managedEnvironmentDir,
+        abortSignal,
+        this.configuration.requestTimeoutMs < DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS
+          ? this.configuration.requestTimeoutMs
+          : DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS,
+      );
+    } catch (error) {
+      if (
+        abortSignal?.aborted === true
+        || (error instanceof Error && error.name === 'TimeoutError')
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Unable to start DeepSeek Harness Python bridge from managed environment at "${this.pythonPath}". `
+        + `${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}: ${safeMessage(error, this.knownSecrets)}`,
+        { cause: error },
+      );
+    }
+    abortSignal?.throwIfAborted();
+    if (this.closed || this.closing) {
       throw new DeepSeekHarnessTransportError('DeepSeek Harness bridge is closed');
     }
     let managed: ManagedProcess;
@@ -881,9 +1189,8 @@ class DeepSeekHarnessProcess {
       );
     } catch (error) {
       throw new Error(
-        `Unable to start DeepSeek Harness Python bridge with "${this.pythonPath}". `
-        + 'Install Python 3.10+ and deepseek-harness-sdk with its matching runtime wheel, '
-        + 'or set provider_options.deepseek_harness.python_path.',
+        `Unable to start DeepSeek Harness Python bridge from managed environment at "${this.pythonPath}". `
+        + `${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}: ${safeMessage(error, this.knownSecrets)}`,
         { cause: error },
       );
     }
@@ -903,6 +1210,7 @@ class DeepSeekHarnessProcess {
         this.configuration.requestTimeoutMs < DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS
           ? this.configuration.requestTimeoutMs
           : DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS,
+        abortSignal,
       );
       this.ready = true;
     } catch (error) {
@@ -910,9 +1218,8 @@ class DeepSeekHarnessProcess {
       const diagnostic = safeMessage(error, this.knownSecrets);
       if (isRuntimeSetupFailure(error, diagnostic)) {
         throw new Error(
-          `Unable to start DeepSeek Harness Python bridge with "${this.pythonPath}". `
-          + 'Install Python 3.10+ and deepseek-harness-sdk with its matching runtime wheel, '
-          + 'or set provider_options.deepseek_harness.python_path.',
+          `Unable to start DeepSeek Harness Python bridge from managed environment at "${this.pythonPath}". `
+          + `${DEEPSEEK_HARNESS_INSTALL_INSTRUCTION}: ${safeMessage(error, this.knownSecrets)}`,
           { cause: error },
         );
       }
@@ -1242,7 +1549,7 @@ class DeepSeekHarnessProcess {
       const finishReason = result.finishReason === null
         ? null
         : requireString(result.finishReason, 'run result finishReason');
-      if (state.finishReason !== finishReason) {
+      if (state.finishReason !== finishReason && state.sawSessionEvent) {
         throw new DeepSeekHarnessProtocolError(
           'DeepSeek Harness run result finishReason did not match the root session turn/end event',
         );
@@ -1453,10 +1760,15 @@ function registerProcessBindings(
 }
 
 function getOrCreateProcess(options: DeepSeekHarnessCallOptions): DeepSeekHarnessProcess {
-  assertSupportedPlatform();
+  assertSupportedDeepSeekHarnessPlatform();
   const providerOptions = options.providerOptions;
   const configuration = resolveBridgeConfiguration(options, providerOptions);
-  const environment = resolveProcessEnvironment(providerOptions, options.childProcessEnv);
+  const managedPaths = getDeepSeekHarnessManagedPaths();
+  const environment = resolveProcessEnvironment(
+    providerOptions,
+    options.childProcessEnv,
+    managedPaths.dshHomeDir,
+  );
   assertOpaqueSessionId(options.sessionId, environment.knownSecrets);
   const baseKey = processKey(configuration, providerOptions, environment);
   const key = options.sessionId === undefined
@@ -1471,12 +1783,12 @@ function getOrCreateProcess(options: DeepSeekHarnessCallOptions): DeepSeekHarnes
       removeProcess(existing);
     }
   }
-  const configuredPythonPath = providerOptions?.pythonPath;
-  const pythonPath = configuredPythonPath === undefined ? 'python3' : configuredPythonPath.trim();
-  if (pythonPath.length === 0) {
-    throw new Error('DeepSeek Harness pythonPath must not be empty');
-  }
-  const processRecord = new DeepSeekHarnessProcess(configuration, pythonPath, environment);
+  const processRecord = new DeepSeekHarnessProcess(
+    configuration,
+    managedPaths.environmentDir,
+    managedPaths.pythonPath,
+    environment,
+  );
   processes.set(key, processRecord);
   try {
     registerProcessBindings(processRecord, configuration, options.sessionId, baseKey);
@@ -1510,7 +1822,10 @@ function failureDetail(
     const detail = classifyAbortSignalReason(options.abortSignal?.reason ?? error);
     return { ...detail, reason: safeMessage(detail.reason, knownSecrets) };
   }
-  if (error instanceof DeepSeekHarnessTimeoutError) {
+  if (
+    error instanceof DeepSeekHarnessTimeoutError
+    || (error instanceof Error && error.name === 'TimeoutError')
+  ) {
     return createPartTimeoutFailure(error.message);
   }
   if (error instanceof DeepSeekHarnessProtocolError) {
@@ -1589,7 +1904,11 @@ function createSuccessResponse(
       `DeepSeek Harness returned unsupported turn completion reason "${result.finishReason}"`,
     );
   }
-  const finalResponse = sanitizeKnownSecrets(result.finalResponse, knownSecrets);
+  const finalResponse = redactFinalResponse(
+    state.responseRedactionContext,
+    result.finalResponse,
+    knownSecrets,
+  );
   assertSafeSessionId(result.sessionId);
   assertOpaqueSessionId(result.sessionId, knownSecrets);
   if (finalResponse.length === 0) {
@@ -1622,16 +1941,22 @@ export async function callDeepSeekHarness(
 ): Promise<AgentResponse> {
   let processRecord: DeepSeekHarnessProcess | undefined;
   const requestedSessionId = options.sessionId;
+  const state: HarnessStreamState = {
+    initializedSessions: new Set(),
+    sawSessionEvent: false,
+    sawTextBySession: new Set(),
+    pendingTextDeltasBySession: new Set(),
+    pendingThinkingDeltasBySession: new Set(),
+    responseRedactionContext: {
+      pendingText: '',
+      pendingChunks: [],
+      failClosed: false,
+    },
+    emittedToolUses: new Set(),
+    emittedToolResults: new Set(),
+  };
   try {
     processRecord = getOrCreateProcess(options);
-    const state: HarnessStreamState = {
-      initializedSessions: new Set(),
-      sawTextBySession: new Set(),
-      pendingTextDeltasBySession: new Set(),
-      pendingThinkingDeltasBySession: new Set(),
-      emittedToolUses: new Set(),
-      emittedToolResults: new Set(),
-    };
     const result = await processRecord.run(
       prompt,
       requestedSessionId,
@@ -1654,6 +1979,7 @@ export async function callDeepSeekHarness(
   } catch (error) {
     const knownSecrets = processRecord?.knownSecrets
       ?? resolveKnownSecretsForFailure(options.providerOptions, options.childProcessEnv);
+    flushHarnessResponseRedactor(state, options.onStream, knownSecrets, true);
     const detail = failureDetail(error, options, knownSecrets);
     const content = formatAgentFailure(detail);
     const responseStatus = error instanceof DeepSeekHarnessTurnEndError

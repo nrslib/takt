@@ -66,6 +66,7 @@ interface HarnessOptions {
   abortFailure?: WorkflowStepFailureSummary;
   resolverError?: Error;
   resolverReturnsNull?: boolean;
+  liveIntervention?: WorkflowEngineOptions['liveIntervention'];
   companionEnabled?: boolean;
   createEngineError?: Error;
   runError?: Error;
@@ -155,6 +156,7 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     model: 'parent-model',
     initialIteration: 1,
     companionEnabled: options.companionEnabled,
+    liveIntervention: options.liveIntervention,
   };
   const state = createInitialState(parentWorkflow, engineOptions);
   state.stepIterations.set(stepName, callInstance);
@@ -589,6 +591,18 @@ describe('WorkflowCallRunner lifecycle events', () => {
       call_instance: 1,
       report_namespace_segment: expect.any(String),
     });
+  });
+
+  it('isolates omitted child options from the parent live instruction channel', async () => {
+    const liveIntervention: NonNullable<WorkflowEngineOptions['liveIntervention']> = {
+      read: vi.fn(), issue: vi.fn(), prepareDelivery: vi.fn(), commitDelivery: vi.fn(), recordTerminal: vi.fn(),
+    };
+    const isolated = createLifecycleHarness({ liveIntervention });
+    await isolated.executeIsolated();
+    expect(isolated.getChildOptions()?.liveIntervention).toBeUndefined();
+    const normal = createLifecycleHarness({ liveIntervention });
+    await normal.execute();
+    expect(normal.getChildOptions()?.liveIntervention).toBe(liveIntervention);
   });
 
   it.each([

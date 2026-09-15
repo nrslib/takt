@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, CompanionFinding } from '../core/models/index.js';
-import { runCompanionFixLoop } from '../core/workflow/companion/fix-loop.js';
+import {
+  runCompanionFixLoop,
+  type CompanionFollowUpResult,
+} from '../core/workflow/companion/fix-loop.js';
+import { StructuredOutputFinalizationError } from '../core/workflow/structured-output-finalization-error.js';
 
 function response(status: AgentResponse['status'], sessionId?: string): AgentResponse {
   return {
@@ -22,11 +26,18 @@ const finding: CompanionFinding = {
   finding: 'unsafe write',
 };
 
+function followUp(
+  responseValue: AgentResponse,
+  kind: CompanionFollowUpResult['kind'] = 'normal_follow_up',
+): CompanionFollowUpResult {
+  return { kind, response: responseValue };
+}
+
 describe('companion follow-up loop', () => {
   it('delivers each finding batch once at a turn boundary', async () => {
     const batches = [[finding], []];
     const completeReview = vi.fn(async () => ({ findings: batches.shift()! }));
-    const executeFollowUp = vi.fn().mockResolvedValue(response('done', 'session-2'));
+    const executeFollowUp = vi.fn().mockResolvedValue(followUp(response('done', 'session-2')));
 
     const result = await runCompanionFixLoop({
       initialResponse: response('done', 'session-1'),
@@ -50,10 +61,13 @@ describe('companion follow-up loop', () => {
     async (status) => {
       const executeFollowUp = vi.fn()
         .mockResolvedValueOnce({
-          ...response('done', 'session-2'),
-          content: 'first follow-up succeeded',
+          kind: 'normal_follow_up',
+          response: {
+            ...response('done', 'session-2'),
+            content: 'first follow-up succeeded',
+          },
         })
-        .mockResolvedValueOnce(response(status));
+        .mockResolvedValueOnce(followUp(response(status)));
       const result = await runCompanionFixLoop({
         initialResponse: response('done', 'session-1'),
         phase1Options: {},
@@ -89,6 +103,61 @@ describe('companion follow-up loop', () => {
     expect(result.followUpRounds).toBe(1);
     expect(result.followUpFailureReason).toBe('Provider failed: token=[REDACTED] at [path]');
   });
+
+  it('keeps the latest response when a normal loop follow-up has a structured output error', async () => {
+    const initialResponse = response('done', 'session-1');
+    const finalizationError = new StructuredOutputFinalizationError(
+      'structured output is invalid',
+      'normal',
+    );
+
+    const result = await runCompanionFixLoop({
+      initialResponse,
+      phase1Options: {},
+      completeReview: vi.fn().mockResolvedValue({ findings: [finding] }),
+      executeFollowUp: vi.fn().mockRejectedValue(finalizationError),
+    });
+
+    expect(result).toEqual({
+      phaseResponse: initialResponse,
+      latestSessionId: 'session-1',
+      followUpRounds: 1,
+      followUpFailureReason: 'structured output is invalid',
+    });
+  });
+
+  it('propagates live intervention structured output finalization errors from a loop follow-up', async () => {
+    const finalizationError = new StructuredOutputFinalizationError(
+      'structured output is invalid',
+      'live_intervention',
+    );
+
+    await expect(runCompanionFixLoop({
+      initialResponse: response('done', 'session-1'),
+      phase1Options: {},
+      completeReview: vi.fn().mockResolvedValue({ findings: [finding] }),
+      executeFollowUp: vi.fn().mockRejectedValue(finalizationError),
+    })).rejects.toBe(finalizationError);
+  });
+
+  it.each(['error', 'rate_limited', 'blocked'] as const)(
+    'returns a live intervention %s response instead of the latest success',
+    async (status) => {
+      const liveResponse = { ...response(status, 'session-2'), error: 'live failed' };
+      const result = await runCompanionFixLoop({
+        initialResponse: response('done', 'session-1'),
+        phase1Options: {},
+        completeReview: vi.fn().mockResolvedValue({ findings: [finding] }),
+        executeFollowUp: vi.fn().mockResolvedValue(
+          followUp(liveResponse, 'live_intervention'),
+        ),
+      });
+
+      expect(result.phaseResponse).toBe(liveResponse);
+      expect(result.phaseResponse.status).toBe(status);
+      expect(result.followUpFailureReason).toBe('live failed');
+    },
+  );
 
   it('propagates AbortSignal cancellation during a follow-up', async () => {
     const controller = new AbortController();

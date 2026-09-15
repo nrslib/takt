@@ -293,8 +293,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     extensions: [npm:pi-fff]
 #     no_skills: true
 #   deepseek_harness:
-#     # python_path and cordis are trusted-global/env-only; project config
-#     # uses the default python3 and cannot select a Cordis executable config.
+#     # The managed environment is created by `takt deepseek-harness install`.
 #     base_url: http://127.0.0.1:8787/v1
 #     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
@@ -320,26 +319,32 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 The TAKT Pi provider uses an embedded, in-memory Pi SDK session for the current TAKT process. It does not write Pi session JSONL files, and it does not read or write the Pi CLI global `settings.json`. Consequently, Pi global settings such as the default model, thinking level, shell, and retry options are not automatically inherited by TAKT.
 
-Set the model explicitly in TAKT configuration when it should be the default for Pi. A Pi model can include a `:<thinking-level>` suffix, for example:
+Set the model explicitly in TAKT configuration when it should be the default for Pi. Keep model selection and thinking-level selection separate. In legacy `config.yaml` mode, use the explicit option as the recommended form:
 
 ```yaml
 # ~/.takt/config.yaml or .takt/config.yaml
 provider: pi
-model: provider/model:high
+model: provider/model
+provider_options:
+  pi:
+    thinking_level: high
 ```
 
-You can also set the model and thinking level on a workflow step:
+In runtime mode, put `thinking_level` in `provider.profiles.<name>.options` for the Pi profile. Workflow YAML cannot define provider, model, or provider options.
+
+Configure Pi thinking level only with `provider_options.pi.thinking_level` or `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL`. The accepted values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; an invalid value fails. If the option is omitted, the Pi SDK default `medium` is used. Model references are split only at `/`, so any `:` in the model ID is literal; for example, `provider/model:high` uses `model:high` as the model ID. An explicitly configured level is applied before every Pi turn, including turns in a reused session.
+
+To migrate an older configuration that used `model: pi/...:high` to select a thinking level, remove `:high` from the model reference and set the option instead:
 
 ```yaml
-steps:
-  - name: implement
-    provider: pi
-    model: provider/model:high
+provider_options:
+  pi:
+    thinking_level: high
 ```
 
-The `provider` and `model` declarations select the provider, model, and thinking level for a TAKT run; they do not import Pi CLI settings. Pi authentication is handled separately through the Pi SDK credential store or provider-native environment variables. The boundary avoids unintended writes to global settings and keeps project-local configuration trustworthy and predictable.
+The `provider` and `model` declarations select the provider and model for a TAKT run; the explicit Pi option selects the thinking level. They do not import Pi CLI settings. Pi authentication is handled separately through the Pi SDK credential store or provider-native environment variables. The boundary avoids unintended writes to global settings and keeps project-local configuration trustworthy and predictable.
 
-`provider_options.pi` is a separate path for loading Pi resources such as `extensions` and `no_*` discovery controls. These options do not declare authentication, model, or thinking level. Bare explicit npm sources reuse an existing project-scope install, then an existing user-scope install, and fall back to temporary resolution only when neither candidate loads successfully; version-qualified npm sources and non-npm sources are always resolved temporarily. Explicit sources are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
+`provider_options.pi` contains the separate `thinking_level` option and Pi resource-loading controls such as `extensions` and `no_*` discovery controls. It does not configure authentication or model selection. Bare explicit npm sources reuse an existing project-scope install, then an existing user-scope install, and fall back to temporary resolution only when neither candidate loads successfully; version-qualified npm sources and non-npm sources are always resolved temporarily. Explicit sources are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
 
 ### Provider inactivity deadline and OpenCode execution guards
 
@@ -466,7 +471,7 @@ export TAKT_OPENCODE_API_KEY=...
 # For Pi
 # Use the Pi SDK credential store or provider-native environment variables
 
-# For the official DeepSeek Harness SDK (Python 3.10+ runtime)
+# For the official DeepSeek Harness SDK managed environment (uv-managed CPython 3.12)
 export DEEPSEEK_API_KEY=...
 # Optional: export DEEPSEEK_BASE_URL=https://...
 
@@ -513,7 +518,7 @@ Environment variables take precedence over `config.yaml` settings.
 - Consider using environment variables instead.
 - Add `~/.takt/config.yaml` to your global `.gitignore` if needed.
 - Cursor provider can run without API key when `cursor-agent login` is already configured.
-- If you set credentials, installing the corresponding CLI tool (Claude Code, Codex, OpenCode, Pi) is not necessary. TAKT directly calls the respective API. DeepSeek Harness additionally requires Python 3.10+, matching `deepseek-harness-sdk`/`deepseek-harness-runtime-bin` packages, and Linux x64/arm64 or macOS arm64; Windows and macOS x64 are unsupported.
+- If you set credentials, installing the corresponding CLI tool (Claude Code, Codex, OpenCode, Pi) is not necessary. TAKT directly calls the respective API. DeepSeek Harness additionally requires its uv-managed environment (`takt deepseek-harness install`) and Linux x64/arm64 with glibc `>= 2.28` or macOS arm64 `>= 14.0`; Windows, macOS x64, Linux musl, older Linux glibc, and older macOS are unsupported. A system Python installation is not required.
 - The DeepSeek API key is passed only to the Python bridge environment, never to command arguments or workflow-generated config.
 - Copilot provider requires the `copilot` CLI to be installed. The GitHub token is used for authentication.
 - Kiro provider requires the `kiro-cli` CLI to be installed. `TAKT_KIRO_API_KEY` / `kiro_api_key` is passed to the child process as `KIRO_API_KEY`; if neither is set, TAKT uses the official `KIRO_API_KEY` environment variable.
@@ -561,7 +566,7 @@ Provider and model selection is owned by `runtime.yaml` when runtime mode is act
 
 **OpenCode** requires a model in `provider/model` format (e.g., `opencode/big-pickle`). Omitting the model for the OpenCode provider will result in a configuration error.
 
-**Pi** accepts `provider/model` references and bare model IDs that uniquely match a configured Pi model. A recognized `:<thinking-level>` suffix selects the Pi thinking level. If omitted, TAKT keeps the Pi session's current model.
+**Pi** accepts `provider/model` references and bare model IDs that uniquely match a configured Pi model. References are split only at `/`, so `provider/model:high` uses `model:high` as a literal model ID. Configure thinking level with `provider_options.pi.thinking_level` or `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL`; if omitted, Pi uses the SDK default `medium`. An explicitly configured level is applied on every Pi turn. If the model is omitted, TAKT keeps the Pi session's current model.
 
 **Cursor Agent** forwards `model` directly to `cursor-agent --model <model>`. If omitted, Cursor CLI default is used.
 
@@ -1209,7 +1214,7 @@ Capability references can load shared provider-options presets by name. Names ar
 
 Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`; TAKT passes those values only to the private Python bridge. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`; TAKT passes those values only to the private Python bridge. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi thinking level, use `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` to set `provider_options.pi.thinking_level`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
 
 This allows runtime targets to mix providers and models within a single workflow while keeping display names independent from provider selection.
 
@@ -1242,15 +1247,15 @@ Workflow and project config can use `base_url` for local proxies only. Non-loopb
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-`deepseek-harness` starts the official `deepseek-harness-sdk` in a Python 3.10+ child process and communicates with it over a line-oriented JSON-RPC bridge. Install the SDK and its matching `deepseek-harness-runtime-bin` wheel separately:
+`deepseek-harness` uses a managed environment that TAKT builds with `uv`, then starts the official `deepseek-harness-sdk` through a line-oriented JSON-RPC bridge. Run `takt deepseek-harness install` once before the first provider call. npm install and npm lifecycle hooks do not build or repair this environment; a provider started during installation may observe an incomplete environment because it does not wait for the installer lock.
 
-```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
-```
+The managed environment uses uv-managed CPython 3.12 and the matching SDK/runtime versions pinned in the shipped `pyproject.toml` and `uv.lock`. Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0` are supported. Windows, macOS x64, Linux musl, older Linux glibc, and older macOS fail fast; TAKT never falls back to another provider, and a system Python installation is not required. Use uv's standard network configuration (`UV_INDEX_URL`, proxy, and certificate variables) for restricted package indexes. TAKT passes those settings through, while `uv sync --locked` keeps the distributed lock authoritative. Install preflight requires `uv >= 0.11.0`; a missing uv, an unparseable version, or an older version stops before the existing managed environment is deleted.
 
-The verified official runtime wheels support Linux x64/arm64 and macOS arm64. Windows and macOS x64 are unsupported and fail fast; TAKT never falls back to another provider. Authentication is intentionally environment-based: set `DEEPSEEK_API_KEY`, and optionally `DEEPSEEK_BASE_URL`. The API key is not written to workflow/config files or command arguments.
+If package-index access was previously configured with `pip`, migrate to uv's standard `UV_INDEX_URL`, proxy, and certificate environment variables; `uv sync --locked` uses the distributed lock as the dependency source.
 
-This provider is a developer-preview compatibility surface: the SDK and runtime wheel must be matching releases, and the upstream event/API vocabulary can change between releases. Run the live smoke only when you intentionally want to spend DeepSeek API quota; normal unit, integration, and mock E2E suites never call DeepSeek.
+The install `--python` option and provider `python_path` option were removed because only the managed interpreter is supported. Authentication remains environment-based: set `DEEPSEEK_API_KEY`, and optionally `DEEPSEEK_BASE_URL`; the API key is not written to workflow/config files or command arguments.
+
+This provider is a developer-preview compatibility surface: use the opt-in live smoke only when you intentionally want to spend DeepSeek API quota; normal unit, integration, and mock E2E suites never call DeepSeek.
 
 Opt-in live smoke (supported Linux/macOS only):
 
@@ -1290,11 +1295,11 @@ validation point. Unknown routes or model IDs are not validated by TAKT and are
 passed unchanged as separate provider/model fields to the bridge/SDK; an SDK
 rejection identifies the supplied reference and the bridge/SDK failure point.
 
-For credential safety, `python_path` is accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`; workflow and project-local provider options must use the default `python3` executable. `cordis` is also accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS`, because it selects executable tool composition. The example above intentionally omits both fields. The same restrictions apply to project `runtime.yaml` profiles; global runtime profiles may select trusted values. Project runtime profiles may use only loopback `base_url` values.
+For credential safety, `cordis` is accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS`, because it selects executable tool composition. The example above intentionally omits it. The managed interpreter is fixed by the install command and cannot be selected through provider options. The same restrictions apply to project `runtime.yaml` profiles; global runtime profiles may select trusted values. Project runtime profiles may use only loopback `base_url` values.
 
 `session_root` and `cordis` are resolved relative to the configured working directory. Sessions are reused when a workflow supplies `session_key`; one-shot calls close the bridge immediately. `request_timeout_ms` terminates the complete Python bridge request, and aborting a TAKT call terminates the bridge process tree. Stream events are converted from official `session.event` notifications into TAKT text, thinking, tool-use, tool-result, error, and result events. System prompts, TAKT `allowed_tools`, MCP server maps, image attachments, structured output, permission modes, and `maxTurns` are not part of the official SDK call and are ignored with a warning; configure system/tool composition through Cordis instead.
 
-The corresponding environment overrides are `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`, `_BASE_URL`, `_SESSION_ROOT`, `_CORDIS`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, and `_RUNTIME_MODE`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
+The corresponding environment overrides are `_BASE_URL`, `_SESSION_ROOT`, `_CORDIS`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, and `_RUNTIME_MODE`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
 
 #### Network access (`network_access`)
 

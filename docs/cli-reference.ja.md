@@ -29,6 +29,16 @@
 
 グローバル設定ディレクトリ（デフォルト: `~/.takt/`）は環境変数 `TAKT_CONFIG_DIR` で変更できます。
 
+## DeepSeek Harness managed environment
+
+| コマンド | 説明 |
+|---------|------|
+| `takt deepseek-harness install` | `<global TAKT dir>/deepseek-harness/` 配下に uv-managed CPython 3.12 環境を作成・修復 |
+
+install は同梱の `pyproject.toml` と `uv.lock` をコピーし、`uv sync --locked` による project sync を一度だけ実行します。`--python` と `--uv-path`、provider の `python_path` オプションは受け付けず、interpreter は managed environment で固定されます。`deepseek-harness` provider を選択する前に `takt deepseek-harness install` を一度実行してください。npm install と npm lifecycle hook は環境を構築・修復せず、install 中に provider を起動すると installer lock を待たずに失敗することがあります。
+
+managed environment は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` に対応します。Windows、macOS x64、Linux musl、古い Linux glibc、古い macOS は fail fast し、system Python の準備は不要です。制限付き package index へ接続する場合は uv 標準の `UV_INDEX_URL`、proxy、certificate 環境変数を設定してください。以前 `pip` で package index を設定していた場合は uv の設定へ移行し、`uv sync --locked` により同梱 lock を正本として扱います。install の preflight は `uv >= 0.11.0` を要求し、uv が未導入、版を解析できない、または古い場合は既存 managed environment を削除する前に停止します。
+
 ## Web UI の実行境界
 
 `takt ui` は実験的なローカル Web UI を `http://127.0.0.1:20525` で起動し、`--port` でポートを変更できます。起動時には、予告なく仕様が変更される可能性があることを表示します。同じ `TAKT_CONFIG_DIR` のインスタンスがすでに動いている場合は二重起動せず、実際の URL と PID を表示します。グレースフルに停止するには `takt ui stop`、停止後に起動し直すには `takt ui restart [--port <number>]` を使用します。
@@ -42,6 +52,8 @@ Viewer は実行状況、観測された実行経路、ライブログ、レポ�
 ## インタラクティブモード
 
 AI との会話を通じてタスク内容を精緻化してから実行するモードです。タスクの要件が曖昧な場合や、AI と相談しながら内容を詰めたい場合に便利です。
+
+通常の assistant 会話では、読み取り専用 MCP tool を通じてタスクと run の要約も確認できます。タスクは名前または要約で指定し、詳細なログやレポートは特定した run に必要な場合だけ読み取ります。新しいタスクの内容が固まったら `/go`、実行中の worktree clone へ追加指示を送る内容が固まったら `/tell` を使用します。
 
 ```bash
 # インタラクティブモードを開始（引数なし）
@@ -80,6 +92,7 @@ TUI の会話履歴では、送信済みのユーザー発言を、表示幅い�
 | `/provider` | 別の provider を選択する。 |
 | `/model <value>` | この会話で使う任意の model 名を指定する。 |
 | `/effort <value>` | この会話で使う任意の推論強度を指定する。 |
+| `/tell [指示]` | 実行中の worktree clone タスクを選び、追加指示を確認してから送る。指示を省略すると会話全体から単独で理解できる追加指示本文を生成する。対話端末が必要で、確認できない場合は送信しない。 |
 
 選択内容は一時的で永続化されません。workflow、mode、provider、model の変更は、次の通常メッセージまたは `/go` で新しい AI session を作り、以前の会話履歴を参照情報として1回だけ渡します。effort だけの変更は現在の session の次回呼び出しへ適用されます。provider を変更すると、一時的な model と effort は消去されます。次の入力までに同じ設定コマンドを複数回実行した場合は、各設定で最後に選択した値だけが適用されます。これらの会話用 override は workflow 実行には影響しません。
 
@@ -168,7 +181,7 @@ ACP prompt がタスクを作成または直接実行する場合、会話結果
 
 ## MCP Server
 
-`takt-mcp` は TAKT を stdio Model Context Protocol server として起動します。MCP client から shell 経由で `takt add` を直接呼ばずに TAKT タスクを enqueue したい場合に登録します。
+`takt-mcp` は TAKT を stdio Model Context Protocol server として起動します。MCP client から shell 経由で TAKT command を直接呼ばずにタスクの enqueue、task/run 状態の確認、実行中 worktree clone への追加指示を行いたい場合に登録します。
 
 ```bash
 takt-mcp
@@ -192,8 +205,13 @@ codex mcp add takt -- takt-mcp
 | Tool | 説明 |
 |------|------|
 | `takt_enqueue_task` | pending タスクを `.takt/tasks.yaml` に保存し、既存 Issue の紐付けまたは新規 Issue 作成を任意で行う。 |
+| `takt_list_tasks` | ログ・レポート本文を読み込まず、タスクと run の要約を取得する。 |
+| `takt_get_run` | 1つの run の現在 step、phase、ログ、レポート、追加指示の配信状況を取得する。 |
+| `takt_tell_run` | 対象を再確認して、実行中の worktree clone タスクへ追加指示を送る。 |
 
 各 tool の `cwd` は `realpath` で解決され、MCP server の許可 project root 内にある必要があります。既定の許可 root は `takt-mcp` を起動したディレクトリです。
+
+task 状態の参照だけを許可する client には `--tool-set read-only` を指定します。この場合は `takt_list_tasks` と `takt_get_run` だけが公開され、`takt_enqueue_task` と `takt_tell_run` は公開されません。通常の assistant 会話にはこの read-only tool set が自動で渡されます。MCP 非対応 provider でも会話は継続し、task 状態の参照が使えない旨を通知します。
 
 ### `takt_enqueue_task`
 
@@ -223,7 +241,11 @@ codex mcp add takt -- takt-mcp
 
 `issue` object は `{ "number": 123 }` または `{ "create": true, "title"?: "...", "labels"?: ["..."] }` のいずれかだけを指定します。混在 key、空の title・label、unknown key は拒否されます。Issue 付き enqueue の成功結果には `issueNumber` を含みます。Issue 番号の解決後にタスク保存が失敗またはキャンセルされた場合も Issue は open のまま残り、MCP error result は `issueCreated`、`issueNumber`、任意の `issueUrl`、`taskEnqueued`、`stage`、sanitize 済みの `error` を返します。`{ "issue": { "number": issueNumber } }` で再試行すれば、新しい Issue は作成されません。`stage` が `issue_number_parsing` の場合は `issueNumber` を返せないため、任意の `issueUrl` で作成済み Issue を特定し、番号を確認してから再試行してください。
 
-MCP はタスクの enqueue だけを担当します。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
+MCP はタスクの enqueue、task/run 状態の確認、実行中 clone への追加指示を行えます。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
+
+### `takt_list_tasks`、`takt_get_run`、`takt_tell_run`
+
+3つの tool は絶対パスの project `cwd` を必須とし、server が許可した project root 内に制限されます。`takt_list_tasks` は名前、要約、状態、workflow、run slug、取得できる現在 step を返しますが、ログ・レポート本文は返しません。`takt_get_run` は一覧の `runSlug` を指定し、その run の step log、レポート、追加指示の配信状況を返します。`takt_tell_run` は空でない `content` を受け取り、書き込み直前に指定 slug が実行中の worktree clone タスクを指すことを再確認します。完了、削除、slug 不一致、clone でない run には書き込まず、理由を返します。
 
 ## Instant Exec モード
 
@@ -340,6 +362,12 @@ takt list --non-interactive --format json
 `--action` に指定できるのは `diff`、`sync`、`try`、`merge`、`delete` の5種です。非インタラクティブのアクションには `--branch` が必須で、`delete` にはさらに `--yes` が必須です。`sync` が失敗した場合は終了コード `1` で終了します。
 
 インタラクティブモードでは **Merge from root** を選択でき、ルートリポジトリの HEAD をワークツリーブランチにマージします。コンフリクト発生時は AI が自動解決を試みます。
+
+#### 実行中タスクへの相談
+
+`takt list` でタスクを選ぶと、状態に応じたアクションメニューが開きます。Instruct、Requeue などの既存アクションは、それぞれ対応する状態で引き続き使用できます。ワークツリークローンを持つ実行中タスクでは、**Interactive** を選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。会話中に別のタスクを確認したり、新しいタスクを相談したりでき、`/go` で実行・保存できます。`/tell` は確定画面でタスク名、workflow、現在 step、指示内容を表示し、確定時に選ばれたタスクにだけ書き込みます。対話端末で確認できない場合は送信せず、理由を通知します。`/cancel` で会話または保留中の操作を取り消します。**Mark as failed** もアクションメニューから引き続き使用できます。
+
+`/tell` の候補は、TAKT が管理する有効な worktree clone で実行中のタスクだけです。選択画面の表示後にも対象を再確認するため、その間に終了したタスクには指示を書き込みません。
 
 ### タスクディレクトリワークフロー（作成 / 実行 / 確認）
 

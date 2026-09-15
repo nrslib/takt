@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
   createIsolatedEnv,
   updateIsolatedConfig,
@@ -71,17 +71,18 @@ function writePendingWorktreeTask(repoPath: string, name: string, content: strin
   const now = new Date().toISOString();
   writeFileSync(
     join(taktDir, 'tasks.yaml'),
-    [
-      'tasks:',
-      `  - name: ${name}`,
-      '    status: pending',
-      `    content: "${content.replaceAll('"', '\\"')}"`,
-      `    workflow: "${MOCK_WORKFLOW_PATH}"`,
-      '    worktree: true',
-      `    created_at: "${now}"`,
-      '    started_at: null',
-      '    completed_at: null',
-    ].join('\n'),
+    stringifyYaml({
+      tasks: [{
+        name,
+        status: 'pending',
+        content,
+        workflow: MOCK_WORKFLOW_PATH,
+        worktree: true,
+        created_at: now,
+        started_at: null,
+        completed_at: null,
+      }],
+    }),
     'utf-8',
   );
 }

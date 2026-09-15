@@ -293,8 +293,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     extensions: [npm:pi-fff]
 #     no_skills: true
 #   deepseek_harness:
-#     # python_path と cordis は trusted global / env 専用。project config
-#     # では既定の python3 を使い、Cordis の実行設定は選択できません。
+#     # managed environment は `takt deepseek-harness install` で作成します。
 #     base_url: http://127.0.0.1:8787/v1
 #     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
@@ -320,26 +319,32 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 TAKT の Pi provider は現在の TAKT process 内だけで使う embedded な in-memory Pi SDK session を使用します。Pi の session JSONL ファイルを書き込まず、Pi CLI のグローバル `settings.json` も読み書きしません。そのため、デフォルト model、thinking level、shell、retry option などの Pi グローバル設定は TAKT に自動継承されません。
 
-Pi のデフォルトとして使う model は TAKT の設定で明示してください。Pi の model には `:<thinking-level>` suffix を付けられます。例えば次のように設定します。
+Pi のデフォルトとして使う model は TAKT の設定で明示してください。model の選択と thinking level の選択は分けて設定します。legacy `config.yaml` モードでは、明示的な option を推奨します。
 
 ```yaml
 # ~/.takt/config.yaml または .takt/config.yaml
 provider: pi
-model: provider/model:high
+model: provider/model
+provider_options:
+  pi:
+    thinking_level: high
 ```
 
-workflow の step に model と thinking level を設定することもできます。
+runtime モードでは、Pi profile の `provider.profiles.<name>.options` に `thinking_level` を置きます。workflow YAML には provider、model、provider option を定義できません。
+
+Pi の thinking level は `provider_options.pi.thinking_level` または `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL` だけで設定します。指定できる値は `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` で、不正な値はエラーになります。省略時は Pi SDK の既定値 `medium` が使われます。model reference は `/` だけで分割されるため、model ID 内の `:` はそのまま扱われます。たとえば `provider/model:high` の model ID は `model:high` です。明示した level は、再利用した session を含むすべての Pi turn の前に適用されます。
+
+以前 `model: pi/...:high` を thinking level の指定に使っていた場合は、model reference から `:high` を削除し、代わりに次の option を設定してください。
 
 ```yaml
-steps:
-  - name: implement
-    provider: pi
-    model: provider/model:high
+provider_options:
+  pi:
+    thinking_level: high
 ```
 
-`provider` と `model` の宣言は TAKT 実行で使う provider、model、thinking level を選択するもので、Pi CLI の設定を取り込むものではありません。Pi の認証は Pi SDK credential store または provider-native 環境変数で別途処理されます。この境界により、グローバル設定への意図しない書き込みを防ぎ、プロジェクトローカル設定の信頼性と予測可能性を保ちます。
+`provider` と `model` の宣言は TAKT 実行で使う provider と model を選択し、明示的な Pi option が thinking level を選択します。Pi CLI の設定は取り込みません。Pi の認証は Pi SDK credential store または provider-native 環境変数で別途処理されます。この境界により、グローバル設定への意図しない書き込みを防ぎ、プロジェクトローカル設定の信頼性と予測可能性を保ちます。
 
-`provider_options.pi` は、`extensions` や `no_*` の探索制御など、Pi リソースを読み込むための別経路です。これらの option は認証、model、thinking level を宣言するものではありません。version 指定のない明示 npm source は既存の project scope、user scope を順に再利用し、どちらも正常に読み込めない場合だけ temporary resolution に fallback します。version 指定付き npm source と npm 以外の source は常に temporary resolution されます。明示した source は Pi settings には永続化されません。リソースの信頼境界については [Pi のリソース読み込み](#pi-resource-loading) を参照してください。
+`provider_options.pi` には、独立した `thinking_level` option と、`extensions` や `no_*` の探索制御など Pi リソースを読み込むための設定が含まれます。認証や model 選択は設定しません。version 指定のない明示 npm source は既存の project scope、user scope を順に再利用し、どちらも正常に読み込めない場合だけ temporary resolution に fallback します。version 指定付き npm source と npm 以外の source は常に temporary resolution されます。明示した source は Pi settings には永続化されません。リソースの信頼境界については [Pi のリソース読み込み](#pi-resource-loading) を参照してください。
 
 ### プロバイダ無応答 deadline と OpenCode 実行ガード
 
@@ -461,7 +466,7 @@ export TAKT_OPENCODE_API_KEY=...
 # Pi 用
 # Pi SDK の credential store または provider-native 環境変数を使用
 
-# 公式 DeepSeek Harness SDK 用（Python 3.10+ runtime）
+# 公式 DeepSeek Harness SDK 用（uv-managed CPython 3.12）
 export DEEPSEEK_API_KEY=...
 # 任意: export DEEPSEEK_BASE_URL=https://...
 
@@ -508,7 +513,7 @@ kiro_api_key: ...              # Kiro CLI 用
 - 環境変数の使用を検討してください。
 - 必要に応じて `~/.takt/config.yaml` をグローバル `.gitignore` に追加してください。
 - Cursor provider は `cursor-agent login` が済んでいれば API キーなしでも動作できます。
-- 認証情報を設定すれば、対応する CLI ツール（Claude Code、Codex、OpenCode、Pi）のインストールは不要です。TAKT が対応する API を直接呼び出します。DeepSeek Harness は Python 3.10+、対応する `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` package、Linux x64/arm64 または macOS arm64 が必要です。Windows と macOS x64 は未対応です。
+- 認証情報を設定すれば、対応する CLI ツール（Claude Code、Codex、OpenCode、Pi）のインストールは不要です。TAKT が対応する API を直接呼び出します。DeepSeek Harness は `takt deepseek-harness install` で用意する uv-managed environment と、glibc `>= 2.28` の Linux x64/arm64 または macOS arm64 `>= 14.0` が必要です。Windows、macOS x64、Linux musl、古い Linux glibc、古い macOS は未対応で、system Python は不要です。
 - DeepSeek API key は Python bridge の環境変数にだけ渡し、command argument や workflow 生成 config には渡しません。
 - Copilot provider は `copilot` CLI のインストールが必要です。GitHub トークンは認証に使用されます。
 - Kiro provider は `kiro-cli` CLI のインストールが必要です。`TAKT_KIRO_API_KEY` / `kiro_api_key` は子プロセスの `KIRO_API_KEY` として渡されます。どちらも未設定の場合は公式の `KIRO_API_KEY` 環境変数を使用します。
@@ -558,7 +563,7 @@ workflow の `promotion` entry は `runtime.yaml` で選択された target ladd
 
 **OpenCode** は `provider/model` 形式のモデル（例: `opencode/big-pickle`）が必要です。OpenCode provider でモデルを省略すると設定エラーになります。
 
-**Pi** は `provider/model` 形式と、設定済みの Pi model に一意に一致する model ID を受け付けます。認識可能な `:<thinking-level>` サフィックスで Pi の thinking level を指定できます。省略時は Pi session の現在の model を維持します。
+**Pi** は `provider/model` 形式と、設定済みの Pi model に一意に一致する model ID を受け付けます。reference は `/` だけで分割されるため、`provider/model:high` の `model:high` はリテラルの model ID です。thinking level は `provider_options.pi.thinking_level` または `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL` で設定し、省略時は Pi SDK の既定値 `medium` を使います。明示した level はすべての Pi turn に適用されます。model を省略した場合は Pi session の現在の model を維持します。
 
 **Cursor Agent** は `model` を `cursor-agent --model <model>` にそのまま渡します。省略時は Cursor CLI のデフォルトが使用されます。
 
@@ -1151,7 +1156,7 @@ capability の参照は共有 YAML provider-options preset を名前で読み込
 
 capability preset の解決は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
 
-provider option の leaf は環境変数でも上書きできます。OpenCode の model variant は `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` で `provider_options.opencode.variant` を設定できます。provider base URL は `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787` を使用できます。DeepSeek Harness は `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` を使用できます。これらは config layer を設定するもので、step や workflow routing の `base_url` leaf は上書きしません。Codex の permission control は `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` または `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex` で設定できます。Codex Skill の継承は `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` または `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` で設定できます。Claude Skill の継承は `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` で設定できます。Claude terminal は `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` を使用できます。Kiro の custom agent は `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` で `provider_options.kiro.agent` を設定できます。Pi の resource loading は `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`、`TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true` を使用できます。
+provider option の leaf は環境変数でも上書きできます。OpenCode の model variant は `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` で `provider_options.opencode.variant` を設定できます。provider base URL は `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787` を使用できます。DeepSeek Harness は `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` を使用できます。これらは config layer を設定するもので、step や workflow routing の `base_url` leaf は上書きしません。Codex の permission control は `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` または `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex` で設定できます。Codex Skill の継承は `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` または `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` で設定できます。Claude Skill の継承は `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` で設定できます。Claude terminal は `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` を使用できます。Kiro の custom agent は `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` で `provider_options.kiro.agent` を設定できます。Pi の thinking level は `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` で `provider_options.pi.thinking_level` に設定できます。Pi の resource loading は `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`、`TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true` を使用できます。
 
 これにより、表示名と provider 選択を分離したまま、runtime target が単一の workflow 内で provider や model を混在させることができます。
 
@@ -1181,15 +1186,15 @@ workflow と project config での `base_url` は local proxy 用に限定され
 
 #### DeepSeek Harness (`deepseek-harness`)
 
-`deepseek-harness` は公式の `deepseek-harness-sdk` を Python 3.10+ の子プロセスで起動し、非公開の行指向 JSON-RPC bridge で通信します。SDK と対応する `deepseek-harness-runtime-bin` wheel は別途インストールしてください。
+`deepseek-harness` は TAKT が `uv` で構築する managed environment を使い、公式の `deepseek-harness-sdk` を非公開の行指向 JSON-RPC bridge 経由で起動します。初回の provider 呼び出し前に `takt deepseek-harness install` を一度実行してください。npm install と npm lifecycle hook は環境を構築・修復せず、install 中に起動した provider は installer lock を待たないため未対応です。
 
-```bash
-python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
-```
+managed environment は uv-managed CPython 3.12 と、同梱の `pyproject.toml` / `uv.lock` に固定された対応 SDK/runtime を使用します。glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` に対応し、Windows、macOS x64、Linux musl、古い Linux glibc、古い macOS は fail fast します。TAKT は別 provider へ暗黙 fallback せず、system Python の準備も不要です。制限付き package index へ接続する場合は uv 標準の `UV_INDEX_URL`、proxy、certificate 環境変数を設定してください。TAKT はそれらを渡し、`uv sync --locked` により配布された lock を正本にします。install の preflight は `uv >= 0.11.0` を要求し、uv が未導入、版を解析できない、または古い場合は既存 managed environment を削除する前に停止します。
 
-確認済みの公式 runtime wheel は Linux x64/arm64 と macOS arm64 に対応します。Windows と macOS x64 は未対応で fail fast し、TAKT は別 provider へ暗黙 fallback しません。認証情報は意図的に環境変数だけで渡します: `DEEPSEEK_API_KEY` と、任意の `DEEPSEEK_BASE_URL` を設定してください。API key は workflow/config や command argument に書き込みません。
+以前 `pip` で package index を設定していた場合は、uv 標準の `UV_INDEX_URL`、proxy、certificate 環境変数へ移行してください。`uv sync --locked` は配布された lock を依存関係の正本として使います。
 
-この provider は developer preview の互換性境界です。SDK と runtime wheel は対応する release の組み合わせを使い、upstream の API/event vocabulary が release 間で変わる可能性を考慮してください。DeepSeek API quota を意図的に消費するときだけ live smoke を実行してください。通常の unit、integration、mock E2E suite は DeepSeek を呼び出しません。
+install の `--python` オプションと provider の `python_path` オプションは、managed interpreter だけを使用するため削除されています。認証情報は引き続き環境変数だけで渡します: `DEEPSEEK_API_KEY` と、任意の `DEEPSEEK_BASE_URL` を設定してください。API key は workflow/config や command argument に書き込みません。
+
+この provider は developer preview の互換性境界です。DeepSeek API quota を意図的に消費するときだけ live smoke を実行してください。通常の unit、integration、mock E2E suite は DeepSeek を呼び出しません。
 
 opt-in live smoke（対応する Linux/macOS のみ）:
 
@@ -1229,11 +1234,11 @@ bridge 起動前に拒否されます。空白だけの route または model �
 bridge/SDK に渡します。SDK が拒否した場合は、入力された参照と bridge/SDK で
 失敗した箇所を含むエラーになります。
 
-credential safety のため、`python_path` は信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH` からのみ設定できます。workflow と project-local provider options では既定の `python3` executable を使用してください。`cordis` も実行する tool composition を選択するため、信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` からのみ設定できます。上の例では両方の項目を意図的に省略しています。同じ制約は project の `runtime.yaml` profile にも適用されます。global runtime profile では信頼できる値を選択できます。project runtime profile の `base_url` は loopback のみ使用できます。
+credential safety のため、`cordis` は実行する tool composition を選択するため、信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` からのみ設定できます。上の例では省略しています。managed interpreter は install command が固定し、provider option から選択できません。同じ制約は project の `runtime.yaml` profile にも適用されます。global runtime profile では信頼できる値を選択できます。project runtime profile の `base_url` は loopback のみ使用できます。
 
 `session_root` と `cordis` は設定された作業ディレクトリからの相対パスとして解決されます。workflow が `session_key` を指定するとセッションを再利用し、one-shot call は bridge を直ちに close します。`request_timeout_ms` は Python bridge request 全体を終了させ、TAKT call の abort は bridge の process tree を終了させます。公式 `session.event` notification は TAKT の text、thinking、tool-use、tool-result、error、result event へ変換されます。system prompt、TAKT の `allowed_tools`、MCP server map、画像添付、structured output、permission mode、`maxTurns` は公式 SDK の call に存在しないため warning とともに無視されます。system/tool composition は Cordis で設定してください。
 
-対応する環境変数 override は `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`、`_BASE_URL`、`_SESSION_ROOT`、`_CORDIS`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
+対応する環境変数 override は `_BASE_URL`、`_SESSION_ROOT`、`_CORDIS`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
 
 #### ネットワークアクセス (`network_access`)
 

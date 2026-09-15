@@ -7,8 +7,14 @@ function isCommandMatchEnabled(command: SlashCommand, availability?: CommandAvai
   if (availability?.enabledCommands && !availability.enabledCommands.includes(command)) {
     return false;
   }
+  if (command === SlashCommand.Tell && availability !== undefined && availability.enableTellCommand !== true) {
+    return false;
+  }
   if (command === SlashCommand.Setup) {
     return availability?.enableSetupCommand === true;
+  }
+  if (command === SlashCommand.Open) {
+    return availability?.enableOpenCommand === true;
   }
   if (INTERACTIVE_SETTING_COMMANDS.has(command)) {
     return availability?.enableSettingsCommands === true;

@@ -86,7 +86,6 @@ type RawProviderOptions = {
     guards?: RawProviderGuardOptions;
   };
   deepseek_harness?: {
-    python_path?: string;
     base_url?: string;
     session_root?: string;
     cordis?: string;
@@ -98,6 +97,7 @@ type RawProviderOptions = {
   pi?: {
     guards?: RawProviderGuardOptions;
     extensions?: string[];
+    thinking_level?: string;
     no_extensions?: boolean;
     no_skills?: boolean;
     no_prompt_templates?: boolean;
@@ -107,13 +107,11 @@ type RawProviderOptions = {
 };
 
 type ProviderBaseUrlTrust = 'trusted' | 'loopback-only' | 'local-loopback-only';
-type ProviderPythonPathTrust = 'trusted' | 'untrusted' | 'local-untrusted';
 type ProviderPathTrust = 'trusted' | 'untrusted' | 'local-untrusted';
 type ProviderCordisTrust = 'trusted' | 'untrusted' | 'local-untrusted';
 
 export interface NormalizeProviderOptionsOptions {
   baseUrlTrust?: ProviderBaseUrlTrust;
-  pythonPathTrust?: ProviderPythonPathTrust;
   pathTrust?: ProviderPathTrust;
   cordisTrust?: ProviderCordisTrust;
   pathPrefix?: string;
@@ -191,31 +189,6 @@ function assertAllowedProviderBaseUrl(
   throw new Error(
     `Configuration error: ${path} must use a loopback base_url when defined by workflow or project config. `
     + 'Move non-loopback provider base URLs to global config or TAKT_PROVIDER_OPTIONS_*_BASE_URL.',
-  );
-}
-
-function assertAllowedProviderPythonPath(
-  path: string,
-  value: string | undefined,
-  options: NormalizeProviderOptionsOptions,
-): void {
-  if (value === undefined) {
-    return;
-  }
-  const trust = options.pythonPathTrust ?? 'trusted';
-  if (trust === 'trusted') {
-    return;
-  }
-  if (trust === 'local-untrusted') {
-    const origin = options.getOrigin?.(path) ?? 'default';
-    if (origin !== 'local' && origin !== 'default') {
-      return;
-    }
-  }
-
-  throw new Error(
-    `Configuration error: ${path} may only be set by trusted user configuration. `
-    + 'Use global config or TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH.',
   );
 }
 
@@ -477,11 +450,6 @@ export function normalizeProviderOptions(
       options.deepseek_harness.base_url,
       normalizationOptions,
     );
-    assertAllowedProviderPythonPath(
-      `${deepseekOptionsPath}.python_path`,
-      options.deepseek_harness.python_path,
-      normalizationOptions,
-    );
     assertTrustedProjectPath(
       `${deepseekOptionsPath}.session_root`,
       options.deepseek_harness.session_root,
@@ -493,9 +461,6 @@ export function normalizeProviderOptions(
       normalizationOptions,
     );
     const deepseekHarness: DeepSeekHarnessProviderOptions = {
-      ...(options.deepseek_harness.python_path !== undefined
-        ? { pythonPath: options.deepseek_harness.python_path }
-        : {}),
       ...(options.deepseek_harness.base_url !== undefined
         ? { baseUrl: options.deepseek_harness.base_url }
         : {}),
@@ -525,6 +490,7 @@ export function normalizeProviderOptions(
   if (options.pi !== undefined) {
     const pi: PiProviderOptions = {
       ...(options.pi.extensions !== undefined ? { extensions: [...options.pi.extensions] } : {}),
+      ...(options.pi.thinking_level !== undefined ? { thinkingLevel: options.pi.thinking_level } : {}),
       ...(options.pi.no_extensions !== undefined ? { noExtensions: options.pi.no_extensions } : {}),
       ...(options.pi.no_skills !== undefined ? { noSkills: options.pi.no_skills } : {}),
       ...(options.pi.no_prompt_templates !== undefined
@@ -766,6 +732,7 @@ export function mergeProviderOptions(
           ? { guards: { ...result.pi?.guards, ...layer.pi.guards } }
           : {}),
         ...(layer.pi.extensions !== undefined ? { extensions: [...layer.pi.extensions] } : {}),
+        ...(layer.pi.thinkingLevel !== undefined ? { thinkingLevel: layer.pi.thinkingLevel } : {}),
         ...(layer.pi.noExtensions !== undefined ? { noExtensions: layer.pi.noExtensions } : {}),
         ...(layer.pi.noSkills !== undefined ? { noSkills: layer.pi.noSkills } : {}),
         ...(layer.pi.noPromptTemplates !== undefined
@@ -1136,12 +1103,6 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.kiro?.agent,
     resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
   );
-  const deepseekHarnessPythonPath = selectProviderValue(
-    resolvedConfigOptions.deepseekHarness?.pythonPath,
-    personaOptions?.deepseekHarness?.pythonPath,
-    stepOptions?.deepseekHarness?.pythonPath,
-    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.pythonPath', source),
-  );
   const deepseekHarnessBaseUrl = selectProviderValueByScope(
     resolvedConfigOptions.deepseekHarness?.baseUrl,
     personaOptions?.deepseekHarness?.baseUrl,
@@ -1188,6 +1149,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.pi?.extensions,
     stepOptions?.pi?.extensions,
     resolveProviderOptionOrigin(originResolver, 'pi.extensions', source),
+  );
+  const piThinkingLevel = selectProviderValue(
+    resolvedConfigOptions.pi?.thinkingLevel,
+    personaOptions?.pi?.thinkingLevel,
+    stepOptions?.pi?.thinkingLevel,
+    resolveProviderOptionOrigin(originResolver, 'pi.thinkingLevel', source),
   );
   const piNoExtensions = selectProviderValue(
     resolvedConfigOptions.pi?.noExtensions,
@@ -1390,8 +1357,7 @@ export function resolveEffectiveProviderOptions(
     ...(cursorCallTimeoutMs !== undefined
       ? { cursor: { guards: { callTimeoutMs: cursorCallTimeoutMs } } }
       : {}),
-    ...(deepseekHarnessPythonPath !== undefined
-      || deepseekHarnessBaseUrl !== undefined
+    ...(deepseekHarnessBaseUrl !== undefined
       || deepseekHarnessSessionRoot !== undefined
       || deepseekHarnessCordis !== undefined
       || deepseekHarnessMaxTokens !== undefined
@@ -1400,7 +1366,6 @@ export function resolveEffectiveProviderOptions(
       || deepseekHarnessRuntimeMode !== undefined
       ? {
           deepseekHarness: {
-            ...(deepseekHarnessPythonPath !== undefined ? { pythonPath: deepseekHarnessPythonPath } : {}),
             ...(deepseekHarnessBaseUrl !== undefined ? { baseUrl: deepseekHarnessBaseUrl } : {}),
             ...(deepseekHarnessSessionRoot !== undefined ? { sessionRoot: deepseekHarnessSessionRoot } : {}),
             ...(deepseekHarnessCordis !== undefined ? { cordis: deepseekHarnessCordis } : {}),
@@ -1416,6 +1381,7 @@ export function resolveEffectiveProviderOptions(
         }
       : {}),
     ...(piExtensions !== undefined
+      || piThinkingLevel !== undefined
       || piCallTimeoutMs !== undefined
       || piNoExtensions !== undefined
       || piNoSkills !== undefined
@@ -1428,6 +1394,7 @@ export function resolveEffectiveProviderOptions(
               ? { guards: { callTimeoutMs: piCallTimeoutMs } }
               : {}),
             ...(piExtensions !== undefined ? { extensions: [...piExtensions] } : {}),
+            ...(piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : {}),
             ...(piNoExtensions !== undefined ? { noExtensions: piNoExtensions } : {}),
             ...(piNoSkills !== undefined ? { noSkills: piNoSkills } : {}),
             ...(piNoPromptTemplates !== undefined ? { noPromptTemplates: piNoPromptTemplates } : {}),
@@ -1519,6 +1486,9 @@ function stripClaudeAllowedTools(
             ...(providerOptions.pi.extensions !== undefined
               ? { extensions: [...providerOptions.pi.extensions] }
               : {}),
+            ...(providerOptions.pi.thinkingLevel !== undefined
+              ? { thinkingLevel: providerOptions.pi.thinkingLevel }
+              : {}),
             ...(providerOptions.pi.noExtensions !== undefined
               ? { noExtensions: providerOptions.pi.noExtensions }
               : {}),
@@ -1602,7 +1572,6 @@ export const PROVIDER_OPTION_PATHS = [
   'kiro.agent',
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
-  'deepseekHarness.pythonPath',
   'deepseekHarness.baseUrl',
   'deepseekHarness.sessionRoot',
   'deepseekHarness.cordis',
@@ -1611,6 +1580,7 @@ export const PROVIDER_OPTION_PATHS = [
   'deepseekHarness.shutdownTimeoutMs',
   'deepseekHarness.runtimeMode',
   'pi.extensions',
+  'pi.thinkingLevel',
   'pi.guards.callTimeoutMs',
   'pi.noExtensions',
   'pi.noSkills',

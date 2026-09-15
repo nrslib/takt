@@ -244,6 +244,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction,
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildInstruction>) => ({
+          text: buildInstruction(...args), injectedReports: [],
+        })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -593,6 +596,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         createCompanionDiffBaseline,
         createCompanionRuntime,
         completeCompanionReview,
@@ -704,6 +708,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             task,
             previousOutput: currentState.lastOutput,
           })).build()),
+        prepareInstruction: vi.fn((candidate: WorkflowStep, _iteration, currentState: WorkflowState, task: string) =>
+          new InstructionBuilder(candidate, makeInstructionContext({ task, previousOutput: currentState.lastOutput })).prepare()),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -927,6 +933,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           candidate,
           makeInstructionContext({ task: 'implement feature' }),
         ).build()),
+        prepareInstruction: vi.fn((candidate: WorkflowStep) => new InstructionBuilder(
+          candidate, makeInstructionContext({ task: 'implement feature' }),
+        ).prepare()),
         createCompanionDiffBaseline,
         createCompanionRuntime,
         completeCompanionReview,
@@ -1074,6 +1083,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildInstruction: vi.fn((candidate: WorkflowStep) => candidate.name.includes('.')
           ? candidate.instruction ?? ''
           : 'leader instruction'),
+        prepareInstruction: vi.fn(() => ({ text: 'leader instruction', injectedReports: [] })),
         createCompanionDiffBaseline: vi.fn().mockReturnValue(undefined),
         createCompanionRuntime,
         completeCompanionReview,
@@ -1171,6 +1181,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases,
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -1298,6 +1309,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         createCompanionDiffBaseline: vi.fn().mockReturnValue(undefined),
         createCompanionRuntime: vi.fn(async (candidateStep: WorkflowStep) => (
           candidateStep.name === 'implement' ? teamRuntime : undefined
@@ -1380,6 +1392,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       optionsBuilder,
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -1480,6 +1493,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       optionsBuilder,
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -1867,6 +1881,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -2004,6 +2019,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -2127,6 +2143,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       optionsBuilder,
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -2246,6 +2263,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -2395,6 +2413,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -2514,6 +2533,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -2632,6 +2652,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -2746,6 +2767,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         },
         stepExecutor: {
           buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+          prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
           applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
           persistPreviousResponseSnapshot: vi.fn(),
           emitStepReports: vi.fn(),
@@ -2863,6 +2885,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -2979,6 +3002,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -3091,6 +3115,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -3217,6 +3242,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -3336,6 +3362,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       },
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -3431,6 +3458,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         },
         stepExecutor: {
           buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+          prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
           applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
           persistPreviousResponseSnapshot: vi.fn(),
           emitStepReports: vi.fn(),
@@ -3613,6 +3641,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         },
         stepExecutor: {
           buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+          prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
           applyPostExecutionPhases,
           persistPreviousResponseSnapshot: vi.fn(),
           emitStepReports: vi.fn(),

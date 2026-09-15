@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 
 const { mkdtempMock, chmodMock, writeFileMock, rmMock } = vi.hoisted(() => ({
-  mkdtempMock: vi.fn(),
-  chmodMock: vi.fn(),
-  writeFileMock: vi.fn(),
-  rmMock: vi.fn(),
+  mkdtempMock: vi.fn<typeof import('node:fs/promises').mkdtemp>(),
+  chmodMock: vi.fn<typeof import('node:fs/promises').chmod>(),
+  writeFileMock: vi.fn<typeof import('node:fs/promises').writeFile>(),
+  rmMock: vi.fn<typeof import('node:fs/promises').rm>(),
 }));
 
 const { assertClaudeSkillsDisableSupportedMock } = vi.hoisted(() => ({
@@ -107,11 +108,11 @@ describe('callClaudeHeadless', () => {
         capturedMcpConfigContent = readFileSync(capturedMcpConfigPath!, 'utf-8');
         capturedMcpConfigMode = statSync(capturedMcpConfigPath!).mode & 0o777;
       }
-      const stdout = new EventEmitter();
-      const stderr = new EventEmitter();
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
       const proc = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
-      proc.stdout = stdout as NodeJS.ReadableStream;
-      proc.stderr = stderr as NodeJS.ReadableStream;
+      proc.stdout = stdout;
+      proc.stderr = stderr;
       lastKill = vi.fn();
       proc.kill = lastKill as unknown as ChildProcess['kill'];
 
@@ -1285,6 +1286,61 @@ describe('callClaudeHeadless', () => {
       data: { tool: 'Edit', id: 'tool-1', input: { file_path: 'src/a.ts' } },
     });
     expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'result',
+      data: {
+        result: 'done',
+        success: true,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
+  it('streams tool_result blocks with their matching tool id before the final result', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{
+              type: 'tool_use',
+              id: 'tool-1',
+              name: 'takt_get_run',
+              input: { runSlug: 'run-a' },
+            }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'user',
+          message: {
+            content: [{
+              type: 'tool_result',
+              tool_use_id: 'tool-1',
+              content: [{ type: 'text', text: 'run state' }],
+              is_error: false,
+            }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'done',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    await callClaudeHeadless('agent', 'p', { cwd: '/tmp', onStream });
+
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'tool_use',
+      data: { tool: 'takt_get_run', id: 'tool-1', input: { runSlug: 'run-a' } },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'tool_result',
+      data: { id: 'tool-1', content: 'run state', isError: false },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(3, {
       type: 'result',
       data: {
         result: 'done',

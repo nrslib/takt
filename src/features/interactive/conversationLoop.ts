@@ -47,6 +47,7 @@ import { resolvePreviousOrder } from './conversationPlan.js';
 import { prependInitialPromptContext } from './promptSections.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { InternalAgentIsolation } from '../../shared/types/provider.js';
+import { runTellCommand } from './tellCommand.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
@@ -153,6 +154,10 @@ export interface ConversationStrategy {
   formalSpecComments?: boolean;
   /** Resolve prompt configuration after the user selects another session. */
   resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
+  /** Resolve the prompt again immediately before a regular turn or /go summary. */
+  resolveCurrentPromptConfiguration?: () => ConversationPromptConfiguration | Promise<ConversationPromptConfiguration>;
+  /** Use the current conversation system prompt as /go's system prompt. */
+  useCurrentSystemPromptForSummary?: boolean;
   /** Allowed tools for AI calls */
   allowedTools: string[];
   /** Permission mode for AI calls. */
@@ -177,8 +182,16 @@ export interface ConversationStrategy {
   previousOrderContent?: string;
   /** Enable /retry slash command (retry mode only) */
   enableRetryCommand?: boolean;
+  /** Enable /open for a mode that can resolve a target run directory. */
+  enableOpenCommand?: boolean;
   /** Explicit slash-command allowlist for modes with a guarded execution path. */
   enabledCommands?: readonly SlashCommand[];
+  /** Enable the normal-assistant-only `/tell` command. */
+  enableTellCommand?: boolean;
+  /** Run to use as the initial `/tell` choice. */
+  initialReferenceRunSlug?: string;
+  /** Capability notice shown before the first user input. */
+  mcpUnavailableNotice?: string;
   /** Context prepended to the first regular prompt in this conversation. */
   initialPromptContext?: string;
   /** Task/action content supplied to the first `/verify` generation call. */
@@ -208,12 +221,20 @@ export async function runConversationLoop(
     ? [{ role: 'user', content: initialUserMessage }]
     : [];
   const sourceContext = initialInput?.sourceContext;
+  let referenceRunSlug = strategy.initialReferenceRunSlug;
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
   let sessionId = ctx.sessionId;
   let activePromptConfiguration: ConversationPromptConfiguration = {
     systemPrompt: strategy.systemPrompt,
     formalSpec: strategy.formalSpec,
     formalSpecComments: strategy.formalSpecComments ?? true,
+  };
+  const refreshPromptConfiguration = async (): Promise<void> => {
+    const resolved = await strategy.resolveCurrentPromptConfiguration?.();
+    if (resolved === undefined) {
+      return;
+    }
+    activePromptConfiguration = resolved;
   };
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
@@ -226,6 +247,9 @@ export async function runConversationLoop(
 
   try {
     info(strategy.introMessage);
+    if (strategy.mcpUnavailableNotice !== undefined) {
+      info(strategy.mcpUnavailableNotice);
+    }
     if (sessionId) {
       info(ui.resume);
     }
@@ -442,6 +466,10 @@ export async function runConversationLoop(
     let commandAvailability: CommandAvailability = resolveFormalSpecCommandAvailability({
       enableRetryCommand: strategy.enableRetryCommand,
       hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
+      ...(strategy.enableTellCommand === undefined
+        ? {}
+        : { enableTellCommand: strategy.enableTellCommand }),
+      ...(strategy.enableOpenCommand === true ? { enableOpenCommand: true } : {}),
       enabledCommands: strategy.enabledCommands,
     }, activePromptConfiguration.formalSpec);
 
@@ -468,6 +496,9 @@ export async function runConversationLoop(
           info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
           continue;
         }
+        if (strategy.resolveCurrentPromptConfiguration !== undefined) {
+          await refreshPromptConfiguration();
+        }
         history.push({ role: 'user', content: trimmed });
         log.debug('Sending to AI', {
           messageCount: history.length,
@@ -487,6 +518,9 @@ export async function runConversationLoop(
         );
         if (result) {
           shouldSendInitialPromptContext = false;
+          if (result.referenceRunSlug !== undefined) {
+            referenceRunSlug = result.referenceRunSlug;
+          }
           if (!result.success) {
             error(result.content);
             blankLine();
@@ -541,6 +575,9 @@ export async function runConversationLoop(
         }
 
         case SlashCommand.Go: {
+          if (strategy.resolveCurrentPromptConfiguration !== undefined) {
+            await refreshPromptConfiguration();
+          }
           const { summaryHistory, userNote } = resolveGoSummaryInput(
             history,
             !!sessionId,
@@ -592,7 +629,12 @@ export async function runConversationLoop(
           }
           // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
           const { result: summaryResult } = await callAIWithRetry(
-            summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
+            summaryPrompt,
+            strategy.useCurrentSystemPromptForSummary
+              ? activePromptConfiguration.systemPrompt
+              : summaryPrompt,
+            strategy.allowedTools,
+            cwd,
             { ...ctx, sessionId: undefined },
             {
               imageAttachments: summaryImageAttachments,
@@ -635,6 +677,19 @@ export async function runConversationLoop(
         case SlashCommand.Cancel: {
           info(ui.cancelled);
           return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+        }
+
+        case SlashCommand.Tell: {
+          const notice = await runTellCommand({
+            cwd,
+            lang: ctx.lang,
+            inlineText: match.text,
+            history,
+            sessionContext: ctx,
+            ...(referenceRunSlug === undefined ? {} : { preferredRunSlug: referenceRunSlug }),
+          });
+          info(notice);
+          continue;
         }
 
         case SlashCommand.Resume: {

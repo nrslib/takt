@@ -69,6 +69,9 @@ export interface TuiConversationRunOptions {
    * the session with, or with the result that ends the run.
    */
   readonly onHandoff?: (id: TuiHandoffId, text: string) => Promise<TuiHandoffOutcome>;
+  /** Reads a live workflow status while this view remains mounted. */
+  readonly liveStatusReader?: () => string;
+  readonly liveStatusRefreshIntervalMs?: number;
 }
 
 export type TuiHandoffOutcome =
@@ -186,6 +189,8 @@ export async function runTuiConversation(
         // images it pasted have to stay available.
         residentSession={options.dispatch !== undefined}
         finalizeTranscript={finalizeTranscript}
+        liveStatusReader={options.liveStatusReader}
+        liveStatusRefreshIntervalMs={options.liveStatusRefreshIntervalMs}
         onExit={(exit, carried) => {
           // A failure ends the run rather than the mount, so it is reported as
           // the mount's own failure and outranks anything the teardown hits.

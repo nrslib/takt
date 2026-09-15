@@ -2,10 +2,23 @@ import type { AgentResponse, CompanionFinding } from '../../models/index.js';
 import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import { createAbortError } from './abort.js';
 import { buildCompanionFollowUpInstruction } from './evidence.js';
+import {
+  isLiveInterventionStructuredOutputFinalizationError,
+} from '../structured-output-finalization-error.js';
 
 export interface CompanionFollowUpContext {
   readonly followUpRound: number;
 }
+
+export type CompanionFollowUpResult =
+  | {
+      readonly kind: 'normal_follow_up';
+      readonly response: AgentResponse;
+    }
+  | {
+      readonly kind: 'live_intervention';
+      readonly response: AgentResponse;
+    };
 
 export async function runCompanionFixLoop<TOptions extends object>(input: {
   readonly initialResponse: AgentResponse;
@@ -20,7 +33,7 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
     readonly sessionId: string | undefined;
     readonly options: TOptions & { sessionId: string | undefined };
     readonly instruction: string;
-  }) => Promise<AgentResponse>;
+  }) => Promise<CompanionFollowUpResult>;
   readonly abortSignal?: AbortSignal;
 }): Promise<{
   readonly phaseResponse: AgentResponse;
@@ -44,9 +57,9 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
       return { phaseResponse: latestResponse, latestSessionId, followUpRounds };
     }
 
-    let fixed: AgentResponse;
+    let fixedResult: CompanionFollowUpResult;
     try {
-      fixed = await input.executeFollowUp({
+      fixedResult = await input.executeFollowUp({
         sequence: followUpRounds + 2,
         phase: 1,
         findingCount: review.findings.length,
@@ -57,6 +70,7 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
     } catch (error) {
       followUpRounds += 1;
       throwIfAborted(input.abortSignal);
+      if (isLiveInterventionStructuredOutputFinalizationError(error)) throw error;
       return {
         phaseResponse: latestResponse,
         latestSessionId,
@@ -66,6 +80,15 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
     }
     throwIfAborted(input.abortSignal);
     followUpRounds += 1;
+    const fixed = fixedResult.response;
+    if (fixedResult.kind === 'live_intervention' && fixed.status !== 'done') {
+      return {
+        phaseResponse: fixed,
+        latestSessionId: fixed.sessionId ?? latestSessionId,
+        followUpRounds,
+        followUpFailureReason: safeExternalErrorMessage(fixed.error ?? fixed.content),
+      };
+    }
     if (fixed.status !== 'done') {
       return {
         phaseResponse: latestResponse,

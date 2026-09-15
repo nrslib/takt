@@ -101,6 +101,53 @@ function extractToolUseEvents(content: unknown): ClaudeTerminalEvent[] {
   });
 }
 
+function stringifyToolResultBlock(block: unknown): string {
+  if (typeof block === 'string') {
+    return block;
+  }
+  const record = toRecord(block);
+  if (record?.type === 'text' && typeof record.text === 'string') {
+    return record.text;
+  }
+  const serialized = JSON.stringify(block);
+  return serialized ?? String(block);
+}
+
+function normalizeToolResultContent(content: unknown): string {
+  if (content === undefined) {
+    return '';
+  }
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map(stringifyToolResultBlock).join('');
+  }
+  return stringifyToolResultBlock(content);
+}
+
+function extractToolResultEvents(content: unknown): ClaudeTerminalEvent[] {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.flatMap<ClaudeTerminalEvent>((item) => {
+    const record = toRecord(item);
+    if (
+      record?.type !== 'tool_result'
+      || typeof record.tool_use_id !== 'string'
+      || record.tool_use_id.length === 0
+    ) {
+      return [];
+    }
+    return [{
+      type: 'tool_result' as const,
+      id: record.tool_use_id,
+      content: normalizeToolResultContent(record.content),
+      isError: record.is_error === true,
+    }];
+  });
+}
+
 function readSessionId(entry: Record<string, unknown>, currentSessionId: string): string {
   if (typeof entry.session_id === 'string' && entry.session_id.length > 0) {
     return entry.session_id;
@@ -123,6 +170,15 @@ function appendTranscriptEntry(
     return {
       sessionId,
       assistantText: [...(parsed.assistantText ? [parsed.assistantText] : []), ...text].join('\n'),
+      events: [...parsed.events, ...events],
+    };
+  }
+  if (entry.type === 'user') {
+    const message = toRecord(entry.message);
+    const events = extractToolResultEvents(message?.content);
+    return {
+      sessionId,
+      assistantText: parsed.assistantText,
       events: [...parsed.events, ...events],
     };
   }

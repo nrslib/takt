@@ -28,7 +28,8 @@ export type Phase1AttemptReason =
   | 'empty_continuation'
   | 'empty_fresh'
   | 'publication_retry_fresh'
-  | 'companion_fix';
+  | 'companion_fix'
+  | 'live_intervention';
 
 export interface Phase1Attempt {
   readonly sequence: number;

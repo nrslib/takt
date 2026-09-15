@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: peer-review / ai-antipattern-review-2nd — wording-fixed test detection.
+# Measures the ai-antipattern policy section against Claude Opus 5 and Codex Luna Max.
+# claude / codex CLI login is required. Excluded from the default suite.
+# Run via npm run eval:prompts -- antipattern-wording-tests
+
+description: 'TAKT facet eval: ai-antipattern review detects wording-fixed tests'
+
+prompts:
+  - file://../../prompts/antipattern-review.phase1.md
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/sample-project
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/sample-project
+      isolate_working_dir: true
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+evaluateOptions:
+  maxConcurrency: 2
+
+tests:
+  - description: 'recall: wording-fixed tests without contract grounds must be flagged'
+    vars:
+      task: file://../../cases/antipattern-wording-tests.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: recall/wording-fixed-tests
+        value: |
+          Judge the review by its decision and reasoning, not by exact wording. The change adds `src/report.test.ts`, whose assertions pin human-readable wording that the task never specified: the Japanese summary string `レポート: 3 件のテンプレートを処理しました`, the warn log line `[warn] report: no templates provided; skipping generation\n`, and the full error message `Failed to generate report: no templates available`. None of these strings is a declared contract.
+
+          Pass only if the review raises this as a blocking issue (REJECT or equivalent): the tests fix non-contract wording by exact match, so rewording the implementation breaks the tests without any behavioral regression, and the tests should instead verify actual contracts such as the error type, the thrown error itself, or observable side effects. The review must identify the wording-pinning in report.test.ts itself, not merely mention test quality in general.
+
+          Fail if the review approves the change without flagging the wording-fixed assertions, treats exact string matching of messages as a correct or acceptable test style, or only suggests optional improvements while keeping the change non-blocking.
+  - description: 'precision: declared machine-readable contract assertions are not wording fixation'
+    vars:
+      task: file://../../cases/antipattern-wording-contract-tokens.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: precision/contract-token-assertions
+        value: |
+          Judge the review by its decision and reasoning, not by exact wording. The task explicitly declares the contract: exit code 3 and error code `REPORT_TEMPLATE_MISSING` when no template is given, while the human-readable message text is explicitly not part of the contract. The tests in `src/cli-exit.test.ts` assert the error type, the `code` property, the named constants, and the exit code value — all declared contracts — and do not pin the human-readable message.
+
+          Pass only if the review does NOT raise wording fixation or "meaningless exact string pinning" as a blocking issue against these assertions. Approving the change, or at most noting non-blocking observations, is a pass.
+
+          Fail if the review rejects or blocks the change because the tests fix the error code or exit code values, or because it demands that the declared contract values be asserted only loosely.

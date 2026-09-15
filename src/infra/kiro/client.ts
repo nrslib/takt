@@ -1,7 +1,15 @@
 import type { AgentResponse } from '../../core/models/index.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
 import { createLogger, getErrorMessage, stripAnsi } from '../../shared/utils/index.js';
 import { execKiro, type KiroExecError } from './process.js';
 import type { KiroCallOptions } from './types.js';
+import {
+  emitStructuredEvents,
+  extractStructuredText,
+  firstNonEmptyString,
+  parseValidJsonLines,
+  toRecord,
+} from '../structured-cli-output.js';
 
 export type { KiroCallOptions } from './types.js';
 
@@ -63,6 +71,10 @@ function buildArgs(options: KiroCallOptions, prompt: string): string[] {
   const args = [
     'chat',
     '--no-interactive',
+    '--engine',
+    'v2',
+    '--output-format',
+    'stream-json',
     ...buildTrustArgs(options),
   ];
 
@@ -232,6 +244,199 @@ async function resolveLatestSessionId(options: KiroCallOptions): Promise<string 
   }
 }
 
+interface KiroParsedOutput {
+  readonly content: string;
+  readonly sessionId?: string;
+  readonly events: readonly StreamEvent[];
+}
+
+function normalizedEventKind(value: unknown): string | undefined {
+  return typeof value === 'string'
+    ? value.toLowerCase().replace(/[\s_-]/gu, '')
+    : undefined;
+}
+
+function isKiroToolUse(record: Record<string, unknown>): boolean {
+  const kind = normalizedEventKind(record.kind ?? record.type ?? record.blockType);
+  return kind === 'tooluse' || kind === 'toolcall' || kind === 'toolrequest';
+}
+
+function isKiroToolResult(record: Record<string, unknown>): boolean {
+  const kind = normalizedEventKind(record.kind ?? record.type ?? record.blockType);
+  return kind === 'toolresult' || kind === 'tooloutput';
+}
+
+function extractKiroSessionId(value: unknown): string | undefined {
+  const root = toRecord(value);
+  if (root === undefined) {
+    return undefined;
+  }
+  const nestedData = toRecord(root.data);
+  const nestedMetadata = toRecord(root.metadata);
+  return firstNonEmptyString([
+    root.sessionId,
+    root.session_id,
+    root.sessionID,
+    nestedData?.sessionId,
+    nestedData?.session_id,
+    nestedData?.sessionID,
+    nestedMetadata?.sessionId,
+    nestedMetadata?.session_id,
+  ]);
+}
+
+function parseKiroToolUse(record: Record<string, unknown>): StreamEvent | undefined {
+  const id = firstNonEmptyString([record.toolUseId, record.toolCallId, record.tool_call_id, record.id]);
+  const tool = firstNonEmptyString([record.toolName, record.tool_name, record.name]);
+  if (id === undefined || tool === undefined) {
+    return undefined;
+  }
+  return {
+    type: 'tool_use',
+    data: {
+      id,
+      tool,
+      input: toRecord(record.input ?? record.arguments ?? record.args) ?? {},
+    },
+  };
+}
+
+function parseKiroToolResult(record: Record<string, unknown>): StreamEvent | undefined {
+  const id = firstNonEmptyString([record.toolUseId, record.toolCallId, record.tool_call_id, record.id]);
+  if (id === undefined) {
+    return undefined;
+  }
+  const content = extractStructuredText(
+    record.content
+      ?? record.output
+      ?? record.result
+      ?? record.data
+      ?? record.text,
+  ) ?? '';
+  const status = normalizedEventKind(record.status);
+  return {
+    type: 'tool_result',
+    data: {
+      id,
+      content,
+      isError: record.isError === true
+        || record.is_error === true
+        || record.success === false
+        || status === 'error'
+        || status === 'failed',
+    },
+  };
+}
+
+function collectKiroStructuredEvents(
+  value: unknown,
+  events: StreamEvent[],
+  assistantText: string[],
+  terminalContent: { value?: string },
+): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectKiroStructuredEvents(entry, events, assistantText, terminalContent);
+    }
+    return;
+  }
+
+  const record = toRecord(value);
+  if (record === undefined) {
+    return;
+  }
+
+  if (isKiroToolUse(record)) {
+    const event = parseKiroToolUse(record);
+    if (event !== undefined) {
+      events.push(event);
+    }
+    return;
+  }
+  if (isKiroToolResult(record)) {
+    const event = parseKiroToolResult(record);
+    if (event !== undefined) {
+      events.push(event);
+    }
+    return;
+  }
+
+  const kind = normalizedEventKind(record.kind ?? record.type ?? record.blockType);
+  const data = toRecord(record.data);
+  if (kind === 'assistantmessage' || kind === 'assistant') {
+    const content = record.content ?? record.message ?? data?.content ?? data?.message;
+    collectKiroStructuredEvents(
+      content,
+      events,
+      assistantText,
+      terminalContent,
+    );
+    if (typeof content === 'string') {
+      assistantText.push(content);
+    }
+    return;
+  }
+  if (kind === 'toolresults' || kind === 'toolresultmessage') {
+    collectKiroStructuredEvents(
+      record.content ?? record.results ?? record.toolResults ?? data?.content ?? data?.results,
+      events,
+      assistantText,
+      terminalContent,
+    );
+    return;
+  }
+  if (kind === 'result' || kind === 'final' || kind === 'assistantmessagecomplete') {
+    const content = extractStructuredText(
+      record.result ?? record.content ?? data?.result ?? data?.content,
+    );
+    if (content !== undefined) {
+      terminalContent.value = content;
+    }
+    return;
+  }
+
+  if (typeof record.text === 'string' && kind === 'text') {
+    assistantText.push(record.text);
+    return;
+  }
+
+  for (const key of ['content', 'message', 'data', 'results']) {
+    collectKiroStructuredEvents(record[key], events, assistantText, terminalContent);
+  }
+}
+
+function parseKiroOutput(stdout: string): KiroParsedOutput | { error: string } {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return { error: 'kiro-cli returned empty output' };
+  }
+
+  const lines = parseValidJsonLines(stdout);
+  if (lines.length === 0) {
+    const content = cleanKiroOutput(stdout);
+    return content.length === 0
+      ? { error: 'kiro-cli returned empty output' }
+      : { content, events: [] };
+  }
+
+  const events: StreamEvent[] = [];
+  const assistantText: string[] = [];
+  const terminalContent: { value?: string } = {};
+  let sessionId: string | undefined;
+  for (const line of lines) {
+    sessionId = extractKiroSessionId(line) ?? sessionId;
+    collectKiroStructuredEvents(line, events, assistantText, terminalContent);
+  }
+
+  const content = terminalContent.value ?? assistantText.join('');
+  if (content.length === 0) {
+    return {
+      error: `Failed to extract assistant content from kiro-cli JSONL output: ${trimDetail(trimmed)}`,
+    };
+  }
+  return { content, sessionId, events };
+}
+
 function emitResult(
   options: KiroCallOptions,
   result: string,
@@ -262,7 +467,19 @@ export class KiroClient {
       const args = buildArgs(effectiveOptions, promptText);
       options.onActivity?.({ kind: 'attempt_started' });
       const { stdout } = await execKiro(args, effectiveOptions);
-      const content = cleanKiroOutput(stdout);
+      const parsed = parseKiroOutput(stdout);
+      if ('error' in parsed) {
+        emitResult(options, '', false, parsed.error, options.sessionId);
+        return {
+          persona: agentType,
+          status: 'error',
+          content: parsed.error,
+          error: parsed.error,
+          timestamp: new Date(),
+          sessionId: options.sessionId,
+        };
+      }
+      const content = parsed.content;
       const outputError = content.length === 0
         ? 'kiro-cli returned empty output'
         : content === KIRO_CONTEXT_COMPACTION_NOTICE
@@ -284,8 +501,11 @@ export class KiroClient {
       // First turn (no session yet): resolve the real session ID now so the
       // caller can resume with `--resume-id` on the next turn. Resume turns
       // already know their session ID, so skip the extra process spawn.
-      const resolvedSessionId = options.sessionId ?? await resolveLatestSessionId(effectiveOptions);
+      const resolvedSessionId = options.sessionId
+        ?? parsed.sessionId
+        ?? await resolveLatestSessionId(effectiveOptions);
 
+      emitStructuredEvents(options.onStream, parsed.events);
       options.onStream?.({ type: 'text', data: { text: content } });
       emitResult(options, content, true, undefined, resolvedSessionId);
 

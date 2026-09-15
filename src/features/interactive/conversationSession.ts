@@ -49,6 +49,10 @@ export interface ConversationSessionStrategy {
    * from the canonical order — the same builder the readline loop uses.
    */
   summaryPromptBuilder?: SummaryPromptBuilder;
+  /** Resolve the prompt again immediately before a regular turn or /go summary. */
+  resolveCurrentPromptConfiguration?: () => ConversationPromptConfiguration | Promise<ConversationPromptConfiguration>;
+  /** Use the current conversation system prompt as /go's system prompt. */
+  useCurrentSystemPromptForSummary?: boolean;
   /**
    * The commands this mode allows. The front-end refuses the rest before they
    * reach the session, and the session reads the same list so a line a guarded
@@ -57,6 +61,10 @@ export interface ConversationSessionStrategy {
   enabledCommands?: readonly SlashCommand[];
   /** Task/action content supplied to the first `/verify` generation call. */
   formalSpecInitialContext?: string;
+  /** Enable the normal-assistant-only `/tell` command. */
+  enableTellCommand?: boolean;
+  /** Run to use as the initial `/tell` choice. */
+  initialReferenceRunSlug?: string;
 }
 
 export interface ConversationSessionOptions {
@@ -163,6 +171,8 @@ export interface InteractiveConversationSession extends ConversationSession {
   snapshotHistory(): readonly ConversationMessage[];
   /** Apply an effort override to subsequent calls without replacing the session. */
   setEffort(effort: string): void;
+  /** Latest run confirmed by a successful task-state lookup in this session. */
+  getReferenceRunSlug?(): string | undefined;
 }
 
 function prependHandoffHistory(
@@ -230,10 +240,20 @@ export function createConversationSession(options: ConversationSessionOptions): 
   let formalSpecComments = options.formalSpecComments ?? options.strategy.formalSpecComments ?? true;
   let systemPrompt = options.strategy.systemPrompt;
   let ctx: SessionContext = { ...options.ctx };
+  let referenceRunSlug = options.strategy.initialReferenceRunSlug;
   let pendingHandoffHistory = options.handoffHistory && options.handoffHistory.length > 0
     ? options.handoffHistory.map((message) => ({ ...message }))
     : undefined;
   let shouldSendInitialPromptContext = !!options.strategy.initialPromptContext;
+  async function refreshPromptConfiguration(): Promise<void> {
+    const resolved = await options.strategy.resolveCurrentPromptConfiguration?.();
+    if (resolved === undefined) {
+      return;
+    }
+    formalSpec = resolved.formalSpec;
+    formalSpecComments = resolved.formalSpecComments ?? true;
+    systemPrompt = resolved.systemPrompt;
+  }
   /**
    * The turn whose result the session still belongs to.
    *
@@ -249,9 +269,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
    * a disabled command from being re-read as a command down here.
    */
   let commandAvailability: CommandAvailability = resolveFormalSpecCommandAvailability(
-    options.strategy.enabledCommands
-      ? { enabledCommands: options.strategy.enabledCommands }
-      : {},
+    {
+      enableTellCommand: options.strategy.enableTellCommand === true,
+      ...(options.strategy.enabledCommands
+        ? { enabledCommands: options.strategy.enabledCommands }
+        : {}),
+    },
     formalSpec,
   );
   /**
@@ -301,6 +324,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
     input: ConversationTurnInput,
   ): Promise<ConversationSessionResult> {
     const isCurrentTurn = beginTurn(input.abortSignal);
+    if (options.strategy.resolveCurrentPromptConfiguration !== undefined) {
+      await refreshPromptConfiguration();
+    }
     const previousHistory = history;
     history = [...history, { role: 'user', content: message }];
     const prompt = prependInitialPromptContext(
@@ -370,6 +396,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
       };
     }
     consumeHandoffHistory(providerPrompt.handoffHistory);
+    if (result.referenceRunSlug !== undefined) {
+      referenceRunSlug = result.referenceRunSlug;
+    }
     shouldSendInitialPromptContext = false;
     history = [...history, { role: 'assistant', content: result.content }];
     return {
@@ -550,6 +579,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
     // still running, so that one no longer writes history or session id when it
     // finally settles.
     const isCurrentTurn = beginTurn(input.abortSignal);
+    if (options.strategy.resolveCurrentPromptConfiguration !== undefined) {
+      await refreshPromptConfiguration();
+    }
     const resumedSessionNote = options.summarizeResumedSession === true && sessionId
       ? getLabel('interactive.noTranscript', ctx.lang)
       : undefined;
@@ -599,7 +631,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     }
     const { result, sessionId: newSessionId, error: callError } = await callAIWithRetry(
       providerPrompt.prompt,
-      summaryPrompt,
+      options.strategy.useCurrentSystemPromptForSummary ? systemPrompt : summaryPrompt,
       options.strategy.allowedTools,
       options.cwd,
       { ...ctx, sessionId: undefined },
@@ -656,6 +688,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
     setEffort(effort: string): void {
       ctx = { ...ctx, effort };
+    },
+    getReferenceRunSlug(): string | undefined {
+      return referenceRunSlug;
     },
     getLatestAssistantMessage(): string | null {
       for (let index = history.length - 1; index >= 0; index -= 1) {

@@ -59,6 +59,63 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('resolves Pi thinkingLevel by existing step/persona/config precedence without losing resource options', () => {
+    const configOptions = asProviderOptions({
+      pi: { thinkingLevel: 'medium', noSkills: true },
+    });
+    const personaOptions = asProviderOptions({
+      pi: { thinkingLevel: 'high' },
+    });
+    const stepOptions = asProviderOptions({
+      pi: { thinkingLevel: 'low', extensions: ['npm:step-extension'] },
+    });
+
+    expect(mergeProviderOptions(configOptions, personaOptions, stepOptions)).toEqual({
+      pi: {
+        thinkingLevel: 'low',
+        extensions: ['npm:step-extension'],
+        noSkills: true,
+      },
+    });
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      configOptions,
+      stepOptions,
+      personaOptions,
+    )).toEqual({
+      pi: {
+        thinkingLevel: 'low',
+        extensions: ['npm:step-extension'],
+        noSkills: true,
+      },
+    });
+    expect(resolveProviderOptionSource(
+      'pi.thinkingLevel',
+      stepOptions,
+      [{ source: 'persona_providers', options: personaOptions }],
+      configOptions,
+      undefined,
+      'project',
+    )).toBe('step');
+
+    const envResolved = resolveEffectiveProviderOptions(
+      'project',
+      (path) => (path === 'pi.thinkingLevel' ? 'env' : 'local'),
+      asProviderOptions({ pi: { thinkingLevel: 'high' } }),
+      asProviderOptions({ pi: { thinkingLevel: 'low' } }),
+    );
+    expect(envResolved).toEqual({ pi: { thinkingLevel: 'high' } });
+    expect(resolveProviderOptionSource(
+      'pi.thinkingLevel',
+      { pi: { thinkingLevel: 'low' } },
+      [],
+      { pi: { thinkingLevel: 'high' } },
+      (path) => (path === 'pi.thinkingLevel' ? 'env' : 'local'),
+      'project',
+    )).toBe('env');
+  });
+
   it.each([true, false])('preserves Codex fastMode=%s when a later layer overrides it', (fastMode) => {
     expect(mergeProviderOptions(
       asProviderOptions({ codex: { fastMode: true } }),
@@ -526,6 +583,26 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
     });
   });
 
+  it('Pi part keeps thinkingLevel while removing Claude allowed tools', () => {
+    const result = resolveEffectiveTeamLeaderPartProviderOptions(
+      'project',
+      undefined,
+      {
+        pi: { thinkingLevel: 'medium' },
+        claude: { allowedTools: ['Read', 'Glob'] },
+      },
+      {
+        pi: { thinkingLevel: 'high' },
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
+      'pi',
+      ['Read', 'Edit'],
+    );
+
+    expect(result?.pi?.thinkingLevel).toBe('high');
+    expect(result?.claude?.allowedTools).toBeUndefined();
+  });
+
   it('Claude part で part_allowed_tools 未指定なら merged claude.allowedTools を維持する', () => {
     const result = resolveEffectiveTeamLeaderPartProviderOptions(
       'project',
@@ -813,6 +890,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
       {
         pi: {
           extensions: ['npm:example-extension'],
+          thinkingLevel: 'high',
           noExtensions: true,
           noSkills: true,
           noPromptTemplates: true,
@@ -828,6 +906,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
 
     expect(result).toEqual({
       'pi.extensions': 'step',
+      'pi.thinkingLevel': 'step',
       'pi.noExtensions': 'step',
       'pi.noSkills': 'step',
       'pi.noPromptTemplates': 'step',
@@ -876,7 +955,6 @@ describe('providerOptionsContract', () => {
       'provider_options.kiro.agent',
       'provider_options.kiro.guards.call_timeout_ms',
       'provider_options.cursor.guards.call_timeout_ms',
-      'provider_options.deepseek_harness.python_path',
       'provider_options.deepseek_harness.base_url',
       'provider_options.deepseek_harness.session_root',
       'provider_options.deepseek_harness.cordis',
@@ -885,6 +963,7 @@ describe('providerOptionsContract', () => {
       'provider_options.deepseek_harness.shutdown_timeout_ms',
       'provider_options.deepseek_harness.runtime_mode',
       'provider_options.pi.extensions',
+      'provider_options.pi.thinking_level',
       'provider_options.pi.guards.call_timeout_ms',
       'provider_options.pi.no_extensions',
       'provider_options.pi.no_skills',
@@ -921,6 +1000,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.extensions');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.thinking_level');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_extensions');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_skills');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_prompt_templates');
@@ -976,6 +1056,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.deepseek_harness.request_timeout_ms');
     expect(toProviderOptionsTracePath('pi.extensions'))
       .toBe('provider_options.pi.extensions');
+    expect(toProviderOptionsTracePath('pi.thinkingLevel'))
+      .toBe('provider_options.pi.thinking_level');
     expect(toProviderOptionsTracePath('pi.noExtensions'))
       .toBe('provider_options.pi.no_extensions');
     expect(toProviderOptionsTracePath('pi.noSkills'))
@@ -1053,25 +1135,30 @@ describe('providerOptionsContract', () => {
   });
 
   it('enumerates pi SDK options when present', () => {
-    expect(getPresentProviderOptionPaths({
+    const paths = getPresentProviderOptionPaths({
       pi: {
         guards: { callTimeoutMs: 420_000 },
         extensions: ['npm:example-extension'],
+        thinkingLevel: 'high',
         noExtensions: true,
         noSkills: true,
         noPromptTemplates: true,
         noThemes: true,
         noContextFiles: true,
       },
-    })).toEqual([
+    });
+
+    expect(paths).toHaveLength(8);
+    expect(paths).toEqual(expect.arrayContaining([
       'pi.extensions',
+      'pi.thinkingLevel',
       'pi.guards.callTimeoutMs',
       'pi.noExtensions',
       'pi.noSkills',
       'pi.noPromptTemplates',
       'pi.noThemes',
       'pi.noContextFiles',
-    ]);
+    ]));
   });
 
   it('does not enumerate Pi SDK options for an empty pi entry', () => {
@@ -1232,6 +1319,7 @@ describe('claude_terminal provider_options normalization', () => {
       'kiro.guards.callTimeoutMs',
       'cursor.guards.callTimeoutMs',
       'pi.guards.callTimeoutMs',
+      'pi.thinkingLevel',
     ]));
   });
 

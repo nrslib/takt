@@ -164,6 +164,23 @@ Verification approach:
 3. When the fix concerns state transitions or permission propagation, verify call arguments and side effects in addition to final state
 4. Check that test names and completion reports do not overclaim behavior the test double cannot prove
 
+## Wording-Fixed Tests Without Contract Grounds
+
+AI tends to copy error messages, log output, UI copy, and prompts it finds during implementation directly into test expectations without checking contract grounds. "Implemented as a string" and "the string itself is a contract" are different things. The source of truth for judgment is the testing policy (Natural-Language and Declarative Asset Tests, Assertion Contracts).
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Fixing human-readable prose the requirements never specified, by full match or long substring | `toBe` on UI copy, log lines, or error message bodies | REJECT |
+| Claiming behavior is verified by message-wording match alone, without checking error occurrence, classification, or side effects | Long-string `toThrow('...')` with no side-effect verification | REJECT |
+| Copying prompts or i18n copy into expectations and claiming semantic behavior is guaranteed | `toBe` on full copy presented as a contract test | REJECT |
+| Verifying actual contracts: error types, codes, structured fields, state transitions | `instanceof`, error codes, side-effect assertions | OK |
+| Fixing protocol values, machine-readable tokens, public error codes, or explicitly approved wording at the contract owner's boundary | `[STEP:N]`, `ABORT`, exit codes | OK |
+
+Verification approach:
+1. For each assertion that fixes wording, check whether rewording it would break backward compatibility (if not, it is not a contract)
+2. Check whether the only ground is that the same wording exists in existing implementation or tests (copying from implementation is not contract grounds)
+3. When non-contract wording is fixed, flag for rewriting toward actual contracts: types, codes, structured fields, side effects
+
 ## Context Fitness Assessment
 
 Does the code fit this specific project?

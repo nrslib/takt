@@ -49,6 +49,8 @@ import {
 } from '../features/workflowMaker/index.js';
 import { prepareWorkflowExecutionBundle } from '../features/tasks/execute/workflowExecutionBundle.js';
 import { ReportInstructionBuilder } from '../core/workflow/instruction/ReportInstructionBuilder.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { makeInstructionContext } from './test-helpers.js';
 import { findAgentWorkflowStep, findWorkflowStep } from './test-helpers.js';
 
 function setBuiltinWorkflowsEnabledForTest(enabled: boolean): void {
@@ -317,6 +319,39 @@ describe('loadWorkflowByIdentifier', () => {
     const supervise = findWorkflowStep(workflow, 'supervise');
     const summary = supervise.outputContracts?.find((contract) => contract.name === 'summary.md');
     expect(summary?.useJudge).toBe(true);
+  });
+
+  it.each(['en', 'ja'] as const)('delivers parent artifacts through builtin development instructions (%s)', (language) => {
+    const projectDir = join(tempDir, language);
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+    const reports = join(projectDir, 'reports');
+    const childReports = join(reports, 'subworkflows', 'implementation');
+    mkdirSync(childReports, { recursive: true });
+    writeFileSync(join(reports, 'plan.md'), 'PARENT-REQUIREMENTS');
+    writeFileSync(join(reports, 'test-report.md'), 'PARENT-TEST-EVIDENCE');
+    for (const name of ['development-core', 'development-implement', 'development-implement-dynamic', 'development-implement-team', 'cli', 'review-fix-takt-default', 'maintenance', 'backend-maintenance', 'frontend-maintenance']) {
+      let workflow = loadWorkflowByIdentifier(name, projectDir);
+      if (!workflow) throw new Error(`Workflow not loaded: ${name}`);
+      while (true) {
+        const implementation = workflow.steps.find((step) => step.name === 'implement');
+        if (implementation && implementation.kind !== 'workflow_call') {
+          const prepared = new InstructionBuilder(implementation, makeInstructionContext({
+            reportDir: childReports, reportsRootDir: reports, language,
+          })).prepare();
+          expect(prepared.injectedReports, name).toEqual([
+            { reference: 'plan.md', scope: 'parent-run-readonly', content: 'PARENT-REQUIREMENTS' },
+            { reference: 'test-report.md', scope: 'parent-run-readonly', content: 'PARENT-TEST-EVIDENCE' },
+          ]);
+          break;
+        }
+        const call = implementation ?? workflow.steps.find((step) => step.kind === 'workflow_call' && step.call === 'development-core');
+        if (!call || call.kind !== 'workflow_call') throw new Error(`Implementation call not found: ${name}`);
+        const child = resolveWorkflowCallTarget(workflow, call, projectDir);
+        if (!child) throw new Error(`Implementation child not loaded: ${name}`);
+        workflow = child;
+      }
+    }
   });
 
   it('TEST-NEW-review-fix-contract keeps review-fix aligned with default peer-review wiring', () => {

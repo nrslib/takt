@@ -28,7 +28,7 @@ steps:
       development_knowledge:
         - architecture
         - task-decomposition
-      implementation_instruction: implement
+      implementation_instruction: development-implement-with-reports
       review_policy:
         - coding
         - testing

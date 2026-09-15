@@ -488,11 +488,17 @@ describe('notices from a turn the user left behind', () => {
 });
 
 describe('TUI local commands', () => {
-  it('should resolve /cancel locally and defer /go and plain text to the session', () => {
+  it('should resolve /cancel and /tell locally and defer /go and plain text to the session', () => {
     const conversation = createConversation();
 
     expect(conversation.resolveLocalCommand('/cancel')).toEqual({ kind: 'cancel' });
     expect(conversation.resolveLocalCommand('  /cancel  ')).toEqual({ kind: 'cancel' });
+    expect(conversation.resolveLocalCommand('/tell')).toEqual({ kind: 'handoff', id: 'tell' });
+    expect(conversation.resolveLocalCommand('/tell skip Android support')).toEqual({
+      kind: 'handoff',
+      id: 'tell',
+      text: 'skip Android support',
+    });
     expect(conversation.resolveLocalCommand('/go')).toBeNull();
     expect(conversation.resolveLocalCommand('hello')).toBeNull();
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
@@ -741,6 +747,7 @@ describe('TUI local commands', () => {
       enableRetryCommand: false,
       hasPreviousOrder: false,
       enableSettingsCommands: true,
+      enableTellCommand: true,
     });
     expect(conversation.commandAvailability.enabledCommands).toEqual(
       expect.arrayContaining([SlashCommand.Go, SlashCommand.Cancel]),
@@ -770,6 +777,7 @@ describe('TUI local commands', () => {
     expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: true,
       hasPreviousOrder: false,
+      enableTellCommand: true,
     });
     expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
   });
@@ -796,6 +804,7 @@ describe('TUI local commands', () => {
     expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: true,
       hasPreviousOrder: true,
+      enableTellCommand: true,
     });
     expect(conversation.commandAvailability.enabledCommands).not.toContain(SlashCommand.Verify);
   });

@@ -29,6 +29,16 @@ This document provides a complete reference for all TAKT CLI commands and option
 
 The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
 
+## DeepSeek Harness managed environment
+
+| Command | Description |
+|---------|-------------|
+| `takt deepseek-harness install` | Create or repair the uv-managed CPython 3.12 environment under `<global TAKT dir>/deepseek-harness/` |
+
+The install command copies the shipped `pyproject.toml` and `uv.lock`, then runs one `uv sync --locked` for the project. It does not accept `--python` or `--uv-path`, and the provider `python_path` option is not supported; the interpreter is fixed by the managed environment. Run `takt deepseek-harness install` once before selecting the `deepseek-harness` provider. Install preflight requires uv `>= 0.11.0`; a missing uv, an unparseable version, or an older version stops before the existing managed environment is deleted. npm install and npm lifecycle hooks do not build or repair this environment; a provider started during installation may fail because it does not wait for the installer lock.
+
+The managed environment supports Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. Windows, macOS x64, Linux musl, older Linux glibc, and older macOS fail fast, and a system Python installation is not required. Use uv's standard network configuration (`UV_INDEX_URL`, proxy, and certificate variables) for restricted package indexes. If package-index access was previously configured with `pip`, migrate to those uv settings; `uv sync --locked` keeps the shipped lock authoritative.
+
 ## Web UI execution boundary
 
 Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.
@@ -44,6 +54,8 @@ Central workflow bundles keep ordinary MCP configuration portable. Non-credentia
 ## Interactive Mode
 
 A mode where you refine task content through conversation with AI before execution. Useful when task requirements are ambiguous or when you want to clarify content while consulting with AI.
+
+The ordinary assistant conversation can also read compact task and run state through read-only MCP tools. Ask about the task by name or summary; the assistant reads detailed logs and reports only for a run you identify. When the requested change is ready, use `/go` for a new task or `/tell` for an additional instruction to a running worktree-clone task.
 
 ```bash
 # Start interactive mode (no arguments)
@@ -82,6 +94,7 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 | `/provider` | Select another provider. |
 | `/model <value>` | Use a free-form model override for this conversation. |
 | `/effort <value>` | Use a free-form reasoning effort override for this conversation. |
+| `/tell [instruction]` | Select a running worktree-clone task, review an additional instruction, and send it after confirmation. With no inline instruction, the full conversation is converted into a standalone additional-instruction body. An interactive terminal is required; no instruction is sent when confirmation is unavailable. |
 
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
 
@@ -171,7 +184,7 @@ TAKT currently supports `initialize`, `session/new`, `session/prompt`, `session/
 
 ## MCP Server
 
-`takt-mcp` starts TAKT as a stdio Model Context Protocol server. Register it in an MCP client when you want the client to enqueue TAKT tasks without shelling out to `takt add`.
+`takt-mcp` starts TAKT as a stdio Model Context Protocol server. Register it in an MCP client when you want to enqueue tasks, inspect task/run state, or send an additional instruction to a running worktree-clone task without shelling out to TAKT commands.
 
 ```bash
 takt-mcp
@@ -195,8 +208,13 @@ The server exposes these tools:
 | Tool | Description |
 |------|-------------|
 | `takt_enqueue_task` | Save a pending task to `.takt/tasks.yaml`, optionally linking or creating an issue. |
+| `takt_list_tasks` | Read compact task and run summaries without loading log or report contents. |
+| `takt_get_run` | Read one run's current step, phase, logs, reports, and live-intervention delivery state. |
+| `takt_tell_run` | Recheck and send an additional instruction to one running worktree-clone task. |
 
 Every tool `cwd` is resolved with `realpath` and must stay inside the MCP server's allowed project root. By default that root is the directory where `takt-mcp` was started.
+
+Use `--tool-set read-only` when registering a server for a client that should only inspect task state. This exposes `takt_list_tasks` and `takt_get_run`; it does not expose `takt_enqueue_task` or `takt_tell_run`. The assistant conversation uses this read-only tool set automatically. Providers without MCP support continue the conversation and report that task-state lookup is unavailable.
 
 ### `takt_enqueue_task`
 
@@ -226,7 +244,11 @@ Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, an iss
 
 The `issue` object must be exactly one of `{ "number": 123 }` or `{ "create": true, "title"?: "...", "labels"?: ["..."] }`; mixed keys, empty titles or labels, and unknown keys are rejected. A successful issue-backed enqueue returns `issueNumber`. If issue creation succeeds but task saving fails or is cancelled after the issue number is resolved, the issue remains open and the MCP error result includes `issueCreated`, `issueNumber`, optional `issueUrl`, `taskEnqueued`, `stage`, and a sanitized `error`. Retry with `{ "issue": { "number": issueNumber } }` to avoid creating another issue. If `stage` is `issue_number_parsing`, `issueNumber` is unavailable; use the optional `issueUrl` to identify the created issue and obtain its number before retrying.
 
-MCP only enqueues tasks. Use `takt run` to execute pending tasks and `takt watch` to monitor and execute them continuously.
+MCP can enqueue tasks, inspect task/run state, and send additional instructions to running clone tasks. Use `takt run` to execute pending tasks and `takt watch` to monitor and execute them continuously.
+
+### `takt_list_tasks`, `takt_get_run`, and `takt_tell_run`
+
+All three tools require the absolute project `cwd` and are limited to the project root allowed by the server. `takt_list_tasks` returns names, summaries, statuses, workflows, run slugs, and available current steps; it does not return log or report bodies. `takt_get_run` takes a `runSlug` from the list and returns details for that run, including step logs, reports, and live-intervention delivery state. `takt_tell_run` takes a non-empty `content`, verifies that the selected slug still identifies a running worktree-clone task immediately before writing, and returns a rejection reason without writing when the run is finished, missing, mismatched, or not a clone.
 
 ## Instant Exec Mode
 
@@ -343,6 +365,12 @@ takt list --non-interactive --format json
 `--action` accepts `diff`, `sync`, `try`, `merge`, or `delete`. Non-interactive actions require `--branch`, and `delete` also requires `--yes`. A failed `sync` exits with code `1`.
 
 In interactive mode, **Merge from root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
+
+#### Consult a running task
+
+Selecting a task in `takt list` opens its status-specific action menu. Existing actions such as Instruct and Requeue remain available for their respective task states. For a running task with a worktree clone, select **Interactive** to open the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks, discuss a new task, and use `/go` to execute or save it. `/tell` displays the task name, workflow, current step, and instruction, then writes only to the task selected at confirmation; `/cancel` closes the conversation or cancels the pending action. `/tell` requires an interactive terminal and sends nothing when confirmation cannot be obtained. **Mark as failed** remains available in the action menu.
+
+Only running tasks backed by a valid TAKT-managed worktree clone are `/tell` candidates. The target is rechecked after confirmation, so a task that finishes while the selector is open receives no instruction.
 
 ### Task Directory Workflow (Create / Run / Verify)
 

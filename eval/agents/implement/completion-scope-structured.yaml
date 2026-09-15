@@ -1,0 +1,42 @@
+description: "実装完了・再計画: 実runと同じ構造化応答によるスコープ判定"
+prompts:
+  - file://../../completion-routing-prompt.mjs
+providers:
+  - id: openai:codex-sdk
+    label: codex-astra-medium-structured
+    config:
+      model: gpt-6-astra
+      model_reasoning_effort: medium
+      working_dir: ../../fixtures/remediation-evidence
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      output_schema:
+        type: object
+        properties:
+          step:
+            type: integer
+            minimum: 1
+            maximum: 3
+          reason:
+            type: string
+        required:
+          - step
+          - reason
+        additionalProperties: false
+evaluateOptions:
+  maxConcurrency: 2
+defaultTest:
+  vars:
+    language:
+      - ja
+      - en
+    workflow: development-implement-dynamic
+    judgment_mode: structured
+  assert:
+    - type: javascript
+      value: |-
+        const result = JSON.parse(output);
+        const pass = result.step === Number(context.vars.expected_rule) && typeof result.reason === 'string' && result.reason.trim().length > 0;
+        return { pass, score: pass ? 1 : 0, reason: `Expected rule ${context.vars.expected_rule}; got ${result.step}: ${result.reason}` };
+tests: file://../../cases/completion-scope-routing.yaml

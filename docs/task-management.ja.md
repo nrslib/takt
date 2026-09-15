@@ -46,7 +46,9 @@ Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介�
 
 ### MCP Client からのタスク保存
 
-MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存できます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、任意の `issue` object で既存 Issue を紐付けるか、設定済み TAKT issue provider で新規 Issue を作成します。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は代わりに Issue URL を返すことがあります。この tool は絶対パスの `cwd` と空でないタスク本文を必須入力とします。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
+MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存し、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、`takt_list_tasks` は要約、`takt_get_run` は1つの run の詳細、`takt_tell_run` は再確認後に実行中 clone への書き込みを行います。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は代わりに Issue URL を返すことがあります。tool は server が許可した project root 内の絶対パス `cwd` を必須とし、enqueue と tell には空でない本文も必要です。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
+
+通常の assistant 会話には、MCP 対応 provider の場合だけ読み取り専用の task 状態 tool が渡されます。新しいタスクには `/go`、実行中 worktree clone への追加指示には `/tell` で対象を選び、内容を確認してから送ります。MCP 非対応 provider でも会話は利用できますが、task 状態の参照はできません。
 
 ## タスクディレクトリ形式
 
@@ -131,7 +133,7 @@ takt run --ignore-exceed
 
 workflow が `max_steps` に到達した場合、通常の `takt run` はタスクを `exceeded` として停止し、`exceeded_max_steps`、`exceeded_current_iteration`、`resume_point` などの再実行メタデータを保存します。`--ignore-exceed` を付けると、この iteration limit だけを無視して workflow を継続し、exceeded 用の再実行メタデータは保存しません。
 
-MCP client はタスクの enqueue だけを担当します。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
+MCP client はタスクの enqueue、task/run 状態の確認、実行中 clone への追加指示を行えます。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
 
 ### 並列実行（Concurrency）
 
@@ -207,7 +209,7 @@ takt list
 | 操作 | 説明 |
 |------|------|
 | **Requeue** | Resume または Restart の位置を選択し、会話を開かずタスクを `pending` に戻す |
-| **Retry** | 失敗コンテキスト付きのリトライ会話を開き、再実行 |
+| **Retry** | 失敗コンテキスト付きのリトライ会話を開き、更新した指示書を確認して `pending` に戻す |
 | **Instruct** | run の作業ツリーに対して AI との会話で追加指示を作成し、requeue |
 | **Create PR** | 失敗した run の変更をコミットして push し、プルリクエストを作成 |
 | **Delete** | 失敗したタスクレコードを削除 |
@@ -223,6 +225,8 @@ takt list
 | 操作 | 説明 |
 |------|------|
 | **Mark as failed** | `running` のまま残ったタスクを `failed` にマーク |
+
+ワークツリークローンを持つ実行中タスクを選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。会話中に別のタスクを確認したり、新しいタスクを相談したりできます。`/tell` は確定後に対象を再確認し、選択されたタスクだけへ書き込みます。完了、削除、slug 不一致、clone でない run は候補にも書き込み先にもなりません。
 
 ### Exceeded タスクの操作
 
@@ -267,7 +271,7 @@ takt list
 
 Requeue 後は新しい namespace で実行されるため、台帳を引き継がず白紙で開始します。
 
-`/go` の後、リトライ会話は Instruct モードと同じ選択肢（**Save as Task** / **Continue editing**）を提供し、即時再実行には `/accept` と `/replay`、中断には `/cancel` を使用します。保存と即時再実行のどちらも選択した Resume または Restart の開始位置を使用します。リトライのメモは複数のリトライ試行にわたってタスクレコードに蓄積されます。
+`/go` の後、リトライ会話は更新された指示書を表示し、先頭かつ既定の **タスクにつむ** または **編集を続ける** を選択できます。タスクにつむを選ぶと対象タスクの指示書を更新して `pending` に戻しますが、その場ではワーカーを起動しません。Retry 会話では `/retry`、`/replay`、即時実行の選択肢は利用できません。変更せずに終了する場合は `/cancel` を使用します。
 
 ### 非インタラクティブモード（`--non-interactive`）
 

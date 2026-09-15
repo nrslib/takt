@@ -34,6 +34,12 @@ export interface ProviderMcpContext {
    * permission does not contradict TAKT's permission mode (order.md:220).
    */
   permissionMode?: PermissionMode;
+  /**
+   * Internal identity for the TAKT-generated read-only task-state server set.
+   * Adapters must compare this reference with the resolved server set before
+   * allowing MCP in a read-only execution.
+   */
+  taskStateMcpServers?: Record<string, McpServerConfig>;
 }
 
 /**

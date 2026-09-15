@@ -1,0 +1,5 @@
+{
+  "name": "legacy-mock-server",
+  "private": true,
+  "type": "module"
+}

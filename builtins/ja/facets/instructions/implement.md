@@ -1,5 +1,5 @@
 計画に従って実装してください。
-Workflow Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
+Workflow Contextに示されたReport Directory内のファイルと、入力に明示された上流成果物を参照してください。他のレポートディレクトリは検索/参照しないでください。
 Report Directory内のレポートを一次情報として参照してください。不足情報の補完が必要な場合に限り、Previous Responseや会話履歴を補助的に参照して構いません（Previous Responseは提供されない場合があります）。情報が競合する場合は、Report Directory内のレポートと実際のファイル内容を優先してください。
 
 **テスト要件:**

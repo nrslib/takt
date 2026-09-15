@@ -133,7 +133,7 @@ function makeParallelDeps(
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: {
       prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
-      buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
+      prepareInstruction: vi.fn((step: WorkflowStep) => ({ text: `instruction:${step.name}`, injectedReports: [] })),
       emitStepReports: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
       normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
@@ -428,7 +428,7 @@ describe('session compaction Phase 1 wiring', () => {
       } as unknown as ParallelRunnerDeps['optionsBuilder'],
       stepExecutor: {
         prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
-        buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
+        prepareInstruction: vi.fn((step: WorkflowStep) => ({ text: `instruction:${step.name}`, injectedReports: [] })),
         emitStepReports: vi.fn(),
         persistPreviousResponseSnapshot: vi.fn(),
         normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
@@ -482,7 +482,7 @@ describe('session compaction Phase 1 wiring', () => {
       } as unknown as ParallelRunnerDeps['optionsBuilder'],
       stepExecutor: {
         prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
-        buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
+        prepareInstruction: vi.fn((step: WorkflowStep) => ({ text: `instruction:${step.name}`, injectedReports: [] })),
         emitStepReports: vi.fn(),
         persistPreviousResponseSnapshot: vi.fn(),
         normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),

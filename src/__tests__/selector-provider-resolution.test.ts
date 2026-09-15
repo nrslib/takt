@@ -184,7 +184,11 @@ describe('selector provider resolution', () => {
           selector: {
             provider: 'pi',
             providerOptions: {
-              pi: { extensions: ['npm:pi-fff'], noSkills: true },
+              pi: {
+                extensions: ['npm:pi-fff'],
+                noSkills: true,
+                thinkingLevel: 'high',
+              },
               codex: { reasoningEffort: 'medium' },
             },
           },
@@ -194,7 +198,11 @@ describe('selector provider resolution', () => {
     });
 
     expect(resolved.providerOptions).toEqual({
-      pi: { extensions: ['npm:pi-fff'], noSkills: true },
+      pi: {
+        extensions: ['npm:pi-fff'],
+        noSkills: true,
+        thinkingLevel: 'high',
+      },
     });
   });
 

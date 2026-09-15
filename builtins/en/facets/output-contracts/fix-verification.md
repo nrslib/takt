@@ -30,6 +30,9 @@ For every applicable member or state, record each distinct entry-to-terminal pat
 |----------|---------------|------|----------|--------------------------------------------------|--------------------------------------------------|-----------------|
 | {Affected unit} | {Obligation ID} | {implementation gap / evidence gap / plan constraint violation / other plan defect} | {Observed fact} | {Unscanned path, weak observation, incomplete migration, unexecuted counterexample, or not reported} | {Fix units and obligations checked by applying the same pattern, with results} | {Action for fix or fix-plan} |
 
+## Unverified Scope Without Optional Execution Records (Non-blocking)
+{Target, what remains unverified, and why this is not a missing mandatory verification obligation. State "None" if inapplicable. Do not count it as successful evidence}
+
 ## Follow-up That Cannot Be Demonstrated Due to Environmental Factors (Non-blocking)
 | Target | Environmental Factor | Why the Repository Cannot Resolve It | Alternative Evidence Verified Now | Follow-up |
 |--------|----------------------|--------------------------------------|-----------------------------------|-----------|
@@ -43,5 +46,6 @@ For every applicable member or state, record each distinct entry-to-terminal pat
 
 For `verified`, state "None" under unmet or unverified items. Follow-up that cannot be demonstrated due to environmental factors may remain, but it is neither successful evidence nor a reason for `incomplete` or `plan_invalid`; state "None" when no such follow-up exists. For `incomplete` or `plan_invalid`, do not stop at the first gap: verify every completion obligation and list every item blocking verification.
 
+- Unmet or Unverified Items contains established gaps that block the decision. Record ranges missing only optional execution records in their dedicated section; they may coexist with `verified`. Record counterevidence and the basis for confirmation-only items in the independent-verification evidence column.
 - Do not stop after the first gap; inspect every fix unit related by the same cause or verification method.
 - Keep the result statement consistent with the satisfied, violated, or unverified items and required actions recorded in the tables.

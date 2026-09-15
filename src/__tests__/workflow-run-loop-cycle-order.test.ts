@@ -1,3 +1,4 @@
+import type { PreparedInstruction } from '../core/workflow/instruction/prepared-instruction.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, LoopMonitorConfig, WorkflowConfig, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
@@ -36,14 +37,14 @@ function makeDeps(nextStep: string) {
     cycleDetectorRecordAndCheck: vi.fn(() => ({ triggered: true, cycleCount: 1, monitor })),
     resolveDoneTransition: vi.fn(() => ({ nextStep, commandGates: 'required' as const })),
     runLoopMonitorJudge: vi.fn(async () => 'ABORT'),
-    runStep: vi.fn(async (_step: WorkflowStep, instruction: string) => ({
+    runStep: vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
       response,
       instruction,
       commitTransition,
     })),
     runQualityGates: vi.fn(async () => ({ ok: true as const })),
     persistPreviousResponseSnapshot: vi.fn(),
-    buildInstruction: vi.fn(() => 'instruction'),
+    prepareInstruction: vi.fn(() => ({ text: 'instruction', injectedReports: [] })),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
     prepareNormalStepExecution: vi.fn(async () => undefined),
     resolveStepProviderModel: vi.fn(() => ({ provider: undefined, model: undefined })),

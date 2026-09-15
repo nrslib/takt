@@ -190,6 +190,34 @@ describe('NDJSON log', () => {
       expect(() => loadNdjsonLog(filepath)).toThrow(/occurrence/i);
     });
 
+    it.each([
+      ['an invalid record', JSON.stringify({}), 'NDJSON session record type is invalid'],
+      ['malformed JSON', '{"type":', undefined],
+    ] as const)('should include the file path when %s', (_case, content, originalDetail) => {
+      const filepath = initTestNdjsonLog(
+        'sess-invalid-record',
+        'invalid record',
+        'default',
+        projectDir,
+      );
+      appendFileSync(filepath, `${content}\n`);
+
+      let thrown: unknown;
+      try {
+        loadNdjsonLog(filepath);
+      } catch (error: unknown) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      if (thrown instanceof Error) {
+        expect(thrown.message).toContain(filepath);
+        if (originalDetail !== undefined) {
+          expect(thrown.message).toContain(originalDetail);
+        }
+      }
+    });
+
     it('should reconstruct SessionLog from NDJSON file', () => {
       const filepath = initTestNdjsonLog('sess-003', 'build app', 'default', projectDir);
 
@@ -653,6 +681,29 @@ describe('NDJSON log', () => {
     it('should return null for non-existent file', () => {
       const result = extractFailureInfo('/nonexistent/path.jsonl');
       expect(result).toBeNull();
+    });
+
+    it('should include the file path when an invalid record is encountered', () => {
+      const filepath = initTestNdjsonLog(
+        'session-invalid-failure-info',
+        'invalid record',
+        'workflow',
+        projectDir,
+      );
+      appendFileSync(filepath, `${JSON.stringify({})}\n`);
+
+      let thrown: unknown;
+      try {
+        extractFailureInfo(filepath);
+      } catch (error: unknown) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      if (thrown instanceof Error) {
+        expect(thrown.message).toContain(filepath);
+        expect(thrown.message).toContain('NDJSON session record type is invalid');
+      }
     });
 
     it('should extract failure info from aborted workflow log', () => {

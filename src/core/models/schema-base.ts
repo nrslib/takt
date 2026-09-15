@@ -164,7 +164,6 @@ const CursorProviderOptionsSchema = z.object({
 });
 
 const DeepSeekHarnessProviderOptionsSchema = z.object({
-  python_path: z.string().min(1).optional(),
   base_url: z.string().min(1).optional(),
   session_root: z.string().min(1).optional(),
   cordis: z.string().min(1).optional(),
@@ -177,6 +176,7 @@ const DeepSeekHarnessProviderOptionsSchema = z.object({
 const PiProviderOptionsSchema = z.object({
   guards: ProviderGuardOptionsSchema.optional(),
   extensions: z.array(z.string().min(1)).optional(),
+  thinking_level: z.string().min(1).optional(),
   no_extensions: z.boolean().optional(),
   no_skills: z.boolean().optional(),
   no_prompt_templates: z.boolean().optional(),
@@ -673,7 +673,6 @@ const NormalizedStepProviderOptionsSchema = z.object({
     }).strict().optional(),
   }).strict().optional(),
   deepseekHarness: z.object({
-    pythonPath: z.string().min(1).optional(),
     baseUrl: z.string().min(1).optional(),
     sessionRoot: z.string().min(1).optional(),
     cordis: z.string().min(1).optional(),
@@ -687,6 +686,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
       callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
     }).strict().optional(),
     extensions: z.array(z.string().min(1)).optional(),
+    thinkingLevel: z.string().min(1).optional(),
     noExtensions: z.boolean().optional(),
     noSkills: z.boolean().optional(),
     noPromptTemplates: z.boolean().optional(),

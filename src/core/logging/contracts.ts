@@ -5,6 +5,13 @@ export const USAGE_EVENTS_LOG_FILE_SUFFIX = '-usage-events.jsonl';
 export const PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX = '-usage-events.phase.jsonl';
 export const OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX = '-otel-session-shadow.jsonl';
 export const PROMPT_LOG_FILE_SUFFIX = '-prompts.jsonl';
+export const SESSION_LOG_SIDECAR_SUFFIXES = Object.freeze([
+  PROMPT_LOG_FILE_SUFFIX,
+  PROVIDER_EVENTS_LOG_FILE_SUFFIX,
+  USAGE_EVENTS_LOG_FILE_SUFFIX,
+  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+]);
 
 export const USAGE_MISSING_REASONS = {
   NOT_AVAILABLE: 'usage_not_available',

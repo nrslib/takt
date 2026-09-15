@@ -132,6 +132,10 @@ describe('KiroProvider integration', () => {
     expect(args).toEqual([
       'chat',
       '--no-interactive',
+      '--engine',
+      'v2',
+      '--output-format',
+      'stream-json',
       '--trust-tools=read,grep,write,shell',
       '--resume-id',
       'sess-chain',

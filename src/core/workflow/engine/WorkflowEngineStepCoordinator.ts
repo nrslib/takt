@@ -16,6 +16,7 @@ import type {
 } from '../types.js';
 import type { WorkflowStepAbortSignalContext } from './step-deadline.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
+import type { PreparedInstruction } from '../instruction/prepared-instruction.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
@@ -45,7 +46,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
-      prebuiltInstruction?: string,
+      prebuiltInstruction?: PreparedInstruction,
       runtime?: RuntimeStepResolution,
       preparedExecution?: PreparedNormalStepExecution,
     ) => Promise<StepRunResult>;
@@ -57,14 +58,14 @@ interface WorkflowEngineStepCoordinatorDeps {
       stepIteration: number,
       runtime?: RuntimeStepResolution,
     ) => Promise<PreparedNormalStepExecution>;
-    buildInstruction: (
+    prepareInstruction: (
       step: WorkflowStep,
       stepIteration: number,
       state: WorkflowState,
       task: string,
       maxSteps: WorkflowMaxSteps,
       fallbackContext?: FallbackContext,
-    ) => string;
+    ) => PreparedInstruction;
     buildPhase1Instruction: (instruction: string, step: WorkflowStep, runtime?: RuntimeStepResolution) => string;
     drainReportFiles: () => Array<{
       step: WorkflowStep;
@@ -328,7 +329,7 @@ export class WorkflowEngineStepCoordinator {
 
   async runStep(
     step: WorkflowStep,
-    prebuiltInstruction?: string,
+    prebuiltInstruction?: PreparedInstruction,
     runtime?: RuntimeStepResolution,
     stepIteration?: number,
     preparedExecution?: PreparedNormalStepExecution,
@@ -435,12 +436,12 @@ export class WorkflowEngineStepCoordinator {
     throw new RuleDetectionExhaustedError(step.name);
   }
 
-  buildInstruction(
+  prepareInstruction(
     step: WorkflowStep,
     stepIteration: number,
     fallbackContext?: FallbackContext,
-  ): string {
-    return this.deps.stepExecutor.buildInstruction(
+  ): PreparedInstruction {
+    return this.deps.stepExecutor.prepareInstruction(
       step,
       stepIteration,
       this.deps.state,

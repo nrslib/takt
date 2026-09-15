@@ -191,6 +191,9 @@ export function hasDeprecatedProviderConfig(orderContent: string | null): boolea
 export async function selectRunSessionContext(
   projectDir: string,
   lang: 'en' | 'ja',
+  options?: {
+    readonly liveInterventionProjectCwd?: string;
+  },
 ): Promise<RunSessionContext | undefined> {
   if (listRecentRuns(projectDir).length === 0) {
     return undefined;
@@ -209,5 +212,5 @@ export async function selectRunSessionContext(
     return undefined;
   }
 
-  return loadRunSessionContext(projectDir, selectedSlug);
+  return loadRunSessionContext(projectDir, selectedSlug, options);
 }

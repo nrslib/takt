@@ -8,6 +8,7 @@ import {
   taskActionButtonModel,
   taskActionNeedsConfirmation,
   taskActionSurfaceModel,
+  taskActionSurfaceWithReview,
   taskActionSurfaceWithState,
   taskInstructionRoute,
 } from '../../web-ui/public/task-action-ui.js';
@@ -165,6 +166,43 @@ describe('Web UI task action presentation helpers', () => {
       goCommand: false,
       canSubmit: false,
       reasonKey: 'app.taskActionFinalizing',
+    });
+  });
+
+  it('keeps the confirmed Retry instruction and option fixed while reviewing', () => {
+    const reviewed = taskActionSurfaceWithReview({
+      action: 'retry',
+      selectedOptionId: 'resume:plan',
+      canFinalizeRetry: true,
+      finalizationState: 'active',
+    }, 'revised task', 'resume:plan');
+    expect(reviewed).toMatchObject({
+      reviewedTask: 'revised task',
+      reviewedTaskActionOptionId: 'resume:plan',
+      finalizationState: 'reviewing',
+    });
+    expect(taskActionGoState(reviewed, '/go')).toEqual({
+      goCommand: true,
+      canSubmit: false,
+      reasonKey: 'app.taskActionReviewRequired',
+    });
+    expect(taskActionGoState(reviewed, '/cancel')).toEqual({
+      goCommand: false,
+      canSubmit: true,
+    });
+    expect(taskActionGoState(reviewed, ' /cancel ')).toEqual({
+      goCommand: false,
+      canSubmit: true,
+    });
+    expect(taskActionGoState(reviewed, '/cancel now')).toEqual({
+      goCommand: false,
+      canSubmit: false,
+      reasonKey: 'app.taskActionReviewRequired',
+    });
+    expect(taskActionGoState(reviewed, '追加修正')).toEqual({
+      goCommand: false,
+      canSubmit: false,
+      reasonKey: 'app.taskActionReviewRequired',
     });
   });
 

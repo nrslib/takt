@@ -282,6 +282,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leaderが分解したパートを並列実行し集約する', async () => {
     const config = buildTeamLeaderConfig();
+    const reports = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, 'upstream.md'), 'LEADER-INPUT');
+    updateTeamLeaderStep(config, (step) => ({
+      ...step, instruction: '{report:upstream.md}', outputContracts: [{ name: 'result.md', format: 'Report the work result.' }],
+    }));
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
 
     mockRunAgentWithPrompt(
@@ -319,6 +325,10 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(output!.content).toContain('API done');
     expect(output!.content).toContain('Tests done');
     expect(output!.content).not.toContain('Normal terminal part ran');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('LEADER-INPUT');
+    expect(vi.mocked(runReportPhase).mock.calls[0]?.[2].injectedReports).toEqual([
+      { reference: 'upstream.md', scope: 'step', content: 'LEADER-INPUT' },
+    ]);
   });
 
   it('Team Leader は dynamic facet を一度だけ選択し、親と全 worker part に同じ内容を渡す', async () => {

@@ -14,10 +14,11 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { callCursor } from '../infra/cursor/client.js';
+import { formatTaskStateReferenceMarker } from '../shared/task-state-reference.js';
 
 type SpawnScenario = {
-  stdout?: string;
-  stderr?: string;
+  stdout?: string | readonly Buffer[];
+  stderr?: string | readonly Buffer[];
   code?: number | null;
   signal?: NodeJS.Signals | null;
   error?: Partial<NodeJS.ErrnoException> & { message: string };
@@ -56,11 +57,15 @@ function mockSpawnWithScenarios(scenarios: SpawnScenario[]): void {
     const child = createMockChildProcess();
 
     queueMicrotask(() => {
-      if (scenario.stdout) {
-        child.stdout.emit('data', Buffer.from(scenario.stdout, 'utf-8'));
-      }
-      if (scenario.stderr) {
-        child.stderr.emit('data', Buffer.from(scenario.stderr, 'utf-8'));
+      const stdoutChunks = typeof scenario.stdout === 'string'
+        ? [Buffer.from(scenario.stdout, 'utf-8')]
+        : scenario.stdout ?? [];
+      const stderrChunks = typeof scenario.stderr === 'string'
+        ? [Buffer.from(scenario.stderr, 'utf-8')]
+        : scenario.stderr ?? [];
+      for (let index = 0; index < Math.max(stdoutChunks.length, stderrChunks.length); index += 1) {
+        if (stdoutChunks[index] !== undefined) child.stdout.emit('data', stdoutChunks[index]);
+        if (stderrChunks[index] !== undefined) child.stderr.emit('data', stderrChunks[index]);
       }
 
       if (scenario.error) {
@@ -82,6 +87,21 @@ function mockSpawnWithScenarios(scenarios: SpawnScenario[]): void {
 
 function mockSpawnWithScenario(scenario: SpawnScenario): void {
   mockSpawnWithScenarios([scenario]);
+}
+
+function splitUtf8Occurrences(text: string, character: string, byteOffset: number): Buffer[] {
+  const bytes = Buffer.from(text);
+  const chunks: Buffer[] = [];
+  let start = 0;
+  let index = bytes.indexOf(character);
+  while (index !== -1) {
+    const end = index + byteOffset;
+    chunks.push(bytes.subarray(start, end));
+    start = end;
+    index = bytes.indexOf(character, index + Buffer.byteLength(character));
+  }
+  chunks.push(bytes.subarray(start));
+  return chunks;
 }
 
 describe('callCursor', () => {
@@ -137,7 +157,7 @@ describe('callCursor', () => {
       '-p',
       '--trust',
       '--output-format',
-      'json',
+      'stream-json',
       '--workspace',
       '/repo',
       '--model',
@@ -452,5 +472,212 @@ describe('callCursor', () => {
         sessionId: 'sess-parse-error',
       },
     });
+  });
+
+  it.each(['system', 'init', 'error'])('ignores content in an unknown typed %s event after the final result', async (type) => {
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({ type: 'result', result: 'assistant answer' }),
+        JSON.stringify({ type, content: 'unrelated diagnostic' }),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'done', content: 'assistant answer' });
+  });
+
+  it('keeps assistant content and tool events when JSONL includes banner lines', async () => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        'Cursor agent starting...',
+        JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: 'tool-1',
+          tool_call: { mcpToolCall: { args: { name: 'takt_get_run', args: { runSlug: 'selected-run' } } } } }),
+        'Warning: optional integration unavailable',
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'answer' }] } }),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer' });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_use', data: {
+      id: 'tool-1', tool: 'takt_get_run', input: { runSlug: 'selected-run' },
+    } });
+  });
+
+  it('preserves the error text of failed Cursor tool results', async () => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          type: 'tool_call', subtype: 'completed', call_id: 'failed-lookup',
+          tool_call: { mcpToolCall: {
+            args: { name: 'takt_get_run', args: { runSlug: 'missing-run' } },
+            result: { success: false, error: 'lookup failed' },
+          } },
+        }),
+        JSON.stringify({ type: 'result', result: 'The run could not be found.' }),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'The run could not be found.' });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_result', data: {
+      id: 'failed-lookup', content: 'lookup failed', isError: true,
+    } });
+  });
+
+  it.each([
+    { label: 'success object', payload: (content: string) => ({ success: { content } }), isError: false },
+    { label: 'success string', payload: (content: string) => ({ success: content }), isError: false },
+    { label: 'success array', payload: (content: string) => ({ success: [{ type: 'text', text: content }] }), isError: false },
+    { label: 'true with content', payload: (content: string) => ({ success: true, content }), isError: false },
+    { label: 'true with output', payload: (output: string) => ({ success: true, output }), isError: false },
+    { label: 'true with result', payload: (content: string) => ({ success: true, result: { content } }), isError: false },
+    { label: 'unwrapped content', payload: (content: string) => ({ content }), isError: false },
+    { label: 'unwrapped string', payload: (content: string) => content, isError: false },
+    { label: 'false with error', payload: (error: string) => ({ success: false, error }), isError: true },
+    { label: 'false with structured error', payload: (content: string) => ({ success: false, error: { content } }), isError: true },
+    { label: 'error without success', payload: (error: string) => ({ error }), isError: true },
+    { label: 'explicit error flag', payload: (content: string) => ({ isError: true, content }), isError: true },
+  ])('forwards Cursor MCP payload and error status from $label', async ({ payload, isError }) => {
+    const marker = formatTaskStateReferenceMarker('run-from-cursor');
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'started',
+          call_id: 'cursor-tool-1',
+          tool_call: {
+            mcpToolCall: {
+              args: { name: 'takt_get_run', args: { runSlug: 'run-from-cursor' } },
+            },
+          },
+          session_id: 'cursor-session',
+        }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          call_id: 'cursor-tool-1',
+          tool_call: {
+            mcpToolCall: {
+              args: { name: 'takt_get_run', args: { runSlug: 'run-from-cursor' } },
+              result: payload(`run details\n${marker}`),
+            },
+          },
+          session_id: 'cursor-session',
+        }),
+        JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'answer',
+          session_id: 'cursor-session',
+        }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'answer', sessionId: 'cursor-session' });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_use',
+      data: {
+        id: 'cursor-tool-1',
+        tool: 'takt_get_run',
+        input: { runSlug: 'run-from-cursor' },
+      },
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_result',
+      data: {
+        id: 'cursor-tool-1',
+        content: `run details\n${marker}`,
+        isError,
+      },
+    });
+  });
+
+  it.each([
+    { character: 'é', byteOffset: 1 },
+    { character: '界', byteOffset: 1 },
+    { character: '界', byteOffset: 2 },
+    { character: '𠮷', byteOffset: 1 },
+    { character: '𠮷', byteOffset: 2 },
+    { character: '𠮷', byteOffset: 3 },
+  ])('preserves UTF-8 $character split at byte $byteOffset in interleaved streams', async ({ character, byteOffset }) => {
+    const onStream = vi.fn();
+    const stdout = [
+      JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: 'utf8-tool',
+        tool_call: { mcpToolCall: { args: { name: 'read_file', args: { path: `${character}.md` } } } } }),
+      JSON.stringify({ type: 'tool_call', subtype: 'completed', call_id: 'utf8-tool',
+        tool_call: { mcpToolCall: { args: { name: 'read_file' }, result: { success: { content: `file ${character}` } } } } }),
+      JSON.stringify({ type: 'result', result: `answer ${character}`, session_id: 'utf8-session' }),
+    ].join('\n');
+    mockSpawnWithScenario({
+      stdout: splitUtf8Occurrences(stdout, character, byteOffset),
+      stderr: splitUtf8Occurrences(`diagnostic ${character}`, character, byteOffset),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: `answer ${character}`, sessionId: 'utf8-session' });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_use', data: {
+      id: 'utf8-tool', tool: 'read_file', input: { path: `${character}.md` },
+    } });
+    expect(onStream).toHaveBeenCalledWith({ type: 'tool_result', data: {
+      id: 'utf8-tool', content: `file ${character}`, isError: false,
+    } });
+  });
+
+  it.each(['stdout', 'stderr'] as const)('preserves split UTF-8 %s diagnostics on a non-zero exit', async (stream) => {
+    const diagnostic = '失敗 café 𠮷';
+    const bytes = Buffer.from(diagnostic);
+    mockSpawnWithScenario({
+      [stream]: Array.from(bytes, (_byte, index) => bytes.subarray(index, index + 1)),
+      code: 2,
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'error', content: `Cursor Agent CLI exited with code 2: ${diagnostic}` });
+  });
+
+  it.each(['stdout', 'stderr'] as const)('flushes an incomplete UTF-8 tail in %s before reporting an exit error', async (stream) => {
+    mockSpawnWithScenario({
+      [stream]: [Buffer.from('diagnostic '), Buffer.from('𠮷').subarray(0, 2)],
+      code: 2,
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'error', content: 'Cursor Agent CLI exited with code 2: diagnostic �' });
+  });
+
+  it.each([
+    { stream: 'stdout', extraBytes: 0 },
+    { stream: 'stderr', extraBytes: 0 },
+    { stream: 'stdout', extraBytes: 1 },
+    { stream: 'stderr', extraBytes: 1 },
+  ])('enforces the raw byte limit for $stream with $extraBytes excess bytes across UTF-8 chunks', async ({ stream, extraBytes }) => {
+    const prefix = Buffer.from('{"content":"é');
+    const suffix = Buffer.from('"}');
+    const padding = Buffer.alloc(10 * 1024 * 1024 - prefix.length - suffix.length + extraBytes, 'a');
+    const chunks = [
+      prefix.subarray(0, prefix.length - 1),
+      Buffer.concat([prefix.subarray(prefix.length - 1), padding, suffix]),
+    ];
+    mockSpawnWithScenario({ stdout: '{"content":"done"}', [stream]: chunks });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo' });
+
+    expect(result.status).toBe(extraBytes === 0 ? 'done' : 'error');
+    if (extraBytes > 0) {
+      expect(result.content).toBe('Cursor Agent CLI output exceeded buffer limit');
+    }
   });
 });

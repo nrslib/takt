@@ -4,4 +4,4 @@ For every authorized repair, reconstruct its invariant, responsible source, and 
 
 Do not treat the contracts of multiple paths as identical merely because they share an implementation. If changing the shared location would alter inputs, return values, or failure behavior that the current task does not require changing, include a boundary that preserves those established conditions in the plan.
 
-Do not edit, add or dismiss concerns, or declare completion in this procedure.
+Do not edit, add concerns, dismiss them without evidence, or declare completion in this procedure. When a premise is refuted, retain the finding ID and original requirements, and record the counterevidence and basis for confirmation-only work in the plan.

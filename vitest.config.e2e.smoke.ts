@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitest/config';
 import { e2eBaseTestConfig } from './vitest.config.e2e.base';
 
+process.env.TAKT_E2E_PROVIDER = 'mock';
+
 export default defineConfig({
   test: {
     ...e2eBaseTestConfig,

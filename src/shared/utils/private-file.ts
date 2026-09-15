@@ -293,12 +293,12 @@ function assertPublicationTargetIdentity(path: string, expectedStat: Stats | und
   const actualStat = lstatOrUndefined(path);
   if (expectedStat === undefined) {
     if (actualStat !== undefined) {
-      throw new Error(`Private artifact file identity changed before publication: ${path}`);
+      throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
     }
     return;
   }
   if (actualStat === undefined || !actualStat.isFile() || !hasMatchingIdentity(expectedStat, actualStat)) {
-    throw new Error(`Private artifact file identity changed before publication: ${path}`);
+    throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
   }
 }
 

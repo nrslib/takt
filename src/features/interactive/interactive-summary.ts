@@ -350,15 +350,10 @@ export function createSelectActionWithoutExecute(
       task,
       ui.proposed,
       ui.actionPrompt,
-      buildSummaryActionOptions(
-        {
-          execute: ui.actions.execute,
-          saveTask: ui.actions.saveTask,
-          continue: ui.actions.continue,
-        },
-        [],
-        ['execute'],
-      ),
+      [
+        { label: ui.actions.saveTask, value: 'save_task' },
+        { label: ui.actions.continue, value: 'continue' },
+      ],
     );
   };
 }

@@ -1,3 +1,5 @@
+{{include:policies/evidence-based-judgment}}
+
 # Contract Replacement Policy
 
 Separate preservation of unaffected contracts, migration of current consumers, and compatibility or migration support for superseded contracts, and implement only the scope stated by the requirement source.

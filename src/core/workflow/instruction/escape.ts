@@ -11,7 +11,9 @@ import type { WorkflowStep } from '../../models/types.js';
 import { isReviewMode } from '../../models/review-mode.js';
 import type { InstructionContext } from './instruction-context.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
-import { REPORT_REFERENCE_PATTERN, resolveReportReference } from './report-reference.js';
+import { REPORT_REFERENCE_PATTERN, resolveReportReferenceDetailed } from './report-reference.js';
+import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
+import type { InjectedReport, PreparedInstruction } from './prepared-instruction.js';
 import { renderTaskReviewScope } from '../review-scope.js';
 import { escapeTemplateChars } from 'faceted-prompting';
 
@@ -25,7 +27,16 @@ export function replaceTemplatePlaceholders(
   step: WorkflowStep,
   context: InstructionContext,
 ): string {
+  return prepareTemplatePlaceholders(template, step, context).text;
+}
+
+export function prepareTemplatePlaceholders(
+  template: string,
+  step: WorkflowStep,
+  context: InstructionContext,
+): PreparedInstruction {
   let result = template;
+  const injectedReports = new Map<string, InjectedReport>();
 
   result = result.replace(/\{var:([^}]+)\}/g, (_match, rawName: string) => {
     const name = rawName.trim();
@@ -104,14 +115,25 @@ export function replaceTemplatePlaceholders(
   if (context.reportDir) {
     const reportDir = context.reportDir;
     result = result.replace(REPORT_REFERENCE_PATTERN, (_match, filename: string) => {
-      return resolveReportReference(reportDir, filename.trim(), {
+      const reference = filename.trim();
+      const classification = classifyReportRelativePath(reference);
+      const normalizedReference = classification.kind === 'public'
+        ? classification.normalizedPath
+        : reference;
+      const existing = injectedReports.get(normalizedReference);
+      if (existing !== undefined) return existing.content;
+      const resolved = resolveReportReferenceDetailed(reportDir, reference, {
         stepName: step.name,
         reportsRootDir: context.reportsRootDir,
         resumeReportConsumerKey: context.resumeReportConsumerKey,
         validateExistence: context.validateReportReferences !== false,
       });
+      if (context.validateReportReferences !== false) {
+        injectedReports.set(normalizedReference, { reference: normalizedReference, ...resolved });
+      }
+      return resolved.content;
     });
   }
 
-  return result;
+  return { text: result, injectedReports: [...injectedReports.values()] };
 }

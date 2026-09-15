@@ -73,7 +73,6 @@ export interface ActionWithoutExecuteUIText {
   proposed: string;
   actionPrompt: string;
   actions: {
-    execute: string;
     saveTask: string;
     continue: string;
   };

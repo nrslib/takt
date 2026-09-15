@@ -41,6 +41,7 @@ import type {
 } from '../types.js';
 import { restoreWorkflowCallInvocationEvidence } from '../workflow-call-invocation-index.js';
 import { mergeWorkflowWideRules } from './workflow-wide-rule-merge.js';
+import type { LiveInterventionChannel } from '../live-intervention/types.js';
 
 const PENDING_WORKFLOW_CALL_SITE_DIGEST = '0'.repeat(64);
 
@@ -160,6 +161,8 @@ interface ExecuteWorkflowCallRequest {
   personaProviders: WorkflowEngineOptions['personaProviders'];
   providerRouting: WorkflowEngineOptions['providerRouting'];
   providerLadders: WorkflowEngineOptions['providerLadders'];
+  /** Undefined preserves direct workflow_call inheritance; null explicitly disables it for an isolated child. */
+  liveIntervention?: LiveInterventionChannel | null;
 }
 
 interface ExecuteWorkflowCallOptions {
@@ -634,6 +637,9 @@ export class WorkflowCallExecutor {
         ...resumeStackPrefix,
         workflowCallFrame,
       ],
+      ...(request.liveIntervention === undefined
+        ? {}
+        : { liveIntervention: request.liveIntervention ?? undefined }),
     };
     const childEngine = this.deps.createEngine(childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
 

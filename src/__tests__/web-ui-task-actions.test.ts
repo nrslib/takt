@@ -113,34 +113,25 @@ describe('central Web UI task action policy', () => {
     }))).toBe('failed');
   });
 
-  it('resolves retry option ids on the server and preserves the task id for the next run', async () => {
+  it('resolves retry option ids and does not start a worker for Retry queueing', async () => {
     const task = makeTask('failed');
-    const resumedTask: CentralTaskRecord = {
-      ...task,
-      generation: task.generation + 2,
-      status: 'starting',
-      attempt: 2,
-      runId: 'run-2',
-      runIds: ['run-1', 'run-2'],
-      activeExecution: {
-        executionId: randomUUID(),
-        runId: 'run-2',
-        ownerTokenHash: 'a'.repeat(64),
-        pid: 0,
-        startTime: timestamp,
-        startedAt: timestamp,
-      },
+    const { runId: _runId, ...taskWithoutRunId } = task;
+    const queuedTask: CentralTaskRecord = {
+      ...taskWithoutRunId,
+      generation: task.generation + 1,
+      status: 'pending',
     };
-    const requeueTask = vi.fn(async (): Promise<CentralTaskLaunchDecision> => ({
-      kind: 'started',
-      task: resumedTask,
-      ownerToken: 'owner-token',
-      executionId: resumedTask.activeExecution!.executionId,
-      runId: resumedTask.runId,
+    const resetFailedTaskToPending = vi.fn(async (): Promise<CentralTaskRecord> => queuedTask);
+    const spawnDecision = vi.fn(async () => ({
+      pid: 123,
+      disposition: 'started' as const,
+      mode: 'run' as const,
     }));
     const repository = {
-      readTask: vi.fn(async () => task),
-      requeueTask,
+      readTask: vi.fn()
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(queuedTask),
+      resetFailedTaskToPending,
       state: { stateId: 'state-1' },
       globalConfigDirectory: '/global',
     } as unknown as CentralTaskRepository;
@@ -178,6 +169,10 @@ describe('central Web UI task action policy', () => {
         worktreePath: task.worktreePath,
       },
       retrySelection: { kind: 'resume', resumePoint },
+      taskActionDraft: {
+        task: 'retry with the corrected fixture',
+        taskActionOptionId: 'resume:plan',
+      },
     };
 
     const result = await executeCentralTaskAction({
@@ -190,11 +185,17 @@ describe('central Web UI task action policy', () => {
       input: 'retry with the corrected fixture',
       conversationId: 'conversation-1',
       taskActionClaim: claim,
-      spawnDecision: async () => ({ pid: 123, disposition: 'started' as const, mode: 'run' as const }),
+      spawnDecision,
     });
 
-    expect(result).toMatchObject({ action: 'retry', taskId: task.taskId, status: 'accepted' });
-    expect(requeueTask).toHaveBeenCalledWith(task.taskId, {
+    expect(result).toMatchObject({
+      action: 'retry',
+      taskId: task.taskId,
+      status: 'accepted',
+      taskStatus: 'pending',
+    });
+    expect(spawnDecision).not.toHaveBeenCalled();
+    expect(resetFailedTaskToPending).toHaveBeenCalledWith(task.taskId, {
       task: 'retry with the corrected fixture',
       executionRequest: {
         resumeMode: 'retry',
