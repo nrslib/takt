@@ -480,6 +480,10 @@ Join the [TAKT Discord](https://discord.gg/R2Xz3uYWxD) for questions, discussion
 
 ## Contributing
 
+PRs that accompany an issue are especially welcome. For bug fixes and small improvements, feel free to submit a PR without waiting for a maintainer response or for discussion to conclude.
+
+For large refactoring or features that affect the project's design or compatibility, we recommend discussing the approach in an issue before implementation to avoid rework.
+
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 ## License

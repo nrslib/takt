@@ -452,6 +452,10 @@ TAKT は [CodeRabbit](https://coderabbit.link/nrslib) の Open Source Support Pr
 
 ## コントリビュート
 
+Issue とあわせて修正・改善の PR も送っていただけると助かります。バグ修正や小さな改善は、メンテナーの返信や議論の完了を待たずに PR を提出していただいて構いません。
+
+大規模なリファクタリングや、プロジェクトの設計・互換性に影響する機能追加は、手戻りを避けるため、実装前に Issue で方針を相談することをおすすめします。
+
 [CONTRIBUTING.ja.md](./CONTRIBUTING.ja.md)（[English](../CONTRIBUTING.md)）を参照してください。
 
 ## ライセンス
