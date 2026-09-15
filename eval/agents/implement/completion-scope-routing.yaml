@@ -3,11 +3,11 @@ prompts:
   - file://../../completion-routing-prompt.mjs
 providers:
   - id: file://../../providers/cli-review.mjs
-    label: codex-astra-medium
+    label: codex-astra-xhigh
     config:
       cli: codex
       model: gpt-6-astra
-      reasoning_effort: medium
+      reasoning_effort: xhigh
       working_dir: fixtures/remediation-evidence
       isolate_working_dir: true
 evaluateOptions:
@@ -20,8 +20,5 @@ defaultTest:
     workflow: development-implement-dynamic
   assert:
     - type: javascript
-      value: |
-        const step = context.vars.workflow === 'development-core' ? 'REPLAN' : 'IMPLEMENT';
-        const expected = `[${step}:${context.vars.expected_rule}]`;
-        return { pass: output.trim() === expected, score: output.trim() === expected ? 1 : 0, reason: `Expected ${expected}; got ${output.trim()}` };
+      value: file://../../asserts/completion-routing.mjs
 tests: file://../../cases/completion-scope-routing.yaml

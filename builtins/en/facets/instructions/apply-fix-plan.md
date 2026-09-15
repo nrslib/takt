@@ -7,6 +7,7 @@ Success means completing every fix unit and every completion obligation derived 
 
 **Important:**
 - Before editing, reconcile the plan's root cause, responsibility and source of truth, impact paths, methods, evidence, and completion criteria with the current code, Report Directory, and active constraints
+- When the plan contains a concrete cause investigation, execute its fixed conditions, single varied condition, observation target, and method before production repair, and confirm that the result matches the plan's premises. If it does not, do not repair; report the evidence that the fix plan requires revision
 - For every planned acceptance criterion, inspect the relevant paths and a failure example that detects a violation. Complete behavior repair, consumer migration, obsolete-path removal, and preservation of existing conditions separately
 - Preserve public APIs, parameters, return values, events, commands, configuration, paths, and persisted formats outside the requested change scope. For a replacement, close current-consumer migration, obsolete-path removal, and each explicitly required support target as separate completion obligations
 - If the plan conflicts under the same requirements and design assumptions, do not edit; provide evidence and report "Fix plan requires revision"

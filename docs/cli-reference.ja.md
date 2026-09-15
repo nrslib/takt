@@ -29,6 +29,16 @@
 
 グローバル設定ディレクトリ（デフォルト: `~/.takt/`）は環境変数 `TAKT_CONFIG_DIR` で変更できます。
 
+## DeepSeek Harness managed environment
+
+| コマンド | 説明 |
+|---------|------|
+| `takt deepseek-harness install` | `<global TAKT dir>/deepseek-harness/` 配下に uv-managed CPython 3.12 環境を作成・修復 |
+
+install は同梱の `pyproject.toml` と `uv.lock` をコピーし、`uv sync --locked` による project sync を一度だけ実行します。`--python` と `--uv-path`、provider の `python_path` オプションは受け付けず、interpreter は managed environment で固定されます。`deepseek-harness` provider を選択する前に `takt deepseek-harness install` を一度実行してください。npm install と npm lifecycle hook は環境を構築・修復せず、install 中に provider を起動すると installer lock を待たずに失敗することがあります。
+
+managed environment は glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` に対応します。Windows、macOS x64、Linux musl、古い Linux glibc、古い macOS は fail fast し、system Python の準備は不要です。制限付き package index へ接続する場合は uv 標準の `UV_INDEX_URL`、proxy、certificate 環境変数を設定してください。以前 `pip` で package index を設定していた場合は uv の設定へ移行し、`uv sync --locked` により同梱 lock を正本として扱います。install の preflight は `uv >= 0.11.0` を要求し、uv が未導入、版を解析できない、または古い場合は既存 managed environment を削除する前に停止します。
+
 ## Web UI の実行境界
 
 `takt ui` は実験的なローカル Web UI を `http://127.0.0.1:20525` で起動し、`--port` でポートを変更できます。起動時には、予告なく仕様が変更される可能性があることを表示します。同じ `TAKT_CONFIG_DIR` のインスタンスがすでに動いている場合は二重起動せず、実際の URL と PID を表示します。グレースフルに停止するには `takt ui stop`、停止後に起動し直すには `takt ui restart [--port <number>]` を使用します。
@@ -87,6 +97,12 @@ TUI の会話履歴では、送信済みのユーザー発言を、表示幅い�
 `/tell` は通常の CLI/TUI の `assistant`、`grill-me`、`persona` 会話で利用でき、これらのモード間を切り替えた後も利用できます。送信先を選ぶには、有効な TAKT 管理の worktree clone で実行中のタスクが必要です。Web UI はローカルの `/tell` handoff を実行せず、`/tell このタスクを確認` のような入力も通常のメッセージとして assistant に送ります。Retry と Instruct の専用会話では `/tell` を公開せず、それぞれのタスク操作を使用します。
 
 選択内容は一時的で永続化されません。workflow、mode、provider、model の変更は、次の通常メッセージまたは `/go` で新しい AI session を作り、以前の会話履歴を参照情報として1回だけ渡します。effort だけの変更は現在の session の次回呼び出しへ適用されます。provider を変更すると、一時的な model と effort は消去されます。次の入力までに同じ設定コマンドを複数回実行した場合は、各設定で最後に選択した値だけが適用されます。これらの会話用 override は workflow 実行には影響しません。
+
+### 形式仕様の検証
+
+現在のインタラクティブセッションで形式仕様モードを有効にしている場合、`/verify` を実行すると、現在の合意内容を1回の操作で検証できます。TAKT はアシスタントに現在の合意内容を形式仕様として出力するよう依頼し、その応答に含まれる `quint` と `alloy` のコードブロックを抽出して検証機を実行します。検証結果は同じセッションに戻され、アシスタントが解釈します。
+
+検証は応答に Quint または Alloy のコードブロックがある場合だけ開始されます。Quint ブロックがある場合、TAKT は `parse` を実行し、parse 成功時だけ `typecheck` を実行します。`run` は typecheck 成功に加え、`init` と `step` の action を持つ main module が見つかり、選択された検証対象がその module 内にある場合だけ実行されます。Java 17 以上を利用できる場合は、Quint の前段階がすべて成功したときだけ `quint verify` を実行し、Alloy ブロックがあれば Quint の結果とは独立して Alloy Analyzer を実行します。Java を利用できない場合、または 17 未満の場合はこれら Java 依存の段階をスキップしますが、該当する Quint の基本段階は上記の条件に従って実行され、結果には Alloy 仕様が未検証であることが明示されます。`TAKT_ALLOY_JAR` を設定すると指定した Alloy JAR を使用します（相対パスはプロジェクトディレクトリ基準で解決されます）。未設定の場合はプロジェクト内の `.takt/cache/alloy/6.2.0/alloy.jar` に固定済み artifact をダウンロードしてキャッシュします。
 
 ### 実行例
 

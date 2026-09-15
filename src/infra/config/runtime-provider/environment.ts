@@ -627,12 +627,8 @@ function resolveProfileProviderOptions(
     ? resolutionContext
     : undefined;
   const isTrustedGlobalProfile = runtimeResolutionContext?.profileOrigins?.get(profileName) === 'global';
-  const pythonPathTrust: NormalizeProviderOptionsOptions['pythonPathTrust'] = isTrustedGlobalProfile
-    ? 'trusted'
-    : 'untrusted';
   const normalizationOptions: NormalizeProviderOptionsOptions = !isTrustedGlobalProfile
     ? {
-        pythonPathTrust,
         baseUrlTrust: 'loopback-only',
         ...(profile.provider === 'deepseek-harness'
           ? {
@@ -641,7 +637,7 @@ function resolveProfileProviderOptions(
             }
           : {}),
       }
-    : { pythonPathTrust };
+    : {};
   const validatedProfileOptions = StepProviderOptionsObjectSchema.parse({ [rawKey]: profile.options });
   const profileOptions = normalizeProviderOptions(validatedProfileOptions, normalizationOptions);
   const mergedOptions = mergeProviderOptions(capabilityOptions, profileOptions);

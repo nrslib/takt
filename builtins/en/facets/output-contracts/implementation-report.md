@@ -4,7 +4,7 @@
 ## Completion Contracts
 | Contract ID | Origin | Upstream Completion Obligation | Implementation Result | Implementation Location | Counterexample and Observed Result | Evidence | Status |
 |-------------|--------|-------------------------------|-----------------------|-------------------------|------------------------------------|----------|--------|
-| `{ID}` | Plan / Newly discovered (discovery stage) | {meaning of the same ID in the upstream contract ledger} | {implemented behavior or preservation obligation} | `{file:line, or "not implemented"}` | {rejected incorrect implementation and concrete observed value, effect, record, field, argument, or event; do not infer rejection from string absence alone; or not run with reason} | Valid: {result}; Failure: {result or N/A with basis}; Boundary: {result or N/A with basis}; Assertion: {observation}; Command: `{execution}` | Verified / Incomplete / Environment-limited |
+| `{ID}` | Plan / Newly discovered (discovery stage) | {source, applicable states, operation, evaluation time, observation target, and expected result for the same ID} | {implemented behavior or preservation obligation} | `{file:line, or "not implemented"}` | {rejected incorrect implementation and concrete observed value, effect, record, field, argument, or event; do not infer rejection from string absence alone; or not run with reason} | Valid: {result}; Failure: {result or N/A with basis}; Boundary: {result or N/A with basis}; Assertion: {observation}; Command: `{execution}` | Verified / Incomplete / Environment-limited |
 
 ## Impact-Path Verification (only for applicable contracts)
 | Contract ID | Producers / Equivalent Branches / Auxiliary Entry Points / Consumers Checked | Migrated / Preserved / Obsolete Paths | Applicable Invariants and Continuous Scenario |
@@ -14,12 +14,12 @@
 ## Quality Gates
 | Type | Execution | Result | Effect on This Task’s Completion and Evidence |
 |------|-----------|--------|-----------------------------------------------|
-| Build / Test / Static Check | `{execution}` | Pass / Fail / Not run | {mandatory condition and causal relationship to the change; blocking / non-blocking / undetermined, with evidence} |
+| Build / Test / Static Check | `{execution; run this time / reused, original execution reference, identity of target code, configuration, dependencies, and environment}` | Pass / Fail / Not run | {mandatory condition and causal relationship to the change; blocking / non-blocking / undetermined, with evidence} |
 
 ## Unverified Scope
 | Item | Reason | Deterministic Alternative Verification | Remaining Risk and Effect on This Task’s Completion |
 |------|--------|----------------------------------------|-----------------------------------------------------|
-| {unverified item, or "none"} | {incomplete implementation, failed verification, environmental limitation, etc.} | {alternative verification performed, or "none"} | {remaining risk, whether required for this task or out of scope, evidence, and next action} |
+| {unverified item, or "none"} | {incomplete implementation, failed verification, environmental limitation, etc.; state whether it is executable within the current plan (yes / no) and the concrete basis} | {alternative verification performed, or "none"} | {remaining risk, whether required for this task or out of scope, evidence, and next action; when identifying a plan defect, state why the current plan cannot execute or verify it, which premise, scope, method, or verification capability must change, and what concrete work becomes possible after the change} |
 
 `Verified` is allowed only when all applicable contract and impact-path evidence succeeded. Record every failed or unexecuted item under Unverified Scope with its reason, deterministic alternative verification, and remaining risk.
 ```

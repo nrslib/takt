@@ -29,6 +29,16 @@ This document provides a complete reference for all TAKT CLI commands and option
 
 The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
 
+## DeepSeek Harness managed environment
+
+| Command | Description |
+|---------|-------------|
+| `takt deepseek-harness install` | Create or repair the uv-managed CPython 3.12 environment under `<global TAKT dir>/deepseek-harness/` |
+
+The install command copies the shipped `pyproject.toml` and `uv.lock`, then runs one `uv sync --locked` for the project. It does not accept `--python` or `--uv-path`, and the provider `python_path` option is not supported; the interpreter is fixed by the managed environment. Run `takt deepseek-harness install` once before selecting the `deepseek-harness` provider. Install preflight requires uv `>= 0.11.0`; a missing uv, an unparseable version, or an older version stops before the existing managed environment is deleted. npm install and npm lifecycle hooks do not build or repair this environment; a provider started during installation may fail because it does not wait for the installer lock.
+
+The managed environment supports Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. Windows, macOS x64, Linux musl, older Linux glibc, and older macOS fail fast, and a system Python installation is not required. Use uv's standard network configuration (`UV_INDEX_URL`, proxy, and certificate variables) for restricted package indexes. If package-index access was previously configured with `pip`, migrate to those uv settings; `uv sync --locked` keeps the shipped lock authoritative.
+
 ## Web UI execution boundary
 
 Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.
@@ -90,6 +100,12 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
 
+### Formal Specification Verification
+
+When formal specification mode is enabled for the current interactive session, run `/verify` to verify the current agreement in one shot. TAKT asks the assistant to output the current agreement as formal specifications, extracts the `quint` and `alloy` code blocks from that response, runs the verifiers, and sends the results back to the same session for the assistant to interpret.
+
+Verification starts only when the response contains a Quint or Alloy code block. For a Quint block, TAKT runs `parse`; `typecheck` runs only after parsing passes, and `run` runs only after typechecking passes, a main module with `init` and `step` actions is found, and the selected verification targets are in that module. With Java 17 or later, TAKT additionally runs `quint verify` only when those preceding Quint stages pass, and runs the Alloy Analyzer when an Alloy block is present, independently of Quint results. When Java is unavailable or older than 17, these Java-dependent stages are skipped; the applicable basic Quint stages still run, and the result explicitly reports that the Alloy specification was not verified. Set `TAKT_ALLOY_JAR` to use an explicit Alloy JAR path (relative paths are resolved from the project directory); otherwise TAKT downloads and caches the pinned artifact at `.takt/cache/alloy/6.2.0/alloy.jar` within the project.
+
 ### Execution Example
 
 ```
@@ -141,11 +157,11 @@ takt --task "Add authentication" --workflow dual
 
 ## Workflow Maker
 
-`takt make` starts the TTY-only Workflow Maker. Before the conversation, choose New workflow or a project, global, builtin, or repertoire workflow as the base. Existing workflows are reference inputs only; Workflow Maker never edits the selected source.
+`takt make` starts the TTY-only Workflow Maker. Before the conversation, choose New workflow or a project, global, built-in, or repertoire workflow as the base. Existing workflows are reference inputs only; Workflow Maker never edits the selected source.
 
 Use `/workflow` to replace the base during the conversation and `/go` to prepare a complete implementation instruction. The approval screen shows the planned `.takt/make/YYYYMMDD-HHmmss-SSS/` path and offers exactly Execute, Continue editing, and Cancel. No Maker artifact is written until Execute is selected.
 
-An approved run copies the statically reachable dependency closure into an isolated directory containing `workflows/`, `steps/`, `facet-pools/`, and `facets/`, rewrites references to the copies, and runs the builtin `workflow-maker` directly with that directory as its working directory. It does not create a task, worktree, commit, push, or pull request. Dynamic or unresolved dependencies fail before execution. Completed and failed runs remain at their displayed paths, including the doctor report when one was produced.
+An approved run copies the statically reachable dependency closure into an isolated directory containing `workflows/`, `steps/`, `facet-pools/`, and `facets/`, rewrites references to the copies, and runs the built-in `workflow-maker` directly with that directory as its working directory. It does not create a task, worktree, commit, push, or pull request. Dynamic or unresolved dependencies fail before execution. Completed and failed runs remain at their displayed paths, including the doctor report when one was produced.
 
 ```bash
 takt make

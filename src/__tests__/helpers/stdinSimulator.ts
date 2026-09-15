@@ -171,6 +171,7 @@ export interface MockProviderCapture {
   providerOptions: unknown[];
   allowedTools: Array<string[] | undefined>;
   permissionModes: Array<string | undefined>;
+  internalAgentIsolations: Array<string | undefined>;
   imageAttachments: Array<Array<{ placeholder: string; path: string }> | undefined>;
 }
 
@@ -213,6 +214,7 @@ export function createScenarioProvider(
     providerOptions: [],
     allowedTools: [],
     permissionModes: [],
+    internalAgentIsolations: [],
     imageAttachments: [],
   };
 
@@ -221,6 +223,7 @@ export function createScenarioProvider(
     providerOptions?: unknown;
     allowedTools?: string[];
     permissionMode?: string;
+    internalAgentIsolation?: string;
     imageAttachments?: Array<{ placeholder: string; path: string }>;
   }) => {
     const idx = capture.callCount;
@@ -230,6 +233,7 @@ export function createScenarioProvider(
     capture.providerOptions.push(options?.providerOptions);
     capture.allowedTools.push(options?.allowedTools);
     capture.permissionModes.push(options?.permissionMode);
+    capture.internalAgentIsolations.push(options?.internalAgentIsolation);
     capture.imageAttachments.push(options?.imageAttachments);
 
     const scenario = idx < scenarios.length

@@ -128,6 +128,7 @@ function requireIsolatedStructuredOutput(
 export class OpenCodeProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
+  readonly supportsToolFreeExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 

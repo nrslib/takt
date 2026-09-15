@@ -31,6 +31,7 @@ export const SlashCommand = {
   Provider: '/provider',
   Model: '/model',
   Effort: '/effort',
+  Verify: '/verify',
 } as const;
 export type SlashCommand = typeof SlashCommand[keyof typeof SlashCommand];
 
