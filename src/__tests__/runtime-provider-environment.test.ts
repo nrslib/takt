@@ -1,4 +1,3 @@
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   compileProviderEnvironment,
@@ -246,51 +245,46 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
       .toThrow('python_path');
   });
 
-  it('resolves relative paths from a trusted global runtime profile before execution', () => {
+  it.each([
+    ['session_root', { session_root: 'deepseek-sessions' }],
+    ['cordis', { cordis: 'cordis.yml' }],
+  ] as const)('rejects removed %s from a global runtime profile with migration guidance', (optionName, options) => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },
       profiles: {
         p: {
           provider: 'deepseek-harness',
           model: 'deepseek-v4-flash',
-          options: {
-            session_root: 'deepseek-sessions',
-            cordis: 'cordis.yml',
-          },
+          options,
         },
       },
     };
 
-    const env = compileRuntimeProviderEnvironment(section, {
-      ...globalRuntimeResolutionContext,
-      executionDir: '/execution',
-    });
-
-    expect(env.providerOptions).toEqual({
-      deepseekHarness: {
-        sessionRoot: resolve('/execution', 'deepseek-sessions'),
-        cordis: resolve('/execution', 'cordis.yml'),
-      },
-    });
+    expect(() => compileRuntimeProviderEnvironment(section, globalRuntimeResolutionContext))
+      .toThrow(new RegExp(`${optionName}.*(?:removed|deprecated|unsupported)`, 'iu'));
+    expect(() => compileRuntimeProviderEnvironment(section, globalRuntimeResolutionContext))
+      .toThrow(/(?:session_key|current SDK|no supported replacement|remove)/iu);
   });
 
-  it('keeps project runtime session roots relative for the client boundary check', () => {
+  it.each([
+    ['session_root', { session_root: 'deepseek-sessions' }],
+    ['cordis', { cordis: 'cordis.yml' }],
+  ] as const)('rejects removed %s from a project runtime profile with migration guidance', (optionName, options) => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },
       profiles: {
         p: {
           provider: 'deepseek-harness',
           model: 'deepseek-v4-flash',
-          options: { session_root: 'deepseek-sessions' },
+          options,
         },
       },
     };
 
-    const env = compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext);
-
-    expect(env.providerOptions).toEqual({
-      deepseekHarness: { sessionRoot: 'deepseek-sessions' },
-    });
+    expect(() => compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext))
+      .toThrow(new RegExp(`${optionName}.*(?:removed|deprecated|unsupported)`, 'iu'));
+    expect(() => compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext))
+      .toThrow(/(?:session_key|current SDK|no supported replacement|remove)/iu);
   });
 
   it('rejects a DeepSeek executable override from a project runtime profile', () => {

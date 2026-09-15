@@ -34,8 +34,12 @@ import {
   assertSupportedDeepSeekHarnessPlatform,
   isSupportedDeepSeekHarnessPlatform,
 } from '../infra/deepseek-harness/platform.js';
-import { installDeepSeekHarness } from '../infra/deepseek-harness/managed-venv.js';
+import {
+  getDeepSeekHarnessManagedPaths,
+  installDeepSeekHarness,
+} from '../infra/deepseek-harness/managed-venv.js';
 import { callDeepSeekHarness, closeDeepSeekHarnessProcesses } from '../infra/deepseek-harness/index.js';
+import { validateDeepSeekHarnessRuntime } from '../infra/deepseek-harness/runtime.js';
 
 const supportedPlatform = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
@@ -153,6 +157,7 @@ interface FakeRuntime {
   pythonShimSource: string;
   pythonInvocationLog: string;
   bridgeStartedMarker: string;
+  lifecycleLog: string;
   probeStartedMarker: string;
   probeReleasePath: string;
   probeFailOncePath: string;
@@ -216,6 +221,7 @@ async function createFakeRuntime(workspace: Workspace, options: FakeRuntimeOptio
   const pythonRoot = path.join(workspace.root, 'fake-python');
   const pythonInvocationLog = path.join(workspace.root, 'managed-python-invocations.log');
   const bridgeStartedMarker = path.join(workspace.root, 'bridge-started.marker');
+  const lifecycleLog = path.join(workspace.root, 'sdk-lifecycle.log');
   const probeStartedMarker = path.join(workspace.root, 'probe-started.marker');
   const probeReleasePath = path.join(workspace.root, 'release-probe');
   const probeFailOncePath = path.join(workspace.root, 'fail-probe-once');
@@ -251,32 +257,43 @@ sys.implementation = types.SimpleNamespace(
   vi.stubEnv('FAKE_PROBE_HOLD', options.holdProbe === true ? '1' : '0');
   vi.stubEnv('FAKE_PROBE_FAIL_ONCE', options.failProbeOnce === true ? '1' : '0');
   vi.stubEnv('FAKE_PROBE_FAIL_ONCE_PATH', probeFailOncePath);
-  const constructor = options.constructorCompatible === false
-    ? `    def __init__(self, required):
+  const config = options.constructorCompatible === false
+    ? `
+class DeepSeekHarnessConfig:
+    def __init__(self, required):
         self.kwargs = {'required': required}
 `
-    : `    def __init__(self, provider, model, cwd, runtime_cwd, max_tokens=None, session_root=None, cordis=None, request_timeout_seconds=None, shutdown_timeout_seconds=None):
+    : `
+class DeepSeekHarnessConfig:
+    def __init__(self, provider, model, cwd, runtime_cwd, max_tokens=None, request_timeout_seconds=None, shutdown_timeout_seconds=None):
         self.kwargs = {
             'provider': provider,
             'model': model,
             'cwd': cwd,
             'runtime_cwd': runtime_cwd,
             'max_tokens': max_tokens,
-            'session_root': session_root,
-            'cordis': cordis,
             'request_timeout_seconds': request_timeout_seconds,
             'shutdown_timeout_seconds': shutdown_timeout_seconds,
         }
-        with open(${JSON.stringify(bridgeStartedMarker)}, 'a', encoding='utf-8') as marker:
-            marker.write(json.dumps({
-                'kwargs': self.kwargs,
-                'dshHome': __import__('os').environ.get('DSH_HOME'),
-                'path': __import__('os').environ.get('PATH'),
-            }, sort_keys=True) + '\\n')
+`;
+  const constructor = `    def __init__(self, **kwargs):
+        self.config = DeepSeekHarnessConfig(**kwargs)
+        self.kwargs = self.config.kwargs
+        phase = 'probe' if sys.argv[0] == '-c' else 'bridge'
+        with open(${JSON.stringify(lifecycleLog)}, 'a', encoding='utf-8') as lifecycle:
+            lifecycle.write(phase + '-constructor\\n')
+        if phase == 'bridge':
+            with open(${JSON.stringify(bridgeStartedMarker)}, 'a', encoding='utf-8') as marker:
+                marker.write(json.dumps({
+                    'kwargs': self.kwargs,
+                    'dshHome': __import__('os').environ.get('DSH_HOME'),
+                    'path': __import__('os').environ.get('PATH'),
+                }, sort_keys=True) + '\\n')
 `;
   await writeFile(path.join(pythonRoot, 'deepseek_harness', '__init__.py'), `
 import json
 import os
+import sys
 import types
 
 if os.environ.get('FAKE_PROBE_FAIL_ONCE') == '1' and not os.path.exists(${JSON.stringify(probeFailOncePath)}):
@@ -290,15 +307,24 @@ class Result:
         self.final_response = final_response
         self.finish_reason = finish_reason
 
+${config}
 class DeepSeekHarness:
 ${constructor}
     def start(self):
+        phase = 'probe' if sys.argv[0] == '-c' else 'bridge'
+        with open(${JSON.stringify(lifecycleLog)}, 'a', encoding='utf-8') as lifecycle:
+            lifecycle.write(phase + '-start\\n')
         return None
 
     def close(self):
+        phase = 'probe' if sys.argv[0] == '-c' else 'bridge'
+        with open(${JSON.stringify(lifecycleLog)}, 'a', encoding='utf-8') as lifecycle:
+            lifecycle.write(phase + '-close\\n')
         return None
 
     def start_session(self, session_id=None):
+        if sys.argv[0] == '-c':
+            raise RuntimeError('preflight must not start a session')
         harness = self
         active_session = session_id or 'managed-session'
         class Session:
@@ -403,6 +429,7 @@ ${constructor}
     pythonShimSource,
     pythonInvocationLog,
     bridgeStartedMarker,
+    lifecycleLog,
     probeStartedMarker,
     probeReleasePath,
     probeFailOncePath,
@@ -940,6 +967,41 @@ describe('DeepSeek Harness managed runtime constants', () => {
     expect(DEEPSEEK_HARNESS_SDK_VERSION).toBe(DEEPSEEK_HARNESS_RUNTIME_VERSION);
     expect(manifest).toContain(`requires-python = "${DEEPSEEK_HARNESS_PYTHON_REQUIRES}"`);
   });
+});
+
+const realRuntimeRequested = process.env.TAKT_TEST_DEEPSEEK_HARNESS_REAL_RUNTIME === '1';
+
+describe.skipIf(!realRuntimeRequested || !supportedPlatform)('DeepSeek Harness fixed SDK runtime', () => {
+  afterEach(async () => {
+    await closeDeepSeekHarnessProcesses();
+    vi.unstubAllEnvs();
+    for (const root of testRoots.splice(0)) {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('validates the pinned SDK constructor and close without an API key or execution', async () => {
+    const workspace = await createWorkspace();
+    vi.stubEnv('TAKT_CONFIG_DIR', workspace.globalDir);
+    vi.stubEnv('DEEPSEEK_API_KEY', undefined);
+
+    const uvPath = process.env.TAKT_TEST_DEEPSEEK_HARNESS_UV_PATH ?? 'uv';
+    await installDeepSeekHarness({ uvPath });
+
+    const paths = getDeepSeekHarnessManagedPaths();
+    const runtime = await validateDeepSeekHarnessRuntime(
+      paths.pythonPath,
+      paths.managedRoot,
+      undefined,
+      60_000,
+    );
+
+    expect(runtime.implementation).toBe('cpython');
+    expect(runtime.python.slice(0, 2)).toEqual([3, 12]);
+    expect(runtime.sdkVersion).toBe(DEEPSEEK_HARNESS_SDK_VERSION);
+    expect(runtime.runtimeVersion).toBe(DEEPSEEK_HARNESS_RUNTIME_VERSION);
+    expect(runtime.sdkRequiresPython).toBeDefined();
+  }, 120_000);
 });
 
 describe.skipIf(!fakePythonAvailable)('DeepSeek Harness managed installer', () => {
@@ -1700,6 +1762,14 @@ describe.skipIf(!fakePythonAvailable)('DeepSeek Harness managed provider startup
     });
 
     expect(response).toMatchObject({ status: 'done', content: 'managed response' });
+    expect(await readFile(fixture.runtime.lifecycleLog, 'utf8')).toBe([
+      'probe-constructor',
+      'probe-close',
+      'bridge-constructor',
+      'bridge-start',
+      'bridge-close',
+      '',
+    ].join('\n'));
     expect(existsSync(fixture.bridgeStartedMarker)).toBe(true);
     const [startup] = (await readFile(fixture.bridgeStartedMarker, 'utf8'))
       .trim()

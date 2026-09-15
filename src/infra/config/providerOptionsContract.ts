@@ -168,8 +168,6 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
   'deepseekHarness.baseUrl',
-  'deepseekHarness.sessionRoot',
-  'deepseekHarness.cordis',
   'deepseekHarness.maxTokens',
   'deepseekHarness.requestTimeoutMs',
   'deepseekHarness.shutdownTimeoutMs',

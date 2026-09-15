@@ -150,6 +150,35 @@ describe('option resolution order', () => {
     expect(getProviderMock).toHaveBeenLastCalledWith('claude');
   });
 
+  it.each(['sessionRoot', 'cordis'] as const)(
+    'should reject removed DeepSeek %s before provider dispatch',
+    async (option) => {
+      resolveProviderOptionsWithTraceMock.mockReturnValue({
+        value: { codex: { networkAccess: false } },
+        source: 'project',
+        originResolver: () => 'local',
+      });
+
+      const providerOptions = {
+        deepseekHarness: { [option]: './removed' },
+      } as unknown as RunAgentOptions['providerOptions'];
+
+      const run = runAgent(undefined, 'task', {
+        cwd: '/repo',
+        provider: 'deepseek-harness',
+        providerOptions,
+      });
+
+      const expectedMessage = option === 'sessionRoot'
+        ? /sessionRoot.*session_key/iu
+        : /cordis.*(?:current SDK|supported replacement|remove)/iu;
+      await expect(run).rejects.toThrow(expectedMessage);
+      expect(getProviderMock).not.toHaveBeenCalled();
+      expect(providerSetupMock).not.toHaveBeenCalled();
+      expect(providerCallMock).not.toHaveBeenCalled();
+    },
+  );
+
   it('should ignore global personaProviders when project personaProviders key exists', async () => {
     resolveConfigValueMock.mockReturnValue({
       coder: { provider: 'codex' },

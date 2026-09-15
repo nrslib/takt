@@ -1,9 +1,7 @@
-import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   normalizeProviderOptions,
   mergeProviderOptions,
-  resolveTrustedDeepSeekHarnessPaths,
 } from '../infra/config/providerOptions.js';
 import {
   buildRawTaktProvidersOrThrow,
@@ -15,8 +13,6 @@ import { StepProviderOptionsObjectSchema } from '../core/models/schema-base.js';
 const deepseekYaml = {
   deepseek_harness: {
     base_url: 'https://api.deepseek.example/v1',
-    session_root: '.takt/deepseek-sessions',
-    cordis: '.takt/cordis.yml',
     max_tokens: 4096,
     request_timeout_ms: 120_000,
     shutdown_timeout_ms: 2_000,
@@ -31,8 +27,6 @@ describe('DeepSeek Harness provider options', () => {
     expect(normalized).toEqual({
       deepseekHarness: {
         baseUrl: 'https://api.deepseek.example/v1',
-        sessionRoot: '.takt/deepseek-sessions',
-        cordis: '.takt/cordis.yml',
         maxTokens: 4096,
         requestTimeoutMs: 120_000,
         shutdownTimeoutMs: 2_000,
@@ -70,6 +64,42 @@ describe('DeepSeek Harness provider options', () => {
     })).toThrow();
   });
 
+  it('rejects the removed session_root option with session_key migration guidance', () => {
+    expect(() => StepProviderOptionsObjectSchema.parse({
+      deepseek_harness: { session_root: '.takt/deepseek-sessions' },
+    })).toThrow(/session_root.*(?:removed|deprecated)/iu);
+    expect(() => StepProviderOptionsObjectSchema.parse({
+      deepseek_harness: { session_root: '.takt/deepseek-sessions' },
+    })).toThrow(/session_key/iu);
+  });
+
+  it('rejects the removed cordis option with current SDK migration guidance', () => {
+    expect(() => StepProviderOptionsObjectSchema.parse({
+      deepseek_harness: { cordis: '.takt/cordis.yml' },
+    })).toThrow(/cordis.*(?:removed|deprecated|unsupported)/iu);
+    expect(() => StepProviderOptionsObjectSchema.parse({
+      deepseek_harness: { cordis: '.takt/cordis.yml' },
+    })).toThrow(/(?:current SDK|no supported replacement|remove)/iu);
+  });
+
+  it('rejects removed DeepSeek options passed directly to the normalizer', () => {
+    expect(() => normalizeProviderOptions({
+      deepseek_harness: { session_root: '.takt/deepseek-sessions' },
+    } as never)).toThrow(/session_root/iu);
+    expect(() => normalizeProviderOptions({
+      deepseek_harness: { cordis: '.takt/cordis.yml' },
+    } as never)).toThrow(/cordis/iu);
+  });
+
+  it('rejects removed DeepSeek options passed directly to the serializer', () => {
+    expect(() => denormalizeProviderOptions({
+      deepseekHarness: { sessionRoot: '.takt/deepseek-sessions' },
+    } as never)).toThrow(/sessionRoot/iu);
+    expect(() => denormalizeProviderOptions({
+      deepseekHarness: { cordis: '.takt/cordis.yml' },
+    } as never)).toThrow(/cordis/iu);
+  });
+
   it('rejects a non-loopback base URL from project/workflow origin', () => {
     expect(() => normalizeProviderOptions(deepseekYaml, {
       baseUrlTrust: 'local-loopback-only',
@@ -89,94 +119,4 @@ describe('DeepSeek Harness provider options', () => {
     })).toThrow(/pythonPath|python_path/);
   });
 
-  it('rejects absolute and traversing session roots from project or workflow config', () => {
-    for (const sessionRoot of [
-      '/tmp/shared-sessions',
-      ' /tmp/shared-sessions',
-      '../shared-sessions',
-      ' ../shared-sessions',
-      '..\\\\shared-sessions',
-      'C:\\\\shared-sessions',
-    ]) {
-      expect(() => normalizeProviderOptions({
-        deepseek_harness: { session_root: sessionRoot },
-      }, {
-        pathTrust: 'untrusted',
-        pathPrefix: 'workflow.provider_options',
-      })).toThrow('project/session boundary');
-    }
-  });
-
-  it('rejects Cordis selection from project or workflow config', () => {
-    expect(() => normalizeProviderOptions({
-      deepseek_harness: { cordis: '.takt/cordis.yml' },
-    }, {
-      pathTrust: 'untrusted',
-      cordisTrust: 'untrusted',
-      pathPrefix: 'workflow.provider_options',
-    })).toThrow('trusted user configuration');
-  });
-
-  it('allows a user-controlled environment Cordis override through an untrusted project layer', () => {
-    expect(normalizeProviderOptions({
-      deepseek_harness: { cordis: '/opt/user-cordis.yml' },
-    }, {
-      cordisTrust: 'untrusted',
-      pathPrefix: 'provider_options',
-      getOrigin: () => 'env',
-    })).toEqual({
-      deepseekHarness: { cordis: '/opt/user-cordis.yml' },
-    });
-  });
-
-  it('allows trusted environment overrides for session root and Cordis paths', () => {
-    expect(normalizeProviderOptions({
-      deepseek_harness: {
-        session_root: '/tmp/user-deepseek-sessions',
-        cordis: '/tmp/user-cordis.yml',
-      },
-    }, {
-      pathTrust: 'local-untrusted',
-      cordisTrust: 'local-untrusted',
-      getOrigin: () => 'env',
-    })).toEqual({
-      deepseekHarness: {
-        sessionRoot: '/tmp/user-deepseek-sessions',
-        cordis: '/tmp/user-cordis.yml',
-      },
-    });
-  });
-
-  it('resolves trusted relative global and environment paths from the execution directory', () => {
-    const resolved = resolveTrustedDeepSeekHarnessPaths({
-      deepseekHarness: {
-        sessionRoot: '../shared-sessions',
-        cordis: 'config/cordis.yml',
-      },
-    }, '/project/worktree', {
-      'deepseekHarness.sessionRoot': 'global',
-      'deepseekHarness.cordis': 'env',
-    });
-
-    expect(resolved).toEqual({
-      deepseekHarness: {
-        sessionRoot: path.resolve('/project/worktree', '../shared-sessions'),
-        cordis: path.resolve('/project/worktree', 'config/cordis.yml'),
-      },
-    });
-  });
-
-  it('preserves absolute trusted global session and Cordis paths', () => {
-    expect(normalizeProviderOptions({
-      deepseek_harness: {
-        session_root: '/var/lib/takt/deepseek-sessions',
-        cordis: '/etc/takt/cordis.yml',
-      },
-    })).toEqual({
-      deepseekHarness: {
-        sessionRoot: '/var/lib/takt/deepseek-sessions',
-        cordis: '/etc/takt/cordis.yml',
-      },
-    });
-  });
 });

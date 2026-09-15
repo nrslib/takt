@@ -292,7 +292,6 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 #   deepseek_harness:
 #     # managed environment 由 `takt deepseek-harness install` 创建。
 #     base_url: http://127.0.0.1:8787/v1
-#     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
 #     request_timeout_ms: 3600000
 #     shutdown_timeout_ms: 1000
@@ -715,9 +714,9 @@ Provider profile 可以为不同 provider 设置默认权限模式和按 step �
 
 | 模式 | 说明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
 |------|------|--------|-------|----------|----|------------------|--------------|---------|----------|
-| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls` | Cordis 配置 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` |
-| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash` | Cordis 配置 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | Cordis 配置 | `--force` | `--yolo` | `--trust-all-tools` |
+| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` |
+| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | 此 SDK 不提供 | `--force` | `--yolo` | `--trust-all-tools` |
 
 Pi 的权限模式是 SDK active-tool allowlist，而不是操作系统 sandbox；TAKT 不为 Pi 增加逐工具确认。使用 Pi 时请确保 workflow 输入和 extension 可信。
 
@@ -917,7 +916,6 @@ model: deepseek-v4-flash
 provider_options:
   deepseek_harness:
     base_url: http://127.0.0.1:8787/v1  # 可选；项目/workflow 配置中使用 loopback
-    session_root: .takt/deepseek-sessions
     max_tokens: 4096
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
@@ -938,7 +936,9 @@ allowlist，也不转换 provider alias。route 和 model 两部分都会按原�
 provider 和 model 字段传给 bridge/SDK；若 SDK 拒绝，错误会标明原始引用以及
 bridge/SDK 的失败位置。
 
-`cordis` 会选择可执行的 tool composition，因此只允许来自受信任的全局配置或 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS`；上面的示例省略了它。managed interpreter 由 install command 固定，不能通过 provider option 选择。`session_root` 和 `cordis` 相对配置的工作目录解析。带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、TAKT `allowed_tools`、MCP server map、图片附件、structured output、permission mode 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略；工具组合请通过 Cordis 配置。
+`session_root` 和 `cordis` 已从 DeepSeek Harness provider option 中删除。要复用 session，请使用 workflow 的 `session_key`。当前 SDK 不支持 `cordis`，也没有受支持的替代配置，因此必须删除。配置文件以及对应的 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_SESSION_ROOT` / `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` 环境变量会在 bridge 启动前报错并给出迁移说明，不会被静默忽略。managed interpreter 由 install command 固定，不能通过 provider option 选择。project runtime profile 的 `base_url` 只能使用 loopback。
+
+带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、TAKT `allowed_tools`、MCP server map、图片附件、structured output、permission mode 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略。工具组合 option 不在此 provider contract 中公开。
 
 #### 网络访问（`network_access`）
 

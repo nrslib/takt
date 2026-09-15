@@ -816,15 +816,21 @@ export function denormalizeProviderOptions(
     };
   }
   if (providerOptions.deepseekHarness !== undefined) {
+    if (Object.hasOwn(providerOptions.deepseekHarness, 'sessionRoot')) {
+      throw new Error(
+        'Configuration error: deepseekHarness.sessionRoot has been removed; '
+        + 'use workflow session_key for session reuse.',
+      );
+    }
+    if (Object.hasOwn(providerOptions.deepseekHarness, 'cordis')) {
+      throw new Error(
+        'Configuration error: deepseekHarness.cordis has been removed because the current SDK does not support it; '
+        + 'there is no supported replacement, so remove it.',
+      );
+    }
     const deepseekHarness = {
       ...(providerOptions.deepseekHarness.baseUrl !== undefined
         ? { base_url: providerOptions.deepseekHarness.baseUrl }
-        : {}),
-      ...(providerOptions.deepseekHarness.sessionRoot !== undefined
-        ? { session_root: providerOptions.deepseekHarness.sessionRoot }
-        : {}),
-      ...(providerOptions.deepseekHarness.cordis !== undefined
-        ? { cordis: providerOptions.deepseekHarness.cordis }
         : {}),
       ...(providerOptions.deepseekHarness.maxTokens !== undefined
         ? { max_tokens: providerOptions.deepseekHarness.maxTokens }

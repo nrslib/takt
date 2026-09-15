@@ -12,8 +12,6 @@ import {
 import {
   resolveEffectiveProviderOptions,
   resolvePersonaProviderOptions,
-  resolveProviderOptionsSources,
-  resolveTrustedDeepSeekHarnessPaths,
 } from '../infra/config/providerOptions.js';
 import {
   getProvider,
@@ -145,20 +143,7 @@ export class AgentRunner {
       options.providerOptions,
       personaProviderOptions,
     );
-    const providerOptionsSources = resolveProviderOptionsSources(
-      options.providerOptions,
-      personaProviderOptions === undefined
-        ? []
-        : [{ source: 'persona_providers' as const, options: personaProviderOptions }],
-      resolvedConfigProviderOptions,
-      providerOptionsOriginResolver,
-      providerOptionsSource,
-    );
-    return resolveTrustedDeepSeekHarnessPaths(
-      resolvedProviderOptions,
-      cwd,
-      providerOptionsSources,
-    );
+    return resolvedProviderOptions;
   }
 
   private static assertResolvedExecutionIsNotMixed(options: RunAgentOptions): void {

@@ -295,7 +295,6 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #   deepseek_harness:
 #     # managed environment は `takt deepseek-harness install` で作成します。
 #     base_url: http://127.0.0.1:8787/v1
-#     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
 #     request_timeout_ms: 3600000
 #     shutdown_timeout_ms: 1000
@@ -974,9 +973,9 @@ TAKT は provider 非依存の3つのパーミッションモードを使用し�
 
 | モード | 説明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
 |--------|------|--------|-------|----------|----|-----------------|--------------|---------|----------|
-| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | Cordis 設定 | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` |
-| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | Cordis 設定 | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | Cordis 設定 | `--force` | `--yolo` | `--trust-all-tools` |
+| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` |
+| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | この SDK では公開されません | `--force` | `--yolo` | `--trust-all-tools` |
 
 Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。internal agent の role に狭い権限が必要なら、Pi の profile に capabilities と permission mode を明示してください。
 
@@ -1210,7 +1209,6 @@ model: deepseek-v4-flash
 provider_options:
   deepseek_harness:
     base_url: http://127.0.0.1:8787/v1  # 任意。project/workflow config では loopback
-    session_root: .takt/deepseek-sessions
     max_tokens: 4096
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
@@ -1234,11 +1232,11 @@ bridge 起動前に拒否されます。空白だけの route または model �
 bridge/SDK に渡します。SDK が拒否した場合は、入力された参照と bridge/SDK で
 失敗した箇所を含むエラーになります。
 
-credential safety のため、`cordis` は実行する tool composition を選択するため、信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` からのみ設定できます。上の例では省略しています。managed interpreter は install command が固定し、provider option から選択できません。同じ制約は project の `runtime.yaml` profile にも適用されます。global runtime profile では信頼できる値を選択できます。project runtime profile の `base_url` は loopback のみ使用できます。
+`session_root` と `cordis` は DeepSeek Harness provider option から削除されました。セッション再利用には workflow の `session_key` を使用してください。`cordis` は現行 SDK が対応しておらず、対応する移行先がないため削除してください。設定ファイルと対応する `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_SESSION_ROOT` / `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` 環境変数は、bridge 起動前にこの移行案内を含むエラーになります。黙って無視されることはありません。managed interpreter は install command が固定し、provider option から選択できません。project runtime profile の `base_url` は loopback のみ使用できます。
 
-`session_root` と `cordis` は設定された作業ディレクトリからの相対パスとして解決されます。workflow が `session_key` を指定するとセッションを再利用し、one-shot call は bridge を直ちに close します。`request_timeout_ms` は Python bridge request 全体を終了させ、TAKT call の abort は bridge の process tree を終了させます。公式 `session.event` notification は TAKT の text、thinking、tool-use、tool-result、error、result event へ変換されます。system prompt、TAKT の `allowed_tools`、MCP server map、画像添付、structured output、permission mode、`maxTurns` は公式 SDK の call に存在しないため warning とともに無視されます。system/tool composition は Cordis で設定してください。
+workflow が `session_key` を指定するとセッションを再利用し、one-shot call は bridge を直ちに close します。`request_timeout_ms` は Python bridge request 全体を終了させ、TAKT call の abort は bridge の process tree を終了させます。公式 `session.event` notification は TAKT の text、thinking、tool-use、tool-result、error、result event へ変換されます。system prompt、TAKT の `allowed_tools`、MCP server map、画像添付、structured output、permission mode、`maxTurns` は公式 SDK の call に存在しないため warning とともに無視されます。tool composition option はこの provider contract では公開されません。
 
-対応する環境変数 override は `_BASE_URL`、`_SESSION_ROOT`、`_CORDIS`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
+対応する環境変数 override は `_BASE_URL`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
 
 #### ネットワークアクセス (`network_access`)
 

@@ -59,6 +59,76 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it.each([
+    ['resolved config', 'sessionRoot'],
+    ['resolved config', 'cordis'],
+    ['step options', 'sessionRoot'],
+    ['step options', 'cordis'],
+    ['persona options', 'sessionRoot'],
+    ['persona options', 'cordis'],
+    ['merged options without config', 'sessionRoot'],
+    ['merged options without config', 'cordis'],
+  ] as const)('rejects removed DeepSeek %s from %s before resolving effective options', (layer, option) => {
+    const removedOptions = {
+      deepseekHarness: { [option]: './removed' },
+    } as unknown as StepProviderOptions;
+    const configOptions = layer === 'resolved config'
+      ? removedOptions
+      : layer === 'merged options without config'
+        ? undefined
+        : { codex: { networkAccess: false } };
+    const stepOptions = layer === 'step options' || layer === 'merged options without config'
+      ? removedOptions
+      : undefined;
+    const personaOptions = layer === 'persona options' ? removedOptions : undefined;
+
+    const resolve = (): StepProviderOptions | undefined => resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      configOptions,
+      stepOptions,
+      personaOptions,
+    );
+
+    const expectedMessage = option === 'sessionRoot'
+      ? /sessionRoot.*session_key/iu
+      : /cordis.*(?:current SDK|supported replacement|remove)/iu;
+    expect(resolve).toThrow(expectedMessage);
+  });
+
+  it('preserves all supported DeepSeek options through effective resolution', () => {
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      {
+        deepseekHarness: {
+          baseUrl: 'https://config.example.test',
+          maxTokens: 1024,
+          requestTimeoutMs: 1000,
+          shutdownTimeoutMs: 2000,
+          runtimeMode: 'exe',
+        },
+      },
+      {
+        deepseekHarness: {
+          baseUrl: 'https://step.example.test',
+          maxTokens: 2048,
+          requestTimeoutMs: 3000,
+          shutdownTimeoutMs: 4000,
+          runtimeMode: 'node',
+        },
+      },
+    )).toEqual({
+      deepseekHarness: {
+        baseUrl: 'https://step.example.test',
+        maxTokens: 2048,
+        requestTimeoutMs: 3000,
+        shutdownTimeoutMs: 4000,
+        runtimeMode: 'node',
+      },
+    });
+  });
+
   it('resolves Pi thinkingLevel by existing step/persona/config precedence without losing resource options', () => {
     const configOptions = asProviderOptions({
       pi: { thinkingLevel: 'medium', noSkills: true },

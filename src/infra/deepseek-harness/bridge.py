@@ -104,6 +104,16 @@ def _error_message(error: BaseException) -> str:
 
 
 def _start_harness(config: dict[str, Any]) -> Any:
+    if "sessionRoot" in config or "session_root" in config:
+        raise RuntimeError(
+            "DeepSeek Harness session_root option has been removed; "
+            "use workflow session_key for session reuse"
+        )
+    if "cordis" in config:
+        raise RuntimeError(
+            "DeepSeek Harness cordis option has been removed because the current SDK does not support it; "
+            "there is no supported replacement, so remove it"
+        )
     python_version = (sys.version_info.major, sys.version_info.minor)
     if sys.implementation.name != "cpython" or python_version != (3, 12):
         raise RuntimeError("DeepSeek Harness requires managed CPython 3.12")
@@ -124,8 +134,6 @@ def _start_harness(config: dict[str, Any]) -> Any:
     }
     optional_fields = {
         "maxTokens": "max_tokens",
-        "sessionRoot": "session_root",
-        "cordis": "cordis",
     }
     for wire_name, sdk_name in optional_fields.items():
         value = config.get(wire_name)

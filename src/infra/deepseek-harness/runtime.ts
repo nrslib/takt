@@ -39,22 +39,32 @@ from deepseek_harness import DeepSeekHarness
 sdk_distribution = importlib.metadata.distribution('deepseek-harness-sdk')
 runtime_distribution = importlib.metadata.distribution('deepseek-harness-runtime-bin')
 constructor_signature = inspect.signature(DeepSeekHarness)
+probe_kwargs = {
+    'provider': '__takt_probe_provider__',
+    'model': '__takt_probe_model__',
+    'cwd': '.',
+    'runtime_cwd': '.',
+    'max_tokens': None,
+    'request_timeout_seconds': 1.0,
+    'shutdown_timeout_seconds': 1.0,
+}
 try:
-    constructor_signature.bind(
-        provider='__takt_probe_provider__',
-        model='__takt_probe_model__',
-        cwd='.',
-        runtime_cwd='.',
-        max_tokens=None,
-        session_root=None,
-        cordis=None,
-        request_timeout_seconds=1.0,
-        shutdown_timeout_seconds=1.0,
-    )
+    constructor_signature.bind(**probe_kwargs)
 except TypeError as error:
     raise RuntimeError(
         'DeepSeek Harness SDK constructor signature is incompatible with the managed runtime contract'
     ) from error
+harness = None
+try:
+    try:
+        harness = DeepSeekHarness(**probe_kwargs)
+    except TypeError as error:
+        raise RuntimeError(
+            'DeepSeek Harness SDK constructor signature is incompatible with the managed runtime contract'
+        ) from error
+finally:
+    if harness is not None:
+        harness.close()
 print(json.dumps({
     'implementation': sys.implementation.name,
     'python': list(sys.version_info[:3]),
@@ -293,22 +303,6 @@ function assertDeepSeekHarnessRuntimeContract(
         ? '(missing)'
         : redactDeepSeekHarnessDiagnostic(info.sdkRequiresPython, process.env)} `
       + `does not allow CPython ${DEEPSEEK_HARNESS_PYTHON_VERSION}`,
-    );
-  }
-  const requiredParameters = [
-    'provider',
-    'model',
-    'cwd',
-    'runtime_cwd',
-    'max_tokens',
-    'session_root',
-    'cordis',
-    'request_timeout_seconds',
-    'shutdown_timeout_seconds',
-  ];
-  if (requiredParameters.some((parameter) => !info.constructorParameters.includes(parameter))) {
-    throw new Error(
-      'DeepSeek Harness SDK constructor signature is incompatible with the managed runtime contract',
     );
   }
 }

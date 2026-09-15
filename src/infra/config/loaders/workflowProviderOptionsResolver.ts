@@ -250,8 +250,6 @@ function resolveWorkflowProviderOptionsFromDir(
   if (ref === undefined) {
     return normalizeProviderOptions(parsedRaw, {
       baseUrlTrust: 'loopback-only',
-      pathTrust: 'untrusted',
-      cordisTrust: 'untrusted',
       pathPrefix: 'provider_options',
     });
   }
@@ -285,8 +283,6 @@ function resolveWorkflowProviderOptionsFromDir(
   );
   const inlineOptions = normalizeProviderOptions(removeProviderOptionsExtends(parsedRaw), {
     baseUrlTrust: 'loopback-only',
-    pathTrust: 'untrusted',
-    cordisTrust: 'untrusted',
     pathPrefix: 'provider_options',
   });
   return mergeProviderOptions(referencedOptions, inlineOptions);

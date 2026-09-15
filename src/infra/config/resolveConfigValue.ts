@@ -3,8 +3,6 @@ import { loadGlobalConfigTraceState } from './global/globalConfigCore.js';
 import {
   mergeProviderOptions,
   resolveEffectiveProviderOptions,
-  resolveProviderOptionsSources,
-  resolveTrustedDeepSeekHarnessPaths,
 } from './providerOptions.js';
 import { loadProjectConfig, loadProjectConfigTraceState } from './project/projectConfig.js';
 import { expandOptionalHomePath } from './pathExpansion.js';
@@ -620,12 +618,5 @@ export function resolveNonWorkflowProviderOptions(
     resolved.value,
     callOptions,
   );
-  const providerOptionsSources = resolveProviderOptionsSources(
-    callOptions,
-    [],
-    resolved.value,
-    resolved.originResolver,
-    resolved.source,
-  );
-  return resolveTrustedDeepSeekHarnessPaths(providerOptions, projectDir, providerOptionsSources);
+  return providerOptions;
 }

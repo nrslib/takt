@@ -295,7 +295,6 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #   deepseek_harness:
 #     # The managed environment is created by `takt deepseek-harness install`.
 #     base_url: http://127.0.0.1:8787/v1
-#     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
 #     request_timeout_ms: 3600000
 #     shutdown_timeout_ms: 1000
@@ -1001,9 +1000,9 @@ TAKT uses three provider-independent permission modes:
 
 | Mode | Description | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
 |------|-------------|--------|-------|----------|----|-----------------|--------------|---------|----------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | Cordis configuration | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` |
-| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | Cordis configuration | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | Cordis configuration | `--force` | `--yolo` | `--trust-all-tools` |
+| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` |
+| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | Not exposed by this SDK | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | Not exposed by this SDK | `--force` | `--yolo` | `--trust-all-tools` |
 
 Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
 
@@ -1271,7 +1270,6 @@ model: deepseek-v4-flash
 provider_options:
   deepseek_harness:
     base_url: http://127.0.0.1:8787/v1  # optional; loopback in project/workflow config
-    session_root: .takt/deepseek-sessions
     max_tokens: 4096
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
@@ -1295,11 +1293,11 @@ validation point. Unknown routes or model IDs are not validated by TAKT and are
 passed unchanged as separate provider/model fields to the bridge/SDK; an SDK
 rejection identifies the supplied reference and the bridge/SDK failure point.
 
-For credential safety, `cordis` is accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS`, because it selects executable tool composition. The example above intentionally omits it. The managed interpreter is fixed by the install command and cannot be selected through provider options. The same restrictions apply to project `runtime.yaml` profiles; global runtime profiles may select trusted values. Project runtime profiles may use only loopback `base_url` values.
+`session_root` and `cordis` have been removed from DeepSeek Harness provider options. Use workflow `session_key` to reuse a session. `cordis` has no supported replacement in the current SDK and must be removed. Configuration files and the corresponding `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_SESSION_ROOT` / `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` environment variables fail before the bridge starts with this migration guidance; they are not ignored. The managed interpreter is fixed by the install command and cannot be selected through provider options. Project runtime profiles may use only loopback `base_url` values.
 
-`session_root` and `cordis` are resolved relative to the configured working directory. Sessions are reused when a workflow supplies `session_key`; one-shot calls close the bridge immediately. `request_timeout_ms` terminates the complete Python bridge request, and aborting a TAKT call terminates the bridge process tree. Stream events are converted from official `session.event` notifications into TAKT text, thinking, tool-use, tool-result, error, and result events. System prompts, TAKT `allowed_tools`, MCP server maps, image attachments, structured output, permission modes, and `maxTurns` are not part of the official SDK call and are ignored with a warning; configure system/tool composition through Cordis instead.
+Sessions are reused when a workflow supplies `session_key`; one-shot calls close the bridge immediately. `request_timeout_ms` terminates the complete Python bridge request, and aborting a TAKT call terminates the bridge process tree. Stream events are converted from official `session.event` notifications into TAKT text, thinking, tool-use, tool-result, error, and result events. System prompts, TAKT `allowed_tools`, MCP server maps, image attachments, structured output, permission modes, and `maxTurns` are not part of the official SDK call and are ignored with a warning. Tool composition options are not exposed through this provider contract.
 
-The corresponding environment overrides are `_BASE_URL`, `_SESSION_ROOT`, `_CORDIS`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, and `_RUNTIME_MODE`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
+The corresponding environment overrides are `_BASE_URL`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, and `_RUNTIME_MODE`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
 
 #### Network access (`network_access`)
 

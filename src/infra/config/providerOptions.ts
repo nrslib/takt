@@ -1,4 +1,3 @@
-import { resolve as resolvePath } from 'node:path';
 import type {
   ClaudeEffort,
   ClaudeTerminalProviderOptions,
@@ -20,7 +19,6 @@ import type {
 } from '../../core/workflow/provider-options-trace.js';
 import { resolveWorkflowStepTarget } from '../../core/workflow/provider-target-resolution.js';
 import type { ProviderType } from '../../shared/types/provider.js';
-import { isAbsolutePathLike } from '../../shared/utils/pathBoundary.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 
 type RawProviderGuardOptions = {
@@ -87,8 +85,6 @@ type RawProviderOptions = {
   };
   deepseek_harness?: {
     base_url?: string;
-    session_root?: string;
-    cordis?: string;
     max_tokens?: number;
     request_timeout_ms?: number;
     shutdown_timeout_ms?: number;
@@ -107,13 +103,9 @@ type RawProviderOptions = {
 };
 
 type ProviderBaseUrlTrust = 'trusted' | 'loopback-only' | 'local-loopback-only';
-type ProviderPathTrust = 'trusted' | 'untrusted' | 'local-untrusted';
-type ProviderCordisTrust = 'trusted' | 'untrusted' | 'local-untrusted';
 
 export interface NormalizeProviderOptionsOptions {
   baseUrlTrust?: ProviderBaseUrlTrust;
-  pathTrust?: ProviderPathTrust;
-  cordisTrust?: ProviderCordisTrust;
   pathPrefix?: string;
   getOrigin?: (path: string) => ProviderOptionsTraceOrigin;
 }
@@ -189,70 +181,6 @@ function assertAllowedProviderBaseUrl(
   throw new Error(
     `Configuration error: ${path} must use a loopback base_url when defined by workflow or project config. `
     + 'Move non-loopback provider base URLs to global config or TAKT_PROVIDER_OPTIONS_*_BASE_URL.',
-  );
-}
-
-function hasParentPathSegment(value: string): boolean {
-  return value.split(/[\\\\/]/u).some((segment) => segment === '..');
-}
-
-function assertTrustedProjectPath(
-  path: string,
-  value: string | undefined,
-  options: NormalizeProviderOptionsOptions,
-): void {
-  if (value === undefined) {
-    return;
-  }
-  const trust = options.pathTrust ?? 'trusted';
-  if (trust === 'trusted') {
-    return;
-  }
-  if (trust === 'local-untrusted') {
-    const origin = options.getOrigin?.(path) ?? 'default';
-    if (origin !== 'local' && origin !== 'default') {
-      return;
-    }
-  }
-  const trimmed = value.trim();
-  if (!isAbsolutePathLike(trimmed) && !hasParentPathSegment(trimmed)) {
-    return;
-  }
-  throw new Error(
-    `Configuration error: ${path} must be a relative path without '..' traversal inside the project/session boundary.`,
-  );
-}
-
-function assertAllowedProviderCordis(
-  path: string,
-  value: string | undefined,
-  options: NormalizeProviderOptionsOptions,
-): void {
-  if (value === undefined) {
-    return;
-  }
-  const trust = options.cordisTrust ?? options.pathTrust ?? 'trusted';
-  if (trust === 'trusted') {
-    return;
-  }
-  if (trust === 'untrusted') {
-    const origin = options.getOrigin?.(path) ?? 'default';
-    // Environment overrides are user-controlled even when the surrounding
-    // project/config layer is untrusted. Repository and workflow values keep
-    // the default origin and remain rejected.
-    if (origin === 'env' || origin === 'global') {
-      return;
-    }
-  }
-  if (trust === 'local-untrusted') {
-    const origin = options.getOrigin?.(path) ?? 'default';
-    if (origin !== 'local' && origin !== 'default') {
-      return;
-    }
-  }
-  throw new Error(
-    `Configuration error: ${path} may only be set by trusted user configuration. `
-    + 'Use global config or TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS.',
   );
 }
 
@@ -444,31 +372,27 @@ export function normalizeProviderOptions(
   }
   if (options.deepseek_harness !== undefined) {
     const deepseekOptionsPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.deepseek_harness`;
+    if (Object.hasOwn(options.deepseek_harness, 'session_root')) {
+      throw new Error(
+        `Configuration error: ${deepseekOptionsPath}.session_root has been removed; `
+        + 'use workflow session_key for session reuse.',
+      );
+    }
+    if (Object.hasOwn(options.deepseek_harness, 'cordis')) {
+      throw new Error(
+        `Configuration error: ${deepseekOptionsPath}.cordis has been removed because the current SDK does not support it; `
+        + 'there is no supported replacement, so remove it.',
+      );
+    }
     const deepseekBaseUrlPath = `${deepseekOptionsPath}.base_url`;
     assertAllowedProviderBaseUrl(
       deepseekBaseUrlPath,
       options.deepseek_harness.base_url,
       normalizationOptions,
     );
-    assertTrustedProjectPath(
-      `${deepseekOptionsPath}.session_root`,
-      options.deepseek_harness.session_root,
-      normalizationOptions,
-    );
-    assertAllowedProviderCordis(
-      `${deepseekOptionsPath}.cordis`,
-      options.deepseek_harness.cordis,
-      normalizationOptions,
-    );
     const deepseekHarness: DeepSeekHarnessProviderOptions = {
       ...(options.deepseek_harness.base_url !== undefined
         ? { baseUrl: options.deepseek_harness.base_url }
-        : {}),
-      ...(options.deepseek_harness.session_root !== undefined
-        ? { sessionRoot: options.deepseek_harness.session_root }
-        : {}),
-      ...(options.deepseek_harness.cordis !== undefined
-        ? { cordis: options.deepseek_harness.cordis }
         : {}),
       ...(options.deepseek_harness.max_tokens !== undefined
         ? { maxTokens: options.deepseek_harness.max_tokens }
@@ -533,59 +457,6 @@ export function normalizeProviderOptions(
   }
   const normalized = Object.keys(result).length > 0 ? result : undefined;
   return normalized;
-}
-
-const TRUSTED_DEEPSEEK_PATH_SOURCES = new Set<ProviderResolutionSource>([
-  'env',
-  'global',
-]);
-
-function resolveTrustedDeepSeekPath(
-  value: string,
-  cwd: string,
-  source: ProviderResolutionSource | undefined,
-): string {
-  if (source === undefined || !TRUSTED_DEEPSEEK_PATH_SOURCES.has(source)) {
-    return value;
-  }
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? value : resolvePath(cwd, trimmed);
-}
-
-export function resolveTrustedDeepSeekHarnessPaths(
-  providerOptions: StepProviderOptions | undefined,
-  cwd: string,
-  providerOptionsSources: Readonly<Record<string, ProviderResolutionSource>> | undefined,
-): StepProviderOptions | undefined {
-  const deepseekHarness = providerOptions?.deepseekHarness;
-  if (deepseekHarness === undefined) {
-    return providerOptions;
-  }
-  const sessionRoot = deepseekHarness.sessionRoot === undefined
-    ? undefined
-    : resolveTrustedDeepSeekPath(
-        deepseekHarness.sessionRoot,
-        cwd,
-        providerOptionsSources?.['deepseekHarness.sessionRoot'],
-      );
-  const cordis = deepseekHarness.cordis === undefined
-    ? undefined
-    : resolveTrustedDeepSeekPath(
-        deepseekHarness.cordis,
-        cwd,
-        providerOptionsSources?.['deepseekHarness.cordis'],
-      );
-  if (sessionRoot === deepseekHarness.sessionRoot && cordis === deepseekHarness.cordis) {
-    return providerOptions;
-  }
-  return {
-    ...providerOptions,
-    deepseekHarness: {
-      ...deepseekHarness,
-      ...(sessionRoot === undefined ? {} : { sessionRoot }),
-      ...(cordis === undefined ? {} : { cordis }),
-    },
-  };
 }
 
 /** Deep merge provider options. Later sources override earlier ones. */
@@ -823,6 +694,26 @@ function selectProviderValueByScope<T>(
   return stepValue ?? personaValue ?? configValue;
 }
 
+function assertNoRemovedDeepSeekHarnessOptions(
+  providerOptions: StepProviderOptions | undefined,
+): void {
+  const deepseekHarnessOptions = providerOptions?.deepseekHarness;
+  if (deepseekHarnessOptions === undefined) {
+    return;
+  }
+  if (Object.hasOwn(deepseekHarnessOptions, 'sessionRoot')) {
+    throw new Error(
+      'DeepSeek Harness sessionRoot option has been removed; use workflow session_key for session reuse.',
+    );
+  }
+  if (Object.hasOwn(deepseekHarnessOptions, 'cordis')) {
+    throw new Error(
+      'DeepSeek Harness cordis option has been removed because the current SDK does not support it; '
+      + 'there is no supported replacement, so remove it.',
+    );
+  }
+}
+
 export function resolvePersonaProviderOptions(
   personaProviders: Record<string, PersonaProviderEntry> | undefined,
   personaDisplayName: string | undefined,
@@ -933,6 +824,9 @@ export function resolveEffectiveProviderOptions(
   stepOptions: StepProviderOptions | undefined,
   personaOptions?: StepProviderOptions,
 ): StepProviderOptions | undefined {
+  for (const options of [resolvedConfigOptions, stepOptions, personaOptions]) {
+    assertNoRemovedDeepSeekHarnessOptions(options);
+  }
   if (!resolvedConfigOptions) {
     return mergeProviderOptions(personaOptions, stepOptions);
   }
@@ -1107,18 +1001,6 @@ export function resolveEffectiveProviderOptions(
     resolvedConfigOptions.deepseekHarness?.baseUrl,
     personaOptions?.deepseekHarness?.baseUrl,
     stepOptions?.deepseekHarness?.baseUrl,
-  );
-  const deepseekHarnessSessionRoot = selectProviderValue(
-    resolvedConfigOptions.deepseekHarness?.sessionRoot,
-    personaOptions?.deepseekHarness?.sessionRoot,
-    stepOptions?.deepseekHarness?.sessionRoot,
-    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.sessionRoot', source),
-  );
-  const deepseekHarnessCordis = selectProviderValue(
-    resolvedConfigOptions.deepseekHarness?.cordis,
-    personaOptions?.deepseekHarness?.cordis,
-    stepOptions?.deepseekHarness?.cordis,
-    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.cordis', source),
   );
   const deepseekHarnessMaxTokens = selectProviderValue(
     resolvedConfigOptions.deepseekHarness?.maxTokens,
@@ -1358,8 +1240,6 @@ export function resolveEffectiveProviderOptions(
       ? { cursor: { guards: { callTimeoutMs: cursorCallTimeoutMs } } }
       : {}),
     ...(deepseekHarnessBaseUrl !== undefined
-      || deepseekHarnessSessionRoot !== undefined
-      || deepseekHarnessCordis !== undefined
       || deepseekHarnessMaxTokens !== undefined
       || deepseekHarnessRequestTimeoutMs !== undefined
       || deepseekHarnessShutdownTimeoutMs !== undefined
@@ -1367,8 +1247,6 @@ export function resolveEffectiveProviderOptions(
       ? {
           deepseekHarness: {
             ...(deepseekHarnessBaseUrl !== undefined ? { baseUrl: deepseekHarnessBaseUrl } : {}),
-            ...(deepseekHarnessSessionRoot !== undefined ? { sessionRoot: deepseekHarnessSessionRoot } : {}),
-            ...(deepseekHarnessCordis !== undefined ? { cordis: deepseekHarnessCordis } : {}),
             ...(deepseekHarnessMaxTokens !== undefined ? { maxTokens: deepseekHarnessMaxTokens } : {}),
             ...(deepseekHarnessRequestTimeoutMs !== undefined
               ? { requestTimeoutMs: deepseekHarnessRequestTimeoutMs }
@@ -1573,8 +1451,6 @@ export const PROVIDER_OPTION_PATHS = [
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
   'deepseekHarness.baseUrl',
-  'deepseekHarness.sessionRoot',
-  'deepseekHarness.cordis',
   'deepseekHarness.maxTokens',
   'deepseekHarness.requestTimeoutMs',
   'deepseekHarness.shutdownTimeoutMs',

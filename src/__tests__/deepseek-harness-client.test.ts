@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -93,6 +93,7 @@ describe.skipIf(!lifecycleRuntimeSupported)('DeepSeek Harness bridge lifecycle',
     await writeFile(path.join(moduleDir, '__init__.py'), `
 import json
 import os
+import sys
 import threading
 import time
 
@@ -113,24 +114,29 @@ class SdkProtocolError(Exception):
 class JsonRpcError(Exception):
     pass
 
-class DeepSeekHarness:
-    def __init__(self, provider, model, cwd, runtime_cwd, max_tokens=None, session_root=None, cordis=None, request_timeout_seconds=None, shutdown_timeout_seconds=None):
+class DeepSeekHarnessConfig:
+    def __init__(self, provider, model, cwd, runtime_cwd, max_tokens=None, request_timeout_seconds=None, shutdown_timeout_seconds=None):
         kwargs = {
             'provider': provider,
             'model': model,
             'cwd': cwd,
             'runtime_cwd': runtime_cwd,
             'max_tokens': max_tokens,
-            'session_root': session_root,
-            'cordis': cordis,
             'request_timeout_seconds': request_timeout_seconds,
             'shutdown_timeout_seconds': shutdown_timeout_seconds,
         }
         self.kwargs = kwargs
+
+class DeepSeekHarness:
+    def __init__(self, **kwargs):
+        self.config = DeepSeekHarnessConfig(**kwargs)
+        kwargs = self.config.kwargs
+        self.kwargs = kwargs
         self.closed = False
-        config_file = os.path.join(kwargs['cwd'], 'bridge-start-configs.jsonl')
-        with open(config_file, 'a', encoding='utf-8') as config:
-            config.write(json.dumps(kwargs, sort_keys=True) + '\\n')
+        if sys.argv[0] != '-c':
+            config_file = os.path.join(kwargs['cwd'], 'bridge-start-configs.jsonl')
+            with open(config_file, 'a', encoding='utf-8') as config:
+                config.write(json.dumps(kwargs, sort_keys=True) + '\\n')
         if kwargs.get('provider') == 'unknown-route':
             raise RuntimeError('SDK rejected unknown provider route "unknown-route"')
         if kwargs.get('model') == 'unknown-model':
@@ -143,17 +149,12 @@ class DeepSeekHarness:
             raise FileNotFoundError('missing DeepSeek Harness runtime wheel')
         if kwargs.get('model') == 'terminal-diagnostic-model':
             raise RuntimeError('SDK diagnostic \\x1b]52;clipboard\\x07\\x1b[31mraw\\x1b[0m\\x01')
-        counter_file = kwargs.get('session_root')
-        if counter_file:
-            with open(counter_file, 'a', encoding='utf-8') as counter:
-                counter.write('initialized\\n')
-
     def start(self):
-        if os.path.basename(self.kwargs.get('cordis') or '') == 'FAKE_START_FAILURE':
+        if self.kwargs.get('model') == 'start-failure-model':
             raise RuntimeError('startup failure')
 
     def close(self):
-        if os.path.basename(self.kwargs.get('cordis') or '') == 'FAKE_CLOSE_HANG':
+        if self.kwargs.get('shutdown_timeout_seconds') == 0.1:
             time.sleep(30)
         self.closed = True
 
@@ -357,8 +358,6 @@ sys.implementation = types.SimpleNamespace(
   });
 
   it('propagates all DeepSeek provider options to the SDK and bridge environment', async () => {
-    const sessionRoot = path.join(root, 'configured-session-root');
-    const cordis = path.join(root, 'configured-cordis.yml');
     const baseUrl = 'https://deepseek.example/v1';
     const responses: Array<Awaited<ReturnType<typeof callDeepSeekHarness>>> = [];
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -367,8 +366,6 @@ sys.implementation = types.SimpleNamespace(
         model: 'openai/gpt-5.4',
         providerOptions: {
           baseUrl,
-          sessionRoot,
-          cordis,
           maxTokens: 4096,
           requestTimeoutMs: 120_000,
           shutdownTimeoutMs: 2_000,
@@ -389,11 +386,11 @@ sys.implementation = types.SimpleNamespace(
       cwd: root,
       runtime_cwd: root,
       max_tokens: 4096,
-      session_root: sessionRoot,
-      cordis,
       request_timeout_seconds: 120,
       shutdown_timeout_seconds: 2,
     });
+    expect(configuration).not.toHaveProperty('session_root');
+    expect(configuration).not.toHaveProperty('cordis');
     expect((await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
       .trim()
       .split('\n')
@@ -403,6 +400,22 @@ sys.implementation = types.SimpleNamespace(
       DEEPSEEK_BASE_URL: baseUrl,
       DSH_RUNTIME_MODE: 'node',
     });
+  });
+
+  it.each([
+    ['session_root', { sessionRoot: 'removed-session-root' }],
+    ['cordis', { cordis: 'removed-cordis.yml' }],
+  ] as const)('rejects removed %s before starting the bridge', async (optionName, providerOptions) => {
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      providerOptions: providerOptions as never,
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.content).toMatch(new RegExp(`${optionName}.*(?:removed|deprecated|unsupported)`, 'iu'));
+    expect(response.content).toMatch(/(?:session_key|current SDK|no supported replacement|remove)/iu);
+    await expect(readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each([
@@ -901,8 +914,8 @@ sys.implementation = types.SimpleNamespace(
   it('returns a provider error when SDK startup fails', async () => {
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
+      model: 'start-failure-model',
       providerOptions: {
-        cordis: 'FAKE_START_FAILURE',
         requestTimeoutMs: 10_000,
       },
     });
@@ -1040,45 +1053,48 @@ sys.implementation = types.SimpleNamespace(
   );
 
   it('reuses one Python bridge for repeated calls with the same session', async () => {
-    const counterFile = path.join(root, 'bridge-starts.txt');
     const first = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       sessionId: 'persistent-session',
-      providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
     const second = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       sessionId: 'persistent-session',
-      providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(first).toMatchObject({ status: 'done', sessionId: 'persistent-session' });
     expect(second).toMatchObject({ status: 'done', sessionId: 'persistent-session' });
-    expect((await readFile(counterFile, 'utf8')).trim().split('\n')).toEqual(['initialized']);
+    expect((await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n'))
+      .toHaveLength(1);
   });
 
   it('reuses one process when bare and explicit default routes have the same effective identity', async () => {
-    const counterFile = path.join(root, 'default-route-starts.txt');
     const first = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       model: 'deepseek-v4-flash',
       sessionId: 'default-route-session',
-      providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
     const second = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       model: 'deepseek-official/deepseek-v4-flash',
       sessionId: 'default-route-session',
-      providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+      providerOptions: { requestTimeoutMs: 10_000 },
     });
 
     expect(first.status).toBe('done');
     expect(second.status).toBe('done');
-    expect((await readFile(counterFile, 'utf8')).trim().split('\n')).toEqual(['initialized']);
+    expect((await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n'))
+      .toHaveLength(1);
   });
 
   it('does not share a process when the effective route or model changes', async () => {
-    const counterFile = path.join(root, 'routing-starts.txt');
     const calls = [
       ['route-a-session', 'openai/gpt-5.4'],
       ['model-b-session', 'openai/gpt-5.5'],
@@ -1090,178 +1106,15 @@ sys.implementation = types.SimpleNamespace(
         cwd: root,
         model,
         sessionId,
-        providerOptions: { sessionRoot: counterFile, requestTimeoutMs: 10_000 },
+        providerOptions: { requestTimeoutMs: 10_000 },
       });
       expect(response.status).toBe('done');
     }
 
-    expect((await readFile(counterFile, 'utf8')).trim().split('\n')).toEqual([
-      'initialized',
-      'initialized',
-      'initialized',
-    ]);
-  });
-
-  it('rejects a relative session root that traverses a symlink outside the project', async () => {
-    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-harness-outside-'));
-    try {
-      const outsideSessionFile = path.join(outsideRoot, 'session.db');
-      const linkedSessionFile = path.join(root, 'session-link');
-      await writeFile(outsideSessionFile, 'outside\n', 'utf8');
-      await symlink(outsideSessionFile, linkedSessionFile, 'file');
-
-      const response = await callDeepSeekHarness('worker', 'hello', {
-        cwd: root,
-        providerOptions: {
-          sessionRoot: 'session-link',
-          requestTimeoutMs: 10_000,
-        },
-      });
-
-      expect(response.status).toBe('error');
-      expect(response.content).toContain('session_root');
-      expect(response.content).toContain('symlinks');
-      expect(await readFile(outsideSessionFile, 'utf8')).toBe('outside\n');
-    } finally {
-      await rm(outsideRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects a relative Cordis path that traverses a symlink outside the project', async () => {
-    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-harness-outside-'));
-    try {
-      const outsideCordis = path.join(outsideRoot, 'cordis.yml');
-      const linkedCordis = path.join(root, 'cordis-link.yml');
-      await writeFile(outsideCordis, 'outside\n', 'utf8');
-      await symlink(outsideCordis, linkedCordis, 'file');
-
-      const response = await callDeepSeekHarness('worker', 'hello', {
-        cwd: root,
-        providerOptions: {
-          cordis: 'cordis-link.yml',
-          requestTimeoutMs: 10_000,
-        },
-      });
-
-      expect(response.status).toBe('error');
-      expect(response.content).toContain('cordis');
-      expect(await readFile(outsideCordis, 'utf8')).toBe('outside\n');
-    } finally {
-      await rm(outsideRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('reuses a session through canonical project and session-root aliases', async () => {
-    const aliasContainer = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-harness-alias-'));
-    try {
-      const sharedSessionFile = path.join(root, 'same-project-session.db');
-      const projectAlias = path.join(aliasContainer, 'project-alias');
-      const aliasedSessionFile = path.join(aliasContainer, 'same-project-session-alias.db');
-      await writeFile(sharedSessionFile, '', 'utf8');
-      await symlink(root, projectAlias, 'dir');
-      await symlink(sharedSessionFile, aliasedSessionFile, 'file');
-
-      const first = await callDeepSeekHarness('worker', 'hello', {
-        cwd: root,
-        sessionId: 'canonical-alias-session',
-        providerOptions: {
-          sessionRoot: sharedSessionFile,
-          requestTimeoutMs: 10_000,
-        },
-      });
-      const second = await callDeepSeekHarness('worker', 'hello', {
-        cwd: projectAlias,
-        sessionId: 'canonical-alias-session',
-        providerOptions: {
-          sessionRoot: aliasedSessionFile,
-          requestTimeoutMs: 10_000,
-        },
-      });
-
-      expect(first).toMatchObject({ status: 'done', sessionId: 'canonical-alias-session' });
-      expect(second).toMatchObject({ status: 'done', sessionId: 'canonical-alias-session' });
-      expect((await readFile(sharedSessionFile, 'utf8')).trim().split('\n')).toEqual(['initialized']);
-    } finally {
-      await rm(aliasContainer, { recursive: true, force: true });
-    }
-  });
-
-  it('canonicalizes session root aliases before cross-project binding checks', async () => {
-    const otherRoot = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-harness-other-'));
-    try {
-      const sharedSessionFile = path.join(root, 'shared-session.db');
-      const aliasedSessionFile = path.join(otherRoot, 'shared-session-alias.db');
-      await writeFile(sharedSessionFile, '', 'utf8');
-      await symlink(sharedSessionFile, aliasedSessionFile, 'file');
-
-      const first = await callDeepSeekHarness('worker', 'hello', {
-        cwd: root,
-        sessionId: 'shared-root-owner',
-        providerOptions: {
-          sessionRoot: sharedSessionFile,
-          requestTimeoutMs: 10_000,
-        },
-      });
-      const second = await callDeepSeekHarness('worker', 'hello', {
-        cwd: otherRoot,
-        sessionId: 'different-project',
-        providerOptions: {
-          sessionRoot: aliasedSessionFile,
-          requestTimeoutMs: 10_000,
-        },
-      });
-
-      expect(first.status).toBe('done');
-      expect(second.status).toBe('error');
-      expect(second.content).toContain('different project');
-      expect((await readFile(sharedSessionFile, 'utf8')).trim().split('\n')).toEqual(['initialized']);
-    } finally {
-      await rm(otherRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects reusing a closed one-shot session root from another project', async () => {
-    const otherRoot = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-harness-other-'));
-    try {
-      const sessionRoot = path.join(root, 'shared-one-shot-sessions');
-      const first = await callDeepSeekHarness('worker', 'hello', {
-        cwd: root,
-        providerOptions: { sessionRoot, requestTimeoutMs: 10_000 },
-      });
-      const second = await callDeepSeekHarness('worker', 'hello', {
-        cwd: otherRoot,
-        providerOptions: { sessionRoot, requestTimeoutMs: 10_000 },
-      });
-
-      expect(first.status).toBe('done');
-      expect(second.status).toBe('error');
-      expect(second.content).toContain('different project');
-    } finally {
-      await rm(otherRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects reusing a session root and session id from another project', async () => {
-    const otherRoot = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-harness-other-'));
-    try {
-      const sessionRoot = path.join(root, 'shared-sessions.txt');
-      const first = await callDeepSeekHarness('worker', 'hello', {
-        cwd: root,
-        sessionId: 'cross-project-session',
-        providerOptions: { sessionRoot, requestTimeoutMs: 10_000 },
-      });
-      const second = await callDeepSeekHarness('worker', 'hello', {
-        cwd: otherRoot,
-        sessionId: 'cross-project-session',
-        providerOptions: { sessionRoot, requestTimeoutMs: 10_000 },
-      });
-
-      expect(first.status).toBe('done');
-      expect(second.status).toBe('error');
-      expect(second.content).toContain('different project');
-    } finally {
-      await rm(otherRoot, { recursive: true, force: true });
-    }
+    expect((await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n'))
+      .toHaveLength(3);
   });
 
   it('maps a request timeout to a bounded part-timeout failure and closes the bridge', async () => {
@@ -1284,7 +1137,6 @@ sys.implementation = types.SimpleNamespace(
     const response = await callDeepSeekHarness('worker', 'hello', {
       cwd: root,
       providerOptions: {
-        cordis: 'FAKE_CLOSE_HANG',
         requestTimeoutMs: 10_000,
         shutdownTimeoutMs: 100,
       },

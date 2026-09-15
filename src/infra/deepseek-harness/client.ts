@@ -19,9 +19,7 @@ import {
 } from '../../shared/types/agent-failure.js';
 import type { StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 import {
-  assertPathSegmentsAreSafe,
   getErrorMessage,
-  isAbsolutePathLike,
   sanitizeTerminalText,
   spawnManagedProcess,
   type ManagedProcess,
@@ -162,8 +160,6 @@ interface ResolvedBridgeConfiguration {
   provider: string;
   model: string;
   cwd: string;
-  sessionRoot?: string;
-  cordis?: string;
   maxTokens?: number;
   requestTimeoutMs: number;
   shutdownTimeoutMs: number;
@@ -209,17 +205,6 @@ function requirePositiveSafeInteger(
   return value;
 }
 
-function resolveOptionalPath(value: string | undefined, cwd: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    throw new Error('DeepSeek Harness path options must not be empty');
-  }
-  return path.resolve(cwd, trimmed);
-}
-
 function canonicalizePathWithMissingTail(pathValue: string): string {
   const missingSegments: string[] = [];
   let current = pathValue;
@@ -243,17 +228,6 @@ function canonicalizePathWithMissingTail(pathValue: string): string {
       current = parent;
     }
   }
-}
-
-function assertProjectPathBoundary(cwd: string, targetPath: string, optionName: 'session_root' | 'cordis'): void {
-  assertPathSegmentsAreSafe(
-    cwd,
-    targetPath,
-    (violation) => new Error(
-      `DeepSeek Harness ${optionName} must remain inside the project/session boundary `
-      + `and must not traverse symlinks (${violation})`,
-    ),
-  );
 }
 
 function assertSafeSessionId(sessionId: string | undefined): void {
@@ -305,6 +279,18 @@ function resolveBridgeConfiguration(
   options: DeepSeekHarnessCallOptions,
   providerOptions: DeepSeekHarnessProviderOptions | undefined,
 ): ResolvedBridgeConfiguration {
+  if (providerOptions !== undefined && Object.hasOwn(providerOptions, 'sessionRoot')) {
+    throw new Error(
+      'DeepSeek Harness session_root option (sessionRoot) has been removed; '
+      + 'use workflow session_key for session reuse.',
+    );
+  }
+  if (providerOptions !== undefined && Object.hasOwn(providerOptions, 'cordis')) {
+    throw new Error(
+      'DeepSeek Harness cordis option has been removed because the current SDK does not support it; '
+      + 'there is no supported replacement, so remove it.',
+    );
+  }
   const modelReference = options.model ?? DEEPSEEK_HARNESS_DEFAULT_MODEL;
   const { provider, model } = parseDeepSeekHarnessModelReference(modelReference);
   assertSafeSessionId(options.sessionId);
@@ -320,36 +306,10 @@ function resolveBridgeConfiguration(
     'shutdownTimeoutMs',
     DEEPSEEK_HARNESS_MAX_NODE_TIMER_MS,
   ) ?? DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS;
-  const sessionRootValue = providerOptions?.sessionRoot;
-  const resolvedSessionRoot = resolveOptionalPath(sessionRootValue, cwd);
-  if (
-    resolvedSessionRoot !== undefined
-    && sessionRootValue !== undefined
-    && !isAbsolutePathLike(sessionRootValue.trim())
-  ) {
-    assertProjectPathBoundary(cwd, resolvedSessionRoot, 'session_root');
-  }
-  const sessionRoot = resolvedSessionRoot === undefined
-    ? undefined
-    : canonicalizePathWithMissingTail(resolvedSessionRoot);
-  const cordisValue = providerOptions?.cordis;
-  const resolvedCordis = resolveOptionalPath(cordisValue, cwd);
-  if (
-    resolvedCordis !== undefined
-    && cordisValue !== undefined
-    && !isAbsolutePathLike(cordisValue.trim())
-  ) {
-    assertProjectPathBoundary(cwd, resolvedCordis, 'cordis');
-  }
-  const cordis = resolvedCordis === undefined
-    ? undefined
-    : canonicalizePathWithMissingTail(resolvedCordis);
   return {
     provider,
     model,
     cwd,
-    ...(sessionRoot === undefined ? {} : { sessionRoot }),
-    ...(cordis === undefined ? {} : { cordis }),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     requestTimeoutMs,
     shutdownTimeoutMs,
@@ -496,9 +456,6 @@ function processKey(
     : {
         ...providerOptions,
         baseUrl: undefined,
-        ...(providerOptions.sessionRoot === undefined
-          ? {}
-          : { sessionRoot: configuration.sessionRoot }),
       };
   return JSON.stringify({
     configuration,
@@ -1684,14 +1641,8 @@ interface SessionBinding {
   identity: string;
 }
 
-interface SessionRootBinding {
-  cwd: string;
-  processes: Set<DeepSeekHarnessProcess>;
-}
-
 const processes = new Map<string, DeepSeekHarnessProcess>();
 const sessionBindings = new Map<string, SessionBinding>();
-const sessionRootBindings = new Map<string, SessionRootBinding>();
 let oneShotProcessSequence = 0;
 let exitCleanupRegistered = false;
 
@@ -1713,14 +1664,9 @@ function removeProcess(processRecord: DeepSeekHarnessProcess): void {
       processes.delete(key);
     }
   }
-  for (const binding of sessionRootBindings.values()) {
-    binding.processes.delete(processRecord);
-  }
 }
 
 function registerProcessBindings(
-  processRecord: DeepSeekHarnessProcess,
-  configuration: ResolvedBridgeConfiguration,
   sessionId: string | undefined,
   identity: string,
 ): void {
@@ -1728,32 +1674,11 @@ function registerProcessBindings(
     const existingSession = sessionBindings.get(sessionId);
     if (existingSession !== undefined && existingSession.identity !== identity) {
       throw new Error(
-        'DeepSeek Harness sessionId is already bound to a different project, session root, or bridge configuration',
+        'DeepSeek Harness sessionId is already bound to a different project or bridge configuration',
       );
     }
   }
 
-  if (configuration.sessionRoot !== undefined) {
-    const existingRoot = sessionRootBindings.get(configuration.sessionRoot);
-    if (existingRoot !== undefined) {
-      for (const boundProcess of existingRoot.processes) {
-        if (boundProcess.isClosed) {
-          existingRoot.processes.delete(boundProcess);
-        }
-      }
-      if (existingRoot.cwd !== configuration.cwd) {
-        throw new Error(
-          'DeepSeek Harness session_root is already bound to a different project in this process',
-        );
-      }
-    }
-    const rootBinding = existingRoot ?? {
-      cwd: configuration.cwd,
-      processes: new Set<DeepSeekHarnessProcess>(),
-    };
-    rootBinding.processes.add(processRecord);
-    sessionRootBindings.set(configuration.sessionRoot, rootBinding);
-  }
   if (sessionId !== undefined) {
     sessionBindings.set(sessionId, { identity });
   }
@@ -1791,7 +1716,7 @@ function getOrCreateProcess(options: DeepSeekHarnessCallOptions): DeepSeekHarnes
   );
   processes.set(key, processRecord);
   try {
-    registerProcessBindings(processRecord, configuration, options.sessionId, baseKey);
+    registerProcessBindings(options.sessionId, baseKey);
   } catch (error) {
     removeProcess(processRecord);
     throw error;
@@ -2023,6 +1948,5 @@ export async function closeDeepSeekHarnessProcesses(): Promise<void> {
   const active = [...processes.values()];
   processes.clear();
   sessionBindings.clear();
-  sessionRootBindings.clear();
   await Promise.all(active.map((processRecord) => processRecord.close()));
 }
