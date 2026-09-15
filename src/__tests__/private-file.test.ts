@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { runPrivateFileExclusiveAsync } from '../shared/utils/private-file-lock.js';
 
 const TEST_TMPDIR = realpathSync(tmpdir());
 
@@ -510,6 +511,51 @@ describe('private file artifacts', () => {
     expect(readFileSync(file, 'utf8')).toBe(replacement);
   });
 
+  it('should recover a stale private-file lock owned by a dead process', async () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-stale-lock-'));
+    roots.push(root);
+    const lockPath = join(root, 'install.lock');
+    const owner = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+    if (owner.pid === undefined) {
+      throw new Error('stale lock fixture process has no PID');
+    }
+    await new Promise<void>((resolve) => owner.once('exit', () => resolve()));
+    writeFileSync(lockPath, JSON.stringify({ pid: owner.pid, token: 'stale-token' }));
+
+    await expect(runPrivateFileExclusiveAsync(lockPath, async () => 'recovered'))
+      .resolves.toBe('recovered');
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('should hold an async private-file lock until the action settles', async () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-async-lock-'));
+    roots.push(root);
+    const lockPath = join(root, 'install.lock');
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstActionFinished = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = runPrivateFileExclusiveAsync(lockPath, async () => {
+      events.push('first-start');
+      await firstActionFinished;
+      events.push('first-end');
+    });
+    await vi.waitFor(() => expect(events).toEqual(['first-start']));
+
+    const second = runPrivateFileExclusiveAsync(lockPath, async () => {
+      events.push('second-start');
+      events.push('second-end');
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(events).toEqual(['first-start']);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
+  });
+
   it('should retain both the write and cleanup errors when both operations fail', () => {
     const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-combined-failure-'));
     roots.push(root);
@@ -566,6 +612,24 @@ describe('private file artifacts', () => {
     expect(readFileSync(file, 'utf-8')).toBe('original\n');
     expect(injectedFileFailure.descriptor).toBeDefined();
     expect(() => fstatSync(injectedFileFailure.descriptor!)).toThrow();
+  });
+
+  it('should classify a concurrent target creation before publication as a publication conflict', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-publish-target-race-'));
+    roots.push(root);
+    const target = join(root, 'install.lock');
+
+    // Another process publishes the same path after the initial inspection and
+    // before the publication itself. The loser must see a publication conflict
+    // (contention) so callers such as the installer lock can wait and retry
+    // instead of failing the whole install.
+    injectedFileFailure.beforeArtifactCreation = () => {
+      writeFileSync(target, 'concurrent\n');
+    };
+
+    expect(() => writeNewPrivateFileWithMode(target, 'ours\n', 0o600))
+      .toThrow(PrivateArtifactPublicationConflictError);
+    expect(readFileSync(target, 'utf8')).toBe('concurrent\n');
   });
 
   it('should classify a file replacement during a private read as a publication conflict', () => {

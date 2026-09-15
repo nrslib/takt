@@ -79,7 +79,7 @@ export async function promptProviderSelection(): Promise<InitialSetupProvider> {
     { label: 'GitHub Copilot', value: 'copilot' },
     { label: 'Kiro CLI', value: 'kiro' },
     { label: 'Pi SDK', value: 'pi' },
-    { label: 'DeepSeek Harness (official Python SDK, developer preview)', value: 'deepseek-harness' },
+    { label: 'DeepSeek Harness (managed environment via uv, official Python SDK, developer preview)', value: 'deepseek-harness' },
   ];
 
   const result = await selectOptionWithDefault(
