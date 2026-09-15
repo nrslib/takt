@@ -29,6 +29,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: development-implement-with-reports
+    reimplementation_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: development-reimplement-with-reports
     scope_report_format:
       type: facet_ref
       facet_kind: report_format
@@ -45,6 +49,9 @@ steps:
       - edit
       - enable-skills
     uses: development-core-implement
+    instruction:
+      - $param: implementation_instruction
+      - development-implementation-completion
     with:
       development_policy:
         $param: development_policy
@@ -61,9 +68,47 @@ steps:
         next: COMPLETE
       - condition: 今回必要な実装変更がなく、必須検証も完了した（レポート作成のみ。未着手の必須作業がある場合は除く）
         next: COMPLETE
-      - condition: 今回の要件・変更契約に必要な実装・検証・原因調査が未完了である（変更起因、変更が依存・影響拡大・新規露出する既存問題、必須条件の未達を含む。無関係な既存失敗・対象外作業だけは含めない）
+      - condition: 採用済み計画は有効だが、実装・原因調査・必須検証に不足が残り、現在の計画の範囲で具体的な補完作業を実行できる（未実行・失敗・未確認という報告だけでは計画変更としない）
+        next: reimplement
+      - condition: 採用済み計画の前提・範囲・方法または検証能力に欠陥があり、計画を変更すれば具体的なプロジェクト内の作業を実行でき、変更しなければ要求を実行・検証できない（未実行・失敗・原因未確定・証拠不足だけでは該当しない。外部操作だけで進める状態は除く）
+        return: need_replan
+      - condition: 現行計画または補完作業で実行できる必須作業がなく、必要な外部操作・外部回答が残るか、条件が両立しないと考える根拠が確認されている。外部制約と未完了義務を報告し、続行・計画変更・停止の最終判断を計画側へ渡す（ユーザー入力を求める選択肢が利用でき、かつその回答で作業を進められる場合だけ入力ルートを選ぶ）
         return: need_replan
       - condition: ユーザー入力が必要
         next: implement
+        requires_user_input: true
+        interactive_only: true
+  - name: reimplement
+    capabilities:
+      - edit
+      - enable-skills
+    uses: development-core-implement
+    instruction:
+      - $param: reimplementation_instruction
+      - development-implementation-completion
+    with:
+      development_policy:
+        $param: development_policy
+      development_knowledge:
+        $param: development_knowledge
+      implementation_instruction:
+        $param: reimplementation_instruction
+      scope_report_format:
+        $param: scope_report_format
+    companion:
+      $param: implementation_companions
+    rules:
+      - condition: 補完すべき実装・原因調査を行い、必須検証も完了した（変更と因果関係がなく、今回の必須条件でもない既存失敗・対象外作業は完了を妨げない）
+        next: COMPLETE
+      - condition: 今回必要な実装変更がなく、未実行だった必須検証を完了した（レポート作成のみ。未着手の必須作業がある場合は除く）
+        next: COMPLETE
+      - condition: 採用済み計画は有効だが、実装・原因調査・必須検証に不足が残り、現在の計画の範囲でさらに具体的な補完作業を実行できる（未実行・失敗・未確認という報告だけでは計画変更としない）
+        next: reimplement
+      - condition: 採用済み計画の前提・範囲・方法または検証能力に欠陥があり、計画を変更すれば具体的なプロジェクト内の作業を実行でき、変更しなければ要求を実行・検証できない（未実行・失敗・原因未確定・証拠不足だけでは該当しない。外部操作だけで進める状態は除く）
+        return: need_replan
+      - condition: 現行計画または補完作業で実行できる必須作業がなく、必要な外部操作・外部回答が残るか、条件が両立しないと考える根拠が確認されている。外部制約と未完了義務を報告し、続行・計画変更・停止の最終判断を計画側へ渡す（ユーザー入力を求める選択肢が利用でき、かつその回答で作業を進められる場合だけ入力ルートを選ぶ）
+        return: need_replan
+      - condition: ユーザー入力が必要
+        next: reimplement
         requires_user_input: true
         interactive_only: true

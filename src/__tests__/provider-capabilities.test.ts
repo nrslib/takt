@@ -7,7 +7,9 @@ import {
   providerSupportsMcpServers,
   providerSupportsNativeImageInput,
   providerSupportsStructuredOutput,
+  providerSupportsToolFreeExecution,
 } from '../infra/providers/provider-capabilities.js';
+import { PROVIDER_TYPES } from '../shared/types/provider.js';
 
 describe('provider capabilities module boundary', () => {
   it('provider-neutral な allowedTools capability は opencode を許可し cursor と codex を拒否する', () => {
@@ -65,6 +67,22 @@ describe('provider capabilities module boundary', () => {
   it('Pi と DeepSeek Harness は structured output をサポートしない', () => {
     expect(providerSupportsStructuredOutput('pi')).toBe(false);
     expect(providerSupportsStructuredOutput('deepseek-harness')).toBe(false);
+  });
+
+  it('tool-free execution capability は対応 provider だけを許可する', () => {
+    const toolFreeProviders = new Set([
+      'claude',
+      'claude-sdk',
+      'claude-terminal',
+      'opencode',
+      'pi',
+      'mock',
+    ]);
+
+    for (const provider of PROVIDER_TYPES) {
+      expect(providerSupportsToolFreeExecution(provider)).toBe(toolFreeProviders.has(provider));
+    }
+    expect(providerSupportsToolFreeExecution(undefined)).toBeUndefined();
   });
 
   it('非編集 step の allowedTools 判定は provider capability 境界に閉じる', () => {

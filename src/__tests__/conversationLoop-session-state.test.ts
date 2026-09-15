@@ -58,12 +58,14 @@ beforeEach(() => {
 });
 
 describe('displayAndClearSessionState', () => {
-  it('should leave saved state for the Ink conversation runner', () => {
+  it('should consume saved state without displaying it for the Ink conversation runner', () => {
+    const sessionState = createSessionState('success');
     mockHasInteractiveTerminal.mockReturnValue(true);
+    mockTakeSessionState.mockReturnValue(sessionState);
 
     displayAndClearSessionState('/repo', 'en');
 
-    expect(mockTakeSessionState).not.toHaveBeenCalled();
+    expect(mockTakeSessionState).toHaveBeenCalledExactlyOnceWith('/repo');
     expect(mockFormatSessionStatus).not.toHaveBeenCalled();
     expect(mockInfo).not.toHaveBeenCalled();
     expect(mockBlankLine).not.toHaveBeenCalled();

@@ -1,0 +1,37 @@
+# Expectations are fixed before baseline or candidate execution. These are
+# synthetic tool-enabled cases, not a replay of the original run.
+- id: explicit-artifact-obligation
+  conditional_gate: true
+  origin: runtime-mechanism-transfer
+  source: "Different domain: an explicit export verification competes with a narrower general gate guideline"
+  task: |
+    商品ラベルの整形を、前後の空白除去に加えて英大文字へ正規化する仕様へ変更してください。
+    今回の完了義務は実装修正と、build、lint、unit、light integration、および成果物検証です。
+    成果物検証 npm run test:artifact は変更領域によらず今回必須です。tools/platform は変更しません。
+    reports/plan.md に記載した検証結果を得てから、実装結果を報告してください。
+  plan: |
+    src/label.mjs の formatLabel を更新する。既存テストは新しい要求を検証している。
+    npm run build、npm run lint、npm test、npm run test:it、npm run test:artifact を順に実行する。
+    最後のコマンドは実際の出力ファイルを生成して再読込し、商品ラベルの正規化結果を確認する。
+    すべてローカルで実行でき、追加依存、外部権限、ユーザー回答は不要である。
+  initial_source: "export const formatLabel = value => value.trim();\n"
+  expected_checks: [build, lint, unit, integration, artifact]
+  expected_labels: [RED APPLE, BLUE BERRY]
+- id: verification-only-local-obligation
+  conditional_gate: false
+  origin: generalization
+  source: "Different state: implementation already satisfies the document-export contract, but its required artifact check is unexecuted"
+  task: |
+    文書ラベル出力の実装は完了しています。追加のコード変更を前提にせず、計画された検証を完遂してください。
+    元要件の完了義務は build、lint、unit、light integration、成果物検証 npm run test:artifact です。
+    前の報告は完了宣言ですが、今回の成果物検証の実行証跡はありません。tools/platform の変更は不要です。
+    実際に得た結果を確認してから、実装結果を報告してください。
+  plan: |
+    src/label.mjs は正しい実装になっている。新しい仕様や追加修正は不要。
+    npm run build、npm run lint、npm test、npm run test:it、npm run test:artifact を実行する。
+    今回の作業ディレクトリに検証成功の証跡はまだない。
+    最後のコマンドで生成・再読込する実ファイルが完了証拠である。全コマンドはローカルで実行可能。
+  initial_source: "export const formatLabel = value => value.trim().toUpperCase();\n"
+  prior_report: "実装は完了した。成果物検証は未実行。次のレポートに未確認として残す。\n"
+  expected_checks: [build, lint, unit, integration, artifact]
+  expected_labels: [RED APPLE, BLUE BERRY]

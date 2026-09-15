@@ -5,13 +5,15 @@ import {
   mergeProviderOptions,
   resolveTrustedDeepSeekHarnessPaths,
 } from '../infra/config/providerOptions.js';
-import { denormalizeProviderOptions } from '../infra/config/configNormalizers.js';
+import {
+  buildRawTaktProvidersOrThrow,
+  denormalizeProviderOptions,
+} from '../infra/config/configNormalizers.js';
 import { redactProviderOptions } from '../core/workflow/providerOptionsRedaction.js';
 import { StepProviderOptionsObjectSchema } from '../core/models/schema-base.js';
 
 const deepseekYaml = {
   deepseek_harness: {
-    python_path: '/opt/python/bin/python3',
     base_url: 'https://api.deepseek.example/v1',
     session_root: '.takt/deepseek-sessions',
     cordis: '.takt/cordis.yml',
@@ -28,7 +30,6 @@ describe('DeepSeek Harness provider options', () => {
 
     expect(normalized).toEqual({
       deepseekHarness: {
-        pythonPath: '/opt/python/bin/python3',
         baseUrl: 'https://api.deepseek.example/v1',
         sessionRoot: '.takt/deepseek-sessions',
         cordis: '.takt/cordis.yml',
@@ -46,13 +47,11 @@ describe('DeepSeek Harness provider options', () => {
     expect(redactProviderOptions({
       deepseekHarness: {
         baseUrl: 'https://user:secret@example.test/v1',
-        pythonPath: '/usr/bin/python3',
         requestTimeoutMs: 1000,
       },
     })).toEqual({
       deepseekHarness: {
         baseUrl: '[configured]',
-        pythonPath: '/usr/bin/python3',
         requestTimeoutMs: 1000,
       },
     });
@@ -79,24 +78,15 @@ describe('DeepSeek Harness provider options', () => {
     })).toThrow('workflow.provider_options.deepseek_harness.base_url');
   });
 
-  it('rejects a Python executable override from project/workflow origin', () => {
-    expect(() => normalizeProviderOptions({
-      deepseek_harness: { python_path: '/tmp/untrusted-python' },
-    }, {
-      pythonPathTrust: 'untrusted',
-      pathPrefix: 'workflow.provider_options',
-    })).toThrow('workflow.provider_options.deepseek_harness.python_path');
-  });
-
-  it('allows a user-controlled environment Python executable override', () => {
-    expect(normalizeProviderOptions({
-      deepseek_harness: { python_path: '/opt/user-python' },
-    }, {
-      pythonPathTrust: 'local-untrusted',
-      getOrigin: () => 'env',
-    })).toEqual({
-      deepseekHarness: { pythonPath: '/opt/user-python' },
-    });
+  it('rejects the removed Python executable override in selector configuration', () => {
+    expect(() => buildRawTaktProvidersOrThrow({
+      selector: {
+        provider: 'deepseek-harness',
+        providerOptions: {
+          deepseekHarness: { pythonPath: '/tmp/removed-python' },
+        } as never,
+      },
+    })).toThrow(/pythonPath|python_path/);
   });
 
   it('rejects absolute and traversing session roots from project or workflow config', () => {

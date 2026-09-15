@@ -18,7 +18,7 @@ import { getProvider } from '../../infra/providers/index.js';
 import { createMcpAdapter, type PreparedProviderMcp, type ResolvedMcpServers } from '../../infra/providers/mcp/index.js';
 import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
-import type { StreamCallback, StreamEvent } from '../../shared/types/provider.js';
+import type { InternalAgentIsolation, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 import type { McpServerConfig, PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
@@ -64,6 +64,7 @@ interface CallAIWithRetryOptions {
   /** Receives what a terminal caller would have printed alongside the answer. */
   onNotice?: (message: string) => void;
   permissionMode?: PermissionMode;
+  internalAgentIsolation?: InternalAgentIsolation;
   outputMode?: 'terminal' | 'silent';
   abortSignal?: AbortSignal;
   /**
@@ -325,6 +326,9 @@ export async function callAIWithRetry(
       sessionId: activeSessionId,
       ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
       ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
+      ...(options.internalAgentIsolation === undefined
+        ? {}
+        : { internalAgentIsolation: options.internalAgentIsolation }),
       providerOptions: ctx.providerOptions,
       effort: ctx.effort,
       abortSignal: abortController.signal,
@@ -351,7 +355,9 @@ export async function callAIWithRetry(
           referenceTracker.observe(event);
           stream(event);
         };
-      const resolvedMcpServers = resolveConversationMcpServers(ctx.mcpServers);
+      const resolvedMcpServers = options.internalAgentIsolation === 'strict-readonly'
+        ? undefined
+        : resolveConversationMcpServers(ctx.mcpServers);
       const preparation = resolvedMcpServers === undefined
         ? Promise.resolve(undefined)
         : prepareConversationMcp(

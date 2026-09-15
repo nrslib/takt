@@ -90,6 +90,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: development-implement-with-reports
+    reimplementation_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: development-reimplement-with-reports
     scope_report_format:
       type: facet_ref
       facet_kind: report_format
@@ -185,11 +189,11 @@ steps:
           format:
             $param: plan_report_format
     rules:
-      - condition: 今回の要件・変更契約の未達を解消するために必要な、プロジェクト内で実行可能な未試行の変更または原因調査と検証手順を具体化した（無関係な既存問題・対象外作業の計画は含めない）
+      - condition: ユーザー入力や外部操作を待たずに、今回の要件・変更契約の未達を解消するため必要な、プロジェクト内で実行可能な未試行の変更または原因調査と検証手順を具体化した（無関係な既存問題・対象外作業の計画は含めない）
         next: implement
       - condition: 現行実装が今回の要件・受入条件を満たし、必要なプロジェクト内検証が完了し、今回必要な未試行の変更・調査が残っていない（無関係な既存問題・対象外作業だけが残る場合を含む。計画や未完了ラベルへの記載だけで必須化しない）
         next: peer-review
-      - condition: 今回の必須条件について、確認済みの根拠によりプロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
+      - condition: 今回の必須条件について、確認済みの根拠によりプロジェクト内の変更や調査では解消できず、外部操作または外部回答を待つだけが残るか、要件が両立しないと確認できる
         next: ABORT
 
   - name: write_tests
@@ -233,6 +237,8 @@ steps:
         $param: development_knowledge
       implementation_instruction:
         $param: implementation_instruction
+      reimplementation_instruction:
+        $param: reimplementation_instruction
       scope_report_format:
         $param: scope_report_format
     rules:
@@ -241,7 +247,7 @@ steps:
       - condition: need_replan
         next: replan
       - condition: ABORT
-        next: ABORT
+        next: replan
 
   - name: peer-review
     kind: workflow_call

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { buildSummaryPrompt } from '../features/interactive/interactive-summary.js';
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
+import {
+  buildFormalSpecGenerationPrompt,
+  buildFormalSpecGenerationSystemPrompt,
+  buildFormalSpecInterpretationSystemPrompt,
+} from '../features/interactive/formalSpecPrompts.js';
 
 const EXPECTED_INVESTIGATION_POLICIES = {
   assistant: {
@@ -33,7 +38,26 @@ function parseInvestigationPolicy(prompt: string): unknown {
   if (match === null) {
     throw new Error('interactive investigation policy metadata is missing');
   }
-  return JSON.parse(match[1]) as unknown;
+  const serializedPolicy = match[1];
+  if (serializedPolicy === undefined) {
+    throw new Error('interactive investigation policy metadata is empty');
+  }
+  return JSON.parse(serializedPolicy) as unknown;
+}
+
+function parseStructuredPolicy(prompt: string, tagName: string): unknown {
+  const openingTag = `<${tagName}>`;
+  const closingTag = `</${tagName}>`;
+  const openingIndex = prompt.indexOf(openingTag);
+  if (openingIndex < 0) {
+    throw new Error(`${tagName} metadata is missing`);
+  }
+  const contentStart = openingIndex + openingTag.length;
+  const closingIndex = prompt.indexOf(closingTag, contentStart);
+  if (closingIndex < 0) {
+    throw new Error(`${tagName} metadata is not closed`);
+  }
+  return JSON.parse(prompt.slice(contentStart, closingIndex).trim()) as unknown;
 }
 
 function renderJapaneseSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
@@ -101,6 +125,40 @@ describe('interactive formal specification prompt template wiring', () => {
       expect(withDefaultComments).toBe(withComments);
     },
   );
+});
+
+describe('formal specification role policy wiring', () => {
+  it.each(['en', 'ja'] as const)('keeps generation and interpretation policies stable for %s', (lang) => {
+    expect(parseStructuredPolicy(
+      buildFormalSpecGenerationSystemPrompt(lang),
+      'takt-formal-spec-generation-policy',
+    )).toEqual({
+      role: 'formal-specification-generator',
+      quint: {
+        invariantPrefix: 'inv',
+        temporalPropertyPrefix: 'prop',
+      },
+      alloy: {
+        targetCommand: 'check',
+      },
+    });
+    expect(parseStructuredPolicy(
+      buildFormalSpecInterpretationSystemPrompt(lang),
+      'takt-formal-spec-interpretation-policy',
+    )).toEqual({
+      role: 'formal-specification-interpreter',
+      rerunPolicy: 'explicit-user-only',
+    });
+  });
+});
+
+describe('formal specification generation context wiring', () => {
+  it.each(['en', 'ja'] as const)('preserves the unique initial agreement inside its stable delimiter for %s', (lang) => {
+    const initialAgreement = `unique-initial-agreement-${lang}-8b7e2d`;
+    const prompt = buildFormalSpecGenerationPrompt(lang, initialAgreement);
+
+    expect(prompt).toContain(`<initial-user-input>\n${initialAgreement}\n</initial-user-input>`);
+  });
 });
 
 describe('task instruction formal specification prompt template wiring', () => {

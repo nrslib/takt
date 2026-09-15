@@ -164,7 +164,6 @@ const CursorProviderOptionsSchema = z.object({
 });
 
 const DeepSeekHarnessProviderOptionsSchema = z.object({
-  python_path: z.string().min(1).optional(),
   base_url: z.string().min(1).optional(),
   session_root: z.string().min(1).optional(),
   cordis: z.string().min(1).optional(),
@@ -674,7 +673,6 @@ const NormalizedStepProviderOptionsSchema = z.object({
     }).strict().optional(),
   }).strict().optional(),
   deepseekHarness: z.object({
-    pythonPath: z.string().min(1).optional(),
     baseUrl: z.string().min(1).optional(),
     sessionRoot: z.string().min(1).optional(),
     cordis: z.string().min(1).optional(),

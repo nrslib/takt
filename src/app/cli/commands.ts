@@ -276,6 +276,18 @@ program
     showCatalog(getCliExecutionContext().cwd, type);
   });
 
+const deepseekHarness = program
+  .command('deepseek-harness')
+  .description('Manage the DeepSeek Harness managed environment');
+
+deepseekHarness
+  .command('install')
+  .description('Install or repair the DeepSeek Harness managed environment')
+  .action(async () => {
+    const { installDeepSeekHarness } = await import('../../infra/deepseek-harness/managed-venv.js');
+    await installDeepSeekHarness();
+  });
+
 const workflow = program
   .command('workflow')
   .description('Workflow authoring utilities');

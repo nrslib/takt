@@ -50,6 +50,7 @@ function toPiOptions(options: ProviderCallOptions, systemPrompt?: string): PiCal
 
 export class PiProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsToolFreeExecution = true;
   readonly supportsNativeImageInput = true;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set();
 

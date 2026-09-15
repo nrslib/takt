@@ -20,6 +20,7 @@ const TUI_ENABLED_COMMANDS: readonly SlashCommand[] = [
   SlashCommand.Provider,
   SlashCommand.Model,
   SlashCommand.Effort,
+  SlashCommand.Verify,
 ];
 
 export interface SlashCompletion {

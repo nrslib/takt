@@ -51,6 +51,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
+  readonly supportsToolFreeExecution = true;
   readonly supportsNativeImageInput = true;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'sse', 'http']);
   readonly supportsStrictMcpConfig = true;
