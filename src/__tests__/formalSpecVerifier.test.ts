@@ -92,6 +92,7 @@ interface MockProcessResponse {
   readonly stderr?: string;
   readonly error?: Error;
   readonly hang?: boolean;
+  readonly beforeExit?: () => Promise<void>;
 }
 
 class MockStream extends EventEmitter {
@@ -152,6 +153,7 @@ function mockProcessBoundary(): void {
           signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         });
       }
+      await response.beforeExit?.();
       if (response.stdout !== undefined) stdout.emit('data', response.stdout);
       if (response.stderr !== undefined) stderr.emit('data', response.stderr);
       if (response.error !== undefined) throw response.error;
@@ -303,6 +305,40 @@ describe('runFormalSpecVerification', () => {
       expect(existsSync(staleDirectory)).toBe(false);
       expect(existsSync(recentDirectory)).toBe(true);
       expect(existsSync(unrelatedDirectory)).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should retain an active workspace when sequential Alloy checks outlive the stale threshold', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const checkNumbers = Array.from({ length: 80 }, (_, index) => index);
+    const retainedSpecifications: boolean[] = [];
+    processResponses.push(
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0, stdout: checkNumbers.map((index) => `${index} . Check Safety${index} for 1`).join('\n') },
+      ...checkNumbers.map(() => ({
+        code: 0,
+        beforeExit: async () => {
+          const activeWorkspace = spawnedProcesses.at(-1)?.options.cwd;
+          if (activeWorkspace === undefined) {
+            throw new Error('Alloy process has no workspace');
+          }
+          vi.setSystemTime(Date.now() + 50_000);
+          await runFormalSpecVerification('No formal specification was generated.', directory);
+          retainedSpecifications.push(existsSync(join(activeWorkspace, 'specs', 'spec.als')));
+        },
+      })),
+    );
+
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+
+      expect(result.alloy).toMatchObject({ status: 'passed', checks: checkNumbers });
+      expect(retainedSpecifications).toEqual(checkNumbers.map(() => true));
+      expect(readdirSync(join(directory, '.takt', 'runs'))).toEqual([]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

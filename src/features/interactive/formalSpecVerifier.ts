@@ -8,6 +8,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -24,8 +25,8 @@ const ALLOY_JAR_SHA256 = '6037cbeee0e8423c1c468447ed10f5fcf2f2743a2ffc39cb1c81f2
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
 const ALLOY_COMMAND_OUTPUT_TRUNCATED_MESSAGE = 'Alloy command enumeration output was truncated before all commands could be read.';
 const MAX_FAILURE_MESSAGE = 8_000;
-// Live workspaces never outlive this age: every subprocess is capped by
-// QUINT/ALLOY_TIMEOUT_MS (60s) and the verification stages run sequentially.
+// Each bounded process refreshes the workspace timestamp, so cleanup measures
+// inactivity rather than the total duration of sequential verification stages.
 const STALE_VERIFY_RUN_MAX_AGE_MS = 60 * 60 * 1000;
 
 export type FormalSpecVerificationStatus = 'passed' | 'failed' | 'error' | 'skipped';
@@ -298,6 +299,8 @@ async function runProcess(
   abortSignal?: AbortSignal,
 ): Promise<ProcessResult> {
   abortSignal?.throwIfAborted();
+  const now = new Date();
+  utimesSync(cwd, now, now);
   const processAbortController = new AbortController();
   let timedOut = false;
   let stdout = '';
