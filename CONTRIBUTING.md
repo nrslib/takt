@@ -26,12 +26,14 @@ nix develop
 
 ## How to Contribute
 
-1. **Open an issue** to discuss the change before starting work
+PRs that accompany an issue are especially welcome. For bug fixes and small improvements, feel free to submit a PR without waiting for a maintainer response or for discussion to conclude.
+
+1. **Open an issue** describing the problem or proposed change, and reference it in your PR — use an existing issue if one already covers the change
 2. **Keep changes small and focused** — bug fixes, documentation improvements, typo corrections are welcome
 3. **Include tests** for new behavior
 4. **Run a TAKT review** before submitting — recommended, not required (see below)
 
-Large refactoring or feature additions without prior discussion are difficult to review and may be declined.
+For large refactoring or features that affect the project's design or compatibility, we recommend discussing the approach in an issue before implementation to avoid rework.
 
 ## Before Submitting a PR
 
