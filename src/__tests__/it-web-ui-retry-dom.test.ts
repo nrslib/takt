@@ -859,7 +859,9 @@ describe('Web UI Retry 本番 DOM 経路', () => {
         await page.click('#new-task-button');
 
         const sendMessage = async (text: string): Promise<void> => {
-          await page.locator('#chat-message').fill(text);
+          const messageInput = page.locator('#chat-message');
+          await messageInput.click();
+          await messageInput.fill(text);
           await page.click('#chat-send-button');
         };
         const waitForNextAssistantResponse = async (): Promise<void> => {
@@ -914,6 +916,12 @@ describe('Web UI Retry 本番 DOM 経路', () => {
             + ' && document.querySelector("#chat-surface")?.dataset.open === "true"'
             + ' && document.querySelector("#chat-task-action-context")?.hidden === false',
           undefined,
+          { timeout: 5000 },
+        );
+        const retryButtonSelector = `article.task-card[data-task-id="${failedTask.taskId}"] button.task-action-retry`;
+        await page.waitForFunction(
+          '(selector) => document.querySelector(selector)?.disabled === false',
+          retryButtonSelector,
           { timeout: 5000 },
         );
         await page.waitForFunction(
