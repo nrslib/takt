@@ -177,6 +177,16 @@ describe('filterSlashCommands', () => {
     });
   });
 
+  it('should preserve implicit commands and expose /verify when formal specification mode is enabled', () => {
+    const availability = resolveFormalSpecCommandAvailability({}, true);
+
+    expect(availability.enabledCommands).toBeUndefined();
+    expect(availability.formalSpec).toBe(true);
+    expect(filterSlashCommands('/', availability).map((entry) => entry.command)).toEqual(
+      expect.arrayContaining([SlashCommand.Go, SlashCommand.Cancel, SlashCommand.Verify]),
+    );
+  });
+
   it('should explicitly exclude /verify from the implicit command set when formal specification mode is disabled', () => {
     const availability = resolveFormalSpecCommandAvailability({}, false);
 
