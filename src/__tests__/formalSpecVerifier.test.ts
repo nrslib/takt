@@ -613,7 +613,8 @@ describe('runFormalSpecVerification', () => {
 
       expect(result.verdict).toBe('error');
       expect(result.quint.verify).toMatchObject({ status: 'error' });
-      expect(result.quint.verify?.message).toMatch(/^Process timed out[^\n]*\nTLC/);
+      expect(result.quint.verify?.message).toMatch(/^TLC exhaustively/);
+      expect(result.quint.verify?.message).toContain('Process timed out after 60000 ms');
       expect(result.quint.verify?.message).toContain('entire state space');
       expect(result.quint.verify?.message).toContain('--max-steps does not limit TLC');
       expect(result.quint.verify?.message).toContain('Bound all state variables');

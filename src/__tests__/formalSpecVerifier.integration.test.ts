@@ -54,7 +54,10 @@ import {
 const require = createRequire(import.meta.url);
 
 const java17Available = (() => {
-  const result = spawnSync('java', ['-version'], { encoding: 'utf8' });
+  const result = spawnSync('java', ['-version'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
   if (result.status !== 0) {
     return false;
   }

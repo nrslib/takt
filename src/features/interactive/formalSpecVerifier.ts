@@ -433,7 +433,7 @@ function formatProcessFailureMessage(
   output: string,
   additionalMessage?: string,
 ): string {
-  const details = [result.error, additionalMessage, output]
+  const details = [additionalMessage, result.error, output]
     .filter((detail): detail is string => detail !== undefined && detail.length > 0)
     .join('\n');
   const exitStatus = result.status === null ? 'unknown' : String(result.status);
