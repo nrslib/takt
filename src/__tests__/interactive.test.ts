@@ -16,13 +16,11 @@ const {
   mockResolveFormalSpecConfigurationWithoutPrompt,
   mockSelectRecentSession,
   mockRunFormalSpecVerification,
-  mockProviderSupportsFormalSpecVerification,
 } = vi.hoisted(() => ({
   mockResolveFormalSpecConfiguration: vi.fn(),
   mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
   mockSelectRecentSession: vi.fn(),
   mockRunFormalSpecVerification: vi.fn(),
-  mockProviderSupportsFormalSpecVerification: vi.fn(),
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -46,7 +44,6 @@ vi.mock('../features/interactive/sessionSelector.js', () => ({
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
-  providerSupportsFormalSpecVerification: (...args: unknown[]) => mockProviderSupportsFormalSpecVerification(...args),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -114,7 +111,6 @@ beforeEach(() => {
     quint: { status: 'passed' },
     alloy: { status: 'passed' },
   });
-  mockProviderSupportsFormalSpecVerification.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -588,20 +584,30 @@ describe('interactiveMode', () => {
     expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyUnavailable', 'en'));
   });
 
-  it('should reject /verify before generation when the provider cannot enforce tool-free calls', async () => {
+  it('should route /verify through generation and interpretation for Codex', async () => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
-    setupMockProvider([]);
+    const generatedResponse = '```quint\nmodule currentAgreement {}\n```';
+    const { provider, capture } = createMockProvider([
+      generatedResponse,
+      'The current agreement passed verification.',
+    ]);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
     mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
-    mockProviderSupportsFormalSpecVerification.mockReturnValue(false);
 
-    const result = await interactiveMode('/project');
+    const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      provider: 'codex',
+    });
 
     expect(result.action).toBe('cancel');
-    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
-    expect(mockProvider._call).not.toHaveBeenCalled();
-    expect(mockProviderSupportsFormalSpecVerification).toHaveBeenCalledWith('mock');
-    expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
-    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyProviderUnavailable', 'en'));
+    expect(provider._call).toHaveBeenCalledTimes(2);
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      generatedResponse,
+      '/project',
+      expect.any(AbortSignal),
+    );
+    expect(capture.allowedTools).toEqual([undefined, undefined]);
+    expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
+    expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
   });
 
   it('should stop the /verify flow with an explicit error when the generated response has no formal blocks', async () => {

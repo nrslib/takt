@@ -23,7 +23,6 @@ import type { ImageAttachmentReference } from '../../shared/types/image-attachme
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import {
-  providerSupportsFormalSpecVerification,
   runFormalSpecVerification,
 } from './formalSpecVerification.js';
 import {
@@ -415,12 +414,6 @@ export function createConversationSession(options: ConversationSessionOptions): 
       return {
         kind: 'error',
         message: getLabel('interactive.ui.verifyUnavailable', ctx.lang),
-      };
-    }
-    if (!providerSupportsFormalSpecVerification(ctx.providerType)) {
-      return {
-        kind: 'error',
-        message: getLabel('interactive.ui.verifyProviderUnavailable', ctx.lang),
       };
     }
 

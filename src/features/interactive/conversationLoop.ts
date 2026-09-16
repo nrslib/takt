@@ -56,7 +56,6 @@ import {
 } from './imageAttachments.js';
 import type { InteractiveImageAttachment } from './imageAttachments.js';
 import {
-  providerSupportsFormalSpecVerification,
   runFormalSpecVerification,
 } from './formalSpecVerification.js';
 import {
@@ -363,10 +362,6 @@ export async function runConversationLoop(
     async function handleVerifyCommand(): Promise<void> {
       if (!activePromptConfiguration.formalSpec) {
         info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
-        return;
-      }
-      if (!providerSupportsFormalSpecVerification(ctx.providerType)) {
-        info(getLabel('interactive.ui.verifyProviderUnavailable', ctx.lang));
         return;
       }
 

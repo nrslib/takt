@@ -4,13 +4,11 @@ const {
   mockCallAIWithRetry,
   mockBuildSummaryPrompt,
   mockRunFormalSpecVerification,
-  mockProviderSupportsFormalSpecVerification,
   mockUpdatePersonaSession,
 } = vi.hoisted(() => ({
   mockCallAIWithRetry: vi.fn(),
   mockBuildSummaryPrompt: vi.fn(),
   mockRunFormalSpecVerification: vi.fn(),
-  mockProviderSupportsFormalSpecVerification: vi.fn(),
   mockUpdatePersonaSession: vi.fn(),
 }));
 
@@ -35,12 +33,12 @@ vi.mock('../features/interactive/interactiveApplication.js', async (importOrigin
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
-  providerSupportsFormalSpecVerification: (...args: unknown[]) => mockProviderSupportsFormalSpecVerification(...args),
 }));
 
 import { createConversationSession } from '../features/interactive/conversationSession.js';
 import { SlashCommand } from '../shared/constants.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { PROVIDER_TYPES } from '../shared/types/provider.js';
 import { makeSessionContext } from './test-helpers.js';
 
 function createSession(cwd = '/repo', formalSpec = false) {
@@ -75,7 +73,6 @@ describe('conversation session application API', () => {
       quint: { status: 'passed' },
       alloy: { status: 'passed' },
     });
-    mockProviderSupportsFormalSpecVerification.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -171,12 +168,11 @@ describe('conversation session application API', () => {
     }));
   });
 
-  it('should reject formal specification verification before generation for an incompatible provider', async () => {
-    mockProviderSupportsFormalSpecVerification.mockReturnValue(false);
+  it.each(PROVIDER_TYPES)('should start /verify generation for %s when formal specification mode is enabled', async (providerType) => {
     const session = createConversationSession({
       cwd: '/repo',
       formalSpec: true,
-      ctx: makeSessionContext({ providerType: 'deepseek-harness' }),
+      ctx: makeSessionContext({ providerType }),
       strategy: {
         systemPrompt: 'formal system prompt',
         allowedTools: ['Read'],
@@ -186,13 +182,17 @@ describe('conversation session application API', () => {
 
     const result = await session.handleUserMessage({ text: '/verify' });
 
-    expect(result).toEqual({
-      kind: 'error',
-      message: getLabel('interactive.ui.verifyProviderUnavailable', 'en'),
-    });
-    expect(mockProviderSupportsFormalSpecVerification).toHaveBeenCalledWith('deepseek-harness');
-    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
-    expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
+    expect(result.kind).toBe('assistant_response');
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual(expect.objectContaining({
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+    }));
+    expect(mockCallAIWithRetry.mock.calls[1]?.[5]).toEqual(expect.objectContaining({
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+    }));
   });
 
   it.each([

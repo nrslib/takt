@@ -84,7 +84,6 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
 export class ClaudeTerminalProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
-  readonly supportsToolFreeExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'sse', 'http']);
   readonly supportsStrictMcpConfig = true;

@@ -81,7 +81,6 @@ import {
   selectAlloyCheckTargets,
   selectQuintVerificationTargets,
 } from '../features/interactive/formalSpecVerifier.js';
-import { providerSupportsFormalSpecVerification } from '../features/interactive/formalSpecVerification.js';
 
 const originalAlloyJar = process.env.TAKT_ALLOY_JAR;
 
@@ -885,22 +884,5 @@ describe('selectAlloyCheckTargets', () => {
       { number: 2, type: 'check', label: 'NoRetry' },
       { number: 3, type: 'check', label: 'ModeGate' },
     ])).toEqual([0, 2, 3]);
-  });
-});
-
-describe('providerSupportsFormalSpecVerification', () => {
-  it('should allow only providers with an explicit tool-free execution capability', () => {
-    expect(providerSupportsFormalSpecVerification('claude')).toBe(true);
-    expect(providerSupportsFormalSpecVerification('claude-sdk')).toBe(true);
-    expect(providerSupportsFormalSpecVerification('claude-terminal')).toBe(true);
-    expect(providerSupportsFormalSpecVerification('opencode')).toBe(true);
-    expect(providerSupportsFormalSpecVerification('pi')).toBe(true);
-    expect(providerSupportsFormalSpecVerification('mock')).toBe(true);
-    expect(providerSupportsFormalSpecVerification('deepseek-harness')).toBe(false);
-    expect(providerSupportsFormalSpecVerification('codex')).toBe(false);
-    expect(providerSupportsFormalSpecVerification('cursor')).toBe(false);
-    expect(providerSupportsFormalSpecVerification('copilot')).toBe(false);
-    expect(providerSupportsFormalSpecVerification('kiro')).toBe(false);
-    expect(providerSupportsFormalSpecVerification(undefined)).toBe(false);
   });
 });

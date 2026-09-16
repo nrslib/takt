@@ -36,7 +36,6 @@ interactive:
     retryUnavailable: "/retry は `takt list` の Retry モードでのみ使用できます。"
     pasteImageUnavailable: "/paste-image は対話入力中の画像添付にのみ使用できます。"
     verifyUnavailable: "/verify は形式仕様モードでのみ使用できます。"
-    verifyProviderUnavailable: "/verify にはツールなしの実行を保証できるプロバイダーが必要です。"
     personaFallback: "先頭ステップにペルソナがありません。アシスタントモードにフォールバックします。"
   modeSelection:
     prompt: "対話モードを選択してください:"

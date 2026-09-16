@@ -17,7 +17,6 @@ const {
   mockLoadTemplate,
   mockLoadAssistantInitContext,
   mockRunFormalSpecVerification,
-  mockProviderSupportsFormalSpecVerification,
   mockResolveFormalSpecConfigurationWithoutPrompt,
 } = vi.hoisted(() => ({
   mockCallAIWithRetry: vi.fn(),
@@ -25,7 +24,6 @@ const {
   mockLoadTemplate: vi.fn(),
   mockLoadAssistantInitContext: vi.fn(),
   mockRunFormalSpecVerification: vi.fn(),
-  mockProviderSupportsFormalSpecVerification: vi.fn(),
   mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
 }));
 
@@ -47,7 +45,6 @@ vi.mock('../features/interactive/assistantInitFiles.js', () => ({
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
-  providerSupportsFormalSpecVerification: (...args: unknown[]) => mockProviderSupportsFormalSpecVerification(...args),
 }));
 
 vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
@@ -181,7 +178,6 @@ beforeEach(() => {
     quint: { status: 'passed' },
     alloy: { status: 'passed' },
   });
-  mockProviderSupportsFormalSpecVerification.mockReturnValue(true);
   mockCallAIWithRetry.mockImplementation((...args: unknown[]) => {
     const options = args[5] as CallAIOptions;
     options.onStream?.({ type: 'text', data: { text: 'chunk-1' } });
@@ -732,7 +728,15 @@ describe('TUI local commands', () => {
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
-  it('should route /verify through generation, verification, and interpretation in the TUI', async () => {
+  it('should route Codex /verify through generation, verification, and interpretation in the TUI', async () => {
+    mockInitializeSession.mockReturnValueOnce({
+      provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+      providerType: 'codex',
+      model: 'codex-model',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    });
     const plan = createPlan();
     const conversation = createConversation({
       plan: {
@@ -762,6 +766,14 @@ describe('TUI local commands', () => {
       '/repo',
       abortController.signal,
     );
+    expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual(expect.objectContaining({
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+    }));
+    expect(mockCallAIWithRetry.mock.calls[1]?.[5]).toEqual(expect.objectContaining({
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+    }));
     expect(chunks).toEqual([]);
   });
 

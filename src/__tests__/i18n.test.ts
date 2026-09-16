@@ -28,9 +28,9 @@ describe('getLabel', () => {
     expect(result.length).toBeGreaterThan(0);
   });
 
-  it.each(['en', 'ja'] as const)('returns the localized incompatible-provider /verify message for %s', (lang) => {
-    const result = getLabel('interactive.ui.verifyProviderUnavailable', lang);
-    expect(result).toMatch(/verify|プロバイダー/iu);
+  it.each(['en', 'ja'] as const)('returns the localized mode-disabled /verify message for %s', (lang) => {
+    const result = getLabel('interactive.ui.verifyUnavailable', lang);
+    expect(result).toMatch(/verify|形式仕様/iu);
   });
 
   it('throws for a non-existent key', () => {

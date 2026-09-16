@@ -92,6 +92,18 @@ function renderEnglishSummaryPrompt(formalSpec: boolean, formalSpecComments = tr
   );
 }
 
+function expectToolFreeVerificationInstruction(prompt: string, lang: 'en' | 'ja'): void {
+  if (lang === 'ja') {
+    expect(prompt).toMatch(/ツール[^。\n]*コマンド[^。\n]*(?:実行|使用|使わ)[^。\n]*(?:ない|ず|ません)/iu);
+    expect(prompt).toMatch(/応答本文[^。\n]*(?:だけ|のみ)/iu);
+    expect(prompt).toMatch(/検証[^。\n]*TAKT|TAKT[^。\n]*検証/iu);
+  } else {
+    expect(prompt).toMatch(/do not[^.\n]*(?:tools?)[^.\n]*(?:commands?)|do not[^.\n]*(?:commands?)[^.\n]*(?:tools?)/iu);
+    expect(prompt).toMatch(/(?:only[^.\n]*response (?:body|text)|response (?:body|text)[^.\n]*only)/iu);
+    expect(prompt).toMatch(/TAKT[^.\n]*verif|verif[^.\n]*TAKT/iu);
+  }
+}
+
 describe('interactive investigation policy template wiring', () => {
   it.each([
     ['en', false, EXPECTED_INVESTIGATION_POLICIES.assistant],
@@ -149,6 +161,16 @@ describe('formal specification role policy wiring', () => {
       role: 'formal-specification-interpreter',
       rerunPolicy: 'explicit-user-only',
     });
+  });
+});
+
+describe('formal specification tool-free execution instructions', () => {
+  it.each(['en', 'ja'] as const)('instructs the %s generation prompt to avoid tools and commands', (lang) => {
+    expectToolFreeVerificationInstruction(buildFormalSpecGenerationSystemPrompt(lang), lang);
+  });
+
+  it.each(['en', 'ja'] as const)('instructs the %s interpretation prompt to avoid tools and commands', (lang) => {
+    expectToolFreeVerificationInstruction(buildFormalSpecInterpretationSystemPrompt(lang), lang);
   });
 });
 

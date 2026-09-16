@@ -14,11 +14,11 @@ import { tmpdir } from 'node:os';
 const {
   mockResolveFormalSpecConfigurationWithoutPrompt,
   mockRunFormalSpecVerification,
-  mockProviderSupportsFormalSpecVerification,
+  mockGlobalConfig,
 } = vi.hoisted(() => ({
   mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
   mockRunFormalSpecVerification: vi.fn(),
-  mockProviderSupportsFormalSpecVerification: vi.fn(),
+  mockGlobalConfig: { provider: 'mock', language: 'en' },
 }));
 
 import {
@@ -37,7 +37,7 @@ vi.mock('../infra/fs/session.js', () => ({
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
-  loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
+  loadGlobalConfig: vi.fn(() => mockGlobalConfig),
   getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
@@ -66,7 +66,6 @@ vi.mock('../features/interactive/taskInstructionFormat.js', async (importOrigina
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
-  providerSupportsFormalSpecVerification: (...args: unknown[]) => mockProviderSupportsFormalSpecVerification(...args),
 }));
 
 vi.mock('../infra/config/paths.js', async (importOriginal) => ({
@@ -166,6 +165,7 @@ describe('/retry slash command', () => {
   beforeEach(() => {
     tmpDir = createTmpDir();
     vi.clearAllMocks();
+    mockGlobalConfig.provider = 'mock';
     mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
     mockRunFormalSpecVerification.mockResolvedValue({
       verdict: 'passed',
@@ -173,7 +173,6 @@ describe('/retry slash command', () => {
       quint: { status: 'passed' },
       alloy: { status: 'passed' },
     });
-    mockProviderSupportsFormalSpecVerification.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -271,6 +270,7 @@ describe('/retry slash command', () => {
       'The direct resume specification passed.',
     ]);
     mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: true });
+    mockGlobalConfig.provider = 'codex';
 
     const result = await runDirectRetryMode(tmpDir, buildRetryContext({
       subject: {
@@ -281,8 +281,12 @@ describe('/retry slash command', () => {
     }));
 
     expect(result.action).toBe('cancel');
+    expect(mockGetProvider).toHaveBeenCalledWith('codex');
     expect(capture.prompts[0]).toContain(orderContent);
     expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    expect(capture.callCount).toBe(2);
+    expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
+    expect(capture.internalAgentIsolations).toEqual(['strict-readonly', 'strict-readonly']);
   });
 
 });
