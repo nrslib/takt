@@ -1,0 +1,199 @@
+# This fixture is intentionally anonymous.  The expected decisions live here,
+# outside the production prompts, so a case answer cannot become an instruction.
+- id: summary-unconfirmed-method
+  responsibility: summary
+  language: ja
+  origin: runtime-derived
+  history:
+    - role: user
+      content: |
+        Codex CLI の設定を環境ごとに切り替えられるように、このリポジトリへ実装してほしい。
+        実装担当は SDK と CLI の仕様を調べ、利用できる方法を確認してから方式を決めること。
+    - role: assistant
+      content: |
+        SDK に config と configOverrides があるので、それを使えば実現できそうです。
+        profile ファイル方式は使わず、configOverrides を必須の実装方式として進めるのがよさそうです。
+  rubric:
+    checks:
+      - preserve_goal
+      - classify_candidate
+      - no_candidate_promotion
+      - no_invented_scope
+
+- id: summary-limited-approval
+  responsibility: summary
+  language: ja
+  origin: runtime-derived
+  history:
+    - role: user
+      content: |
+        Issue の要求は CLI の --profile と、$CODEX_HOME/<name>.config.toml による
+        環境ごとの設定切替を実装することである。SDK 更新、CLI への設定受け渡し、
+        別統合のどれを採るかはまだ開いている。
+    - role: assistant
+      content: |
+        SDK に config/configOverrides があるので、それを使うのがよさそうです。
+        方式の確定と実装範囲はまだ提案段階です。
+        自動テストはモック中心とし、実 API は使わず手動確認手順を記載する方針でよいか？
+    - role: user
+      content: OK
+    - role: assistant
+      content: |
+        了解しました。config/configOverrides 方式で実装し、古い profile ファイルも必須にします。
+        対象ファイルをすべて確定したうえで実装を始めます。
+  rubric:
+    checks:
+      - preserve_goal
+      - preserve_profile_request
+      - preserve_limited_ok
+      - classify_candidate
+      - no_candidate_promotion
+      - no_scope_expansion
+
+- id: summary-explicit-method-adoption
+  responsibility: summary
+  language: en
+  origin: control
+  history:
+    - role: user
+      content: |
+        Implement environment-specific Codex settings using the SDK configOverrides option.
+        This method has been explicitly selected. Keep the existing manual verification procedure
+        and add an automated API test if the repository supports it.
+    - role: assistant
+      content: |
+        I will investigate the selected configOverrides route and wire it through the existing
+        configuration boundary. The selected method is part of the requested implementation.
+  rubric:
+    checks:
+      - preserve_goal
+      - preserve_explicit_method
+      - preserve_manual_verification
+
+- id: summary-unresolved-draft
+  responsibility: summary
+  language: en
+  origin: runtime-derived
+  history:
+    - role: user
+      content: |
+        The configuration mechanism is unresolved. First verify the current SDK and CLI behavior,
+        then choose an implementation. Do not commit to a profile file or configOverrides yet.
+    - role: assistant
+      content: |
+        Required approach: use configOverrides and add a profile file under the user config directory.
+
+        Open Questions: the mechanism and profile format are not decided yet.
+  rubric:
+    checks:
+      - preserve_unresolved
+      - no_candidate_promotion
+      - resolve_draft_contradiction
+
+- id: summary-delegated-investigation
+  responsibility: summary
+  language: ja
+  origin: runtime-derived
+  history:
+    - role: user
+      content: |
+        実装担当へ、SDK と CLI の公式資料を調査してから実装するよう委譲する。
+        コマンドが承認待ちや未実行になった場合は、結果を推測せず未確認として報告すること。
+        調査後に必要な検証手順を引き継ぎ、方式の決定が必要なら私に確認する。
+    - role: assistant
+      content: |
+        要約では対象ファイルを一つずつ列挙し、各ファイルの変更内容まで先に確定させます。
+        CLI の help が取れなくても、既知の旧仕様を正しいものとして指示書に書けます。
+  rubric:
+    checks:
+      - preserve_delegation
+      - preserve_unverified_boundary
+      - preserve_handoff
+      - no_invented_file_scope
+
+- id: plan-local-unknown
+  responsibility: plan
+  language: ja
+  origin: runtime-derived
+  task: |
+    既存の設定アダプターと CLI 起動経路へ設定切替を追加する。呼出しごとに設定名を指定
+    し、登録済みの名前別設定の一つを既存アダプターの context へ渡す。未指定の場合は
+    既存の default を維持し、未知の設定名は拒否する。現行アダプター API と CLI への
+    受け渡しはまだコードで確認できていないが、リポジトリ内で調査・実装・検証できる。
+    登録と受け渡しの方法は既存コードを調べて選択し、手動確認手順も用意する。
+  rubric:
+    checks:
+      - plan_local_investigation
+      - plan_implementation_after_investigation
+      - no_premature_abort
+
+- id: report-separate-handoff
+  responsibility: report
+  language: en
+  origin: held-out-domain
+  task: |
+    Implement a configurable retry policy in the existing payment flow. The local source and tests
+    can be inspected now; an external sandbox verification is required after the implementation.
+    The retry mechanism is still a candidate and must be confirmed by the technical investigation.
+  response: |
+    The source search identified the payment entry point, but no implementation or API experiment
+    has run. The SDK behavior is therefore unverified. The external sandbox test is a later required
+    verification owned by the release verifier. A policy abstraction is a candidate pending the
+    investigation; no user decision is needed to inspect the local code and run the first experiment.
+  rubric:
+    checks:
+      - report_separates_technical_gap
+      - report_hands_off_verification
+      - report_preserves_candidate_status
+      - report_keeps_local_next_step
+
+- id: plan-confirmed-method-contradiction
+  responsibility: plan
+  language: en
+  origin: runtime-derived
+  task: |
+    The requested public behavior explicitly requires both the CLI --profile option backed by
+    $CODEX_HOME/<name>.config.toml and the SDK config/configOverrides route as the only required
+    implementation. Confirmed current SDK and CLI evidence shows that configOverrides is an SDK
+    option and cannot supply the CLI --profile contract. The project cannot choose which public
+    behavior to drop; the user must decide. Local investigation can document the conflict but cannot
+    make both confirmed requirements true.
+  rubric:
+    checks:
+      - identify_user_decision
+      - preserve_conflict
+      - no_false_implementation
+      - identify_confirmed_external_blocker
+      - preserve_stop_condition
+      - no_fake_local_resolution
+
+- id: plan-confirmed-external-blocker
+  responsibility: plan
+  language: ja
+  origin: control
+  task: |
+    指定された実機での出力確認を必須とする。コード変更とプロジェクト内テストは完了している。
+    実機は接続されておらず、管理者だけが設置できることを確認した。シミュレーターは代替に
+    ならないため、外部作業が完了するまで最終確認できない。
+  rubric:
+    checks:
+      - identify_confirmed_external_blocker
+      - preserve_stop_condition
+      - no_fake_local_resolution
+
+- id: judge-initial-local-investigation
+  responsibility: judge
+  language: ja
+  origin: runtime-derived
+  workflow: development-core
+  step_name: plan
+  report: |
+    要件の目的と受入条件は確定している。現行 SDK の API と CLI の受け渡しだけが
+    未確認だが、同じプロジェクト内でコード、依存 SDK、CLI の公式資料を調査できる。
+    調査結果に応じた実装と検証もリポジトリ内で実行可能で、外部操作やユーザー回答は
+    現時点では不要である。まず調査計画を実行し、方式を確認してから実装へ進める。
+  expected_transition:
+    next: write_tests
+  rubric:
+    checks:
+      - route_initial_local_investigation

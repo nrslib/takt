@@ -1,0 +1,8 @@
+{
+  "name": "instruction-research-handoff-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/settings.test.js"
+  }
+}

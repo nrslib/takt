@@ -117,6 +117,49 @@ implementation/evidence gaps separate from omitted family paths and excludes a
 neighboring contract. Invoke it with
 `npm run eval:prompts:fix-verifier-family-boundary`.
 
+The `instruction-research-handoff` suite evaluates the instruction-summary,
+plan, report, and routing boundaries from the instruction-research handoff
+regression. It contains ten fixed cases (five summary cases and five
+downstream cases), uses the production prompt builders, and runs the four
+model matrix from `fix-verifier-model-matrix`: Claude Opus 5, Codex Sol High,
+Codex Luna Max, and Kimi K3. The semantic rubric is judged by Codex Luna Max;
+the generator receives only the role-separated case history and the isolated
+fixture, while the judge receives the rubric and fixture evidence separately.
+Run a fresh baseline and then a candidate comparison with:
+
+```sh
+node eval/scripts/instruction-research-handoff-eval.mjs baseline \
+  .tmp/instruction-research-handoff-baseline \
+  --skip-provider kimi-k3
+node eval/scripts/instruction-research-handoff-eval.mjs candidate \
+  .tmp/instruction-research-handoff-baseline \
+  .tmp/instruction-research-handoff-candidate \
+  --skip-provider kimi-k3
+```
+
+If a confirmed provider outage prevents one matrix member from running, pass
+its exact matrix ID, for example `--skip-provider kimi-k3`. The manifest keeps
+the skipped provider as infrastructure failure and does not substitute
+another model. The same skip flag must be supplied to both baseline and
+candidate; omit it from both commands when that provider is available. A
+candidate still must complete every active provider/case row. Use `rescore`
+when only the rubric or judge needs to change:
+
+```sh
+node eval/scripts/instruction-research-handoff-eval.mjs rescore \
+  .tmp/instruction-research-handoff-baseline \
+  .tmp/instruction-research-handoff-rescored
+```
+
+Rescoring reuses the saved source prompts and raw model outputs. It rejects
+changed case input, prompt, or fixture hashes; the fixture manifest records
+each file hash and an aggregate hash. `manifestHash` is the SHA-256 of the
+canonical manifest JSON, while `rescoredFromManifestFileSha256` is the SHA-256
+of the saved manifest file bytes. Results separate model failures from provider
+or grader failures and unexecuted rows. These are fixed-input prompt
+regressions with stochastic model output, not end-to-end product correctness;
+repeat runs and inspect the saved evidence before making convergence claims.
+
 The `fix-plan-cause-check` suite uses the same three providers and one-at-a-time
 execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with
