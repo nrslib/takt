@@ -124,10 +124,70 @@ steps:
 `);
 }
 
+function writeParentReviewRepairWorkflow(projectDir: string, recoverFromAbort = false): void {
+  writeWorkflow(projectDir, 'root-revisit.yaml', `name: root-revisit
+initial_step: parent-call
+max_steps: 20
+steps:
+  - name: parent-call
+    kind: workflow_call
+    call: nested/revisit
+    rules:
+      - condition: COMPLETE
+        next: parent-review
+      - condition: DONE
+        next: COMPLETE
+      - condition: ABORT
+        next: ${recoverFromAbort ? 'parent-repair' : 'ABORT'}
+  - name: parent-review
+    persona: parent-review
+    instruction: Review the child result
+    rules:
+      - condition: needs_fix
+        next: parent-repair
+  - name: parent-repair
+    persona: parent-repair
+    instruction: Repair the parent result
+    rules:
+      - condition: done
+        next: parent-call
+`);
+  writeWorkflow(projectDir, 'nested/revisit.yaml', `name: nested/revisit
+subworkflow:
+  callable: true
+  returns: [DONE]
+initial_step: child-review
+max_steps: 20
+steps:
+  - name: child-review
+    persona: child-review
+    instruction: Review the child work
+    rules:
+      - condition: needs_fix
+        next: child-fix
+      - condition: done
+        return: DONE
+  - name: child-fix
+    persona: child-fix
+    instruction: Fix the child work
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+}
+
 function loadRootWorkflow(projectDir: string): WorkflowConfig {
   const workflow = loadWorkflowByIdentifier('root-resume', projectDir);
   if (workflow === null) {
     throw new Error('root-resume workflow was not loaded');
+  }
+  return workflow;
+}
+
+function loadRevisitWorkflow(projectDir: string): WorkflowConfig {
+  const workflow = loadWorkflowByIdentifier('root-revisit', projectDir);
+  if (workflow === null) {
+    throw new Error('root-revisit workflow was not loaded');
   }
   return workflow;
 }
@@ -274,6 +334,187 @@ describe('serial workflow_call abort resume checkpoints', () => {
         step: 'recover',
         kind: 'agent',
       }),
+    ]);
+  });
+
+  it('returns to a parent workflow_call without reusing its child resume frame', async () => {
+    writeParentReviewRepairWorkflow(tmpDir);
+    const rootWorkflow = loadRevisitWorkflow(tmpDir);
+
+    mockRunAgentSequence([makeResponse({ persona: 'child-review', content: 'needs fix' })]);
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('child fix exploded'));
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+    engine = new WorkflowEngine(rootWorkflow, tmpDir, 'parent revisit', createOptions(tmpDir));
+
+    const firstResult = await engine.run();
+    const resumePoint = engine.getResumePoint();
+
+    expect(firstResult.status).toBe('aborted');
+    expect(resumePoint?.stack).toEqual([
+      expect.objectContaining({ workflow: 'root-revisit', step: 'parent-call', kind: 'workflow_call', occurrence: 1 }),
+      expect.objectContaining({ workflow: 'nested/revisit', step: 'child-fix', kind: 'agent', occurrence: 1 }),
+    ]);
+
+    cleanupWorkflowEngine(engine);
+    vi.mocked(runAgent).mockReset();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'child-fix', content: 'fixed' }),
+      makeResponse({ persona: 'parent-review', content: 'needs fix' }),
+      makeResponse({ persona: 'parent-repair', content: 'done' }),
+      makeResponse({ persona: 'child-review', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+    ]);
+    const startedSteps: string[] = [];
+    engine = new WorkflowEngine(rootWorkflow, tmpDir, 'parent revisit retry', createOptions(tmpDir, {
+      startStep: 'parent-call',
+      resumePoint,
+    }));
+    engine.on('workflow_call:start', () => {
+      startedSteps.push('parent-call');
+    });
+    engine.on('step:start', (step, _iteration, _instruction, _providerInfo, workflowName) => {
+      startedSteps.push(`${workflowName}:${step.name}`);
+    });
+
+    const resumed = await engine.run();
+
+    expect(resumed.status).toBe('completed');
+    expect(startedSteps).toEqual([
+      'parent-call',
+      'nested/revisit:child-fix',
+      'root-revisit:parent-review',
+      'root-revisit:parent-repair',
+      'parent-call',
+      'nested/revisit:child-review',
+    ]);
+  });
+
+  it('does not reuse a consumed child frame after the child aborts before completion', async () => {
+    writeParentReviewRepairWorkflow(tmpDir);
+    const sourceWorkflow = loadRevisitWorkflow(tmpDir);
+
+    mockRunAgentSequence([makeResponse({ persona: 'child-review', content: 'needs fix' })]);
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('child fix exploded'));
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+    engine = new WorkflowEngine(sourceWorkflow, tmpDir, 'child abort source', createOptions(tmpDir));
+
+    const sourceResult = await engine.run();
+    const sourceResumePoint = engine.getResumePoint();
+
+    expect(sourceResult.status).toBe('aborted');
+    expect(sourceResumePoint?.stack).toEqual([
+      expect.objectContaining({ workflow: 'root-revisit', step: 'parent-call', kind: 'workflow_call' }),
+      expect.objectContaining({ workflow: 'nested/revisit', step: 'child-fix', kind: 'agent' }),
+    ]);
+
+    cleanupWorkflowEngine(engine);
+    writeParentReviewRepairWorkflow(tmpDir, true);
+    const recoveryWorkflow = loadRevisitWorkflow(tmpDir);
+    vi.mocked(runAgent).mockReset();
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('child fix exploded again'));
+    mockRunAgentSequence([
+      makeResponse({ persona: 'parent-repair', content: 'done' }),
+      makeResponse({ persona: 'child-review', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+    ]);
+    const startedSteps: string[] = [];
+    engine = new WorkflowEngine(recoveryWorkflow, tmpDir, 'child abort recovery', createOptions(tmpDir, {
+      startStep: 'parent-call',
+      resumePoint: sourceResumePoint,
+    }));
+    engine.on('workflow_call:start', () => {
+      startedSteps.push('parent-call');
+    });
+    engine.on('step:start', (step, _iteration, _instruction, _providerInfo, workflowName) => {
+      startedSteps.push(`${workflowName}:${step.name}`);
+    });
+
+    const recovered = await engine.run();
+
+    expect(recovered.status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls.map(([persona]) => String(persona))).toEqual([
+      'child-fix',
+      'parent-repair',
+      'child-review',
+    ]);
+    expect(startedSteps).toEqual([
+      'parent-call',
+      'nested/revisit:child-fix',
+      'root-revisit:parent-repair',
+      'parent-call',
+      'nested/revisit:child-review',
+    ]);
+  });
+
+  it('saves a new nested checkpoint after a resumed run aborts again', async () => {
+    writeParentReviewRepairWorkflow(tmpDir);
+    const rootWorkflow = loadRevisitWorkflow(tmpDir);
+
+    mockRunAgentSequence([makeResponse({ persona: 'child-review', content: 'needs fix' })]);
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('child fix exploded'));
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+    engine = new WorkflowEngine(rootWorkflow, tmpDir, 'nested checkpoint source', createOptions(tmpDir));
+    await engine.run();
+    const sourceResumePoint = engine.getResumePoint();
+
+    cleanupWorkflowEngine(engine);
+    vi.mocked(runAgent).mockReset();
+    mockRunAgentSequence([makeResponse({ persona: 'child-fix', content: 'fixed' })]);
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('parent review exploded'));
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+    engine = new WorkflowEngine(rootWorkflow, tmpDir, 'nested checkpoint second abort', createOptions(tmpDir, {
+      startStep: 'parent-call',
+      resumePoint: sourceResumePoint,
+    }));
+
+    const secondResult = await engine.run();
+    const secondResumePoint = engine.getResumePoint();
+
+    expect(secondResult.status).toBe('aborted');
+    expect(secondResumePoint?.stack).toEqual([
+      expect.objectContaining({ workflow: 'root-revisit', step: 'parent-review', kind: 'agent', occurrence: 1 }),
+    ]);
+
+    cleanupWorkflowEngine(engine);
+    vi.mocked(runAgent).mockReset();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'parent-review', content: 'needs fix' }),
+      makeResponse({ persona: 'parent-repair', content: 'done' }),
+      makeResponse({ persona: 'child-review', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+    ]);
+    const startedSteps: string[] = [];
+    engine = new WorkflowEngine(rootWorkflow, tmpDir, 'nested checkpoint retry', createOptions(tmpDir, {
+      startStep: 'parent-review',
+      resumePoint: secondResumePoint,
+    }));
+    engine.on('workflow_call:start', () => {
+      startedSteps.push('parent-call');
+    });
+    engine.on('step:start', (step, _iteration, _instruction, _providerInfo, workflowName) => {
+      startedSteps.push(`${workflowName}:${step.name}`);
+    });
+
+    const resumed = await engine.run();
+
+    expect(resumed.status).toBe('completed');
+    expect(startedSteps).toEqual([
+      'root-revisit:parent-review',
+      'root-revisit:parent-repair',
+      'parent-call',
+      'nested/revisit:child-review',
     ]);
   });
 });

@@ -24,6 +24,7 @@ const {
   mockLocalBranchExists,
   mockMaterializePullRequestBase,
   mockGetCurrentBranch,
+  mockResolveWorkflowCallTarget,
 } = vi.hoisted(() => ({
   mockFindLatestResumableDirectRun: vi.fn(),
   mockSelectOption: vi.fn(),
@@ -48,6 +49,7 @@ const {
   mockMaterializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
     `refs/takt/pr-base/${baseBranch}`),
   mockGetCurrentBranch: vi.fn(() => 'feature/direct-resume'),
+  mockResolveWorkflowCallTarget: vi.fn(),
 }));
 
 vi.mock('../features/tasks/resume/directRunFinder.js', () => ({
@@ -74,6 +76,10 @@ vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: mockLoadWorkflowByIdentifier,
   getWorkflowDescription: mockGetWorkflowDescription,
   resolveWorkflowConfigValue: vi.fn(() => 3),
+}));
+
+vi.mock('../infra/config/loaders/workflowCallResolver.js', () => ({
+  resolveWorkflowCallTarget: mockResolveWorkflowCallTarget,
 }));
 
 vi.mock('../core/workflow/run/order-content.js', () => ({
@@ -283,6 +289,63 @@ describe('resumeDirectRun', () => {
         taskSummary: 'Order file instruction',
         taskSource: 'manual',
       },
+    }));
+  });
+
+  it('Given a nested resume point is selected for requeue, Then the root call and full checkpoint are forwarded', async () => {
+    const childWorkflow: WorkflowConfig = {
+      name: 'child',
+      subworkflow: { callable: true },
+      initialStep: 'review',
+      maxSteps: 20,
+      steps: [
+        { name: 'review', personaDisplayName: 'Reviewer', instruction: 'Review', rules: [] },
+      ],
+    };
+    const parentWorkflow: WorkflowConfig = {
+      ...workflow,
+      steps: [
+        {
+          name: 'parent-call',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [],
+        },
+        ...workflow.steps,
+      ],
+    };
+    const nestedResumePoint: WorkflowResumePoint = {
+      ...resumePoint,
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'parent-call',
+          kind: 'workflow_call',
+          occurrence: 2,
+        },
+        {
+          workflow: 'child',
+          workflow_ref: 'child',
+          step: 'review',
+          kind: 'agent',
+          occurrence: 3,
+        },
+      ],
+    };
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(parentWorkflow);
+    mockResolveWorkflowCallTarget.mockReturnValueOnce(childWorkflow);
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({
+      currentStep: 'parent-call',
+      resumePoint: nestedResumePoint,
+    }));
+    mockSelectOption.mockResolvedValueOnce('requeue');
+
+    await resumeDirectRun('/project');
+
+    expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+      startStep: 'parent-call',
+      resumePoint: nestedResumePoint,
     }));
   });
 

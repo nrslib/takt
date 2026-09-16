@@ -457,6 +457,109 @@ describe('WorkflowResumeContinuation', () => {
     })).toBeUndefined();
   });
 
+  it('親階層の消費後も子階層の初回再開を独立して消費する', () => {
+    const parentWorkflow = {
+      name: 'parent',
+      initialStep: 'outer-call',
+      maxSteps: 10,
+      steps: [{
+        name: 'outer-call',
+        kind: 'workflow_call',
+        call: 'child',
+        rules: [],
+      }],
+    } as WorkflowConfig;
+    const childWorkflow = {
+      name: 'child',
+      subworkflow: { callable: true },
+      initialStep: 'nested-call',
+      maxSteps: 10,
+      steps: [{
+        name: 'nested-call',
+        kind: 'workflow_call',
+        call: 'grandchild',
+        rules: [],
+      }],
+    } as WorkflowConfig;
+    const parentFrame = buildWorkflowResumePointEntry(
+      parentWorkflow,
+      'outer-call',
+      'workflow_call',
+      2,
+      new Map([['outer-call', 2]]),
+      2,
+    );
+    const nestedFrame = buildWorkflowResumePointEntry(
+      childWorkflow,
+      'nested-call',
+      'workflow_call',
+      3,
+      new Map([['nested-call', 3]]),
+      3,
+    );
+    const source: WorkflowResumePoint = {
+      version: 1,
+      stack: [parentFrame, nestedFrame],
+      iteration: 8,
+      elapsed_ms: 100,
+    };
+    const parentState: WorkflowState = {
+      workflowName: parentWorkflow.name,
+      currentStep: 'outer-call',
+      iteration: 8,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+    const childState: WorkflowState = {
+      ...parentState,
+      workflowName: childWorkflow.name,
+      currentStep: 'nested-call',
+      stepIterations: new Map(),
+    };
+    const parentContinuation = new WorkflowResumeContinuation(parentWorkflow, source);
+    const childContinuation = new WorkflowResumeContinuation(childWorkflow, source);
+
+    const parentOccurrence = parentContinuation.claimStepOccurrence({
+      step: parentWorkflow.steps[0]!,
+      resumeStackPrefix: [],
+      state: parentState,
+    });
+    expect(parentContinuation.consumeWorkflowCallFrame({
+      step: parentWorkflow.steps[0]!,
+      occurrence: parentOccurrence,
+      resumeStackPrefix: [],
+    })).toEqual(parentFrame);
+
+    const nestedOccurrence = childContinuation.claimStepOccurrence({
+      step: childWorkflow.steps[0]!,
+      resumeStackPrefix: [parentFrame],
+      state: childState,
+    });
+    expect(nestedOccurrence).toBe(3);
+    expect(childContinuation.consumeWorkflowCallFrame({
+      step: childWorkflow.steps[0]!,
+      occurrence: nestedOccurrence,
+      resumeStackPrefix: [parentFrame],
+    })).toEqual(nestedFrame);
+
+    expect(parentContinuation.claimStepOccurrence({
+      step: parentWorkflow.steps[0]!,
+      resumeStackPrefix: [],
+      state: parentState,
+    })).toBe(3);
+    expect(childContinuation.claimStepOccurrence({
+      step: childWorkflow.steps[0]!,
+      resumeStackPrefix: [parentFrame],
+      state: childState,
+    })).toBe(4);
+  });
+
   it('parallel source frameを同名の通常agentがclaimしない', () => {
     const workflow = {
       name: 'parent',
