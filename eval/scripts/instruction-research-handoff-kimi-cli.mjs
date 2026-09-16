@@ -73,6 +73,33 @@ function requireString(value, description) {
   return value;
 }
 
+function normalizeKimiEvidenceField(value, camelKey, snakeKey, description) {
+  const hasCamel = Object.hasOwn(value, camelKey);
+  const hasSnake = Object.hasOwn(value, snakeKey);
+  if (hasCamel && hasSnake && value[camelKey] !== value[snakeKey]) {
+    throw new Error(description + ' has conflicting ' + camelKey + '/' + snakeKey + ' values');
+  }
+  return hasCamel ? value[camelKey] : value[snakeKey];
+}
+
+function normalizeKimiRequest(request, description) {
+  return {
+    ...request,
+    modelAlias: normalizeKimiEvidenceField(
+      request,
+      'modelAlias',
+      'model_alias',
+      description + ' modelAlias',
+    ),
+    thinkingEffort: normalizeKimiEvidenceField(
+      request,
+      'thinkingEffort',
+      'thinking_effort',
+      description + ' thinkingEffort',
+    ),
+  };
+}
+
 function isNoAssistantTextError(error) {
   return error instanceof KimiAssistantOutputError && error.code === 'no_assistant_text';
 }
@@ -409,22 +436,20 @@ export function parseKimiWireEvidence(jsonl) {
     if (event.type === 'llm.request') requests.push(event);
   }
   if (requests.length === 0) throw new Error('Kimi wire.jsonl has no llm.request event');
-  const invalidRequest = requests.find(request => request.model !== actualModel
-    || (request.modelAlias ?? request.model_alias) !== requestedModelAlias
-    || (request.thinkingEffort ?? request.thinking_effort) !== thinkingEffort);
+  const normalizedRequests = requests.map(request => normalizeKimiRequest(request, 'Kimi wire llm.request'));
+  const invalidRequest = normalizedRequests.find(request => request.model !== actualModel
+    || request.modelAlias !== requestedModelAlias
+    || request.thinkingEffort !== thinkingEffort);
   if (invalidRequest !== undefined) {
     throw new Error('Kimi wire provenance has a non-k3/high llm.request');
   }
-  const request = requests.at(-1);
+  const request = normalizedRequests.at(-1);
   return {
     requestCount: requests.length,
     provider: request.provider ?? null,
     model: requireString(request.model, 'Kimi wire llm.request model'),
-    modelAlias: requireString(request.modelAlias ?? request.model_alias, 'Kimi wire llm.request modelAlias'),
-    thinkingEffort: requireString(
-      request.thinkingEffort ?? request.thinking_effort,
-      'Kimi wire llm.request thinkingEffort',
-    ),
+    modelAlias: requireString(request.modelAlias, 'Kimi wire llm.request modelAlias'),
+    thinkingEffort: requireString(request.thinkingEffort, 'Kimi wire llm.request thinkingEffort'),
   };
 }
 
@@ -464,10 +489,11 @@ export function readRouteProvenance(path) {
   }
   if (probe.healthCheck?.exitCode !== 0) throw new Error('Kimi route provenance health check failed');
   const requests = (Array.isArray(probe.wireModelEvents) ? probe.wireModelEvents : [])
-    .filter(event => event.type === 'llm.request');
+    .filter(event => event.type === 'llm.request')
+    .map(request => normalizeKimiRequest(request, 'Kimi route llm.request'));
   if (requests.length === 0 || requests.some(request => request.model !== actualModel
-    || (request.modelAlias ?? request.model_alias) !== requestedModelAlias
-    || (request.thinkingEffort ?? request.thinking_effort) !== thinkingEffort)) {
+    || request.modelAlias !== requestedModelAlias
+    || request.thinkingEffort !== thinkingEffort)) {
     throw new Error('Kimi route provenance wire model differs');
   }
   const request = requests.at(-1);
@@ -481,7 +507,7 @@ export function readRouteProvenance(path) {
     cliVersion: probe.cliVersion,
     requestedAlias: probe.requestedAlias,
     model: request.model,
-    thinkingEffort: request.thinkingEffort ?? request.thinking_effort,
+    thinkingEffort: request.thinkingEffort,
     endpointType: 'managed',
     healthCheck: 'passed',
   };

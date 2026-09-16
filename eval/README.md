@@ -232,6 +232,8 @@ The output manifest and summary also retain source status counts for every
 original provider and phase, including skipped and incomplete rows. A passing
 Kimi supplement describes the Kimi rows only; it does not mean that the
 four-provider matrix is complete.
+`sourceStatus` summarizes the loaded source rows and does not detect edits to
+the rows' full contents.
 
 The `fix-plan-cause-check` suite uses the same three providers and one-at-a-time
 execution. It checks that a planner does not treat failure during parallel

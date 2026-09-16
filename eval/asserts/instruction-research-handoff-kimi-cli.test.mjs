@@ -40,6 +40,43 @@ import {
 
 const casesPath = new URL('../cases/instruction-research-handoff.yaml', import.meta.url);
 const hash = value => createHash('sha256').update(value).digest('hex');
+const kimiRequestFieldVariants = [
+  {
+    name: 'camel-only',
+    fields: { modelAlias: requestedModelAlias, thinkingEffort: 'high' },
+  },
+  {
+    name: 'snake-only',
+    fields: { model_alias: requestedModelAlias, thinking_effort: 'high' },
+  },
+  {
+    name: 'both-equal',
+    fields: {
+      modelAlias: requestedModelAlias,
+      model_alias: requestedModelAlias,
+      thinkingEffort: 'high',
+      thinking_effort: 'high',
+    },
+  },
+  {
+    name: 'alias-conflict',
+    fields: {
+      modelAlias: requestedModelAlias,
+      model_alias: 'other-alias',
+      thinkingEffort: 'high',
+    },
+    conflict: true,
+  },
+  {
+    name: 'effort-conflict',
+    fields: {
+      modelAlias: requestedModelAlias,
+      thinkingEffort: 'high',
+      thinking_effort: 'low',
+    },
+    conflict: true,
+  },
+];
 
 function writeSyntheticSource(
   directory,
@@ -147,11 +184,11 @@ test('distinguishes a completed Kimi stream without assistant text from protocol
   );
 });
 
-test('accepts camelCase and snake_case route effort evidence and returns normalized effort', () => {
+test('normalizes route camelCase and snake_case evidence and rejects conflicts', () => {
   const root = mkdtempSync(join(tmpdir(), 'takt-kimi-route-contract-'));
   try {
-    for (const [index, effortKey] of ['thinkingEffort', 'thinking_effort'].entries()) {
-      const path = join(root, `${index}.json`);
+    for (const variant of kimiRequestFieldVariants) {
+      const path = join(root, `${variant.name}.json`);
       writeFileSync(path, JSON.stringify({
         cliVersion: kimiCliVersion,
         requestedAlias: requestedModelAlias,
@@ -161,14 +198,44 @@ test('accepts camelCase and snake_case route effort evidence and returns normali
         wireModelEvents: [{
           type: 'llm.request',
           model: actualModel,
-          modelAlias: requestedModelAlias,
-          [effortKey]: 'high',
+          ...variant.fields,
         }],
       }));
-      assert.equal(readRouteProvenance(path).thinkingEffort, 'high');
+      if (variant.conflict) {
+        assert.throws(() => readRouteProvenance(path), /conflicting/i);
+      } else {
+        const provenance = readRouteProvenance(path);
+        assert.equal(provenance.model, actualModel);
+        assert.equal(provenance.thinkingEffort, 'high');
+      }
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('normalizes wire camelCase and snake_case evidence and rejects conflicts', () => {
+  for (const variant of kimiRequestFieldVariants) {
+    const request = {
+      type: 'llm.request',
+      provider: 'openai',
+      model: actualModel,
+      ...variant.fields,
+    };
+    if (variant.conflict) {
+      assert.throws(
+        () => parseKimiWireEvidence(JSON.stringify(request)),
+        /conflicting/i,
+      );
+    } else {
+      assert.deepEqual(parseKimiWireEvidence(JSON.stringify(request)), {
+        requestCount: 1,
+        provider: 'openai',
+        model: actualModel,
+        modelAlias: requestedModelAlias,
+        thinkingEffort: 'high',
+      });
+    }
   }
 });
 
