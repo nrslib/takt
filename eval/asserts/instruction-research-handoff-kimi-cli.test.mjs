@@ -4,7 +4,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { parseKimiAssistantOutput } from '../scripts/development-loop-eval.mjs';
+import {
+  KimiAssistantOutputError,
+  parseKimiAssistantOutput,
+} from '../scripts/development-loop-eval.mjs';
 import {
   actualModel,
   evaluationExitCode,
@@ -16,9 +19,11 @@ import {
   parseKimiStdoutEvidence,
   parseKimiWireEvidence,
   providerId,
+  readRouteProvenance,
   requestedModelAlias,
   rowsForPhase,
   validatePairedSources,
+  validateRescoreSourceManifestSha,
   validateSavedKimiOutput,
   validateKimiProvenance,
 } from '../scripts/instruction-research-handoff-kimi-cli.mjs';
@@ -107,10 +112,64 @@ test('parses Kimi stream output without mixing tool events into the answer', () 
   ].map(event => JSON.stringify(event)).join('\n');
 
   assert.equal(parseKimiAssistantOutput(stream), 'final answer');
+  const chunkedAnswer = [
+    { role: 'assistant', content: 'first' },
+    { role: 'assistant', content: ' ' },
+    { role: 'assistant', content: 'answer' },
+  ].map(event => JSON.stringify(event)).join('\n');
+  assert.equal(parseKimiAssistantOutput(chunkedAnswer), 'first answer');
   assert.deepEqual(parseKimiStdoutEvidence(stream), {
     cliVersion: kimiCliVersion,
     sessionId: 'session-test',
   });
+});
+
+test('distinguishes a completed Kimi stream without assistant text from protocol errors', () => {
+  const noAnswer = [
+    { role: 'meta', type: 'system.version', version: kimiCliVersion },
+    { role: 'assistant', tool_calls: [] },
+    { role: 'tool', content: 'tool result' },
+    { role: 'assistant', content: '   \n' },
+    { role: 'meta', type: 'session.resume_hint', session_id: 'session-test' },
+  ].map(event => JSON.stringify(event)).join('\n');
+
+  assert.throws(
+    () => parseKimiAssistantOutput(noAnswer),
+    error => error instanceof KimiAssistantOutputError && error.code === 'no_assistant_text',
+  );
+  assert.throws(
+    () => parseKimiAssistantOutput(JSON.stringify({ role: 'user', content: 'unexpected' })),
+    error => !(error instanceof KimiAssistantOutputError),
+  );
+  assert.throws(
+    () => parseKimiAssistantOutput('{malformed-json'),
+    error => !(error instanceof KimiAssistantOutputError),
+  );
+});
+
+test('accepts camelCase and snake_case route effort evidence and returns normalized effort', () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-kimi-route-contract-'));
+  try {
+    for (const [index, effortKey] of ['thinkingEffort', 'thinking_effort'].entries()) {
+      const path = join(root, `${index}.json`);
+      writeFileSync(path, JSON.stringify({
+        cliVersion: kimiCliVersion,
+        requestedAlias: requestedModelAlias,
+        healthCheck: { exitCode: 0 },
+        managedEndpoint: 'managed Kimi Code endpoint',
+        safeConfig: { endpoint: 'managed:kimi-code' },
+        wireModelEvents: [{
+          type: 'llm.request',
+          model: actualModel,
+          modelAlias: requestedModelAlias,
+          [effortKey]: 'high',
+        }],
+      }));
+      assert.equal(readRouteProvenance(path).thinkingEffort, 'high');
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('parses candidate-only without changing the run positional arguments', () => {
@@ -311,6 +370,40 @@ test('requires rows for a skipped provider to stay infrastructure failures', () 
   }
 });
 
+test('retains source provider status counts while allowing active partial failures', () => {
+  const { cases, casesHash } = readCases(casesPath);
+  const fixture = fixtureSnapshot();
+  const samples = buildSamples(
+    cases,
+    casesHash,
+    fixture,
+    fixtureWorkspaceEvidence(),
+    fixtureVerificationEvidence(),
+  );
+  const root = mkdtempSync(join(tmpdir(), 'takt-kimi-source-status-contract-'));
+  try {
+    writeSyntheticSource(root, 'candidate', samples, fixture, casesHash, {}, ['kimi-k3']);
+    const rowPath = join(root, 'rows', 'claude-opus-5--summary-limited-approval.json');
+    const row = JSON.parse(readFileSync(rowPath, 'utf8'));
+    row.status = 'infrastructure_failure';
+    row.pass = false;
+    row.rawResponse = '';
+    writeFileSync(rowPath, JSON.stringify(row));
+
+    const source = loadFrozenPhase(root, 'candidate', casesPath);
+    const claude = source.statusSummary.find(status => status.provider === 'claude-opus-5');
+    const kimi = source.statusSummary.find(status => status.provider === 'kimi-k3');
+    assert.equal(claude.selection, 'executed');
+    assert.equal(claude.statusCounts.infrastructure_failure, 1);
+    assert.equal(claude.statusCounts.pass, 9);
+    assert.equal(kimi.selection, 'skipped');
+    assert.equal(kimi.statusCounts.infrastructure_failure, 10);
+    assert.equal(kimi.statusCounts.pass, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('rejects paired sources with different baseline lineage or execution metadata', () => {
   const { cases, casesHash } = readCases(casesPath);
   const fixture = fixtureSnapshot();
@@ -420,7 +513,38 @@ test('validates candidate-only phase shape and hashes at the rescore boundary', 
   }
 });
 
+test('rejects a rescore source whose manifest bytes differ from the recorded SHA', () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-kimi-source-manifest-sha-contract-'));
+  const sourceDirectory = join(root, 'candidate-source');
+  mkdirSync(sourceDirectory);
+  try {
+    const original = '{"source":"candidate"}\n';
+    writeFileSync(join(sourceDirectory, 'manifest.json'), original);
+    const outputManifest = {
+      sources: {
+        candidate: { manifestSha256: hash(original) },
+      },
+    };
+    assert.equal(
+      validateRescoreSourceManifestSha(outputManifest, 'candidate', sourceDirectory),
+      hash(original),
+    );
+    writeFileSync(join(sourceDirectory, 'manifest.json'), '{"source":"replacement"}\n');
+    assert.throws(
+      () => validateRescoreSourceManifestSha(outputManifest, 'candidate', sourceDirectory),
+      /manifest SHA-256 differs/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('keeps provider failures separate from model assertion failures', () => {
+  const emptyModelFailure = classifyResult({
+    response: { output: '' },
+    gradingResult: { componentResults: [{ score: 0, reason: 'no assistant answer' }] },
+    success: false,
+  });
   const modelFailure = classifyResult({
     response: { output: 'answer' },
     gradingResult: { componentResults: [{ score: 0, reason: 'rubric mismatch' }] },
@@ -432,6 +556,7 @@ test('keeps provider failures separate from model assertion failures', () => {
     success: false,
   });
 
+  assert.equal(emptyModelFailure.status, 'model_failure');
   assert.equal(modelFailure.status, 'model_failure');
   assert.equal(infrastructureFailure.status, 'infrastructure_failure');
   assert.equal(evaluationExitCode([{ revision: 'baseline', status: 'model_failure' }]), 0);

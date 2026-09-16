@@ -15,6 +15,14 @@ export const providers = [
   { cli: 'kimi', model: 'kimi-code/k3' },
 ];
 
+export class KimiAssistantOutputError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'KimiAssistantOutputError';
+    this.code = code;
+  }
+}
+
 export function parseKimiAssistantOutput(jsonl) {
   const messages = [];
   for (const line of jsonl.split(/\r?\n/).filter(line => line.trim())) {
@@ -26,8 +34,11 @@ export function parseKimiAssistantOutput(jsonl) {
     }
     messages.push(event.content);
   }
-  if (messages.length === 0) throw new Error('Kimi returned no assistant text');
-  return messages.join('');
+  const answer = messages.join('');
+  if (answer.trim() === '') {
+    throw new KimiAssistantOutputError('no_assistant_text', 'Kimi returned no assistant text');
+  }
+  return answer;
 }
 
 function digest(value) {

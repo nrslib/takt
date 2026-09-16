@@ -34,9 +34,9 @@ plan・report・judgeは、技術調査、後段の外部検証、ユーザー�
 
 ## 追加prompt修正とKimi CLI補足
 
-初回Kimi CLI補足は、保存済みbaseline/candidate promptとrubricでbaseline 10件・candidate 10件の回答を実走保存し（`.tmp/instruction-research-handoff-kimi-cli-initial`）、そのrawを再採点したものです。採点時に回答は再生成していません。初回runのsession list回収はcwd表記差でinfraになったため、stdoutのsession IDと実体のstate/wireをrootが照合し、rawを変更せずprovenanceだけを `.tmp/instruction-research-handoff-kimi-cli-recovered-source` へ補完しました。`.tmp/instruction-research-handoff-kimi-cli-scored` では、baselineが9/10、candidateが9/10、infra failureは0件でした。baselineのREDは `summary-limited-approval`、candidateのREDは `summary-unconfirmed-method` です。candidateの回答は、assistantだけが提案した「採用しない方式」を必須制約へ昇格し、ユーザーの異議がないことを了承根拠として扱いました。これは候補の採用だけでなく禁止・除外もユーザー明示なしには確定しないこと、沈黙・異議なし・話題移動を了承根拠にしないこと、観察したAPIやテストを根拠なく変更禁止へ変換しないこと、委譲された調査や方式選択に新たな承認gateを足さないことを追加promptで明示する契機になりました。
+初回Kimi CLI補足は、保存済みbaseline/candidate promptとrubricでbaseline 10件・candidate 10件の初回実走回答20件を保存し（`.tmp/instruction-research-handoff-kimi-cli-initial`）、その保存rawを再採点したものです。採点時に回答は再生成していません。初回runのsession list回収はcwd表記差でinfraになったため、stdoutのsession IDと実体のstate/wireをrootが照合し、rawを変更せずprovenanceだけを `.tmp/instruction-research-handoff-kimi-cli-recovered-source` へ補完しました。`.tmp/instruction-research-handoff-kimi-cli-scored` では、baselineが9/10、candidateが9/10、infra failureは0件でした。baselineのREDは `summary-limited-approval`、candidateのREDは `summary-unconfirmed-method` です。candidateの回答は、assistantだけが提案した「採用しない方式」を必須制約へ昇格し、ユーザーの異議がないことを了承根拠として扱いました。これは候補の採用だけでなく禁止・除外もユーザー明示なしには確定しないこと、沈黙・異議なし・話題移動を了承根拠にしないこと、観察したAPIやテストを根拠なく変更禁止へ変換しないこと、委譲された調査や方式選択に新たな承認gateを足さないことを追加promptで明示する契機になりました。
 
-追加prompt修正後の3モデルcandidate評価は `.tmp/instruction-research-handoff-candidate-silence-v2` に保存され、Claude Opus、Codex Sol、Codex Lunaの各10/10（合計30/30）がpass、infra failureは0件でした。Kimi CLIの同条件candidate-only評価は `.tmp/instruction-research-handoff-kimi-cli-candidate-silence-v2` に保存され、10/10、infra failure 0件、unexecuted 0件、exit 0でした。これはcandidate 10件だけを実行したartifactであり、初回20行artifactの結果を追加prompt修正後のbaselineへ代用していません。元のsource artifact、初回Kimi CLI artifact、保存済みrawとrowsは不変です。
+追加prompt修正後の3モデルcandidate評価は `.tmp/instruction-research-handoff-candidate-silence-v2` に保存され、Claude Opus、Codex Sol、Codex Lunaの各10/10（合計30/30）がpass、infra failureは0件でした。Kimi CLIの同条件candidate-only評価は `.tmp/instruction-research-handoff-kimi-cli-candidate-silence-v2` に保存され、10/10、infra failure 0件、unexecuted 0件、exit 0でした。これはcandidate 10件だけを実行したartifactであり、初回20行artifactの結果を追加prompt修正後の最終candidateへ代用していません。元のsource artifact、初回Kimi CLI artifact、保存済みrawとrowsは不変です。
 
 追加prompt修正前後の4モデル結果は次の通りです。Opus/Sol/LunaのBeforeは元matrixのbaseline、Afterはcandidateです。Kimi CLIのBeforeは初回CLI補足のbaseline、Afterは追加prompt修正後のcandidate-onlyです。
 
@@ -47,7 +47,7 @@ plan・report・judgeは、技術調査、後段の外部検証、ユーザー�
 | `gpt-5.6-luna/max` | 5/5 | 5/5 | 10/10 | 10/10 | 5/5 → 5/5 |
 | `KimiCodeCLI K3/high補足` (`kimi-code/k3`) | 4/5 | 5/5 | 9/10 | 10/10 | 5/5 → 5/5 |
 
-Kimi CLIの実行証跡は、各10行のprovenanceでCLI `0.43.1`、要求alias `kimi-code/k3`、wire上の実model `k3`、全 `llm.request` の `thinkingEffort: high`、stdoutのsession IDとsession listの実ID一致、`completed`、raw/state/wireのSHA-256を確認しています。全ケースで `agentsMdPaths=[]` かつsubagentなしでした。managed endpointは指定したprivate route probeの証跡で確認し、未指定時はunknownとして記録します。元matrixのOpenCode Kimiは残高不足のままinfraとして保持し、CLI経路で置換していません。
+Kimi CLIの実行証跡は、各10行のprovenanceでCLI `0.43.1`、要求alias `kimi-code/k3`、wire上の実model `k3`、全 `llm.request` の `thinkingEffort: high`、stdoutのsession IDとsession listの実ID一致、`completed`、raw/state/wireのSHA-256を確認しています。`agentsMdPaths=[]` かつsubagentなしという点はrunnerの自動保証ではなく、評価担当が実sessionのprofile.bind・agents directory・raw/wire/state SHAを直接監査した結果です。この直接監査のprivate記録は `.tmp/instruction-research-handoff-kimi-cli-candidate-silence-v2-audit.json`（SHA-256 `d7fb0cc147a7320c6c4a8eab42f4adedb03692ba7cd3a5db2ee7652d753d20bf`）です。managed endpointは指定したprivate route probeの証跡で確認し、未指定時はunknownとして記録します。元matrixのOpenCode Kimiは残高不足のままinfraとして保持し、CLI経路で置換していません。
 
 ## 再現
 
@@ -73,16 +73,24 @@ node eval/scripts/instruction-research-handoff-eval.mjs rescore \
 
 rescoreはcasesHash、fixture各ファイルのSHA-256、inputHash、保存promptHashを検証し、差分があれば停止します。manifestのcanonical JSONに対するSHA-256を `manifestHash` とし、再採点元manifestのファイルbytesに対するSHA-256を `rescoredFromManifestFileSha256` として記録します。candidate由来の再採点は `sourceRevision: candidate`、`revision: candidate-rescored` として保存し、baseline由来と混同しないようにしています。
 
-最終比較に使ったローカルartifactは次の通りです。
+元matrixの再採点に使ったローカルartifactは次の通りです。
 
 ```text
 .tmp/instruction-research-handoff-baseline-rescored-final-v2
 .tmp/instruction-research-handoff-candidate-rescored-final
 ```
 
-両方ともケース数40行、fixture aggregate hash
+追加prompt修正後の4モデル比較には、次のcandidate artifactも使いました。
+
+```text
+.tmp/instruction-research-handoff-candidate-silence-v2
+.tmp/instruction-research-handoff-kimi-cli-candidate-silence-v2
+```
+
+元matrixの上記2 artifactはそれぞれ40行、fixture aggregate hash
 `783fcbbe39db33d835708460cb9bc784db55eba7a1d400ad951057309cc82b84`、同じ casesHash
 `05c2632c4d096837a897f9f7569b6865cf390f290151a980fef729c37bbe0e45` を保持しています。summaryのrubricHash配列と全inputHashは一致し、summary prompt 5件だけpromptHashが異なります。raw response、judge理由、promptfooの全evaluation resultも各artifactに保存しています。
+追加prompt修正後の3モデル実行対象は30行で、旧Kimiのskip記録10行を含むartifact全体は40行です。Kimi CLI candidate-only artifactの実行対象は10行です。
 
 ## 判定方法と限界
 
@@ -93,4 +101,4 @@ rescoreはcasesHash、fixture各ファイルのSHA-256、inputHash、保存promp
 - 元のmatrixのKimi K3（OpenCode）は残高不足によるinfra行です。別経路のKimi Code CLI補足は初回20回答を保存してrawを再採点し、追加prompt修正後はcandidate-only 10/10を保存済みです。
 - リポジトリのOpenCode probeは10/11でした。唯一のprompt-capture timeoutは変更前のclean baseでも再現したため、今回のprompt/eval差分による失敗とは扱っていません。
 
-通常ゲートの記録は、build、lint、root実行のunit 6203/6203、E2E smoke 19 pass・1 skipです。light ITは最新runと変更前a9c9fを同じworkers 2条件で比較し、いずれも2605/2605 tests、exit 0、Vitest RPC `onTaskUpdate Timeout` のUnhandled Error 1件でした。変更前にも再現した基盤現象として扱い、CIのstrict gateで確認します。f3時点のlight ITはclean pass済みです。対象34件として実行したコマンドは `node --test eval/asserts/instruction-research-handoff-kimi-cli.test.mjs eval/asserts/development-loop-eval.test.mjs` で、最終修正後は追加3契約を含む37/37 pass、fixture testsは3/3 passでした。
+通常ゲートの記録は、build、lint、root実行のunit 6203/6203、E2E smoke 19 pass・1 skipです。light ITは最新runと変更前a9c9fを同じworkers 2条件で比較し、いずれも2605/2605 tests、exit 0、Vitest RPC `onTaskUpdate Timeout` のUnhandled Error 1件でした。変更前にも再現した基盤現象として扱い、CIのstrict gateで確認します。f3時点のlight ITはclean pass済みです。対象34件として記録したコマンドは `node --test eval/asserts/instruction-research-handoff-kimi-cli.test.mjs eval/asserts/development-loop-eval.test.mjs` で、今回の最終修正後に同コマンドを再実行して追加4契約を含む41/41 pass、fixture testsは3/3 passでした。

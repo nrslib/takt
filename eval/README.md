@@ -228,6 +228,11 @@ node eval/scripts/instruction-research-handoff-kimi-cli.mjs rescore \
   --route-provenance "$TAKT_KIMI_ROUTE_PROVENANCE"
 ```
 
+The output manifest and summary also retain source status counts for every
+original provider and phase, including skipped and incomplete rows. A passing
+Kimi supplement describes the Kimi rows only; it does not mean that the
+four-provider matrix is complete.
+
 The `fix-plan-cause-check` suite uses the same three providers and one-at-a-time
 execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with

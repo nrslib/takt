@@ -22,7 +22,7 @@ import {
   validateSavedPromptHashes,
   validateSavedRowHashes,
 } from './instruction-research-handoff-eval.mjs';
-import { parseKimiAssistantOutput } from './development-loop-eval.mjs';
+import { KimiAssistantOutputError, parseKimiAssistantOutput } from './development-loop-eval.mjs';
 import { createIsolatedWorkingDirectory, runProcess } from '../providers/cli-review.mjs';
 
 process.env.PROMPTFOO_DISABLE_TELEMETRY = 'true';
@@ -73,6 +73,10 @@ function requireString(value, description) {
   return value;
 }
 
+function isNoAssistantTextError(error) {
+  return error instanceof KimiAssistantOutputError && error.code === 'no_assistant_text';
+}
+
 function sourceRows(directory) {
   const rowsDirectory = join(directory, 'rows');
   if (!existsSync(rowsDirectory)) throw new Error('Saved source rows directory is missing: ' + rowsDirectory);
@@ -92,6 +96,12 @@ const sourceProviderIds = Object.freeze(sourceProviderDefinitions.map(provider =
 const sourceProviderDefinitionById = new Map(
   sourceProviderDefinitions.map(provider => [provider.id, provider]),
 );
+const sourceRowStatuses = Object.freeze([
+  'pass',
+  'model_failure',
+  'infrastructure_failure',
+  'unexecuted',
+]);
 
 function sourceSampleMap(manifest) {
   if (!Array.isArray(manifest.samples) || manifest.samples.length !== 10) {
@@ -186,6 +196,11 @@ export function validateSourceRows(manifest, rows, phase = expectedSourceRevisio
       || row.rubricHash !== sample.rubricHash) {
       throw new Error('Saved source row metadata or hash differs from its manifest for ' + key);
     }
+    if (!sourceRowStatuses.includes(row.status)
+      || typeof row.pass !== 'boolean'
+      || row.pass !== (row.status === 'pass')) {
+      throw new Error('Saved source row has an invalid status for ' + key);
+    }
     if (providerSelection.skipped.has(row.provider)
       && (row.status !== 'infrastructure_failure' || row.pass !== false || row.rawResponse !== '')) {
       throw new Error('Saved source skipped provider row must be infrastructure_failure for ' + key);
@@ -199,6 +214,25 @@ export function validateSourceRows(manifest, rows, phase = expectedSourceRevisio
   }
   validateSavedRowHashes(manifest, rows);
   return rows;
+}
+
+function sourceStatusSummary(manifest, rows, phase) {
+  const skippedProviderIds = new Set(manifest.providerSelection.skipped.map(provider => provider.id));
+  return sourceProviderDefinitions.map(provider => {
+    const selected = rows.filter(row => row.provider === provider.id);
+    return {
+      phase,
+      provider: provider.id,
+      model: provider.model,
+      effort: provider.effort,
+      selection: skippedProviderIds.has(provider.id) ? 'skipped' : 'executed',
+      rows: selected.length,
+      statusCounts: Object.fromEntries(sourceRowStatuses.map(status => [
+        status,
+        selected.filter(row => row.status === status).length,
+      ])),
+    };
+  });
 }
 
 function readSavedPromptAndRubric(directory, manifest, currentSamples) {
@@ -274,7 +308,8 @@ function validateSavedSource(directory, phase, context) {
   assertRescoreFixtureMatches(manifest, context.fixture);
 
   const frozenSamples = readSavedPromptAndRubric(directory, manifest, context.samples);
-  validateSourceRows(manifest, sourceRows(directory), phase);
+  const rows = sourceRows(directory);
+  validateSourceRows(manifest, rows, phase);
   return {
     phase,
     directory: resolve(directory),
@@ -282,6 +317,7 @@ function validateSavedSource(directory, phase, context) {
     manifestText,
     manifestSha256: digest(manifestText),
     samples: frozenSamples,
+    statusSummary: sourceStatusSummary(manifest, rows, phase),
   };
 }
 
@@ -419,7 +455,7 @@ export function validateKimiProvenance(provenance) {
   return provenance;
 }
 
-function readRouteProvenance(path) {
+export function readRouteProvenance(path) {
   if (!existsSync(path)) throw new Error('Kimi route provenance is missing: ' + path);
   const text = readFileSync(path, 'utf8');
   const probe = JSON.parse(text);
@@ -445,7 +481,7 @@ function readRouteProvenance(path) {
     cliVersion: probe.cliVersion,
     requestedAlias: probe.requestedAlias,
     model: request.model,
-    thinkingEffort: request.thinkingEffort,
+    thinkingEffort: request.thinkingEffort ?? request.thinking_effort,
     endpointType: 'managed',
     healthCheck: 'passed',
   };
@@ -534,6 +570,16 @@ async function callKimiCli({ phase, sample, outputDirectory, provenanceEntries, 
     return { output };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (validatedProvenance !== undefined && isNoAssistantTextError(error)) {
+      provenanceEntries.push({
+        ...validatedProvenance,
+        phase,
+        caseId: sample.id,
+        status: 'model_failure',
+        error: 'Kimi completed with no assistant answer',
+      });
+      return { output: '' };
+    }
     if (!existsSync(errorPath)) writePrivateNew(errorPath, message);
     provenanceEntries.push({
       ...(validatedProvenance ?? {}),
@@ -715,7 +761,9 @@ function outputManifest(sources, context, routeProvenance, phases = phaseNames) 
       revision: source.manifest.revision,
       sourceRevision: source.manifest.sourceRevision,
       manifestSha256: source.manifestSha256,
+      statusSummary: source.statusSummary,
     }])),
+    sourceStatus: sources.flatMap(source => source.statusSummary),
     samples,
     rawLayout: 'raw/<phase>/<caseId>.stdout (mode 600)',
     provenanceArtifact: 'provenance.json',
@@ -871,6 +919,7 @@ export async function runKimiCliComparison({
     rows: rows.length,
     phases,
     summary: summarize(rows, phases),
+    sourceStatus: sources.flatMap(source => source.statusSummary),
     phaseFailures,
     infrastructureFailures: rows.filter(row => row.status === 'infrastructure_failure').length,
     unexecuted: rows.filter(row => row.status === 'unexecuted').length,
@@ -886,6 +935,22 @@ function savedOutputSource(outputManifestValue, phase) {
   const source = outputManifestValue.sources?.[phase];
   if (source?.directory === undefined) throw new Error('Output manifest is missing source directory for ' + phase);
   return source.directory;
+}
+
+export function validateRescoreSourceManifestSha(outputManifestValue, phase, sourceDirectory) {
+  const expectedSha256 = outputManifestValue.sources?.[phase]?.manifestSha256;
+  if (typeof expectedSha256 !== 'string' || expectedSha256.length === 0) {
+    throw new Error('Output manifest is missing source manifest SHA-256 for ' + phase);
+  }
+  const sourceManifestPath = join(resolve(sourceDirectory), 'manifest.json');
+  if (!existsSync(sourceManifestPath)) {
+    throw new Error('Rescore source manifest is missing: ' + sourceManifestPath);
+  }
+  const actualSha256 = digest(readFileSync(sourceManifestPath));
+  if (actualSha256 !== expectedSha256) {
+    throw new Error('Rescore source manifest SHA-256 differs for ' + phase);
+  }
+  return actualSha256;
 }
 
 export function validateSavedKimiOutput(outputDirectory, manifest) {
@@ -937,6 +1002,20 @@ function normalizeRecoveredProvenance(entry) {
   return entry;
 }
 
+function readSavedRaw(outputDirectory, entry, row, key) {
+  const expectedRawPath = `raw/${row.revision}/${row.caseId}.stdout`;
+  if (entry.rawStdoutPath !== expectedRawPath) {
+    throw new Error('Saved Kimi provenance points to an unexpected raw output for ' + key);
+  }
+  const rawPath = join(outputDirectory, entry.rawStdoutPath);
+  if (!existsSync(rawPath)) throw new Error('Saved Kimi raw output is missing: ' + rawPath);
+  const raw = readFileSync(rawPath, 'utf8');
+  if (digest(raw) !== entry.rawStdoutSha256) {
+    throw new Error('Saved Kimi raw output hash differs from provenance for ' + key);
+  }
+  return raw;
+}
+
 function savedAnswers(outputDirectory, manifest, rows) {
   const provenancePath = join(outputDirectory, 'provenance.json');
   if (!existsSync(provenancePath)) throw new Error('Saved Kimi provenance is missing: ' + provenancePath);
@@ -952,6 +1031,7 @@ function savedAnswers(outputDirectory, manifest, rows) {
   }
   const answers = new Map();
   const errors = new Map();
+  const modelFailures = new Map();
   for (const row of rows) {
     const key = `${row.revision}/${row.caseId}`;
     const entry = entries.get(key);
@@ -966,23 +1046,23 @@ function savedAnswers(outputDirectory, manifest, rows) {
     const validatedEntry = normalizeRecoveredProvenance(entry);
     validateKimiProvenance(validatedEntry);
     entries.set(key, validatedEntry);
-    const expectedRawPath = `raw/${row.revision}/${row.caseId}.stdout`;
-    if (entry.rawStdoutPath !== expectedRawPath) {
-      throw new Error('Saved Kimi provenance points to an unexpected raw output for ' + key);
-    }
-    const rawPath = join(outputDirectory, entry.rawStdoutPath);
-    if (!existsSync(rawPath)) throw new Error('Saved Kimi raw output is missing: ' + rawPath);
-    const raw = readFileSync(rawPath, 'utf8');
-    if (digest(raw) !== entry.rawStdoutSha256) {
-      throw new Error('Saved Kimi raw output hash differs from provenance for ' + key);
-    }
+    const raw = readSavedRaw(outputDirectory, validatedEntry, row, key);
     try {
-      answers.set(key, parseKimiAssistantOutput(raw));
-    } catch (_error) {
-      errors.set(key, 'Saved Kimi raw output could not be parsed as an assistant answer');
+      const answer = parseKimiAssistantOutput(raw);
+      if (entry.status === 'model_failure') {
+        errors.set(key, 'Saved Kimi provenance marked model_failure but raw contains an assistant answer');
+      } else {
+        answers.set(key, answer);
+      }
+    } catch (error) {
+      if (isNoAssistantTextError(error)) {
+        modelFailures.set(key, entry.error ?? 'Kimi completed with no assistant answer');
+      } else {
+        errors.set(key, 'Saved Kimi raw output could not be parsed as an assistant answer');
+      }
     }
   }
-  return { answers, errors, entries };
+  return { answers, errors, modelFailures, entries };
 }
 
 function copySavedRawStreams(sourceDirectory, outputDirectory, phases) {
@@ -1059,6 +1139,7 @@ export async function rescoreKimiCliOutput(sourceDirectory, outputDirectory, cas
   const {
     answers: savedAnswersByKey,
     errors: savedAnswerErrors,
+    modelFailures: savedAnswerModelFailures,
     entries: savedProvenanceEntries,
   } = savedAnswers(
     sourceOutput,
@@ -1067,11 +1148,11 @@ export async function rescoreKimiCliOutput(sourceDirectory, outputDirectory, cas
   );
   const context = validationContext(resolvedCasesPath);
   const routeProvenance = resolveRouteProvenance(routeProvenancePath);
-  const sources = phases.map(phase => validateSavedSource(
-    savedOutputSource(sourceManifest, phase),
-    phase,
-    context,
-  ));
+  const sources = phases.map(phase => {
+    const sourceDirectory = savedOutputSource(sourceManifest, phase);
+    validateRescoreSourceManifestSha(sourceManifest, phase, sourceDirectory);
+    return validateSavedSource(sourceDirectory, phase, context);
+  });
   assertNewOutputDirectory(resolve(outputDirectory));
   const output = resolve(outputDirectory);
   const manifest = outputManifest(sources, context, routeProvenance, phases);
@@ -1093,6 +1174,8 @@ export async function rescoreKimiCliOutput(sourceDirectory, outputDirectory, cas
         const key = `${source.phase}/${String(requestContext.vars?.caseId ?? '')}`;
         const error = savedAnswerErrors.get(key);
         if (error !== undefined) return { error };
+        const modelFailure = savedAnswerModelFailures.get(key);
+        if (modelFailure !== undefined) return { output: '' };
         const output = savedAnswersByKey.get(key);
         if (output === undefined) return { error: 'Saved Kimi answer is missing for ' + key };
         return { output };
@@ -1111,7 +1194,11 @@ export async function rescoreKimiCliOutput(sourceDirectory, outputDirectory, cas
         ...(sourceEntry ?? {}),
         phase: source.phase,
         caseId: sample.id,
-        status: savedAnswerErrors.has(key) ? 'infrastructure_failure' : 'reused_saved_answer',
+        status: savedAnswerErrors.has(key)
+          ? 'infrastructure_failure'
+          : savedAnswerModelFailures.has(key)
+            ? 'model_failure'
+            : 'reused_saved_answer',
         ...sourceReference,
         ...copiedReference,
       };
@@ -1138,6 +1225,7 @@ export async function rescoreKimiCliOutput(sourceDirectory, outputDirectory, cas
     rows: rows.length,
     phases,
     summary: summarize(rows, phases),
+    sourceStatus: sources.flatMap(source => source.statusSummary),
   };
   summary.exitCode = evaluationExitCode(rows);
   writeNewJson(join(output, 'scored-results.json'), rows);
