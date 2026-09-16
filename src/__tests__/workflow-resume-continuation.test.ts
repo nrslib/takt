@@ -104,6 +104,8 @@ describe('WorkflowResumeContinuation', () => {
       steps: [{
         name: 'remediation',
         kind: 'workflow_call',
+        personaDisplayName: 'Remediation workflow',
+        instruction: 'Call the remediation workflow',
         call: 'experimental-remediation',
         rules: [],
       }],
@@ -119,6 +121,9 @@ describe('WorkflowResumeContinuation', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
     const childWorkflow = {
@@ -160,7 +165,14 @@ describe('WorkflowResumeContinuation', () => {
       name: 'parent',
       initialStep: 'delegate',
       maxSteps: 10,
-      steps: [{ name: 'delegate', kind: 'workflow_call', call: 'child', rules: [] }],
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        personaDisplayName: 'Child workflow',
+        instruction: 'Call the child workflow',
+        call: 'child',
+        rules: [],
+      }],
     } as WorkflowConfig;
     const parallelFrame = buildWorkflowResumePointEntry(workflow, 'reviewers', 'parallel', 4);
     const top = invocationRecord(workflow, 'delegate', child, [], 5);
@@ -242,7 +254,14 @@ describe('WorkflowResumeContinuation', () => {
       name: 'takt-experimental-core',
       initialStep: 'review',
       maxSteps: 10,
-      steps: [{ name: 'review', kind: 'workflow_call', call: child.name, rules: [] }],
+      steps: [{
+        name: 'review',
+        kind: 'workflow_call',
+        personaDisplayName: 'Child workflow',
+        instruction: 'Call the child workflow',
+        call: child.name,
+        rules: [],
+      }],
     } as WorkflowConfig;
     const siteAFrame = buildWorkflowResumePointEntry(workflow, 'initial-reviewers', 'parallel', 1);
     const siteBFrame = buildWorkflowResumePointEntry(workflow, 'reviewers', 'parallel', 1);
@@ -261,6 +280,9 @@ describe('WorkflowResumeContinuation', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -298,7 +320,14 @@ describe('WorkflowResumeContinuation', () => {
       name: 'takt-experimental-core',
       initialStep: 'review',
       maxSteps: 10,
-      steps: [{ name: 'review', kind: 'workflow_call', call: child.name, rules: [] }],
+      steps: [{
+        name: 'review',
+        kind: 'workflow_call',
+        personaDisplayName: 'Child workflow',
+        instruction: 'Call the child workflow',
+        call: child.name,
+        rules: [],
+      }],
     } as WorkflowConfig;
     const siteAFrame = buildWorkflowResumePointEntry(workflow, 'initial-reviewers', 'parallel', 1);
     const siteBFrame = buildWorkflowResumePointEntry(workflow, 'reviewers', 'parallel', 1);
@@ -315,6 +344,9 @@ describe('WorkflowResumeContinuation', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
     const index = new ResumeArtifactOccurrenceIndex(
@@ -349,7 +381,14 @@ describe('WorkflowResumeContinuation', () => {
       name: 'parent',
       initialStep: 'delegate',
       maxSteps: 10,
-      steps: [{ name: 'delegate', kind: 'workflow_call', call: 'child', rules: [] }],
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        personaDisplayName: 'Child workflow',
+        instruction: 'Call the child workflow',
+        call: 'child',
+        rules: [],
+      }],
     } as WorkflowConfig;
     const state = {
       workflowName: workflow.name,
@@ -362,6 +401,9 @@ describe('WorkflowResumeContinuation', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     } as WorkflowState;
     const continuation = new WorkflowResumeContinuation(workflow, undefined);
@@ -380,6 +422,8 @@ describe('WorkflowResumeContinuation', () => {
       steps: [{
         name: 'outer-call',
         kind: 'workflow_call',
+        personaDisplayName: 'Child workflow',
+        instruction: 'Call the child workflow',
         call: 'child',
         rules: [],
       }],
@@ -392,6 +436,8 @@ describe('WorkflowResumeContinuation', () => {
       steps: [{
         name: 'nested-call',
         kind: 'workflow_call',
+        personaDisplayName: 'Grandchild workflow',
+        instruction: 'Call the grandchild workflow',
         call: 'grandchild',
         rules: [],
       }],
@@ -411,10 +457,12 @@ describe('WorkflowResumeContinuation', () => {
       new Map([['nested-call', 3]]),
     );
     const source: WorkflowResumePoint = {
-      version: 1,
+      version: 2,
       stack: [parentFrame, nestedFrame],
       iteration: 8,
       elapsed_ms: 100,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const state: WorkflowState = {
       workflowName: childWorkflow.name,
@@ -427,6 +475,9 @@ describe('WorkflowResumeContinuation', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map([['nested-call', 3]]),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
     const step = childWorkflow.steps[0]!;
@@ -465,6 +516,8 @@ describe('WorkflowResumeContinuation', () => {
       steps: [{
         name: 'outer-call',
         kind: 'workflow_call',
+        personaDisplayName: 'Child workflow',
+        instruction: 'Call the child workflow',
         call: 'child',
         rules: [],
       }],
@@ -477,6 +530,8 @@ describe('WorkflowResumeContinuation', () => {
       steps: [{
         name: 'nested-call',
         kind: 'workflow_call',
+        personaDisplayName: 'Grandchild workflow',
+        instruction: 'Call the grandchild workflow',
         call: 'grandchild',
         rules: [],
       }],
@@ -498,10 +553,12 @@ describe('WorkflowResumeContinuation', () => {
       3,
     );
     const source: WorkflowResumePoint = {
-      version: 1,
+      version: 2,
       stack: [parentFrame, nestedFrame],
       iteration: 8,
       elapsed_ms: 100,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const parentState: WorkflowState = {
       workflowName: parentWorkflow.name,
@@ -514,6 +571,9 @@ describe('WorkflowResumeContinuation', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
     const childState: WorkflowState = {
@@ -575,7 +635,7 @@ describe('WorkflowResumeContinuation', () => {
       }],
     } as WorkflowConfig;
     const source: WorkflowResumePoint = {
-      version: 1,
+      version: 2,
       stack: [{
         workflow: 'parent',
         workflow_ref: 'parent',
@@ -586,6 +646,8 @@ describe('WorkflowResumeContinuation', () => {
       }],
       iteration: 8,
       elapsed_ms: 100,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const state: WorkflowState = {
       workflowName: workflow.name,
@@ -598,6 +660,9 @@ describe('WorkflowResumeContinuation', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
     const continuation = new WorkflowResumeContinuation(workflow, source);
@@ -623,6 +688,8 @@ describe('WorkflowResumeContinuation', () => {
         {
           name: 'delegate',
           kind: 'workflow_call',
+          personaDisplayName: 'Child workflow',
+          instruction: 'Call the child workflow',
           call: 'child',
           rules: [],
         },
@@ -631,6 +698,8 @@ describe('WorkflowResumeContinuation', () => {
           parallel: [{
             name: 'delegate',
             kind: 'workflow_call',
+            personaDisplayName: 'Child workflow',
+            instruction: 'Call the child workflow',
             call: 'child',
             rules: [],
           }],
@@ -656,10 +725,12 @@ describe('WorkflowResumeContinuation', () => {
       3,
     );
     const source: WorkflowResumePoint = {
-      version: 1,
+      version: 2,
       stack: [parentFrame, descendantFrame],
       iteration: 9,
       elapsed_ms: 100,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const state: WorkflowState = {
       workflowName: workflow.name,
@@ -676,6 +747,9 @@ describe('WorkflowResumeContinuation', () => {
         ['reviewers', 2],
         [descendantIdentity, 3],
       ]),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
     const continuation = new WorkflowResumeContinuation(workflow, source);
@@ -684,8 +758,12 @@ describe('WorkflowResumeContinuation', () => {
       resumeStackPrefix: [],
       state,
     });
+    const parallelSteps = workflow.steps[1]!.parallel;
+    if (!Array.isArray(parallelSteps)) {
+      throw new Error('Expected static parallel steps');
+    }
     const descendantOccurrence = continuation.claimStepOccurrence({
-      step: workflow.steps[1]!.parallel![0]!,
+      step: parallelSteps[0]!,
       resumeStackPrefix: [parentFrame],
       state,
     });

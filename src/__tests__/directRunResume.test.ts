@@ -98,9 +98,11 @@ vi.mock('../features/tasks/resume/directInstructMode.js', () => ({
 
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getCurrentBranch: (...args: unknown[]) => mockGetCurrentBranch(...args),
-  localBranchExists: (...args: unknown[]) => mockLocalBranchExists(...args),
-  materializePullRequestBase: (...args: unknown[]) => mockMaterializePullRequestBase(...args),
+  getCurrentBranch: (...args: Parameters<typeof mockGetCurrentBranch>) => mockGetCurrentBranch(...args),
+  localBranchExists: (...args: Parameters<typeof mockLocalBranchExists>) => mockLocalBranchExists(...args),
+  materializePullRequestBase: (...args: Parameters<typeof mockMaterializePullRequestBase>) => (
+    mockMaterializePullRequestBase(...args)
+  ),
 }));
 
 import { resumeDirectRun } from '../features/tasks/resume/index.js';
@@ -308,6 +310,8 @@ describe('resumeDirectRun', () => {
         {
           name: 'parent-call',
           kind: 'workflow_call',
+          personaDisplayName: 'Child workflow',
+          instruction: 'Call child workflow',
           call: 'child',
           rules: [],
         },
