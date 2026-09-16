@@ -46,9 +46,21 @@ vi.mock('../shared/utils/spawn.js', async () => {
   };
 });
 
-import { runFormalSpecVerification } from '../features/interactive/formalSpecVerifier.js';
+import {
+  detectJavaMajorVersion,
+  runFormalSpecVerification,
+} from '../features/interactive/formalSpecVerifier.js';
 
 const require = createRequire(import.meta.url);
+
+const java17Available = (() => {
+  const result = spawnSync('java', ['-version'], { encoding: 'utf8' });
+  if (result.status !== 0) {
+    return false;
+  }
+  const version = detectJavaMajorVersion(`${result.stdout}\n${result.stderr}`);
+  return version !== undefined && version >= 17;
+})();
 
 function runQuint(quintCli: string, args: string[], cwd: string) {
   return spawnSync(process.execPath, [quintCli, ...args], {
@@ -349,6 +361,36 @@ describe('bundled Quint CLI verification boundary', () => {
       expect(result.quint.temporal).toEqual(['propEventually']);
       expect(result.quint.verify?.status).toBe('failed');
       expect(result.quint.verify?.message).not.toMatch(/Do you want to proceed/i);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!java17Available)('reports the TLC reason for a non-enumerable temporal model', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-tlc-diagnostic-'));
+    const prime = String.fromCharCode(39);
+    const response = [
+      '```quint',
+      'module verify {',
+      '  var n: int',
+      `  action init = n${prime} = 0`,
+      '  action step = {',
+      '    nondet value = Int.oneOf()',
+      `    n${prime} = value`,
+      '  }',
+      '  temporal propEventually = eventually(n == 0)',
+      '}',
+      '```',
+    ].join('\n');
+
+    try {
+      const result = await runFormalSpecVerification(response, directory);
+
+      expect(result.verdict).toBe('failed');
+      expect(result.quint.verify?.status).toBe('failed');
+      expect(result.quint.verify?.message).toMatch(/non-enumerable/i);
+      expect(result.quint.verify?.message).not.toMatch(/Parsing file|Semantic processing of module|error: TLC error/);
+      expect(result.message).toBe(result.quint.verify?.message);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
