@@ -45,9 +45,6 @@ export function resolvePreviousOrder(previousOrderContent: string | undefined): 
     : previousOrderContent;
 }
 
-/** Grill Me withholds Bash so the assistant interrogates instead of acting. */
-const GRILL_ME_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
-
 const EMPTY_RUN_SESSION_VARS = {
   runTask: '',
   runWorkflow: '',
@@ -59,19 +56,13 @@ const EMPTY_RUN_SESSION_VARS = {
   runLiveIntervention: '',
 };
 
-const INTERACTIVE_INVESTIGATION_POLICIES = {
-  assistant: {
-    currentStateScope: 'current-state-and-prerequisites',
-    implementationInvestigationOwner: 'workflow-execution',
-  },
-  grillMe: {
-    currentStateScope: 'requirements-decisions-only',
-    implementationInvestigationOwner: 'workflow-execution',
-  },
+const INTERACTIVE_INVESTIGATION_POLICY = {
+  currentStateScope: 'current-state-and-prerequisites',
+  implementationInvestigationOwner: 'workflow-execution',
 } as const;
 
 function serializeInvestigationPolicy(
-  policy: (typeof INTERACTIVE_INVESTIGATION_POLICIES)[keyof typeof INTERACTIVE_INVESTIGATION_POLICIES],
+  policy: typeof INTERACTIVE_INVESTIGATION_POLICY,
 ): string {
   const serialized = JSON.stringify(policy);
   if (serialized === undefined) {
@@ -99,16 +90,13 @@ export function buildInteractiveSystemPrompt(
   const runSessionVars = input.runSessionContext
     ? formatRunSessionForPrompt(input.runSessionContext)
     : EMPTY_RUN_SESSION_VARS;
-  const investigationPolicy = input.grillMe
-    ? INTERACTIVE_INVESTIGATION_POLICIES.grillMe
-    : INTERACTIVE_INVESTIGATION_POLICIES.assistant;
   const enableTellCommand = input.enableTellCommand ?? true;
   const tellAvailable = enableTellCommand;
 
   return loadTemplate('score_interactive_system_prompt', lang, {
     grillMe: input.grillMe,
     tellAvailable,
-    investigationPolicy: serializeInvestigationPolicy(investigationPolicy),
+    investigationPolicy: serializeInvestigationPolicy(INTERACTIVE_INVESTIGATION_POLICY),
     formalSpec: input.formalSpec ?? false,
     formalSpecComments: input.formalSpecComments ?? true,
     formalSpecCommentsEnabled: (input.formalSpec ?? false) && (input.formalSpecComments ?? true),
@@ -267,8 +255,7 @@ export function createAssistantConversationPlan(
     ctx,
     strategy: {
       ...initialPromptConfiguration,
-      allowedTools: grillMe ? GRILL_ME_INTERACTIVE_TOOLS : DEFAULT_INTERACTIVE_TOOLS,
-      ...(grillMe ? { permissionMode: 'readonly' as const } : {}),
+      allowedTools: DEFAULT_INTERACTIVE_TOOLS,
       transformPrompt: (message: string, sourceContext?: string) =>
         prependSourceContext(ctx.lang, frameUserComment(ctx.lang, message), sourceContext),
       introMessage: getLabel(

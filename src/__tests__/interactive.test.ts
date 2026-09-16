@@ -302,7 +302,7 @@ describe('interactiveMode', () => {
     }));
   });
 
-  it('should restrict Grill Me provider calls to read-only tools', async () => {
+  it('should allow Grill Me to use the same default tools as assistant', async () => {
     setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
     const { provider } = createMockProvider(['Which roles may approve?']);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
@@ -314,12 +314,12 @@ describe('interactiveMode', () => {
     expect((provider as { _call: ReturnType<typeof vi.fn> })._call).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
-        allowedTools: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+        allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
       }),
     );
   });
 
-  it('should propagate readonly permission mode for Grill Me calls', async () => {
+  it('should leave Grill Me permission resolution to the configured session', async () => {
     setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
     const { provider, capture } = createMockProvider(['Which roles may approve?']);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
@@ -328,7 +328,7 @@ describe('interactiveMode', () => {
       assistantMode: 'grill-me',
     });
 
-    expect(capture.permissionModes).toEqual(['readonly']);
+    expect(capture.permissionModes).toEqual([undefined]);
   });
 
   it('should show the Grill Me intro when selected', async () => {

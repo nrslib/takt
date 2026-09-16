@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentResponse } from '../core/models/index.js';
+import type { AgentResponse, PermissionMode } from '../core/models/index.js';
 import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
 import type { Provider, ProviderAgent, ProviderCallOptions } from '../infra/providers/types.js';
@@ -22,7 +22,7 @@ function createFakeCopilotProvider(
   return { provider, providerCall };
 }
 
-function createGrillMePlan(projectCwd: string, provider: Provider) {
+function createGrillMePlan(projectCwd: string, provider: Provider, permissionMode?: PermissionMode) {
   return createAssistantConversationPlan(projectCwd, {
     assistantMode: 'grill-me',
     formalSpec: false,
@@ -34,6 +34,7 @@ function createGrillMePlan(projectCwd: string, provider: Provider) {
       lang: 'en',
       personaName: 'grill-me-interactive',
       sessionId: undefined,
+      ...(permissionMode === undefined ? {} : { permissionMode }),
     },
   });
 }
@@ -87,9 +88,10 @@ describe('conversation task-state MCP integration', () => {
       return successfulResponse();
     });
     const { provider } = createFakeCopilotProvider(providerCall);
-    const plan = createGrillMePlan(projectCwd, provider);
+    const plan = createGrillMePlan(projectCwd, provider, 'readonly');
 
-    expect(plan.strategy.permissionMode).toBe('readonly');
+    expect(plan.strategy.permissionMode).toBeUndefined();
+    expect(plan.ctx.permissionMode).toBe('readonly');
     expect(plan.ctx.mcpServers).toBe(plan.ctx.taskStateMcpServers);
     expect(plan.ctx.mcpServers?.takt).toMatchObject({
       type: 'stdio',
@@ -105,7 +107,6 @@ describe('conversation task-state MCP integration', () => {
       plan.ctx,
       {
         outputMode: 'silent',
-        permissionMode: plan.strategy.permissionMode,
       },
     );
 
@@ -123,7 +124,7 @@ describe('conversation task-state MCP integration', () => {
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-conversation-task-state-mcp-'));
     const providerCall = vi.fn(async (): Promise<AgentResponse> => successfulResponse());
     const { provider } = createFakeCopilotProvider(providerCall);
-    const plan = createGrillMePlan(projectCwd, provider);
+    const plan = createGrillMePlan(projectCwd, provider, 'readonly');
     const generatedServer = plan.ctx.mcpServers?.takt;
     if (generatedServer === undefined || generatedServer.type !== 'stdio') {
       throw new Error('The grill-me plan did not generate its stdio task-state server');
@@ -144,7 +145,6 @@ describe('conversation task-state MCP integration', () => {
       plan.ctx,
       {
         outputMode: 'silent',
-        permissionMode: plan.strategy.permissionMode,
       },
     );
 

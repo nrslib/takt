@@ -393,14 +393,14 @@ describe('TUI conversation layer', () => {
     expect(outcome).toMatchObject({ kind: 'error', message: 'rate limit reached' });
   });
 
-  it('should carry the Grill Me read-only permission mode into the provider call', async () => {
+  it('should use assistant tools and permission resolution for Grill Me', async () => {
     const chunks: string[] = [];
     const grillMe = createConversation({ plan: createPlan('grill-me') });
 
     await send(grillMe, 'hello', chunks);
 
-    expect(lastCallOptions().permissionMode).toBe('readonly');
-    expect(lastCallAllowedTools()).not.toContain('Bash');
+    expect(lastCallOptions().permissionMode).toBeUndefined();
+    expect(lastCallAllowedTools()).toContain('Bash');
 
     await submit('hello', chunks);
 

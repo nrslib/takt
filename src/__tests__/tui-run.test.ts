@@ -590,7 +590,7 @@ describe('runTui', () => {
       expect(snapshotHistory).toHaveBeenCalledTimes(1);
       const finalPlan = mockCreateTuiConversation.mock.calls[1]?.[0]?.plan;
       expect(finalPlan.ctx.personaName).toBe('grill-me-interactive');
-      expect(finalPlan.strategy.permissionMode).toBe('readonly');
+      expect(finalPlan.strategy.permissionMode).toBeUndefined();
       expect(mockCreateTuiConversation.mock.calls[1]?.[0]?.handoffHistory).toEqual(history);
       expect(finalConversation.submit).toHaveBeenCalledTimes(1);
 

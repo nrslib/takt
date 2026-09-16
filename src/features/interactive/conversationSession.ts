@@ -37,7 +37,7 @@ export interface ConversationSessionStrategy {
   /** Whether formal notation blocks must include natural-language meaning comments. */
   formalSpecComments?: boolean;
   allowedTools: string[];
-  /** Constraint the provider must enforce for this mode (Grill Me is read-only). */
+  /** Optional permission mode resolved for the conversation's provider. */
   permissionMode?: PermissionMode;
   transformPrompt: (message: string, sourceContext?: string) => string;
   summaryPromptContext?: string;

@@ -7,15 +7,9 @@ import {
   buildFormalSpecInterpretationSystemPrompt,
 } from '../features/interactive/formalSpecPrompts.js';
 
-const EXPECTED_INVESTIGATION_POLICIES = {
-  assistant: {
-    currentStateScope: 'current-state-and-prerequisites',
-    implementationInvestigationOwner: 'workflow-execution',
-  },
-  grillMe: {
-    currentStateScope: 'requirements-decisions-only',
-    implementationInvestigationOwner: 'workflow-execution',
-  },
+const EXPECTED_INVESTIGATION_POLICY = {
+  currentStateScope: 'current-state-and-prerequisites',
+  implementationInvestigationOwner: 'workflow-execution',
 } as const;
 
 function renderInteractivePrompt(
@@ -106,10 +100,10 @@ function expectToolFreeVerificationInstruction(prompt: string, lang: 'en' | 'ja'
 
 describe('interactive investigation policy template wiring', () => {
   it.each([
-    ['en', false, EXPECTED_INVESTIGATION_POLICIES.assistant],
-    ['en', true, EXPECTED_INVESTIGATION_POLICIES.grillMe],
-    ['ja', false, EXPECTED_INVESTIGATION_POLICIES.assistant],
-    ['ja', true, EXPECTED_INVESTIGATION_POLICIES.grillMe],
+    ['en', false, EXPECTED_INVESTIGATION_POLICY],
+    ['en', true, EXPECTED_INVESTIGATION_POLICY],
+    ['ja', false, EXPECTED_INVESTIGATION_POLICY],
+    ['ja', true, EXPECTED_INVESTIGATION_POLICY],
   ] as const)(
     'renders the structured policy for %s when grillMe is %s',
     (lang, grillMe, expectedPolicy) => {

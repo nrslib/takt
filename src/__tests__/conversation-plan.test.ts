@@ -39,6 +39,7 @@ import {
   createAssistantConversationPlan,
   createPersonaConversationPlan,
 } from '../features/interactive/conversationPlan.js';
+import { DEFAULT_INTERACTIVE_TOOLS } from '../features/interactive/interactiveApplication.js';
 
 function templateVarsFor(name: string, occurrence = 0): Record<string, unknown> {
   const call = mockLoadTemplate.mock.calls.filter((args) => args[0] === name)[occurrence];
@@ -163,7 +164,7 @@ describe('assistant conversation plan', () => {
     });
   });
 
-  it('should resolve the assistant persona and keep Bash available', () => {
+  it('should resolve the assistant persona and use the default interactive tools', () => {
     const { strategy } = createAssistantConversationPlan('/repo', {
       assistantMode: 'assistant',
       formalSpec: false,
@@ -172,7 +173,7 @@ describe('assistant conversation plan', () => {
     });
 
     expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'interactive');
-    expect(strategy.allowedTools).toContain('Bash');
+    expect(strategy.allowedTools).toEqual(DEFAULT_INTERACTIVE_TOOLS);
     expect(strategy.permissionMode).toBeUndefined();
     expect(strategy.introMessage).toContain('Interactive mode');
     expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
@@ -195,7 +196,7 @@ describe('assistant conversation plan', () => {
     });
   });
 
-  it('should make Grill Me read-only and withhold Bash', () => {
+  it('should keep Grill Me tools and permission resolution aligned with assistant', () => {
     const { strategy } = createAssistantConversationPlan('/repo', {
       assistantMode: 'grill-me',
       formalSpec: false,
@@ -204,8 +205,8 @@ describe('assistant conversation plan', () => {
     });
 
     expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'grill-me-interactive');
-    expect(strategy.allowedTools).not.toContain('Bash');
-    expect(strategy.permissionMode).toBe('readonly');
+    expect(strategy.allowedTools).toEqual(DEFAULT_INTERACTIVE_TOOLS);
+    expect(strategy.permissionMode).toBeUndefined();
     expect(strategy.introMessage).toContain('Grill Me mode');
     expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
     expect(strategy.enableTellCommand).toBe(true);

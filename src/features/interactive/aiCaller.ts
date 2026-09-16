@@ -298,8 +298,8 @@ export async function callAIWithRetry(
     const allowedToolsForProvider = providerSupportsAllowedTools(ctx.providerType) === false
       ? undefined
       : allowedTools;
-    // Per-call permissionMode is synthesized by the assistant strategy; a session-level mode is
-    // resolved user configuration and must still reach the provider for explicit-constraint errors.
+    // Per-call permissionMode is used for operations with a dedicated constraint; a session-level
+    // mode is resolved user configuration and must still reach the provider for explicit-constraint errors.
     const permissionModeForProvider = providerSupportsPermissionControls(ctx.providerType) === false
       ? ctx.permissionMode
       : options.permissionMode ?? ctx.permissionMode;
