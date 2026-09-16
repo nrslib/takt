@@ -13,6 +13,8 @@
 
 Kimi K3 は残高不足による provider failure が確認されたため、今回の実行では `--skip-provider kimi-k3` を baseline と candidate の両方へ指定しました。matrix の行は削除せず、4モデル×10ケースの40行を生成し、Kimiの10行は `infrastructure_failure` として保存しています。代替モデルへの置換はしていません。
 
+明示的にskipした行はmatrix上は未評価のinfra行として残りますが、修正後のCLI終了コードはactive行だけで判定します。active providerが完了していれば終了コード0で、active行のinfra／未実行は2、candidate由来のrescoreを含むcandidateのactive model failureは1です。baseline由来のrescoreはREDを記録するため、active行が完了していれば0です。修正後の終了コード0も4モデル完了を意味しません。最終比較artifactを作成した保存runの終了コードは旧仕様の2でしたが、保存したraw／rowsの内容は変更していません。全providerをskipする指定は受け付けません。
+
 ## Before / after
 
 Before はAの本番summary prompt変更前に保存したtarget rawを、最終fixture evidenceとrubricで再採点した `baseline-rescored` です。After はA変更後に生成したcandidate rawを、同じ最終rubricで再採点した `candidate-rescored` です。再採点ではtarget modelを再生成していません。
@@ -74,4 +76,4 @@ rescoreはcasesHash、fixture各ファイルのSHA-256、inputHash、保存promp
 - Kimi K3は残高不足で未評価です。利用可能になった時点で同じcases、fixture、matrix設定で再実行してください。
 - リポジトリのOpenCode probeは10/11でした。唯一のprompt-capture timeoutは変更前のclean baseでも再現したため、今回のprompt/eval差分による失敗とは扱っていません。
 
-通常ゲートの記録は、build、lint、unit 6203/6203、light IT 2605/2605、E2E smoke 19 pass・1 skipです。eval契約テストは10/10、fixtureテストは3/3 passでした。
+通常ゲートの記録は、build、lint、unit 6203/6203、light IT 2605/2605、E2E smoke 19 pass・1 skipです。eval契約テストは12/12、fixtureテストは3/3 passでした。

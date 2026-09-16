@@ -112,6 +112,9 @@ function providerSelectionFor(skipProviderIds = []) {
   for (const providerId of uniqueSkipped) {
     if (!knownIds.has(providerId)) throw new Error('Unknown provider to skip: ' + providerId);
   }
+  if (uniqueSkipped.length === providers.length) {
+    throw new Error('At least one provider must remain active');
+  }
   const skipped = uniqueSkipped.map(id => ({
     id,
     reason: 'Provider execution was skipped after a confirmed provider failure; no replacement model was used.',
@@ -120,6 +123,27 @@ function providerSelectionFor(skipProviderIds = []) {
   return {
     executed: providers.filter(provider => !skippedIds.has(provider.id)).map(provider => provider.id),
     skipped,
+  };
+}
+
+function evaluationExitCode(rows, phase, providerSelection = providerSelectionFor()) {
+  const skippedIds = new Set((providerSelection.skipped ?? []).map(provider => provider.id));
+  // Deliberate skips remain recorded as infrastructure rows; the CLI status
+  // reflects only providers that this invocation was asked to execute.
+  const activeRows = rows.filter(row => !skippedIds.has(row.provider));
+  if (activeRows.some(row => row.status === 'infrastructure_failure' || row.status === 'unexecuted')) {
+    return 2;
+  }
+  if (phase === 'candidate' && activeRows.some(row => row.pass !== true)) return 1;
+  return 0;
+}
+
+function rescoreLineageFor(sourceManifest) {
+  const sourceRevision = sourceManifest.sourceRevision
+    ?? (sourceManifest.candidatePromptHashes === undefined ? 'baseline' : 'candidate');
+  return {
+    sourceRevision,
+    revision: sourceRevision + '-rescored',
   };
 }
 
@@ -806,16 +830,13 @@ async function runBaseline(outputDirectory, casesPath, skipProviderIds = []) {
     summary,
   }, null, 2) + '\n');
   console.log(JSON.stringify(summary, null, 2));
-  if (rows.some(row => row.status === 'infrastructure_failure' || row.status === 'unexecuted')) {
-    process.exitCode = 2;
-    return;
-  }
+  process.exitCode = evaluationExitCode(rows, 'baseline', selected);
   console.log(JSON.stringify({
     phase: 'baseline',
     cases: cases.length,
     providers: providers.length,
     red: rows.some(row => row.status === 'model_failure' && row.origin !== 'control'),
-    next: 'Run candidate only after all baseline rows are present and infrastructure failures are zero.',
+    next: 'Run candidate after every active provider/case row is present and no active infrastructure or unexecuted rows remain; explicitly skipped providers remain unevaluated.',
   }));
 }
 
@@ -863,8 +884,7 @@ async function runRescore(sourceDirectory, outputDirectory, casesPath) {
     config => makeReplayProvider(config, byKey),
   );
   writePromptArtifacts(outputDirectory, samplesWithFrozenPrompts);
-  const sourceRevision = sourceManifest.candidatePromptHashes === undefined ? 'baseline' : 'candidate';
-  const revision = sourceRevision + '-rescored';
+  const { sourceRevision, revision } = rescoreLineageFor(sourceManifest);
   const manifest = {
     ...currentManifest,
     revision,
@@ -901,9 +921,7 @@ async function runRescore(sourceDirectory, outputDirectory, casesPath) {
     summary,
   }, null, 2) + '\n');
   console.log(JSON.stringify(summary, null, 2));
-  if (rows.some(row => row.status === 'infrastructure_failure' || row.status === 'unexecuted')) {
-    process.exitCode = 2;
-  }
+  process.exitCode = evaluationExitCode(rows, sourceRevision, selected);
 }
 
 function assertBaselineCompatible(savedManifest, currentManifest, rows) {
@@ -993,8 +1011,7 @@ async function runCandidate(baselineDirectory, outputDirectory, casesPath, skipP
     summary,
   }, null, 2) + '\n');
   console.log(JSON.stringify(summary, null, 2));
-  if (candidateRows.some(row => row.status === 'infrastructure_failure' || row.status === 'unexecuted')) process.exitCode = 2;
-  else if (candidateRows.some(row => !row.pass)) process.exitCode = 1;
+  process.exitCode = evaluationExitCode(candidateRows, 'candidate', selected);
 }
 
 async function main() {
@@ -1059,6 +1076,7 @@ export {
   buildPrompt,
   buildSamples,
   classifyResult,
+  evaluationExitCode,
   assertRescoreFixtureMatches,
   manifestFor,
   fixtureSnapshot,
@@ -1066,6 +1084,7 @@ export {
   fixtureVerificationEvidence,
   providerSelectionFor,
   providers,
+  rescoreLineageFor,
   readCases,
   runPromptfooEvaluation,
   scoreTransition,

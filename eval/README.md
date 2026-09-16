@@ -142,8 +142,16 @@ its exact matrix ID, for example `--skip-provider kimi-k3`. The manifest keeps
 the skipped provider as infrastructure failure and does not substitute
 another model. The same skip flag must be supplied to both baseline and
 candidate; omit it from both commands when that provider is available. A
-candidate still must complete every active provider/case row. Use `rescore`
-when only the rubric or judge needs to change:
+candidate still must complete every active provider/case row. Exit status is
+calculated from active rows: `0` means the selected active subset completed,
+`1` means an active candidate row failed its model assertion, and `2` means
+an active provider or grader failed or a row was unexecuted. Skipped rows stay
+visible as infrastructure failures in the manifest and summary, so exit `0`
+does not mean that all four matrix providers ran. At least one provider must
+remain active. A candidate-sourced `rescore` uses the same candidate failure
+status; a baseline-sourced `rescore` preserves baseline REDs and only fails for
+active infrastructure or unexecuted rows. Use `rescore` when only the rubric
+or judge needs to change:
 
 ```sh
 node eval/scripts/instruction-research-handoff-eval.mjs rescore \

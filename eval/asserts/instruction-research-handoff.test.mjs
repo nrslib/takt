@@ -5,6 +5,7 @@ import {
   assertRescoreFixtureMatches,
   buildSamples,
   classifyResult,
+  evaluationExitCode,
   fixtureSnapshot,
   fixtureWorkspaceEvidence,
   fixtureVerificationEvidence,
@@ -12,6 +13,7 @@ import {
   providerSelectionFor,
   providers,
   readCases,
+  rescoreLineageFor,
   validateSavedPromptHashes,
   validateSavedRowHashes,
 } from '../scripts/instruction-research-handoff-eval.mjs';
@@ -89,6 +91,67 @@ test('records an unavailable provider without substituting another model', () =>
   ]);
   assert.deepEqual(selected.skipped.map(provider => provider.id), ['kimi-k3']);
   assert.match(selected.skipped[0].reason, /no replacement model/i);
+});
+
+test('uses active rows for exit status while retaining skipped provider failures', () => {
+  const selected = providerSelectionFor(['kimi-k3']);
+  const skippedFailure = {
+    provider: 'kimi-k3',
+    status: 'infrastructure_failure',
+    pass: false,
+  };
+  const activePass = {
+    provider: 'claude-opus-5',
+    status: 'pass',
+    pass: true,
+  };
+
+  assert.equal(evaluationExitCode([activePass, skippedFailure], 'candidate', selected), 0);
+  assert.equal(
+    evaluationExitCode([{ ...activePass, status: 'model_failure', pass: false }, skippedFailure], 'candidate', selected),
+    1,
+  );
+  assert.equal(
+    evaluationExitCode([{ ...activePass, status: 'infrastructure_failure', pass: false }, skippedFailure], 'candidate', selected),
+    2,
+  );
+  assert.equal(
+    evaluationExitCode([{ ...activePass, status: 'unexecuted', pass: false }, skippedFailure], 'baseline', selected),
+    2,
+  );
+  assert.equal(
+    evaluationExitCode([{ ...activePass, status: 'model_failure', pass: false }, skippedFailure], 'baseline', selected),
+    0,
+  );
+  assert.throws(
+    () => providerSelectionFor(providers.map(provider => provider.id)),
+    /at least one provider must remain active/i,
+  );
+});
+
+test('preserves baseline or candidate lineage across repeated rescoring', () => {
+  assert.deepEqual(rescoreLineageFor({}), {
+    sourceRevision: 'baseline',
+    revision: 'baseline-rescored',
+  });
+  assert.deepEqual(rescoreLineageFor({ candidatePromptHashes: { case: 'hash' } }), {
+    sourceRevision: 'candidate',
+    revision: 'candidate-rescored',
+  });
+  assert.deepEqual(rescoreLineageFor({
+    sourceRevision: 'candidate',
+    revision: 'candidate-rescored',
+  }), {
+    sourceRevision: 'candidate',
+    revision: 'candidate-rescored',
+  });
+  assert.deepEqual(rescoreLineageFor({
+    sourceRevision: 'baseline',
+    revision: 'baseline-rescored',
+  }), {
+    sourceRevision: 'baseline',
+    revision: 'baseline-rescored',
+  });
 });
 
 test('keeps the limited approval as a short user OK after the assistant question', () => {
