@@ -168,6 +168,66 @@ or grader failures and unexecuted rows. These are fixed-input prompt
 regressions with stochastic model output, not end-to-end product correctness;
 repeat runs and inspect the saved evidence before making convergence claims.
 
+When the opencode Kimi route is unavailable, the saved baseline and candidate
+artifacts can be supplemented with the installed Kimi Code CLI route. This
+does not regenerate or rescore the other three-provider rows (30 rows per
+phase, 60 rows across baseline and candidate). The runner validates the source
+cases, fixture, prompts, rubrics, and saved row hashes before it executes ten
+baseline prompts and then ten candidate prompts:
+
+```sh
+node eval/scripts/instruction-research-handoff-kimi-cli.mjs run \
+  .tmp/instruction-research-handoff-baseline-rescored-final-v2 \
+  .tmp/instruction-research-handoff-candidate-rescored-final \
+  .tmp/instruction-research-handoff-kimi-code-cli-k3 \
+  --route-provenance "$TAKT_KIMI_ROUTE_PROVENANCE"
+```
+
+The supplemental provider ID is `kimi-code-cli-k3`, labelled
+`KimiCodeCLI K3/high補足`. Its CLI invocation uses the installed
+`kimi-code/k3` alias, an empty skills directory, and prompt mode (`-p`).
+Set `TAKT_EVAL_KIMI_BIN` when the executable is not available as `kimi` on
+`PATH` (for example, `TAKT_EVAL_KIMI_BIN=$HOME/.kimi-code/bin/kimi`).
+Kimi Code CLI 0.43.1 rejects `--auto` together with `-p`, so the manifest
+records that the `--auto` flag was omitted and why. The route provenance must
+show CLI 0.43.1, model `k3`, alias `kimi-code/k3`, effort `high`, and the
+managed endpoint when the optional route probe is supplied. Without that
+probe, the endpoint is recorded as `unknown`; each run still records per-case
+`system.version`, session list, and `agents/main/wire.jsonl` evidence without
+copying logs or credentials.
+
+`--route-provenance` optionally points to a private preflight artifact from an
+authenticated Kimi Code CLI health probe. When supplied, the runner verifies
+its model and managed-endpoint evidence and stores its hash, but does not
+create or publish that artifact. Keep it outside the repository and pass a new
+path when reproducing the run. Omitting the option is supported when no
+preflight artifact is available.
+
+To generate only the candidate phase (ten prompts and ten rows), add
+`--candidate-only` to the `run` command. The baseline source argument remains
+required for a consistent command shape, but is not read or executed:
+
+```sh
+node eval/scripts/instruction-research-handoff-kimi-cli.mjs run \
+  .tmp/instruction-research-handoff-baseline-rescored-final-v2 \
+  .tmp/instruction-research-handoff-candidate-rescored-final \
+  .tmp/instruction-research-handoff-kimi-code-cli-k3-candidate \
+  --candidate-only
+```
+
+The output stores private raw streams in
+`raw/<baseline|candidate>/<caseId>.stdout` (mode 600), promptfoo results,
+ten or twenty scored rows depending on the phase selection,
+`provenance.json`, and `summary.json`. If only the semantic judge needs
+another attempt, replay the saved answers without invoking Kimi:
+
+```sh
+node eval/scripts/instruction-research-handoff-kimi-cli.mjs rescore \
+  .tmp/instruction-research-handoff-kimi-code-cli-k3 \
+  .tmp/instruction-research-handoff-kimi-code-cli-k3-rescored \
+  --route-provenance "$TAKT_KIMI_ROUTE_PROVENANCE"
+```
+
 The `fix-plan-cause-check` suite uses the same three providers and one-at-a-time
 execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with

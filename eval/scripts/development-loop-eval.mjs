@@ -19,7 +19,8 @@ export function parseKimiAssistantOutput(jsonl) {
   const messages = [];
   for (const line of jsonl.split(/\r?\n/).filter(line => line.trim())) {
     const event = JSON.parse(line);
-    if (event.role === 'meta') continue;
+    if (event.role === 'meta' || event.role === 'tool') continue;
+    if (event.role === 'assistant' && event.content == null && Array.isArray(event.tool_calls)) continue;
     if (event.role !== 'assistant' || typeof event.content !== 'string') {
       throw new Error('Unexpected Kimi event; expected assistant text');
     }
