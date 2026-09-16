@@ -86,16 +86,21 @@ test('plan-scoped remediation now enters fix; old rule 2 was a full replan', () 
   assert.equal(after.rules.some(rule => rule.next === 'investigate'), false);
 });
 
-test('the candidate loader exposes direct reimplementation routing and preserves input gating', () => {
+test('the candidate loader routes remaining reimplementation gaps to planning and preserves input gating', () => {
   for (const language of ['ja', 'en']) {
     const step = loadCompletionRoutingStep({
       language, workflow: 'development-implement-dynamic', step_name: 'reimplement',
     });
     assert.equal(step.name, 'reimplement');
-    assert.equal(scoreTransition('[REIMPLEMENT:3]', step, { next: 'reimplement' }).pass, true);
+    assert.equal(scoreTransition('[REIMPLEMENT:3]', step, { return: 'need_replan' }).pass, true);
     assert.equal(scoreTransition('[REIMPLEMENT:4]', step, { return: 'need_replan' }).pass, true);
+    assert.equal(scoreTransition('[REIMPLEMENT:5]', step, { return: 'need_replan' }).pass, true);
     assert.equal(scoreTransition('[REIMPLEMENT:6]', step, { next: 'reimplement', requires_user_input: true }, true).pass, true);
     assert.equal(scoreTransition('[REIMPLEMENT:6]', step, { next: 'reimplement', requires_user_input: true }, false).pass, false);
+    const selfRoutes = step.rules.filter(rule => rule.next === 'reimplement');
+    assert.equal(selfRoutes.length, 1);
+    assert.equal(selfRoutes[0].requires_user_input, true);
+    assert.equal(selfRoutes[0].interactive_only, true);
   }
 });
 

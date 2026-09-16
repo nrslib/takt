@@ -80,15 +80,38 @@ describe('shipped development completion and remediation routes', () => {
     expect(implementation?.instructionRef).not.toContain('development-implementation-completion');
   });
 
-  it.each(variants(implementations))('$language/$name sends executable incompleteness to reimplement and repeats until complete', async ({ language, name }) => {
+  it.each(variants(implementations))('$language/$name sends executable incompleteness to reimplement once, then hands remaining gaps to planning', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'implement');
     const pending = await execute(config, 'implement', 2);
     expect(pending.nextStep).toBe('reimplement');
     expect(pending.isComplete).toBe(false);
     expect(pending.returnValue).toBeUndefined();
-    expect((await execute(config, 'reimplement', 2)).nextStep).toBe('reimplement');
+    const remaining = await execute(config, 'reimplement', 2);
+    expect(remaining).toMatchObject({ isComplete: true, returnValue: 'need_replan' });
+    expect(remaining.nextStep).toBe('COMPLETE');
+    start(config, 'reimplement');
     expect((await execute(config, 'reimplement', 0)).nextStep).toBe('COMPLETE');
+  });
+
+  it.each(variants(implementations))('$language/$name never routes reimplement back to itself except for user input', ({ language, name }) => {
+    const step = load(language, name).steps.find(candidate => candidate.name === 'reimplement');
+    const selfRoutes = step?.rules?.filter(rule => rule.next === 'reimplement') ?? [];
+    expect(selfRoutes).toHaveLength(1);
+    expect(selfRoutes[0]).toMatchObject({
+      requiresUserInput: true,
+      interactiveOnly: true,
+    });
+    const residualRule = step?.rules?.[2];
+    expect(residualRule?.condition.kind).toBe('semantic');
+    expect(residualRule?.condition.kind === 'semantic' && residualRule.condition.label).toContain(
+      language === 'ja' ? 'ユーザー入力で解消できる場合を除く' : 'except when available user input can resolve it',
+    );
+    expect(step?.rules?.every(rule => (
+      (rule.next === 'COMPLETE' && rule.returnValue === undefined)
+      || rule.returnValue === 'need_replan'
+      || (rule.next === 'reimplement' && rule.requiresUserInput === true && rule.interactiveOnly === true)
+    ))).toBe(true);
   });
 
   it.each(variants(implementations))('$language/$name returns only an invalid plan to its caller', async ({ language, name }) => {
@@ -114,7 +137,7 @@ describe('shipped development completion and remediation routes', () => {
     for (const stepName of ['implement', 'reimplement']) {
       const step = config.steps.find(candidate => candidate.name === stepName);
       expect(step?.rules?.some(rule => rule.next === 'ABORT')).toBe(false);
-      expect(step?.rules?.filter(rule => rule.returnValue === 'need_replan')).toHaveLength(2);
+      expect(step?.rules?.filter(rule => rule.returnValue === 'need_replan')).toHaveLength(stepName === 'reimplement' ? 3 : 2);
     }
   });
 
@@ -146,11 +169,32 @@ describe('shipped development completion and remediation routes', () => {
     }
   });
 
-  it.each(variants(['development-core']))('$language routes an implementation workflow ABORT result to replan for final planning judgment', ({ language, name }) => {
+  it.each(variants(['development-core']))('$language routes implementation workflow results through the planning handoffs', async ({ language, name }) => {
     const config = load(language, name);
     const implementation = config.steps.find(step => step.name === 'implement');
-    const abortRule = implementation?.rules?.find(rule => rule.condition.kind === 'semantic' && rule.condition.label === 'ABORT');
-    expect(abortRule?.next).toBe('replan');
+    expect(implementation?.rules?.find(rule => rule.condition.kind === 'semantic' && rule.condition.label === 'COMPLETE')?.next).toBe('peer-review');
+    expect(implementation?.rules?.find(rule => rule.condition.kind === 'semantic' && rule.condition.label === 'need_replan')?.next).toBe('replan');
+    expect(implementation?.rules?.find(rule => rule.condition.kind === 'semantic' && rule.condition.label === 'ABORT')?.next).toBe('replan');
+
+    const replan = config.steps.find(step => step.name === 'replan');
+    const replanRules = replan?.rules ?? [];
+    expect(replanRules).toHaveLength(3);
+    expect(replanRules.map(rule => rule.next)).toEqual(['implement', 'peer-review', 'ABORT']);
+    expect(replanRules[0]?.condition.kind).toBe('semantic');
+    expect(replanRules[0]?.condition.kind === 'semantic' && replanRules[0].condition.label).toMatch(
+      language === 'ja' ? /ユーザー入力や外部操作を待たず.*必須/ : /Without waiting for user input or an external action.*mandatory/,
+    );
+    expect(replanRules[2]?.condition.kind).toBe('semantic');
+    expect(replanRules[2]?.condition.kind === 'semantic' && replanRules[2].condition.label).toMatch(language === 'ja' ? /外部.*両立/ : /external.*incompatible/);
+    expect(replanRules[1]?.condition.kind).toBe('semantic');
+    expect(replanRules[1]?.condition.kind === 'semantic' && replanRules[1].condition.label).toMatch(language === 'ja' ? /受入条件.*検証が完了/ : /acceptance criteria.*verification is complete/);
+
+    start(config, 'replan');
+    expect((await execute(config, 'replan', 0)).nextStep).toBe('implement');
+    start(config, 'replan');
+    expect((await execute(config, 'replan', 1)).nextStep).toBe('peer-review');
+    start(config, 'replan');
+    expect((await execute(config, 'replan', 2)).nextStep).toBe('ABORT');
   });
 
   it.each(variants(remediations))('$language/$name executes plan-scoped investigation in fix and preserves the repair path', async ({ language, name }) => {

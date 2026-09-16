@@ -128,8 +128,8 @@ steps:
         next: COMPLETE
       - condition: No implementation change was needed and the previously unexecuted mandatory verification is complete (report-only work; excludes any required work that has not been performed)
         next: COMPLETE
-      - condition: The accepted plan is valid, but implementation, cause investigation, or mandatory verification remains incomplete and another concrete remediation is executable within the current plan (an unexecuted, failed, or unverified report alone does not require replanning)
-        next: reimplement
+      - condition: Implementation, cause investigation, or mandatory verification remains incomplete after remediation (including when the accepted plan is still valid, except when available user input can resolve it). Report the remaining gaps with evidence and pass the continuation decision to the planning step
+        return: need_replan
       - condition: The accepted plan's premises, scope, method, or verification capability is defective; changing the plan would enable concrete project-local work, and leaving it unchanged prevents the requirement from being executed or verified (unexecuted, failed, unresolved, or unsupported work alone does not qualify; external-only work is excluded)
         return: need_replan
       - condition: No mandatory work can be executed under the current plan or remediation, and evidence confirms that only an external action or external answer remains, or provides a basis to believe the conditions are incompatible. Report the external constraint and unmet obligations, and pass the final continuation, replanning, or stopping decision to the planning step (choose the user-input route only when a user-input option is available and its answer would unblock the work)
