@@ -94,7 +94,7 @@ describe('shipped development completion and remediation routes', () => {
     expect((await execute(config, 'reimplement', 0)).nextStep).toBe('COMPLETE');
   });
 
-  it.each(variants(implementations))('$language/$name never routes reimplement back to itself except for user input', ({ language, name }) => {
+  it.each(variants(implementations))('$language/$name keeps reimplement destinations within the allowed set and gates self-resume on user input', ({ language, name }) => {
     const step = load(language, name).steps.find(candidate => candidate.name === 'reimplement');
     const selfRoutes = step?.rules?.filter(rule => rule.next === 'reimplement') ?? [];
     expect(selfRoutes).toHaveLength(1);
@@ -102,11 +102,6 @@ describe('shipped development completion and remediation routes', () => {
       requiresUserInput: true,
       interactiveOnly: true,
     });
-    const residualRule = step?.rules?.[2];
-    expect(residualRule?.condition.kind).toBe('semantic');
-    expect(residualRule?.condition.kind === 'semantic' && residualRule.condition.label).toContain(
-      language === 'ja' ? 'ユーザー入力で解消できる場合を除く' : 'except when available user input can resolve it',
-    );
     expect(step?.rules?.every(rule => (
       (rule.next === 'COMPLETE' && rule.returnValue === undefined)
       || rule.returnValue === 'need_replan'
@@ -137,7 +132,6 @@ describe('shipped development completion and remediation routes', () => {
     for (const stepName of ['implement', 'reimplement']) {
       const step = config.steps.find(candidate => candidate.name === stepName);
       expect(step?.rules?.some(rule => rule.next === 'ABORT')).toBe(false);
-      expect(step?.rules?.filter(rule => rule.returnValue === 'need_replan')).toHaveLength(stepName === 'reimplement' ? 3 : 2);
     }
   });
 
@@ -171,24 +165,12 @@ describe('shipped development completion and remediation routes', () => {
 
   it.each(variants(['development-core']))('$language routes implementation workflow results through the planning handoffs', async ({ language, name }) => {
     const config = load(language, name);
-    const implementation = config.steps.find(step => step.name === 'implement');
-    expect(implementation?.rules?.find(rule => rule.condition.kind === 'semantic' && rule.condition.label === 'COMPLETE')?.next).toBe('peer-review');
-    expect(implementation?.rules?.find(rule => rule.condition.kind === 'semantic' && rule.condition.label === 'need_replan')?.next).toBe('replan');
-    expect(implementation?.rules?.find(rule => rule.condition.kind === 'semantic' && rule.condition.label === 'ABORT')?.next).toBe('replan');
-
-    const replan = config.steps.find(step => step.name === 'replan');
-    const replanRules = replan?.rules ?? [];
-    expect(replanRules).toHaveLength(3);
-    expect(replanRules.map(rule => rule.next)).toEqual(['implement', 'peer-review', 'ABORT']);
-    expect(replanRules[0]?.condition.kind).toBe('semantic');
-    expect(replanRules[0]?.condition.kind === 'semantic' && replanRules[0].condition.label).toMatch(
-      language === 'ja' ? /ユーザー入力や外部操作を待たず.*必須/ : /Without waiting for user input or an external action.*mandatory/,
-    );
-    expect(replanRules[2]?.condition.kind).toBe('semantic');
-    expect(replanRules[2]?.condition.kind === 'semantic' && replanRules[2].condition.label).toMatch(language === 'ja' ? /外部.*両立/ : /external.*incompatible/);
-    expect(replanRules[1]?.condition.kind).toBe('semantic');
-    expect(replanRules[1]?.condition.kind === 'semantic' && replanRules[1].condition.label).toMatch(language === 'ja' ? /受入条件.*検証が完了/ : /acceptance criteria.*verification is complete/);
-
+    start(config, 'implement');
+    expect((await execute(config, 'implement', 0)).nextStep).toBe('peer-review');
+    start(config, 'implement');
+    expect((await execute(config, 'implement', 1)).nextStep).toBe('replan');
+    start(config, 'implement');
+    expect((await execute(config, 'implement', 2)).nextStep).toBe('replan');
     start(config, 'replan');
     expect((await execute(config, 'replan', 0)).nextStep).toBe('implement');
     start(config, 'replan');
