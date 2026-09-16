@@ -185,10 +185,12 @@ describe('conversation session application API', () => {
     expect(result.kind).toBe('assistant_response');
     expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
     expect(mockRunFormalSpecVerification).toHaveBeenCalledOnce();
+    expect(mockCallAIWithRetry.mock.calls[0]?.[2]).toEqual([]);
     expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',
     }));
+    expect(mockCallAIWithRetry.mock.calls[1]?.[2]).toEqual([]);
     expect(mockCallAIWithRetry.mock.calls[1]?.[5]).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
       internalAgentIsolation: 'strict-readonly',

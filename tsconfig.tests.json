@@ -107,6 +107,7 @@
     "src/__tests__/pi-client-cache.test.ts",
     "src/__tests__/previewPrompts.test.ts",
     "src/__tests__/private-file.test.ts",
+    "src/__tests__/provider-capabilities.test.ts",
     "src/__tests__/provider-mcp-adapter.test.ts",
     "src/__tests__/provider-mcp-capability-declaration.test.ts",
     "src/__tests__/provider-mcp-cleanup.test.ts",
