@@ -111,12 +111,33 @@ function summaryTemplateVars(): Record<string, unknown> {
   return call[2] as Record<string, unknown>;
 }
 
-function createPlan(assistantMode: AssistantInteractiveMode = 'assistant'): ConversationPlan {
+function createPlan(
+  assistantMode: AssistantInteractiveMode = 'assistant',
+  permissionMode?: PermissionMode,
+): ConversationPlan {
+  const resolvedSessionContext = permissionMode === undefined
+    ? undefined
+    : {
+      provider: {
+        supportsStructuredOutput: false,
+        supportsNativeImageInput: false,
+        keepsAllowedToolWithoutEdit: vi.fn(() => true),
+        setup: vi.fn(),
+        getRuntimeInstructions: vi.fn(() => null),
+      },
+      providerType: 'mock' as const,
+      model: 'mock-model',
+      lang: 'en' as const,
+      personaName: 'interactive',
+      sessionId: undefined,
+      permissionMode,
+    };
   return createAssistantConversationPlan('/repo', {
     assistantMode,
     formalSpec: false,
     formalSpecComments: true,
     workflowContext: WORKFLOW_CONTEXT,
+    ...(resolvedSessionContext === undefined ? {} : { resolvedSessionContext }),
   });
 }
 
@@ -153,6 +174,12 @@ function send(
     abortSignal,
     onAssistantChunk: (chunk) => chunks.push(chunk),
   });
+}
+
+function expectPermissionResolution(callIndex: number): void {
+  const call = mockCallAIWithRetry.mock.calls[callIndex];
+  expect(call?.[4]).toEqual(expect.objectContaining({ permissionMode: 'readonly' }));
+  expect(call?.[5]).toEqual(expect.objectContaining({ permissionMode: undefined }));
 }
 
 async function submit(text: string, chunks: string[], overrides?: Partial<TuiConversationOptions>) {
@@ -393,18 +420,18 @@ describe('TUI conversation layer', () => {
     expect(outcome).toMatchObject({ kind: 'error', message: 'rate limit reached' });
   });
 
-  it('should use assistant tools and permission resolution for Grill Me', async () => {
+  it('should preserve configured Grill Me permission through initial and subsequent TUI turns', async () => {
     const chunks: string[] = [];
-    const grillMe = createConversation({ plan: createPlan('grill-me') });
+    const grillMe = createConversation({ plan: createPlan('grill-me', 'readonly') });
 
     await send(grillMe, 'hello', chunks);
 
-    expect(lastCallOptions().permissionMode).toBeUndefined();
+    expectPermissionResolution(0);
     expect(lastCallAllowedTools()).toContain('Bash');
 
-    await submit('hello', chunks);
+    await send(grillMe, 'hello again', chunks);
 
-    expect(lastCallOptions().permissionMode).toBeUndefined();
+    expectPermissionResolution(1);
     expect(lastCallAllowedTools()).toContain('Bash');
   });
 });
