@@ -49,6 +49,9 @@ function makeState(): WorkflowState {
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map(),
+    restoredStepIterationNames: new Set(),
+    dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
     status: 'running',
   };
 }
@@ -170,17 +173,17 @@ function makeRunner(options: {
       projectCwd: projectDir,
     },
     getCwd: () => projectDir,
-    getReportDir: () => '.takt/runs/test/reports',
+    dynamicParallelSelector: {
+      selectParticipants: vi.fn(),
+    } as unknown as ParallelRunnerDeps['dynamicParallelSelector'],
     getWorkflowName: () => 'test-workflow',
+    getTask: () => 'test task',
     getInteractive: () => false,
     observabilityEnabled: options.observabilityEnabled ?? false,
     observabilityRunId: options.observabilityRunId,
-    structuredCaller: {
-      evaluateCondition: vi.fn(),
-      judgeStatus: vi.fn(),
-      decomposeTask: vi.fn(),
-      requestMoreParts: vi.fn(),
-    },
+    emitEvent: vi.fn(),
+    claimStepOccurrence: vi.fn().mockReturnValue(0),
+    getRunId: () => 'run-1',
     runQualityGates: options.runQualityGates ?? vi.fn().mockResolvedValue({ ok: true }),
     updateMaxSteps: vi.fn(),
     setActiveResumePoint: vi.fn(),
@@ -299,6 +302,51 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(result.response.content).toBeTruthy();
     expect(state.stepOutputs.get('reviewers')).toBe(result.response);
     expect(state.lastOutput).toBe(result.response);
+  });
+
+  it('parse error で落ちた sub-step だけを新規セッションで再実行し、他の sub-step を再実行せず集約ルールを評価する', async () => {
+    const { runner, deps } = makeRunner();
+    const step = makeParallelStep();
+    const state = makeState();
+    const staleSessionId = 'stale-session';
+    const subSessionKey = '["ai-antipattern-review-2nd","claude","claude-sonnet"]';
+    state.personaSessions.set(subSessionKey, staleSessionId);
+    vi.mocked(deps.optionsBuilder.buildAgentOptions).mockImplementation(((stepOptions: WorkflowStep) => (
+      stepOptions.name === 'ai-antipattern-review-2nd' ? { sessionId: staleSessionId } : {}
+    )) as never);
+    vi.mocked(mockRuleEvaluation).mockImplementation((evaluatedStep) => {
+      if (evaluatedStep.name === 'reviewers') return { index: 0, method: 'phase3_tag' };
+      if (evaluatedStep.name === 'security-review') return { index: 0, method: 'phase3_tag' };
+      return undefined;
+    });
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+      failureCategory: 'provider_stream_parse_error',
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      content: '[AI-ANTIPATTERN-REVIEW:1] approved',
+      sessionId: 'fresh-session',
+    }));
+
+    const updateSession = vi.fn();
+    const result = await runner.runParallelStep(step, state, 'test task', 5, updateSession);
+
+    expect(result.response.status).toBe('done');
+    expect(result.response.matchedRuleIndex).toBe(0);
+    expect(executeAgent).toHaveBeenCalledTimes(3);
+    const retriedCall = vi.mocked(executeAgent).mock.calls[2];
+    expect(retriedCall?.[0]).toBe('ai-antipattern-review-2nd');
+    expect(retriedCall?.[2].sessionId).toBeUndefined();
+    expect(updateSession).toHaveBeenCalledWith(subSessionKey, undefined);
+    expect(updateSession).toHaveBeenLastCalledWith(subSessionKey, 'fresh-session');
   });
 
   it('propagates the sum of child retry counts to the aggregated response', async () => {
@@ -499,7 +547,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
         runQualityGates: runRealQualityGates,
       });
       const step = makeParallelStep();
-      if (!step.parallel) {
+      if (!Array.isArray(step.parallel)) {
         throw new Error('parallel sub-steps are required for this test');
       }
       for (const subStep of step.parallel) {
@@ -554,7 +602,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
         runQualityGates: runRealQualityGates,
       });
       const step = makeParallelStep();
-      if (!step.parallel) {
+      if (!Array.isArray(step.parallel)) {
         throw new Error('parallel sub-steps are required for this test');
       }
       for (const subStep of step.parallel) {

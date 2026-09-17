@@ -9,7 +9,6 @@ import type {
 } from '../types.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
-import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 
 const MAX_PHASE1_EXECUTIONS = 3;
@@ -238,8 +237,7 @@ function isEmptyPhase1Response(response: AgentResponse): boolean {
 
 function isProviderErrorEligibleForFreshRetry(response: AgentResponse): boolean {
   return response.status === 'error'
-    && response.errorKind !== 'rate_limit'
-    && response.failureCategory !== AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR;
+    && response.errorKind !== 'rate_limit';
 }
 
 function withEffectiveSession(

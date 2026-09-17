@@ -7,6 +7,7 @@ import {
   runSingleFreshPhase1Retry,
 } from '../core/workflow/engine/phase1-empty-recovery.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
+import { makeStep } from './test-helpers.js';
 
 function response(overrides: Partial<AgentResponse>): AgentResponse {
   return {
@@ -26,8 +27,8 @@ describe('Phase 1 empty response recovery', () => {
       enabled: false,
       runId: undefined,
       workflowName: 'review',
-      eventStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
-      spanStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
+      eventStep: makeStep({ name: 'reviewer' }),
+      spanStep: makeStep({ name: 'reviewer' }),
       iteration: 1,
       attempt: {
         sequence: 2,
@@ -65,16 +66,20 @@ describe('Phase 1 empty response recovery', () => {
     const onPhaseComplete = vi.fn();
     await expect(executeObservedPhase1Attempt({
       enabled: false,
+      runId: undefined,
       workflowName: 'review',
-      eventStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
-      spanStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
+      eventStep: makeStep({ name: 'reviewer' }),
+      spanStep: makeStep({ name: 'reviewer' }),
       iteration: 1,
       attempt: { sequence: 2, reason: 'initial', instruction: 'review', sessionId: undefined },
+      workflowStack: undefined,
+      sanitizeText: undefined,
       providerInfo: { provider: 'mock', model: undefined },
       execute: async (_instruction, _sessionId, onPromptResolved) => {
         onPromptResolved({ systemPrompt: 'system', userInstruction: 'review' });
         throw new Error('provider failed');
       },
+      onPhaseStart: undefined,
       onPhaseComplete,
     })).rejects.toThrow('provider failed');
 
@@ -87,15 +92,19 @@ describe('Phase 1 empty response recovery', () => {
 
     await expect(executeObservedPhase1Attempt({
       enabled: false,
+      runId: undefined,
       workflowName: 'review',
-      eventStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
-      spanStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
+      eventStep: makeStep({ name: 'reviewer' }),
+      spanStep: makeStep({ name: 'reviewer' }),
       iteration: 1,
       attempt: { sequence: 2, reason: 'initial', instruction: 'review', sessionId: undefined },
+      workflowStack: undefined,
+      sanitizeText: undefined,
       providerInfo: { provider: 'mock', model: undefined },
       execute: async () => {
         throw new Error('prompt resolution failed');
       },
+      onPhaseStart: undefined,
       onPhaseComplete,
       recordFailure,
     })).rejects.toThrow('prompt resolution failed');
@@ -178,12 +187,6 @@ describe('Phase 1 empty response recovery', () => {
     ['structured output', response({ content: '', structuredOutput: { result: 'ok' } })],
     ['blocked response', response({ status: 'blocked', content: '' })],
     ['rate limited response', response({ status: 'rate_limited', content: '', errorKind: 'rate_limit' })],
-    ['provider stream parse error', response({
-      status: 'error',
-      content: '',
-      error: 'Failed to parse item: invalid stdout line',
-      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
-    })],
   ])('does not retry a %s', async (_label, terminalResponse) => {
     const execute = vi.fn().mockResolvedValue(terminalResponse);
 
@@ -199,6 +202,63 @@ describe('Phase 1 empty response recovery', () => {
     expect(execute).toHaveBeenCalledOnce();
     expect(result.response.status).toBe(terminalResponse.status);
     expect(result.response.structuredOutput).toEqual(terminalResponse.structuredOutput);
+  });
+
+  it('retries a provider stream parse error once in a fresh session', async () => {
+    const discardSession = vi.fn();
+    const execute = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: 'error',
+        content: '',
+        error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      }))
+      .mockResolvedValueOnce(response({ content: 'recovered fresh', sessionId: 'session-fresh' }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      retryProviderErrorFresh: true,
+      execute,
+      discardSession,
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute.mock.calls.map(([attempt]) => [
+      attempt.reason,
+      attempt.instruction,
+      attempt.sessionId,
+    ])).toEqual([
+      ['initial', 'original instruction', 'session-1'],
+      ['provider_error_fresh', 'original instruction', undefined],
+    ]);
+    expect(discardSession).toHaveBeenCalledWith('session-1');
+    expect(result.response.content).toBe('recovered fresh');
+  });
+
+  it('returns the parse error when the fresh retry also fails with a parse error', async () => {
+    const parseError = response({
+      status: 'error',
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+    const execute = vi.fn()
+      .mockResolvedValueOnce(parseError)
+      .mockResolvedValueOnce(parseError);
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      retryProviderErrorFresh: true,
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.response.status).toBe('error');
+    expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR);
   });
 
   it('does not turn a provider error into an empty-output retry', async () => {

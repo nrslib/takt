@@ -56,6 +56,7 @@ const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_STREAM_ABORTED_MESSAGE = 'Codex execution aborted';
 const CODEX_TIMEOUT_MAX_RETRIES = 2;
 const CODEX_REFUSAL_MAX_RETRIES = 2;
+const CODEX_PARSE_MAX_RETRIES = 1;
 const CODEX_RETRY_MAX_RETRIES = 8;
 const CODEX_RETRY_BASE_DELAY_MS = 1000;
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -265,9 +266,10 @@ export class CodexClient {
     failure: AgentFailureDetail,
     standardRetryCount: number,
     timeoutRetryCount: number,
+    parseRetryCount: number,
   ): boolean {
     if (failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
-      return false;
+      return parseRetryCount < CODEX_PARSE_MAX_RETRIES;
     }
     if (failure.category === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT) {
       return timeoutRetryCount < CODEX_TIMEOUT_MAX_RETRIES;
@@ -278,21 +280,37 @@ export class CodexClient {
     return standardRetryCount < CODEX_RETRY_MAX_RETRIES && this.isRetriableError(failure.reason);
   }
 
+  private resolveRetryThreadId(
+    failureCategory: AgentFailureCategory,
+    currentThreadId: string | undefined,
+  ): string | undefined {
+    // parse error が出たスレッドを resume すると同じ壊れたストリームを読み直すため、新規スレッドでやり直す
+    return failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
+      ? undefined
+      : currentThreadId;
+  }
+
   private recordRetry(
     failureCategory: AgentFailureCategory,
     standardRetryCount: number,
     timeoutRetryCount: number,
-  ): { standardRetryCount: number; timeoutRetryCount: number; retryAttempt: number } {
-    const nextStandardRetryCount = failureCategory === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT
+    parseRetryCount: number,
+  ): { standardRetryCount: number; timeoutRetryCount: number; parseRetryCount: number; retryAttempt: number } {
+    const isParseFailure = failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR;
+    const nextStandardRetryCount = failureCategory === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT || isParseFailure
       ? standardRetryCount
       : standardRetryCount + 1;
     const nextTimeoutRetryCount = failureCategory === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT
       ? timeoutRetryCount + 1
       : timeoutRetryCount;
+    const nextParseRetryCount = isParseFailure
+      ? parseRetryCount + 1
+      : parseRetryCount;
     return {
       standardRetryCount: nextStandardRetryCount,
       timeoutRetryCount: nextTimeoutRetryCount,
-      retryAttempt: nextStandardRetryCount + nextTimeoutRetryCount,
+      parseRetryCount: nextParseRetryCount,
+      retryAttempt: nextStandardRetryCount + nextTimeoutRetryCount + nextParseRetryCount,
     };
   }
 
@@ -374,7 +392,8 @@ export class CodexClient {
     let standardRetryCount = 0;
     let timeoutRetryCount = 0;
     let refusalRetryCount = 0;
-    const totalRetryCount = (): number => standardRetryCount + timeoutRetryCount + refusalRetryCount;
+    let parseRetryCount = 0;
+    const totalRetryCount = (): number => standardRetryCount + timeoutRetryCount + refusalRetryCount + parseRetryCount;
     let codexSkillConfig: CodexOptions['config'] | undefined;
     try {
       codexSkillConfig = options.skills
@@ -435,7 +454,7 @@ export class CodexClient {
     };
 
     while (true) {
-      const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
+      const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + parseRetryCount + 1;
       options.onActivity?.({ kind: 'attempt_started' });
       let currentThreadId = threadId;
       const codexClientOptions: CodexOptions = {
@@ -641,17 +660,21 @@ export class CodexClient {
             return rateLimitedResponse;
           }
 
-          if (!failedAfterStreamError && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
+          if (
+            (!failedAfterStreamError || failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR)
+            && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount, parseRetryCount)
+          ) {
             const boundedFailureMessage = boundCodexFailureMessage(failure.reason, options, true);
             log.info('Retrying Codex call after transient failure', {
               agentType,
               attempt,
               message: boundedFailureMessage,
             });
-            threadId = currentThreadId;
-            const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
+            threadId = this.resolveRetryThreadId(failure.category, currentThreadId);
+            const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount, parseRetryCount);
             standardRetryCount = retryState.standardRetryCount;
             timeoutRetryCount = retryState.timeoutRetryCount;
+            parseRetryCount = retryState.parseRetryCount;
             await this.waitForRetryDelay(retryState.retryAttempt, options.abortSignal);
             continue;
           }
@@ -767,17 +790,18 @@ export class CodexClient {
           boundedErrorMessage,
         );
 
-        if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
+        if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount, parseRetryCount)) {
           const retryErrorMessage = boundCodexFailureMessage(errorMessage, options, true);
           log.info('Retrying Codex call after transient exception', {
             agentType,
             attempt,
             errorMessage: retryErrorMessage,
           });
-          threadId = currentThreadId;
-          const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
+          threadId = this.resolveRetryThreadId(failure.category, currentThreadId);
+          const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount, parseRetryCount);
           standardRetryCount = retryState.standardRetryCount;
           timeoutRetryCount = retryState.timeoutRetryCount;
+          parseRetryCount = retryState.parseRetryCount;
           await this.waitForRetryDelay(retryState.retryAttempt, options.abortSignal);
           continue;
         }
