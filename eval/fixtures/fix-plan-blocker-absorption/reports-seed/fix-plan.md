@@ -2,7 +2,7 @@
 
 ## 結果: 修正計画確定
 
-対象は `TEST-NEW-tsconfig-internal-agents-001` のみ。現行設定で対象テストの登録を確認できたため、追加編集は行わず、登録と型検査への接続確認を後続工程へ引き継ぐ。
+裁定が採用した指摘のみを対象とし、修正対象は `TEST-NEW-tsconfig-internal-agents-001` に限定する。`src/__tests__/workflowExecutionBootstrapDirectResume.test.ts` は現行の `tsconfig.tests.json` に登録済みのため、追加編集なし、確認のみとし、登録と型検査への接続確認を後続工程へ引き継ぐ。
 
 型検査対象への包含と型検査成功は区別する。本工程では解消判定を行わない。
 
