@@ -46,7 +46,7 @@ describe('facet include expansion', () => {
     let references = 0;
     for (const directory of ['instructions', 'partials/instructions']) {
       const root = join(facetsRoot, directory);
-      const files = readdirSync(root, { recursive: true }).filter(name => name.endsWith('.md'));
+      const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter(name => name.endsWith('.md'));
       expect(files.length).toBeGreaterThan(0);
       for (const file of files) {
         const body = readFileSync(join(root, file), 'utf8');
