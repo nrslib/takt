@@ -59,8 +59,7 @@ import type { WorkflowConfig, OutputContractItem } from '../core/models/index.js
 function buildConfigWithReport(): WorkflowConfig {
   const reportContract: OutputContractItem = {
     name: '02-coder-scope.md',
-    label: 'Scope',
-    description: 'Scope report',
+    format: 'markdown',
   };
 
   return buildDefaultWorkflowConfig({
@@ -123,7 +122,7 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
 
     // Report phase returns blocked (only implement has outputContracts, so only one call)
     const blockedResponse = makeResponse({ persona: 'implement', status: 'blocked', content: 'Need clarification for report' });
-    vi.mocked(runReportPhase).mockResolvedValueOnce({ blocked: true, response: blockedResponse });
+    vi.mocked(runReportPhase).mockResolvedValueOnce({ blocked: true, response: blockedResponse, providerInfo: { provider: 'claude', model: undefined } });
 
     const blockedFn = vi.fn();
     const abortFn = vi.fn();
@@ -156,7 +155,7 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
     ]);
 
     const blockedResponse = makeResponse({ persona: 'implement', status: 'blocked', content: 'Need info for report' });
-    vi.mocked(runReportPhase).mockResolvedValueOnce({ blocked: true, response: blockedResponse });
+    vi.mocked(runReportPhase).mockResolvedValueOnce({ blocked: true, response: blockedResponse, providerInfo: { provider: 'claude', model: undefined } });
 
     const state = await engine.run();
 
@@ -196,7 +195,7 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
 
     // Report phase: only implement has outputContracts; blocks first, succeeds on retry
     const blockedResponse = makeResponse({ persona: 'implement', status: 'blocked', content: 'Need report clarification' });
-    vi.mocked(runReportPhase).mockResolvedValueOnce({ blocked: true, response: blockedResponse }); // implement (first attempt)
+    vi.mocked(runReportPhase).mockResolvedValueOnce({ blocked: true, response: blockedResponse, providerInfo: { provider: 'claude', model: undefined } }); // implement (first attempt)
     vi.mocked(runReportPhase).mockResolvedValueOnce(undefined); // implement (retry, succeeds)
 
     const userInputFn = vi.fn();
@@ -228,7 +227,7 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
 
     const blockedContent = 'Blocked: need specific file path for report';
     const blockedResponse = makeResponse({ persona: 'implement', status: 'blocked', content: blockedContent });
-    vi.mocked(runReportPhase).mockResolvedValueOnce({ blocked: true, response: blockedResponse });
+    vi.mocked(runReportPhase).mockResolvedValueOnce({ blocked: true, response: blockedResponse, providerInfo: { provider: 'claude', model: undefined } });
 
     const blockedFn = vi.fn();
     engine.on('step:blocked', blockedFn);
@@ -248,6 +247,13 @@ describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),
+      makeResponse({
+        persona: 'implement',
+        status: 'error',
+        content: 'Cursor Agent CLI exited with code 1: Workspace Trust Required',
+        error: 'Cursor Agent CLI exited with code 1: Workspace Trust Required',
+      }),
+      // エンジンの fresh retry が 1 回走り、同じ error で確定する
       makeResponse({
         persona: 'implement',
         status: 'error',

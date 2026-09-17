@@ -435,6 +435,8 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     vi.mocked(runAgent).mockReset();
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', status: 'error', content: 'Partial output', error: 'request failed' }),
+      // エンジンの fresh retry が 1 回走り、同じ error で確定する
+      makeResponse({ persona: 'plan', status: 'error', content: 'Partial output', error: 'request failed' }),
     ]);
 
     const errorEngine = new WorkflowEngine(blockedConfig, tmpDir, 'error task', {

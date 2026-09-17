@@ -41,7 +41,6 @@ export interface Phase1Attempt {
 interface Phase1EmptyRecoveryOptions {
   readonly instruction: string;
   readonly initialSessionId: string | undefined;
-  readonly retryProviderErrorFresh: boolean;
   readonly execute: (attempt: Phase1Attempt) => Promise<AgentResponse>;
   readonly discardSession: (sessionId: string | undefined) => void;
   readonly recordSupersededAttempt?: (
@@ -239,7 +238,7 @@ function isEmptyPhase1Response(response: AgentResponse): boolean {
 function isProviderErrorEligibleForFreshRetry(response: AgentResponse): boolean {
   return response.status === 'error'
     && response.errorKind !== 'rate_limit'
-    && response.failureCategory !== AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR;
+    && response.failureCategory !== AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT;
 }
 
 function withEffectiveSession(
@@ -286,8 +285,7 @@ export async function runPhase1WithEmptyRecovery(
   let current = await execute('initial', options.instruction, options.initialSessionId);
 
   if (
-    options.retryProviderErrorFresh
-    && isProviderErrorEligibleForFreshRetry(current.response)
+    isProviderErrorEligibleForFreshRetry(current.response)
     && executionCount < MAX_PHASE1_EXECUTIONS
   ) {
     options.recordSupersededAttempt?.(current.response, current.attempt);
@@ -317,8 +315,8 @@ export async function runPhase1WithEmptyRecovery(
 
   if (!isEmptyPhase1Response(current.response)) {
     if (
-      options.retryProviderErrorFresh
-      && current.attempt.reason === 'empty_continuation'
+      (current.attempt.reason === 'empty_continuation'
+        || current.attempt.reason === 'empty_fresh')
       && isProviderErrorEligibleForFreshRetry(current.response)
       && executionCount < MAX_PHASE1_EXECUTIONS
     ) {

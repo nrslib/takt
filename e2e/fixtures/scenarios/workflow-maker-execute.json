@@ -168,6 +168,10 @@
     "content": "Simulated Workflow Maker fix failure"
   },
   {
+    "status": "error",
+    "content": "Simulated Workflow Maker fix failure"
+  },
+  {
     "persona": "interactive",
     "status": "done",
     "content": "TUI-AFTER-FAILURE-REPLY"

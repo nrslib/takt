@@ -65,7 +65,7 @@ import { runAgent } from '../agents/runner.js';
 import { WorkflowEngine, type WorkflowEngineOptions } from '../core/workflow/index.js';
 import { RuleEvaluator as ActualRuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
-import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
+import type { AgentResponse, LoopMonitorRule, WorkflowConfig } from '../core/models/index.js';
 import type { LiveInterventionChannel } from '../core/workflow/live-intervention/types.js';
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 import * as workflowExecutionBundle from '../features/tasks/execute/workflowExecutionBundle.js';
@@ -343,7 +343,7 @@ describe('WorkflowEngine live intervention integration', () => {
       maxSteps: 1,
       initialStep: 'review',
       steps: [makeStep('review', {
-        structuredOutput: { schema },
+        structuredOutput: { schemaRef: 'structured-result', schema },
         rules: [makeRule('when(structured.review.result == "accepted")', 'COMPLETE')],
       })],
     };
@@ -417,7 +417,7 @@ describe('WorkflowEngine live intervention integration', () => {
       maxSteps: 1,
       initialStep: 'review',
       steps: [makeStep('review', {
-        structuredOutput: { schema },
+        structuredOutput: { schemaRef: 'structured-result', schema },
         rules: [makeRule('done', 'COMPLETE')],
       })],
     };
@@ -573,7 +573,7 @@ describe('WorkflowEngine live intervention integration', () => {
         judge: {
           persona: 'loop-judge',
           instruction: 'Choose the next step for this loop.',
-          rules: [makeRule('judge-selected-fix', 'fix')],
+          rules: [makeRule('judge-selected-fix', 'fix') as LoopMonitorRule],
         },
       }],
       steps: [
@@ -656,7 +656,7 @@ describe('WorkflowEngine live intervention integration', () => {
 
     engine = new WorkflowEngine(config, projectCwd, 'test task', {
       ...createEngineOptions(projectCwd, store),
-      workflowCallResolver: ({ step }) => step.call === childConfig.name ? childConfig : undefined,
+      workflowCallResolver: ({ step }) => step.call === childConfig.name ? childConfig : null,
     });
     const state = await engine.run();
     const calls = vi.mocked(runAgent).mock.calls;
@@ -721,6 +721,7 @@ describe('WorkflowEngine live intervention integration', () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     const warning = vi.fn();
     const config = buildSingleStepConfig([makeRule('done', 'COMPLETE')]);
+    let providerCalls = 0;
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       const response = await dispatchMockResponse(
         persona,
@@ -728,9 +729,13 @@ describe('WorkflowEngine live intervention integration', () => {
         options,
         makeResponse({ status: 'error', content: 'provider failed', error: 'provider failed' }),
       );
-      await store.issue('未消化の一件目', '2026-09-03T00:00:00.000Z');
-      await store.issue('未消化の二件目', '2026-09-03T00:00:01.000Z');
-      failLiveInterventionRead('terminal');
+      // エンジンの fresh retry でも同じ error を返す。指示の発行は初回のみ（呼び出しごとの副作用ではない）
+      if (providerCalls === 0) {
+        await store.issue('未消化の一件目', '2026-09-03T00:00:00.000Z');
+        await store.issue('未消化の二件目', '2026-09-03T00:00:01.000Z');
+        failLiveInterventionRead('terminal');
+      }
+      providerCalls += 1;
       return response;
     });
 
@@ -877,7 +882,7 @@ describe('WorkflowEngine live intervention integration', () => {
       maxSteps: 1,
       initialStep: 'review',
       steps: [makeStep('review', {
-        structuredOutput: { schema },
+        structuredOutput: { schemaRef: 'structured-result', schema },
         completionRetry: {
           minRetry: 0,
           maxRetry: 1,
@@ -958,7 +963,7 @@ describe('WorkflowEngine live intervention integration', () => {
       maxSteps: 1,
       initialStep: 'review',
       steps: [makeStep('review', {
-        structuredOutput: { schema },
+        structuredOutput: { schemaRef: 'structured-result', schema },
         completionRetry: {
           minRetry: 0,
           maxRetry: 1,
@@ -1072,7 +1077,7 @@ describe('WorkflowEngine live intervention integration', () => {
       maxSteps: 1,
       initialStep: 'review',
       steps: [makeStep('review', {
-        structuredOutput: { schema: STRUCTURED_RESULT_SCHEMA },
+        structuredOutput: { schemaRef: 'structured-result', schema: STRUCTURED_RESULT_SCHEMA },
         completionRetry: {
           minRetry: 0,
           maxRetry: 1,
@@ -1240,7 +1245,7 @@ describe('WorkflowEngine live intervention integration', () => {
         },
       },
       steps: [makeStep('implement', {
-        structuredOutput: { schema },
+        structuredOutput: { schemaRef: 'structured-result', schema },
         companion: { fixed: ['reviewer'], pool: [] },
         rules: [makeRule('done', 'COMPLETE')],
       })],
@@ -1333,7 +1338,7 @@ describe('WorkflowEngine live intervention integration', () => {
         },
       },
       steps: [makeStep('implement', {
-        structuredOutput: { schema },
+        structuredOutput: { schemaRef: 'structured-result', schema },
         companion: { fixed: ['reviewer'], pool: [] },
         rules: [makeRule('done', 'COMPLETE')],
       })],
@@ -1507,11 +1512,13 @@ describe('WorkflowEngine live intervention integration', () => {
           userInstruction: instruction,
         });
         options.onDispatch?.(options.permissionMode);
+        // error の follow-up はエンジンの fresh retry が 1 回走るため、再試行（3 回目）も失敗させる
+        const shouldFail = status === 'error' ? mainCalls >= 2 : mainCalls === 2;
         return makeResponse({
           persona: typeof persona === 'string' ? persona : 'implementer',
-          status: mainCalls === 2 ? status : 'done',
-          content: mainCalls === 2 ? `${status} follow-up response` : 'initial implementation',
-          error: mainCalls === 2 ? 'follow-up failed' : undefined,
+          status: shouldFail ? status : 'done',
+          content: shouldFail ? `${status} follow-up response` : 'initial implementation',
+          error: shouldFail ? 'follow-up failed' : undefined,
           sessionId: `implementer-session-${mainCalls}`,
         });
       });
@@ -1538,7 +1545,7 @@ describe('WorkflowEngine live intervention integration', () => {
         completionFailure: true,
         reason: 'follow-up failed',
       });
-      expect(mainCalls).toBe(2);
+      expect(mainCalls).toBe(status === 'error' ? 3 : 2);
       expect(companionReviewCalls).toBe(1);
       expect(store.read()).toMatchObject({
         pending: 0,
@@ -1640,7 +1647,7 @@ describe('WorkflowEngine live intervention integration', () => {
     const config: WorkflowConfig = {
       ...baseConfig,
       steps: [makeStep('implement', {
-        structuredOutput: { schema: STRUCTURED_RESULT_SCHEMA },
+        structuredOutput: { schemaRef: 'structured-result', schema: STRUCTURED_RESULT_SCHEMA },
         companion: { fixed: ['reviewer'], pool: [] },
         rules: [makeRule('done', 'COMPLETE')],
       })],
@@ -1760,7 +1767,7 @@ describe('WorkflowEngine live intervention integration', () => {
         },
       },
       steps: [makeStep('review', {
-        structuredOutput: { schema },
+        structuredOutput: { schemaRef: 'structured-result', schema },
         companion: { fixed: ['reviewer'], pool: [] },
         completionRetry: {
           minRetry: 0,
@@ -1872,7 +1879,7 @@ describe('WorkflowEngine live intervention integration', () => {
           },
         },
         steps: [makeStep('review', {
-          structuredOutput: { schema },
+          structuredOutput: { schemaRef: 'structured-result', schema },
           companion: { fixed: ['reviewer'], pool: [] },
           completionRetry: {
             minRetry: 0,
@@ -2095,6 +2102,7 @@ describe('WorkflowEngine live intervention integration', () => {
   it('reports unconsumed instructions from a failed executeWorkflow through the output adapter', async () => {
     const cloneCwd = mkdtempSync(join(tmpdir(), 'takt-live-engine-failed-'));
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    let providerCalls = 0;
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       const response = await dispatchMockResponse(
         persona,
@@ -2102,8 +2110,12 @@ describe('WorkflowEngine live intervention integration', () => {
         options,
         makeResponse({ status: 'error', content: 'provider failed', error: 'provider failed' }),
       );
-      await store.issue('failed instruction one', '2026-09-03T00:00:00.000Z');
-      await store.issue('failed instruction two', '2026-09-03T00:00:01.000Z');
+      // エンジンの fresh retry でも同じ error を返す。指示の発行は初回のみ（呼び出しごとの副作用ではない）
+      if (providerCalls === 0) {
+        await store.issue('failed instruction one', '2026-09-03T00:00:00.000Z');
+        await store.issue('failed instruction two', '2026-09-03T00:00:01.000Z');
+      }
+      providerCalls += 1;
       return response;
     });
 

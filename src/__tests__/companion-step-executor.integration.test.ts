@@ -908,6 +908,15 @@ describe('companion StepExecutor lifecycle', () => {
             ? { error: 'follow-up failed: token=secret at /private/project/file.ts' }
             : {}),
         },
+        // error 終端の follow-up はエンジンの fresh retry が 1 回走るため再試行分も並べる
+        ...(status === 'error'
+          ? [{
+              persona: 'coder',
+              status,
+              content: `follow-up ${status}`,
+              error: 'follow-up failed: token=secret at /private/project/file.ts',
+            }]
+          : []),
       ]);
       const executeAgentMock = vi.mocked(executeAgent);
       executeAgentMock.mockImplementation(async (persona, prompt, options) => {
@@ -937,7 +946,7 @@ describe('companion StepExecutor lifecycle', () => {
 
       expect(result.response).toMatchObject({ status: 'done', content: 'implemented' });
       const coderCalls = executeAgentMock.mock.calls.filter(([persona]) => persona === 'coder');
-      expect(coderCalls).toHaveLength(2);
+      expect(coderCalls).toHaveLength(status === 'error' ? 3 : 2);
       expect(coderCalls[1]?.[2]?.sessionId).toBeDefined();
       expect(result.response.sessionId).toBe(coderCalls[1]?.[2]?.sessionId);
       expect(workflowState.stepOutputs.get('implement')).toBe(result.response);
@@ -990,6 +999,13 @@ describe('companion StepExecutor lifecycle', () => {
           findings: [{ action: 'accept', sourceIndex: 0 }],
         },
       },
+      {
+        persona: 'coder',
+        status: 'error',
+        content: 'follow-up failed',
+        error: 'follow-up failed',
+      },
+      // エンジンの fresh retry が 1 回走り、同じ error で確定する
       {
         persona: 'coder',
         status: 'error',
@@ -1057,7 +1073,7 @@ describe('companion StepExecutor lifecycle', () => {
       followUpRounds: 1,
       reason: 'follow-up failed',
     });
-    expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'coder')).toHaveLength(3);
+    expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'coder')).toHaveLength(4);
     expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'reviewer')).toHaveLength(1);
     expect(executeAgentMock.mock.calls.filter(([persona]) => persona === 'moderator')).toHaveLength(1);
     const terminalEvents = emitEvent.mock.calls.filter(([event]) => event === 'companion:complete');

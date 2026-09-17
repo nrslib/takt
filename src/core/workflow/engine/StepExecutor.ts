@@ -688,7 +688,6 @@ export class StepExecutor {
         const recovery = await runPhase1WithEmptyRecovery({
           instruction: attempt.instruction,
           initialSessionId: attempt.sessionId,
-          retryProviderErrorFresh: false,
           execute: async (recoveryAttempt) => {
             const phaseAttempt = resolvePhaseAttempt(recoveryAttempt);
             try {
@@ -1728,7 +1727,6 @@ export class StepExecutor {
         initialSessionId: executableStep.internalFreshSession === true
           ? undefined
           : agentOptions.sessionId,
-        retryProviderErrorFresh: false,
         execute: async (attempt) => {
           const result = await executeObservedPhase1Attempt({
             enabled: this.deps.observabilityEnabled?.() === true,
@@ -2071,7 +2069,6 @@ export class StepExecutor {
           const retryResponse = await runPhase1WithEmptyRecovery({
             instruction: retryInstruction,
             initialSessionId: retrySessionId,
-            retryProviderErrorFresh: false,
             execute: async (attempt) => {
               const observedAttempt = resolveObservedAttempt(attempt);
               const observed = await executeObservedPhase1Attempt({

@@ -1178,6 +1178,8 @@ steps:
           },
         },
         { status: 'error', content: `FIX-REACHED-AFTER-${doctorState.toUpperCase()}-DOCTOR` },
+        // エンジンの fresh retry でも同じ error を返して fix 失敗を確定させる
+        { status: 'error', content: `FIX-REACHED-AFTER-${doctorState.toUpperCase()}-DOCTOR` },
       ]), 'utf-8');
       const callLog = join(testRepo.path, `workflow-maker-doctor-${doctorState}-calls.jsonl`);
       const tui = start(scenarioPath, ['make'], { TAKT_MOCK_CALL_LOG: callLog });

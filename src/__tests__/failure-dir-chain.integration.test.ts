@@ -70,7 +70,7 @@ describe('failureDir propagation through the complete Codex workflow chain', () 
     rmSync(projectCwd, { recursive: true, force: true });
   });
 
-  it('persists oversized SDK parse failures and aborts as step_error without retrying', async () => {
+  it('persists oversized SDK parse failures and aborts as step_error after one fresh-session retry', async () => {
     const engine = new WorkflowEngine(
       createWorkflowConfig(),
       projectCwd,
@@ -102,20 +102,18 @@ describe('failureDir propagation through the complete Codex workflow chain', () 
     expect(Buffer.byteLength(abortReason ?? '')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(Buffer.byteLength(abortFailureError ?? '')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(abortReason).not.toContain('Step execution failed:');
-    expect(codexCallCount).toBe(1);
+    expect(codexCallCount).toBe(2);
 
     const failureDir = join(projectCwd, '.takt', 'runs', 'failure-dir-chain', 'failures');
     const failureFiles = readdirSync(failureDir);
     const expectedFullText = `provider stream parse error: ${PARSE_FAILURE_DETAIL}`;
 
-    expect(failureFiles).toHaveLength(1);
-    const failureFile = failureFiles[0];
-    expect(failureFile).toBeDefined();
-    if (failureFile === undefined) {
-      throw new Error('Expected one persisted failure file');
+    // 初回試行と fresh セッションでの再試行が 1 件ずつ永続化される
+    expect(failureFiles).toHaveLength(2);
+    for (const failureFile of failureFiles) {
+      const failurePath = join(failureDir, failureFile);
+      expect(readFileSync(failurePath, 'utf8')).toBe(expectedFullText);
+      expect(statSync(failurePath).mode & 0o777).toBe(0o600);
     }
-    const failurePath = join(failureDir, failureFile);
-    expect(readFileSync(failurePath, 'utf8')).toBe(expectedFullText);
-    expect(statSync(failurePath).mode & 0o777).toBe(0o600);
   });
 });

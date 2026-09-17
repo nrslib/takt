@@ -48,6 +48,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/runAllTasks-concurrency.test.ts',
   'src/__tests__/selector-input-reader.test.ts',
   'src/__tests__/step-executor.test.ts',
+  'src/__tests__/step-executor-provider-error-retry.test.ts',
   'src/__tests__/task-review-scope.test.ts',
   'src/__tests__/team-leader-runner-structured-caller.test.ts',
   'src/__tests__/token-usage-csv.test.ts',

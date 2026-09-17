@@ -476,7 +476,7 @@ describe('CodexClient retry', () => {
     let elapsedMs = 0;
 
     for (let index = 0; index < CODEX_CAPPED_RETRY_DELAYS_MS.length; index += 1) {
-      const delayMs = CODEX_CAPPED_RETRY_DELAYS_MS[index];
+      const delayMs = CODEX_CAPPED_RETRY_DELAYS_MS[index]!;
       await vi.advanceTimersByTimeAsync(delayMs - 1);
       expect(resumeThreadCalls).toHaveLength(index);
 
@@ -1204,7 +1204,7 @@ describe('CodexClient retry', () => {
     const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
 
     for (let index = 0; index < CODEX_CAPPED_RETRY_DELAYS_MS.length; index += 1) {
-      await vi.advanceTimersByTimeAsync(CODEX_CAPPED_RETRY_DELAYS_MS[index]);
+      await vi.advanceTimersByTimeAsync(CODEX_CAPPED_RETRY_DELAYS_MS[index]!);
       expect(resumeThreadCalls).toHaveLength(index + 1);
     }
 
