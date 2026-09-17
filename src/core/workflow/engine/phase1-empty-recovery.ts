@@ -315,7 +315,8 @@ export async function runPhase1WithEmptyRecovery(
 
   if (!isEmptyPhase1Response(current.response)) {
     if (
-      current.attempt.reason === 'empty_continuation'
+      (current.attempt.reason === 'empty_continuation'
+        || current.attempt.reason === 'empty_fresh')
       && isProviderErrorEligibleForFreshRetry(current.response)
       && executionCount < MAX_PHASE1_EXECUTIONS
     ) {

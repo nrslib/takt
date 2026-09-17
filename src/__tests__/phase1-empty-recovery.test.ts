@@ -368,6 +368,37 @@ describe('Phase 1 empty response recovery', () => {
     expect(result.response.content).toBe('complete fresh');
   });
 
+  it('retries a provider error fresh after an empty fresh recovery', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce(response({ content: '', sessionId: undefined }))
+      .mockResolvedValueOnce(response({
+        status: 'error',
+        content: '',
+        error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      }))
+      .mockResolvedValueOnce(response({ content: 'complete after provider error', sessionId: 'session-fresh' }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: undefined,
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute.mock.calls.map(([attempt]) => [
+      attempt.reason,
+      attempt.instruction,
+      attempt.sessionId,
+    ])).toEqual([
+      ['initial', 'original instruction', undefined],
+      ['empty_fresh', 'original instruction', undefined],
+      ['provider_error_fresh', 'original instruction', undefined],
+    ]);
+    expect(result.response.content).toBe('complete after provider error');
+  });
+
   it('does not start a second fresh retry when provider recovery returns empty without a session', async () => {
     const execute = vi.fn()
       .mockResolvedValueOnce(response({
