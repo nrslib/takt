@@ -240,21 +240,7 @@ execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with
 `npm run eval:prompts:fix-plan-cause-check`.
 
-The `fix-plan-blocker-absorption` suite checks whether a planner includes type
-errors exposed by registering a changed test in the same repair unit, rather
-than repeating a confirmation-only plan or treating the repair as refutation.
-It uses a reduced fixture and seeded reports derived from a real remediation
-run, with repository-relative paths; source line numbers in the reports refer
-to that run, not the reduced fixture. Claude Opus 5, Codex Luna Max, and Codex
-Sol High each run three times, serially in isolated copies, with uncached
-generation and an external semantic rubric. It requires both CLI logins and
-is excluded from the default run. Invoke it explicitly with
-`npm run eval:prompts:fix-plan-blocker-absorption`; this fixed-input planning
-evaluation does not execute the repair or measure full-loop convergence.
-The Phase 2 case passes its actual Phase 1 response into the same CLI session
-and scores only the resulting plan report's policy-rule column and caveats;
-the Phase 1 response is retained in result metadata, not supplied as a canned answer.
-旧版との比較は、prepare の対象 step を fix-plan に切り替え、変更した ja ファセットを main の内容に差し替えて同じ fixture と rubric で実行する。Phase 2 ケースはレポート内容の評価であり、runtime の Phase 2 ツール禁止契約までは再現しない。
+`fix-plan-blocker-absorption` は、登録で露出した型エラーを同じ修正単位に含め、確認のみの計画や修正を反証と呼ぶ読み替えを避ける、改修後の振る舞いを固定する回帰ガードであり、改修の効果を実証するものではない。実 run に合わせた中立的な指示と、確認のみ・反証・テスト本体を変更しない範囲を記した前回計画を使い、Claude Opus 5 / Codex Luna Max / Codex Sol High 各3回で Phase 1 を比較した結果、赤（origin/main のファセット、初回 fix-plan）は9/9合格、緑（改修後、fix-replan）は8/9合格だった。緑の不合格1件は Codex Luna が「登録漏れ自体は反証済み」と記したもので、反証の読み替えとして意図どおり不合格となった。改修後のみ実施した Phase 2 の記録契約評価は7/9合格で、不合格2件は規則名の列に持ち越し規則以外の規則名だけを記したものだった。上位3モデルはこの縮約 fixture では main の手順でも正しく計画できるため、この suite は改修前後を弁別しない。実 run の非収束（Codex Luna、25KB の指示書、切り詰められたポリシー、長い run の文脈）は再現できておらず、弁別の証拠を得るには、より弱いモデル（opencode 経由の無料モデルなど）での比較か、実 run 相当の文脈量での再現が必要となる。実行は `npm run eval:prompts:fix-plan-blocker-absorption` で明示指定し、両 CLI のログインを必要とするためデフォルト実行には含めない。隔離コピーで直列・生成キャッシュ無効・外部 rubric による採点を行い、修正の実行やループ全体の収束は測定しない。Phase 2 は同一 CLI セッションの Phase 1 実応答を引き継ぎ、計画レポートの規則名列と留意点だけを採点する。Phase 1 実応答は結果の metadata に保持する。旧版との比較は、prepare の対象 step を fix-plan に切り替え、変更した ja ファセットを main の内容に差し替えて同じ fixture と rubric で実行する。Phase 2 ケースはレポート内容の評価であり、runtime の Phase 2 ツール禁止契約までは再現しない。
 
 The `fix-plan-bounded-proof` suite runs Claude Opus 5, Codex Luna Max, and
 Codex Sol High against a regression extracted from a real remediation run. It
@@ -360,7 +346,7 @@ remain excluded.
 | `fix-verifier-state-routing` | review-remediation / fix-verifier status judgement | fix-verifier-state-closure | whether workflow-owned rules route a report containing both a plan defect and an implementation gap to fix-plan |
 | `fix-verifier-model-matrix` | review-remediation / fix-verifier | fix-verifier-state-closure | source-derived state closure and workflow-owned mixed-gap routing measured separately on Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3 |
 | `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes a duplicate review update from possible causes and declines to serialize parallel execution until the cause is confirmed, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
-| `fix-plan-blocker-absorption` | peer-review / fix-replan（旧版比較時のみ fix-plan） | fix-plan-blocker-absorption | whether the planner absorbs repair-exposed type errors into the accepted repair, addresses the implementer's blocker, and preserves excluded findings and genuine refutation boundaries |
+| `fix-plan-blocker-absorption` | peer-review / fix-replan（旧版比較時のみ fix-plan） | fix-plan-blocker-absorption | 改修後の計画・記録契約の回帰ガード。3モデル×3回で Phase 1 は赤9/9・緑8/9、Phase 2 は改修後7/9。上位モデルでは改修前後を弁別せず、改善効果の証拠とはしない |
 | `fix-plan-bounded-proof` | peer-review / fix-plan | fix-plan-bounded-proof | whether Opus 5, Luna Max, and Sol High turn broad format, consumer, and boundary claims into source-backed concrete rows for report variants, helper limits, absence states, branch identity, and locale consumers |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the accepted group of findings, covers every affected use of the same rule, and does not revive findings that were excluded |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
