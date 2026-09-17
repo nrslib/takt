@@ -240,6 +240,22 @@ execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with
 `npm run eval:prompts:fix-plan-cause-check`.
 
+The `fix-plan-blocker-absorption` suite checks whether a planner includes type
+errors exposed by registering a changed test in the same repair unit, rather
+than repeating a confirmation-only plan or treating the repair as refutation.
+It uses a reduced fixture and seeded reports derived from a real remediation
+run, with repository-relative paths; source line numbers in the reports refer
+to that run, not the reduced fixture. Claude Opus 5, Codex Luna Max, and Codex
+Sol High each run three times, serially in isolated copies, with uncached
+generation and an external semantic rubric. It requires both CLI logins and
+is excluded from the default run. Invoke it explicitly with
+`npm run eval:prompts:fix-plan-blocker-absorption`; this fixed-input planning
+evaluation does not execute the repair or measure full-loop convergence.
+The Phase 2 case passes its actual Phase 1 response into the same CLI session
+and scores only the resulting plan report's policy-rule column and caveats;
+the Phase 1 response is retained in result metadata, not supplied as a canned answer.
+旧版との比較は、prepare の対象 step を fix-plan に切り替え、変更した ja ファセットを main の内容に差し替えて同じ fixture と rubric で実行する。Phase 2 ケースはレポート内容の評価であり、runtime の Phase 2 ツール禁止契約までは再現しない。
+
 The `fix-plan-bounded-proof` suite runs Claude Opus 5, Codex Luna Max, and
 Codex Sol High against a regression extracted from a real remediation run. It
 checks that a planner replaces umbrella coverage with concrete report-format,
@@ -344,6 +360,7 @@ remain excluded.
 | `fix-verifier-state-routing` | review-remediation / fix-verifier status judgement | fix-verifier-state-closure | whether workflow-owned rules route a report containing both a plan defect and an implementation gap to fix-plan |
 | `fix-verifier-model-matrix` | review-remediation / fix-verifier | fix-verifier-state-closure | source-derived state closure and workflow-owned mixed-gap routing measured separately on Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3 |
 | `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes a duplicate review update from possible causes and declines to serialize parallel execution until the cause is confirmed, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
+| `fix-plan-blocker-absorption` | peer-review / fix-replan（旧版比較時のみ fix-plan） | fix-plan-blocker-absorption | whether the planner absorbs repair-exposed type errors into the accepted repair, addresses the implementer's blocker, and preserves excluded findings and genuine refutation boundaries |
 | `fix-plan-bounded-proof` | peer-review / fix-plan | fix-plan-bounded-proof | whether Opus 5, Luna Max, and Sol High turn broad format, consumer, and boundary claims into source-backed concrete rows for report variants, helper limits, absence states, branch identity, and locale consumers |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the accepted group of findings, covers every affected use of the same rule, and does not revive findings that were excluded |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |

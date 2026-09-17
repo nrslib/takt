@@ -179,6 +179,25 @@ describe('shipped development completion and remediation routes', () => {
     expect((await execute(config, 'replan', 2)).nextStep).toBe('ABORT');
   });
 
+  it.each(variants(remediations))('$language/$name keeps return guidance exclusive to replanning and supplies reopening criteria', ({ language, name }) => {
+    const config = load(language, name);
+    const returnGuidance = language === 'ja'
+      ? '実質同一の計画を繰り返さない'
+      : 'substantively identical plan';
+    const initialPlan = config.steps.find(step => step.name === 'fix-plan');
+    const replan = config.steps.find(step => step.name === 'fix-replan');
+    expect(initialPlan?.instruction).toContain(language === 'ja' ? '全修正対象と受入条件を列挙' : 'Enumerate every remediation target');
+    expect(initialPlan?.instruction).not.toContain(returnGuidance);
+    expect(replan?.instruction).toContain(returnGuidance);
+    if (name === 'review-remediation') {
+      const reopened = language === 'ja'
+        ? '修正が同じ問題を再導入した場合だけ'
+        : 'reintroduced the same issue';
+      const adjudication = config.steps.find(step => step.name === 'review-adjudication');
+      expect(adjudication?.instruction).toContain(reopened);
+    }
+  });
+
   it.each(variants(remediations))('$language/$name executes plan-scoped investigation in fix and preserves the repair path', async ({ language, name }) => {
     const config = load(language, name);
     expect(config.steps.find(step => step.name === 'investigate')).toBeUndefined();
@@ -209,12 +228,13 @@ describe('shipped development completion and remediation routes', () => {
     const config = load(language, name);
     const detector = new CycleDetector(config.loopMonitors);
     expect(config.loopMonitors?.some(monitor => monitor.cycle.includes('investigate')) ?? false).toBe(false);
+    const planningStep = 'fix-replan';
     for (let cycle = 1; cycle <= 4; cycle++) {
-      expect(detector.recordAndCheck('fix-plan', 'fix').triggered).toBe(false);
-      const result = detector.recordAndCheck('fix', 'fix-plan');
+      expect(detector.recordAndCheck(planningStep, 'fix').triggered).toBe(false);
+      const result = detector.recordAndCheck('fix', planningStep);
       expect(result.triggered).toBe(cycle === 4);
       if (result.triggered) {
-        expect(result.monitor?.judge.rules.map(rule => rule.next)).toEqual(['fix-plan', 'fix-plan', 'fix-plan', 'ABORT']);
+        expect(result.monitor?.judge.rules.map(rule => rule.next)).toEqual([planningStep, planningStep, planningStep, 'ABORT']);
       }
     }
   });

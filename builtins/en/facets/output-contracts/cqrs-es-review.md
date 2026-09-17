@@ -30,6 +30,8 @@
 {{include:output-contracts/base-review-reopened-findings}}
 | 1 | CQRS-REOPENED-src-file-L55 | cqrs-violation | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at src/file.ts:55` | Issue description | Fix approach |
 
+{{include:output-contracts/base-review-non-finding-concerns}}
+
 {{include:output-contracts/base-review-reopened}}
 ## Rejection Gate
 {{include:output-contracts/base-review-rejection-gate}}

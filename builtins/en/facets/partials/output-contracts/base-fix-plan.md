@@ -9,9 +9,9 @@
 | {ID and report name} | {Name for repairs sharing the same cause and completion criteria} | {Report or file:line} | {Source-required states, operation, evaluation time, observation target, expected result} |
 
 ## Repair Units
-| Repair Unit | Cause | Condition to Preserve | Relevant Paths | Changes | Excluded Scope |
-|-------------|-------|-----------------------|----------------|---------|----------------|
-| {Name} | {Verified cause and primary alternatives ruled out} | {Externally observable condition} | {Actual paths from the top-level production entry through every relevant stage to the observable result} | {Minimum necessary changes} | {Separate contracts, adjacent work, and unnecessary mechanism changes} |
+| Repair Unit | Cause | Condition to Preserve | Relevant Paths | Changes | Excluded Scope | Policy Rules Supporting the Repair Boundary |
+|-------------|-------|-----------------------|----------------|---------|----------------|--------------------------------------------|
+| {Name} | {Verified cause and primary alternatives ruled out} | {Externally observable condition} | {Actual paths from the top-level production entry through every relevant stage to the observable result} | {Minimum necessary changes} | {Separate contracts, adjacent work, and unnecessary mechanism changes} | {Applied rule names and how they support the boundary decision} |
 
 ## Impact Paths
 | Repair Unit / Path | Source of Truth and Input / State | Entry to Observable Result | Treatment | Successful Example | Counterexample Detecting a Violation |
@@ -30,6 +30,9 @@
 
 ## Plan-scoped Investigation
 {None, or the finding ID, unresolved hypothesis, fixed conditions, single varied condition, observation target, execution method, and result-dependent repair and verification to execute as a repair unit}
+
+## Caveats
+{None, or items excluded from the plan because they cannot be resolved within the current requirements, their evidence, affected acceptance criteria, and the next stage responsible for them}
 
 ## Replanning Items
 - {None, or evidence that the cause, requirement, or repair boundary cannot be established and the decision needed}

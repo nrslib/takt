@@ -12,7 +12,7 @@ Recheck the gaps claimed by the latest completion verification, correct the supp
 {{include:instructions/quality-gate-causality}}
 
 **Procedure after a verifier return:**
-1. Check finding premises and counterevidence, then map only established gaps to completion obligations in the plan. For refuted premises, record why confirmation alone is sufficient and exclude those items from the repair steps below
+1. Apply the refutation definition in "Finding Reassessment and Tracking", then map only established gaps to completion obligations in the plan. For items meeting that definition, record why confirmation alone is sufficient and exclude those items from the repair steps below
 2. Do not split problems with the same cause, condition, and acceptance criteria based only on physical code locations or file paths
 3. Determine why the previous evidence missed each gap: an unscanned path, weak observation, false assumption, incomplete migration, unexecuted counterexample, or overstated completion report
 4. When the observation or detection method itself failed, recheck every obligation closed with the same assumption, search method, or evidence

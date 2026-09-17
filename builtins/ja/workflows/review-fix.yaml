@@ -70,6 +70,7 @@ steps:
         - review
         - architecture
       fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
+      fix_replan_instruction: scenario-based-fix-replan
       fix_plan_report_format: scenario-based-fix-plan
       final_gate_instruction: scenario-based-supervise-review-resolution
     rules:

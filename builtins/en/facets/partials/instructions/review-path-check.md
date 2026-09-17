@@ -2,7 +2,7 @@
 
 Review only the current change request and presented review scope. Within that scope, inspect every path involved in changed invariants, established contracts that must remain intact, and regressions caused by repairs. Do not claim coverage beyond it.
 
-Identify what can be decided in this review and why from the original requirements, acceptance criteria, public specifications, and actual consumer dependencies.
+Identify what can be decided in this review and why from the original requirements, acceptance criteria, public specifications, and actual consumer dependencies. Compare caveats in the plan report (items carried forward as open questions in a regular plan) as well, and keep items not submitted as findings traceable in the report with their carry-forward treatment.
 
 Inspect consumers and branches directly reachable from actual entry points. Separate concrete conditions when their input, precondition, dependency outcome, or externally observable result differs. Record evidence for conditions classified as out of scope or unreachable.
 

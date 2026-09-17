@@ -30,6 +30,8 @@
 {{include:output-contracts/base-review-reopened-findings}}
 | 1 | TF-REOPENED-file-L55 | tf-convention | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at file.tf:55` | Issue description | Fix approach |
 
+{{include:output-contracts/base-review-non-finding-concerns}}
+
 {{include:output-contracts/base-review-reopened}}
 ## Rejection Gate
 {{include:output-contracts/base-review-rejection-gate}}
@@ -37,6 +39,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE → Summary only (5 lines or fewer)
+- APPROVE → Summary only (5 lines or fewer). Never omit Non-Finding Concerns (including carry-forwards of plan caveats) when they have content
 - REJECT → Include every verified finding row and aggregate locations with the same cause
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

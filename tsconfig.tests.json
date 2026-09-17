@@ -66,6 +66,8 @@
     "src/__tests__/exec-tui-conversation.test.ts",
     "src/__tests__/exec-workflowRunner.integration.test.ts",
     "src/__tests__/execution-locations.test.ts",
+    "src/__tests__/fix-replan-routing.integration.test.ts",
+    "src/__tests__/fix-verifier-routing-contract.integration.test.ts",
     "src/__tests__/fixtures/task-store-stale-recovery.ts",
     "src/__tests__/formalSpecPromptTemplates.test.ts",
     "src/__tests__/formalSpecVerifier.integration.test.ts",

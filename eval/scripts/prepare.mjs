@@ -67,6 +67,7 @@ const TARGETS = [
   { id: 'fix-plan-fresh-findings', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-fresh-findings' },
   { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
   { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
+  { id: 'fix-plan-blocker-absorption', workflow: 'peer-review', step: 'fix-replan', fixture: 'eval/fixtures/fix-plan-blocker-absorption', reportFile: 'fix-plan.md' },
   { id: 'fix-plan-bounded-proof', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-bounded-proof' },
   {
     id: 'fix-plan-impact-closure-primary',
@@ -618,6 +619,7 @@ async function main() {
     artifacts,
     phase: requestedPhase,
     targetFile,
+    reportFile,
     dynamicFacetSelection,
     snapshotPrefix,
   } of targets) {
@@ -815,6 +817,21 @@ async function main() {
     mkdirSync(outDir, { recursive: true });
     const outPath = join(outDir, `${id}.${resolvedPhase}.md`);
     writeFileSync(outPath, assembled);
+    if (reportFile !== undefined) {
+      const reportInstruction = new ReportInstructionBuilder(target, {
+        cwd: runDir,
+        task: TASK_MARKER,
+        reportDir,
+        stepIteration: 1,
+        language,
+        targetFile: reportFile,
+        lastResponse: PREV_MARKER,
+      }).build();
+      const reportPrompt = (persona ? `${persona}\n\n${reportInstruction}` : reportInstruction)
+        .replaceAll(TASK_MARKER, '{{task}}')
+        .replaceAll(PREV_MARKER, '{{previous_response}}');
+      writeFileSync(join(outDir, `${id}.phase2.md`), reportPrompt);
+    }
 
     const targetName = companionName ?? (monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName);
     console.log(`[${id}] ${workflowName ?? 'companion'}/${targetName}${mutable ? ' (mutable copy)' : ''}`);

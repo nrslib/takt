@@ -1,0 +1,81 @@
+description: 'TAKT ファセット評価: 修正で露出した型エラーを同じ修正単位の完了義務として計画する'
+
+prompts:
+  - file://../../prompts/fix-plan-blocker-absorption.phase1.md
+
+providers:
+  - id: file://../../providers/cli-plan-report.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/fix-plan-blocker-absorption
+      isolate_working_dir: true
+      report_prompt: prompts/fix-plan-blocker-absorption.phase2.md
+  - id: file://../../providers/cli-plan-report.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/fix-plan-blocker-absorption
+      isolate_working_dir: true
+      report_prompt: prompts/fix-plan-blocker-absorption.phase2.md
+  - id: file://../../providers/cli-plan-report.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/fix-plan-blocker-absorption
+      isolate_working_dir: true
+      report_prompt: prompts/fix-plan-blocker-absorption.phase2.md
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+evaluateOptions:
+  maxConcurrency: 1
+  repeat: 3
+
+tests:
+  - description: '登録後の型検査 exit 2 を受け、確認のみの修正計画を見直す'
+    vars:
+      output_phase: phase1
+      task: file://../../cases/fix-plan-blocker-absorption-task.md
+      previous_response: file://../../cases/fix-plan-blocker-absorption-previous.md
+    assert:
+      - type: llm-rubric
+        metric: fix-plan/blocker-absorption
+        value: |
+          Phase1 の実応答について、実装担当に渡す修正方針と境界を評価する。Phase2 の出力契約や記録欄への準拠は要求しない。
+          次の条件をすべて満たす場合だけ合格とする。
+          - 採用指摘 TEST-NEW-tsconfig-internal-agents-001 の登録修正で露出し、その受入条件の達成を妨げる型エラーを、同じ修正単位の未完了義務として扱う。src/__tests__/workflowExecutionBootstrapDirectResume.test.ts 本体を変更対象に含め、確認済みの attachWorkflowOpaqueRef 重複 import の解消と、残る型診断の確認・必要な修正、登録を維持した型検査の成功まで計画する。未確認の個別診断を捏造する必要はない。
+          - 「修正計画の見直しが必要」という報告に対し、型エラーで進めない理由への方針を示し、前回と実質同一の確認のみの計画を返さない。
+          - 実 Codex の TOML 解決、Windows の実 spawn、watcher.test.ts の timing failure は裁定の除外を維持する。型エラーの修正をこれらの再採用と混同しない。
+          - 登録は修正されたのであり、指摘の前提そのものが誤りで修正が不要だった場合の反証ではないと区別する。過去計画の誤りとして「反証」という語を引用・否定することは許容する。
+          - このケースにはプロジェクト内の修正手段があるため、ABORT、タスク全体の再計画、裁定や利用者への修正許可の要求を既定の出口にしない。
+          - 持ち越し境界の判断では、適用ポリシーの持ち越しに関する規則（「即座修正」/「Fix immediately」等）を判断根拠として挙げ、採用指摘の受入条件に必要な型エラー修正は同じ修正単位に含め、元の17件全体の実証制約だけを後続検証へ持ち越し、裁定済みの除外項目は再採用しないという方針へ結び付ける。規則名の列挙だけでは合格にしない。記載位置・列名・レポート形式は評価しない。
+          以下はいずれも不合格とする: 確認のみを返す、テスト本体を変更しない範囲に置く、型エラーを新規指摘として棚上げする、登録を取り消す・型検査設定を緩和することで失敗を回避する、「前提は反証された」として確認のみにする、解消可能なのに ABORT や全体再計画へ送る。
+
+  - description: 'Phase1実応答を引き継いだ計画レポートが修正境界と持ち越しを記録する'
+    vars:
+      output_phase: phase2
+      task: file://../../cases/fix-plan-blocker-absorption-task.md
+      previous_response: file://../../cases/fix-plan-blocker-absorption-previous.md
+    assert:
+      - type: llm-rubric
+        metric: fix-plan/blocker-absorption-report
+        value: |
+          採点対象はPhase1の実応答を引き継いで生成されたPhase2の修正計画レポートのみとする。
+          次のD/F記録契約を両方満たす場合だけ合格とする。
+          - F: 「修正単位」表の「修正境界の根拠となるポリシー規則」列に、適用ポリシーの持ち越しに関する規則（「即座修正」/「Fix immediately」等）と今回の境界判断との対応を記録する。TEST-NEW-tsconfig-internal-agents-001 の登録修正で露出した型エラーは受入条件達成に必要なので同じ修正単位へ含め、対象テスト本体の attachWorkflowOpaqueRef 重複 import 解消と残る診断の調査・必要な修正を変更対象とする。元の17件全体の実証制約だけを持ち越す一方、実 Codex の TOML 解決、Windows の実 spawn、watcher.test.ts の timing failure は裁定済みの除外として維持する。規則名だけの列挙や、登録修正を前提の反証として扱う記録は不合格とする。
+          - D: 「留意点」欄に、現行要求・環境で解消できず計画から外した事項として、元の17テスト全体の修正後の型検査成功の実証を記録する。根拠は対象1件のみの縮約ソース、残り16件と元コード全文の不在、および元リポジトリの取得・再構成を行わない制約とする。影響する受入条件は元の17件全体を含む既存の型検査入口での修正後の成功であると示し、元の全ソースを利用できる環境での後続検証を持ち越し先として記録する。登録維持と作業コピー内の型修正・型検査成功でその条件の充足や全完了を主張せず、過去の登録確認や品質ゲート結果を修正後の成功証拠へ流用しない。実行可能な登録維持・対象テストの型修正・検証は計画内に残す。
+          欄の見出しがあるだけ、方針を確認のみに戻す、修正可能な型エラーまで持ち越す、解消可能なのに停止や全体再計画へ送る場合は不合格とする。

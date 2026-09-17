@@ -16,6 +16,7 @@ const CLASSIFICATIONS = [
     suites: [
       'fix-loop-convergence',
       'fix-plan-bounded-proof',
+      'fix-plan-blocker-absorption',
       'fix-plan-impact-closure-primary',
       'fix-plan-impact-closure-heldout',
     ],
@@ -242,6 +243,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '2つの外部CLIを使う比較 suite である',
+  },
+  'fix-plan-blocker-absorption': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '修正で露出した型エラーを同じ修正単位へ含める計画を3モデル・3反復で比較する',
   },
   'fix-plan-bounded-proof': {
     defaultEligible: false,

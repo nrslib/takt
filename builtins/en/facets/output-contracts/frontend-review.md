@@ -31,6 +31,8 @@
 {{include:output-contracts/base-review-reopened-findings}}
 | 1 | FE-REOPENED-src-file-L55 | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at src/file.tsx:55` | Issue description | Fix approach |
 
+{{include:output-contracts/base-review-non-finding-concerns}}
+
 {{include:output-contracts/base-review-reopened}}
 ## Rejection Gate
 {{include:output-contracts/base-review-rejection-gate}}
