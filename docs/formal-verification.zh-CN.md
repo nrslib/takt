@@ -30,7 +30,7 @@ assistant:
   formal_spec:
     mode: 'Y/n'     # true、false、Y/n 或 y/N（默认：y/N）
     comments: true  # 为每个形式结构添加自然语言含义注释（默认：true）
-    model_check_timeout_seconds: 300  # quint verify 与 Alloy 模型检查的上限秒数（默认：300）
+    model_check_timeout_seconds: 300  # quint verify 与 Alloy 模型检查的上限秒数，1～86400 的整数（默认：300）
 ```
 
 `true` 和 `false` 不会询问，直接使用。`Y/n` 和 `y/N` 会在交互会话开始时询问一次，大写字母是直接按 Enter 时采用的默认回答。完整选项说明请参阅[配置](./configuration.zh-CN.md)。
@@ -48,7 +48,7 @@ assistant:
 
 对于 Alloy 代码块，TAKT 独立于 Quint 结果运行 Alloy Analyzer。规范中的每个 `check` 命令都会被验证。
 
-`parse`、`typecheck`、`run` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 5 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds` 调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
+`parse`、`typecheck`、`run` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 5 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
 
 ## 验证目标的选择
 
@@ -77,7 +77,7 @@ TLC 报告违反或失败时，TAKT 会从 `Error:` 行开始提取诊断信息�
 
 若 `quint verify` 和 Alloy 被跳过，请确认 `java -version` 返回 17 或更高版本。TAKT 直接调用 `PATH` 上的 `java`。
 
-若 TLC 超时，请先增大 `model_check_timeout_seconds`。若仍无法完成，几乎可以肯定是状态空间无界。`--max-steps` 对 TLC 无效，请把所有状态变量（尤其是 `int` 变量）限制在有限范围内。
+若 TLC 超时，请先增大 `model_check_timeout_seconds`。若仍无法完成，说明状态空间过大或无界。`--max-steps` 对 TLC 无效，请把所有状态变量（尤其是 `int` 变量）限制在有限范围内。
 
 若 Alloy 的 `check` 以“Bounded engines do not support complete model checking”结束，说明命令的 scope 指定了 `1.. steps` 这类无限长 trace。TAKT 使用默认 SAT 求解器（SAT4J）运行 Alloy，只能进行有界检查；完整模型检查所需的 Electrod 和 nuXmv 不会被使用。请把 trace 长度改为有限值，例如 `for 3 but 8 steps`。
 

@@ -30,7 +30,7 @@ assistant:
   formal_spec:
     mode: 'Y/n'     # true, false, Y/n, y/N のいずれか（デフォルト: y/N）
     comments: true  # 形式構造ごとに自然言語の意味コメントを付ける（デフォルト: true）
-    model_check_timeout_seconds: 300  # quint verify と Alloy のモデル検査の上限秒数（デフォルト: 300）
+    model_check_timeout_seconds: 300  # quint verify と Alloy のモデル検査の上限秒数。1〜86400 の整数（デフォルト: 300）
 ```
 
 `true` または `false` を指定すると、質問なしでその値が使われます。`Y/n` と `y/N` を指定すると、対話セッションの開始時に一度だけ有効化するか質問され、Enter だけを押したときの既定回答が大文字側になります。設定項目の詳細は [Configuration](./configuration.ja.md) を参照してください。
@@ -48,7 +48,7 @@ Quint のブロックがある場合、TAKT は段階を順に進めます。前
 
 Alloy のブロックがある場合は、Quint の結果とは独立して Alloy Analyzer を実行します。仕様内の `check` コマンドがすべて検査対象になります。
 
-`parse`、`typecheck`、`run` には 60 秒のタイムアウトがあります。`quint verify` と Alloy Analyzer のモデル検査は既定で 5 分まで待ち、`assistant.formal_spec.model_check_timeout_seconds` で変更できます。状態数の多い仕様で TLC が打ち切られる場合は、この値を増やすか、モデルを縮約してください。
+`parse`、`typecheck`、`run` には 60 秒のタイムアウトがあります。`quint verify` と Alloy Analyzer のモデル検査は既定で 5 分まで待ち、`assistant.formal_spec.model_check_timeout_seconds`（1〜86,400 秒の整数）で変更できます。状態数の多い仕様で TLC が打ち切られる場合は、この値を増やすか、モデルを縮約してください。
 
 ## 検証対象の選ばれ方
 
@@ -77,7 +77,7 @@ TLC で違反や失敗が起きた場合、TAKT は出力から `Error:` 以降�
 
 `quint verify` と Alloy がスキップされる場合は、`java -version` が 17 以上を返すか確認してください。TAKT は `PATH` 上の `java` をそのまま呼びます。
 
-TLC がタイムアウトする場合は、まず `model_check_timeout_seconds` を増やしてください。それでも終わらないときは、状態空間が有限に収まっていないことがほとんどです。`--max-steps` は TLC には効かないため、`int` 型の変数を含むすべての状態変数の値域を有限に絞ってください。
+TLC がタイムアウトする場合は、まず `model_check_timeout_seconds` を増やしてください。それでも終わらないときは、状態空間が大きすぎるか、有限に収まっていません。`--max-steps` は TLC には効かないため、`int` 型の変数を含むすべての状態変数の値域を有限に絞ってください。
 
 Alloy の `check` が「Bounded engines do not support complete model checking」で解けない場合は、コマンドのスコープに `1.. steps` のような無限長トレースを指定しています。TAKT は Alloy を既定の SAT ソルバー（SAT4J）で実行するため有界検査しかできず、無限長トレースの完全検査に必要な Electrod と nuXmv は使いません。`for 3 but 8 steps` のようにトレース長を有限にしてください。
 

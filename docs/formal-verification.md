@@ -30,7 +30,7 @@ assistant:
   formal_spec:
     mode: 'Y/n'     # true, false, Y/n, or y/N (default: y/N)
     comments: true  # natural-language meaning comments on each formal construct (default: true)
-    model_check_timeout_seconds: 300  # limit for quint verify and Alloy model checking (default: 300)
+    model_check_timeout_seconds: 300  # limit for quint verify and Alloy model checking, integer 1-86400 (default: 300)
 ```
 
 `true` and `false` are used without asking. `Y/n` and `y/N` prompt once at the start of an interactive session; the uppercase letter is the answer chosen when you just press Enter. See [Configuration](./configuration.md) for the full option reference.
@@ -48,7 +48,7 @@ For a Quint block, TAKT runs the stages in order, and a stage that does not pass
 
 For an Alloy block, TAKT runs the Alloy Analyzer independently of the Quint results. Every `check` command in the specification is verified.
 
-`parse`, `typecheck`, and `run` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 5 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds`. If TLC is cut off on a specification with many states, raise this value or shrink the model.
+`parse`, `typecheck`, and `run` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 5 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds` (an integer from 1 to 86,400 seconds). If TLC is cut off on a specification with many states, raise this value or shrink the model.
 
 ## How targets are selected
 
@@ -77,7 +77,7 @@ When TLC reports a violation or failure, TAKT extracts the diagnostics starting 
 
 If `quint verify` and Alloy are skipped, check that `java -version` reports 17 or later. TAKT invokes `java` from `PATH` as is.
 
-If TLC times out, first raise `model_check_timeout_seconds`. If it still does not finish, the state space is almost certainly unbounded. `--max-steps` does not limit TLC, so bound every state variable, especially `int` variables, to a finite range.
+If TLC times out, first raise `model_check_timeout_seconds`. If it still does not finish, the state space is too large or unbounded. `--max-steps` does not limit TLC, so bound every state variable, especially `int` variables, to a finite range.
 
 If an Alloy `check` ends with "Bounded engines do not support complete model checking", the command scope asks for an unbounded trace such as `1.. steps`. TAKT runs Alloy with the default SAT solver (SAT4J), which can only do bounded checking; Electrod and nuXmv, which complete model checking requires, are not used. Give the trace a finite length, for example `for 3 but 8 steps`.
 

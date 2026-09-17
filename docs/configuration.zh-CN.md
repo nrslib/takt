@@ -33,7 +33,7 @@ assistant:
   formal_spec:
     mode: 'y/N'                # Alloy/Quint 模式：true、false、Y/n 或 y/N（默认 y/N）
     comments: true             # 为每个形式结构添加自然语言含义注释（默认 true）
-    model_check_timeout_seconds: 300  # /verify 中 quint verify 与 Alloy 模型检查的上限秒数（默认 300）
+    model_check_timeout_seconds: 300  # /verify 中 quint verify 与 Alloy 模型检查的上限秒数，1～86400 的整数（默认 300）
 # auto_fetch: false           # 创建 clone 前 fetch remote（默认 false）
 # base_branch: main           # 创建 clone 的基分支（默认使用 remote 默认分支）
 
@@ -192,7 +192,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` 并行任务数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | 交互模式中的 step 预览数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（正整数，默认 300），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 300），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
