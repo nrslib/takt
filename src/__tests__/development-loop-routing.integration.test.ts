@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -177,6 +177,23 @@ describe('shipped development completion and remediation routes', () => {
     expect((await execute(config, 'replan', 1)).nextStep).toBe('peer-review');
     start(config, 'replan');
     expect((await execute(config, 'replan', 2)).nextStep).toBe('ABORT');
+  });
+
+  it.each(['ja', 'en'] as const)('%s: loads scenario-based fix-replan through the dynamic remediation fragment', (language) => {
+    const resourceRoot = resolve(repoRoot, 'builtins', language);
+    const config = loadWorkflowFromFile(
+      resolve(resourceRoot, 'workflows', 'development-remediation-dynamic.yaml'),
+      directory,
+      { resourceRoot, callableArgs: { fix_replan_instruction: 'scenario-based-fix-replan' } },
+    );
+    const step = config.steps.find(candidate => candidate.name === 'fix-replan');
+    const scenario = readFileSync(resolve(resourceRoot, 'facets/partials/instructions/requirement-scenario-maintenance.md'), 'utf8').trim();
+    expect(step).toBeDefined();
+    expect(step?.instructionRef).toContain('scenario-based-fix-replan');
+    expect(step?.instructionRef).toContain('review-remediation-problem-tracking');
+    expect(step?.instruction).toContain('{report:fix-verification.md}');
+    expect(step?.instruction).toContain(scenario);
+    expect(step?.instruction).not.toContain('{{include:');
   });
 
   it.each(variants(remediations))('$language/$name keeps return guidance exclusive to replanning and supplies reopening criteria', ({ language, name }) => {
