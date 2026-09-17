@@ -143,26 +143,19 @@ describe('CodexClient failure handling', () => {
     vi.useRealTimers();
   });
 
-  it('should retry once in a fresh thread and then fail with a dedicated category when the SDK cannot parse stdout', async () => {
-    vi.useFakeTimers();
-    runPlans = [
-      createParseFailurePlan('Failed to parse item: invalid stdout line'),
-      createParseFailurePlan('Failed to parse item: invalid stdout line'),
-    ];
+  it('should fail fast with a dedicated category when the SDK cannot parse stdout', async () => {
+    runPlans = [createParseFailurePlan('Failed to parse item: invalid stdout line')];
     const onStream = vi.fn();
 
-    const resultPromise = new CodexClient().call('coder', 'prompt', {
+    const result = await new CodexClient().call('coder', 'prompt', {
       ...createFailureOptions(),
       onStream,
     });
-    await vi.advanceTimersByTimeAsync(1000);
-    const result = await resultPromise;
 
     expect(result.status).toBe('error');
     expect(result.failureCategory).toBe('provider_stream_parse_error');
     expect(result.error).toContain('Failed to parse item: invalid stdout line');
-    expect(result.retryCount).toBe(1);
-    expect(runPlanIndex).toBe(2);
+    expect(runPlanIndex).toBe(1);
     expect(onStream).toHaveBeenCalledWith({
       type: 'result',
       data: expect.objectContaining({
@@ -174,39 +167,25 @@ describe('CodexClient failure handling', () => {
   });
 
   it('should classify an iterator parse failure as parse error even when the detail contains rate-limit text', async () => {
-    vi.useFakeTimers();
-    runPlans = [
-      createParseFailurePlan(`Failed to parse item: ${'x'.repeat(9000)} 429 Too Many Requests`),
-      createParseFailurePlan(`Failed to parse item: ${'x'.repeat(9000)} 429 Too Many Requests`),
-    ];
+    runPlans = [createParseFailurePlan(`Failed to parse item: ${'x'.repeat(9000)} 429 Too Many Requests`)];
 
-    const resultPromise = new CodexClient().call('coder', 'prompt', createFailureOptions());
-    await vi.advanceTimersByTimeAsync(1000);
-    const result = await resultPromise;
+    const result = await new CodexClient().call('coder', 'prompt', createFailureOptions());
 
     expect(result.status).toBe('error');
     expect(result.failureCategory).toBe('provider_stream_parse_error');
     expect(result.error).toContain('[TRUNCATED:');
-    expect(result.retryCount).toBe(1);
-    expect(runPlanIndex).toBe(2);
+    expect(runPlanIndex).toBe(1);
   });
 
   it('should classify a turn.failed parse failure as parse error even when the detail contains rate-limit text', async () => {
-    vi.useFakeTimers();
-    runPlans = [
-      createTurnFailedPlan('Failed to parse item: invalid stdout line; 429 Too Many Requests'),
-      createTurnFailedPlan('Failed to parse item: invalid stdout line; 429 Too Many Requests'),
-    ];
+    runPlans = [createTurnFailedPlan('Failed to parse item: invalid stdout line; 429 Too Many Requests')];
 
-    const resultPromise = new CodexClient().call('coder', 'prompt', createFailureOptions());
-    await vi.advanceTimersByTimeAsync(1000);
-    const result = await resultPromise;
+    const result = await new CodexClient().call('coder', 'prompt', createFailureOptions());
 
     expect(result.status).toBe('error');
     expect(result.failureCategory).toBe('provider_stream_parse_error');
     expect(result.error).toContain('Failed to parse item: invalid stdout line');
-    expect(result.retryCount).toBe(1);
-    expect(runPlanIndex).toBe(2);
+    expect(runPlanIndex).toBe(1);
   });
 
   it('should bound an oversized rate-limit error from an iterator failure', async () => {
@@ -378,7 +357,7 @@ describe('CodexClient failure handling', () => {
     expect(result.status).toBe('done');
   });
 
-  it('should retry a provider stream parse failure once even when the detail contains a retryable pattern', async () => {
+  it('should not retry a provider stream parse failure containing a retryable pattern', async () => {
     vi.useFakeTimers();
     runPlans = [
       createParseFailurePlan('Failed to parse item: network error'),
@@ -386,7 +365,7 @@ describe('CodexClient failure handling', () => {
         type: 'events',
         events: [
           { type: 'thread.started', thread_id: 'thread-retry' },
-          { type: 'item.completed', item: { id: 'message-retry', type: 'agent_message', text: 'parse retry succeeded' } },
+          { type: 'item.completed', item: { id: 'message-retry', type: 'agent_message', text: 'unexpected retry' } },
           { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
         ],
       },
@@ -396,10 +375,9 @@ describe('CodexClient failure handling', () => {
     await vi.advanceTimersByTimeAsync(1000);
     const result = await resultPromise;
 
-    expect(runPlanIndex).toBe(2);
-    expect(result.status).toBe('done');
-    expect(result.content).toBe('parse retry succeeded');
-    expect(result.retryCount).toBe(1);
+    expect(runPlanIndex).toBe(1);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_stream_parse_error');
   });
 
   it('should not add reconnect diagnostics when a reconnect pattern appears only after the retry prefix', async () => {

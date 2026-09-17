@@ -555,6 +555,13 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           content: 'failed',
           error: 'request failed',
         }),
+        // エンジンの fresh retry が 1 回走り、同じ error で確定する
+        makeResponse({
+          persona: 'plan',
+          status: 'error',
+          content: 'failed',
+          error: 'request failed',
+        }),
       ]);
 
       const abortFn = vi.fn();

@@ -70,7 +70,7 @@ describe('failureDir propagation through the complete Codex workflow chain', () 
     rmSync(projectCwd, { recursive: true, force: true });
   });
 
-  it('persists oversized SDK parse failures and aborts as step_error after one fresh-thread retry', async () => {
+  it('persists oversized SDK parse failures and aborts as step_error after one fresh-session retry', async () => {
     const engine = new WorkflowEngine(
       createWorkflowConfig(),
       projectCwd,
@@ -108,7 +108,7 @@ describe('failureDir propagation through the complete Codex workflow chain', () 
     const failureFiles = readdirSync(failureDir);
     const expectedFullText = `provider stream parse error: ${PARSE_FAILURE_DETAIL}`;
 
-    // リトライ時のログ用と最終失敗の応答用に 1 件ずつ永続化される
+    // 初回試行と fresh セッションでの再試行が 1 件ずつ永続化される
     expect(failureFiles).toHaveLength(2);
     for (const failureFile of failureFiles) {
       const failurePath = join(failureDir, failureFile);

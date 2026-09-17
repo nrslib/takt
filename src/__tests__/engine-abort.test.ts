@@ -103,7 +103,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
 
       expect(state.status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
-      expect(abortFn.mock.calls[0][1]).toContain('SIGINT');
+      expect(abortFn.mock.calls[0]![1]).toContain('SIGINT');
       // runAgent should never be called since abort was requested before the first step
       expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
     });
@@ -127,7 +127,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
 
       expect(state.status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
-      expect(abortFn.mock.calls[0][1]).toContain('SIGINT');
+      expect(abortFn.mock.calls[0]![1]).toContain('SIGINT');
     });
   });
 
@@ -171,7 +171,13 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
       });
       vi.mocked(runAgent).mockImplementation(async () => {
         controller.abort(new Error('orchestrator timeout'));
-        return makeResponse({ status: 'error', content: 'Provider stopped', error: 'Provider stopped' });
+        // 本番 provider は abort 発火時の失敗を external_abort に分類する（classifyAbortSignalReason）
+        return makeResponse({
+          status: 'error',
+          content: 'Provider stopped',
+          error: 'Provider stopped',
+          failureCategory: 'external_abort',
+        });
       });
       const abortFn = vi.fn();
       engine.on('workflow:abort', abortFn);
