@@ -6,6 +6,8 @@ import { spawn as esmSpawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
 import '../infra/codex/codex-spawn-guard.js';
 
 type SpawnFunction = (
@@ -14,7 +16,7 @@ type SpawnFunction = (
   options?: SpawnOptions,
 ) => ChildProcess;
 
-type FakeExecutableMode = 'exit' | 'epipe' | 'hang';
+type FakeExecutableMode = 'exit' | 'epipe' | 'hang' | 'line-separator-json';
 
 const require = createRequire(import.meta.url);
 const childProcessModule = require('node:child_process') as { spawn: SpawnFunction };
@@ -32,7 +34,9 @@ function makeFakeExecutable(name: string, mode: FakeExecutableMode = 'exit'): st
       ? '#!/bin/sh\nexit 0\n'
       : mode === 'epipe'
         ? '#!/bin/sh\nexec 0<&-\nsleep 0.2\nexit 42\n'
-        : '#!/bin/sh\nexec 0<&-\nwhile :; do :; done\n';
+        : mode === 'line-separator-json'
+          ? '#!/bin/sh\nprintf \'{"a":"abc\\342\\200\\250def"}\\n\'\n'
+          : '#!/bin/sh\nexec 0<&-\nwhile :; do :; done\n';
     writeFileSync(file, script);
     chmodSync(file, 0o755);
   }
@@ -121,6 +125,26 @@ describe('codex-spawn-guard', () => {
     }
 
     await Promise.all([waitForClose(child), waitForClose(overloadChild)]);
+  });
+
+  it.skipIf(process.platform === 'win32')('keeps a JSON line with a raw U+2028 as one line through the Codex spawn wiring', async () => {
+    const child = childProcessModule.spawn(
+      makeFakeExecutable('codex', 'line-separator-json'),
+      [],
+      spawnOptions(),
+    );
+    expect(child.stdout).not.toBeNull();
+
+    const rl = createInterface({ input: child.stdout as Readable, crlfDelay: Infinity });
+    const lines: string[] = [];
+    for await (const line of rl) {
+      lines.push(line);
+    }
+    const result = await waitForClose(child);
+
+    expect(result.code).toBe(0);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] as string)).toEqual({ a: 'abc\u2028def' });
   });
 
   it.skipIf(process.platform === 'win32')('handles a real EPIPE and terminates a stuck Codex child', async () => {

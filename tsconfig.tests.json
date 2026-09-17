@@ -93,6 +93,7 @@
     "src/__tests__/it-tell-command-file-store.test.ts",
     "src/__tests__/it-web-ui-retry-dom.test.ts",
     "src/__tests__/it-workflow-all-steps-rules.test.ts",
+    "src/__tests__/json-line-separator-stream.test.ts",
     "src/__tests__/kiro-client.test.ts",
     "src/__tests__/kiro-provider-integration.test.ts",
     "src/__tests__/live-intervention-list.test.ts",
