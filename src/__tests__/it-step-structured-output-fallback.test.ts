@@ -102,7 +102,7 @@ describe('workflow structured_output fallback integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
+    const stateRecord = state as unknown as Record<string, unknown>;
 
     expect(state.status).toBe('completed');
     expect(mockGetProvider).toHaveBeenCalledWith('cursor');
@@ -169,7 +169,8 @@ describe('workflow structured_output fallback integration', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(mockProviderCall).toHaveBeenCalledOnce();
+    // エンジンの fresh retry で 1 回再実行されるが、同じ parse error で確定する
+    expect(mockProviderCall).toHaveBeenCalledTimes(2);
     expect(abortFailure).toMatchObject({
       kind: 'step_error',
       step: 'plan_fresh_improvement',
@@ -265,7 +266,7 @@ describe('workflow structured_output fallback integration', () => {
 
     const state = await engine.run();
     const callOptions = mockProviderCall.mock.calls[0]?.[2] as { outputSchema?: unknown };
-    const structuredOutputs = (state as Record<string, unknown>).structuredOutputs as Map<string, unknown>;
+    const structuredOutputs = (state as unknown as Record<string, unknown>).structuredOutputs as Map<string, unknown>;
 
     expect(state.status).toBe('aborted');
     expect(abortReason).toContain('requires structured_output');
@@ -339,7 +340,7 @@ describe('workflow structured_output fallback integration', () => {
     });
 
     const state = await engine.run();
-    const structuredOutputs = (state as Record<string, unknown>).structuredOutputs as Map<string, unknown>;
+    const structuredOutputs = (state as unknown as Record<string, unknown>).structuredOutputs as Map<string, unknown>;
 
     expect(state.status).toBe('completed');
     expect(structuredOutputs.get('plan_fresh_improvement')).toEqual(expect.objectContaining({
@@ -413,7 +414,7 @@ describe('workflow structured_output fallback integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
+    const stateRecord = state as unknown as Record<string, unknown>;
 
     expect(state.status).toBe('completed');
     expect((stateRecord.structuredOutputs as Map<string, unknown>).get('plan_followup')).toEqual({

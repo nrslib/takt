@@ -103,6 +103,13 @@ describe('WorkflowEngine workflow span outcome', () => {
         content: 'failed',
         error: 'request failed',
       }),
+      // エンジンの fresh retry が 1 回走り、同じ error で確定する
+      makeResponse({
+        persona: 'plan',
+        status: 'error',
+        content: 'failed',
+        error: 'request failed',
+      }),
     ]);
 
     await engine.runSingleIteration();
@@ -166,6 +173,13 @@ describe('WorkflowEngine workflow span outcome', () => {
     });
     const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
     mockRunAgentSequence([
+      makeResponse({
+        persona: 'plan',
+        status: 'error',
+        content: 'failed',
+        error: 'request failed',
+      }),
+      // エンジンの fresh retry が 1 回走り、同じ error で確定する
       makeResponse({
         persona: 'plan',
         status: 'error',

@@ -66,8 +66,8 @@ function mockRunAgentSequence(responses: ReturnType<typeof makeResponse>[]): voi
 
 function loopJudgeRules(): LoopMonitorRule[] {
   return [
-    normalizeRule({ condition: 'Healthy', next: 'ai_review' }),
-    normalizeRule({ condition: 'Unproductive', next: 'reviewers' }),
+    normalizeRule({ condition: 'Healthy', next: 'ai_review' }) as LoopMonitorRule,
+    normalizeRule({ condition: 'Unproductive', next: 'reviewers' }) as LoopMonitorRule,
   ];
 }
 
@@ -192,7 +192,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
       expect(state.status).toBe('completed');
       expect(cycleDetectedFn).toHaveBeenCalledOnce();
-      expect(cycleDetectedFn.mock.calls[0][1]).toBe(2); // cycleCount
+      expect(cycleDetectedFn.mock.calls[0]?.[1]).toBe(2); // cycleCount
       // 7 iterations: implement + ai_review + ai_fix + ai_review + ai_fix + judge + reviewers
       expect(state.iteration).toBe(7);
     });
@@ -255,6 +255,13 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
         makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
         makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+        makeResponse({
+          persona: 'supervisor',
+          status: 'error',
+          content: 'judge failed',
+          error: 'judge interrupted',
+        }),
+        // エンジンの fresh retry でも同じ error を返し、判定不能のまま自然遷移へ進む
         makeResponse({
           persona: 'supervisor',
           status: 'error',
@@ -332,14 +339,14 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1);
       config.loopMonitors![0]!.judge.persona = 'supervisor';
       const autoRouting = {
-        strategy: 'balanced',
-        router: { provider: 'codex', model: 'router-model' },
+        strategy: 'balanced' as const,
+        router: { provider: 'codex' as const, model: 'router-model' },
         candidates: [{
           name: 'workflow-candidate',
           description: 'Workflow and loop judge execution',
-          provider: 'codex',
+          provider: 'codex' as const,
           model: 'gpt-5',
-          routingTier: 'medium',
+          routingTier: 'medium' as const,
         }],
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['workflow-candidate'], fallback: 'workflow-candidate' } },
@@ -1586,7 +1593,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           cycle: ['ai_review', 'nonexistent'],
           threshold: 3,
           judge: {
-            rules: [normalizeRule({ condition: 'test', next: 'ai_review' })],
+            rules: [normalizeRule({ condition: 'test', next: 'ai_review' }) as LoopMonitorRule],
           },
         },
       ];
@@ -1603,7 +1610,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           cycle: ['ai_review', 'ai_fix'],
           threshold: 3,
           judge: {
-            rules: [normalizeRule({ condition: 'test', next: 'nonexistent_target' })],
+            rules: [normalizeRule({ condition: 'test', next: 'nonexistent_target' }) as LoopMonitorRule],
           },
         },
       ];
@@ -1650,14 +1657,14 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
     it('should validate a loop judge through workflow-level effective auto routing', () => {
       const config = buildConfigWithLoopMonitor(3);
       const autoRouting = {
-        strategy: 'balanced',
-        router: { provider: 'codex', model: 'router-model' },
+        strategy: 'balanced' as const,
+        router: { provider: 'codex' as const, model: 'router-model' },
         candidates: [{
           name: 'loop-candidate',
           description: 'Loop monitor validation',
-          provider: 'codex',
+          provider: 'codex' as const,
           model: 'gpt-5',
-          routingTier: 'medium',
+          routingTier: 'medium' as const,
         }],
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['loop-candidate'], fallback: 'loop-candidate' } },
@@ -1787,6 +1794,8 @@ describe('Judge failure falls back to the natural transition', () => {
       makeResponse({ persona: 'ai_fix', content: 'Fixed Y' }),
       // 判定役がプロバイダエラーで decision を返せない
       makeResponse({ persona: 'supervisor', content: '', status: 'error', error: 'provider exploded' }),
+      // エンジンの fresh retry でも同じ error を返し、判定不能のまま自然遷移へ進む
+      makeResponse({ persona: 'supervisor', content: '', status: 'error', error: 'provider exploded' }),
       // 自然遷移（ai_fix → ai_review）で続行し、承認 → reviewers → COMPLETE
       makeResponse({ persona: 'ai_review', content: 'No issues' }),
       makeResponse({ persona: 'reviewers', content: 'All approved' }),
@@ -1850,9 +1859,9 @@ describe('Replan-family judge transitions (runtime)', () => {
             persona: 'supervisor',
             instruction: 'The replan loop repeated {cycle_count} times.',
             rules: [
-              normalizeRule({ condition: 'The latest fix ended with fixes complete', next: 'reviewers' }),
-              normalizeRule({ condition: 'Healthy replanning', next: 'plan' }),
-              normalizeRule({ condition: 'Same dead end repeats', next: 'ABORT' }),
+              normalizeRule({ condition: 'The latest fix ended with fixes complete', next: 'reviewers' }) as LoopMonitorRule,
+              normalizeRule({ condition: 'Healthy replanning', next: 'plan' }) as LoopMonitorRule,
+              normalizeRule({ condition: 'Same dead end repeats', next: 'ABORT' }) as LoopMonitorRule,
             ],
           },
         },
