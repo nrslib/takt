@@ -31,6 +31,7 @@
     "src/__tests__/cli-routing-issue-resolve.test.ts",
     "src/__tests__/cli-routing-tui.test.ts",
     "src/__tests__/clone-metadata-central.test.ts",
+    "src/__tests__/codex-spawn-guard.test.ts",
     "src/__tests__/codex-structured-output.test.ts",
     "src/__tests__/commandMatcher.test.ts",
     "src/__tests__/commands-workflow.test.ts",

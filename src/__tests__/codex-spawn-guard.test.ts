@@ -133,6 +133,7 @@ describe('codex-spawn-guard', () => {
       [],
       spawnOptions(),
     );
+    const closePromise = waitForClose(child);
     expect(child.stdout).not.toBeNull();
 
     const rl = createInterface({ input: child.stdout as Readable, crlfDelay: Infinity });
@@ -140,7 +141,7 @@ describe('codex-spawn-guard', () => {
     for await (const line of rl) {
       lines.push(line);
     }
-    const result = await waitForClose(child);
+    const result = await closePromise;
 
     expect(result.code).toBe(0);
     expect(lines).toHaveLength(1);
