@@ -318,6 +318,124 @@ describe('CodexClient retry', () => {
     expect(attemptOrder).toEqual(['activity', 'provider', 'activity', 'provider']);
   });
 
+  it('config profile の内部マーカーを呼び出し単位の Codex 環境へ設定する', async () => {
+    runPlans = [{
+      type: 'events',
+      events: [
+        { type: 'thread.started', thread_id: 'thread-profile' },
+        { type: 'item.completed', item: { id: 'msg-profile', type: 'agent_message', text: 'ok' } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+      ],
+    }];
+
+    const result = await new CodexClient().call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    } as never);
+
+    expect(result.status).toBe('done');
+    expect(codexConstructorCalls[0]?.env).toMatchObject({
+      TAKT_CODEX_CONFIG_PROFILE: 'automation-review',
+    });
+  });
+
+  it('config profile の内部マーカーを retry ごとに保持する', async () => {
+    vi.useFakeTimers();
+    runPlans = [
+      {
+        type: 'events',
+        events: [{
+          type: 'turn.failed',
+          error: { message: 'Selected model is at capacity. Please try a different model.' },
+        }],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-profile-retry' },
+          { type: 'item.completed', item: { id: 'msg-profile-retry', type: 'agent_message', text: 'ok' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+
+    const resultPromise = new CodexClient().call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    } as never);
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+
+    expect(result.status).toBe('done');
+    expect(codexConstructorCalls.map((call) => call?.env)).toEqual([
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+    ]);
+  });
+
+  it('並行 run の config profile を呼び出し履歴間で混在させない', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-review' },
+          { type: 'item.completed', item: { id: 'msg-review', type: 'agent_message', text: 'review' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-implement' },
+          { type: 'item.completed', item: { id: 'msg-implement', type: 'agent_message', text: 'implement' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+
+    const [review, implement] = await Promise.all([
+      new CodexClient().call('review', 'prompt', {
+        cwd: '/tmp/review',
+        permissionControl: 'codex',
+        configProfile: 'review',
+      } as never),
+      new CodexClient().call('implement', 'prompt', {
+        cwd: '/tmp/implement',
+        permissionControl: 'codex',
+        configProfile: 'implement',
+      } as never),
+    ]);
+
+    expect(review.content).toBe('review');
+    expect(implement.content).toBe('implement');
+    expect(codexConstructorCalls
+      .map((call) => call?.env as Record<string, string> | undefined)
+      .map((env) => env?.TAKT_CODEX_CONFIG_PROFILE))
+      .toEqual(['review', 'implement']);
+  });
+
+  it('プロファイル選択失敗を profile なしで再試行せず AgentResponse.error にする', async () => {
+    runPlans = [{
+      type: 'throw',
+      error: new Error('Codex Exec exited with code 1: profile missing'),
+    }];
+
+    const result = await new CodexClient().call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'missing-profile',
+    } as never);
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Codex Exec exited with code 1');
+    expect(runPlanIndex).toBe(1);
+    expect(codexConstructorCalls).toHaveLength(1);
+    expect((codexConstructorCalls[0]?.env as Record<string, string>)?.TAKT_CODEX_CONFIG_PROFILE)
+      .toBe('missing-profile');
+  });
+
   it('retry と session resume に同じ Codex Skill override を適用する', async () => {
     vi.useFakeTimers();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-skill-retry-'));
@@ -476,7 +594,7 @@ describe('CodexClient retry', () => {
     let elapsedMs = 0;
 
     for (let index = 0; index < CODEX_CAPPED_RETRY_DELAYS_MS.length; index += 1) {
-      const delayMs = CODEX_CAPPED_RETRY_DELAYS_MS[index];
+      const delayMs = CODEX_CAPPED_RETRY_DELAYS_MS[index]!;
       await vi.advanceTimersByTimeAsync(delayMs - 1);
       expect(resumeThreadCalls).toHaveLength(index);
 
@@ -639,7 +757,11 @@ describe('CodexClient retry', () => {
     ];
 
     const client = new CodexClient();
-    const resultPromise = client.call('security-reviewer', 'prompt', { cwd: '/tmp' });
+    const resultPromise = client.call('security-reviewer', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    });
 
     await vi.advanceTimersByTimeAsync(1000);
     const result = await resultPromise;
@@ -650,6 +772,10 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('done');
     expect(result.content).toBe('review completed');
     expect(result.retryCount).toBe(1);
+    expect(codexConstructorCalls.map((call) => call?.env)).toEqual([
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+    ]);
   });
 
   it('渡された既存セッションは安全フィルタ拒否の retry でも破棄しない', async () => {
@@ -1089,7 +1215,11 @@ describe('CodexClient retry', () => {
     ];
 
     const client = new CodexClient();
-    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+    const resultPromise = client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    });
 
     await vi.advanceTimersByTimeAsync(CODEX_STREAM_IDLE_TIMEOUT_MS - 1);
     expect(resumeThreadCalls).toHaveLength(0);
@@ -1113,6 +1243,10 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('done');
     expect(result.content).toBe('timeout retry succeeded');
     expect(result.retryCount).toBe(1);
+    expect(codexConstructorCalls.map((call) => call?.env)).toEqual([
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+      expect.objectContaining({ TAKT_CODEX_CONFIG_PROFILE: 'automation-review' }),
+    ]);
   });
 
   it('ストリームの idle timeout は最大 2 回まで retry して停止する', async () => {
@@ -1204,7 +1338,7 @@ describe('CodexClient retry', () => {
     const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
 
     for (let index = 0; index < CODEX_CAPPED_RETRY_DELAYS_MS.length; index += 1) {
-      await vi.advanceTimersByTimeAsync(CODEX_CAPPED_RETRY_DELAYS_MS[index]);
+      await vi.advanceTimersByTimeAsync(CODEX_CAPPED_RETRY_DELAYS_MS[index]!);
       expect(resumeThreadCalls).toHaveLength(index + 1);
     }
 

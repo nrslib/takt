@@ -194,7 +194,11 @@ export function resolveWorkflowSelector(
   }
 
   const selectorProvider = options.providerConfigMode === 'runtime-v1'
-    ? resolveSelectorProviderFromRuntimeEnvironment(options.providerEnvironment, options.overrides)
+    ? resolveSelectorProviderFromRuntimeEnvironment(
+        options.providerEnvironment,
+        options.projectCwd,
+        options.overrides,
+      )
     : resolveSelectorProviderFromLegacyProject(options.projectCwd, options.overrides);
   if (selectorProvider.provider === undefined) {
     throw new Error('Dynamic selector has no resolved provider');

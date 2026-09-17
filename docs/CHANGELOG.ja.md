@@ -10,6 +10,7 @@
 
 ### Added
 
+- Codex provider が `permission_control: codex` のとき、`provider_options.codex.config_profile` で名前付き設定プロファイルを選択できるようになりました (#1539)。TAKT は Codex の TOML を読み込まず、名前を `codex exec --profile <name>` として渡します。
 - 実行中の worktree clone タスクへのライブ介入 (#1531, #1545)。`takt list` で実行中タスクを選ぶと状態別のアクションメニューが表示され、新しい **Interactive** を選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。新しい `/tell [instruction]` コマンドは実行中の worktree clone タスクを選択し、タスク名・ワークフロー・現在のステップ・追加指示を表示して、確認後に `.takt/runs/<slug>/interventions.jsonl` へ指示を記録します。実行中のエンジンは run を止めずに、次のステップ境界（`arpeggio` ステップでは次のバッチ境界）で保留中の指示を配信します。指示を省略した場合は会話全体を独立した指示本文へ変換します。対象は確認後に再検証されるため、完了した・clone がない・差し替えられたタスクには何も送られません。対話型ターミナルが必要です。
 - MCP のタスク状態ツール (#1545)。`takt-mcp` に `takt_list_tasks`（ログ・レポート本文を含まないタスク/run の要約）、`takt_get_run`（1つの run の現在のステップ・フェーズ・ログ・レポート・ライブ介入の配信状態）、`takt_tell_run`（実行中の worktree clone タスク1件へ再検証のうえ追加指示を送信）が追加されました。`takt-mcp --tool-set read-only` は読み取り2ツールだけを公開します。通常の `takt` assistant 会話は provider が MCP をサポートする場合にこの読み取り専用セットを自動で使い、タスクや run の状態について答えられます。MCP 非対応の provider では会話は継続し、タスク状態の参照が利用できない旨を報告します。
 

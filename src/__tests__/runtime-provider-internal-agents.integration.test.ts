@@ -79,6 +79,39 @@ describe('runtime.yaml internal_agents resolution', () => {
     expect(selector.providerOptions).toEqual({ codex: { reasoningEffort: 'high' } });
   });
 
+  it('applies an env config_profile override to the runtime selector options', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'opencode', model: 'qwen' },
+          router: {
+            provider: 'codex',
+            model: 'gpt-router',
+            options: { config_profile: 'runtime-review', permission_control: 'codex' },
+          },
+        },
+        targets: { internal_agents: { selector: { profile: 'router' } } },
+      },
+    });
+    const previous = process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'env-review';
+    invalidate();
+    try {
+      expect(resolveSelectorProviderForProject(projectCwd).providerOptions).toEqual({
+        codex: { configProfile: 'env-review', permissionControl: 'codex' },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = previous;
+      }
+      invalidate();
+    }
+  });
+
   it('falls back to the defaults profile when internal_agents.assistant is absent', () => {
     writeGlobalRuntimeFile({
       version: 1,

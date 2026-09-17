@@ -8,6 +8,7 @@ import { loadProjectConfig } from './project/projectConfig.js';
 import { resolveConfigValueWithSource } from './resolveConfigValue.js';
 import { resolveRuntimeNonWorkflowProvider } from './runtime-provider/internal-agents.js';
 import { composeRuntimeProviderOverride } from './runtime-provider/override.js';
+import { resolveRuntimeProviderOptions } from './runtime-provider/provider-options.js';
 
 /**
  * Provider/model/options for a non-workflow agent (task summarizer, sync conflict resolver,
@@ -58,11 +59,12 @@ export function resolveNonWorkflowProviderModel(cwd: string): ResolvedNonWorkflo
     validateProviderModelRequirements(composed.provider, composed.model, {
       modelFieldName: 'Configuration error: runtime.yaml defaults resolved model',
     });
+    const providerOptions = resolveRuntimeProviderOptions(cwd, composed.providerOptions);
     return {
       runtimeManaged: true,
       provider: composed.provider,
       ...(composed.model !== undefined ? { model: composed.model } : {}),
-      ...(composed.providerOptions !== undefined ? { providerOptions: composed.providerOptions } : {}),
+      ...(providerOptions !== undefined ? { providerOptions } : {}),
       ...(composed.permissionMode !== undefined ? { permissionMode: composed.permissionMode } : {}),
     };
   }

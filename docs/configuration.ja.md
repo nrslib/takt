@@ -1310,6 +1310,19 @@ provider_options:
 
 `permission_control: codex` では通常の Codex 呼び出しと strict isolated structured 呼び出しの両方で TAKT は `sandboxMode` と `networkAccessEnabled` を渡しません。実効権限は Codex の `config.toml`、`default_permissions`、permission profile に委譲されます。capability、runtime profile、routing、project／global 設定、環境変数 override のいずれから解決された場合も、`network_access` は警告なしで受理され、これらの Codex 権限フィールドには使用されません。非対話実行を成立させるため `approvalPolicy: never` は引き続き設定され、`reasoning_effort`、`fast_mode`、`skills` などの非権限制御 option も従来どおり適用されます。明示的な opt-in のため、権限の結果は利用者の自己責任です。
 
+Codex の設定プロファイルを名前で選択するには、`permission_control: codex` と一緒に `config_profile` を指定します。
+
+```yaml
+provider_options:
+  codex:
+    permission_control: codex
+    config_profile: automation-review
+```
+
+環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` でも設定できます。
+
+`config_profile` は ASCII の英字・数字・ハイフン・アンダースコアだけを含む名前を受け付けます。空文字や path は拒否され、`permission_control: codex` の場合だけ有効です。省略時の既定値や `permission_control: takt` との併用は設定エラーになります。TAKT は名前を `codex exec --profile <name>` として渡し、Codex が `$CODEX_HOME/<name>.config.toml` を解決します。そのファイル、基本設定、trusted project 設定、実行時 override の優先順位は Codex の仕様に従います。
+
 #### Codex Skill の継承 (`skills`)
 
 TAKT workflow は repository scope と user scope の Codex Skill をデフォルトでは継承しません。workflow が環境依存の指示を利用すべき場合は runtime profile または `enable-skills` capability で対象 scope を明示的に有効化します。`takt exec` は解決した capability を生成 workflow に保持しますが、provider/model/options は runtime 設定に残ります。後の実行で指定した `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` 環境変数は引き続き最優先です。

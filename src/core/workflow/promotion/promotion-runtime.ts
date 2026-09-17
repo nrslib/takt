@@ -153,13 +153,19 @@ export async function resolvePromotionRuntime(
   // apply, so keep the terminal stage rather than downgrading toward the base assignment. The
   // exhausted depth is still surfaced as a warning — not a debug log — so a ladder that cannot
   // satisfy the requested promotion depth is visible.
-  const isPastLadderEnd = stageIndex >= ladder.length;
-  if (isPastLadderEnd) {
+  const ladderStage = resolvePromotionLadderStage(ladder, stageIndex);
+  if (ladderStage === undefined) {
+    log.warn(
+      `Promotion for step "${step.name}" requested ladder stage ${stageIndex} but the ladder has no usable stages; keeping the current provider/model`,
+    );
+    return runtime;
+  }
+  if (ladderStage.isPastLadderEnd) {
     log.warn(
       `Promotion for step "${step.name}" requested ladder stage ${stageIndex} but the ladder ends at stage ${ladder.length - 1}; keeping the terminal stage`,
     );
   }
-  const stageEntry = ladder[isPastLadderEnd ? ladder.length - 1 : stageIndex] as ProviderRoutingEntry;
+  const stageEntry = ladderStage.entry;
   return applyPromotionTarget(runtime, baseProviderInfo, {
     provider: stageEntry.provider,
     providerSpecified: stageEntry.provider !== undefined,
@@ -168,6 +174,28 @@ export async function resolvePromotionRuntime(
     providerOptions: stageEntry.providerOptions,
     permissionMode: stageEntry.permissionMode,
   });
+}
+
+export interface PromotionLadderStage {
+  entry: ProviderRoutingEntry;
+  index: number;
+  isPastLadderEnd: boolean;
+}
+
+/** Resolve a ladder stage using the same terminal-stage rule as execution. */
+export function resolvePromotionLadderStage(
+  ladder: readonly ProviderRoutingEntry[] | undefined,
+  stageIndex: number,
+): PromotionLadderStage | undefined {
+  if (ladder === undefined || ladder.length === 0) {
+    return undefined;
+  }
+  const isPastLadderEnd = stageIndex >= ladder.length;
+  const index = isPastLadderEnd ? ladder.length - 1 : stageIndex;
+  const entry = ladder[index];
+  return entry === undefined
+    ? undefined
+    : { entry, index, isPastLadderEnd };
 }
 
 interface PromotionTarget {
@@ -185,10 +213,7 @@ function applyPromotionTarget(
   baseProviderInfo: StepProviderInfo,
   target: PromotionTarget,
 ): RuntimeStepResolution {
-  const promotionProviderOptions = filterPromotionProviderOptions(
-    baseProviderInfo.providerOptionsSources,
-    target.providerOptions,
-  );
+  const promotedProviderOptions = resolvePromotionProviderOptions(baseProviderInfo, target.providerOptions);
   const promotedProviderInfo = applyProviderModelOverride(baseProviderInfo, {
     provider: target.provider,
     providerSpecified: target.providerSpecified,
@@ -200,15 +225,39 @@ function applyPromotionTarget(
     ...runtime,
     providerInfo: {
       ...promotedProviderInfo,
-      providerOptions: mergeProviderOptions(baseProviderInfo.providerOptions, promotionProviderOptions),
-      providerOptionsSources: resolvePromotionProviderOptionsSources(
-        baseProviderInfo.providerOptionsSources,
-        promotionProviderOptions,
-      ),
+      providerOptions: promotedProviderOptions.providerOptions,
+      providerOptionsSources: promotedProviderOptions.providerOptionsSources,
       ...(target.providerSpecified
         ? { permissionMode: target.permissionMode }
         : {}),
     },
+  };
+}
+
+export interface PromotionProviderOptionsResolution {
+  providerOptions: StepProviderInfo['providerOptions'];
+  providerOptionsSources: StepProviderInfo['providerOptionsSources'];
+}
+
+/**
+ * Compose a promotion target onto the already-resolved base options. This is shared with
+ * runtime preflight so environment/CLI-protected leaves and file-preferred leaves follow the
+ * same rule before and during execution.
+ */
+export function resolvePromotionProviderOptions(
+  baseProviderInfo: Pick<StepProviderInfo, 'providerOptions' | 'providerOptionsSources'>,
+  promotionOptions: StepProviderInfo['providerOptions'],
+): PromotionProviderOptionsResolution {
+  const filteredPromotionOptions = filterPromotionProviderOptions(
+    baseProviderInfo.providerOptionsSources,
+    promotionOptions,
+  );
+  return {
+    providerOptions: mergeProviderOptions(baseProviderInfo.providerOptions, filteredPromotionOptions),
+    providerOptionsSources: resolvePromotionProviderOptionsSources(
+      baseProviderInfo.providerOptionsSources,
+      filteredPromotionOptions,
+    ),
   };
 }
 
@@ -218,7 +267,7 @@ function applyPromotionTarget(
  * — and therefore which ladder — to advance, so promotion continues the same ladder rather than
  * jumping to an unrelated one.
  */
-function resolveGoverningLadder(
+export function resolveGoverningLadder(
   ladders: ProviderLadderConfig | undefined,
   step: AgentWorkflowStep,
   baseSource: ProviderResolutionSource | undefined,

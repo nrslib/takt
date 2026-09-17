@@ -204,6 +204,36 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.originResolver('codex.networkAccess')).toBe('local');
   });
 
+  it('Codex config profile を global/project/env の優先順位と trace 付きで解決する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  codex:',
+        '    config_profile: global-review',
+        '    permission_control: codex',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    config_profile: project-review'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'env-review';
+
+    const result = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(result.value?.codex).toMatchObject({ configProfile: 'env-review' });
+    expect(result.originResolver('codex.configProfile')).toBe('env');
+    expect(result.source).toBe('env');
+  });
+
   it('provider_options の effort 系キーも trace 付きで解決する', () => {
     writeFileSync(
       globalConfigPath,

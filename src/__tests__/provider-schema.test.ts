@@ -230,6 +230,20 @@ describe('Codex permission control provider option', () => {
   });
 });
 
+describe('Codex config profile provider option', () => {
+  it.each(['automation-review', 'review_2', 'profile123'])('accepts a profile name: %s', (configProfile) => {
+    expect(StepProviderOptionsSchema.parse({
+      codex: { config_profile: configProfile },
+    })).toEqual({ codex: { config_profile: configProfile } });
+  });
+
+  it.each(['', '   ', '../other', 'team/review', 'team\\review'])('rejects an invalid profile name: %j', (configProfile) => {
+    expect(() => StepProviderOptionsSchema.parse({
+      codex: { config_profile: configProfile },
+    })).toThrow(/config_profile|profile/i);
+  });
+});
+
 describe('Claude terminal provider contract', () => {
   beforeEach(() => {
     ProviderRegistry.resetInstance();

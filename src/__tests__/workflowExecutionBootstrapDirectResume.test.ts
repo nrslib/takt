@@ -2,8 +2,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkflowConfig } from '../core/models/index.js';
-import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import type {
+  NormalAgentWorkflowStep,
+  WorkflowCallStep,
+  WorkflowConfig,
+} from '../core/models/index.js';
+import type { AutoRoutingConfig, ProjectConfig } from '../core/models/config-types.js';
 
 const TEST_TMPDIR = realpathSync(tmpdir());
 
@@ -44,6 +48,7 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 vi.mock('../infra/config/resolveConfigValue.js', () => ({
+  resolveConfigValue: vi.fn(() => 'en'),
   resolveConfigValueWithSource: mockResolveConfigValueWithSource,
   toProviderResolutionSource: mockToProviderResolutionSource,
   resolveProviderOptionsWithTrace: vi.fn(() => ({
@@ -56,6 +61,7 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 vi.mock('../infra/config/paths.js', () => ({
   getGlobalConfigDir: vi.fn(() => '/tmp/.takt'),
   getProjectConfigDir: vi.fn((projectDir: string) => `${projectDir}/.takt`),
+  getRepertoireDir: vi.fn(() => '/tmp/repertoire'),
 }));
 
 vi.mock('../infra/fs/index.js', () => ({
@@ -153,6 +159,9 @@ import {
   resolveWorkflowExecutionResumeLineage,
 } from '../features/tasks/execute/workflowExecutionBootstrap.js';
 import type {
+  WorkflowExecutionBootstrap,
+} from '../features/tasks/execute/workflowExecutionBootstrap.js';
+import type {
   WorkflowRunBootstrap,
 } from '../features/tasks/execute/workflowRunLifecycle.js';
 import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
@@ -165,21 +174,26 @@ import {
   isValidReportDirName,
 } from '../shared/utils/index.js';
 
+type BootstrapWorkflowConfig = WorkflowConfig & Pick<ProjectConfig, 'provider' | 'model' | 'autoRouting'>;
+type TestWorkflowExecutionBootstrap = Omit<WorkflowExecutionBootstrap, 'effectiveWorkflowConfig'> & {
+  effectiveWorkflowConfig: BootstrapWorkflowConfig;
+};
+
 async function createWorkflowExecutionBootstrap(
   ...args: [
-    Parameters<typeof createWorkflowExecutionBootstrapImpl>[0],
+    BootstrapWorkflowConfig,
     Parameters<typeof createWorkflowExecutionBootstrapImpl>[1],
     Parameters<typeof createWorkflowExecutionBootstrapImpl>[2],
     Parameters<typeof createWorkflowExecutionBootstrapImpl>[3],
   ]
-) {
+): Promise<TestWorkflowExecutionBootstrap> {
   const runBootstrap = createRunBootstrap({
     cwd: args[2],
     task: args[1],
     requestedRunSlug: args[3].reportDirName,
     resumeSource: args[3].resumeSource,
   });
-  return await createWorkflowExecutionBootstrapImpl(
+  const bootstrap = await createWorkflowExecutionBootstrapImpl(
     ...args,
     runBootstrap,
     resolveWorkflowExecutionResumeLineage(
@@ -188,6 +202,10 @@ async function createWorkflowExecutionBootstrap(
       args[3].resumeSource,
     ),
   );
+  return {
+    ...bootstrap,
+    effectiveWorkflowConfig: bootstrap.effectiveWorkflowConfig as BootstrapWorkflowConfig,
+  };
 }
 
 function createRunBootstrap(setup: {
@@ -236,16 +254,21 @@ import {
   inheritWorkflowConfigMetadata,
 } from '../shared/workflowConfigMetadata.js';
 
-const workflowConfig: WorkflowConfig = {
+const workflowStep: NormalAgentWorkflowStep = {
+  name: 'fix',
+  personaDisplayName: 'Fixer',
+  instruction: 'Fix',
+  rules: [],
+};
+
+const workflowConfig: BootstrapWorkflowConfig = {
   name: 'default',
   initialStep: 'fix',
   maxSteps: 50,
-  steps: [
-    { name: 'fix', personaDisplayName: 'Fixer', instruction: 'Fix', rules: [] },
-  ],
+  steps: [workflowStep],
 };
 
-function createAutoRoutingConfig(): NonNullable<WorkflowConfig['autoRouting']> {
+function createAutoRoutingConfig(): AutoRoutingConfig {
   return {
     strategy: 'cost',
     router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
@@ -741,6 +764,64 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
+  it('propagates resolved runtime provider options to companion providers', async () => {
+    const projectDir = createTempProject();
+    mockResolveConfigValueWithSource.mockImplementation((_projectCwd: string, key: 'provider' | 'model') => ({
+      value: undefined,
+      source: key === 'provider' ? 'default' : 'default',
+    }));
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+      'provider:',
+      '  defaults:',
+      '    profile: default',
+      '  profiles:',
+      '    default:',
+      '      provider: codex',
+      '      model: gpt-runtime',
+      '      options:',
+      '        config_profile: automation-review',
+      '        permission_control: codex',
+    ].join('\n'), 'utf-8');
+
+    const config: WorkflowConfig = {
+      ...workflowConfig,
+      steps: [{
+        ...workflowStep,
+        companion: { fixed: ['reviewer'], pool: [] },
+      }],
+      companions: {
+        reviewer: {
+          name: 'reviewer',
+          description: 'reviewer',
+          instruction: 'review',
+          instructionRef: 'review',
+          intervalMs: 1_000,
+        },
+      },
+    };
+
+    const bootstrap = await createWorkflowExecutionBootstrap(config, 'Run companion workflow', projectDir, {
+      projectCwd: projectDir,
+    });
+
+    expect(bootstrap.companionProviders).toMatchObject({
+      reviewer: {
+        provider: 'codex',
+        model: 'gpt-runtime',
+        providerOptions: {
+          codex: {
+            configProfile: 'automation-review',
+            permissionControl: 'codex',
+          },
+        },
+      },
+    });
+  });
+
   it('Given CLI provider and workflow auto_routing coexist, When bootstrap resolves config, Then autoStrategy applies independently of provider', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
@@ -785,6 +866,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
               provider: 'mock',
               providerSpecified: false,
               persona: 'reviewer',
+              personaDisplayName: 'Reviewer',
               instruction: 'Review code',
             },
           ],
@@ -830,7 +912,13 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           personaDisplayName: 'Reviewers',
           instruction: 'Run reviewers',
           parallel: [
-            { name: 'coding-review', provider: 'mock', persona: 'reviewer', instruction: 'Review code' },
+            {
+              name: 'coding-review',
+              provider: 'mock',
+              persona: 'reviewer',
+              personaDisplayName: 'Reviewer',
+              instruction: 'Review code',
+            },
           ],
           rules: [],
         },
@@ -844,7 +932,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given a concrete workflow_call override and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
+  it('Given a workflow_call and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
       initialStep: 'call-child',
@@ -854,9 +942,10 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           name: 'call-child',
           kind: 'workflow_call',
           call: 'child',
-          overrides: { provider: 'mock' },
+          personaDisplayName: 'Call child',
+          instruction: '',
           rules: [],
-        },
+        } satisfies WorkflowCallStep,
       ],
     }, 'Run workflow call auto workflow', '/project', {
       projectCwd: '/project',
@@ -880,6 +969,8 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           name: 'unreachable-child',
           kind: 'workflow_call',
           call: 'child',
+          personaDisplayName: 'Unreachable child',
+          instruction: '',
           rules: [],
         },
       ],
@@ -896,7 +987,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
   });
 
   it('Given a child workflow has auto_routing and autoStrategy, When bootstrap resolves config, Then it does not warn', async () => {
-    const childWorkflow: WorkflowConfig = {
+    const childWorkflow: BootstrapWorkflowConfig = {
       ...workflowConfig,
       name: 'child',
       provider: 'mock',
@@ -910,6 +1001,8 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           name: 'call-child',
           kind: 'workflow_call',
           call: 'child',
+          personaDisplayName: 'Call child',
+          instruction: '',
           rules: [],
         },
       ],
@@ -925,7 +1018,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
   });
 
   it('Given a parallel workflow_call child has auto_routing and autoStrategy, When bootstrap resolves config, Then strategy override applies', async () => {
-    const childWorkflow: WorkflowConfig = {
+    const childWorkflow: BootstrapWorkflowConfig = {
       ...workflowConfig,
       name: 'child',
       provider: 'mock',
@@ -952,7 +1045,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           rules: [],
         },
       ],
-    } as unknown as WorkflowConfig;
+    } as unknown as BootstrapWorkflowConfig;
 
     const bootstrap = await createWorkflowExecutionBootstrap(parentWorkflow, 'Run parallel child auto workflow', '/project', {
       projectCwd: '/project',
@@ -965,8 +1058,8 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given workflow_call concrete provider override and effective auto_routing, When bootstrap resolves config, Then strategy override still applies', async () => {
-    const childWorkflow: WorkflowConfig = {
+  it('Given a workflow_call child with auto_routing and autoStrategy, When bootstrap resolves config, Then strategy override still applies', async () => {
+    const childWorkflow: BootstrapWorkflowConfig = {
       ...workflowConfig,
       name: 'child',
       provider: 'mock',
@@ -980,9 +1073,10 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           name: 'call-child',
           kind: 'workflow_call',
           call: 'child',
-          overrides: { provider: 'mock' },
+          personaDisplayName: 'Call child',
+          instruction: '',
           rules: [],
-        },
+        } satisfies WorkflowCallStep,
       ],
     }, 'Run child auto workflow with concrete override', '/project', {
       projectCwd: '/project',
@@ -995,8 +1089,8 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given workflow_call concrete provider override and child auto_routing, When bootstrap resolves config, Then strategy override applies', async () => {
-    const childWorkflow: WorkflowConfig = {
+  it('Given a workflow_call child with auto_routing and an explicit provider step, When bootstrap resolves config, Then strategy override applies', async () => {
+    const childWorkflow: BootstrapWorkflowConfig = {
       ...workflowConfig,
       name: 'child',
       initialStep: 'child-auto',
@@ -1013,9 +1107,10 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           name: 'call-child',
           kind: 'workflow_call',
           call: 'child',
-          overrides: { provider: 'mock' },
+          personaDisplayName: 'Call child',
+          instruction: '',
           rules: [],
-        },
+        } satisfies WorkflowCallStep,
       ],
     }, 'Run child explicit step auto workflow', '/project', {
       projectCwd: '/project',
@@ -1037,10 +1132,12 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           name: 'call-child',
           kind: 'workflow_call',
           call: 'child',
+          personaDisplayName: 'Call child',
+          instruction: '',
           rules: [],
         },
       ],
-    }, 'project:sha256:parent');
+    } as BootstrapWorkflowConfig, 'project:sha256:parent');
     const childWorkflow = attachWorkflowOpaqueRef({
       ...workflowConfig,
       name: parentWorkflow.name,

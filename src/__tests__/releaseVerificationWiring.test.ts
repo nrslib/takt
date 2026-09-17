@@ -736,6 +736,16 @@ describe('release verification wiring', () => {
       normalized: 'src/__tests__/it-web-ui-retry-dom.test.ts',
     },
     {
+      target: 'src/__tests__/codex-spawn-guard.test.ts',
+      script: 'test:it:heavy:parallel',
+      normalized: 'src/__tests__/codex-spawn-guard.test.ts',
+    },
+    {
+      target: 'codex-spawn-guard.test.ts',
+      script: 'test:it:heavy:parallel',
+      normalized: 'src/__tests__/codex-spawn-guard.test.ts',
+    },
+    {
       target: 'it-web-ui-retry-dom.test.ts',
       script: 'test:it:heavy:parallel',
       normalized: 'src/__tests__/it-web-ui-retry-dom.test.ts',

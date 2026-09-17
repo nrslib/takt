@@ -79,10 +79,15 @@ const ProviderGuardOptionShape = {
 
 const ProviderGuardOptionsSchema = z.object(ProviderGuardOptionShape).strict();
 
+export const CodexConfigProfileSchema = z.string()
+  .min(1, 'config_profile must not be empty')
+  .regex(/^[A-Za-z0-9_-]+$/, 'config_profile must be a profile name');
+
 const CodexProviderOptionShape = {
   base_url: z.string().min(1).optional(),
   network_access: z.boolean().optional(),
   permission_control: z.enum(['takt', 'codex']).optional(),
+  config_profile: CodexConfigProfileSchema.optional(),
   reasoning_effort: ProviderEffortSchema.optional(),
   fast_mode: z.boolean().optional(),
   skills: z.object(CodexSkillsShape).optional(),
@@ -610,6 +615,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
     baseUrl: z.string().min(1).optional(),
     networkAccess: z.boolean().optional(),
     permissionControl: z.enum(['takt', 'codex']).optional(),
+    configProfile: CodexConfigProfileSchema.optional(),
     reasoningEffort: ProviderEffortSchema.optional(),
     fastMode: z.boolean().optional(),
     guards: z.object({

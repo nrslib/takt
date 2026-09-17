@@ -11,6 +11,8 @@ export const parallelIntegrationTestGlobs = Object.freeze([
 // real child processes, or real Git boundaries.
 const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/acp-entrypoint.test.ts',
+  'src/__tests__/codex-spawn-guard.test.ts',
+  'src/__tests__/runtime-provider-companion.integration.test.ts',
   'src/__tests__/dependency-versions.test.ts',
   'src/__tests__/deepseek-harness-client.test.ts',
   'src/__tests__/deepseek-harness-live-smoke.test.ts',
@@ -196,7 +198,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/clone-metadata-central.test.ts',
   'src/__tests__/codex-client-retry.test.ts',
   'src/__tests__/codex-skill-config.test.ts',
-  'src/__tests__/codex-spawn-guard.test.ts',
   'src/__tests__/config-path-collision.test.ts',
   'src/__tests__/conversation-session-failure.test.ts',
   'src/__tests__/conversationLoop-resume.test.ts',

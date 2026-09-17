@@ -9,6 +9,7 @@ import {
 } from '../codex/index.js';
 import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
+import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
 import {
   assertOutputSchema,
   type AgentSetup,
@@ -18,25 +19,28 @@ import {
 } from './types.js';
 
 function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
+  const providerCodexOptions = options.providerOptions?.codex;
+  assertCodexConfigProfilePermissionControl(providerCodexOptions);
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
-    reasoningEffort: options.effort ?? options.providerOptions?.codex?.reasoningEffort,
-    fastMode: options.providerOptions?.codex?.fastMode,
+    reasoningEffort: options.effort ?? providerCodexOptions?.reasoningEffort,
+    fastMode: providerCodexOptions?.fastMode,
     permissionMode: options.permissionMode,
-    permissionControl: options.providerOptions?.codex?.permissionControl,
-    networkAccess: options.providerOptions?.codex?.networkAccess,
+    permissionControl: providerCodexOptions?.permissionControl,
+    configProfile: providerCodexOptions?.configProfile,
+    networkAccess: providerCodexOptions?.networkAccess,
     onStream: options.onStream,
     onActivity: options.onActivity,
     openaiApiKey: options.openaiApiKey ?? resolveOpenaiApiKey(),
-    baseUrl: options.providerOptions?.codex?.baseUrl,
+    baseUrl: providerCodexOptions?.baseUrl,
     skills: options.internalAgentIsolation === 'strict-readonly'
       ? { repo: false, user: false }
       : {
-          repo: options.providerOptions?.codex?.skills?.repo ?? false,
-          user: options.providerOptions?.codex?.skills?.user ?? false,
+          repo: providerCodexOptions?.skills?.repo ?? false,
+          user: providerCodexOptions?.skills?.user ?? false,
         },
     codexPathOverride: resolveCodexCliPath(),
     outputSchema: options.outputSchema,

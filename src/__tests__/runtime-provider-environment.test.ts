@@ -227,6 +227,36 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
     });
   });
 
+  it('carries Codex config_profile through defaults and persona/tag/step routing entries', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'codex', model: 'base-m', options: { config_profile: 'base-review' } },
+        persona: { provider: 'codex', model: 'persona-m', options: { config_profile: 'persona-review' } },
+        tag: { provider: 'codex', model: 'tag-m', options: { config_profile: 'tag-review' } },
+        step: { provider: 'codex', model: 'step-m', options: { config_profile: 'step-review' } },
+      },
+      targets: {
+        personas: { coder: { profile: 'persona' } },
+        tags: { 'high-stakes': { profile: 'tag' } },
+        steps: { 'wf/impl': { profile: 'step' } },
+      },
+    };
+
+    const env = compileRuntimeProviderEnvironment(section);
+
+    expect(env.providerOptions).toEqual({ codex: { configProfile: 'base-review' } });
+    expect(env.personaProviders?.coder).toMatchObject({
+      providerOptions: { codex: { configProfile: 'persona-review' } },
+    });
+    expect(env.providerRouting?.tags?.['high-stakes']).toMatchObject({
+      providerOptions: { codex: { configProfile: 'tag-review' } },
+    });
+    expect(env.providerRouting?.steps?.['wf/impl']).toMatchObject({
+      providerOptions: { codex: { configProfile: 'step-review' } },
+    });
+  });
+
   it('rejects the removed DeepSeek Python executable override from a global runtime profile', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },
@@ -667,6 +697,48 @@ describe('collectLegacyProviderSignals', () => {
     };
     expect(collectLegacyProviderSignals(legacy, 'default')).toEqual([]);
     expect(collectLegacyProviderSignals(legacy, 'env')).toEqual([]);
+  });
+
+  it.each(['local', 'global'] as const)(
+    'reports a %s provider_options leaf even when another leaf is env-sourced',
+    (legacyOrigin) => {
+      const legacy: LegacyProviderEnvironmentInput = {
+        provider: undefined,
+        providerSource: 'default',
+        model: undefined,
+        modelSource: 'default',
+        personaProviders: undefined,
+        providerRouting: undefined,
+        autoRouting: undefined,
+        providerOptions: {
+          codex: { configProfile: 'automation-review', fastMode: true },
+        },
+      };
+      const signals = collectLegacyProviderSignals(
+        legacy,
+        'env',
+        (path) => path === 'codex.configProfile' ? legacyOrigin : 'env',
+      );
+
+      expect(signals.map((signal) => signal.setting)).toContain('provider_options');
+    },
+  );
+
+  it('does not report provider_options when every present leaf is env-sourced', () => {
+    const legacy: LegacyProviderEnvironmentInput = {
+      provider: undefined,
+      providerSource: 'default',
+      model: undefined,
+      modelSource: 'default',
+      personaProviders: undefined,
+      providerRouting: undefined,
+      autoRouting: undefined,
+      providerOptions: {
+        codex: { configProfile: 'automation-review', fastMode: true },
+      },
+    };
+
+    expect(collectLegacyProviderSignals(legacy, 'env', () => 'env')).toEqual([]);
   });
 
   it('reports provider_options only when explicitly configured in project/global config.yaml', () => {

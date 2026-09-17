@@ -25,6 +25,7 @@ import { createRequire, syncBuiltinESMExports } from 'node:module';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { guardChildProcessStreams } from '../../shared/utils/child-process-guard.js';
 import { createLogger } from '../../shared/utils/debug.js';
+import { CODEX_CONFIG_PROFILE_ENV } from './types.js';
 
 const log = createLogger('codex-spawn-guard');
 
@@ -59,6 +60,25 @@ function isCodexSpawn(
       && Object.hasOwn(options.env, CODEX_SDK_ORIGINATOR_ENV));
 }
 
+function findCodexConfigProfileEnvKey(
+  env: NodeJS.ProcessEnv | undefined,
+): string | undefined {
+  if (!env) {
+    return undefined;
+  }
+  return Object.keys(env).find((key) => key.toLowerCase() === CODEX_CONFIG_PROFILE_ENV.toLowerCase());
+}
+
+function removeCodexConfigProfileEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const cleaned = { ...env };
+  for (const key of Object.keys(cleaned)) {
+    if (key.toLowerCase() === CODEX_CONFIG_PROFILE_ENV.toLowerCase()) {
+      delete cleaned[key];
+    }
+  }
+  return cleaned;
+}
+
 export function installCodexSpawnGuard(): void {
   if (installed) {
     return;
@@ -70,9 +90,31 @@ export function installCodexSpawnGuard(): void {
   const originalSpawn = childProcessModule.spawn;
 
   const guardedSpawn: SpawnFn = (command, argsOrOptions, options) => {
-    const child = originalSpawn(command, argsOrOptions, options);
     const args = isArgumentList(argsOrOptions) ? argsOrOptions : [];
-    if (!isCodexSpawn(command, args, options)) {
+    const spawnOptions = isArgumentList(argsOrOptions) ? options : argsOrOptions;
+    const codexSpawn = isCodexSpawn(command, args, spawnOptions);
+    let childArgsOrOptions = argsOrOptions;
+    let childOptions = options;
+    const profileEnvKey = findCodexConfigProfileEnvKey(spawnOptions?.env);
+    if (codexSpawn && profileEnvKey !== undefined && spawnOptions?.env !== undefined) {
+      const configProfile = spawnOptions.env[profileEnvKey];
+      const cleanedOptions: SpawnOptions = {
+        ...spawnOptions,
+        env: removeCodexConfigProfileEnv(spawnOptions.env),
+      };
+      if (isArgumentList(argsOrOptions)) {
+        childArgsOrOptions = typeof configProfile === 'string' && args[0] === 'exec'
+          ? [args[0], '--profile', configProfile, ...args.slice(1)]
+          : argsOrOptions;
+        childOptions = cleanedOptions;
+      } else {
+        childArgsOrOptions = cleanedOptions;
+        childOptions = undefined;
+      }
+    }
+
+    const child = originalSpawn(command, childArgsOrOptions, childOptions);
+    if (!codexSpawn) {
       return child;
     }
 

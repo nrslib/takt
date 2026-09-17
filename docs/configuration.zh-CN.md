@@ -978,6 +978,17 @@ provider_options:
 
 使用 `permission_control: codex` 时，TAKT 从每次 Codex 调用（包括 strict isolated structured 调用）中省略 `sandboxMode` 和 `networkAccessEnabled`，由 Codex 的 `config.toml`、`default_permissions` 和 permission profile 决定实际权限。无论 `network_access` 来自 capability、runtime profile、routing、项目或全局配置，还是环境变量覆盖，解析后的值都会被接受且不会产生警告，但不会用于这些 Codex 权限字段。非交互执行仍会设置 `approvalPolicy: never`，`reasoning_effort`、`fast_mode`、`skills` 等非权限控制选项也会继续生效。
 
+要按名称选择 Codex 配置 profile，请在 `permission_control: codex` 下设置 `config_profile`：
+
+```yaml
+provider_options:
+  codex:
+    permission_control: codex
+    config_profile: automation-review
+```
+
+环境变量 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` 也可以设置它。`config_profile` 只接受由 ASCII 字母、数字、连字符和下划线组成的名称；空值和路径会被拒绝，且只有与 `permission_control: codex` 一起使用时才有效。省略 permission control（默认的 `takt`）或明确设置为 `takt` 都会产生配置错误。TAKT 会将名称作为 `codex exec --profile <name>` 传给 CLI，Codex 从 `$CODEX_HOME/<name>.config.toml` 解析 profile，并按照 Codex 规范决定该文件、基础配置、trusted project 设置和运行时 override 的优先级。
+
 #### Codex Skill 继承（`skills`）
 
 TAKT workflow 默认不继承 repository 或 user Codex Skill。需要时显式启用：

@@ -917,6 +917,54 @@ describe('resolveProviderOptionsSources (all paths)', () => {
 });
 
 describe('providerOptionsContract', () => {
+  it('tracks Codex config profile through env, trace, internal, and present-path contracts', () => {
+    expect(PROVIDER_OPTIONS_ENV_SPECS).toEqual(expect.arrayContaining([
+      { path: 'provider_options.codex.config_profile', type: 'string' },
+    ]));
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.config_profile');
+    expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.codex.config_profile');
+    expect(getPresentProviderOptionPaths(asProviderOptions({
+      codex: { configProfile: 'automation-review' },
+    }))).toContain('codex.configProfile');
+    expect(toProviderOptionsTracePath('codex.configProfile'))
+      .toBe('provider_options.codex.config_profile');
+  });
+
+  it('resolves Codex config profile with the same layer precedence as other leaves', () => {
+    const resolved = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'codex.configProfile' ? 'env' : 'local'),
+      asProviderOptions({ codex: { configProfile: 'project-profile', permissionControl: 'codex' } }),
+      asProviderOptions({ codex: { configProfile: 'step-profile' } }),
+      asProviderOptions({ codex: { configProfile: 'config-profile' } }),
+    );
+
+    expect(resolved).toEqual({
+      codex: { configProfile: 'project-profile', permissionControl: 'codex' },
+    });
+    expect(mergeProviderOptions(
+      asProviderOptions({ codex: { configProfile: 'global-profile' } }),
+      asProviderOptions({ codex: { configProfile: 'project-profile' } }),
+    )).toEqual({ codex: { configProfile: 'project-profile' } });
+  });
+
+  it('reports Codex config profile origin and source', () => {
+    const options = asProviderOptions({ codex: { configProfile: 'automation-review' } });
+    const resolver = (path: string) => (path === 'codex.configProfile' ? 'env' : 'local');
+
+    expect(resolveProviderOptionOrigin(resolver, 'codex.configProfile', 'project')).toBe('env');
+    expect(resolveProviderOptionSource(
+      'codex.configProfile',
+      undefined,
+      [],
+      options,
+      resolver,
+      'project',
+    )).toBe('env');
+    expect(resolveProviderOptionsSources(undefined, [], options, resolver, 'project'))
+      .toMatchObject({ 'codex.configProfile': 'env' });
+  });
+
   it('provider_options contract paths stay aligned across env and trace definitions', () => {
     const envPaths = new Set(PROVIDER_OPTIONS_ENV_SPECS.map((spec) => spec.path));
 
@@ -926,6 +974,7 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.fast_mode',
       'provider_options.codex.network_access',
       'provider_options.codex.permission_control',
+      'provider_options.codex.config_profile',
       'provider_options.codex.reasoning_effort',
       'provider_options.codex.guards.call_timeout_ms',
       'provider_options.codex.skills.repo',
@@ -1034,6 +1083,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.codex.reasoning_effort');
     expect(toProviderOptionsTracePath('codex.permissionControl'))
       .toBe('provider_options.codex.permission_control');
+    expect(toProviderOptionsTracePath('codex.configProfile'))
+      .toBe('provider_options.codex.config_profile');
     expect(toProviderOptionsTracePath('codex.guards.callTimeoutMs'))
       .toBe('provider_options.codex.guards.call_timeout_ms');
     expect(toProviderOptionsTracePath('codex.skills.repo'))
@@ -1077,6 +1128,7 @@ describe('providerOptionsContract', () => {
         fastMode: false,
         networkAccess: true,
         permissionControl: 'takt',
+        configProfile: 'automation-review',
         reasoningEffort: 'high',
         guards: { callTimeoutMs: 120_000 },
         skills: { repo: false, user: true },
@@ -1101,6 +1153,7 @@ describe('providerOptionsContract', () => {
       'codex.fastMode',
       'codex.networkAccess',
       'codex.permissionControl',
+      'codex.configProfile',
       'codex.reasoningEffort',
       'codex.guards.callTimeoutMs',
       'codex.skills.repo',
