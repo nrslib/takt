@@ -153,6 +153,7 @@ describe('assistant conversation plan', () => {
       assistantMode: 'assistant',
       formalSpec: true,
       formalSpecComments: false,
+      modelCheckTimeoutSeconds: 300,
     });
 
     expect(strategy.formalSpec).toBe(true);
@@ -169,6 +170,7 @@ describe('assistant conversation plan', () => {
       assistantMode: 'assistant',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       workflowContext: WORKFLOW_CONTEXT,
     });
 
@@ -189,6 +191,7 @@ describe('assistant conversation plan', () => {
       enableTellCommand: false,
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
     });
 
     expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
@@ -201,6 +204,7 @@ describe('assistant conversation plan', () => {
       assistantMode: 'grill-me',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       workflowContext: WORKFLOW_CONTEXT,
     });
 
@@ -229,12 +233,14 @@ describe('assistant conversation plan', () => {
       assistantMode: 'grill-me',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       enableTellCommand: true,
     });
     const withoutTell = createAssistantConversationPlan('/repo', {
       assistantMode: 'grill-me',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       enableTellCommand: false,
     });
 
@@ -264,6 +270,7 @@ describe('assistant conversation plan', () => {
       assistantMode: 'assistant',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       provider: 'mock',
       model: 'other-model',
       sessionId: 'session-9',
@@ -281,6 +288,7 @@ describe('assistant conversation plan', () => {
       assistantMode: 'assistant',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       effort: 'custom-effort',
     });
 
@@ -293,6 +301,7 @@ describe('assistant conversation plan', () => {
       assistantMode: 'assistant',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       initialReferenceRunSlug: 'authentication-run',
       initialTaskContext: {
         name: 'authentication',
@@ -322,6 +331,7 @@ describe('assistant conversation plan', () => {
       assistantMode: 'grill-me',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       model: 'temporary-model',
       resolvedSessionContext: {
         provider,
@@ -355,6 +365,7 @@ describe('assistant conversation plan', () => {
       assistantMode: 'assistant',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
     });
 
     expect(strategy.initialPromptContext).toBe('init context');
@@ -368,7 +379,7 @@ describe('persona conversation plan', () => {
       personaContent: 'You are the reviewer.',
       personaDisplayName: 'Reviewer',
       allowedTools: ['Read'],
-    });
+    }, { modelCheckTimeoutSeconds: 300 });
 
     expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'persona-interactive');
     expect(strategy.allowedTools).toEqual(['Read']);
@@ -384,7 +395,7 @@ describe('persona conversation plan', () => {
       personaContent: 'You are the reviewer.',
       personaDisplayName: 'Reviewer',
       allowedTools: [],
-    });
+    }, { modelCheckTimeoutSeconds: 300 });
 
     expect(strategy.allowedTools).toContain('Bash');
   });
@@ -395,6 +406,7 @@ describe('persona conversation plan', () => {
       personaDisplayName: 'Reviewer',
       allowedTools: ['Read'],
     }, {
+      modelCheckTimeoutSeconds: 300,
       provider: 'claude',
       model: 'custom-model',
       effort: 'custom-effort',
@@ -412,7 +424,10 @@ describe('persona conversation plan', () => {
       personaContent: 'You are the reviewer.',
       personaDisplayName: 'Reviewer',
       allowedTools: ['Read'],
-    }, { enableTellCommand: false });
+    }, {
+      modelCheckTimeoutSeconds: 300,
+      enableTellCommand: false,
+    });
 
     expect(strategy.introMessage).not.toContain('/tell');
     expect(strategy.introMessage).toContain('[Reviewer]');

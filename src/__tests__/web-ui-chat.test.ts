@@ -54,7 +54,11 @@ import {
   type WebTaskActionContext,
 } from '../features/web-ui/chat.js';
 
-function createPlan(workflow: string, model: string | null = `model-${workflow}`) {
+function createPlan(
+  workflow: string,
+  model: string | null = `model-${workflow}`,
+  modelCheckTimeoutSeconds = 17,
+) {
   return {
     ctx: {
       providerType: 'mock',
@@ -67,6 +71,7 @@ function createPlan(workflow: string, model: string | null = `model-${workflow}`
       allowedTools: [],
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds,
       transformPrompt: (message: string) => message,
     },
   };
@@ -137,11 +142,15 @@ beforeEach(() => {
     workflowStructure: '1. discuss',
     stepPreviews: [],
   }));
-  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({
+    mode: false,
+    comments: true,
+    modelCheckTimeoutSeconds: 17,
+  });
   mockCreateAssistantConversationPlan.mockImplementation((
     _cwd: string,
-    options: { workflowContext: { name: string } },
-  ) => createPlan(options.workflowContext.name));
+    options: { workflowContext: { name: string }; modelCheckTimeoutSeconds: number },
+  ) => createPlan(options.workflowContext.name, undefined, options.modelCheckTimeoutSeconds));
   mockCreateRetryConversationPlan.mockReturnValue(createPlan('retry'));
   mockCreateInstructConversationPlan.mockReturnValue(createPlan('instruct'));
 });
@@ -170,6 +179,22 @@ describe('Web UI chat input', () => {
     })).toEqual({ text: '/go', taskActionOptionId: 'restart:plan' });
     expect(() => parseWebChatMessageRequest({ text: '/go', taskActionOptionId: '' }))
       .toThrow('taskActionOptionId is invalid');
+  });
+
+  it('passes the resolved model-check timeout into the Web UI conversation session', () => {
+    const session = createSessionDouble();
+    mockCreateConversationSession.mockReturnValue(session);
+    const service = createWebChatService();
+
+    service.create('/repo', { workflow: 'default', mode: 'assistant' });
+
+    expect(mockCreateAssistantConversationPlan).toHaveBeenCalledWith('/repo', expect.objectContaining({
+      modelCheckTimeoutSeconds: 17,
+    }));
+    expect(mockCreateConversationSession).toHaveBeenCalledWith(expect.objectContaining({
+      modelCheckTimeoutSeconds: 17,
+      strategy: expect.objectContaining({ modelCheckTimeoutSeconds: 17 }),
+    }));
   });
 
   it('keeps a Retry task-action conversation available after showing a revised order', async () => {

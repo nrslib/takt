@@ -118,7 +118,7 @@ describe('assistant provider entry gates', () => {
     mockSelectOption.mockResolvedValue('continue');
     mockGetLabel.mockReturnValue('Retry intro');
     mockGetLabelObject.mockReturnValue(instructUi);
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   });
 
   it('Given top-level provider is unset, When instruct starts, Then provider resolution is deferred to initializeSession', async () => {
@@ -156,7 +156,7 @@ describe('assistant provider entry gates', () => {
   it.each([false, true])(
     'passes resolved formal specification mode=%s to instruct conversation',
     async (formalSpec) => {
-      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: formalSpec, comments: true });
+      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: formalSpec, comments: true, modelCheckTimeoutSeconds: 300 });
 
       await runInstructMode({
         cwd: '/project',
@@ -174,7 +174,7 @@ describe('assistant provider entry gates', () => {
   );
 
   it('passes comments=false to instruct conversation while keeping formal specifications enabled', async () => {
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: false });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: false, modelCheckTimeoutSeconds: 300 });
 
     await runInstructMode({
       cwd: '/project',
@@ -197,7 +197,7 @@ describe('assistant provider entry gates', () => {
   it.each([false, true])(
     'passes resolved formal specification mode=%s to retry conversation',
     async (formalSpec) => {
-      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: formalSpec, comments: true });
+      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: formalSpec, comments: true, modelCheckTimeoutSeconds: 300 });
 
       await runTaskRetryMode('/project', buildRetryContext());
 

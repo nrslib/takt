@@ -168,6 +168,7 @@ const defaultStrategy = {
   systemPrompt: 'test system prompt',
   allowedTools: ['Read'],
   formalSpec: false,
+  modelCheckTimeoutSeconds: 300,
   transformPrompt: (msg: string) => msg,
   introMessage: 'Test intro',
 };

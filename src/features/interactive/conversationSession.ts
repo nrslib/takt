@@ -36,6 +36,8 @@ export interface ConversationSessionStrategy {
   systemPrompt: string;
   /** Whether formal notation blocks must include natural-language meaning comments. */
   formalSpecComments?: boolean;
+  /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
+  modelCheckTimeoutSeconds: number;
   allowedTools: string[];
   /** Optional permission mode resolved for the conversation's provider. */
   permissionMode?: PermissionMode;
@@ -71,6 +73,8 @@ export interface ConversationSessionOptions {
   formalSpec: boolean;
   /** Resolved setting propagated to this session's summary prompt. */
   formalSpecComments?: boolean;
+  /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
+  modelCheckTimeoutSeconds: number;
   outputMode?: 'terminal' | 'silent';
   ctx: SessionContext;
   strategy: ConversationSessionStrategy;
@@ -237,6 +241,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
   let sessionId = options.ctx.sessionId;
   let formalSpec = options.formalSpec;
   let formalSpecComments = options.formalSpecComments ?? options.strategy.formalSpecComments ?? true;
+  let modelCheckTimeoutSeconds = options.modelCheckTimeoutSeconds;
   let systemPrompt = options.strategy.systemPrompt;
   let ctx: SessionContext = { ...options.ctx };
   let referenceRunSlug = options.strategy.initialReferenceRunSlug;
@@ -251,6 +256,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     }
     formalSpec = resolved.formalSpec;
     formalSpecComments = resolved.formalSpecComments ?? true;
+    modelCheckTimeoutSeconds = resolved.modelCheckTimeoutSeconds;
     systemPrompt = resolved.systemPrompt;
   }
   /**
@@ -472,7 +478,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
     let verification;
     try {
-      verification = await runFormalSpecVerification(generation.result.content, options.cwd, input.abortSignal);
+      verification = await runFormalSpecVerification(generation.result.content, options.cwd, {
+        abortSignal: input.abortSignal,
+        modelCheckTimeoutSeconds,
+      });
     } catch (error) {
       if (!isCurrentTurn()) {
         return interrupted();
@@ -702,6 +711,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     setPromptConfiguration(configuration: ConversationPromptConfiguration): void {
       formalSpec = configuration.formalSpec;
       formalSpecComments = configuration.formalSpecComments ?? true;
+      modelCheckTimeoutSeconds = configuration.modelCheckTimeoutSeconds;
       systemPrompt = configuration.systemPrompt;
       commandAvailability = resolveFormalSpecCommandAvailability(
         commandAvailability,

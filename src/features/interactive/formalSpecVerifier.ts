@@ -18,7 +18,6 @@ import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 const require = createRequire(import.meta.url);
 
 const QUINT_TIMEOUT_MS = 60_000;
-const ALLOY_TIMEOUT_MS = 60_000;
 const ALLOY_VERSION = '6.2.0';
 const ALLOY_JAR_URL = `https://repo1.maven.org/maven2/org/alloytools/org.alloytools.alloy.dist/${ALLOY_VERSION}/org.alloytools.alloy.dist-${ALLOY_VERSION}.jar`;
 const ALLOY_JAR_SHA256 = '6037cbeee0e8423c1c468447ed10f5fcf2f2743a2ffc39cb1c81f2905c0fdb9d';
@@ -59,6 +58,11 @@ export interface FormalSpecVerificationResult {
   readonly javaMajorVersion?: number;
   readonly quint: FormalSpecQuintResult;
   readonly alloy: FormalSpecAlloyResult;
+}
+
+export interface FormalSpecVerificationOptions {
+  readonly abortSignal?: AbortSignal;
+  readonly modelCheckTimeoutSeconds: number;
 }
 
 export interface FormalSpecBlocks {
@@ -637,7 +641,11 @@ function assertTrustedAlloyJar(bytes: Buffer, source: string): void {
   }
 }
 
-async function ensureAlloyJar(cwd: string, abortSignal?: AbortSignal): Promise<string> {
+async function ensureAlloyJar(
+  cwd: string,
+  timeoutMs: number,
+  abortSignal?: AbortSignal,
+): Promise<string> {
   const configuredPath = process.env.TAKT_ALLOY_JAR;
   if (configuredPath) {
     const resolvedConfiguredPath = resolve(cwd, configuredPath);
@@ -657,7 +665,7 @@ async function ensureAlloyJar(cwd: string, abortSignal?: AbortSignal): Promise<s
   mkdirSync(cacheDirectory, { recursive: true, mode: 0o700 });
   const temporaryPath = join(cacheDirectory, `.alloy-${randomUUID()}.tmp`);
   try {
-    const timeoutSignal = AbortSignal.timeout(ALLOY_TIMEOUT_MS);
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const signal = abortSignal === undefined
       ? timeoutSignal
       : AbortSignal.any([abortSignal, timeoutSignal]);
@@ -693,13 +701,14 @@ async function runQuintCommand(
   quintCli: string,
   args: readonly string[],
   cwd: string,
+  timeoutMs: number,
   abortSignal?: AbortSignal,
 ): Promise<ProcessResult> {
   return runProcess(
     process.execPath,
     [quintCli, ...args],
     cwd,
-    QUINT_TIMEOUT_MS,
+    timeoutMs,
     abortSignal,
   );
 }
@@ -708,13 +717,14 @@ async function runAlloyCommand(
   jarPath: string,
   args: readonly string[],
   cwd: string,
+  timeoutMs: number,
   abortSignal?: AbortSignal,
 ): Promise<ProcessResult> {
   return runProcess(
     'java',
     ['-jar', jarPath, ...args],
     cwd,
-    ALLOY_TIMEOUT_MS,
+    timeoutMs,
     abortSignal,
   );
 }
@@ -747,13 +757,14 @@ function quintResultFromStages(
 
 /**
  * Extract and deterministically verify one newly generated provider response.
- * The response is intentionally the only input from the conversation layer.
+ * The conversation layer supplies only the response and resolved verifier options.
  */
 export async function runFormalSpecVerification(
   response: string,
   cwd: string,
-  abortSignal?: AbortSignal,
+  options: FormalSpecVerificationOptions,
 ): Promise<FormalSpecVerificationResult> {
+  const { abortSignal, modelCheckTimeoutSeconds } = options;
   abortSignal?.throwIfAborted();
   cleanupAbandonedVerifyRuns(cwd);
   let blocks: FormalSpecBlocks;
@@ -766,6 +777,8 @@ export async function runFormalSpecVerification(
   if (blocks.quint.length === 0 && blocks.alloy.length === 0) {
     return resultForNoBlocks('No formal specification blocks found.');
   }
+
+  const modelCheckTimeoutMs = modelCheckTimeoutSeconds * 1000;
 
   let runDirectory: string | undefined;
   let verificationStarted = false;
@@ -797,6 +810,7 @@ export async function runFormalSpecVerification(
           quintCli,
           ['parse', quintPath, '--out', parseJsonPath],
           runDirectory,
+          QUINT_TIMEOUT_MS,
           abortSignal,
         ),
       );
@@ -824,6 +838,7 @@ export async function runFormalSpecVerification(
             quintCli,
             ['typecheck', quintPath],
             runDirectory,
+            QUINT_TIMEOUT_MS,
             abortSignal,
           ),
         );
@@ -851,7 +866,7 @@ export async function runFormalSpecVerification(
             ...(invariantNames.length > 0 ? ['--invariants', ...invariantNames] : []),
           ];
           run = verificationProcessStage(
-            await runQuintCommand(quintCli, runArgs, runDirectory, abortSignal),
+            await runQuintCommand(quintCli, runArgs, runDirectory, QUINT_TIMEOUT_MS, abortSignal),
             'typescript',
           );
         }
@@ -894,7 +909,7 @@ export async function runFormalSpecVerification(
           : []),
       ];
       const verify = verificationProcessStage(
-        await runQuintCommand(quintCli, verifyArgs, runDirectory, abortSignal),
+        await runQuintCommand(quintCli, verifyArgs, runDirectory, modelCheckTimeoutMs, abortSignal),
         verifyBackend,
       );
       if (quintPath) {
@@ -925,7 +940,7 @@ export async function runFormalSpecVerification(
     } else {
       let jarPath: string | undefined;
       try {
-        jarPath = await ensureAlloyJar(cwd, abortSignal);
+        jarPath = await ensureAlloyJar(cwd, modelCheckTimeoutMs, abortSignal);
       } catch (error) {
         const message = `Alloy Analyzer could not be prepared: ${error instanceof Error ? error.message : String(error)}`;
         alloy = { status: 'error', message };
@@ -937,6 +952,7 @@ export async function runFormalSpecVerification(
           jarPath,
           ['commands', alloyPath],
           runDirectory,
+          modelCheckTimeoutMs,
           abortSignal,
         );
         if (!isSuccessfulProcess(commandsProcess)) {
@@ -958,6 +974,7 @@ export async function runFormalSpecVerification(
                 jarPath,
                 ['exec', '--quiet', '--type', 'text', '--output', '-', '--command', String(commandNumber), alloyPath],
                 runDirectory,
+                modelCheckTimeoutMs,
                 abortSignal,
               );
               const check = isSuccessfulProcess(checkProcess) && checkProcess.stdout.trim() === ''

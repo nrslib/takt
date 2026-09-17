@@ -252,9 +252,11 @@ function createPlan(
   const description = getWorkflowDescription(request.workflow, projectDirectory);
   const workflowContext = buildWorkflowContext(description);
   if (request.mode === 'persona' && description.firstStep !== undefined) {
+    const formalSpecConfiguration = resolveFormalSpecConfigurationWithoutPrompt(projectDirectory);
     return {
       plan: createPersonaConversationPlan(projectDirectory, description.firstStep, {
         enableTellCommand: false,
+        modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
       }),
       workflowContext,
     };
@@ -267,6 +269,7 @@ function createPlan(
       enableTellCommand: false,
       formalSpec: formalSpecConfiguration.mode,
       formalSpecComments: formalSpecConfiguration.comments,
+      modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
       workflowContext,
     }),
     workflowContext,
@@ -433,6 +436,7 @@ function buildConversation(
     ctx: plan.ctx,
     strategy: plan.strategy,
     formalSpec: plan.strategy.formalSpec,
+    modelCheckTimeoutSeconds: plan.strategy.modelCheckTimeoutSeconds,
     workflowContext,
     ...(handoffHistory.length === 0 ? {} : { handoffHistory }),
   });

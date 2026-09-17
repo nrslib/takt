@@ -5,6 +5,7 @@ import {
   buildFormalSpecGenerationPrompt,
   buildFormalSpecGenerationSystemPrompt,
   buildFormalSpecInterpretationSystemPrompt,
+  loadFormalSpecVerifierConstraints,
 } from '../features/interactive/formalSpecPrompts.js';
 
 const EXPECTED_INVESTIGATION_POLICY = {
@@ -98,6 +99,59 @@ function expectToolFreeVerificationInstruction(prompt: string, lang: 'en' | 'ja'
   }
 }
 
+function expectFormalSpecVerifierConstraints(prompt: string, lang: 'en' | 'ja'): void {
+  const constraints = loadFormalSpecVerifierConstraints(lang);
+  expect(prompt).toContain(constraints);
+  expect(constraints).toContain('--max-steps 20');
+  expect(constraints).toContain('Int.oneOf()');
+  expect(constraints).toMatch(/1\.\. steps/iu);
+  expect(constraints).toMatch(/exists[\s\S]*forall[\s\S]*filter[\s\S]*map/iu);
+  if (lang === 'ja') {
+    expect(constraints).toMatch(/`action init` と `action step` を持つ main module を1つ作る/iu);
+    expect(constraints).toMatch(/`inv` で始まる `val` 不変条件と `prop` で始まる `temporal` 時相プロパティはすべて同じ module 内に置く/iu);
+    expect(constraints).toMatch(/`inv` で始まる `val` 不変条件/iu);
+    expect(constraints).toMatch(/`prop` で始まる `temporal` 時相プロパティ/iu);
+    expect(constraints).toMatch(/`prop\*`[^。\n]*Quint は TLC に切り替わり/iu);
+    expect(constraints).toMatch(/`--max-steps 20` は TLC の探索範囲を制限しない/iu);
+    expect(constraints).toMatch(/時相プロパティ内で `next\(` やプライム付き状態変数参照を使わない/iu);
+    expect(constraints).toMatch(/常に有効な無操作または stuttering のトレースが最終到達の結果に違反できない/iu);
+    expect(constraints).toMatch(/有限のトレース長を指定した `check` コマンド/iu);
+    expect(constraints).toMatch(/検証するすべての Alloy プロパティに/iu);
+    expect(constraints).toMatch(/`check` コマンドだけで、`run` コマンドは決して実行しない/iu);
+    expect(constraints).toMatch(/すべての状態変数[^。\n]*有限範囲に有界化/iu);
+    expect(constraints).toMatch(/組み込み演算子名[^。\n]*exists[^。\n]*forall[^。\n]*filter[^。\n]*map[^。\n]*(?:def|val|action)[^。\n]*再定義しない/iu);
+    expect(constraints).toMatch(/parse[^。\n]*typecheck[^。\n]*run[^。\n]*60 秒/iu);
+    expect(constraints).toMatch(/モデル検査段階[^。\n]*既定 5 分/iu);
+  } else {
+    expect(constraints).toMatch(/Put `action init` and `action step` in one main module/iu);
+    expect(constraints).toMatch(/every `val` invariant whose name starts with `inv` and every `temporal` property whose name starts with `prop` in that same module/iu);
+    expect(constraints).toMatch(/every `val` invariant whose name starts with `inv`/iu);
+    expect(constraints).toMatch(/every `temporal` property whose name starts with `prop`/iu);
+    expect(constraints).toMatch(/When any `prop\*` temporal property is present, Quint switches to TLC/iu);
+    expect(constraints).toMatch(/`--max-steps 20` does not limit TLC's exploration/iu);
+    expect(constraints).toMatch(/In temporal properties, do not use `next\(` or primed state-variable references/iu);
+    expect(constraints).toMatch(/always-enabled no-op or stuttering trace cannot violate an eventual outcome/iu);
+    expect(constraints).toMatch(/finite trace scope such as `for 3 but 8 steps`/iu);
+    expect(constraints).toMatch(/For every Alloy property that must be verified, include a `check` command/iu);
+    expect(constraints).toMatch(/TAKT executes `check` commands only and never executes `run` commands/iu);
+    expect(constraints).toMatch(/bound every state variable[^.\n]*finite ranges/iu);
+    expect(constraints).toMatch(/Do not redefine Quint built-in operator names[^.\n]*exists[^.\n]*forall[^.\n]*filter[^.\n]*map/iu);
+    expect(constraints).toMatch(/parse[^.\n]*typecheck[^.\n]*run[^.\n]*60 seconds/iu);
+    expect(constraints).toMatch(/model-check stage[^.\n]*5 minutes by default/iu);
+  }
+  const temporalPrimeRules = constraints.split('\n').filter((line) => (
+    /primed state-variable references|プライム付き状態変数参照/iu.test(line)
+  ));
+  expect(temporalPrimeRules).toHaveLength(1);
+  expect(temporalPrimeRules[0]).toMatch(
+    lang === 'ja' ? /時相プロパティ内で/iu : /In temporal properties/iu,
+  );
+}
+
+function expectNoUnexpandedTemplateVariables(prompt: string): void {
+  expect(prompt).not.toMatch(/\{\{|\}\}/u);
+}
+
 describe('interactive investigation policy template wiring', () => {
   it.each([
     ['en', false, EXPECTED_INVESTIGATION_POLICY],
@@ -165,6 +219,56 @@ describe('formal specification tool-free execution instructions', () => {
 
   it.each(['en', 'ja'] as const)('instructs the %s interpretation prompt to avoid tools and commands', (lang) => {
     expectToolFreeVerificationInstruction(buildFormalSpecInterpretationSystemPrompt(lang), lang);
+  });
+});
+
+describe('formal specification verifier constraint wiring', () => {
+  it.each(['en', 'ja'] as const)('includes verifier constraints in generation and interpretation system prompts for %s', (lang) => {
+    const generationPrompt = buildFormalSpecGenerationSystemPrompt(lang);
+    const interpretationPrompt = buildFormalSpecInterpretationSystemPrompt(lang);
+    expectFormalSpecVerifierConstraints(generationPrompt, lang);
+    expectFormalSpecVerifierConstraints(interpretationPrompt, lang);
+    expectNoUnexpandedTemplateVariables(generationPrompt);
+    expectNoUnexpandedTemplateVariables(interpretationPrompt);
+  });
+
+  it.each(['en', 'ja'] as const)('includes verifier constraints in interactive and task instruction prompts for %s', (lang) => {
+    const interactivePrompt = renderInteractivePrompt(lang, true);
+    const summaryPrompt = lang === 'ja' ? renderJapaneseSummaryPrompt(true) : renderEnglishSummaryPrompt(true);
+    expectFormalSpecVerifierConstraints(interactivePrompt, lang);
+    expectFormalSpecVerifierConstraints(summaryPrompt, lang);
+    expectNoUnexpandedTemplateVariables(interactivePrompt);
+    expectNoUnexpandedTemplateVariables(summaryPrompt);
+  });
+
+  it.each(['en', 'ja'] as const)('omits verifier constraints and template placeholders when formalSpec is false for %s', (lang) => {
+    const constraints = loadFormalSpecVerifierConstraints(lang);
+    const interactivePrompt = renderInteractivePrompt(lang, false);
+    const summaryPrompt = lang === 'ja' ? renderJapaneseSummaryPrompt(false) : renderEnglishSummaryPrompt(false);
+
+    for (const prompt of [interactivePrompt, summaryPrompt]) {
+      expect(prompt).not.toContain(constraints);
+      expect(prompt).not.toContain('--max-steps 20');
+      expect(prompt).not.toMatch(/1\.\. steps/iu);
+      expect(prompt).not.toContain('Int.oneOf()');
+      expectNoUnexpandedTemplateVariables(prompt);
+    }
+  });
+});
+
+describe('formal specification generation user prompt boundaries', () => {
+  it.each(['en', 'ja'] as const)('keeps generation-only fences without duplicating verifier constraints for %s', (lang) => {
+    const prompt = buildFormalSpecGenerationPrompt(lang, `generation-context-${lang}`);
+
+    expect(prompt).toContain('```quint');
+    expect(prompt).toContain('```alloy');
+    expect(prompt).not.toContain(loadFormalSpecVerifierConstraints(lang));
+    if (lang === 'ja') {
+      expect(prompt).not.toMatch(/Quintの不変条件名はinvで始め|Alloyの検証対象には必ずcheckコマンド/iu);
+    } else {
+      expect(prompt).not.toMatch(/Prefix every Quint invariant name with inv|Include a check command for every Alloy property/iu);
+    }
+    expectNoUnexpandedTemplateVariables(prompt);
   });
 });
 

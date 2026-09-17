@@ -622,9 +622,11 @@ describe('MCP package entrypoint', () => {
     const conversation = createConversationSession({
       cwd,
       formalSpec: false,
+      modelCheckTimeoutSeconds: 300,
       ctx,
       strategy: {
         systemPrompt: 'system',
+        modelCheckTimeoutSeconds: 300,
         allowedTools: [],
         transformPrompt: (message) => message,
       },

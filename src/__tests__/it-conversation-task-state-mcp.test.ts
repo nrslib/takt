@@ -27,6 +27,7 @@ function createGrillMePlan(projectCwd: string, provider: Provider, permissionMod
     assistantMode: 'grill-me',
     formalSpec: false,
     formalSpecComments: true,
+    modelCheckTimeoutSeconds: 300,
     resolvedSessionContext: {
       provider,
       providerType: 'copilot',

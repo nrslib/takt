@@ -40,7 +40,7 @@ vi.mock('../features/interactive/assistantInitFiles.js', () => ({
 }));
 
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({
-  resolveFormalSpecConfigurationWithoutPrompt: vi.fn(() => ({ mode: false, comments: true })),
+  resolveFormalSpecConfigurationWithoutPrompt: vi.fn(() => ({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 })),
 }));
 
 import { createWebChatService } from '../features/web-ui/chat.js';

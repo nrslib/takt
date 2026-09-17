@@ -146,10 +146,17 @@ export interface TaktProvidersConfig {
 
 export type FormalSpecMode = boolean | 'Y/n' | 'y/N';
 
-/** Structured formal specification settings. Both fields are independently optional per layer. */
+/** Default timeout for model-checking stages, in seconds. */
+export const DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS = 300;
+
+/** Maximum timeout accepted by the Node timer based model-checking stages, in seconds. */
+export const MAX_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS = 86_400;
+
+/** Structured formal specification settings. Fields are independently optional per layer. */
 export interface FormalSpecConfig {
   mode?: FormalSpecMode;
   comments?: boolean;
+  modelCheckTimeoutSeconds?: number;
 }
 
 /** Legacy scalar mode or the structured formal specification settings. */

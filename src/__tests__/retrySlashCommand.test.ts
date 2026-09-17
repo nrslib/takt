@@ -166,7 +166,7 @@ describe('/retry slash command', () => {
     tmpDir = createTmpDir();
     vi.clearAllMocks();
     mockGlobalConfig.provider = 'mock';
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
     mockRunFormalSpecVerification.mockResolvedValue({
       verdict: 'passed',
       verificationStarted: true,
@@ -269,7 +269,7 @@ describe('/retry slash command', () => {
       '```quint\nmodule directResumeAgreement {}\n```',
       'The direct resume specification passed.',
     ]);
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
     mockGlobalConfig.provider = 'codex';
 
     const result = await runDirectRetryMode(tmpDir, buildRetryContext({

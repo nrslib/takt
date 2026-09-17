@@ -136,6 +136,7 @@ function createPlan(
     assistantMode,
     formalSpec: false,
     formalSpecComments: true,
+    modelCheckTimeoutSeconds: 300,
     workflowContext: WORKFLOW_CONTEXT,
     ...(resolvedSessionContext === undefined ? {} : { resolvedSessionContext }),
   });
@@ -158,7 +159,7 @@ function createConversationForMode(mode: 'assistant' | 'grill-me' | 'persona'): 
       personaContent: 'You are the reviewer.',
       personaDisplayName: 'Reviewer',
       allowedTools: ['Read'],
-    })
+    }, { modelCheckTimeoutSeconds: 300 })
     : createPlan(mode);
   return createConversation({ plan });
 }
@@ -198,7 +199,11 @@ beforeEach(() => {
   });
   mockLoadTemplate.mockReturnValue('rendered template');
   mockLoadAssistantInitContext.mockReturnValue(undefined);
-  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({
+    mode: false,
+    comments: true,
+    modelCheckTimeoutSeconds: 300,
+  });
   mockRunFormalSpecVerification.mockResolvedValue({
     verdict: 'passed',
     verificationStarted: true,
@@ -682,7 +687,10 @@ describe('TUI local commands', () => {
     expect(mockLoadTemplate).toHaveBeenCalledWith(
       'score_summary_formal_spec_instructions',
       'en',
-      { formalSpecComments: true },
+      expect.objectContaining({
+        formalSpecComments: true,
+        formalSpecVerifierConstraints: expect.any(String),
+      }),
     );
   });
 
@@ -791,7 +799,7 @@ describe('TUI local commands', () => {
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       '```quint\nmodule currentAgreement {}\n```',
       '/repo',
-      abortController.signal,
+      { abortSignal: abortController.signal, modelCheckTimeoutSeconds: 300 },
     );
     expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
@@ -802,6 +810,34 @@ describe('TUI local commands', () => {
       internalAgentIsolation: 'strict-readonly',
     }));
     expect(chunks).toEqual([]);
+  });
+
+  it('should pass the plan model-check timeout to the TUI verifier', async () => {
+    const plan = createPlan();
+    const conversation = createConversation({
+      plan: {
+        ...plan,
+        strategy: { ...plan.strategy, formalSpec: true, modelCheckTimeoutSeconds: 9 },
+      },
+      persistSession: false,
+    });
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({
+        result: { content: '```quint\nmodule currentAgreement {}\n```', sessionId: 'session-1', success: true },
+        sessionId: 'session-1',
+      })
+      .mockResolvedValueOnce({
+        result: { content: 'The formal specification passed.', sessionId: 'session-1', success: true },
+        sessionId: 'session-1',
+      });
+
+    await send(conversation, '/verify', []);
+
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      expect.any(String),
+      '/repo',
+      { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 9 },
+    );
   });
 
   it('should report /replay and /retry as unavailable, matching the readline loop', () => {
@@ -1000,7 +1036,11 @@ describe('TUI local commands', () => {
       retryNote: '',
       workflowContext: WORKFLOW_CONTEXT,
     } as const;
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({ mode: true, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({
+      mode: true,
+      comments: true,
+      modelCheckTimeoutSeconds: 300,
+    });
     const formalPlan = createInstructConversationPlan('/repo', instructOptions);
     expect(formalPlan.strategy.enabledCommands).toContain(SlashCommand.Verify);
     const formalConversation = createTuiConversation({
@@ -1027,7 +1067,7 @@ describe('TUI local commands', () => {
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       '```quint\nmodule taskActionAgreement {}\n```',
       '/repo',
-      expect.any(AbortSignal),
+      { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
     );
   });
 
@@ -1041,7 +1081,11 @@ describe('TUI local commands', () => {
       retryNote: '',
       workflowContext: WORKFLOW_CONTEXT,
     } as const;
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({ mode: false, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({
+      mode: false,
+      comments: true,
+      modelCheckTimeoutSeconds: 300,
+    });
     const regularPlan = createInstructConversationPlan('/repo', instructOptions);
     expect(regularPlan.strategy.enabledCommands).not.toContain(SlashCommand.Verify);
     const regularConversation = createTuiConversation({
