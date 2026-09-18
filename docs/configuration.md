@@ -1277,6 +1277,32 @@ provider_options:
     runtime_mode: exe                  # exe or node; node is for explicit SDK development mode
 ```
 
+DeepSeek reasoning effort is configured only in a `runtime.yaml` provider profile or through
+the standard TAKT environment override:
+
+```yaml
+version: 1
+provider:
+  defaults:
+    profile: deepseek
+  profiles:
+    deepseek:
+      provider: deepseek-harness
+      model: deepseek-v4-flash
+      options:
+        reasoning_effort: high
+```
+
+The accepted values are `off`, `low`, `high`, and `max`. If the option is omitted, TAKT leaves
+the field unset so the SDK default is used. `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT`
+is the corresponding environment override. The legacy `provider_options` bag, workflow steps,
+personas, and routing entries do not support this option; specifying it there fails with a
+configuration error.
+
+Changing or clearing the effort applies to the next turn without resetting the session ID or
+persisted history. A session's bridge is replaced when necessary; other sessions keep their own
+bridges. A failed replacement returns an error rather than continuing with the old effort.
+
 The DeepSeek Harness `model` field accepts either a bare model reference such as
 `deepseek-v4-flash` or `<route>/<model>` such as `openai/gpt-5.4` and
 `my-gateway/org/custom-model`. TAKT uses the text before the first `/` as the
@@ -1300,7 +1326,7 @@ Sessions are reused when a workflow supplies `session_key`; one-shot calls close
 
 Permission controls and tool restrictions are not ignored: provider calls with `permissionMode` set, `bypassPermissions: true`, or an explicit `allowedTools` value (including an empty list) return `status: 'error'` before the bridge starts. Use a compatible provider when these constraints are required. Separately, `allowed_tools` is not a supported workflow-step field: workflow schema validation rejects it before any provider call, so it does not reach the provider error-response path described above.
 
-The corresponding environment overrides are `_BASE_URL`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, and `_RUNTIME_MODE`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
+The corresponding environment overrides are `_BASE_URL`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, `_RUNTIME_MODE`, and `_REASONING_EFFORT`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
 
 #### Network access (`network_access`)
 

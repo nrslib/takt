@@ -267,7 +267,7 @@ class DeepSeekHarnessConfig:
 `
     : `
 class DeepSeekHarnessConfig:
-    def __init__(self, provider, model, cwd, runtime_cwd, max_tokens=None, request_timeout_seconds=None, shutdown_timeout_seconds=None):
+    def __init__(self, provider, model, cwd, runtime_cwd, max_tokens=None, request_timeout_seconds=None, shutdown_timeout_seconds=None, reasoning_effort=None):
         self.kwargs = {
             'provider': provider,
             'model': model,
@@ -277,6 +277,10 @@ class DeepSeekHarnessConfig:
             'request_timeout_seconds': request_timeout_seconds,
             'shutdown_timeout_seconds': shutdown_timeout_seconds,
         }
+        if reasoning_effort is not None:
+            if reasoning_effort not in ('off', 'low', 'high', 'max'):
+                raise ValueError('unsupported reasoning_effort')
+            self.kwargs['reasoning_effort'] = reasoning_effort
 `;
   const constructor = `    def __init__(self, **kwargs):
         self.config = DeepSeekHarnessConfig(**kwargs)
@@ -1034,7 +1038,8 @@ describe.skipIf(!fakePythonAvailable)('DeepSeek Harness managed installer', () =
     expect(await readFile(fixture.runtime.probeHomeLog, 'utf8')).toBe(fixture.dshHomeDir);
     expect(process.env.DSH_HOME).toBe(ambientHome);
     expect(existsSync(fixture.runtime.bridgeStartedMarker)).toBe(false);
-    expect(await readFile(fixture.runtime.lifecycleLog, 'utf8')).toBe('probe-constructor\nprobe-close\n');
+    expect(await readFile(fixture.runtime.lifecycleLog, 'utf8'))
+      .toBe('probe-constructor\nprobe-close\n'.repeat(5));
   });
 
   it('syncs the managed project once with absolute paths and the locked non-dev contract', async () => {
@@ -1803,8 +1808,7 @@ describe.skipIf(!fakePythonAvailable)('DeepSeek Harness managed provider startup
 
     expect(response).toMatchObject({ status: 'done', content: 'managed response' });
     expect(await readFile(fixture.runtime.lifecycleLog, 'utf8')).toBe([
-      'probe-constructor',
-      'probe-close',
+      ...Array.from({ length: 5 }, () => ['probe-constructor', 'probe-close']).flat(),
       'bridge-constructor',
       'bridge-start',
       'bridge-close',
@@ -1820,6 +1824,24 @@ describe.skipIf(!fakePythonAvailable)('DeepSeek Harness managed provider startup
     const invocations = await readFile(fixture.runtime.pythonInvocationLog, 'utf8');
     expect(invocations).toMatch(/-u .*bridge\.py/u);
     expect(existsSync(fixture.uvLogPath)).toBe(false);
+  });
+
+  it.each(['off', 'low', 'high', 'max'] as const)('passes reasoning_effort=%s through the managed SDK constructor', async (reasoningEffort) => {
+    const fixture = await prepareProviderFixture();
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: fixture.projectDir,
+      model: DEEPSEEK_HARNESS_DEFAULT_MODEL_FOR_TEST,
+      providerOptions: {
+        reasoningEffort,
+      },
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'managed response' });
+    const [startup] = (await readFile(fixture.bridgeStartedMarker, 'utf8'))
+      .trim()
+      .split(/\r?\n/u)
+      .map((line) => JSON.parse(line) as { kwargs?: Record<string, unknown> });
+    expect(startup?.kwargs).toMatchObject({ reasoning_effort: reasoningEffort });
   });
 
   it('isolates provider startup probing from a project Python module', async () => {

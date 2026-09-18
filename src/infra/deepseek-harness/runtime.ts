@@ -37,7 +37,7 @@ from deepseek_harness import DeepSeekHarness
 
 sdk_distribution = importlib.metadata.distribution('deepseek-harness-sdk')
 runtime_distribution = importlib.metadata.distribution('deepseek-harness-runtime-bin')
-probe_kwargs = {
+base_probe_kwargs = {
     'provider': '__takt_probe_provider__',
     'model': '__takt_probe_model__',
     'cwd': '.',
@@ -46,17 +46,21 @@ probe_kwargs = {
     'request_timeout_seconds': 1.0,
     'shutdown_timeout_seconds': 1.0,
 }
-harness = None
-try:
+for reasoning_effort in (None, 'off', 'low', 'high', 'max'):
+    probe_kwargs = dict(base_probe_kwargs)
+    if reasoning_effort is not None:
+        probe_kwargs['reasoning_effort'] = reasoning_effort
+    harness = None
     try:
-        harness = DeepSeekHarness(**probe_kwargs)
-    except TypeError as error:
-        raise RuntimeError(
-            'DeepSeek Harness SDK constructor signature is incompatible with the managed runtime contract'
-        ) from error
-finally:
-    if harness is not None:
-        harness.close()
+        try:
+            harness = DeepSeekHarness(**probe_kwargs)
+        except TypeError as error:
+            raise RuntimeError(
+                'DeepSeek Harness SDK constructor signature is incompatible with the managed runtime contract'
+            ) from error
+    finally:
+        if harness is not None:
+            harness.close()
 print(json.dumps({
     'implementation': sys.implementation.name,
     'python': list(sys.version_info[:3]),

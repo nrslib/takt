@@ -61,6 +61,7 @@ export type {
   CursorProviderOptions,
   CopilotProviderOptions,
   KiroProviderOptions,
+  DeepSeekReasoningEffort,
   DeepSeekHarnessProviderOptions,
   PiProviderOptions,
   StepProviderOptions,

@@ -630,8 +630,11 @@ function resolveProfileProviderOptions(
   const normalizationOptions: NormalizeProviderOptionsOptions = !isTrustedGlobalProfile
     ? {
         baseUrlTrust: 'loopback-only',
+        allowDeepSeekHarnessReasoningEffort: profile.provider === 'deepseek-harness',
       }
-    : {};
+    : {
+        allowDeepSeekHarnessReasoningEffort: profile.provider === 'deepseek-harness',
+      };
   const validatedProfileOptions = StepProviderOptionsObjectSchema.parse({ [rawKey]: profile.options });
   const profileOptions = normalizeProviderOptions(validatedProfileOptions, normalizationOptions);
   const mergedOptions = mergeProviderOptions(capabilityOptions, profileOptions);

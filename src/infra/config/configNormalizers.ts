@@ -693,12 +693,21 @@ export function buildRawTaktProvidersOrThrow(
   };
 }
 
-/** Serialize supported internal provider options to YAML keys, omitting unspecified values. */
+/**
+ * Serialize supported internal provider options to legacy YAML keys, omitting unset values.
+ * Reject runtime-only DeepSeek effort instead of silently losing it during persistence.
+ */
 export function denormalizeProviderOptions(
   providerOptions: StepProviderOptions | undefined,
 ): Record<string, unknown> | undefined {
   if (!providerOptions) {
     return undefined;
+  }
+  if (providerOptions.deepseekHarness?.reasoningEffort !== undefined) {
+    throw new Error(
+      'Configuration error: DeepSeek reasoning_effort cannot be saved in legacy provider_options; '
+      + 'use runtime profile options or the standard environment override.',
+    );
   }
 
   const raw: Record<string, unknown> = {};

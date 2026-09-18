@@ -19,6 +19,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
+import type { DeepSeekHarnessProviderOptions } from '../core/models/workflow-provider-options.js';
 
 describe('DeepSeekHarnessProvider', () => {
   it('declares the official SDK capability boundary', () => {
@@ -42,16 +43,16 @@ describe('DeepSeekHarnessProvider', () => {
     const agent = provider.setup({ name: 'worker', systemPrompt: 'Use Cordis.' });
     const onStream = vi.fn();
     const abortController = new AbortController();
+    const providerOptions: DeepSeekHarnessProviderOptions = {
+      requestTimeoutMs: 12_000,
+      reasoningEffort: 'high',
+    };
 
     await agent.call('implement', {
       cwd: '/tmp/work',
       model: 'deepseek-v4-flash',
       sessionId: 'session-1',
-      providerOptions: {
-        deepseekHarness: {
-          requestTimeoutMs: 12_000,
-        },
-      },
+      providerOptions: { deepseekHarness: providerOptions },
       abortSignal: abortController.signal,
       onStream,
     });
@@ -60,9 +61,7 @@ describe('DeepSeekHarnessProvider', () => {
       cwd: '/tmp/work',
       model: 'deepseek-v4-flash',
       sessionId: 'session-1',
-      providerOptions: {
-        requestTimeoutMs: 12_000,
-      },
+      providerOptions,
       abortSignal: abortController.signal,
       systemPrompt: 'Use Cordis.',
       onStream,

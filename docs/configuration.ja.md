@@ -1216,6 +1216,32 @@ provider_options:
     runtime_mode: exe                  # exe または node
 ```
 
+DeepSeek の推論強度は `runtime.yaml` の provider profile、または標準の TAKT 環境変数
+override からだけ設定します。
+
+```yaml
+version: 1
+provider:
+  defaults:
+    profile: deepseek
+  profiles:
+    deepseek:
+      provider: deepseek-harness
+      model: deepseek-v4-flash
+      options:
+        reasoning_effort: high
+```
+
+指定できる値は `off`、`low`、`high`、`max` です。省略時はフィールドを設定せず、SDK の
+既定値へ委譲します。対応する環境変数 override は
+`TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT` です。legacy の
+`provider_options`、workflow step、persona、routing entry での指定は対応せず、設定エラーに
+なります。
+
+強度の変更・指定解除は次のturnから適用し、会話IDと保存済みの履歴を維持します。
+必要に応じてそのsessionのbridgeだけを交換し、別sessionのbridgeは変更しません。
+交換に失敗した場合はエラーを返し、古い強度では続行しません。
+
 DeepSeek Harness の `model` フィールドは、`deepseek-v4-flash` のような
 model 参照だけの形式と、`openai/gpt-5.4` や
 `my-gateway/org/custom-model` のような `<route>/<model>` 形式を受け付けます。
@@ -1239,7 +1265,7 @@ workflow が `session_key` を指定するとセッションを再利用し、on
 
 権限制御とツール制限は無視しません。provider への呼び出しで `permissionMode`、`bypassPermissions: true`、または `allowedTools`（空配列も含む）が明示された場合は、bridge を起動せず `status: 'error'` を返します。これらの制約が必要な場合は、対応する provider を使用してください。一方、workflow step の `allowed_tools` は対応していないフィールドであり、workflow の schema 検証で拒否されます。provider 呼び出しには到達せず、上記のエラー応答とは別の段階で失敗します。
 
-対応する環境変数 override は `_BASE_URL`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
+対応する環境変数 override は `_BASE_URL`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE`、`_REASONING_EFFORT` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
 
 #### ネットワークアクセス (`network_access`)
 

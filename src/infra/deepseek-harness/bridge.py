@@ -136,6 +136,9 @@ def _start_harness(config: dict[str, Any]) -> Any:
     shutdown_timeout_ms = config.get("shutdownTimeoutMs")
     if shutdown_timeout_ms is not None:
         kwargs["shutdown_timeout_seconds"] = shutdown_timeout_ms / 1000
+    reasoning_effort = config.get("reasoningEffort")
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
 
     harness = DeepSeekHarness(**kwargs)
     harness.start()
