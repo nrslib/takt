@@ -142,17 +142,22 @@ describe('MCP package entrypoint', () => {
 
       const tools = await client.listTools();
 
-      expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
-        'takt_list_tasks',
+      expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'takt_get_run',
-      ]));
-      expect(tools.tools).toHaveLength(2);
+        'takt_list_tasks',
+      ]);
       const enqueueResult = await client.callTool({
         name: 'takt_enqueue_task',
         arguments: { cwd: process.cwd(), task: 'must not enqueue', workflow: 'default', autoPr: false },
       });
       expect(enqueueResult.isError).toBe(true);
       expect(firstTextContent(enqueueResult.content)).toContain('Tool takt_enqueue_task not found');
+      const tellResult = await client.callTool({
+        name: 'takt_tell_run',
+        arguments: { cwd: process.cwd(), runSlug: 'must-not-tell', content: 'must not tell' },
+      });
+      expect(tellResult.isError).toBe(true);
+      expect(firstTextContent(tellResult.content)).toContain('Tool takt_tell_run not found');
     } finally {
       await client.close();
       await server.close();

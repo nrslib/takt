@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- 生成した read-only task-state server が接続されている対話では、provider の権限 allowlist に `takt_list_tasks` と `takt_get_run` を追加し、これらの MCP tool が拒否されないようにしました。Grill Me の tool と権限設定も Assistant と統一しました (#1587)。
 - 注入レポートがサブワークフローと Phase 2 へ引き継がれます (#1538)。`workflow_call` サブワークフロー内の実装担当にも、ビルトインの development / maintenance instruction が参照する親の計画・テスト報告が届くようになり、Phase 1 で解決した report の参照名・scope・本文が Phase 2（初回・複数 report・新規セッション再試行・fallback）へ引き継がれます。これにより report フェーズが上流の契約 ID を参照でき、完了済みの実装を再計画が必要と誤報告しなくなりました。#1535 の残りの受入条件は未対応のためオープンのままです。
 
 ## [0.64.1] - 2026-09-05

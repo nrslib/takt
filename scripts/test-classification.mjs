@@ -344,6 +344,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-entrypoint-lazy-loading.test.ts',
   'src/__tests__/it-cli-entrypoint-required-option-errors.test.ts',
   'src/__tests__/it-interactive-routes.test.ts',
+  'src/__tests__/it-opencode-task-state-mcp.test.ts',
   'src/__tests__/it-run-session-instruct.test.ts',
   'src/__tests__/it-system-enqueue-effect-duplicate.test.ts',
   'src/__tests__/it-task-restart-point.test.ts',

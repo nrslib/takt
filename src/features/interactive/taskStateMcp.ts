@@ -2,6 +2,7 @@ import * as process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import type { McpServerConfig } from '../../core/models/index.js';
+import { TAKT_MCP_READ_ONLY_TOOL_NAMES } from '../mcp/server.js';
 import { createMcpAdapter, type ResolvedMcpServers } from '../../infra/providers/mcp/index.js';
 import { markTaskStateMcpServers } from '../../infra/providers/mcp/task-state.js';
 import { providerSupportsMcpServers } from '../../infra/providers/provider-capabilities.js';
@@ -23,7 +24,7 @@ export function createTaskStateMcpServers(): Record<string, McpServerConfig> {
       command: process.execPath,
       args: [entrypoint, '--tool-set', 'read-only', '--include-reference-markers'],
     },
-  });
+  }, TAKT_MCP_READ_ONLY_TOOL_NAMES);
 }
 
 function resolveTaskStateMcpServers(

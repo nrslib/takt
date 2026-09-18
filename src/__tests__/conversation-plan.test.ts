@@ -200,7 +200,14 @@ describe('assistant conversation plan', () => {
   });
 
   it('should keep Grill Me tools and permission resolution aligned with assistant', () => {
-    const { strategy } = createAssistantConversationPlan('/repo', {
+    const assistantPlan = createAssistantConversationPlan('/repo', {
+      assistantMode: 'assistant',
+      formalSpec: false,
+      formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
+      workflowContext: WORKFLOW_CONTEXT,
+    });
+    const grillMePlan = createAssistantConversationPlan('/repo', {
       assistantMode: 'grill-me',
       formalSpec: false,
       formalSpecComments: true,
@@ -209,11 +216,12 @@ describe('assistant conversation plan', () => {
     });
 
     expect(mockInitializeSession).toHaveBeenCalledWith('/repo', 'grill-me-interactive');
-    expect(strategy.allowedTools).toEqual(DEFAULT_INTERACTIVE_TOOLS);
-    expect(strategy.permissionMode).toBeUndefined();
-    expect(strategy.introMessage).toContain('Grill Me mode');
-    expect(strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
-    expect(strategy.enableTellCommand).toBe(true);
+    expect(grillMePlan.strategy.allowedTools).toEqual(assistantPlan.strategy.allowedTools);
+    expect(grillMePlan.strategy.permissionMode).toBe(assistantPlan.strategy.permissionMode);
+    expect(grillMePlan.strategy.allowedTools).toEqual(DEFAULT_INTERACTIVE_TOOLS);
+    expect(grillMePlan.strategy.introMessage).toContain('Grill Me mode');
+    expect(grillMePlan.strategy.introMessage.match(/\/[\w-]+/g)).toEqual(['/go', '/tell']);
+    expect(grillMePlan.strategy.enableTellCommand).toBe(true);
     expect(templateVarsFor('score_interactive_system_prompt')).toMatchObject({
       tellAvailable: true,
     });

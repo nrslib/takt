@@ -1,13 +1,16 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, PermissionMode } from '../core/models/index.js';
+import { createTaktMcpServer } from '../app/mcp/server.js';
 import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
-import type { Provider, ProviderAgent, ProviderCallOptions } from '../infra/providers/types.js';
+import type { Provider, ProviderAgent, ProviderCallOptions, ProviderType } from '../infra/providers/types.js';
 
-function createFakeCopilotProvider(
+function createFakeProvider(
   providerCall: ProviderAgent['call'],
 ): { provider: Provider; providerCall: ProviderAgent['call'] } {
   const agent: ProviderAgent = { call: providerCall };
@@ -49,6 +52,53 @@ function successfulResponse(): AgentResponse {
   };
 }
 
+async function listTaktToolNames(toolSet: 'all' | 'read-only'): Promise<string[]> {
+  const server = createTaktMcpServer({}, { toolSet });
+  const client = new Client({ name: `takt-mcp-${toolSet}-test-client`, version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const tools = await client.listTools();
+    return tools.tools.map((tool) => tool.name).sort();
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
+function toClaudeMcpToolName(toolName: string): string {
+  return `mcp__takt__${toolName}`;
+}
+
+function createInteractivePlan(
+  projectCwd: string,
+  provider: Provider,
+  providerType: ProviderType,
+  options: {
+    assistantMode?: 'assistant' | 'grill-me';
+    permissionMode?: PermissionMode;
+    sessionId?: string;
+  } = {},
+) {
+  return createAssistantConversationPlan(projectCwd, {
+    assistantMode: options.assistantMode ?? 'assistant',
+    formalSpec: false,
+    formalSpecComments: true,
+    modelCheckTimeoutSeconds: 300,
+    resolvedSessionContext: {
+      provider,
+      providerType,
+      model: `${providerType}-model`,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+      ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
+    },
+    ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+  });
+}
+
 describe('conversation task-state MCP integration', () => {
   let projectCwd: string | undefined;
 
@@ -88,7 +138,7 @@ describe('conversation task-state MCP integration', () => {
       });
       return successfulResponse();
     });
-    const { provider } = createFakeCopilotProvider(providerCall);
+    const { provider } = createFakeProvider(providerCall);
     const plan = createGrillMePlan(projectCwd, provider, 'readonly');
 
     expect(plan.strategy.permissionMode).toBeUndefined();
@@ -124,7 +174,7 @@ describe('conversation task-state MCP integration', () => {
   it('rejects an arbitrary readonly MCP record even when its arguments look read-only', async () => {
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-conversation-task-state-mcp-'));
     const providerCall = vi.fn(async (): Promise<AgentResponse> => successfulResponse());
-    const { provider } = createFakeCopilotProvider(providerCall);
+    const { provider } = createFakeProvider(providerCall);
     const plan = createGrillMePlan(projectCwd, provider, 'readonly');
     const generatedServer = plan.ctx.mcpServers?.takt;
     if (generatedServer === undefined || generatedServer.type !== 'stdio') {
@@ -152,5 +202,146 @@ describe('conversation task-state MCP integration', () => {
     expect(outcome.result).toBeNull();
     expect(outcome.error).toContain('readonly permission mode');
     expect(providerCall).not.toHaveBeenCalled();
+  });
+
+  it.each(['claude-sdk', 'claude', 'claude-terminal', 'opencode'] as const)(
+    'passes only the generated task-state read-only tools to %s',
+    async (providerType) => {
+      projectCwd = mkdtempSync(join(tmpdir(), 'takt-conversation-task-state-mcp-'));
+      const allToolNames = await listTaktToolNames('all');
+      const readOnlyToolNames = await listTaktToolNames('read-only');
+      const writeToolNames = allToolNames.filter((name) => !readOnlyToolNames.includes(name));
+      const providerCall = vi.fn(async (_prompt: string, options: ProviderCallOptions) => {
+        expect(options.mcpServers).toBeDefined();
+        expect(options.preparedMcp).toBeDefined();
+        expect(options.allowedTools).toEqual(expect.arrayContaining(
+          readOnlyToolNames.map(toClaudeMcpToolName),
+        ));
+        expect(options.allowedTools).not.toEqual(expect.arrayContaining(
+          writeToolNames.map(toClaudeMcpToolName),
+        ));
+        return successfulResponse();
+      });
+      const { provider } = createFakeProvider(providerCall);
+      const plan = createInteractivePlan(projectCwd, provider, providerType);
+
+      const { result, error } = await callAIWithRetry(
+        'inspect the current task state',
+        plan.strategy.systemPrompt,
+        plan.strategy.allowedTools,
+        projectCwd,
+        plan.ctx,
+        { outputMode: 'silent' },
+      );
+
+      expect(error).toBeUndefined();
+      expect(result).toMatchObject({ success: true, content: 'copilot response' });
+      expect(providerCall).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not derive task-state permissions from an untrusted server copy', async () => {
+    projectCwd = mkdtempSync(join(tmpdir(), 'takt-conversation-task-state-mcp-'));
+    const readOnlyToolNames = await listTaktToolNames('read-only');
+    const providerCall = vi.fn(async (_prompt: string, options: ProviderCallOptions) => {
+      expect(options.allowedTools).not.toEqual(expect.arrayContaining(
+        readOnlyToolNames.map(toClaudeMcpToolName),
+      ));
+      return successfulResponse();
+    });
+    const { provider } = createFakeProvider(providerCall);
+    const plan = createInteractivePlan(projectCwd, provider, 'claude-sdk');
+    const generatedServer = plan.ctx.mcpServers?.takt;
+    if (generatedServer === undefined || generatedServer.type !== 'stdio') {
+      throw new Error('The interactive plan did not generate its stdio task-state server');
+    }
+    plan.ctx.mcpServers = {
+      takt: {
+        ...generatedServer,
+        command: '/fixture/arbitrary-server',
+      },
+    };
+
+    const { result, error } = await callAIWithRetry(
+      'inspect the current task state',
+      plan.strategy.systemPrompt,
+      plan.strategy.allowedTools,
+      projectCwd,
+      plan.ctx,
+      { outputMode: 'silent' },
+    );
+
+    expect(error).toBeUndefined();
+    expect(result).toMatchObject({ success: true });
+    expect(providerCall).toHaveBeenCalledOnce();
+  });
+
+  it('does not pass task-state MCP or permissions to a strict-readonly attempt', async () => {
+    projectCwd = mkdtempSync(join(tmpdir(), 'takt-conversation-task-state-mcp-'));
+    const readOnlyToolNames = await listTaktToolNames('read-only');
+    const providerCall = vi.fn(async (_prompt: string, options: ProviderCallOptions) => {
+      expect(options.mcpServers).toBeUndefined();
+      expect(options.preparedMcp).toBeUndefined();
+      expect(options.allowedTools).not.toEqual(expect.arrayContaining(
+        readOnlyToolNames.map(toClaudeMcpToolName),
+      ));
+      return successfulResponse();
+    });
+    const { provider } = createFakeProvider(providerCall);
+    const plan = createInteractivePlan(projectCwd, provider, 'claude-sdk');
+
+    const { result, error } = await callAIWithRetry(
+      'inspect the current task state',
+      plan.strategy.systemPrompt,
+      plan.strategy.allowedTools,
+      projectCwd,
+      plan.ctx,
+      { internalAgentIsolation: 'strict-readonly', outputMode: 'silent' },
+    );
+
+    expect(error).toBeUndefined();
+    expect(result).toMatchObject({ success: true });
+    expect(providerCall).toHaveBeenCalledOnce();
+  });
+
+  it('retains task-state read-only permissions when retrying without a stale session', async () => {
+    projectCwd = mkdtempSync(join(tmpdir(), 'takt-conversation-task-state-mcp-'));
+    const readOnlyToolNames = await listTaktToolNames('read-only');
+    const capturedOptions: ProviderCallOptions[] = [];
+    const providerCall = vi.fn(async (_prompt: string, options: ProviderCallOptions) => {
+      capturedOptions.push(options);
+      if (capturedOptions.length === 1) {
+        return {
+          ...successfulResponse(),
+          status: 'blocked' as const,
+          content: '',
+          error: 'stale session',
+          sessionId: 'stale-session',
+        };
+      }
+      return { ...successfulResponse(), sessionId: 'new-session' };
+    });
+    const { provider } = createFakeProvider(providerCall);
+    const plan = createInteractivePlan(projectCwd, provider, 'claude-sdk', { sessionId: 'stale-session' });
+
+    const { result, error } = await callAIWithRetry(
+      'inspect the current task state',
+      plan.strategy.systemPrompt,
+      plan.strategy.allowedTools,
+      projectCwd,
+      plan.ctx,
+      { outputMode: 'silent' },
+    );
+
+    expect(error).toBeUndefined();
+    expect(result).toMatchObject({ success: true, sessionId: 'new-session' });
+    expect(providerCall).toHaveBeenCalledTimes(2);
+    for (const options of capturedOptions) {
+      expect(options.allowedTools).toEqual(expect.arrayContaining(
+        readOnlyToolNames.map(toClaudeMcpToolName),
+      ));
+      expect(options.preparedMcp).toBeDefined();
+    }
+    expect(capturedOptions[0]?.preparedMcp).not.toBe(capturedOptions[1]?.preparedMcp);
   });
 });

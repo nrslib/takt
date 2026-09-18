@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Interactive task-state MCP tools are now included in the provider permission allowlist when the generated read-only server is connected, so `takt_list_tasks` and `takt_get_run` are not rejected; Grill Me uses the same tools and permission settings as Assistant (#1587).
 - Injected reports are handed over to subworkflows and to Phase 2 (#1538). Implementers inside a `workflow_call` subworkflow now receive the parent plan and test reports referenced by the builtin development and maintenance instructions, and the report references, scope, and bodies resolved in Phase 1 are carried into Phase 2 (first report, multiple reports, new-session retries, and fallback), so the report phase can cite upstream contract IDs instead of misreporting completed implementation as needing a replan. Related to #1535, which stays open for the remaining acceptance criteria.
 
 ## [0.64.1] - 2026-09-05
