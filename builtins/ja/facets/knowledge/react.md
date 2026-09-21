@@ -1,25 +1,13 @@
 # React知識
 
-Reactのprops、state、Context、reducer、Effect、hookを、GUIの階層と状態遷移へ具体化する。Reactの慣用的な書き方と、MVPでいう厳密なPassive Viewは同じ概念ではないが、表示部品と画面・領域の動作を裁定する処理を分けるという設計意図で対応させる。Reactのコンポーネント階層は論理的な構成であり、PortalでDOM上の配置が変わっても、状態の所有とContext・イベントの経路はその論理階層から追う。
+Reactでは、propsで親から値を受け、stateで変化する値を持ち、描画で画面を作る。画面の通信や遷移はハンドラやhookへ置き、表示用コンポーネントへ埋め込まない。
 
-## Propsとstateの所有
+## Propsとstate
 
-propsは親から渡される入力、stateはコンポーネントが保持して操作で変化させる記憶である。各stateには一つの担当を置き、同じ事実を複数のコンポーネントで複製しない。Reactではstateを持つコンポーネントの位置が、どの部分木へ表示が反映されるかを決める。
-
-| 状態の性質 | Reactでの配置例 |
-|------------|----------------|
-| 一つの部品に閉じるfocus、開閉、入力途中 | その部品の `useState` または `useReducer` |
-| 兄弟部品が共有する選択や入力 | 最小共通の親で保持し、propsとイベントハンドラで渡す |
-| 深い部分木へ同じ値と操作を配る | Contextで値を配り、状態の保持・更新はProviderやreducerなどの担当に置く |
-| 状態と遷移を一箇所で裁定する | `useReducer`、dispatch、画面用hookなど |
-| サーバー由来のデータと再取得 | query hookやデータ取得担当が取得条件、失敗、更新を扱う |
-
-### 共有選択を一つにする
-
-一覧と詳細が同じ選択を表示する場合は、共通の親で選択を保持する。子がそれぞれ `selectedId` を持つと、片方だけ更新される経路や同期Effectが生まれる。
+propsは親から渡される入力、stateはコンポーネントが操作で変える値である。同じ事実を二つの`useState`で持たず、値を使う範囲と残る時間に合う位置で保持する。
 
 ```tsx
-// NG - 二つの部品が同じ選択を別々に保持する
+// NG - 一覧と詳細が選択を別々に持つ
 function List() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   return <ItemList selectedId={selectedId} onSelect={setSelectedId} />
@@ -30,7 +18,7 @@ function Detail() {
   return <ItemDetail id={selectedId} onSelect={setSelectedId} />
 }
 
-// OK - 共通の親が選択を保持し、表示と操作を配る
+// OK - 共通の親が一つの選択を持つ
 function Workspace() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   return (
@@ -42,57 +30,68 @@ function Workspace() {
 }
 ```
 
-選択の担当が変わるときは、表示部品のAPIだけでなく、一覧の操作、詳細の表示、URLや通信が選択に反応する経路を同じ変更として確認する。
+入力途中の値や開閉状態を一つのコンポーネントだけで使うなら、そのコンポーネントで持てる。複数のコンポーネントが使う選択や入力は共通の親で持つ。複数画面に残す値は、画面を切り替えても残るProviderや外部ストアで持つ。
 
 ## Propsの変更とstateの寿命
 
-propsをstateの初期値へコピーすると、その値は最初のrenderでしか読み取られない。親の値が変わるたびに表示を変えるcontrolled componentなのか、識別子が変わったときだけ編集草稿を作り直すcomponentなのかを決める。
+`useState`へ渡した初期値は、後からpropsが変わってもstateへ反映されない。親の値を表示し続ける入力欄なら、値と変更コールバックをpropsで受け取る。
 
 ```tsx
-// NG - documentTitleが変わっても初回の草稿を表示し続ける
+// NG - documentTitleが変わっても初回の草稿を表示する
 function TitleEditor({ documentTitle }: { documentTitle: string }) {
   const [draft, setDraft] = useState(documentTitle)
-  return <input aria-label="文書名" value={draft} onChange={event => setDraft(event.target.value)} />
+  return (
+    <input
+      aria-label="文書名"
+      value={draft}
+      onChange={event => setDraft(event.target.value)}
+    />
+  )
 }
 
-// OK - 編集中の値を親のstateとして扱う
+// OK - 親の値を表示し、変更を親へ知らせる
 function TitleEditor({ title, onChange }: {
   title: string
   onChange: (title: string) => void
 }) {
-  return <input aria-label="文書名" value={title} onChange={event => onChange(event.target.value)} />
+  return (
+    <input
+      aria-label="文書名"
+      value={title}
+      onChange={event => onChange(event.target.value)}
+    />
+  )
 }
 ```
 
-ローカルな編集草稿が必要な場合は、どの文書IDで草稿を破棄して初期化するかを、`key`でcomponentの境界を変える、明示的なイベントで初期化するなどの形で表す。propsの変更をEffectで無条件にstateへコピーし続けると、利用者の入力を上書きしやすい。
+確定するまで親へ反映しない下書きは、コンポーネント内のstateに持てる。別の文書へ切り替えるときは、文書IDを`key`にして作り直すか、切替操作で初期化する。propsの変化をEffectで毎回コピーすると、編集中の値まで上書きしてしまう。
 
-## 派生値とstateの重複
+## 派生値は計算する
 
-propsやstateから毎回計算できる値は、別のstateとして保存しない。派生値をEffectで同期すると、render直後に一度古い表示が出たり、更新順によって送信値がずれたりする。
+propsやstateから計算できる値を別のstateに保存しない。Effectで派生値を同期すると、更新直後に古い値を表示したり、更新順で判定がずれたりする。
 
 ```tsx
-// NG - visibleItemsとallSelectedをEffectで正規stateとして同期する
+// NG - 表示一覧と全選択をEffectで別のstateに保存する
 const [visibleItems, setVisibleItems] = useState<Item[]>([])
 const [allSelected, setAllSelected] = useState(false)
 
 useEffect(() => {
-  const nextVisibleItems = items.filter(item => matches(item, filter))
-  setVisibleItems(nextVisibleItems)
-  setAllSelected(
-    nextVisibleItems.length > 0 && nextVisibleItems.every(item => selectedIds.has(item.id)),
-  )
+  const next = items.filter(item => matches(item, filter))
+  setVisibleItems(next)
+  setAllSelected(next.length > 0 && next.every(item => selectedIds.has(item.id)))
 }, [items, filter, selectedIds])
 
-// OK - 正規stateから表示と判定を導出する
+// OK - 同じ条件から毎回計算する
 const visibleItems = items.filter(item => matches(item, filter))
-const allSelected = visibleItems.length > 0 && visibleItems.every(item => selectedIds.has(item.id))
+const allSelected = visibleItems.length > 0
+  && visibleItems.every(item => selectedIds.has(item.id))
 ```
 
-計算量が実測上の問題になる場合は `useMemo` などで計算を再利用できるが、依存と結果の契約を明示する。依存していない値や小さな計算を形式だけでmemo化しない。
+計算量が実際に問題なら`useMemo`などで再利用する。何を依存にして計算を省くかを説明できる状態で使う。
 
-## Contextは値を配る仕組み
+## Contextは値を渡す
 
-Contextは、木の深い場所へ値を渡す経路を提供する。Contextそのものが状態を保持したり、遷移を裁定したりするわけではない。Provider内の `useState`、`useReducer`、外部storeなどが状態を持ち、Contextはその値と操作入口を利用者へ配る構成を取れる。
+Contextは、祖先のProviderが渡した値を子孫から読む仕組みである。Providerで`useState`や`useReducer`を使い、その状態と更新関数を渡せる。
 
 ```tsx
 const CartContext = createContext<CartContextValue | null>(null)
@@ -113,92 +112,51 @@ function CartTotal() {
 }
 ```
 
-Contextへ画面固有の通信手順や複数の正規stateを詰め込むと、利用者がどの操作で状態を変えるか追いにくくなる。深い部品が必要とする値と操作だけを配り、遷移と副作用の裁定はProvider内のreducerや画面用hookなど、責務が読める担当へ置く。
+Contextで保存関数を渡せば、深い子も同じ保存処理を呼べる。stateの計算はreducerで行い、通信の開始は渡された関数で行う。
 
-## Reducerと画面の状態機械
+## Reducerと保存通信
 
-`useReducer`は、現在stateと操作意図から次のstateを決める境界を作る。これは画面や領域のMediatorに対応するReactの実現方法の一つであり、特別なクラスを作ることを要求しない。表示部品はreducerを直接理解せず、表示値と意図の通知を受ける。
+reducerは現在のstateとeventから次のstateを返す純粋な関数である。保存通信はハンドラで開始し、開始時・成功時・失敗時にdispatchする。reducerの中で通信や通知を実行しない。
+
+## 重複submitを防ぐ
+
+次は`onSave`を受け取るフォームの例である。formのsubmitを一つの入口にし、ボタンのclick側では`onSave`を呼ばない。
 
 ```tsx
-type Phase = 'editing' | 'submitting' | 'success' | 'failure'
-type State = { phase: Phase; message: string | null }
-type Event =
-  | { type: 'submit' }
-  | { type: 'retry' }
-  | { type: 'completed' }
-  | { type: 'failed'; message: string }
-
-const initialState: State = { phase: 'editing', message: null }
-
-function reducer(state: State, event: Event): State {
-  if (event.type === 'submit' && state.phase === 'editing') {
-    return { phase: 'submitting', message: null }
-  }
-  if (event.type === 'retry' && state.phase === 'failure') {
-    return { phase: 'submitting', message: null }
-  }
-  if (event.type === 'completed' && state.phase === 'submitting') {
-    return { phase: 'success', message: '保存しました' }
-  }
-  if (event.type === 'failed' && state.phase === 'submitting') {
-    return { phase: 'failure', message: event.message }
-  }
-  return state
-}
-
-function SaveView({ state, onSave, onRetry }: {
-  state: State
+function SaveForm({ disabled, onSave }: {
+  disabled: boolean
   onSave: () => void
-  onRetry: () => void
 }) {
   return (
-    <section>
-      {state.message && <p role="status">{state.message}</p>}
-      <SaveButton disabled={state.phase !== 'editing'} onSave={onSave} />
-      {state.phase === 'failure' && <RetryButton onRetry={onRetry} />}
-    </section>
+    <form onSubmit={event => {
+      event.preventDefault()
+      if (!disabled) onSave()
+    }}>
+      <button type="submit" disabled={disabled}>保存</button>
+    </form>
   )
 }
 ```
 
-この例は状態遷移と描画を抜き出している。画面側は `useReducer(reducer, initialState)` で状態を保持し、操作ハンドラが現在状態から受理を判断して保存を開始する。完了・失敗をdispatchし、そのstateと操作ハンドラを `SaveView` へ渡す。reducerは純粋に次のstateを返し、表示部品は描画パラメータと通知を扱う。複数の操作入口は同じ保存ハンドラへ集める。
+Enterキーなど別の入口から来てもsubmitへ入り、保存を一度だけ通知する。
 
-## 重複submitと複数の操作入口
+PortalでDOM上の配置が異なる部品でも、ReactのイベントはReactツリーに沿って祖先へ伝わる。
 
-フォーム送信、ボタンのclick、キーボードのEnterなどは、同じ操作へ到達しうる。入口ごとに通信を呼ぶと一回の意図が二重送信になる。HTMLのform送信を一つの入口にし、ボタンは `type="submit"` として、送信可能かどうかは現在stateから決める。
+## Effectと外部システム
 
-```tsx
-// NG - clickとsubmitが同じ通信を二度呼ぶ
-<form onSubmit={submitOrder}>
-  <button type="submit" onClick={submitOrder}>注文する</button>
-</form>
+`useEffect`は描画の外にある接続、購読、timer、取得などとReactを同期する。利用者の一回の操作に属する保存や通知は、Effectではなくイベントハンドラやcommandへ置く。
 
-// OK - formのsubmitだけが操作をdispatchする
-<form onSubmit={event => {
-  event.preventDefault()
-  dispatch({ type: 'submit' })
-}}>
-  <button type="submit" disabled={state.phase === 'submitting'}>注文する</button>
-</form>
-```
-
-操作の重複を、各ボタンの条件式や `stopPropagation` の追加で隠さない。操作意図がどの入口から来ても、同じreducer、command、画面用hookへ入り、現在stateで受理・拒否される構造にする。
-
-## Effectと外部システムの同期
-
-`useEffect`はrenderの外にあるシステムとの同期に使う。接続、購読、timer、外部APIとの同期など、開始と停止が対になる処理をEffectへ置き、利用者の一回の操作に属する送信や通知はイベントハンドラまたはcommandへ置く。
-
-Effectが読むprops、state、component内で作った値や関数が再実行条件になる。依存配列をlintへの対処として固定・追加せず、同期する対象と再実行の理由を先に決める。
+Effect内で読むprops、state、コンポーネント内で宣言した変数や関数を依存配列に含める。接続先が変わったら接続を作り直す、というように同期する対象を決める。
 
 ```tsx
-// NG - roomIdが変わっても接続を作り直せず、古い部屋を表示し続ける
+// NG - roomIdが変わっても古い部屋への接続を使い続ける
 useEffect(() => {
   const connection = connectToRoom(roomId)
   connection.subscribe(onMessage)
   return () => connection.close()
 }, [])
 
-// OK - roomIdごとに接続を作り、再実行前とunmount時に解放する
+// OK - roomIdごとに接続し、再実行前とunmount時に閉じる
 useEffect(() => {
   const connection = connectToRoom(roomId)
   connection.subscribe(onMessage)
@@ -206,11 +164,9 @@ useEffect(() => {
 }, [roomId, onMessage])
 ```
 
-`onMessage`がrenderごとに変わるため不要な再接続が起きるなら、handlerの責務を整理し、安定した参照へ移す、Effectの外へ出す、またはイベント処理へ移す。依存を削るだけで古い値を許容しない。
+callbackの参照が描画ごとに変わり、機能上不要な再接続が実際に起きるなら、ハンドラを安定させる、Effectの外へ出す、またはイベント処理へ移す。依存を削って古い値を使わせない。
 
-### 通信とcleanup
-
-URLや識別子の変化で取得をやり直す場合は、その値を依存へ含め、前の取得をキャンセルできるようにする。失敗を空配列へ変換して成功と区別できなくしない。
+識別子の変更で取得をやり直す場合は、識別子を依存へ含め、前の取得をcleanupでキャンセルする。Abortされた結果を失敗表示へ変換しない。
 
 ```tsx
 useEffect(() => {
@@ -227,67 +183,43 @@ useEffect(() => {
 }, [documentId])
 ```
 
-初期ロードが一度だけという仕様なら、Effectがreactive valueを読まない構造にして空の依存配列を使う。filter、URL、ページング、明示的な再取得が仕様なら、それらを依存、query key、操作入力へ反映する。loading表示、message、dialogの開閉だけを初期ロードの再実行条件にしない。
+## Reactの実行規則
+
+Hookはコンポーネントまたはcustom hookのトップレベルで呼び、条件分岐やloopの中で呼ばない。描画中は通信、通知、DOM操作、外部変数の変更を行わず、propsとstateを直接変更しない。
+
+並べ替え可能な一覧では、配列の添字ではなく項目のIDを`key`に使う。`key`が変わるとReactは別のコンポーネントとして扱い、stateを初期化する。
 
 ## Custom Hook
 
-custom hookは、Reactのstate、Effect、ref、Context、query、form、イベント変換を、呼び出し元から責務が追える形で組み合わせる境界にできる。statefulなUI制御はhookへ、純粋計算は通常の関数へ分けると、画面のMediatorと表示部品の境界が読みやすい。
+custom hookは、state、Effect、ref、Context、query、form、イベント変換を一つの画面の動作としてまとめられる。純粋な計算だけなら通常の関数に分ける。
 
-同じstateful hookを複数のコンポーネントから呼んでも、stateは共有されない。共有が必要なら、最小共通のコンポーネントで一度だけ呼んでprops・callbackで渡すか、Providerや外部storeへ置く。
+hook内部の`useState`で作ったstateは、hookの呼び出しごとに別になる。Context、query、外部storeを読むhookは共有された値を返せるため、hookの名前だけで共有を判断せず、内部で何を読み書きするかを見る。
 
-```tsx
-// NG - 同じhookを呼べば共有されると誤認する
-function List() {
-  const selection = useSelection()
-  return <ItemList selection={selection} />
-}
+## TanStack Queryとcache
 
-function Detail() {
-  const selection = useSelection()
-  return <ItemDetail selection={selection} />
-}
-
-// OK - hookを一つの担当で呼び、結果を両方へ渡す
-function Workspace() {
-  const selection = useSelection()
-  return (
-    <>
-      <ItemList selection={selection} />
-      <ItemDetail selection={selection} />
-    </>
-  )
-}
-```
-
-hookがJSXやpropsに似たオブジェクトを返す形式だけで設計を決めない。hookが画面固有の通信を隠す、同じ副作用を複数回起こす、画面固有の型やcomponentへ循環依存する場合は、その依存方向と変更理由を見直す。
-
-## TanStack Queryとキャッシュの条件
-
-TanStack Queryでは、取得結果を変える条件を `queryKey` と `queryFn` の両方へ明示する。条件付きで一部のキーを省略すると、別の利用者・URL・filterの結果を同じcacheへ置く。
+TanStack Queryでは、取得結果を変える条件を`queryKey`と`queryFn`へ同じ意味で渡す。条件によってkeyの項目を省略すると、別の利用者やfilterの結果を同じcacheへ置く。
 
 ```tsx
 import { useQuery } from '@tanstack/react-query'
 
-// NG - filterがないとaccountIdがキーへ入らない
+// NG - filterがない場合にaccountIdもkeyから消える
 const result = useQuery({
   queryKey: ['orders', filter ? { accountId, filter, page } : { page }],
   queryFn: () => fetchOrders({ accountId, filter, page }),
 })
 
-// OK - useQueryのキーへ取得条件を常に含める
+// OK - 取得条件を常に同じkeyへ含める
 const result = useQuery({
   queryKey: ['orders', { accountId, filter, page }],
   queryFn: () => fetchOrders({ accountId, filter, page }),
 })
 ```
 
-更新後はinvalidation、refetch、またはライブラリの契約に沿ったcache更新で、古い表示を正規データとして残さない。cursorやoffsetのページングでは、ページの連続性、重複、欠落、並び替え後の表示をサーバーとqueryライブラリの契約で確認する。
+更新後はinvalidation、再取得、またはTanStack Queryのcache更新で古い結果を置き換える。ページングでは、cursor、sort、filter、snapshotがサーバーの結果と一致し、重複や欠落を扱えることを確認する。
 
-## Props型とhookの境界
+## Props型とhookの配置
 
-Props型とhookの配置は、共有範囲、公開契約、変更理由、依存方向で決める。一つのcomponentだけが使う型はcomponentの近くに置くと描画契約を追いやすい。複数componentの共有契約、公開API、独立したドメインモデルは別ファイルへ置ける。
-
-hookは状態、イベント、派生値を返し、呼び出し側で表示へ束ねる形にすると、画面の動作とcomponentの描画を分けやすい。Props型を共有する構成も、循環依存や不要な画面固有結合を生まず、同じ変更理由で管理されるなら選択できる。
+一つのコンポーネントだけが使うProps型は、その近くに置く。複数の部品が使う型は、共通で使える場所へ置く。画面用hookから表示に必要な値と操作関数を返せば、コンポーネントはそれらを使って描画できる。
 
 ## 参考資料
 
@@ -299,6 +231,8 @@ hookは状態、イベント、派生値を返し、呼び出し側で表示へ�
   https://react.dev/learn/responding-to-events
 - React: Passing Data Deeply with Context
   https://react.dev/learn/passing-data-deeply-with-context
+- React: Reusing Logic with Custom Hooks
+  https://react.dev/learn/reusing-logic-with-custom-hooks
 - React: useEffect
   https://react.dev/reference/react/useEffect
 - React: You Might Not Need an Effect

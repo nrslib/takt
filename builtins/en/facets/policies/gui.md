@@ -1,54 +1,29 @@
 # GUI Policy
 
-Judge GUI structure, state ownership, display and behavior separation, operation-intent paths, and current-state arbitration by the change impact that can be traced.
+Review how the screen is assembled, where state is kept, how display parts pass operations to the screen, and how the current state determines the result.
 
-## Principles
+## Criteria
 
-| Principle | Criterion |
-|-----------|-----------|
-| Hierarchy | Screen components are reachable from Root and each subtree's responsibility is readable |
-| State scope | An owner exists in the smallest subtree that must keep the fact consistent |
-| Passive View | A display component handles render parameters and reports intent; it does not arbitrate transitions, communication, or shared-state changes |
-| Mediator | A screen or region owner decides acceptance, rejection, transitions, and side effects from current state and intent |
-| Operation path | The route from intent to its owner is traceable and a handled intent is not executed twice |
-| Changeability | Generic display components are not coupled to screen-specific communication or transitions, and change scope is readable |
-| Structure | Ownerless state, mixed responsibilities, and hidden change paths are evidence alongside runtime defects |
+| Criterion | Decision |
+|------|------|
+| The screen and its parts can be followed from Root, and the place that handles each operation is clear | OK |
+| The list and detail view keep separate `selectedId` values for the same order, so their displays diverge | REJECT |
+| A part owns an input value or open/closed state used only inside that part | OK |
+| A display part renders values and reports operations upward with `onSelect` or `onSave` | OK |
+| A display part calls a screen-specific API and chooses where to navigate after saving | REJECT |
+| The screen checks current state, accepts or rejects the operation, and updates state | OK |
+| A delete request moves from row to list to screen, and the screen performs the deletion | OK |
+| An ancestor runs an operation again after it was handled or rejected | REJECT |
+| Only the save button checks whether saving is in progress, so keyboard input can submit again while saving | REJECT |
 
-## Hierarchy and state ownership
+## Example
 
-| Criterion | Judgment |
-|-----------|----------|
-| UI cannot be followed from Root and no display, state, or operation owner can be traced | REJECT |
-| Multiple components keep one fact separately, so display or operation results depend on update order | REJECT |
-| A child changes state in another subtree without its owner's operation entry | REJECT |
-| State is placed in a subtree matching its scope and lifetime, with a readable path from owner to display | OK |
-| Root composes the screen and delegates required state to subtrees | OK |
+```text
+NG: A shared ResultsTable calls the order API when a row is clicked
+    and navigates to the order detail URL
+    -> Every other screen using the table must accept the order API and destination
 
-## Display and behavior
-
-| Criterion | Judgment |
-|-----------|----------|
-| A display component individually performs navigation, communication, shared-state changes, or business acceptance decisions | REJECT |
-| A display component receives render values and reports intent through the responsible operation entry | OK |
-| A screen or region owner reads current state and decides acceptance, rejection, and transition | OK |
-| A small screen keeps display and arbitration in one function while the two responsibilities and paths remain visible in code | Check the change reason |
-
-Place framework-native components according to this responsibility boundary. Judge the mixed responsibility and change path.
-
-## Operation intent and events
-
-| Criterion | Judgment |
-|-----------|----------|
-| Intent bypasses its owner's operation entry and directly changes another state owner | REJECT |
-| An intermediate component delegates intent without changing its meaning | OK |
-| An ancestor executes the same save, deletion, or other operation again after its owner accepted or rejected it | REJECT |
-| Callback, operation delegation, and Chain of Responsibility are treated as one mechanism so owner or stopping condition cannot be traced | REJECT |
-
-## State transitions and change scope
-
-| Criterion | Judgment |
-|-----------|----------|
-| Accepted operations differ by state, yet each display component makes its own state condition | REJECT |
-| State, intent, transition, and resulting display are traceable to one owner | OK |
-| Screen-specific communication or transition logic is added to a generic display component to preserve its apparent reuse | REJECT |
-| Independent display, state, and external-side-effect reasons to change are mixed into one responsibility and the path cannot be traced | REJECT |
+OK: The screen passes rows and onSelect(id) to the table
+    The table renders rows and calls onSelect(id)
+    -> The screen decides selection, communication, and destination
+```

@@ -1,138 +1,47 @@
 # GUI Knowledge
 
-Understand a GUI through a hierarchy rooted at Root, state scope and lifetime, separation of display from behavior, operation-intent notification, and decisions based on current state.
+Build components in a hierarchy that starts at Root, and separate display work from interaction handling.
 
-## Hierarchy rooted at Root
+## A hierarchy that starts at Root
 
-Components belonging to a screen form a UI subtree that can be followed from Root. This hierarchy is the logical containment of components that own responsibilities and state; it is separate from DOM placement. Root composes the screen and is not a place where every state or side effect belongs. Choose the depth and number of intermediate components from responsibilities and reasons to change.
+Root builds the screen, and the screen combines parts such as a list and a detail view.
 
 ```
 Root
-└── screen or region behavior mediator
-    ├── display component
-    └── display component
+└── Order screen
+    ├── Order list
+    └── Order detail
 ```
 
-The diagram expresses responsibility relationships. File placement and hierarchy depth follow responsibilities and reasons to change. A small screen may place Root and its behavior mediator in one component, while an independent region may have its own mediator. Make it possible to follow each display component to its subtree and identify who arbitrates its state and operations.
+Following this hierarchy shows which screen displays a part and where an operation is handled. Use Root to assemble the screen, and keep state close to the screen or part that uses it.
 
-| Condition | Meaning or option |
-|-----------|-------------------|
-| The UI is reachable from Root and each subtree's responsibility is readable | The hierarchy shows change paths |
-| Several display components must handle one fact consistently | Place the owner in the smallest subtree containing them |
-| A region has independent placement, state, and communication | Close those responsibilities in the region's owner |
-| Root composes the screen and delegates state to the required subtrees | Composition and state ownership are separated |
+## Where to keep state
 
-## State scope and lifetime
+When the list and detail view select the same order, keep one `selectedId` in their common parent and pass it to both. Keep an in-progress input value or open/closed state in the part that uses it.
 
-Keep state in the smallest subtree that must keep the fact consistent. Choose placement from usage scope and lifetime.
+If both the list and detail view show the save state, keep one `saveState` in the screen. Keep long-lived values such as login information in a shared part that contains the screens that use them. Choose the location from the parts that read the same value and how long the value must remain.
 
-| State nature | Placement consideration |
-|--------------|------------------------|
-| Hover, focus, in-progress input, and open/close state confined to one component | The component or small subtree |
-| Selection shared by nearby list and detail branches | The smallest owner containing both, then pass it to each View |
-| Screen-level submitting, completed, and failed transitions | The screen or region behavior mediator |
-| Sessions or settings that live across screens | A shared mechanism near Root with matching scope and lifetime |
-| Fetched data and loading/error state | The subtree owner responsible for fetching and updating it |
+## Separate display from interaction
 
-### One owner for shared selection
+A display part renders values received from the screen and reports operations upward. A save button calls `onSave`. The screen checks whether a save is already in progress and starts communication only when saving is allowed. It updates state on success or failure and reflects that state in the button and message.
 
-When a list and detail view show the same selection, one smallest common owner keeps the selected ID. Passing the same operation path from list interaction to detail display makes the changed code and affected views traceable.
-
-## Separation of display and behavior
-
-Strict MVP Passive View receives the parameters needed to render and reports the user's operation intent. It does not arbitrate state transitions, communication, shared-state changes, or external side effects as a display component's own decisions.
-
-A Mediator receives screen or region state and operation intent, decides whether the current state accepts it, and determines the next state and required side effects. The role may be implemented by a function, hook, reducer, or another framework-native unit; the responsibility must remain separate from display code.
-
-```tsx
-// Bad: the display component arbitrates communication and navigation
-function SaveButton({ orderId }: { orderId: string }) {
-  return (
-    <button type="button" onClick={async () => {
-      await fetch(`/orders/${orderId}`, { method: 'POST' })
-      window.location.assign('/orders')
-    }}>
-      Save
-    </button>
-  )
-}
-
-// Good: the display component handles render parameters and intent notification
-function SaveButton({ disabled, onSave }: {
-  disabled: boolean
-  onSave: () => void
-}) {
-  return <button type="button" disabled={disabled} onClick={onSave}>Save</button>
-}
+```
+editing    --save--> submitting --success--> success
+                                └--failure--> failure
+submitting --save--> rejected
 ```
 
-A small screen may keep Root and Mediator logic in one function when the code still distinguishes display inputs and outputs from the current-state operation decision. Framework-native state and input mechanisms fit when that boundary remains readable.
+While `submitting`, disable the save button so the same save is not sent twice. Show completion on success and an error with retry on failure. The screen makes this decision; the display part renders the values it receives.
 
-## Operation intent and event paths
+## Pass operations upward
 
-Component callbacks, a Chain of Responsibility, and a Mediator are separate concepts. Make the path that delegates intent to an upper-level owner, and the condition that passes an unhandled intent to the next owner, traceable from the logical component hierarchy.
+Pass an operation upward when a part does not handle it. For example, pass a delete request from a row to the list and from the list to the screen; the screen checks its current state and deletes the item. An ancestor must not run an operation again after it has been handled or rejected.
 
-| Path | Role |
-|------|------|
-| Callback or binding | A child directly reports intent through an exposed operation entry |
-| Chain of Responsibility | A handler decides whether it can handle intent and passes unhandled intent to the next handler |
-| Mediator | Current state and intent determine acceptance, rejection, transition, and required side effects |
+## Mapping to established patterns
 
-Design the delegation path and the rule that prevents an ancestor from processing an already-handled intent again.
+MVP Passive View describes a display part that receives values needed for drawing and reports operation intent. A mechanism that passes an operation to the next handler when the current handler cannot process it is called Chain of Responsibility. Mediator describes a screen or region deciding, from its current state, whether to accept an operation and what state and processing should follow. A state machine represents those states and transitions.
 
-## Decisions from current state
-
-A state machine makes states, intents, transitions, and transition side effects explicit. When accepted operations differ by state, the screen or region Mediator makes the decision from current state instead of scattering conditions across display components.
-
-The example shows state transitions and rendering parameters. The responsible handler executes communication for an accepted operation and passes its result back as the next intent.
-
-```ts
-type Phase = 'editing' | 'submitting' | 'success' | 'failure'
-type ScreenState = { phase: Phase; message: string | null }
-type Intent =
-  | { type: 'submit' }
-  | { type: 'retry' }
-  | { type: 'completed' }
-  | { type: 'failed'; message: string }
-
-function transition(state: ScreenState, intent: Intent): ScreenState {
-  if (intent.type === 'submit' && state.phase === 'editing') {
-    return { phase: 'submitting', message: null }
-  }
-  if (intent.type === 'submit') {
-    return state
-  }
-  if (intent.type === 'retry' && state.phase === 'failure') {
-    return { phase: 'submitting', message: null }
-  }
-  if (intent.type === 'completed' && state.phase === 'submitting') {
-    return { phase: 'success', message: 'Saved' }
-  }
-  if (intent.type === 'failed' && state.phase === 'submitting') {
-    return { phase: 'failure', message: intent.message }
-  }
-  return state
-}
-
-function viewParameters(state: ScreenState) {
-  return {
-    submitDisabled: state.phase !== 'editing',
-    retryVisible: state.phase === 'failure',
-    message: state.message,
-  }
-}
-```
-
-The second submit during `submitting` is rejected by retaining the same state. Only `completed` or `failed` changes the display parameters. Acceptance and display reflection therefore come from one state model.
-
-| Observable structure | Meaning or option |
-|----------------------|-------------------|
-| A display component receives render parameters and reports intent through an operation entry | Passive View responsibility is preserved |
-| A screen or region owner reads current state and decides acceptance, rejection, and transition | Mediator arbitration is traceable |
-| Root leads to display components and state owners | Hierarchy and ownership are readable |
-| Intermediate components delegate intent without changing its meaning | Depth alone is not a structural problem |
-| A display component individually decides communication, transition, or shared-state changes | Review the display/behavior boundary |
-| The same intent runs through multiple operation paths | Review the operation entry and delegation chain |
+Frameworks realize this division with standard mechanisms such as props, callbacks, bindings, hooks, and reducers. For example, a descendant calls a callback provided by an ancestor to notify that ancestor directly of an operation.
 
 ## Reference
 
