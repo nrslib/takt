@@ -490,7 +490,23 @@ function resolveParentFacetWithSource(
   selectorInstruction = false,
 ): ResolvedFacetContent | undefined {
   if (!context) {
-    return undefined;
+    const parentPath = join(dirname(currentSourcePath), `${parentName}.md`);
+    const stats = assertPathSegmentsAreSafe(
+      dirname(currentSourcePath),
+      parentPath,
+      (_violation, segmentPath) => new Error(
+        `Facet inheritance parent must stay beside the source facet and must not use symlinks: ${segmentPath}`,
+      ),
+    );
+    if (!stats || !stats.isFile() || stats.isSymbolicLink()) {
+      return undefined;
+    }
+    return {
+      content: readFileSync(parentPath, 'utf-8'),
+      sourcePath: parentPath,
+      facetType,
+      refName: parentName,
+    };
   }
 
   const candidateDirs = buildCandidateDirsWithPackage(facetType, context);

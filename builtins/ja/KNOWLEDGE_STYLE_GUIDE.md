@@ -131,17 +131,23 @@ forceExit: true
 
 ```markdown
 # 良い例: 原則 → コード例
-子コンポーネントは自身で状態を変更しない。イベントを親にバブリングし、親が状態を操作する。
+親が所有する正規状態を、子が所有者の公開更新契約を経ずに直接変更しない。公開callbackで通知でき、親へ伝える必要がないlocal stateは子が所有する。
 
-// NG - 子が自分で状態を変更
-const ChildBad = ({ initialValue }) => {
-  const [value, setValue] = useState(initialValue)
-  ...
+// NG - 親が所有する正規状態を子が直接変更
+const ChildBad = ({ state }) => {
+  state.value = 'changed'
+  return <input value={state.value} />
 }
 
-// OK - 親が状態を管理、子はコールバックで通知
+// OK - 親の公開callbackで操作意図を通知
 const ChildGood = ({ value, onChange }) => {
   return <input value={value} onChange={e => onChange(e.target.value)} />
+}
+
+// OK - 親へ伝える必要がないlocal state
+const ChildLocal = () => {
+  const [value, setValue] = useState('')
+  return <input value={value} onChange={e => setValue(e.target.value)} />
 }
 ```
 

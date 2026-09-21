@@ -428,7 +428,7 @@ const PREPARE_TARGET_OVERRIDES = {
   arch: ['arch-review'],
   antipattern: ['antipattern-review'],
   'antipattern-wording-tests': ['antipattern-review'],
-  frontend: ['frontend-review'],
+  frontend: ['frontend-review', 'frontend-review-react'],
   cqrs: ['cqrs-review'],
   'frontend-coder': ['frontend-implement'],
   'cqrs-coder': ['cqrs-implement'],

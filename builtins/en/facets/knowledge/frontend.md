@@ -1,3 +1,5 @@
+{extends:gui}
+
 # Frontend Knowledge
 
 ## Component Design
@@ -13,8 +15,8 @@ Component Classification:
 
 | Type | Responsibility | Example |
 |------|----------------|---------|
-| Container | Data fetching, state management | `UserListContainer` |
-| Presentational | Display only | `UserCard` |
+| Container | Ownership of required data and state | `UserListContainer` |
+| Presentational | Rendering display values and reporting intent | `UserCard` |
 | Layout | Arrangement, structure | `PageLayout`, `Grid` |
 | Utility | Common functionality | `ErrorBoundary`, `Portal` |
 
@@ -58,58 +60,38 @@ Accessible names, roles, and states are UI contracts consumed by assistive techn
 
 ## State Management
 
-Child components do not modify their own state. They bubble events to parent, and parent manipulates state.
-When multiple components read or update the same state, first place that state in their nearest common parent, then pass data and event callbacks down through props.
-
-```tsx
-// ❌ Child modifies its own state
-const ChildBad = ({ initialValue }: { initialValue: string }) => {
-  const [value, setValue] = useState(initialValue)
-  return <input value={value} onChange={e => setValue(e.target.value)} />
-}
-
-// ✅ Parent manages state, child notifies via callback
-const ChildGood = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => {
-  return <input value={value} onChange={e => onChange(e.target.value)} />
-}
-
-const Parent = () => {
-  const [value, setValue] = useState('')
-  return <ChildGood value={value} onChange={setValue} />
-}
-```
-
-Exception (OK for child to have local state):
-- UI-only temporary state (hover, focus, animation)
-- Completely local state that doesn't need to be communicated to parent
-
+Using the GUI ownership model, frontend code distinguishes canonical data, display-only derived values, form input, and server data as separate contracts.
 
 ### Canonical and Derived State
 
 State should hold canonical values such as user input, server data, and temporary UI state. Display values, aggregates, selection states, sorted results, and grouped results that can be computed from canonical state are derived values and must not be kept as independent state.
 
 
-State Placement Guidelines:
+State placement follows GUI ownership and also considers data lifetime and usage scope:
 
 | State Nature | Recommended Placement |
 |--------------|----------------------|
 | Temporary UI state (modal open/close, etc.) | Local (useState) |
 | Form input values | Local or form library |
-| Shared across nearby parent/child or sibling components | Nearest common parent, passed through props |
-| Shared across deep hierarchy or multiple screens | Context or state management library |
-| Server data cache | Data fetching library (TanStack Query, etc.) |
+| Shared across nearby parent/child or sibling components | Nearest common owner, public callbacks, or Context |
+| Shared across deep hierarchy or multiple screens | Context, dispatch, store, or another shared mechanism |
+| Server data cache | A query, data-fetching library, or screen owner |
 
 ## Initial load and refetch boundaries
 
-Initial loading should be separated from reactive refetching. If refetching is not driven by URL, filter, paging, or explicit user action, keep it mount-only and do not tie it to unstable callback references.
+Separate initial loading from reactive refetching. Express mount-only behavior as an intentional contract; when URL, filter, paging, or explicit user actions cause refetching, reflect those values or events in the dependencies, query key, or operation path. Do not add or remove dependencies only to satisfy lint.
+
+## Cache and Pagination
+
+Cursor- or offset-paginated lists can use a query cache or infinite query when the query key, invalidation, refetch, page continuity, duplicate/gap handling, and visible snapshot contract are explicit. Do not prohibit caching from the pagination name alone.
 
 
 ## Data Fetching
 
-API calls are made in root (View) components and passed to children via props.
+API calls belong to the route, screen owner, or independent widget that owns the required data and consistency. Display-only children receive display values and operation entries. A query or data-fetching hook may own fetching and state transitions.
 
 ```tsx
-// ✅ CORRECT - Fetch at root, pass to children
+// Example: screen owner fetches and passes display values
 const OrderDetailView = () => {
   const { data: order, isLoading, error } = useGetOrder(orderId)
   const { data: items } = useListOrderItems(orderId)
@@ -126,7 +108,7 @@ const OrderDetailView = () => {
   )
 }
 
-// ❌ WRONG - Child fetches its own data
+// Caution: the problem is re-owning the same canonical order without a contract, not the orderId-to-query shape itself
 const OrderSummary = ({ orderId }) => {
   const { data: order } = useGetOrder(orderId)
   // ...
@@ -135,10 +117,10 @@ const OrderSummary = ({ orderId }) => {
 
 When UI state changes affect parameters (week switching, filters, etc.):
 
-Manage state at View level and pass callbacks to components.
+Manage the state and query conditions in the same screen owner, then pass values and public callbacks to display components.
 
 ```tsx
-// ✅ CORRECT - State managed at View level
+// Example: screen owner manages state and query conditions
 const ScheduleView = () => {
   const [currentWeek, setCurrentWeek] = useState(startOfWeek(new Date()))
   const { data } = useListSchedules({
@@ -155,7 +137,7 @@ const ScheduleView = () => {
   )
 }
 
-// ❌ WRONG - Component manages state + data fetching
+// Caution: a display-only component re-owns the parent data contract
 const WeeklyCalendar = ({ facilityId }) => {
   const [currentWeek, setCurrentWeek] = useState(...)
   const { data } = useListSchedules({ facilityId, from, to })
@@ -169,16 +151,17 @@ Exceptions (component-level fetching allowed):
 |------|--------|
 | Infinite scroll | Depends on scroll position (internal UI state) |
 | Search autocomplete | Real-time search based on input value |
-| Independent widget | Notification badge, weather, etc. Completely unrelated to parent data |
+| Independent widget | A self-contained component that owns its data and consistency contract and can accept public inputs on any page |
 | Real-time updates | WebSocket/Polling auto-updates |
 | Modal detail fetch | Fetch additional data only when opened |
 
 Widget conditions (must satisfy all):
-- Completely unrelated to parent data
-- Does not affect parent state
-- Works the same on any page
+- Owns the data and consistency responsibility for its subtree
+- Does not re-own the parent's already-fetched data as another canonical state
+- Does not mutate parent state outside its public update contract
+- When URL, id, or filter values are accepted as public inputs, the query identity (query key or dependencies) and update contract such as invalidation or refetch correspond to those values
 
-If any condition is not met, fetch data at View level and pass via props.
+Receiving an id or another public input and running a query is not rejected by itself. If the widget refetches or retains the same canonical data without an ownership and consistency contract, move fetching to the owner participating in the parent data contract and expose the result to the display.
 
 
 ### Screen-Specific API Usage

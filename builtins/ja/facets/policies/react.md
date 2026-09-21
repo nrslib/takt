@@ -1,6 +1,6 @@
 # Reactポリシー
 
-Reactに関する独立した判定を一つの正本で行う。
+React固有の再実行、状態保持、Context、hook、queryの判定を、実際の責務、依存、整合性契約に基づいて行う。
 
 ## 原則
 
@@ -8,72 +8,83 @@ Reactに関する独立した判定を一つの正本で行う。
 |------|------|
 | 適用条件を確認 | 元要件、変更契約、実在する影響経路に基づいて適用する |
 | 事実を根拠にする | コード、契約、証跡で確認できる条件だけを判定する |
-| 責務境界を守る | 判定対象の所有者と観測可能な影響を分けて確認する |
+| 依存とコード | Effectが読むreactive valueと再実行条件を一致させる |
+| cleanup | 接続、購読、timerなどの外部資源を終了経路で解放する |
+| 状態所有 | hook、reducer、Context、store、query、formの方式ではなく所有者と操作経路を確認する |
+| query整合性 | query key、invalidation、refetch、ページ連続性を実データ契約で確認する |
+| 実害の根拠 | 再実行ループ、漏れ、重複、古い表示など観測できる影響を判定する |
 | 最小範囲に限定する | 今回の要求と因果関係のある範囲だけを判定する |
 | 判定根拠を統一する | 元要件、変更契約、実在する影響経路から導けない例示を判断基準に追加しない |
 
-## React 判定基準
-
-### effect と再実行
+## Effectと依存
 
 | 基準 | 判定 |
 |------|------|
-| 初期表示の一度きりのロードなのに、再生成される関数参照を依存に置く | REJECT |
-| 再取得条件が明確でないのに、Context/Provider 由来関数を依存に置く | REJECT |
-| mount-only 初期化を `useEffect(..., [])` で表現し、意図をコメントで残す | OK |
-| 依存変化時の再取得が仕様として必要で、その依存を明示している | OK |
+| Effectが読むreactive valueを依存から外し、古い値を使う | REJECT |
+| 不安定な関数やContext valueの参照変化だけで初期取得・購読が繰り返される | REJECT |
+| 初期表示の一度きりのロードが、再生成される関数参照の変化で再実行される | REJECT |
+| Context/Provider由来関数の参照変化だけで、要件外の初期取得や購読が繰り返される | REJECT |
+| 初期表示で一覧を一度だけ読むのに、loading state更新で再取得が走る | REJECT |
+| 初期表示で一覧を一度だけ読むのに、message表示やdialog開閉で再取得が走る | REJECT |
+| lintを満たすためだけに依存を追加し、仕様外の再取得や再接続を起こす | REJECT |
+| ひとつのEffectで独立した同期をまとめ、無関係な値の変化で双方を再実行する | REJECT |
+| 外部接続、購読、timerのcleanupがなく、再実行やunmountで資源が残る | REJECT |
+| reactive valueを読まず、mount時の同期とcleanupが契約に合うEffectを空配列で実装する | OK |
+| mount-onlyのEffectがreactive valueを読まず、同期対象とcleanupが契約に合う | OK |
+| lint抑制でreactive valueとの不一致を隠し、古い値や再実行漏れを生む | REJECT |
+| 再実行が必要なEffectを空配列で固定する | REJECT |
 
-### Context と Provider value
+## exhaustive-depsの扱い
 
-| 基準 | 判定 |
-|------|------|
-| Context 由来関数の参照安定性を確認せず、effect 依存に入れる | REJECT |
-| Provider 側で value の安定性が保証されていないのに mount effect の依存に使う | REJECT |
-| Context 関数はイベントハンドラから使い、初期取得は mount-only に閉じる | OK |
-| Provider 側で value 安定化を行い、再取得条件も仕様で定義する | OK |
+依存を変更する場合は、依存配列だけでなくEffectが同期する対象、event handlerへ移すべき処理、独立した処理の分離を確認する。抑制コメントの有無だけで判定しない。
 
-### 初期表示ロード
-
-| 基準 | 判定 |
-|------|------|
-| 初期表示で一覧を一度だけ読むのに、loading state 更新で再取得が走る | REJECT |
-| 初期表示で一覧を一度だけ読むのに、message 表示や dialog 開閉で再取得が走る | REJECT |
-| 初期表示は mount-only とし、後続の再取得条件を明示する | OK |
-
-### データフェッチライブラリのキャッシュ適性
-
-| データ特性 | キャッシュ | 判定 |
-|-----------|----------|------|
-| 単一リソースの詳細（設定値、プロフィール等） | 有効 | OK |
-| 安定した一覧（マスタデータ、変更頻度が低い） | 有効 | OK |
-| cursor ページングかつ途中で追加・削除・並び替えが起きる一覧 | 無効 | local state で取得 |
-| offset ページングかつ途中でデータ変動が起きる一覧 | 無効 | local state で取得 |
-
-### custom hook の責務
+## State、Context、hook
 
 | 基準 | 判定 |
 |------|------|
-| React の state/effect を使わないのに `use*` と命名する | 警告 |
-| 純関数群を custom hook として扱う | 警告 |
-| stateful な UI 制御は custom hook に、純粋計算は function module に分ける | OK |
-| 共有状態が必要な複数コンポーネントで同じ stateful hook を個別に呼ぶ | REJECT |
-| hook が JSX を返す | REJECT |
+| local useStateが部分木の所有者に閉じ、他の部分木へ不透明な変更を行わない | OK |
+| reducer、Context Provider、dispatch、storeで状態と操作入口をまとめる | OK |
+| query hook、form hook、bindingが状態と操作を所有し、表示から経路を追跡できる | OK |
+| 同じstateful hookを複数箇所で呼び、共有されると誤認して別々の正規状態を作る | REJECT |
+| Context、hook、reducerという名称だけで状態所有や操作経路を確認しない | REJECT |
+| 標準APIの形式だけを理由にhook、Context、local state、親callbackを禁止する | REJECT |
 
-### Props 型の配置と hook の境界
-
-| 基準 | 判定 |
-|------|------|
-| 1つのコンポーネント専用 Props を、理由なく `types` ファイルへ切り出す | 警告 |
-| hook から component の Props 型を import するためだけに Props を別ファイルへ移す | REJECT |
-| 複数コンポーネントや公開 API が共有する Props/データ契約を別ファイルへ置く | OK |
-| hook は状態・イベント・派生値を返し、container が component props へ束ねる | OK |
-| hook が component props を返す場合でも、component への型依存を hook に持ち込まない | OK |
-
-### exhaustive-deps の扱い
+## custom hookの責務
 
 | 基準 | 判定 |
 |------|------|
-| ルールに従うためだけに不要な再実行依存を追加する | REJECT |
-| lint 抑制を無言で入れる | 警告 |
-| mount-only の理由をコメントで説明して抑制する | OK |
-| 再実行が必要な effect なのに `[]` にする | REJECT |
+| `use*`関数がReact hook、Context、query、form、イベント変換を組み合わせ、責務と経路を追跡できる | OK |
+| `use*`関数がReact hookや状態・操作契約を使わず、純粋計算だけを包む | 簡素化を検討 |
+| statefulなUI制御はcustom hookに、純粋計算は通常の関数へ分ける | OK |
+| hookがJSXを返しても、所有者と操作経路が明確 | 返り値の形式だけで拒否する根拠にしない |
+| hookが操作の所有者を隠し、返したJSXを含めて不透明または重複した副作用を起こす | REJECT |
+
+## Props型の配置とhookの境界
+
+| 基準 | 判定 |
+|------|------|
+| 1つのcomponent専用Propsを、理由なく`types`ファイルへ切り出す | 警告 |
+| hookからcomponentのProps型をimportするためだけにPropsを別ファイルへ移す | REJECT |
+| 複数componentや公開APIが共有するProps/データ契約を別ファイルへ置く | OK |
+| hookは状態・イベント・派生値を返し、containerがcomponent propsへ束ねる | OK |
+| hookがcomponent propsを返す場合でも、componentへの型依存をhookに持ち込まない | OK |
+
+## Query、キャッシュ、ページング
+
+| 基準 | 判定 |
+|------|------|
+| query keyがresource、URL、filter、利用者などデータを識別する条件を欠き、別データを共有する | REJECT |
+| 更新後にinvalidation、refetch、または契約に沿ったcache更新のいずれもなく、古いデータを正規表示として残す | REJECT |
+| cursor/offset一覧の再取得でページ連続性、重複、欠落の契約がない | REJECT |
+| query/infinite queryのAPIとサーバー契約に沿ってページを取得・再取得する | OK |
+| cursorまたはoffsetという名前だけでquery cacheを禁止する | REJECTの根拠にしない |
+| query hookが取得条件、エラー、更新後の整合性をどのownerからも追跡できない形に隠し、別データや誤った表示を生む | REJECT |
+| 安定した単一リソースや一覧を、識別条件と更新契約に合うquery cacheで扱う | OK |
+
+## Formsと標準API
+
+| 基準 | 判定 |
+|------|------|
+| controlled/uncontrolled input、form library、bindingで入力状態の所有者が明確 | OK |
+| Context dispatchや親の公開callbackで操作意図を伝える | OK |
+| 標準hook、Context、query、formを特定のMVP形式へ変換するだけの変更 | REJECTの根拠にしない |

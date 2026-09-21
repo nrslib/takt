@@ -1,3 +1,5 @@
+{extends:gui}
+
 # フロントエンド専門知識
 
 ## フロントエンドの層構造
@@ -10,20 +12,20 @@ app/routes/ → features/ → shared/
 
 | 層 | 責務 | ルール |
 |---|------|--------|
-| `app/routes/` | ルート定義のみ | UIロジックを持たない。feature の View を呼ぶだけ |
+| `app/routes/` | URLから画面部分木への入口 | route固有の境界を扱い、担当ownerへつなぐ |
 | `features/` | 機能単位の自己完結モジュール | 他の feature を直接参照しない |
 | `shared/` | 全 feature 横断の共有コード | feature に依存しない |
 
-ルートファイルは薄いラッパーに徹する。
+ルートは入口とWeb境界を担当する。画面の状態や取得をroute、画面owner、hook、Providerなどのどこに置くかは、必要な部分木と整合性の契約で決める。
 
 ```tsx
-// CORRECT - ルートは薄い
+// 例: routeは画面部分木を組み立てる
 // app/routes/schedule-management.tsx
 export default function ScheduleManagementRoute() {
   return <ScheduleManagementView />
 }
 
-// WRONG - ルートにロジックを書く
+// routeに状態や取得を置くこと自体を一律に禁止しない
 export default function ScheduleManagementRoute() {
   const [filter, setFilter] = useState('all')
   const { data } = useListSchedules({ filter })
@@ -31,10 +33,10 @@ export default function ScheduleManagementRoute() {
 }
 ```
 
-View コンポーネント（`features/*/components/*-view.tsx`）がデータ取得・状態管理を担当する。
+View、hook、Provider、queryなど、担当ownerがデータ取得・状態管理を担う。表示専用の子は表示値と操作入口を受け取る。
 
 ```
-ルート（route） → View（データ取得・状態管理） → 子コンポーネント（表示）
+ルート（route） → 画面owner（View / hook / Providerなど） → 子コンポーネント（表示）
 ```
 
 ### 画面追加時のルーティング配線
@@ -76,8 +78,8 @@ accessible name、role、state は支援技術とテストが参照する UI 契
 
 | 種類 | 責務 | 例 |
 |------|------|-----|
-| Container | データ取得・状態管理 | `UserListContainer` |
-| Presentational | 表示のみ | `UserCard` |
+| Container | 必要なデータと状態の所有 | `UserListContainer` |
+| Presentational | 表示値の描画と操作意図の通知 | `UserCard` |
 | Layout | 配置・構造 | `PageLayout`, `Grid` |
 | Utility | 共通機能 | `ErrorBoundary`, `Portal` |
 
@@ -126,46 +128,22 @@ features/{feature-name}/
 
 ## 状態管理
 
-子コンポーネントは自身で状態を変更しない。イベントを親にバブリングし、親が状態を操作する。
-複数コンポーネントが同じ状態を読む・更新する場合は、まずそれらの最小共通親に状態を配置し、子には props とイベントコールバックで渡す。
-
-```tsx
-// 子が自分で状態を変更（NG）
-const ChildBad = ({ initialValue }: { initialValue: string }) => {
-  const [value, setValue] = useState(initialValue)
-  return <input value={value} onChange={e => setValue(e.target.value)} />
-}
-
-// 親が状態を管理、子はコールバックで通知（OK）
-const ChildGood = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => {
-  return <input value={value} onChange={e => onChange(e.target.value)} />
-}
-
-const Parent = () => {
-  const [value, setValue] = useState('')
-  return <ChildGood value={value} onChange={setValue} />
-}
-```
-
-例外（子がローカルstate持ってOK）:
-- UI専用の一時状態（ホバー、フォーカス、アニメーション）
-- 親に伝える必要がない完全にローカルな状態
-
+GUIの状態所有モデルを前提に、フロントエンドでは正規データと表示用の派生値、フォーム入力、サーバー由来データを別の契約として扱う。
 
 ### 正規状態と派生状態
 
 state にはユーザー入力、サーバーデータ、UIの一時状態などの正規状態を保持する。正規状態から計算できる表示値、集計値、選択状態、並び替え結果、グルーピング結果は派生値として扱い、独立した state として保持しない。
 
 
-状態配置の判断基準:
+状態配置の判断基準は、GUIの状態所有契約に加えて、データの更新頻度と利用範囲で決める。
 
 | 状態の性質 | 推奨配置 |
 |-----------|---------|
 | UIの一時的な状態（モーダル開閉等） | ローカル（useState） |
 | フォームの入力値 | ローカル or フォームライブラリ |
-| 近い親子・兄弟コンポーネントで共有 | 最小共通親で管理して props で渡す |
-| 深い階層・画面横断で共有 | Context or 状態管理ライブラリ |
-| サーバーデータのキャッシュ | TanStack Query等のデータフェッチライブラリ |
+| 近い親子・兄弟コンポーネントで共有 | 最小共通のowner、公開callback、Contextなど |
+| 深い階層・画面横断で共有 | Context、dispatch、storeなど |
+| サーバーデータのキャッシュ | query、data fetching library、画面ownerなど |
 
 ## APIクライアント生成
 
@@ -179,15 +157,18 @@ state にはユーザー入力、サーバーデータ、UIの一時状態など
 
 ## 初期表示ロードと再取得境界
 
-初期表示ロードはリアクティブな再取得と分けて扱う。URL、フィルタ、ページング、明示的な更新操作がない限り、初回ロードは mount-only に保ち、不安定なコールバック参照に結び付けない。
+初期表示ロードとリアクティブな再取得を分けて扱う。mount時だけ必要な処理はその契約を表し、URL、フィルタ、ページング、明示的な更新操作で再取得する処理はその値やイベントを実際の依存・query key・操作経路へ反映する。lint対応だけで依存を固定または追加しない。
 
+## キャッシュとページング
+
+cursorやoffsetを使う一覧でも、query key、invalidation、refetch、ページの連続性、重複・欠落、表示中のスナップショットの契約が成立していれば、query cacheやinfinite queryを選択できる。方式の名前だけでキャッシュを禁止せず、更新時の再取得と表示整合性を確認する。
 
 ## データ取得
 
-API呼び出しはルート（View）コンポーネントで行い、子コンポーネントにはpropsで渡す。
+API呼び出しは、必要なデータと整合性を所有するroute、画面owner、独立widgetなどから行う。表示専用の子には表示値と操作入口を渡す。query hookやdata-fetching hookが取得と状態遷移を所有する構成も許容する。
 
 ```tsx
-// CORRECT - ルートでデータ取得、子に渡す
+// 例: 画面ownerが取得し、表示に渡す
 const OrderDetailView = () => {
   const { data: order, isLoading, error } = useGetOrder(orderId)
   const { data: items } = useListOrderItems(orderId)
@@ -204,7 +185,7 @@ const OrderDetailView = () => {
   )
 }
 
-// WRONG - 子コンポーネントが自分でデータ取得
+// 注意: orderIdからqueryする形ではなく、親が同じorderを正規状態として取得済みなのに、子が契約なく再所有することが問題
 const OrderSummary = ({ orderId }) => {
   const { data: order } = useGetOrder(orderId)
   // ...
@@ -213,10 +194,10 @@ const OrderSummary = ({ orderId }) => {
 
 UIの状態変更でパラメータが変わる場合（週切り替え、フィルタ等）:
 
-状態もViewレベルで管理し、コンポーネントにはコールバックを渡す。
+状態も同じ画面ownerの責務として管理し、表示コンポーネントには値と公開callbackを渡す。
 
 ```tsx
-// CORRECT - 状態もViewで管理
+// 例: 画面ownerで状態とquery条件を管理
 const ScheduleView = () => {
   const [currentWeek, setCurrentWeek] = useState(startOfWeek(new Date()))
   const { data } = useListSchedules({
@@ -233,7 +214,7 @@ const ScheduleView = () => {
   )
 }
 
-// WRONG - コンポーネント内で状態管理+データ取得
+// 注意: 表示専用コンポーネントが親のデータ契約を再所有する
 const WeeklyCalendar = ({ facilityId }) => {
   const [currentWeek, setCurrentWeek] = useState(...)
   const { data } = useListSchedules({ facilityId, from, to })
@@ -245,7 +226,7 @@ const WeeklyCalendar = ({ facilityId }) => {
 
 | ケース | 理由 |
 |--------|------|
-| 独立ウィジェット | どのページにも置ける自己完結型コンポーネント |
+| 独立ウィジェット | 必要なデータと整合性を自身の契約で所有し、公開入力を受けてどのページにも置ける自己完結型コンポーネント |
 | 無限スクロール | スクロール位置というUI内部状態に依存 |
 | 検索オートコンプリート | 入力値に依存したリアルタイム検索 |
 | リアルタイム更新 | WebSocket/Pollingでの自動更新 |
@@ -256,21 +237,24 @@ const WeeklyCalendar = ({ facilityId }) => {
 どのページにも「置くだけ」で動く自己完結型コンポーネント（通知バッジ、ログインユーザー表示等）。
 
 ウィジェットと判定する条件（すべて満たすこと）:
-- 親のデータと完全に無関係
-- 親の状態に影響を与えない
-- どのページに置いても同じ動作をする
+- 自身が表示するデータと整合性の責任を持つ
+- 親の既取得データを別の正規状態として二重所有しない
+- 親の状態を無断で変更しない
+- URL、id、filterなどを公開入力として受ける場合、その値に対応するquery identity（query keyや依存値）と無効化・refetchなどの更新契約が明示されている
 
-1つでも満たさない場合は View でデータ取得し、props で渡す。
+親からidなどを受けてqueryを実行する形自体は拒否しない。親の同じ正規状態を契約なしに再取得・保持するなど、所有と整合性に実害がある場合は、親のデータ契約に参加するownerへ取得を寄せて表示へ公開する。
 
 ```tsx
-// WRONG - orderId という親のコンテキストに依存。ウィジェットではない
+// OK - orderIdは公開入力。query identityとウィジェットの整合性契約が対応している
 const OrderStatusWidget = ({ orderId }: { orderId: string }) => {
   const { data } = useGetOrder(orderId)
   return <StatusBadge status={data?.status} />
 }
 
-// CORRECT - 親のデータフローに参加するならpropsで受け取る
-const OrderStatusWidget = ({ status }: { status: OrderStatus }) => {
+// 親が同じorderを正規状態として所有しているのに、契約なく別の正規状態として再取得・保持する場合はREJECT
+
+// 親のデータフローに参加する場合は、取得済みの表示値をpropsで受け取ることもできる
+const OrderStatusBadgeFromOwner = ({ status }: { status: OrderStatus }) => {
   return <StatusBadge status={status} />
 }
 ```
@@ -614,7 +598,7 @@ function TaskCard({ task }: { task: Task }) {
 | 認証エラー（401/403） | APIクライアント層 | レスポンスインターセプタ |
 | ルート保護 | レイアウト層 | ProtectedRoute + Outlet |
 | ロール別振り分け | レイアウト層 | ユーザー種別による分岐 |
-| ローディング/エラー表示 | View（Container）層 | 早期リターン |
+| ローディング/エラー表示 | 画面owner（View / hook / Provider） | 早期リターンまたは状態遷移 |
 
 ```tsx
 // CORRECT - 横断的関心事はインターセプタ層で処理

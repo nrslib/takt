@@ -6,6 +6,7 @@ description: 'TAKT facet eval: review-frontend / frontend-review'
 
 prompts:
   - file://../../prompts/frontend-review.phase1.md
+  - file://../../prompts/frontend-review-react.phase1.md
 
 providers:
   - id: openai:codex-sdk
@@ -18,16 +19,11 @@ providers:
       model_reasoning_effort: low
 
 tests:
-  - description: 'recall: planted frontend layering violations must be flagged'
+  - description: 'recall: planted cross-feature layering violations must be flagged'
     vars:
       task: file://../../cases/frontend-layering.md
       previous_response: file://../../cases/prev-gather-frontend.md
     assert:
-      - type: javascript
-        metric: recall/route-with-logic
-        value: |
-          return /(user-list|route|ルート)/i.test(output) &&
-            /(useState|ロジック|データ取得|薄|thin|view)/i.test(output);
       - type: javascript
         metric: recall/cross-feature-import
         value: |
@@ -38,3 +34,36 @@ tests:
         value: |
           return /(user-avatar|shared)/i.test(output) &&
             /(feature|依存|参照|逆)/i.test(output);
+  - description: 'judgment: framework idioms are accepted while ownership and duplicate-operation defects are rejected'
+    vars:
+      task: file://../../cases/frontend-gui-patterns.md
+      previous_response: file://../../cases/prev-gather-frontend-gui.md
+    assert:
+      - type: javascript
+        metric: judgment/context-dispatch-accepted
+        value: |
+          return /(?:^|\n)[^\n]*context-dispatch\.tsx[^\n]*\[OK\]/i.test(output);
+      - type: javascript
+        metric: judgment/local-state-accepted
+        value: |
+          return /(?:^|\n)[^\n]*local-state\.tsx[^\n]*\[OK\]/i.test(output);
+      - type: javascript
+        metric: judgment/query-owner-accepted
+        value: |
+          return /(?:^|\n)[^\n]*query-owner\.tsx[^\n]*\[OK\]/i.test(output);
+      - type: javascript
+        metric: judgment/callback-delegation-accepted
+        value: |
+          return /(?:^|\n)[^\n]*callback-delegation\.tsx[^\n]*\[OK\]/i.test(output);
+      - type: javascript
+        metric: judgment/owner-boundary-rejected
+        value: |
+          const line = output.split(/\r?\n/).find((entry) => /buyer-editor\.tsx/i.test(entry));
+          return line !== undefined && /\[REJECT\]/i.test(line) &&
+            /(owner|所有|props|直接|mutation|書き換え)/i.test(line);
+      - type: javascript
+        metric: judgment/duplicate-operation-rejected
+        value: |
+          const line = output.split(/\r?\n/).find((entry) => /editor-form\.tsx/i.test(entry));
+          return line !== undefined && /\[REJECT\]/i.test(line) &&
+            /(duplicate|二重|重複|twice|submit|操作)/i.test(line);
