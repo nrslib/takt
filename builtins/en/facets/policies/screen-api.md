@@ -93,28 +93,13 @@ The server does not treat a client-rendered flag, count, price, inventory value,
 | Tenant, owner, and resource conditions apply to both server lookup and update | OK |
 | Forbidden, missing, conflicting, and invalid requests return the same success response | REJECT |
 
-```typescript
-// Bad: trust a client-supplied decision
-function approve(request: { orderId: string; canApprove: boolean }) {
-  if (request.canApprove) return persistApproval(request.orderId)
-}
-
-// Good: validate current permission and state on the server
-async function approve(orderId: string, actor: Actor) {
-  const order = await findOrderForActor(orderId, actor)
-  if (!order) return { status: 'not-found' as const }
-  if (!order.canBeApproved) return { status: 'conflict' as const }
-  return persistApproval(order.id, actor.id)
-}
-```
-
 ## Result consistency
 
 When reads and updates run concurrently, the API contract defines the result point, stale-write behavior, page ordering, and retry conditions. Choose ETag, version, idempotency key, or snapshot cursor when it addresses an actual conflict condition.
 
 | Criterion | Judgment |
 |-----------|----------|
-| The update validates version or ETag and does not report stale writes as successful | OK |
+| Version or ETag comparison and the update are atomic, and a conflicting update is not reported as successful | OK |
 | A retried operation can create duplicates and has no idempotency or duplicate detection | REJECT |
 | Cursor order, filter, and snapshot remain stable across pages | OK |
 | The relationship between success and persistence, and retry conditions after failure, is traceable from the API | OK |

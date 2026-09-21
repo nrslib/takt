@@ -93,28 +93,13 @@ return listOrders({ date: request.date, nextId: request.nextId, pageSize })
 | テナント・所有者・対象IDの条件がサーバー側の検索と更新の両方へ適用される | OK |
 | 権限不足、対象なし、状態競合、入力不備を同じ成功応答として返す | REJECT |
 
-```typescript
-// NG - クライアントから届いた判定を信頼する
-function approve(request: { orderId: string; canApprove: boolean }) {
-  if (request.canApprove) return persistApproval(request.orderId)
-}
-
-// OK - サーバーが現在の権限と状態を検証する
-async function approve(orderId: string, actor: Actor) {
-  const order = await findOrderForActor(orderId, actor)
-  if (!order) return { status: 'not-found' as const }
-  if (!order.canBeApproved) return { status: 'conflict' as const }
-  return persistApproval(order.id, actor.id)
-}
-```
-
 ## 結果の整合性
 
 更新と取得が並行する場合は、どの時点の結果を返すか、古い書き込みをどう拒否するか、ページをどの順序で連結するかをサーバー契約へ含める。ETag、version、idempotency key、snapshot cursorなどは、実際の競合条件に対応するときに選ぶ。
 
 | 基準 | 判定 |
 |------|------|
-| 更新対象のversionやETagを検証し、古い更新を成功扱いにしない | OK |
+| 更新対象のversionやETagの照合と更新を原子的に行い、競合した更新を成功扱いにしない | OK |
 | 同じ操作の再送が重複作成を起こすのに、idempotencyや重複判定がない | REJECT |
 | cursorの順序・filter・snapshotがページ間で維持される | OK |
 | 成功応答と保存結果の関係、失敗時の再試行条件がAPIから追える | OK |
