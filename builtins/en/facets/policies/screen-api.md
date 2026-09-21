@@ -102,7 +102,8 @@ function approve(request: { orderId: string; canApprove: boolean }) {
 // Good: validate current permission and state on the server
 async function approve(orderId: string, actor: Actor) {
   const order = await findOrderForActor(orderId, actor)
-  if (!order || !order.canBeApproved) return { status: 'rejected' as const }
+  if (!order) return { status: 'not-found' as const }
+  if (!order.canBeApproved) return { status: 'conflict' as const }
   return persistApproval(order.id, actor.id)
 }
 ```
