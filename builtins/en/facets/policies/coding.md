@@ -388,7 +388,7 @@ When adding a new feature or screen, update the paths by which users reach it in
 ### Dependency Direction
 
 - Upper layers → Lower layers (reverse direction prohibited)
-- Fetch data at the boundary that owns the required data and consistency (View, Controller, hook, Provider, or equivalent) and expose it to the display
+- Fetch data at the boundary responsible for retrieving and updating the required data and handling failures, then pass required values and operation entries to the display
 - Children do not depend on parent internals; use operation entries exposed by the owner
 
 ### Align execution triggers with actual intent
@@ -417,9 +417,9 @@ When changing contracts that other code or users depend on — types, interfaces
 ## State Management
 
 - Confine state to where it is used
-- Do not directly mutate caller-owned values or shared/external values without using the owner's public update API
+- Do not directly mutate caller-owned values or shared/external values without using the owner's update API
 - A function or test may mutate a local accumulator collection that it creates internally and never exposes
-- Children do not change canonical state in a parent or another subtree without a public update contract; use a callback, dispatch, store, or binding operation entry
+- Children do not change canonical state in a parent or another subtree without the owner's operation entry; use a callback, dispatch, store, or binding operation entry
 - Keep the owner and operation path traceable
 - Do not keep derived values that can be computed from canonical state as independent state
 - If multiple fields require constant synchronization, revisit the state model
@@ -642,7 +642,7 @@ Verification approach:
 - **Unused code** - Do not write "just in case" code
 - **Unfinished code** - Do not defer required work with TODO/FIXME or leave stubs or commented-out old code
 - **any type** - Do not break type safety
-- **Direct mutation outside a public update contract** - Do not mutate caller-owned, shared, or externally exposed values without using the owner's public update API or binding; create new values or use the owner's operation entry
+- **Direct mutation without the owner's operation entry** - Do not mutate caller-owned, shared, or externally exposed values without using the owner's update API or binding; create new values or use the owner's operation entry
 - **console.log** - Do not leave in production code
 - **Sensitive information exposure** - Do not include sensitive data in hardcoded values, logs, error responses, or test output
 - **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited

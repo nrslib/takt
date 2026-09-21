@@ -1,109 +1,121 @@
 # Screen-Specific API Policy
 
-Provide data through screen-specific API endpoints. Do not assemble screens by repurposing generic APIs.
+Design and judge the data needed by a screen or region through API response fields, data volume, server-side constraints, and result consistency. This policy covers the server data contract; component structure and request timing belong to frontend guidance.
 
 ## Principles
 
-| Principle | Criteria |
+| Principle | Criterion |
+|-----------|-----------|
+| Response fields | Include identifiers, state, related data, and aggregates required by display and operations |
+| Data volume | The server validates result size, limits, pagination, and cursor conditions against actual data |
+| Server authority | The server decides authorization, business judgments, and persistence-dependent transitions from current data |
+| Aggregation | Choose server aggregation or finite client-side derivation from volume and decision semantics |
+| Result consistency | Define concurrent updates, page continuity, duplicates/gaps, and stale responses in the API contract |
+| Error contract | Distinguish authentication/authorization, invalid input, conflict, missing resources, and server failures |
+
+## Response fields and endpoints
+
+Design response shapes around what the screen displays and operates on. A screen and endpoint do not need a one-to-one naming relationship; the contract must provide the actual required fields and operations.
+
+| Criterion | Judgment |
 |-----------|----------|
-| Screen-API alignment | Provide dedicated endpoints matching each screen's data needs |
-| Separate list and detail | Do not reuse list API responses for detail screens |
-| Aggregation via aggregation API | Do not fetch all records to count/summarize on the client |
-| Server owns pagination | Server manages page size, sort order, and filter conditions |
-| Add API when missing | Add a backend endpoint rather than working around it on the frontend |
-
-## Screen-Level API Design
-
-Design endpoints based on "what does this screen display and what does it operate on."
-
-| Pattern | Judgment | Reason |
-|---------|----------|--------|
-| List screen uses list API, detail screen uses detail API | OK | Screen and API responsibilities align |
-| Detail screen calls list API and searches result by ID | REJECT | Fetches unnecessary data, API contract mismatch |
-| Fetch all records to aggregate on the frontend for a decision | REJECT | Provide an aggregation API on the server |
-| Fetch both processing and completed from same API, filter on frontend | REJECT | Server should return them separately |
-| Screen needs data not available from existing APIs | Add an API | Do not combine other APIs as a workaround |
+| Required identifiers, state, or related fields are missing and another field with a different meaning is used as a substitute | REJECT |
+| A list response includes the identifiers, counts, related fields, and state required by its screen contract | OK |
+| List and detail responses have separate contracts because fields, volume, or authorization scope differ | OK |
+| A detail field is missing and the client fetches an unbounded list to fill it | REJECT. Design the field or retrieval boundary |
+| Related data requires so many individual requests that actual volume or response time exceeds the allowed range | REJECT |
+| A list response also serves detail when its fields, item count, and authorization satisfy the detail contract | OK |
 
 ```typescript
-// REJECT - Reusing list API for detail screen
+// Bad: use a list summary as a detail description
 async function loadDetail(id: string) {
   const list = await fetchList({ date })
-  return list.items.find(item => item.id === id)
+  const item = list.items.find(item => item.id === id)
+  return item && { ...item, description: item.summary }
 }
 
-// OK - Detail screen uses detail API
+// Good: the detail contract returns the required fields and authorization scope
 async function loadDetail(id: string) {
   return await fetchDetail(id)
 }
 ```
 
-## Pagination and Data Volume Control
+Choose separate or shared list/detail responses from required fields, result count, authorization, update frequency, and actual data volume. Endpoint names alone are not evidence.
 
-Pagination responsibility belongs to the server. Frontend does not specify page size; server returns an appropriate number.
+## Data volume and pagination
 
-| Pattern | Judgment |
-|---------|----------|
-| Server has default page size, frontend sends only nextId | OK |
-| Frontend specifies limit and sends it to server | Avoid (can't change server-side only) |
-| List API returns all records without limit | REJECT |
-| Server validates limit upper bound | OK |
+A fixed, explicitly small collection can be returned in one response. Results that can grow require server-validated limits, a pagination method, and an ordering contract. A client may provide page size, sort, or filter parameters when the server validates their types, allowed range, and maximum response contract.
 
-```typescript
-// Avoid - Frontend decides page size
-const result = await fetchList({ date, limit: 10, nextId })
-
-// OK - Frontend sends only nextId, server decides page size
-const result = await fetchList({ date, nextId })
-```
-
-## Aggregation and Decision Responsibility
-
-Decisions like "how many exist," "can generate," "should regenerate" are computed by the server and returned as results.
-
-| Pattern | Judgment |
-|---------|----------|
-| Fetch all records to determine batch generation eligibility | REJECT |
-| Aggregation API returns confirmed/unconfirmed counts | OK |
-| Server computes and returns canRegenerate flag | OK |
-| Frontend compares generated memo IDs to determine regeneration eligibility | REJECT |
+| Criterion | Judgment |
+|-----------|----------|
+| A fixed small collection is returned in full and its upper bound is supported by the specification and actual data | OK |
+| The client supplies `limit`, page size, sort, or filter and the server validates its type, authorization scope, and cap | OK |
+| The server accepts client size parameters without a bound on result volume or response time | REJECT |
+| A potentially large list is returned in full without a cap | REJECT |
+| A cursor omits sort, filter, tenant, snapshot, or another result condition and pages duplicate or omit records | REJECT |
+| The server has default and maximum values and clamps client input to that range | OK |
 
 ```typescript
-// REJECT - Fetch all for decision-making
-const memos = await fetchAllMemos({ date })
-const canGenerate = memos.filter(m => m.confirmed).length > 0
+// Good: the request accepts a size, and the server applies its maximum
+const result = await fetchList({ date, limit: 20, nextId })
 
-// OK - Server returns aggregation
-const counts = await fetchMemoCounts({ date })
-// counts: { childId, memoCount, confirmedCount, unconfirmedCount }
+// Server-side example
+const requestedSize = request.limit ?? DEFAULT_PAGE_SIZE
+if (!Number.isInteger(requestedSize) || requestedSize < 1) {
+  throw new RangeError('limit must be a positive integer')
+}
+const pageSize = Math.min(requestedSize, MAX_PAGE_SIZE)
+return listOrders({ date: request.date, nextId: request.nextId, pageSize })
 ```
 
-## Tab/Screen Navigation and Communication Scope
+Judge the actual maximum data volume, authorization scope, response time, and cursor stability. A `limit` or pagination parameter is not itself a defect.
 
-Communication is scoped to the active tab/screen. Do not prefetch for other tabs.
+## Aggregation and business decisions
 
-| Pattern | Judgment |
-|---------|----------|
-| Only the visible tab communicates on tab switch | OK |
-| Parent component fetches for all tabs and distributes to children | REJECT |
-| Periodic polling runs only on the visible screen | OK |
-| Polling continues on hidden tabs | REJECT |
+Separate display aggregation of a finite response from a client-side final business decision. When volume is large, freshness matters, or authorization and business state are involved, design a server aggregation or decision response.
 
-## Backend Responsibilities
+| Criterion | Judgment |
+|-----------|----------|
+| A bounded small list is totaled for display using only fields in the response | OK |
+| An unbounded or unknown-size collection is fetched to compute a count, total, or business decision | REJECT |
+| Inventory, permission, generation eligibility, or a business transition is finalized only by the client | REJECT |
+| The server computes an aggregate or decision from current data and returns it with its state basis | OK |
+| Aggregate and detail cover different scopes or update times, so the displayed result cannot be identified | REJECT |
 
-Backend provides the following so that frontend can use screen-specific APIs.
+## Server authorization and constraints
 
-| Responsibility | Content |
-|---------------|---------|
-| Separate list and detail | List returns lightweight summaries, detail includes full information |
-| Embed related data | Include related data the screen needs in the response (avoid N+1) |
-| Aggregation endpoints | Return counts, confirmation status via dedicated endpoints |
-| Decision flags | Server computes can-regenerate, can-generate flags |
-| Pagination infrastructure | nextId cursor, default page size, limit validation |
+The server does not treat a client-rendered flag, count, price, inventory value, or permission as the final decision. It validates the authenticated actor, resource, tenant, current state, and operation permission, then returns a contracted rejection reason.
 
-## Prohibited
+| Criterion | Judgment |
+|-----------|----------|
+| Persistence or permission change is allowed from a request's `canApprove` or other client-computed value alone | REJECT |
+| The server reloads the resource for the actor and validates current authorization and state before operating | OK |
+| Tenant, owner, and resource conditions apply to both server lookup and update | OK |
+| Forbidden, missing, conflicting, and invalid requests return the same success response | REJECT |
 
-- **Generic API reuse** - Do not use list APIs for detail screens or fetch-all for aggregation
-- **Frontend-side aggregation** - Do not fetch all records to count on the client
-- **Cross-tab communication** - Do not prefetch data for other tabs
-- **Frontend page size specification** - Let the server decide
-- **Frontend workaround for missing API** - Add a dedicated endpoint instead
+```typescript
+// Bad: trust a client-supplied decision
+function approve(request: { orderId: string; canApprove: boolean }) {
+  if (request.canApprove) return persistApproval(request.orderId)
+}
+
+// Good: validate current permission and state on the server
+async function approve(orderId: string, actor: Actor) {
+  const order = await findOrderForActor(orderId, actor)
+  if (!order || !order.canBeApproved) return { status: 'rejected' as const }
+  return persistApproval(order.id, actor.id)
+}
+```
+
+## Result consistency
+
+When reads and updates run concurrently, the API contract defines the result point, stale-write behavior, page ordering, and retry conditions. Choose ETag, version, idempotency key, or snapshot cursor when it addresses an actual conflict condition.
+
+| Criterion | Judgment |
+|-----------|----------|
+| The update validates version or ETag and does not report stale writes as successful | OK |
+| A retried operation can create duplicates and has no idempotency or duplicate detection | REJECT |
+| Cursor order, filter, and snapshot remain stable across pages | OK |
+| The relationship between success and persistence, and retry conditions after failure, is traceable from the API | OK |
+
+Frontend guidance covers display and request timing. This policy checks whether the API returns sufficient fields and volume and whether the server can guarantee authorization, business decisions, and result consistency.

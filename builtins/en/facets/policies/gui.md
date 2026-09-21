@@ -1,65 +1,54 @@
 # GUI Policy
 
-Judge GUI hierarchy, state ownership, intent paths, and display/behavior responsibilities using observable harm.
+Judge GUI structure, state ownership, display and behavior separation, operation-intent paths, and current-state arbitration by the change impact that can be traced.
 
 ## Principles
 
 | Principle | Criterion |
 |-----------|-----------|
-| Hierarchical containment | UI is reachable from Root, and an independent widget has an owner for its subtree |
-| State ownership | Shared state and external side effects belong to an owner that can arbitrate consistency |
-| Intent path | A child reports intent through an upper-level operation entry and the path to the owner is traceable |
-| Display and behavior | Separate display rendering from state and side-effect arbitration where the boundary requires it |
-| Evidence of harm | Reject ownerless state, broken boundaries, or duplicate operations when the effect is observable |
-| Respect framework idioms | Do not reject hooks, Context, dispatch, queries, forms, or binding by name |
-| Minimal change | Do not require classes, libraries, transition tables, or externalizing all state without a requirement |
+| Hierarchy | Screen components are reachable from Root and each subtree's responsibility is readable |
+| State scope | An owner exists in the smallest subtree that must keep the fact consistent |
+| Passive View | A display component handles render parameters and reports intent; it does not arbitrate transitions, communication, or shared-state changes |
+| Mediator | A screen or region owner decides acceptance, rejection, transitions, and side effects from current state and intent |
+| Operation path | The route from intent to its owner is traceable and a handled intent is not executed twice |
+| Changeability | Generic display components are not coupled to screen-specific communication or transitions, and change scope is readable |
+| Structure | Ownerless state, mixed responsibilities, and hidden change paths are evidence alongside runtime defects |
 
-## Hierarchy and State Ownership
-
-| Criterion | Judgment |
-|-----------|----------|
-| UI is outside a hierarchy reachable from Root and no state owner can be traced | REJECT |
-| A child writes parent state, a shared store, or canonical state in another subtree without using the owner's public update contract | REJECT |
-| A small screen concentrates the state it needs in Root or its screen owner with clear consistency | OK |
-| Hover, focus, in-progress input, or open/close state confined to a subtree lives in local state | OK |
-| Context, a store, a query, or a form shares state with a clear owner and update path | OK |
-| Root does not own every descendant state | Not a reason to reject |
-| State is externalized or kept at Root as a formality | Not evidence by itself |
-
-When multiple owners keep separate canonical copies and synchronization causes different display or operation results depending on update order, report the actual inconsistency. State placement follows subtree consistency and change paths.
-
-## Display and Behavior
+## Hierarchy and state ownership
 
 | Criterion | Judgment |
 |-----------|----------|
-| A display component arbitrates communication, shared-state mutation, or an external side effect without using its responsible owner's public operation entry | REJECT |
-| A View receives display values and reports intent through a public callback or standard API | OK |
-| A small component combines View and state arbitration while its owner and boundaries remain traceable | OK |
-| A hook, reducer, Context Provider, store, query, or form implements the Mediator role | OK |
-| The names Passive View, Mediator, or state machine, or a dedicated class, are absent | Not a reason to reject |
-| A large migration or new abstraction layer is added only to separate these names | Check the requirement and impact |
+| UI cannot be followed from Root and no display, state, or operation owner can be traced | REJECT |
+| Multiple components keep one fact separately, so display or operation results depend on update order | REJECT |
+| A child changes state in another subtree without its owner's operation entry | REJECT |
+| State is placed in a subtree matching its scope and lifetime, with a readable path from owner to display | OK |
+| Root composes the screen and delegates required state to subtrees | OK |
 
-## Intent and Events
-
-| Criterion | Judgment |
-|-----------|----------|
-| A child bypasses the owner's public operation entry and directly changes another owner | REJECT |
-| An intermediate component delegates a callback or dispatch without changing its meaning | OK |
-| The responsible owner accepts or rejects intent from state and does not let an ancestor execute the same intent again | OK |
-| An unhandled intermediate intent is delegated upward | OK |
-| Native event propagation is distinguished from application-level intent notification | OK |
-| Event-path stopping is required only as a formal pattern | Not a reason to reject |
-| The same operation intent executes twice through multiple paths | REJECT |
-| An ancestor repeats the same intent after the responsible owner handled it | REJECT |
-
-Do not reject callback prop passing because it is deep. Inspect the actual path for re-owned state or changed operation meaning.
-
-## Frameworks and Composition
+## Display and behavior
 
 | Criterion | Judgment |
 |-----------|----------|
-| Standard hooks, Context, dispatch, query, form, or binding are used with a clear owner and operation path | OK |
-| A child calls an operation callback exposed by its parent and the responsible owner updates state | OK |
-| A Mediator class, a particular library, or a fixed directory layout is absent | Not a reason to reject |
-| All state is moved to an external store and local state is prohibited | Not a GUI requirement |
-| Changing the mechanism does not fix ownerless state or duplicate processing | REJECT. Fix the actual harm |
+| A display component individually performs navigation, communication, shared-state changes, or business acceptance decisions | REJECT |
+| A display component receives render values and reports intent through the responsible operation entry | OK |
+| A screen or region owner reads current state and decides acceptance, rejection, and transition | OK |
+| A small screen keeps display and arbitration in one function while the two responsibilities and paths remain visible in code | Check the change reason |
+
+Place framework-native components according to this responsibility boundary. Judge the mixed responsibility and change path.
+
+## Operation intent and events
+
+| Criterion | Judgment |
+|-----------|----------|
+| Intent bypasses its owner's operation entry and directly changes another state owner | REJECT |
+| An intermediate component delegates intent without changing its meaning | OK |
+| An ancestor executes the same save, deletion, or other operation again after its owner accepted or rejected it | REJECT |
+| Callback, operation delegation, and Chain of Responsibility are treated as one mechanism so owner or stopping condition cannot be traced | REJECT |
+
+## State transitions and change scope
+
+| Criterion | Judgment |
+|-----------|----------|
+| Accepted operations differ by state, yet each display component makes its own state condition | REJECT |
+| State, intent, transition, and resulting display are traceable to one owner | OK |
+| Screen-specific communication or transition logic is added to a generic display component to preserve its apparent reuse | REJECT |
+| Independent display, state, and external-side-effect reasons to change are mixed into one responsibility and the path cannot be traced | REJECT |

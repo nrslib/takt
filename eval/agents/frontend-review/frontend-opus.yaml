@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# Run via npm run eval:prompts -- frontend
+# Run via npm run eval:prompts -- frontend-opus
 
 description: 'GUI design: paired implementations and framework idioms'
 
@@ -9,14 +9,12 @@ prompts:
 
 providers:
   - id: file://../../providers/cli-review.mjs
-    label: codex-luna-max
+    label: claude-opus-5
     config:
-      cli: codex
-      model: gpt-5.6-luna
-      reasoning_effort: max
+      cli: claude
+      model: claude-opus-5
       working_dir: fixtures/frontend-design
       isolate_working_dir: true
-      disable_inherited_skills: true
 
 evaluateOptions:
   maxConcurrency: 1

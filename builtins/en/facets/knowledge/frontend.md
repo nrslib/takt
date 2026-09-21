@@ -2,503 +2,199 @@
 
 # Frontend Knowledge
 
-## Component Design
+Apply GUI design to the web runtime: URLs, browser behavior, HTML, communication, accessibility, and browser safety. Separate the reasons for changing display, operations, state, and communication so the impact path remains traceable.
 
-Choose component boundaries by responsibility, reason to change, reuse boundary, and data ownership rather than line count or the mere presence of state. Independently changing sections and side effects are separation candidates, but closely collaborating presentation should not be split mechanically. Do not introduce state management based on prop depth alone; reconsider ownership when multiple branches share the same state or another real ownership boundary appears.
+## URLs and screen navigation
 
-Good Component:
-- Single responsibility: Does one thing well
-- Self-contained: Dependencies are clear
-- Testable: Side effects are isolated
+A URL is an entry to a screen and state referenced by browser history and external links. A router maps the URL to the screen Root; the screen or routing owner handles path, query, and history contracts.
 
-Component Classification:
-
-| Type | Responsibility | Example |
-|------|----------------|---------|
-| Container | Ownership of required data and state | `UserListContainer` |
-| Presentational | Rendering display values and reporting intent | `UserCard` |
-| Layout | Arrangement, structure | `PageLayout`, `Grid` |
-| Utility | Common functionality | `ErrorBoundary`, `Portal` |
-
-Directory Structure:
-```
-features/{feature-name}/
-├── components/
-│   ├── {feature}-view.tsx      # Main view (composes children)
-│   ├── {sub-component}.tsx     # Sub-components
-│   └── index.ts
-├── hooks/
-├── types.ts
-└── index.ts
+```text
+route('/orders/:orderId', OrderScreen)
 ```
 
-## Routing Wiring When Adding a Page
+When adding a screen, trace the route-to-Root path, user-facing entries such as menus and links, and direct URL and back/forward behavior. Route placement and directories follow the framework and the reasons to change.
 
-Do not stop at creating the page component. A new page must also be wired into an actual entry path. Decide together with the implementation how the page is reached: router, menu, temporary route, or another explicit entry point.
+| Condition | Meaning or option |
+|-----------|-------------------|
+| A URL identifier or search condition is required by screen state | Pass it explicitly from the URL |
+| A display state lives only within the screen | Keep it as screen state |
+| Back/forward should restore an operation | Treat the operation as a history transition |
+| Direct navigation finds no resource or insufficient permission | Distinguish screen error, empty state, and redirect |
 
+Collect navigation decisions in the screen or routing owner. Display components report navigation intent so links, keyboard operations, and external links follow the same decision path.
+
+## HTML operations and accessibility
+
+HTML elements provide keyboard behavior, focus, form submission, and state exposure to assistive technology in addition to visual output. Match the element to the operation contract.
+
+DOM events travel from ancestors to the target during capture and from the target to ancestors during bubble. This propagation path is separate from the application path that reports intent to an owner. Check default actions and operation entries so one operation is not executed through both paths.
 
 ```tsx
-// Example: page and route are added together
-<Route path="/contreg" element={<ContainerRegisterPage />} />
+// Bad: a non-interactive element with only a click handler
+<div onClick={openDialog}>Details</div>
 
-// Avoid: page exists but has no reachable route
-// src/pages/ContainerRegisterPage.tsx exists
-// Router has no matching route
+// Good: use the native operation contract
+<button type="button" onClick={openDialog}>Details</button>
 ```
 
-Reachability is broader than router configuration. Confirm the real entry path users will follow, such as menus, transition buttons, dialog actions, links from other screens, or external callers.
+Every new operation needs a purpose-revealing accessible name, an appropriate element or role, states such as disabled/expanded/selected, and keyboard access. Associate form labels with their controls. Include focus movement and restoration in the operation path when opening and closing dialogs.
 
-### Integrating third-party UI libraries
+Compose dynamic text so the final announcement has meaning. In a list with multiple edit or delete controls, make the target identifiable by its name or programmatic row/group association.
 
-Third-party UI libraries such as data grids, date pickers, charts, and virtualized lists can fail at runtime even when types pass. This is especially common across major-version changes where prop names or state model shapes are no longer compatible, and shallow mocks do not expose the problem.
+| UI state | Contract to check |
+|----------|------------------|
+| Selected, expanded, checked, or disabled | Element or attribute that exposes the state to assistive technology |
+| Loading, success, or failure | A notification when needed and a recovery operation |
+| Empty list | A display that distinguishes no data from failed retrieval |
+| Dialog or menu | Opening operation, focus, closing operation, and focus restoration |
 
+## Communication states and display
 
-### Accessibility Contracts
-
-Accessible names, roles, and states are UI contracts consumed by assistive technologies and tests. Add appropriate accessibility attributes for new UI elements, but treat changes to existing accessibility contracts like other user-facing copy or behavior changes.
-
-
-## State Management
-
-Using the GUI ownership model, frontend code distinguishes canonical data, display-only derived values, form input, and server data as separate contracts.
-
-### Canonical and Derived State
-
-State should hold canonical values such as user input, server data, and temporary UI state. Display values, aggregates, selection states, sorted results, and grouped results that can be computed from canonical state are derived values and must not be kept as independent state.
-
-
-State placement follows GUI ownership and also considers data lifetime and usage scope:
-
-| State Nature | Recommended Placement |
-|--------------|----------------------|
-| Temporary UI state (modal open/close, etc.) | Local (useState) |
-| Form input values | Local or form library |
-| Shared across nearby parent/child or sibling components | Nearest common owner, public callbacks, or Context |
-| Shared across deep hierarchy or multiple screens | Context, dispatch, store, or another shared mechanism |
-| Server data cache | A query, data-fetching library, or screen owner |
-
-## Initial load and refetch boundaries
-
-Separate initial loading from reactive refetching. Express mount-only behavior as an intentional contract; when URL, filter, paging, or explicit user actions cause refetching, reflect those values or events in the dependencies, query key, or operation path. Do not add or remove dependencies only to satisfy lint.
-
-## Cache and Pagination
-
-Cursor- or offset-paginated lists can use a query cache or infinite query when the query key, invalidation, refetch, page continuity, duplicate/gap handling, and visible snapshot contract are explicit. Do not prohibit caching from the pagination name alone.
-
-
-## Data Fetching
-
-API calls belong to the route, screen owner, or independent widget that owns the required data and consistency. Display-only children receive display values and operation entries. A query or data-fetching hook may own fetching and state transitions.
+A communicating screen distinguishes not started, loading, success, empty, failure, and cancelled states. Convert failures into screen states that give the user retry, correction, or another recovery operation.
 
 ```tsx
-// Example: screen owner fetches and passes display values
-const OrderDetailView = () => {
-  const { data: order, isLoading, error } = useGetOrder(orderId)
-  const { data: items } = useListOrderItems(orderId)
-
-  if (isLoading) return <Skeleton />
-  if (error) return <ErrorDisplay error={error} />
-
-  return (
-    <OrderSummary
-      order={order}
-      items={items}
-      onItemSelect={handleItemSelect}
-    />
-  )
-}
-
-// Caution: the problem is re-owning the same canonical order without a contract, not the orderId-to-query shape itself
-const OrderSummary = ({ orderId }) => {
-  const { data: order } = useGetOrder(orderId)
-  // ...
-}
-```
-
-When UI state changes affect parameters (week switching, filters, etc.):
-
-Manage the state and query conditions in the same screen owner, then pass values and public callbacks to display components.
-
-```tsx
-// Example: screen owner manages state and query conditions
-const ScheduleView = () => {
-  const [currentWeek, setCurrentWeek] = useState(startOfWeek(new Date()))
-  const { data } = useListSchedules({
-    from: format(currentWeek, 'yyyy-MM-dd'),
-    to: format(endOfWeek(currentWeek), 'yyyy-MM-dd'),
-  })
-
-  return (
-    <WeeklyCalendar
-      schedules={data?.items ?? []}
-      currentWeek={currentWeek}
-      onWeekChange={setCurrentWeek}
-    />
-  )
-}
-
-// Caution: a display-only component re-owns the parent data contract
-const WeeklyCalendar = ({ facilityId }) => {
-  const [currentWeek, setCurrentWeek] = useState(...)
-  const { data } = useListSchedules({ facilityId, from, to })
-  // ...
-}
-```
-
-Exceptions (component-level fetching allowed):
-
-| Case | Reason |
-|------|--------|
-| Infinite scroll | Depends on scroll position (internal UI state) |
-| Search autocomplete | Real-time search based on input value |
-| Independent widget | A self-contained component that owns its data and consistency contract and can accept public inputs on any page |
-| Real-time updates | WebSocket/Polling auto-updates |
-| Modal detail fetch | Fetch additional data only when opened |
-
-Widget conditions (must satisfy all):
-- Owns the data and consistency responsibility for its subtree
-- Does not re-own the parent's already-fetched data as another canonical state
-- Does not mutate parent state outside its public update contract
-- When URL, id, or filter values are accepted as public inputs, the query identity (query key or dependencies) and update contract such as invalidation or refetch correspond to those values
-
-Receiving an id or another public input and running a query is not rejected by itself. If the widget refetches or retains the same canonical data without an ownership and consistency contract, move fetching to the owner participating in the parent data contract and expose the result to the display.
-
-
-### Screen-Specific API Usage
-
-Fetch data from screen-specific API endpoints. Do not assemble screens by repurposing generic APIs. If an API doesn't exist, add a backend endpoint first rather than working around it on the frontend.
-
-
-```tsx
-// Avoid: Reusing list API for detail screen
-const DetailScreen = ({ itemId }) => {
-  const { data: list } = useListItems({ date })
-  const item = list?.items.find(i => i.id === itemId)
-  return <Detail item={item} />
-}
-
-// Example: Detail screen uses detail API
-const DetailScreen = ({ itemId }) => {
-  const { data: item } = useGetItem(itemId)
-  return <Detail item={item} />
-}
-```
-
-### Communication Scope Limitation
-
-Communication is scoped to the active tab/screen. Do not prefetch for other tabs. Periodic polling runs only on the visible screen.
-
-
-## Shared Components and Abstraction
-
-Common UI patterns should be shared components. Copy-paste of inline styles is prohibited. UI that represents the same role or semantic state (placeholder, disabled, unconfirmed, etc.) must align copy, styling, and screen-reader output within the same shared component or an explicit design contract; presentation may vary with display context (hierarchy, density, theme), but the meaning and interaction contract must hold.
-
-```tsx
-// ❌ WRONG - Copy-pasted inline styles
-<button className="p-2 text-[var(--text-secondary)] hover:...">
-  <X className="w-5 h-5" />
-</button>
-
-// ✅ CORRECT - Use shared component
-<IconButton onClick={onClose} aria-label="Close">
-  <X className="w-5 h-5" />
-</IconButton>
-```
-
-Patterns to make shared components:
-- Icon buttons (close, edit, delete, etc.)
-- Loading/error displays
-- Status badges
-- Tab switching
-- Label + value display (detail screens)
-- Search input
-- Color legends
-
-Avoid over-generalization:
-
-```tsx
-// ❌ WRONG - Forcing stepper variant into IconButton
-export const iconButtonVariants = cva('...', {
-  variants: {
-    variant: {
-      default: '...',
-      outlined: '...',  // ← Stepper-specific, not used elsewhere
-    },
-    size: {
-      medium: 'p-2',
-      stepper: 'w-8 h-8',  // ← Only used with outlined
-    },
-  },
-})
-
-// ✅ CORRECT - Purpose-specific component
-export function StepperButton(props) {
-  return (
-    <button className="w-8 h-8 rounded-full border ..." {...props}>
-      <Plus className="w-4 h-4" />
-    </button>
-  )
-}
-```
-
-Signs to make separate components:
-- Implicit constraints like "this variant is always with this size"
-- Added variant is clearly different from original component's purpose
-- Props specification becomes complex on the usage side
-
-### Theme Differences and Design Tokens
-
-When you need different visuals with the same functional components, manage it with design tokens + theme scope.
-
-Principles:
-- Define color, spacing, radius, shadow, and typography as tokens (CSS variables)
-- Apply role/page-specific differences by overriding tokens in a theme scope (e.g. `.consumer-theme`, `.admin-theme`)
-- Do not hardcode hex colors (`#xxxxxx`) in feature components
-- Keep logic differences (API/state) separate from visual differences (tokens)
-
-```css
-/* tokens.css */
-:root {
-  --color-bg-page: #f3f4f6;
-  --color-surface: #ffffff;
-  --color-text-primary: #1f2937;
-  --color-border: #d1d5db;
-  --color-accent: #2563eb;
-}
-
-.consumer-theme {
-  --color-bg-page: #f7f8fa;
-  --color-accent: #4daca1;
-}
-```
-
-```tsx
-// same component, different look by scope
-<div className="consumer-theme">
-  <Button variant="primary">Submit</Button>
-</div>
-```
-
-Operational rules:
-- Implement shared UI primitives (Button/Card/Input/Tabs) using tokens only
-- In feature views, use theme-common utility classes (e.g. `surface`, `title`, `chip`) to avoid duplicated styling logic
-- For a new theme, follow: "add tokens -> override by scope -> reuse existing components"
-
-Review checklist:
-- No copy-pasted hardcoded colors/spacings
-- No duplicated components per theme for the same UI behavior
-- No API/state-management changes made solely for visual adjustments
-
-Anti-patterns:
-- Creating `ButtonConsumer`, `ButtonAdmin` for styling only
-- Hardcoding colors in each feature component
-- Changing response shaping logic when only the theme changed
-
-## Abstraction Level Evaluation
-
-**Conditionals and abstraction:**
-
-Express rendering branches in terms of user-visible states and responsibility. Once two implementations with the same meaning, contract, and reason to change are observed, decide the owner of a shared component or transformation. Do not require component splitting or polymorphism based only on branch count or syntax.
-
-**Abstraction level mismatch detection:**
-
-| Pattern | Problem | Fix |
-|---------|---------|-----|
-| Data fetching logic mixed in JSX | Hard to read | Extract to custom hook |
-| Business logic mixed in component | Responsibility violation | Separate to hooks/utils |
-| Style calculation logic scattered | Hard to maintain | Extract to utility function |
-| Same transformation in multiple places | DRY violation | Extract to common function |
-
-Good abstraction examples:
-
-```tsx
-// ❌ Conditional bloat
-function UserBadge({ user }) {
-  if (user.role === 'admin') {
-    return <span className="bg-red-500">Admin</span>
-  } else if (user.role === 'moderator') {
-    return <span className="bg-yellow-500">Moderator</span>
-  } else if (user.role === 'premium') {
-    return <span className="bg-purple-500">Premium</span>
-  } else {
-    return <span className="bg-gray-500">User</span>
+// Bad: a generic empty state contains a screen-specific communication procedure
+function EmptyState() {
+  async function retry() {
+    await fetch('/orders')
+    window.location.reload()
   }
+
+  return <button type="button" onClick={retry}>Reload</button>
 }
 
-// ✅ Abstracted with Map
-const ROLE_CONFIG = {
-  admin: { label: 'Admin', className: 'bg-red-500' },
-  moderator: { label: 'Moderator', className: 'bg-yellow-500' },
-  premium: { label: 'Premium', className: 'bg-purple-500' },
-  default: { label: 'User', className: 'bg-gray-500' },
-}
-
-function UserBadge({ user }) {
-  const config = ROLE_CONFIG[user.role] ?? ROLE_CONFIG.default
-  return <span className={config.className}>{config.label}</span>
-}
-```
-
-```tsx
-// ❌ Mixed abstraction levels
-function OrderList() {
-  const [orders, setOrders] = useState([])
-  useEffect(() => {
-    fetch('/api/orders')
-      .then(res => res.json())
-      .then(data => setOrders(data))
-  }, [])
-
-  return orders.map(order => (
-    <div>{order.total.toLocaleString()} USD</div>
-  ))
-}
-
-// ✅ Aligned abstraction levels
-function OrderList() {
-  const { data: orders } = useOrders()  // Hide data fetching
-
-  return orders.map(order => (
-    <OrderItem key={order.id} order={order} />
-  ))
-}
-```
-
-## Frontend and Backend Separation of Concerns
-
-### Display Format Responsibility
-
-Backend returns "data", frontend converts to "display format".
-
-```tsx
-// ✅ Frontend: Convert to display format
-export function formatPrice(amount: number): string {
-  return `$${amount.toLocaleString()}`
-}
-
-export function formatDate(date: Date): string {
-  return format(date, 'MMM d, yyyy')
-}
-```
-
-
-### Domain Logic Placement (Smart UI Elimination)
-
-Domain logic (business rules) belongs in the backend. Frontend only displays and edits state.
-
-What is domain logic:
-- Aggregate business rules (stock validation, price calculation, status transitions)
-- Business constraint validation
-- Invariant enforcement
-
-Frontend responsibilities:
-- Display state received from server
-- Collect user input and send commands to backend
-- Manage UI-only temporary state (focus, hover, modal open/close)
-- Display format conversion (formatting, sorting, filtering)
-
-
-Good and contrasting examples:
-
-```tsx
-// Avoid: Business rules in frontend
-function OrderForm({ order }: { order: Order }) {
-  const totalPrice = order.items.reduce((sum, item) =>
-    sum + item.price * item.quantity, 0
-  )
-  const canCheckout = totalPrice >= 100 && order.items.every(i => i.stock > 0)
-
-  return <button disabled={!canCheckout}>Checkout</button>
-}
-
-// ✅ GOOD - Display state received from server
-function OrderForm({ order }: { order: Order }) {
-  // totalPrice, canCheckout are received from server
+// Good: the generic display receives render parameters and intent notification
+function EmptyState({
+  title,
+  description,
+  onRetry,
+}: {
+  title: string
+  description: string
+  onRetry?: () => void
+}) {
   return (
-    <>
-      <div>{formatPrice(order.totalPrice)}</div>
-      <button disabled={!order.canCheckout}>Checkout</button>
-    </>
+    <section aria-live="polite">
+      <h2>{title}</h2>
+      <p>{description}</p>
+      {onRetry && <button type="button" onClick={onRetry}>Retry</button>}
+    </section>
   )
 }
 ```
+
+The screen communication owner passes text and a retry entry to `EmptyState`, so changing the communication method does not change the generic display. Embedding a URL, API client, or navigation procedure in the generic display expands the change scope for every reuse.
+
+## Data-fetching boundary
+
+The screen or region owner that needs the data handles its retrieval and updates. A screen-wide owner, an independent region, or a data library can own this work when the data scope and operation path are explicit.
+
+A display-only component receives display values and operation entries. It does not build fetch conditions or arbitrate communication errors.
 
 ```tsx
-// Avoid: Status transition logic in frontend
-function TaskCard({ task }: { task: Task }) {
-  const canStart = task.status === 'pending' && task.assignee !== null
-  const canComplete = task.status === 'in_progress' && /* complex conditions... */
-
-  return (
-    <>
-      <button onClick={startTask} disabled={!canStart}>Start</button>
-      <button onClick={completeTask} disabled={!canComplete}>Complete</button>
-    </>
-  )
+// Bad: a generically named display component mixes screen-specific fetching and display decisions
+function DataTable({ accountId }: { accountId: string }) {
+  const result = ordersForAccount(accountId)
+  if (result.status === 'loading') return <Loading />
+  if (result.status === 'error') return <ErrorPanel onRetry={result.retry} />
+  if (result.orders.length === 0) {
+    return <EmptyState title="No orders" description="Create a new order" />
+  }
+  return <Table rows={result.orders} onRowSelect={result.select} />
 }
 
-// ✅ GOOD - Server returns allowed actions
-function TaskCard({ task }: { task: Task }) {
-  // task.allowedActions = ['start', 'cancel'], etc., calculated by server
-  const canStart = task.allowedActions.includes('start')
-  const canComplete = task.allowedActions.includes('complete')
+// Good: the screen owner decides communication states and passes values and intent entries
+function OrderScreen({ result }: { result: OrderScreenResult }) {
+  if (result.status === 'loading') return <Loading />
+  if (result.status === 'error') return <ErrorPanel onRetry={result.retry} />
+  if (result.orders.length === 0) {
+    return <EmptyState title="No orders" description="Create a new order" />
+  }
+  return <OrderTable rows={result.orders} onSelect={result.select} />
+}
 
-  return (
-    <>
-      <button onClick={startTask} disabled={!canStart}>Start</button>
-      <button onClick={completeTask} disabled={!canComplete}>Complete</button>
-    </>
-  )
+function OrderTable({ rows, onSelect }: { rows: Order[]; onSelect: (id: string) => void }) {
+  return <Table rows={rows} onRowSelect={onSelect} />
 }
 ```
 
-Exceptions (OK to have logic in frontend):
+When `DataTable` embeds an orders API, order-specific empty text, and order-screen retry behavior, its generic name hides screen coupling. Keep communication-state decisions in the screen owner so the display component can focus on rows and selection notification. Choose an API client, handwritten fetch, or query library according to the existing communication boundary and contract.
 
-| Case | Reason |
-|------|--------|
-| UI-only validation | UX feedback like "required field", "max length" (must also validate on server) |
-| Client-side filter/sort | Changing display order of lists received from server |
-| Display condition branching | UI control like "show details if logged in" |
-| Real-time feedback | Preview display during input |
+## Cache and pagination
 
-Decision criteria: "Would the business break if this calculation differs from the server?"
-- YES → Place in backend (domain logic)
-- NO → keep the logic in the frontend (display logic)
-
-## Performance
-
-
-Optimization Checklist:
-- Are `React.memo` / `useMemo` / `useCallback` appropriate?
-- Are large lists using virtual scroll?
-- Is Code Splitting appropriate?
-- Are images lazy loaded?
-
-Anti-patterns:
+Choose a cache from the conditions that identify the same data, the way stale data is discarded after updates, and page continuity. Include URL, user, tenant, filter, sort, page, cursor, and every other condition that changes the result in the cache key or dependency.
 
 ```tsx
-// ❌ New object every render
-<Child style={{ color: 'red' }} />
+// Bad: accountId is missing, so accounts with the same filter share results
+const key = ['orders', { filter, page }]
 
-// ✅ Constant or useMemo
-const style = useMemo(() => ({ color: 'red' }), []);
-<Child style={style} />
+// Good: every result condition is present in one key
+const key = ['orders', { accountId, filter, page }]
 ```
 
-## Accessibility
+Cursor and offset names do not decide cache suitability. Check insertion, deletion, reordering, stale cursors, duplicate or missing pages, and post-update refetch against the server and library contract. A screen snapshot without a cache is also valid when its update behavior is explicit.
 
+## Frontend and server responsibilities
 
-Checklist:
-- Using semantic HTML?
-- Are ARIA attributes appropriate (not excessive)?
-- Is keyboard navigation possible?
-- Does it make sense with a screen reader?
-- Is color contrast sufficient?
+Keep server-authoritative business state separate from display and input state known only by the browser. Client-side validation during input, sorting, filtering, and preview are screen responsibilities when the server remains the final authority.
 
-## TypeScript/Type Safety
+| Decision | Primary owner |
+|----------|---------------|
+| Inventory, price, permission, and business state transitions | Server result is authoritative; UI renders the result and permitted operations |
+| Required fields, length, and input-format feedback | Browser gives immediate feedback; server validates required constraints too |
+| Ordering, display filters, and preview of received data | UI display state |
+| Currency, date, and unit formatting | User locale and display context; keep it separate from values sent or stored |
 
+```tsx
+// Bad: client-only calculation sets a completed business state without a server operation
+function CheckoutButton({ cart }: { cart: Cart }) {
+  const canCheckout = cart.total >= 1000 && cart.items.every(item => item.stock > 0)
+  return <button type="button" onClick={() => showCompleted()} disabled={!canCheckout}>Place order</button>
+}
 
-## Frontend Security
+// Good: the screen handles checkout; the display button reports intent
+function CheckoutScreen({ cart }: { cart: Cart }) {
+  const canShowCheckout = cart.total >= 1000
+  async function handleCheckout() {
+    showResult(await checkout(cart.id))
+  }
+  return <CheckoutButton disabled={!canShowCheckout} onCheckout={handleCheckout} />
+}
 
+function CheckoutButton({ disabled, onCheckout }: {
+  disabled: boolean
+  onCheckout: () => void
+}) {
+  return <button type="button" disabled={disabled} onClick={onCheckout}>Place order</button>
+}
+```
 
-## Testability
+Client display calculations belong to the screen state. The final business state changes through the server operation and its result.
+
+## Browser safety
+
+Trace browser input and execution boundaries. Check escaping for user input inserted into HTML or URLs, the source and sanitization boundary for direct HTML, external destinations, Cookie and Web Storage handling, CSRF-required requests, and cross-origin boundaries against the implementation and server contract.
+
+```tsx
+// Bad: interpret user input as HTML
+return <div dangerouslySetInnerHTML={{ __html: comment }} />
+
+// Good: render it as text; make an approved source and sanitization boundary explicit when HTML is required
+return <div>{comment}</div>
+```
+
+Deep authentication, authorization, cryptography, and server-side validation decisions belong to security expertise. Frontend review follows values entering and leaving the browser and the operations that carry them.
+
+## Changeable component boundaries
+
+Choose component boundaries from responsibility, reason to change, reuse unit, and state ownership. Hiding a screen-specific API or route in a display component makes visual changes affect communication procedures.
+
+| Condition | Meaning or option |
+|-----------|-------------------|
+| Several screens share a display while retrieval differs per screen | Display receives values and operation entries; retrieval stays with the screen |
+| A component manages only input or open/close state and has no external effect | Keep the state within that component |
+| Several branches read and write one fact | Place state and operations in a common owner |
+| Screen-specific conditions accumulate in a generic component | Separate screen behavior from display reasons to change |
+| Props are delegated without changing their meaning | Use ownership and change impact rather than depth to assess the split |
+
+Names such as container or presentational can explain a responsibility. Establish the boundary from change reasons and operation paths.

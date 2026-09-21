@@ -54,8 +54,8 @@ const TARGETS = [
     fixture: 'eval/fixtures/arch-failure-aggregation',
   },
   { id: 'antipattern-review', workflow: 'peer-review', step: 'ai-antipattern-review-2nd', fixture: 'eval/fixtures/sample-project' },
-  { id: 'frontend-review', workflow: 'review-frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-app' },
-  { id: 'frontend-review-react', workflow: 'frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-app' },
+  { id: 'frontend-review', workflow: 'review-frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-design' },
+  { id: 'frontend-review-react', workflow: 'frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-design' },
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },
   // rescan は arch-review と同じ facet 構成だが fixture が異なるため、
   // 省略時に全文を確認できるスナップショットを inventory-es 側に生成する専用エントリが必要

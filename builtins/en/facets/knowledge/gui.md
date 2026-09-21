@@ -1,71 +1,138 @@
 # GUI Knowledge
 
-Provide the foundational knowledge for understanding GUIs through hierarchy, state ownership, intent paths, and separation of display from behavior.
+Understand a GUI through a hierarchy rooted at Root, state scope and lifetime, separation of display from behavior, operation-intent notification, and decisions based on current state.
 
-## UI Hierarchy
+## Hierarchy rooted at Root
 
-A screen is a subtree of the UI rooted at Root. Root is the structural boundary that contains the UI; it does not mean that every state or side effect must be concentrated in one component. A screen region or independent widget may have an owner for its own subtree.
+Components belonging to a screen form a UI subtree that can be followed from Root. This hierarchy is the logical containment of components that own responsibilities and state; it is separate from DOM placement. Root composes the screen and is not a place where every state or side effect belongs. Choose the depth and number of intermediate components from responsibilities and reasons to change.
 
-Think about responsibilities through these conceptual roles:
+```
+Root
+└── screen or region behavior mediator
+    ├── display component
+    └── display component
+```
 
-| Role | Main responsibility |
-|------|---------------------|
-| Root | Starting point for the UI hierarchy and composition of screens or widgets |
-| State owner | State, operations, and external side-effect decisions that must stay consistent in a subtree |
-| Display View | Renders display values and reports user intent upward |
+The diagram expresses responsibility relationships. File placement and hierarchy depth follow responsibilities and reasons to change. A small screen may place Root and its behavior mediator in one component, while an independent region may have its own mediator. Make it possible to follow each display component to its subtree and identify who arbitrates its state and operations.
 
-A small screen may combine these roles in one component. The purpose of the roles is to make the state owner and operation path traceable, not to require more classes or a particular file layout.
+| Condition | Meaning or option |
+|-----------|-------------------|
+| The UI is reachable from Root and each subtree's responsibility is readable | The hierarchy shows change paths |
+| Several display components must handle one fact consistently | Place the owner in the smallest subtree containing them |
+| A region has independent placement, state, and communication | Close those responsibilities in the region's owner |
+| Root composes the screen and delegates state to the required subtrees | Composition and state ownership are separated |
 
-## State Ownership
+## State scope and lifetime
 
-Place state in the smallest subtree that needs the state to remain consistent. Temporary state confined to display can stay local to a display component; state shared by multiple branches belongs to their common owner. State shared across screens or concerns can be owned by Context, an external store, or another shared mechanism.
+Keep state in the smallest subtree that must keep the fact consistent. Choose placement from usage scope and lifetime.
 
 | State nature | Placement consideration |
-|--------------|-------------------------|
-| Hover, focus, in-progress input, or open/close state used only for display | The component or small subtree that uses it |
-| State that must stay consistent across nearby components | The nearest common state owner |
-| State shared across deep hierarchy or multiple screens | Context, a store, or another shared state mechanism |
-| Server data and refetch state | A query, data-fetching hook, state owner, or another mechanism with an explicit consistency contract |
+|--------------|------------------------|
+| Hover, focus, in-progress input, and open/close state confined to one component | The component or small subtree |
+| Selection shared by nearby list and detail branches | The smallest owner containing both, then pass it to each View |
+| Screen-level submitting, completed, and failed transitions | The screen or region behavior mediator |
+| Sessions or settings that live across screens | A shared mechanism near Root with matching scope and lifetime |
+| Fetched data and loading/error state | The subtree owner responsible for fetching and updating it |
 
-A child that directly writes a parent or shared state without using the owner's public update contract hides who arbitrates consistency. A parent-provided operation callback, Context dispatch, a store's public API, or form binding routes the update through an owner's contract even when the child initiates it, so it is not by itself a violation of ownership. A child may also keep local state for its own concern.
+### One owner for shared selection
 
-## Separation of Display and Behavior
+When a list and detail view show the same selection, one smallest common owner keeps the selected ID. Passing the same operation path from list interaction to detail display makes the changed code and affected views traceable.
 
-Passive View is a basic model in which a view does not arbitrate state changes or external side effects: it receives display values, renders them, and reports user intent. A Mediator is the role that decides the next state or side effect from current state and user intent.
+## Separation of display and behavior
 
-This model is also easy to explain without a framework. React hooks, reducers, Context Providers, query hooks, form controllers, Vue composables, and Angular services can realize the same responsibilities without being converted into MVP classes. The relevant questions are whether display and behavior are separated, who owns the state, and how the operation travels.
+Strict MVP Passive View receives the parameters needed to render and reports the user's operation intent. It does not arbitrate state transitions, communication, shared-state changes, or external side effects as a display component's own decisions.
 
-A display component may own a small local input state or use standard binding. The problem is hiding communication, shared-state mutation, or business arbitration behind a display convenience when another owner should decide it.
+A Mediator receives screen or region state and operation intent, decides whether the current state accepts it, and determines the next state and required side effects. The role may be implemented by a function, hook, reducer, or another framework-native unit; the responsibility must remain separate from display code.
 
-## Intent and Event Paths
+```tsx
+// Bad: the display component arbitrates communication and navigation
+function SaveButton({ orderId }: { orderId: string }) {
+  return (
+    <button type="button" onClick={async () => {
+      await fetch(`/orders/${orderId}`, { method: 'POST' })
+      window.location.assign('/orders')
+    }}>
+      Save
+    </button>
+  )
+}
 
-Native event propagation is a separate layer from application-level intent notification. Distinguish the event path provided by the browser or framework from the path that delivers intent to a state owner.
+// Good: the display component handles render parameters and intent notification
+function SaveButton({ disabled, onSave }: {
+  disabled: boolean
+  onSave: () => void
+}) {
+  return <button type="button" disabled={disabled} onClick={onSave}>Save</button>
+}
+```
 
-| Path | Use |
-|------|-----|
-| Native event propagation | Input source, default actions, and integration with the external environment |
-| Public callback | A child reports intent through an operation exposed by its parent |
-| Context, dispatch, or store | Intent reaches a shared state owner inside the hierarchy |
-| Query, form, or binding API | A framework or library provides the state and operation entry point |
+A small screen may keep Root and Mediator logic in one function when the code still distinguishes display inputs and outputs from the current-state operation decision. Framework-native state and input mechanisms fit when that boundary remains readable.
 
-Stop or duplicate behavior follows the actual operation contract and owner. An intermediate component that accepts a public callback and passes it upward without changing its meaning is not automatically a hidden bypass.
+## Operation intent and event paths
 
-An intent is delegated along the hierarchy until it reaches the responsible state owner. Passing an unhandled intent upward is the basic Chain of Responsibility model. Once the responsible owner accepts or rejects the operation, an ancestor performing the same intent as a second operation creates unintended duplicate processing.
+Component callbacks, a Chain of Responsibility, and a Mediator are separate concepts. Make the path that delegates intent to an upper-level owner, and the condition that passes an unhandled intent to the next owner, traceable from the logical component hierarchy.
 
-## State Machines
+| Path | Role |
+|------|------|
+| Callback or binding | A child directly reports intent through an exposed operation entry |
+| Chain of Responsibility | A handler decides whether it can handle intent and passes unhandled intent to the next handler |
+| Mediator | Current state and intent determine acceptance, rejection, transition, and required side effects |
 
-A state machine makes states, intents, transitions, and transition side effects explicit. It helps when the accepted intents differ by state, such as dialog open/close, submitting/completed, or available operations.
+Design the delegation path and the rule that prevents an ancestor from processing an already-handled intent again.
 
-Reducer branches, hook state transitions, Context dispatch, store actions, and query loading/error/success states can all realize the same model when the relevant information remains traceable. A transition table, a dedicated library, the name Mediator, or a particular class structure is not itself evidence of quality.
+## Decisions from current state
 
-## Design Signals
+A state machine makes states, intents, transitions, and transition side effects explicit. When accepted operations differ by state, the screen or region Mediator makes the decision from current state instead of scattering conditions across display components.
 
-| Observable structure | Judgment |
-|----------------------|----------|
-| The UI is reachable from Root and each shared state and operation has an owner | The hierarchy is coherent |
-| A display View renders values and reports intent through a public operation entry | Passive View responsibilities are separated |
-| Hooks, Context, dispatch, query, form, or binding implement state and operations with a traceable owner | Framework-fit realization |
-| A small screen keeps state and display together while its owner and paths are clear | Do not force a split |
-| Props or callbacks pass through intermediaries without changing meaning and reach the responsible owner | Depth alone is not a defect |
-| DOM events and application operations perform the same action twice | Investigate duplicate processing |
-| A pattern or class name is absent | Not evidence of a defect |
+```ts
+type Phase = 'editing' | 'submitting' | 'success' | 'failure'
+type ScreenState = { phase: Phase; message: string | null }
+type Intent =
+  | { type: 'submit' }
+  | { type: 'retry' }
+  | { type: 'completed' }
+  | { type: 'failed'; message: string }
+
+function transition(state: ScreenState, intent: Intent): ScreenState {
+  if (intent.type === 'submit' && state.phase === 'editing') {
+    return { phase: 'submitting', message: null }
+  }
+  if (intent.type === 'submit') {
+    return state
+  }
+  if (intent.type === 'retry' && state.phase === 'failure') {
+    return { phase: 'submitting', message: null }
+  }
+  if (intent.type === 'completed' && state.phase === 'submitting') {
+    return { phase: 'success', message: 'Saved' }
+  }
+  if (intent.type === 'failed' && state.phase === 'submitting') {
+    return { phase: 'failure', message: intent.message }
+  }
+  return state
+}
+
+function viewParameters(state: ScreenState) {
+  return {
+    submitDisabled: state.phase !== 'editing',
+    retryVisible: state.phase === 'failure',
+    message: state.message,
+  }
+}
+```
+
+The second submit during `submitting` is rejected by retaining the same state. Only `completed` or `failed` changes the display parameters. Acceptance and display reflection therefore come from one state model.
+
+| Observable structure | Meaning or option |
+|----------------------|-------------------|
+| A display component receives render parameters and reports intent through an operation entry | Passive View responsibility is preserved |
+| A screen or region owner reads current state and decides acceptance, rejection, and transition | Mediator arbitration is traceable |
+| Root leads to display components and state owners | Hierarchy and ownership are readable |
+| Intermediate components delegate intent without changing its meaning | Depth alone is not a structural problem |
+| A display component individually decides communication, transition, or shared-state changes | Review the display/behavior boundary |
+| The same intent runs through multiple operation paths | Review the operation entry and delegation chain |
+
+## Reference
+
+- Martin Fowler: Passive View
+  https://martinfowler.com/eaaDev/PassiveScreen.html

@@ -333,7 +333,7 @@ remain excluded.
 | `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
 | `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
 | `antipattern-wording-tests` | peer-review / ai-antipattern-review-2nd | sample-project | whether Claude Opus 5 and Codex Luna Max reject wording-fixed tests without contract grounds while accepting declared machine-readable contract assertions |
-| `frontend` | review-frontend / frontend-review; frontend / frontend-review | frontend-app | recall on planted layering violations and judgment of GUI ownership/operation cases with and without the React facet |
+| `frontend`, `frontend-opus` | review-frontend / frontend-review; frontend / frontend-review | frontend-design | 8 paired GUI designs and 5 framework idioms; defect detection and acceptance scored separately, with and without the React facet |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
@@ -388,6 +388,8 @@ remain excluded.
 | `fix-verification-scope` | review-remediation / fix-verifier | fix-verification-scope | whether completion verification accepts satisfied planned conditions while recording, but not selecting for repair, a broad-gate failure with no causal connection to the current change |
 | `fix-verification-current-diff-regression` | review-remediation / fix-verifier | fix-verification-current-diff-regression | whether completion verification marks a broad-gate failure incomplete when the current diff caused the regression |
 | `fix-verification-preserved-condition` | review-remediation / fix-verifier | fix-verification-preserved-condition | whether completion verification marks a repair incomplete when it breaks an existing condition that the plan requires preserving |
+
+GUI設計の比較例、採点、旧・新比較の手順は [frontend-design.md](frontend-design.md) を参照。
 
 The `coding` suite requires both Claude and Codex CLI logins and is excluded
 from the default suite run. Invoke it explicitly with

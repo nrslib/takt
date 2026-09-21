@@ -1,90 +1,77 @@
 # React Policy
 
-Judge React-specific re-execution, state retention, Context, hooks, and queries from actual responsibilities, dependencies, and consistency contracts.
+Judge React state, props, Context, reducers, Effects, and hooks from re-execution, state lifetime, operation paths, and synchronization with external systems.
 
 ## Principles
 
 | Principle | Criterion |
 |-----------|-----------|
-| Check applicability | Apply these criteria only to the original requirement, changed contract, and real impact paths |
-| Use evidence | Judge only conditions confirmed by code, contracts, or evidence |
-| Code and dependencies | Match reactive values read by an Effect with its re-execution conditions |
-| Cleanup | Release external connections, subscriptions, and timers on every exit path |
-| State ownership | Inspect the owner and operation path rather than the names of hooks, reducers, Context, stores, queries, or forms |
-| Query consistency | Check query keys, invalidation, refetching, and page continuity against the data contract |
-| Observable harm | Judge loops, leaks, gaps, duplicates, or stale displays that can be observed |
-| Keep scope bounded | Judge only the scope causally related to the request |
-| Use consistent grounds | Do not add a judgment criterion from an example that cannot be derived from the original requirement, changed contract, or real impact paths |
+| State ownership | One owner keeps each fact, with traceable display and operation paths |
+| Props | Parent inputs and component-local editing state have distinct lifetimes |
+| Context | Deep components receive values and operation entries through an explicit value owner |
+| Reducer | Current state and intent produce the next state without side effects |
+| Effect | Rendering synchronizes with external systems through dependencies and cleanup that match the target |
+| Hook | Stateful responsibility and its direction from screen behavior to display remain traceable |
+| React runtime rules | Hook, render, props, and key rules support the state lifetime and re-execution reasoning |
+| Evidence | Judge actual reruns, omissions, duplicates, stale displays, and mixed responsibilities rather than API form |
 
-## Effects and Dependencies
+## State, props, and derived values
 
-| Criteria | Judgment |
-|----------|----------|
-| An Effect reads a reactive value but omits it from dependencies and uses a stale value | REJECT |
-| An unstable function or Context value reference alone repeats initial loading or a subscription | REJECT |
-| A mount-only initial load reruns when recreated function references change | REJECT |
-| A Context or Provider function reference alone repeats an out-of-contract initial load or subscription | REJECT |
-| A mount-only list load is retriggered by loading-state updates | REJECT |
-| A mount-only list load is retriggered by message display or dialog toggles | REJECT |
-| A dependency is added only to satisfy lint and causes an unintended refetch or reconnection | REJECT |
-| One Effect combines independent synchronization processes so unrelated changes rerun both | REJECT |
-| An external connection, subscription, or timer has no cleanup and survives rerender or unmount | REJECT |
-| An empty dependency list is used when the Effect reads no reactive values and its mount synchronization and cleanup match the contract | OK |
-| A mount-only Effect reads no reactive values and its synchronization and cleanup match the contract | OK |
-| A lint suppression hides a reactive-value mismatch and leaves stale data or misses a rerun | REJECT |
-| An Effect that should rerun is incorrectly frozen with an empty dependency list | REJECT |
+| Criterion | Judgment |
+|-----------|----------|
+| Sibling components keep shared state in separate `useState` calls and their display or operation results diverge | REJECT |
+| A component needs to respond to prop changes but keeps showing a copied initial value | REJECT |
+| A list, count, all-selected flag, or label computable from state is synchronized as another state through an Effect | REJECT |
+| State lives in the smallest common component and flows through props and operation entries to display | OK |
+| Controlled input, local editing draft, or component identity change matches the required state lifetime | OK |
+| Memoization hides dependencies and does not address a measured computation or reference-stability problem | REJECT |
 
-## Handling exhaustive-deps
+Choose state placement from sharing scope, lifetime, update operations, and display reflection.
 
-When dependencies change, inspect the synchronized system, work that belongs in an event handler, and independent processes that should be split. Do not decide from the presence of a suppression comment alone.
+## Context, reducer, and operation entries
 
-## State, Context, and Hooks
+| Criterion | Judgment |
+|-----------|----------|
+| A Provider or component calls `useState` or `useReducer` and the Context operation path is traceable | OK |
+| Context contains screen-specific communication and several canonical states whose update operations cannot be traced | REJECT |
+| A reducer performs communication, timers, or notifications so side effects cannot be distinguished from state changes | REJECT |
+| A reducer returns the next state purely from current state and event while a handler or Effect owns side effects | OK |
+| Buttons, forms, and keyboard operations enter one command and current state accepts or rejects them | OK |
+| Click and submit paths call the same communication directly and cause duplicate submission | REJECT |
 
-| Criteria | Judgment |
-|----------|----------|
-| Local useState stays within its subtree owner and does not perform opaque changes in another subtree | OK |
-| A reducer, Context Provider, dispatch, or store centralizes state and operation entries | OK |
-| A query hook, form hook, or binding owns state and operations with a traceable path from display | OK |
-| The same stateful hook is called in multiple places under the assumption that its state is shared, creating separate canonical states | REJECT |
-| Context, hook, or reducer names are used without checking ownership or operation paths | REJECT |
-| Standard hooks, Context, local state, and parent callbacks are prohibited because of their API form | REJECT |
+Context distributes values. Review the Provider or component that calls `useState` or `useReducer`, as well as query and form owners, to identify the state and operation owner for each subtree.
 
-## Custom Hook Responsibility
+## Effects and dependencies
 
-| Criteria | Judgment |
-|----------|----------|
-| A `use*` function composes React hooks, Context, query, form, or event translation with a traceable responsibility | OK |
-| A `use*` function only wraps a pure calculation and uses no React hook or state/operation contract | Consider simplification |
-| Stateful UI control lives in a custom hook while pure calculations live in ordinary functions | OK |
-| A hook returns JSX while its ownership and operation path are clear | Not a reason to reject by return shape alone |
-| A hook hides an operation owner or causes an opaque or duplicate side effect, including through returned JSX | REJECT |
+| Criterion | Judgment |
+|-----------|----------|
+| An Effect omits a reactive value it reads and synchronizes with a stale value | REJECT |
+| Effect dependencies do not match the conditions that should reconnect or refetch | REJECT |
+| A callback or Context value reference alone causes functionally unnecessary refetches or reconnections that occur in practice | REJECT |
+| Independent synchronization processes share one Effect and unrelated changes rerun both | REJECT |
+| A connection, subscription, timer, or request has no cleanup on rerun or unmount | REJECT |
+| The synchronization target and read values are explicit, dependencies match, and cleanup is returned | OK |
+| A mount-only synchronization reads no reactive value and its start/stop contract is explicit | OK |
 
-## Props Type Placement and Hook Boundaries
+Choose the synchronization target before changing dependencies. Move a value outside the reactive scope, move one-time interaction work to a handler, or split independent synchronization when that makes the contract clear. A required rerun stays represented in dependencies.
 
-| Criteria | Judgment |
-|----------|----------|
-| A single component's private Props type is moved to a `types` file without a clear reason | Warning |
-| Props are moved to a separate file only so a hook can import a component's Props type | REJECT |
-| Shared Props or data contracts used by multiple components or public APIs live in a separate file | OK |
-| A hook returns state, events, and derived values while a container maps them to component props | OK |
-| Even when a hook returns a props-like object, the hook does not depend on the component's Props type | OK |
+## React runtime rules
 
-## Queries, Cache, and Pagination
+| Criterion | Judgment |
+|-----------|----------|
+| A Hook is called outside the top level of a component or custom hook, changing call order across renders | REJECT |
+| Rendering performs communication, notifications, DOM operations, or mutation of an external variable | REJECT |
+| Props, state, or nested values owned by them are mutated directly | REJECT |
+| An index key causes input or selection state to move to another item after a reorderable list changes order | REJECT |
+| Stable item identifiers are used as keys and component identity matches the intended state lifetime | OK |
 
-| Criteria | Judgment |
-|----------|----------|
-| A query key omits the resource, URL, filters, user, or another identity condition and shares different data | REJECT |
-| No invalidation, refetch, or contract-compliant cache update after an update leaves stale data as canonical display | REJECT |
-| Cursor or offset refetching has no contract for page continuity, duplicates, or gaps | REJECT |
-| Pages are fetched and refetched according to the query or infinite-query API and server contract | OK |
-| A query cache is prohibited solely because the data uses cursor or offset pagination | Not a reason to reject |
-| A query hook hides fetch conditions, errors, and post-update consistency from every traceable owner and produces different data or an incorrect display | REJECT |
-| A stable detail resource or stable list uses a query cache with a matching identity and update contract | OK |
+## Custom hooks and component boundaries
 
-## Forms and Standard APIs
+| Criterion | Judgment |
+|-----------|----------|
+| A hook composes React state, Effects, Context, queries, forms, or event translation as one traceable responsibility | OK |
+| A hook only wraps a pure calculation without a stateful contract | Consider an ordinary function |
+| Hook, component, and screen dependencies form a cycle that hides how changes reach display or communication | REJECT |
+| Hook state, events, and derived values are mapped to component render parameters through a readable path | OK |
 
-| Criteria | Judgment |
-|----------|----------|
-| A controlled or uncontrolled input, form library, or binding has a clear state owner | OK |
-| Context dispatch or a parent-provided callback reports operation intent | OK |
-| A change only converts standard hooks, Context, queries, or forms into a particular MVP shape | Not a reason to reject |
+Treat a React component with local state or event handlers separately from strict Passive View. Where screen or region arbitration is required, keep communication and transition decisions out of the display portion while using idiomatic hooks, reducers, and handlers.

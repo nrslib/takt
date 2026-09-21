@@ -97,7 +97,7 @@ Apply the next three test-related REJECT conditions only when all five facts are
 - Fallback value abuse (`?? 'unknown'`)
 - Explanatory comments (What/How comments)
 - Unused code ("just in case" code)
-- Direct mutation of caller-owned, shared, or externally exposed objects/arrays without using the owner's public update contract
+- Direct mutation of caller-owned, shared, or externally exposed objects/arrays without using the owner's operation entry
 - Swallowed errors (empty catch blocks)
 - Method proliferation doing the same thing (should be absorbed by configuration differences)
 - Specific implementation leaking into generic layers (imports and branching for specific implementations in generic layers)
