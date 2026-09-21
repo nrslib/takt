@@ -33,7 +33,6 @@ if (!Number.isInteger(requestedSize) || requestedSize < 1) {
   throw new RangeError('limit must be a positive integer')
 }
 const pageSize = Math.min(requestedSize, MAX_PAGE_SIZE)
-return listOrders({ date: request.date, nextId: request.nextId, pageSize })
 ```
 
 Judge client-controlled page size from the actual maximum size, permission scope, response time, and cursor stability, rather than from whether the client can specify a count.

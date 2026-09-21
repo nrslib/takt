@@ -33,7 +33,6 @@ if (!Number.isInteger(requestedSize) || requestedSize < 1) {
   throw new RangeError('limit must be a positive integer')
 }
 const pageSize = Math.min(requestedSize, MAX_PAGE_SIZE)
-return listOrders({ date: request.date, nextId: request.nextId, pageSize })
 ```
 
 クライアントが件数を指定できるかどうかではなく、実際の最大件数、権限の範囲、応答時間、cursorの安定性で判定する。
