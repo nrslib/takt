@@ -48,6 +48,8 @@ route('/orders/:orderId', OrderScreen)
 | 空の一覧 | 「データがない」と「取得に失敗した」を区別する表示 |
 | ダイアログやメニュー | 開く操作、フォーカス、閉じる操作、元の位置への復帰 |
 
+外部UIライブラリは、導入済みバージョンの実装・型・公式資料から、対応するpropsと要素構造を確認する。ラッパーや属性の上書きがある場合は、実際に生成される要素の名前・role・state・操作を確認する。shallow mockの成功だけでは、実ライブラリの描画や操作を検証したことにならない。
+
 ## 通信状態と表示
 
 通信をともなう画面は、未開始、読み込み中、成功、空、失敗、キャンセルを区別する。失敗時は原因の詳細をそのまま表示するのではなく、利用者が再試行や別の操作を選べる画面の状態へ変換する。
@@ -118,6 +120,8 @@ function OrderTable({ rows, onSelect }: { rows: Order[]; onSelect: (id: string) 
 
 `DataTable`の名前に対して注文API、注文固有の空状態、注文画面の再試行が埋め込まれると、別の画面で再利用しにくくなる。通信状態の判断を画面の担当へ置くと、表示部品は行の表示と選択通知に集中できる。APIクライアント生成、手書きのfetch、queryライブラリなどの選択は、プロジェクトの実在する通信境界と既存の契約に合わせる。
 
+生成済みAPIクライアントが対象のAPIを担当している場合は、その型、認証、エラー変換を再利用する。同じAPIの通信処理を別に作ると、スキーマや認証方式の変更が片方にしか反映されなくなる。
+
 ## キャッシュとページング
 
 キャッシュは、同じデータを識別する条件、更新後に古い表示を破棄する方法、ページの連続性を確認して選ぶ。URL、利用者、テナント、filter、sort、pageやcursorなど、結果を変える条件をキャッシュのキーや依存へ含める。
@@ -142,30 +146,6 @@ cursorやoffsetという方式名だけでキャッシュの可否は決まら�
 | 必須入力、文字数、入力形式など入力中のフィードバック | ブラウザで即時に示し、必要な制約はサーバーでも検証する |
 | 受信済み一覧の表示順、表示フィルタ、プレビュー | UIの表示状態として管理する |
 | 金額・日時・単位の表示 | 利用者のlocaleと表示文脈に合わせ、操作や保存へ流用する値と分ける |
-
-```tsx
-// NG - クライアントだけで成功状態を確定し、サーバーへ操作を送らない
-function CheckoutButton({ cart }: { cart: Cart }) {
-  const canCheckout = cart.total >= 1000 && cart.items.every(item => item.stock > 0)
-  return <button type="button" onClick={() => showCompleted()} disabled={!canCheckout}>注文を確定</button>
-}
-
-// OK - 画面が確定操作を担当し、表示ボタンは意図を通知する
-function CheckoutScreen({ cart }: { cart: Cart }) {
-  const canShowCheckout = cart.total >= 1000
-  async function handleCheckout() {
-    showResult(await checkout(cart.id))
-  }
-  return <CheckoutButton disabled={!canShowCheckout} onCheckout={handleCheckout} />
-}
-
-function CheckoutButton({ disabled, onCheckout }: {
-  disabled: boolean
-  onCheckout: () => void
-}) {
-  return <button type="button" disabled={disabled} onClick={onCheckout}>注文を確定</button>
-}
-```
 
 クライアントの表示用計算は画面状態として扱い、業務の確定状態はサーバー操作の結果を受けて更新する。
 

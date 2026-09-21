@@ -48,6 +48,8 @@ Compose dynamic text so the final announcement has meaning. In a list with multi
 | Empty list | A display that distinguishes no data from failed retrieval |
 | Dialog or menu | Opening operation, focus, closing operation, and focus restoration |
 
+Check the installed UI library version against its implementation, types, and official documentation for supported props and element structure. With wrappers or attribute overrides, verify the actual rendered name, role, state, and interaction. Passing shallow mocks does not verify real library rendering or behavior.
+
 ## Communication states and display
 
 A communicating screen distinguishes not started, loading, success, empty, failure, and cancelled states. Convert failures into screen states that give the user retry, correction, or another recovery operation.
@@ -120,6 +122,8 @@ function OrderTable({ rows, onSelect }: { rows: Order[]; onSelect: (id: string) 
 
 When `DataTable` embeds an orders API, order-specific empty text, and order-screen retry behavior, its generic name hides screen coupling. Keep communication-state decisions in the screen owner so the display component can focus on rows and selection notification. Choose an API client, handwritten fetch, or query library according to the existing communication boundary and contract.
 
+When a generated API client handles the API in use, reuse its types, authentication, and error conversion. Reimplementing the same API communication separately can leave one path behind when schemas or authentication change.
+
 ## Cache and pagination
 
 Choose a cache from the conditions that identify the same data, the way stale data is discarded after updates, and page continuity. Include URL, user, tenant, filter, sort, page, cursor, and every other condition that changes the result in the cache key or dependency.
@@ -144,30 +148,6 @@ Keep server-authoritative business state separate from display and input state k
 | Required fields, length, and input-format feedback | Browser gives immediate feedback; server validates required constraints too |
 | Ordering, display filters, and preview of received data | UI display state |
 | Currency, date, and unit formatting | User locale and display context; keep it separate from values sent or stored |
-
-```tsx
-// Bad: client-only calculation sets a completed business state without a server operation
-function CheckoutButton({ cart }: { cart: Cart }) {
-  const canCheckout = cart.total >= 1000 && cart.items.every(item => item.stock > 0)
-  return <button type="button" onClick={() => showCompleted()} disabled={!canCheckout}>Place order</button>
-}
-
-// Good: the screen handles checkout; the display button reports intent
-function CheckoutScreen({ cart }: { cart: Cart }) {
-  const canShowCheckout = cart.total >= 1000
-  async function handleCheckout() {
-    showResult(await checkout(cart.id))
-  }
-  return <CheckoutButton disabled={!canShowCheckout} onCheckout={handleCheckout} />
-}
-
-function CheckoutButton({ disabled, onCheckout }: {
-  disabled: boolean
-  onCheckout: () => void
-}) {
-  return <button type="button" disabled={disabled} onClick={onCheckout}>Place order</button>
-}
-```
 
 Client display calculations belong to the screen state. The final business state changes through the server operation and its result.
 

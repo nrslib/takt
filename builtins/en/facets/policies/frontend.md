@@ -38,6 +38,7 @@ Judge URLs, screen navigation, HTML operations, communication states, accessibil
 | A generated accessible name is empty, misleading, or meaningless when announced | REJECT |
 | A change to accessible name, role, or wording makes the target unidentifiable or its state unintelligible | REJECT |
 | DOM capture/bubble and application intent notification execute the same operation twice | REJECT |
+| Unsupported props or element structure in the installed UI library break rendering, interaction, or accessibility | REJECT |
 
 ## Communication states and display
 
@@ -57,6 +58,7 @@ Judge URLs, screen navigation, HTML operations, communication states, accessibil
 | An update leaves stale display as canonical because invalidation, refetch, or contract-compliant cache update is absent | REJECT |
 | Cursor or offset retrieval has no condition for continuity, duplicates, gaps, or reordered results | REJECT |
 | A query, handwritten request, or screen-held snapshot satisfies retrieval conditions and the update path | OK |
+| Types, authentication, or error handling for the same API are duplicated outside the existing client, so changes reach only one path | REJECT |
 
 ## Frontend and server responsibilities
 

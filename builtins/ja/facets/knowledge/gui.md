@@ -84,6 +84,8 @@ callbackは直接の操作通知、責任連鎖は担当外の意図を次の担
 
 状態機械は、状態、操作意図、遷移、遷移に伴う副作用を明示する。状態によって受理できる操作が変わる画面では、表示部品が個別に判断せず、画面または領域のMediatorが現在状態から決める。
 
+以下は裁定のうち、状態遷移と描画パラメータの計算を示す。受理した操作に伴う通信などは担当が実行し、結果を次の意図として状態遷移へ渡す。
+
 ```ts
 type Phase = 'editing' | 'submitting' | 'success' | 'failure'
 type ScreenState = { phase: Phase; message: string | null }

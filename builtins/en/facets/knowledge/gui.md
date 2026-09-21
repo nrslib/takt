@@ -84,6 +84,8 @@ Design the delegation path and the rule that prevents an ancestor from processin
 
 A state machine makes states, intents, transitions, and transition side effects explicit. When accepted operations differ by state, the screen or region Mediator makes the decision from current state instead of scattering conditions across display components.
 
+The example shows state transitions and rendering parameters. The responsible handler executes communication for an accepted operation and passes its result back as the next intent.
+
 ```ts
 type Phase = 'editing' | 'submitting' | 'success' | 'failure'
 type ScreenState = { phase: Phase; message: string | null }
