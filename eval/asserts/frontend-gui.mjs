@@ -21,6 +21,13 @@ export const expectations = [
   ['callback-delegation.tsx', 'OK', /onSelect/],
   ['draft.tsx', 'OK', /draft|下書き/, /Confirm|確定|onConfirm/],
   ['shared-query.tsx', 'OK', /QueryClient|キャッシュ/, /共有/],
+  ['bubble-a.tsx', 'REJECT', /Screen|RecordActions|onAction/, /担当|処理|select|remove|上位|渡|二重|再実行/],
+  ['bubble-b.tsx', 'OK', /handleAction|onAction|return/, /select|remove|未担当|上位|担当|処理/],
+  ['guard-a.tsx', 'REJECT', /requestSave|status|onSave/, /拒否|空|saving|処理中|上位|親|渡|実行/],
+  ['guard-b.tsx', 'OK', /requestSave|onSave|status/, /editing|saving|return|拒否|空|処理中|親/],
+  ['mediator-a.tsx', 'REJECT', /dispatch|started|saving/, /成功|success|succeeded|失敗|failed|state|表示/],
+  ['mediator-b.tsx', 'OK', /dispatch|succeeded|failed/, /saving|saved|error|成功|失敗|state|表示/],
+  ['form-action.tsx', 'OK', /useActionState|formAction|action/, /state|pending|action|form|成功|入力/],
 ];
 
 export function verdictPayload(output) {

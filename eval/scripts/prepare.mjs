@@ -34,6 +34,15 @@ const PREV_MARKER = '@@PROMPTFOO_PREVIOUS_RESPONSE@@';
 const SCENARIO_MARKER = '@@PROMPTFOO_SCENARIO@@';
 const EVAL_LANGUAGE = 'ja';
 
+export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths) {
+  for (const kind of requiredFacetKinds ?? []) {
+    const sourcePath = sourcePaths[kind];
+    if (sourcePath === undefined || !existsSync(sourcePath)) {
+      throw new Error(`Required ${kind} facet snapshot missing for eval target "${id}"`);
+    }
+  }
+}
+
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
@@ -54,8 +63,24 @@ const TARGETS = [
     fixture: 'eval/fixtures/arch-failure-aggregation',
   },
   { id: 'antipattern-review', workflow: 'peer-review', step: 'ai-antipattern-review-2nd', fixture: 'eval/fixtures/sample-project' },
-  { id: 'frontend-review', workflow: 'review-frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-design' },
-  { id: 'frontend-review-react', workflow: 'frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-design' },
+  {
+    id: 'frontend-review',
+    workflow: 'review-frontend',
+    step: 'frontend-review',
+    fixture: 'eval/fixtures/frontend-design',
+    copyFixture: true,
+    requiredFacetKinds: ['policies', 'knowledge'],
+    promptExtension: 'j2',
+  },
+  {
+    id: 'frontend-review-react',
+    workflow: 'frontend',
+    step: 'frontend-review',
+    fixture: 'eval/fixtures/frontend-design',
+    copyFixture: true,
+    requiredFacetKinds: ['policies', 'knowledge'],
+    promptExtension: 'j2',
+  },
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },
   // rescan は arch-review と同じ facet 構成だが fixture が異なるため、
   // 省略時に全文を確認できるスナップショットを inventory-es 側に生成する専用エントリが必要
@@ -623,6 +648,9 @@ async function main() {
     reportFile,
     dynamicFacetSelection,
     snapshotPrefix,
+    copyFixture,
+    requiredFacetKinds,
+    promptExtension,
   } of targets) {
     if (requestedPhase !== undefined && monitorCycle !== undefined) {
       throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
@@ -630,9 +658,9 @@ async function main() {
     const resolvedPhase = requestedPhase ?? (monitorCycle ? 'phase3' : 'phase1');
     const fixtureDir = resolve(repoRoot, fixture);
 
-    // Mutable (coder) targets work on a disposable copy.
+    // Targets with copyFixture and mutable targets use an independent run directory.
     let runDir = fixtureDir;
-    if (mutable) {
+    if (copyFixture || mutable) {
       runDir = join(repoRoot, 'eval', '.work', id);
       rmSync(runDir, { recursive: true, force: true });
       mkdirSync(dirname(runDir), { recursive: true });
@@ -764,6 +792,10 @@ async function main() {
 
     const policySourcePath = writeFacetSnapshot('policies', target.policyContents);
     const knowledgeSourcePath = writeFacetSnapshot('knowledge', target.knowledgeContents);
+    assertRequiredFacetSnapshots(id, requiredFacetKinds, {
+      policies: policySourcePath,
+      knowledge: knowledgeSourcePath,
+    });
 
     // --- Render the assembled Phase 1 prompt ---------------------------------
     const context = {
@@ -816,7 +848,7 @@ async function main() {
 
     const outDir = join(repoRoot, 'eval', 'prompts');
     mkdirSync(outDir, { recursive: true });
-    const outPath = join(outDir, `${id}.${resolvedPhase}.md`);
+    const outPath = join(outDir, `${id}.${resolvedPhase}.${promptExtension ?? 'md'}`);
     writeFileSync(outPath, assembled);
     if (reportFile !== undefined) {
       const reportInstruction = new ReportInstructionBuilder(target, {

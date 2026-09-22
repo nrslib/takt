@@ -24,9 +24,7 @@ A screen handler or custom Hook receives an operation notification, checks the c
 
 A reducer is a pure function that returns the next state from the current state and an event. A handler starts communication outside the reducer and dispatches its start, success, and failure results. The reducer does not perform communication, timers, or notifications. Rejection, invalid input, insufficient permission, and conflicts become display results through this state flow.
 
-Use `onSubmit` as the single form submission entry for a submit operation. Do not call the same processing directly from `onClick`; keyboard input that submits the form should reach the same handler, and the current state should decide whether it is accepted.
-
-Even when a Portal places a part elsewhere in the DOM, React events propagate through the React tree to its ancestors.
+Form submission should notify the handler once through the chosen entry, such as `onSubmit`, a form `action`, or another standard mechanism, and go through the same state decision. Actions such as pressing Enter that submit the form should use that same state decision, and submission processing should not run more than once. Even when a Portal places a part elsewhere in the DOM, React events propagate through the React tree to its ancestors.
 
 ## Effects and external systems
 

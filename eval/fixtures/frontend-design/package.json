@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "react": "^18.3.0",
+    "react": "^19.0.0",
     "@tanstack/react-query": "^5.0.0"
   }
 }

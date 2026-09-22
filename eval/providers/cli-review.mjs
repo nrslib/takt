@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,17 +23,44 @@ export function createIsolatedWorkingDirectory(sourceDirectory, copyDirectory = 
   };
 }
 
+export function assertRequiredSnapshots(sourceDirectory, requiredSnapshots = []) {
+  if (!Array.isArray(requiredSnapshots)) {
+    throw new Error('required_snapshots must be an array of relative paths');
+  }
+  for (const snapshot of requiredSnapshots) {
+    if (typeof snapshot !== 'string' || snapshot.length === 0) {
+      throw new Error('required_snapshots must contain non-empty paths');
+    }
+    if (!existsSync(resolve(sourceDirectory, snapshot))) {
+      throw new Error(`Required snapshot "${snapshot}" missing in ${sourceDirectory}`);
+    }
+  }
+}
+
 export function prepareWorkingDirectory(config) {
   const sourceDirectory = resolve(evalDirectory, config.working_dir);
+  assertRequiredSnapshots(sourceDirectory, config.required_snapshots);
   if (!config.isolate_working_dir) {
     return { sourceDirectory, cwd: sourceDirectory, cleanup: () => undefined };
   }
 
   const isolated = createIsolatedWorkingDirectory(sourceDirectory);
+  try {
+    assertRequiredSnapshots(isolated.cwd, config.required_snapshots);
+  } catch (error) {
+    isolated.cleanup();
+    throw error;
+  }
   return {
     sourceDirectory,
     ...isolated,
   };
+}
+
+export function mergeCliReviewConfig(providerConfig, context) {
+  const promptConfig = context?.prompt?.config;
+  if (promptConfig === undefined) return providerConfig;
+  return { ...providerConfig, ...promptConfig };
 }
 
 export function rewriteWorkingDirectoryPaths(prompt, workingDirectory) {
@@ -235,14 +262,15 @@ export default class CliReviewProvider {
     return `cli-review:${this.config.cli}:${this.config.model}`;
   }
 
-  async callApi(prompt, _context, options = {}) {
+  async callApi(prompt, context, options = {}) {
     let workingDirectory;
 
     try {
-      workingDirectory = prepareWorkingDirectory(this.config);
+      const config = mergeCliReviewConfig(this.config, context);
+      workingDirectory = prepareWorkingDirectory(config);
       const { cwd } = workingDirectory;
       const isolatedPrompt = rewriteWorkingDirectoryPaths(prompt, workingDirectory);
-      const output = await runCliReview(this.config, isolatedPrompt, {
+      const output = await runCliReview(config, isolatedPrompt, {
         cwd,
         abortSignal: options.abortSignal,
       });

@@ -15,5 +15,9 @@
 - `src/gui-patterns/callback-delegation.tsx`: 行の選択を一覧の呼び出し元へ通知する。
 - `src/gui-patterns/draft.tsx`: ダイアログを開くたびに新規マウントする。編集中の値はConfirmまで親へ反映せず、initialNameはこの表示中には変わらない。
 - `src/gui-patterns/shared-query.tsx`: 同じアカウントの注文を2箇所に表示し、同じQueryClientのキャッシュを共有する。
+- `src/gui-patterns/bubble-a.tsx` と `bubble-b.tsx`: Rootがrecordsのremove処理を持ち、ScreenがRecordActionsのselect状態を持つ。Screenが担当するselectをRootへ実行させず、担当しないremoveだけをRootへ一度通知する。
+- `src/gui-patterns/guard-a.tsx` と `guard-b.tsx`: Rootが保存処理を持ち、ScreenのrequestSaveが現在のediting/saving状態と入力を確認する。拒否した空入力や処理中の要求をRootへ渡さず、受理した保存だけを親で1回実行する。
+- `src/gui-patterns/mediator-a.tsx` と `mediator-b.tsx`: RootのMediatorが保存開始、成功、失敗を現在stateへ反映し、ScreenとSaveFormがsaving/saved/errorの表示を受け取る。saveの成功と失敗を実際のPromise結果からそれぞれ追える。
+- `src/gui-patterns/form-action.tsx`: React 19の`useActionState`でformの`action`へ処理を渡し、成功・入力不備のstateとpending表示を描画する。
 
-最終出力はJSON配列だけにしてください。対象21ファイルを1回ずつ含め、各要素を `{"file":"src/gui-patterns/ファイル名.tsx","verdict":"OK または REJECT","reason":"コード中の識別子と操作の流れを挙げた具体的理由"}` としてください。判定理由は日本語で記述してください。
+最終出力はJSON配列だけにしてください。対象28ファイルを1回ずつ含め、各要素を `{"file":"src/gui-patterns/ファイル名.tsx","verdict":"OK または REJECT","reason":"コード中の識別子と操作の流れを挙げた具体的理由"}` としてください。判定理由は日本語で記述してください。

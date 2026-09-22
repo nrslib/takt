@@ -1,11 +1,23 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
 # Run via npm run eval:prompts -- frontend-opus
 
-description: 'GUI design: paired implementations and framework idioms'
+description: 'GUI design: paired implementations, framework idioms, and operation paths'
 
 prompts:
-  - file://../../prompts/frontend-review.phase1.md
-  - file://../../prompts/frontend-review-react.phase1.md
+  - label: frontend-review
+    raw: file://../../prompts/frontend-review.phase1.j2
+    config:
+      working_dir: .work/frontend-review
+      required_snapshots:
+        - .takt/eval-snapshots/frontend-review-policies.md
+        - .takt/eval-snapshots/frontend-review-knowledge.md
+  - label: frontend-review-react
+    raw: file://../../prompts/frontend-review-react.phase1.j2
+    config:
+      working_dir: .work/frontend-review-react
+      required_snapshots:
+        - .takt/eval-snapshots/frontend-review-react-policies.md
+        - .takt/eval-snapshots/frontend-review-react-knowledge.md
 
 providers:
   - id: file://../../providers/cli-review.mjs
@@ -13,14 +25,13 @@ providers:
     config:
       cli: claude
       model: claude-opus-5
-      working_dir: fixtures/frontend-design
       isolate_working_dir: true
 
 evaluateOptions:
   maxConcurrency: 1
 
 tests:
-  - description: '8 paired designs and 5 framework idioms'
+  - description: '11 paired designs and 6 framework idioms'
     vars:
       task: file://../../cases/frontend-gui-patterns.md
       previous_response: file://../../cases/prev-gather-frontend-gui.md

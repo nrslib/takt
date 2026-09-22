@@ -24,6 +24,13 @@ const reasons = {
   'callback-delegation.tsx': 'onSelectで呼び出し元に通知する。',
   'draft.tsx': 'draftは確定までの下書きでConfirmからonConfirmを呼ぶ。',
   'shared-query.tsx': '同じQueryClientのキャッシュを共有する。',
+  'bubble-a.tsx': 'Screenがselectを処理した後もonActionでRootのsetRootSelectedIdへ渡している。',
+  'bubble-b.tsx': 'selectはreturnでScreenに留めremoveだけをonActionでRootのsetRecordsへ渡す。',
+  'guard-a.tsx': 'statusや空入力を確認してもreturnせずonSaveを呼び、拒否した要求を親が実行する。',
+  'guard-b.tsx': 'editingと入力を確認し、拒否時はreturnして受理した保存だけをonSaveへ渡す。',
+  'mediator-a.tsx': 'startedとfailedはdispatchするがsave成功時の次状態をdispatchせず表示がsavingのままになる。',
+  'mediator-b.tsx': 'saveの前後でstarted、succeeded、failedをdispatchしstateのstatusとmessageを表示へ渡す。',
+  'form-action.tsx': 'useActionStateのformActionをformのactionへ渡しpendingと成功・入力エラーのstateを表示する。',
 };
 
 function verdicts() {

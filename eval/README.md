@@ -333,7 +333,7 @@ remain excluded.
 | `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
 | `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
 | `antipattern-wording-tests` | peer-review / ai-antipattern-review-2nd | sample-project | whether Claude Opus 5 and Codex Luna Max reject wording-fixed tests without contract grounds while accepting declared machine-readable contract assertions |
-| `frontend`, `frontend-opus` | review-frontend / frontend-review; frontend / frontend-review | frontend-design | 8 paired GUI designs and 5 framework idioms; defect detection and acceptance scored separately, with and without the React facet |
+| `frontend`, `frontend-opus` | review-frontend / frontend-review; frontend / frontend-review | frontend-design | 11 paired GUI designs and 6 framework idioms; defect detection and acceptance scored separately, with and without the React facet |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |

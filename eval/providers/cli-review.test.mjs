@@ -17,6 +17,7 @@ import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import CliReviewProvider, {
   createIsolatedWorkingDirectory,
+  mergeCliReviewConfig,
   prepareWorkingDirectory,
   resolveTimeoutMs,
   rewriteWorkingDirectoryPaths,
@@ -300,6 +301,109 @@ test('isolated working directory copies only the provider fixture', () => {
     );
   } finally {
     isolated.cleanup();
+    rmSync(outerDirectory, { recursive: true, force: true });
+  }
+});
+
+test('prompt config selects the source fixture without changing the provider base config', () => {
+  const outerDirectory = mkdtempSync(join(tmpdir(), 'takt-cli-review-prompt-config-'));
+  const baseDirectory = join(outerDirectory, 'base');
+  const selectedDirectory = join(outerDirectory, 'selected');
+  mkdirSync(baseDirectory);
+  mkdirSync(selectedDirectory);
+  writeFileSync(join(baseDirectory, 'base-only.txt'), 'base');
+  writeFileSync(join(selectedDirectory, 'selected-only.txt'), 'selected');
+
+  const providerConfig = {
+    cli: 'codex',
+    model: 'fake-luna',
+    working_dir: baseDirectory,
+    isolate_working_dir: true,
+  };
+  const config = mergeCliReviewConfig(providerConfig, {
+    prompt: { config: { working_dir: selectedDirectory } },
+  });
+  const isolated = prepareWorkingDirectory(config);
+
+  try {
+    assert.equal(readFileSync(join(isolated.cwd, 'selected-only.txt'), 'utf8'), 'selected');
+    assert.equal(existsSync(join(isolated.cwd, 'base-only.txt')), false);
+    assert.equal(providerConfig.working_dir, baseDirectory);
+    assert.equal(config.model, 'fake-luna');
+  } finally {
+    isolated.cleanup();
+    rmSync(outerDirectory, { recursive: true, force: true });
+  }
+});
+
+test('provider call uses the prompt-selected fixture through the normal CLI path', async () => {
+  const outerDirectory = mkdtempSync(join(tmpdir(), 'takt-cli-review-provider-config-'));
+  const baseDirectory = join(outerDirectory, 'base');
+  const selectedDirectory = join(outerDirectory, 'selected');
+  const binDirectory = join(outerDirectory, 'bin');
+  const claudePath = join(binDirectory, 'claude');
+  mkdirSync(baseDirectory);
+  mkdirSync(selectedDirectory);
+  mkdirSync(binDirectory);
+  writeFileSync(join(baseDirectory, 'which-fixture.txt'), 'base');
+  writeFileSync(join(selectedDirectory, 'which-fixture.txt'), 'selected');
+  writeFileSync(claudePath, [
+    '#!/bin/sh',
+    'cat which-fixture.txt',
+  ].join('\n'));
+  chmodSync(claudePath, 0o755);
+
+  const provider = new CliReviewProvider({
+    config: {
+      cli: 'claude',
+      model: 'fake-opus',
+      working_dir: baseDirectory,
+      isolate_working_dir: true,
+    },
+  });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDirectory}:${previousPath ?? ''}`;
+  try {
+    const result = await provider.callApi('prompt', {
+      prompt: { config: { working_dir: selectedDirectory } },
+    });
+    assert.equal(result.output, 'selected');
+  } finally {
+    process.env.PATH = previousPath;
+    rmSync(outerDirectory, { recursive: true, force: true });
+  }
+});
+
+test('provider call fails when a required snapshot disappears after preparation', async () => {
+  const outerDirectory = mkdtempSync(join(tmpdir(), 'takt-cli-review-required-snapshot-'));
+  const sourceDirectory = join(outerDirectory, 'fixture');
+  const snapshotDirectory = join(sourceDirectory, '.takt', 'eval-snapshots');
+  const snapshot = '.takt/eval-snapshots/frontend-review-policies.md';
+  mkdirSync(snapshotDirectory, { recursive: true });
+  writeFileSync(join(snapshotDirectory, 'frontend-review-policies.md'), '# policies\n');
+
+  const initialPreparation = prepareWorkingDirectory({
+    working_dir: sourceDirectory,
+    isolate_working_dir: true,
+    required_snapshots: [snapshot],
+  });
+  initialPreparation.cleanup();
+  rmSync(join(sourceDirectory, '.takt', 'eval-snapshots', 'frontend-review-policies.md'), { force: true });
+
+  const provider = new CliReviewProvider({
+    config: {
+      cli: 'claude',
+      model: 'fake-opus',
+      working_dir: sourceDirectory,
+      isolate_working_dir: true,
+    },
+  });
+  try {
+    const result = await provider.callApi('prompt', {
+      prompt: { config: { working_dir: sourceDirectory, required_snapshots: [snapshot] } },
+    });
+    assert.match(result.error, /Required snapshot .*frontend-review-policies\.md.*missing/);
+  } finally {
     rmSync(outerDirectory, { recursive: true, force: true });
   }
 });
