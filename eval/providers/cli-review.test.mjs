@@ -418,13 +418,23 @@ test('required snapshots reject paths outside the source directory and non-files
   const outsidePath = join(outerDirectory, 'outside.md');
   const directoryPath = join(sourceDirectory, 'directory.md');
   const externalLinkPath = join(sourceDirectory, 'external-link.md');
+  const internalTargetPath = join(sourceDirectory, 'internal-target.md');
+  const internalLinkPath = join(sourceDirectory, 'internal-link.md');
   mkdirSync(sourceDirectory);
   writeFileSync(outsidePath, '# outside\n');
   mkdirSync(directoryPath);
+  writeFileSync(internalTargetPath, '# internal\n');
   symlinkSync(outsidePath, externalLinkPath);
+  symlinkSync(internalTargetPath, internalLinkPath);
 
   try {
-    for (const snapshot of [outsidePath, '../outside.md', 'directory.md', 'external-link.md']) {
+    for (const snapshot of [
+      outsidePath,
+      '../outside.md',
+      'directory.md',
+      'external-link.md',
+      'internal-link.md',
+    ]) {
       assert.throws(
         () => assertRequiredSnapshots(sourceDirectory, [snapshot]),
         /must be a regular file inside/,

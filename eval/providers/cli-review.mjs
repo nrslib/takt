@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import {
   cpSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
-  statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -62,7 +62,7 @@ export function assertRequiredSnapshots(sourceDirectory, requiredSnapshots = [])
       }
       throw error;
     }
-    if (isOutside(sourceRealPath, snapshotRealPath) || !statSync(snapshotRealPath).isFile()) {
+    if (isOutside(sourceRealPath, snapshotRealPath) || !lstatSync(snapshotPath).isFile()) {
       throw new Error(`Required snapshot "${snapshot}" must be a regular file inside ${sourceDirectory}`);
     }
   }
