@@ -11,8 +11,8 @@ Review how the screen is assembled, where state is kept, how display parts pass 
 | A part owns an input value or open/closed state used only inside that part | OK |
 | A display part renders values and reports operation intent upward | OK |
 | A display part calls a screen-specific API and chooses navigation or the result after processing | REJECT |
-| Mediator checks the current state and target and decides acceptance or rejection, processing, the next state, and the displayed result | OK |
-| The operation path executes an operation that must be rejected without checking the state that determines whether it is allowed | REJECT |
+| Mediator checks the current state and target and decides acceptance or rejection, processing, the next state, displayed content, operation availability, and consistency between displayed and processed targets | OK |
+| The operation path executes an operation or its processing that must be rejected without checking the state that determines whether it is allowed | REJECT |
 | The result of an accepted operation is not reflected in the next state or displayed result | REJECT |
 | Only an operation the current part does not handle is passed upward in order | OK |
 | An ancestor runs an operation again after it was handled or rejected | REJECT |

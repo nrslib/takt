@@ -32,7 +32,7 @@ Native browser DOM events also reach ancestors. If a click handler and a form su
 
 Communication has different states: not started, loading, success, empty, failure, and cancelled. If loading or failure is represented as an empty array, users cannot tell whether to wait or retry.
 
-A shared error display receives a message and a retry operation. The display part does not call a specific API or navigate; the screen that owns fetching starts the retry.
+When retry is offered, use the failed target and content together with the current state to decide the failure display and retry availability. Retry must correspond to the displayed target and content. Show the guidance or operation required by the specification. The display part does not call a specific API or navigate; the screen that owns fetching starts the operation. The retry processing side checks the target, content, and current retry permission when it runs, and keeps the displayed retry target and content consistent with the actual processing.
 
 When an API client already exists, use its types, authentication, and error handling. Reimplementing the same communication in each screen means a change to the API can be reflected in only one of them.
 

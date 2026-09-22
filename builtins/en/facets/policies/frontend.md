@@ -34,7 +34,8 @@ Do not decide from whether someone checked an accessible name or role alone; ins
 |------|------|
 | The display distinguishes not started, loading, success, empty, failure, and cancelled | OK |
 | Loading or failure is converted to an empty array, leaving users unable to tell whether to wait or retry | REJECT |
-| After a failure, users cannot take a required action such as retrying, correcting input, or going back | REJECT |
+| When retry is offered, the failure display shows the target and content, with current retry availability, and the actual processing uses the displayed retry target and content | OK |
+| After a failure, a required operation from the specification is unavailable; when retry is offered, retry is shown as executable although the current state disallows it; or the actual processing uses a retry target or content different from what is displayed | REJECT |
 | Form, click, keyboard, or other entries execute or send the same operation twice | REJECT |
 
 ## Data fetching, cache, and paging
@@ -71,3 +72,8 @@ Before: After a modal dialog appears, a background keyboard operation reaches th
         handler and starts processing that competes with the pending decision.
 After:  While the modal dialog is open, focus stays inside it and all background user
         interaction is suppressed.
+
+Before: A failure is shown for one target while the retry operation receives another
+        currently selected target.
+After:  The failed target and current state determine the failure content and retry
+        availability, and actual retry processing uses the displayed target and content.

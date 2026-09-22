@@ -10,7 +10,7 @@ Keep state in the screen or region whose use range and lifetime match the value.
 
 ## The role of Passive View
 
-A Passive View display part renders values received from above and reports the user's operation intent upward. Keep communication, navigation, and state decisions in the screen or region that handles them instead of in the display part.
+A Passive View display part renders displayed content and operation availability passed down from its screen or region, and reports the user's operation intent to that responsible screen or region. Keep the decision to accept or reject an operation, and the following communication, navigation, and next-state decisions, in the screen or region that handles them instead of in the display part.
 
 Keep an in-progress input value or open/closed state in the part that uses it. Share an identifier for the target or the progress of processing in the screen or region that coordinates the parts. Keep a value that survives several screens in a shared manager whose scope and lifetime match its use.
 
@@ -20,9 +20,9 @@ Pass an operation to the next parent when the current part does not handle it. E
 
 ## Process according to state with Mediator
 
-Mediator receives an operation notification and examines the current state and target to decide whether to accept or reject the operation, what processing an accepted operation needs, the next state, and the values to display as its result. Prevent re-running an operation while it is already processing when the operation cannot run concurrently.
+Mediator receives an operation notification and examines the current state and target to decide whether to accept or reject the operation, what processing an accepted operation needs, the next state, and the display. The same decision determines displayed content, operation availability, and consistency between displayed and processed targets. Prevent re-running an operation while it is already processing when the operation cannot run concurrently.
 
-Do not rely only on disabling a control or showing a modal: notifications from different entries such as clicks and keyboard input go through the same Mediator state decision. Reflect success, failure, invalid input, and insufficient permission in state and update the display. Show a rejected operation at the point of rejection, and pass only unhandled operations upward.
+Do not rely only on disabling a control or showing a modal: notifications from different entries such as clicks and keyboard input go through the same Mediator state decision. Start processing only for an accepted operation, and give the user feedback for a rejected operation without starting its processing. Reflect success, failure, invalid input, and insufficient permission in state and update the display. Pass only unhandled operations upward.
 
 Before confirmation is answered, the operation handler rejects operations that change the target, input, saving state, or another premise of the decision. Allow an independent operation to continue when the specification permits it and it does not affect the pending decision. Apply the same distinction while processing: stop the same or conflicting operation, while allowing independent operations that remain safe.
 

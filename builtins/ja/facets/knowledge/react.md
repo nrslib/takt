@@ -20,9 +20,11 @@ propsやstateから計算できる一覧、件数、全選択、ラベルなど�
 
 ## Mediator、Reducer、操作
 
-画面用handlerやcustom hookは操作の通知を受け、現在stateと対象を確認して、受理する処理、拒否の結果、次のstateを決める。form、button、keyboardなど異なる入口から同じ操作が来ても、同じMediatorの判断を通す。操作要素の`disabled`表示だけを判定にせず、状態を確認して通信や副作用を一度だけ開始する。
+画面用handlerやcustom hookはMediatorとして操作の通知を受け、現在stateと対象を確認して、操作を受理または拒否し、受理した操作に必要な処理、拒否の結果、次のstate、表示する値を決める。form、button、keyboardなど異なる入口から同じ操作が来ても、同じMediatorの判断を通す。操作要素の`disabled`表示だけを判定にせず、処理を開始する箇所でもstateと対象を確認する。
 
 `reducer`は現在stateとeventから次のstateを返す純粋な関数である。通信、timer、通知などの副作用はreducerの外でhandlerが開始し、開始・成功・失敗の結果を`dispatch`してstateへ反映する。拒否、入力不備、権限不足、競合など、結果に応じた表示もこの状態の流れから作る。
+
+Reactのstate更新は次のrenderで反映され、`dispatch`直後に同じhandlerが読むstateは、そのhandler内では変わらない。描画前に次の通知が届く経路では、先の受理を反映しない古いstateで後続通知を判定し、受け付けられない操作の通信やtimerを開始しないよう、受理判定と副作用開始を同じ制御経路で扱い、受理した操作だけを開始する。続く通知は、先の受理を反映したstateで判断できるようにする。実装方式はフレームワークの慣用方法から条件に合うものを選ぶ。
 
 フォーム送信は、`onSubmit`、formの`action`、その他の標準的な仕組みなど、選んだ入口から処理担当へ一度だけ通知し、同じ状態判断を通す。Enterキーなどフォームを送信する操作も同じ状態判断を通し、送信処理を重複実行しない。PortalでDOM上の配置が異なる部品でも、ReactのイベントはReactツリーに沿って祖先へ伝わる。
 
@@ -42,7 +44,7 @@ Hookはコンポーネントまたはcustom hookのトップレベルで呼び�
 
 ## Custom Hook
 
-custom hookは、state、Effect、ref、Context、query、form、イベント変換を一つの画面の動作としてまとめられる。純粋な計算だけなら通常の関数に分ける。hook内部の`useState`で作ったstateはhookの呼び出しごとに別になる。Context、query、外部storeを読むhookは共有された値を返せるため、hookの名前ではなく内部で何を読み書きするかを見る。
+画面や領域を担当するコンポーネントは、custom hookでstate、Effect、ref、Context、query、form、イベント変換などを一つの画面の動作としてまとめ、表示部品へ必要な値と操作の通知先を渡せる。純粋な計算だけなら通常の関数に分ける。hook内部の`useState`で作ったstateはhookの呼び出しごとに別になる。Context、query、外部storeを読むhookは共有された値を返せるため、hookの名前ではなく内部で何を読み書きするかを見る。
 
 ## TanStack Queryとcache
 
@@ -68,6 +70,10 @@ TanStack Queryの`useQuery`では、取得結果を変える条件を`queryKey`�
   https://react.dev/learn/reusing-logic-with-custom-hooks
 - React: useEffect
   https://react.dev/reference/react/useEffect
+- React: useReducer
+  https://react.dev/reference/react/useReducer
+- React: State as a Snapshot
+  https://react.dev/learn/state-as-a-snapshot
 - React: You Might Not Need an Effect
   https://react.dev/learn/you-might-not-need-an-effect
 - Martin Fowler: Passive View

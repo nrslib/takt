@@ -20,9 +20,11 @@ Do not store a list, count, all-selected result, label, or other value calculabl
 
 ## Mediator, reducers, and operations
 
-A screen handler or custom Hook receives an operation notification, checks the current state and target, and decides the accepted processing, a rejection result, and the next state. Form, button, keyboard, and other entries for the same operation go through the same Mediator decision. Do not use a control's `disabled` display as the only decision; check state before starting communication or another side effect, and start it once.
+A screen handler or custom Hook acts as the Mediator: it receives an operation notification, checks the current state and target, accepts or rejects the operation, and decides the processing needed for an accepted operation, the rejection result, the next state, and the displayed values. Form, button, keyboard, and other entries for the same operation go through the same Mediator decision. Do not use a control's `disabled` display as the only decision; also check state and target where processing starts.
 
 A reducer is a pure function that returns the next state from the current state and an event. A handler starts communication outside the reducer and dispatches its start, success, and failure results. The reducer does not perform communication, timers, or notifications. Rejection, invalid input, insufficient permission, and conflicts become display results through this state flow.
+
+React state updates are reflected in the next render; the state read by the same handler immediately after `dispatch` does not change within that handler. When another notification can arrive before that render, do not judge it with old state that omits the earlier acceptance and start communication or a timer for an operation that must be rejected. Keep the acceptance decision and side-effect start in the same control path, start only an accepted operation, and judge a later notification with state that reflects the earlier acceptance. Choose an implementation that fits the framework and conditions.
 
 Form submission should notify the handler once through the chosen entry, such as `onSubmit`, a form `action`, or another standard mechanism, and go through the same state decision. Actions such as pressing Enter that submit the form should use that same state decision, and submission processing should not run more than once. Even when a Portal places a part elsewhere in the DOM, React events propagate through the React tree to its ancestors.
 
@@ -42,7 +44,7 @@ In a reorderable list, use the item's stable identifier as `key` instead of the 
 
 ## Custom Hooks
 
-A custom Hook can group state, Effects, refs, Context, queries, forms, and event conversion as one screen behavior. Put pure calculations in a regular function. State created by `useState` inside a Hook is separate for each call to that Hook. A Hook that reads Context, a query, or an external store can return a value shared by its source, so determine sharing from what it reads and writes rather than its name.
+A component responsible for a screen or region can use a custom Hook to group state, Effects, refs, Context, queries, forms, and event conversion as one screen behavior, then pass display values and operation notifications to display parts. Put pure calculations in a regular function. State created by `useState` inside a Hook is separate for each call to that Hook. A Hook that reads Context, a query, or an external store can return a value shared by its source, so determine sharing from what it reads and writes rather than its name.
 
 ## TanStack Query and cache
 
@@ -68,6 +70,10 @@ Keep a Props type used by one component near that component. Put a type used by 
   https://react.dev/learn/reusing-logic-with-custom-hooks
 - React: useEffect
   https://react.dev/reference/react/useEffect
+- React: useReducer
+  https://react.dev/reference/react/useReducer
+- React: State as a Snapshot
+  https://react.dev/learn/state-as-a-snapshot
 - React: You Might Not Need an Effect
   https://react.dev/learn/you-might-not-need-an-effect
 - Martin Fowler: Passive View

@@ -19,8 +19,8 @@ Judge React state, props, Context, reducers, Effects, and Hooks from rerenders, 
 |------|------|
 | A Provider or component creates values with `useState`, `useReducer`, a query, or similar, and Context distributes the values and operations | OK |
 | A reducer performs communication, timers, notifications, or other side effects | REJECT |
-| A reducer returns the next state from state and an event; a handler communicates and dispatch reflects the result | OK |
-| Form, button, keyboard, or other entries reach the same handler, which accepts or rejects them using current state | OK |
+| A notification that arrives before the next render is judged with old render state, and communication or a timer starts for an operation that must be rejected | REJECT |
+| A reducer returns the next state from state and an event; a handler starts communication or another side effect only for an accepted operation, and dispatch reflects the result | OK |
 | Multiple entries such as click and submit call the same communication directly and send it twice | REJECT |
 
 ## Effects and dependencies

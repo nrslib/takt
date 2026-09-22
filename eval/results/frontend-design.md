@@ -15,6 +15,8 @@
 
 まずLunaで両構成を実行した。初回 `ecbcd9069` は、Reactなしが28/28、Reactありが27/28だった。Reactありは `row-b.tsx` の委譲を適切と認めながら、削除ボタンの対象名を理由に拒否した。
 
+注: 表中の「Reactなし／あり」はReact knowledgeだけの有無を表さない。Reactなしは`frontend-review`（`review-frontend` workflow）、Reactありは`frontend-review-react`（`frontend` workflow）で、他のfacetも構成が異なる。
+
 設計上の委譲を比較する例に別の論点が混じることを避けるため、`row-a.tsx` と `row-b.tsx` の両方へ同じ対象名を付けた。処理経路、プロンプト、課題、採点基準は変更していない。初回回答は保存し、修正した入力でLunaの両構成を改めて評価した。その判定と理由を確認してから、同じ入力でOpusを実行した。
 
 | モデル | 構成 | 適合例の判定 | 欠陥の判定 | 理由の語句も含む自動採点（適合／欠陥） |

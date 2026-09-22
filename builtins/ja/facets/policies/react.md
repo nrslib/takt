@@ -19,8 +19,8 @@ Reactのstate、props、Context、reducer、Effect、hookを、再描画、state
 |------|------|
 | Providerやコンポーネントが`useState`・`useReducer`・queryなどで値を作り、Contextがその値と操作を配る | OK |
 | reducerが通信、timer、通知などの副作用を実行する | REJECT |
-| reducerがstateとeventから次のstateを返し、通信はハンドラ、結果の反映はdispatchで行う | OK |
-| form、button、keyboardなど複数の入口が同じハンドラへ入り、現在stateで受理・拒否される | OK |
+| 描画前に続く通知を古いrenderのstateで判定し、受け付けられない操作の通信やtimerを開始する | REJECT |
+| reducerがstateとeventから次のstateを返し、handlerが受理した操作だけ通信や副作用を開始し、結果の反映をdispatchで行う | OK |
 | clickとsubmitなど複数の入口が同じ通信を直接呼び、二重送信を起こす | REJECT |
 
 ## Effectと依存

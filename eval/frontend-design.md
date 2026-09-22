@@ -1,6 +1,6 @@
 # GUI・フロントエンドのプロンプト評価
 
-`frontend` は Luna、`frontend-opus` は Opus で同じ課題をレビューする。Lunaで判定と理由を確認し、必要な修正を終えてからOpusを実行する。各suiteはReactナレッジなし／ありの2通りのプロンプトを使う。
+`frontend` は Luna、`frontend-opus` は Opus で同じ課題をレビューする。Lunaで判定と理由を確認し、必要な修正を終えてからOpusを実行する。各suiteは、`frontend-review`（`review-frontend` workflow）と`frontend-review-react`（`frontend` workflow）という異なるworkflow構成で同じ課題をレビューする。後者はReactナレッジを含み、他のレビュー用ファセットも加わるため、比較をReactナレッジだけの有無として扱わない。
 
 ```sh
 npm run build
