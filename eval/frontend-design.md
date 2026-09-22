@@ -7,8 +7,10 @@ npm run build
 node eval/scripts/prepare.mjs frontend-review frontend-review-react
 npm run eval:prompts -- frontend --no-cache
 npm run eval:prompts -- frontend-opus --no-cache
-# ReactDOM/Vite を含む生成プロジェクトを指定して、6 fixtureを実ブラウザで検証する
-node eval/scripts/frontend-gui-browser.mjs --project-dir /path/to/frontend-generation-project
+# 6 fixtureの実ブラウザ検証に必要なReactとReactDOMを一時ディレクトリへ用意する
+frontend_deps="$(mktemp -d)"
+npm install --prefix "$frontend_deps" --no-save --package-lock=false react@19.2.8 react-dom@19.2.8
+node eval/scripts/frontend-gui-browser.mjs --dependency-dir "$frontend_deps/node_modules"
 ```
 
 課題は `cases/frontend-gui-patterns.md`、コードは `fixtures/frontend-design/`、期待判定は `asserts/frontend-gui.mjs` にある。CLI providerは構成ごとにprepareが作成した実行ディレクトリと、その構成のファセットスナップショットだけを一時ディレクトリへコピーして実行する。期待判定と採点コードはコピーしない。
@@ -47,7 +49,7 @@ node eval/scripts/frontend-gui-browser.mjs --project-dir /path/to/frontend-gener
 
 ## 実ブラウザ検証
 
-`eval/scripts/frontend-gui-browser.mjs` は、指定された生成プロジェクトの `node_modules`（または `--dependency-dir` で指定した依存ディレクトリ）を一時Viteアプリへリンクし、6つのfixtureを1つずつPlaywrightで起動する。guardの組では空入力と処理中の要求が保存へ到達するか、非同期保存のsavingからeditingへの復帰、保存内容、拒否メッセージの消去、完了後の再保存を確認する。guardの非同期保存はPlaywrightの時計を明示的に停止し、壁時計が経過してもsavingが続き、時計を進めたときだけ完了することも確認する。確認待ちの組では確認中にsave callbackへ届く要求が受理されるかを、通常保存のpositive controlと保存回数・保存内容で確認する。モーダルの組ではdialogの名前、確認中の再要求、Tabによる背景focus、背景操作、Escape、トリガーへのfocus復帰、確認完了を、ブラウザのDOMと操作結果で確認する。
+`eval/scripts/frontend-gui-browser.mjs` は、`--dependency-dir` で指定した依存ディレクトリを一時Viteアプリへリンクし、6つのfixtureを1つずつPlaywrightで起動する。ViteとPlaywrightはリポジトリの開発依存を使う。guardの組では空入力と処理中の要求が保存へ到達するか、非同期保存のsavingからeditingへの復帰、保存内容、拒否メッセージの消去、完了後の再保存を確認する。guardの非同期保存はPlaywrightの時計を明示的に停止し、壁時計が経過してもsavingが続き、時計を進めたときだけ完了することも確認する。確認待ちの組では確認中にsave callbackへ届く要求が受理されるかを、通常保存のpositive controlと保存回数・保存内容で確認する。モーダルの組ではdialogの名前、確認中の再要求、Tabによる背景focus、背景操作、Escape、トリガーへのfocus復帰、確認完了を、ブラウザのDOMと操作結果で確認する。
 
 この実行でNG fixtureが仕様どおり崩れることは、既存実装の不具合を再現した証拠であり、プロンプト改善のREDとは呼ばない。プロンプトのRED/GREENは、同一ケースを旧・新プロンプトでレビューした採点結果の変化として別に記録する。モデル回答のラベル一致だけでは改善と判定せず、回答原文の理由とコードの因果関係を確認する。
 
@@ -60,3 +62,5 @@ node eval/scripts/frontend-gui-browser.mjs --project-dir /path/to/frontend-gener
 悪いコードを用意しただけではREDではない。旧プロンプトで期待判定との不一致を観測したケースをREDとし、同じケースが変更後に通ったことをGREENとする。旧版も通ったケースは回帰確認であり、改善実績として数えない。1回の成功は、その試行での結果として報告する。
 
 2026-09-21〜22の実モデル比較と回答原文は [評価結果](results/frontend-design.md) を参照。
+
+実装生成による基準の検証は[生成評価の要約](results/frontend-generation.md)を参照。

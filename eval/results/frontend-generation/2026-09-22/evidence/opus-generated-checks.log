@@ -1,5 +1,0 @@
-
-> frontend-generation-sample@0.0.0 verify
-> esbuild verify/machine.check.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify/machine.check.mjs --log-level=warning && node node_modules/.cache/verify/machine.check.mjs
-
-all machine checks passed

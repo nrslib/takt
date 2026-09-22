@@ -1,8 +1,0 @@
-{
-  "reason": "The prior check captured the whole row before editing. Opus legitimately adds an unsaved-changes badge during setup. Compare immediately before and after the save notification instead, after editing and opening confirmation. No behavior expectation was removed.",
-  "previous_file": "evidence/check-reply-desk-before-opus-calibration.mjs",
-  "previous_sha256": "144fd6ea86b38784db5ee264ae2d15266486c2ef5d473ab303ef376182fa04ae",
-  "script": "check-reply-desk.mjs",
-  "sha256": "4469e4719a1dddc3dc95ddcb293983a7e894708d60b01e96e8f6bb048c5c1fca",
-  "all_reply_desk_versions_rerun": true
-}

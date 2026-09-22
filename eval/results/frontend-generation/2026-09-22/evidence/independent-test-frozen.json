@@ -1,6 +1,0 @@
-{
-  "script": "check-independent-regions.mjs",
-  "sha256": "e65f5818a6aff4e518acfe593b9ca2649217d1fdc7f4fe309463e68d838b26e4",
-  "frozen_before_reading_generated_source": true,
-  "policy": "Only selectors and output text adapters depend on generated UI. Specification behavior is checked independently."
-}

@@ -1,4 +1,0 @@
-
-> takt@0.66.0 build
-> node scripts/clean-build-output.mjs && tsc && tsc -p tsconfig.opencode-probe.json && node scripts/copy-build-assets.mjs
-
