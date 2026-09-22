@@ -9,7 +9,7 @@ Judge React state, props, Context, reducers, Effects, and Hooks from rerenders, 
 | Sibling components keep shared state in separate `useState` calls, so their displays or operations diverge | REJECT |
 | A component needs to respond to prop changes but copies the initial value into state and keeps displaying the old value | REJECT |
 | A list, count, all-selected result, or label calculable from state is synchronized as separate state through an Effect | REJECT |
-| A common parent owns one state value and passes props and operation callbacks to children | OK |
+| A common parent owns one state value shared by sibling components and passes props and operation callbacks to the children | OK |
 | Controlled input, an editing draft, or recreation with `key` is chosen to match the required state lifetime | OK |
 | Memoization hides dependencies and update paths without addressing an actual computation or reference problem | REJECT |
 

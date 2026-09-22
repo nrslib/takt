@@ -18,7 +18,9 @@ Choose a link or a button from the meaning of the operation. A link moves to ano
 
 HTML buttons and links provide keyboard and focus behavior. Choose the HTML element and accessible name that match the meaning of the operation, and use the behavior provided by the browser.
 
-Give each interactive element a name that assistive technology can announce. Associate labels with inputs, and expose selected, expanded, checked, and disabled states through the element or its attributes. In a dialog, move focus into the dialog when it opens and return focus to the element that opened it when it closes.
+Give each interactive element a name that assistive technology can announce. Associate labels with inputs, and expose selected, expanded, checked, and disabled states through the element or its attributes. In a modal dialog, move focus into the dialog when it opens and return focus to the element that opened it when it closes.
+
+While a modal dialog is open, keep focus from leaving it through Tab or Shift+Tab, and do not accept any background user interaction such as clicks, keyboard input, or shortcuts. An `aria-modal` attribute alone does not stop background interaction, so provide a mechanism that suppresses it.
 
 When edit and delete controls appear in a list, make the target row identifiable from the announced name or its relationship to the row. Announce communication results when needed, and show a retry or a way to correct input after a failure.
 

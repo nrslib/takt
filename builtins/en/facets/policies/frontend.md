@@ -20,7 +20,8 @@ Judge URLs, HTML interactions, communication states, accessibility, and values e
 | An element that looks clickable has no name, keyboard behavior, appropriate element, or role | REJECT |
 | A form does not relate its input to its label, error, or required state, so users cannot tell what to enter | REJECT |
 | States such as selected, expanded, checked, and disabled do not reach assistive technology, so users cannot tell the current state | REJECT |
-| After a dialog or menu opens, focus movement, closing, or the return focus target is missing, so users cannot continue the operation | REJECT |
+| After a modal dialog or menu opens, focus movement, closing, or the return focus target is missing, so users cannot continue the operation | REJECT |
+| While a modal dialog is open, Tab or Shift+Tab can move to the background, or a background control can be operated through a click, keyboard action, or shortcut | REJECT |
 | An edit or delete operation in a list does not identify its target row by name or relationship | REJECT |
 | DOM capture/bubble and screen notification cause the same operation to run twice | REJECT |
 | Props absent from the installed version are passed, or the generated element's name, role, state, or operation disagrees with the implementation and breaks display, operation, or announcement | REJECT |
@@ -63,3 +64,10 @@ Do not decide from whether someone checked an accessible name or role alone; ins
 | The source and allowed range of values for direct HTML, external navigation, Storage, cookies, and cross-origin requests are readable | OK |
 | CSRF, authentication data, or sensitive data handling disagrees with the browser/server contract | REJECT |
 | Unvalidated input is passed to `innerHTML` or `eval` and executed as code | REJECT |
+
+## Example
+
+Before: After a modal dialog appears, a background keyboard operation reaches the
+        handler and starts processing that competes with the pending decision.
+After:  While the modal dialog is open, focus stays inside it and all background user
+        interaction is suppressed.

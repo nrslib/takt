@@ -9,7 +9,7 @@ Reactのstate、props、Context、reducer、Effect、hookを、再描画、state
 | 兄弟コンポーネントが共有するstateをそれぞれの`useState`で持ち、表示や操作がずれる | REJECT |
 | propsの変更が必要なコンポーネントで、初期値をstateへコピーしたまま古い値を表示する | REJECT |
 | stateから計算できる一覧、件数、全選択、ラベルを別stateとしてEffectで同期する | REJECT |
-| 共通の親がstateを一つ持ち、propsと操作のcallbackを子へ渡す | OK |
+| 兄弟コンポーネントが共有するstateを共通の親が一つ持ち、propsと操作のcallbackを子へ渡す | OK |
 | controlled input、編集草稿、`key`による作り直しを、必要なstateの寿命に合わせて選ぶ | OK |
 | 実際の計算量や参照の問題を解決せず、memo化で依存と更新経路を隠す | REJECT |
 
