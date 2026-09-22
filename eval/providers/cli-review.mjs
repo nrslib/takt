@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnManagedProcess } from '../../dist/shared/utils/spawn.js';
 import { buildCodexSkillConfig } from '../../dist/infra/codex/skill-config.js';
@@ -27,12 +34,36 @@ export function assertRequiredSnapshots(sourceDirectory, requiredSnapshots = [])
   if (!Array.isArray(requiredSnapshots)) {
     throw new Error('required_snapshots must be an array of relative paths');
   }
+  if (requiredSnapshots.length === 0) return;
+
+  const sourceRealPath = realpathSync(sourceDirectory);
+  const isOutside = (root, candidate) => {
+    const candidateRelativePath = relative(root, candidate);
+    return candidateRelativePath === '..'
+      || candidateRelativePath.startsWith(`..${sep}`)
+      || isAbsolute(candidateRelativePath);
+  };
+
   for (const snapshot of requiredSnapshots) {
     if (typeof snapshot !== 'string' || snapshot.length === 0) {
       throw new Error('required_snapshots must contain non-empty paths');
     }
-    if (!existsSync(resolve(sourceDirectory, snapshot))) {
-      throw new Error(`Required snapshot "${snapshot}" missing in ${sourceDirectory}`);
+    const snapshotPath = resolve(sourceDirectory, snapshot);
+    if (isAbsolute(snapshot) || isOutside(sourceDirectory, snapshotPath)) {
+      throw new Error(`Required snapshot "${snapshot}" must be a regular file inside ${sourceDirectory}`);
+    }
+
+    let snapshotRealPath;
+    try {
+      snapshotRealPath = realpathSync(snapshotPath);
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+        throw new Error(`Required snapshot "${snapshot}" missing in ${sourceDirectory}`);
+      }
+      throw error;
+    }
+    if (isOutside(sourceRealPath, snapshotRealPath) || !statSync(snapshotRealPath).isFile()) {
+      throw new Error(`Required snapshot "${snapshot}" must be a regular file inside ${sourceDirectory}`);
     }
   }
 }

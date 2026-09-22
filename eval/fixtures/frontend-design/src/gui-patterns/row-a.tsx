@@ -6,5 +6,5 @@ export function RecordRow({ id, label, remove }: {
     remove(workspace, id);
     window.location.assign(`/workspaces/${workspace}/records`);
   }
-  return <li>{label}<button type="button" onClick={handleDelete}>Delete</button></li>;
+  return <li>{label}<button type="button" aria-label={`Delete ${label}`} onClick={handleDelete}>Delete</button></li>;
 }

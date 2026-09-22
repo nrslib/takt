@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,6 +17,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import CliReviewProvider, {
+  assertRequiredSnapshots,
   createIsolatedWorkingDirectory,
   mergeCliReviewConfig,
   prepareWorkingDirectory,
@@ -403,6 +405,31 @@ test('provider call fails when a required snapshot disappears after preparation'
       prompt: { config: { working_dir: sourceDirectory, required_snapshots: [snapshot] } },
     });
     assert.match(result.error, /Required snapshot .*frontend-review-policies\.md.*missing/);
+  } finally {
+    rmSync(outerDirectory, { recursive: true, force: true });
+  }
+});
+
+test('required snapshots reject paths outside the source directory and non-files', {
+  skip: process.platform === 'win32',
+}, () => {
+  const outerDirectory = mkdtempSync(join(tmpdir(), 'takt-cli-review-snapshot-boundary-'));
+  const sourceDirectory = join(outerDirectory, 'fixture');
+  const outsidePath = join(outerDirectory, 'outside.md');
+  const directoryPath = join(sourceDirectory, 'directory.md');
+  const externalLinkPath = join(sourceDirectory, 'external-link.md');
+  mkdirSync(sourceDirectory);
+  writeFileSync(outsidePath, '# outside\n');
+  mkdirSync(directoryPath);
+  symlinkSync(outsidePath, externalLinkPath);
+
+  try {
+    for (const snapshot of [outsidePath, '../outside.md', 'directory.md', 'external-link.md']) {
+      assert.throws(
+        () => assertRequiredSnapshots(sourceDirectory, [snapshot]),
+        /must be a regular file inside/,
+      );
+    }
   } finally {
     rmSync(outerDirectory, { recursive: true, force: true });
   }
