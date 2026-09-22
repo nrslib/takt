@@ -1,0 +1,18 @@
+[
+  {
+    "file": "confirmation-a.tsx",
+    "pass": true
+  },
+  {
+    "file": "confirmation-b.tsx",
+    "pass": true
+  },
+  {
+    "file": "modal-a.tsx",
+    "pass": true
+  },
+  {
+    "file": "modal-b.tsx",
+    "pass": true
+  }
+]

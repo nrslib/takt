@@ -1,0 +1,38 @@
+✔ scores appropriate and defective implementations separately (2.907291ms)
+✔ fails duplicate, contradictory, unknown, and missing verdicts (0.553333ms)
+✔ does not accept correct labels with unrelated evidence (0.155333ms)
+✔ does not borrow evidence from another file (0.083791ms)
+✔ fails malformed or empty responses instead of finding stray OK tokens (0.097084ms)
+✔ accepts concrete explanations without requiring one particular Japanese phrasing (0.135375ms)
+✔ scores one fenced JSON payload while retaining its format difference (0.95625ms)
+✔ does not select a JSON fragment from prose or contradictory payloads (0.218125ms)
+✔ force-kills a child process that exceeds the hang watchdog (52.864375ms)
+✔ composes knowledge from the selected dynamic facet candidate (171.6835ms)
+✔ keeps the target unchanged when dynamic facet selection is not configured (0.057833ms)
+✔ reports a missing source step with the target ID (30.993667ms)
+✔ reports a source step without dynamic facets with the target ID (25.102375ms)
+✔ reports a dynamic facet pool mismatch with the target ID (25.359417ms)
+✔ reports an unknown candidate ID with the target ID (24.823584ms)
+✔ executes main when prepare.mjs is launched directly (495.940875ms)
+✔ does not execute main when prepare.mjs is imported (239.885083ms)
+✔ renders eval targets with the production caller review mode (1009.429875ms)
+✔ marks the standalone review workflow as an initial review across error retries (1.124459ms)
+✔ composes only reviewer-scoped workflow rules into every production reviewer suite (1.534667ms)
+✔ composes remediation problem tracking only in dedicated step instructions (3.673958ms)
+✔ keeps remediation bookkeeping vocabulary out of ordinary reviewer prompts (664.651875ms)
+✔ keeps finding identity stable across newly checked paths (0.641708ms)
+✔ does not inject report output contracts into Phase 1 eval prompts (734.29725ms)
+✔ renders the production review-adjudication Phase 2 report contract (494.112208ms)
+✔ does not hard-code workflow-specific report paths in Japanese adjudication instructions (0.207875ms)
+✔ keeps peer-review round scope out of the production final gate (412.723541ms)
+✔ resolves nested named workflow calls from the fixture project (118.461083ms)
+✔ keeps the fixture project when following an explicit call and its descendants (8.61725ms)
+✔ loads dynamic facet sources and their child steps from the fixture project (10.780125ms)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 30
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4796.879375
