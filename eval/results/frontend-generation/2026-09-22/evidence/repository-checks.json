@@ -1,0 +1,36 @@
+{
+  "build": "PASS (v3 facets)",
+  "lint": "PASS",
+  "unit": {
+    "passed": 6231,
+    "shards": 8
+  },
+  "eval_contracts": {
+    "passed": 30,
+    "command": "node --test eval/asserts/frontend-gui.test.mjs eval/asserts/prepare-dynamic-facet-composition.test.mjs eval/asserts/prepare-project-root.test.mjs"
+  },
+  "fixtures_browser": {
+    "passed": 6,
+    "meaning": "NG fixtures reproduced defects; OK fixtures prevented them",
+    "evidence": "fixtures-browser-clock.log"
+  },
+  "light_integration": {
+    "test_files_passed": 164,
+    "tests_passed": 2648,
+    "unhandled_errors": 1,
+    "error": "[vitest-worker]: Timeout calling onTaskUpdate",
+    "last_command": "npm run test:it:light -- --maxWorkers=2",
+    "status": "all assertions passed, unhandled runtime error remains",
+    "previous_attempts": "Default parallel run and first retry each reported 2 errors; the first retry did not forward maxWorkers to Vitest."
+  },
+  "opencode_probe": {
+    "passed": 10,
+    "failed": 1,
+    "failure": "prompt-capture execution phase timeout after 30000ms",
+    "sandbox_attempt": "EPERM for local port 4096; retried with local listen permission"
+  },
+  "e2e_smoke": {
+    "passed": 19,
+    "skipped": 1
+  }
+}

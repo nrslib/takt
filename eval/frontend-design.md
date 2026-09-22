@@ -7,6 +7,8 @@ npm run build
 node eval/scripts/prepare.mjs frontend-review frontend-review-react
 npm run eval:prompts -- frontend --no-cache
 npm run eval:prompts -- frontend-opus --no-cache
+# ReactDOM/Vite を含む生成プロジェクトを指定して、6 fixtureを実ブラウザで検証する
+node eval/scripts/frontend-gui-browser.mjs --project-dir /path/to/frontend-generation-project
 ```
 
 課題は `cases/frontend-gui-patterns.md`、コードは `fixtures/frontend-design/`、期待判定は `asserts/frontend-gui.mjs` にある。CLI providerは構成ごとにprepareが作成した実行ディレクトリと、その構成のファセットスナップショットだけを一時ディレクトリへコピーして実行する。期待判定と採点コードはコピーしない。
@@ -28,18 +30,26 @@ npm run eval:prompts -- frontend-opus --no-cache
 | 未担当操作の上位通知 | bubble-a | bubble-b | Screenで処理したselectまでRootへ渡す。担当しないremoveだけを上位へ通知する |
 | 拒否・処理済み操作の再実行 | guard-a | guard-b | 状態や入力で拒否した要求もRootへ渡す。受理した保存と拒否した要求を同じ親処理へ流さない |
 | Mediatorの状態と表示 | mediator-a | mediator-b | 保存成功時の次状態を反映しない。開始・成功・失敗をstateへ反映し表示へ渡す |
+| 確認待ちの保存要求 | confirmation-a | confirmation-b | 破棄確認中にrequestSaveを受理して保存開始を許す。ボタンのdisabled表示ではなくhandlerで確認状態を判断する |
+| 保存確認モーダル | modal-a | modal-b | custom role dialogで背景のTab移動・操作を抑止できない。native dialogによる背景操作の抑止、開閉focus、Escape、accessible nameを確認する |
 
-加えて、Contextからのdispatch、入力中のローカルstate、callbackの受け渡し、確定前の下書き、同じQueryClientのキャッシュ共有、React 19の`useActionState`とform `action`の6例を適切な実装として評価する。
+加えて、Contextからのdispatch、入力中のローカルstate、callbackの受け渡し、確定前の下書き、同じQueryClientのキャッシュ共有、React 19の`useActionState`とform `action`の6例を適切な実装として評価する。合計は13組の比較と6例の単独実装、32ファイルである。
 
 ## 採点
 
-- 適切な17例への判定と、不適切な11例の検出を別々に集計する。
+- 適切な19例への判定と、不適切な13例の検出を別々に集計する。
 - JSON配列を囲む単一のMarkdownコードブロックは、外側を除いて内容を採点する。JSONのみを求めた課題への形式違反は別に記録し、設計判断の失敗に数えない。前後の文章や複数のJSON断片から都合のよい箇所を抜き出さない。
-- 全28ファイルのJSON判定を要求する。欠落、重複、矛盾、対象外ファイル、空の理由は不合格にする。
+- 全32ファイルのJSON判定を要求する。欠落、重複、矛盾、対象外ファイル、空の理由は不合格にする。
 - 自動採点は事前確認である。判定と理由中のコード識別子・語句を検査するが、語句の一致だけで因果関係を保証しない。正しいラベルでも別の理由で拒否した回答は、回答原文の意味確認で不合格とする。
 - 正規表現だけでは理由の意味を保証できない。回答原文を読み、コードと因果関係が一致するか確認してから結果を報告する。
 
-従来の21例は部品単位のコードレビュー用であり、下書きの再マウントや行の呼び出し元の責務は課題で与えた前提として扱う。追加した委譲・拒否・状態遷移の3組とform actionの例は、Root・画面・表示部品のコードを含む。いずれもコードレビューの評価であり、アプリケーション全体を実行した結果ではない。TSXの構文検査や採点処理のテストは、ブラウザ上の操作・Reactの再描画・TanStack Queryの実行を検証した証拠にはならない。
+従来の21例は部品単位のコードレビュー用であり、下書きの再マウントや行の呼び出し元の責務は課題で与えた前提として扱う。追加した委譲・拒否・状態遷移・確認待ち・モーダルの5組とform actionの例は、Root・画面・表示部品のコードを含む。コードレビューの採点と実ブラウザ検証は別の証拠として扱う。
+
+## 実ブラウザ検証
+
+`eval/scripts/frontend-gui-browser.mjs` は、指定された生成プロジェクトの `node_modules`（または `--dependency-dir` で指定した依存ディレクトリ）を一時Viteアプリへリンクし、6つのfixtureを1つずつPlaywrightで起動する。guardの組では空入力と処理中の要求が保存へ到達するか、非同期保存のsavingからeditingへの復帰、保存内容、拒否メッセージの消去、完了後の再保存を確認する。guardの非同期保存はPlaywrightの時計を明示的に停止し、壁時計が経過してもsavingが続き、時計を進めたときだけ完了することも確認する。確認待ちの組では確認中にsave callbackへ届く要求が受理されるかを、通常保存のpositive controlと保存回数・保存内容で確認する。モーダルの組ではdialogの名前、確認中の再要求、Tabによる背景focus、背景操作、Escape、トリガーへのfocus復帰、確認完了を、ブラウザのDOMと操作結果で確認する。
+
+この実行でNG fixtureが仕様どおり崩れることは、既存実装の不具合を再現した証拠であり、プロンプト改善のREDとは呼ばない。プロンプトのRED/GREENは、同一ケースを旧・新プロンプトでレビューした採点結果の変化として別に記録する。モデル回答のラベル一致だけでは改善と判定せず、回答原文の理由とコードの因果関係を確認する。
 
 ## 旧・新プロンプトの比較
 

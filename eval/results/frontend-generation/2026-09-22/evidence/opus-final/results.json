@@ -1,0 +1,83 @@
+{
+  "url": "http://127.0.0.1:4182",
+  "adapter": {
+    "rows": ".inquiry-item",
+    "selected": "#inquiry-detail-heading",
+    "draft": "#reply-draft",
+    "save": ".reply-editor-actions button[type=\"submit\"]",
+    "count": ".demo-controls output",
+    "failure": ".demo-controls input[type=\"checkbox\"]",
+    "status": ".reply-editor",
+    "cancel": "dialog:has(#discard-dialog-title) .dialog-actions button:not(.button-danger)",
+    "discard": "dialog:has(#discard-dialog-title) .button-danger",
+    "reset": ".reply-editor-actions button[type=\"button\"]",
+    "search": "#inquiry-search",
+    "help": ".app-header button, .reply-editor-header button",
+    "failureText": "保存に失敗|保存できませんでした",
+    "emptyText": "該当する問い合わせはありません"
+  },
+  "results": [
+    {
+      "name": "一覧と詳細の選択が一致し、対象の入力に切り替わる",
+      "status": "PASS"
+    },
+    {
+      "name": "ボタン保存は一覧と詳細を更新する",
+      "status": "PASS"
+    },
+    {
+      "name": "通常Enterは改行、Ctrl+Enterで保存する",
+      "status": "PASS"
+    },
+    {
+      "name": "Command+Enterでも保存する",
+      "status": "PASS"
+    },
+    {
+      "name": "空白だけの入力は保存せず、修正後は保存できる",
+      "status": "PASS"
+    },
+    {
+      "name": "連打と同一タスク内の複数通知で二重保存しない",
+      "status": "PASS"
+    },
+    {
+      "name": "保存中の対象切替要求を拒否する",
+      "status": "PASS"
+    },
+    {
+      "name": "失敗後に入力を保ち、再試行で一回だけ成功する",
+      "status": "PASS"
+    },
+    {
+      "name": "未保存切替を取り消すと、対象と下書きが残る",
+      "status": "PASS"
+    },
+    {
+      "name": "未保存を破棄して切り替えると別対象の入力を表示する",
+      "status": "PASS"
+    },
+    {
+      "name": "保存済みに戻し、検索の該当なしから復帰する",
+      "status": "PASS"
+    },
+    {
+      "name": "二つのヘルプ入口は同じ説明を開き、閉じると元へ戻る",
+      "status": "PASS"
+    },
+    {
+      "name": "ヘルプのTab/Shift+Tabが背景へ抜けない",
+      "status": "PASS"
+    },
+    {
+      "name": "未保存確認のTab/Shift+Tabが背景へ抜けない",
+      "status": "PASS"
+    },
+    {
+      "name": "確認待ちの保存通知を処理側でも拒否する",
+      "status": "PASS"
+    }
+  ],
+  "passed": 15,
+  "failed": 0
+}

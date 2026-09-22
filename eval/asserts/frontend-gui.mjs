@@ -27,6 +27,10 @@ export const expectations = [
   ['guard-b.tsx', 'OK', /requestSave|onSave|status/, /editing|saving|return|拒否|空|処理中|親/],
   ['mediator-a.tsx', 'REJECT', /dispatch|started|saving/, /成功|success|succeeded|失敗|failed|state|表示/],
   ['mediator-b.tsx', 'OK', /dispatch|succeeded|failed/, /saving|saved|error|成功|失敗|state|表示/],
+  ['confirmation-a.tsx', 'REJECT', /requestSave|confirm|confirmation|dialog/i, /確認|受理|拒否|二重|確認中|確認待ち|pending|guard/i],
+  ['confirmation-b.tsx', 'OK', /requestSave|confirm|confirmation|dialog/i, /確認|拒否|確認中|確認待ち|pending|return|guard/i],
+  ['modal-a.tsx', 'REJECT', /dialog|role|aria-modal|focus/i, /focus|Tab|背景|操作|抑止|inert|Escape|復帰|確認中|確認待ち/],
+  ['modal-b.tsx', 'OK', /showModal|dialog|requestSave/i, /focus|Escape|復帰|accessible|aria-labelledby|確認中|確認待ち|拒否/],
   ['form-action.tsx', 'OK', /useActionState|formAction|action/, /state|pending|action|form|成功|入力/],
 ];
 

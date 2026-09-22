@@ -1,0 +1,29 @@
+{
+  "regions": [
+    {
+      "draft": "#team-message",
+      "send": "section[aria-labelledby=\"team-heading\"] .send-button",
+      "count": "section[aria-labelledby=\"team-heading\"] .accepted-count__number",
+      "result": "section[aria-labelledby=\"team-heading\"] .delivery-status",
+      "status": "section[aria-labelledby=\"team-heading\"]",
+      "clear": "section[aria-labelledby=\"team-heading\"] .clear-button",
+      "cancel": "section[aria-labelledby=\"team-heading\"] .inline-confirmation .text-button",
+      "discard": "section[aria-labelledby=\"team-heading\"] .danger-button",
+      "failure": "section[aria-labelledby=\"team-heading\"] .fail-toggle"
+    },
+    {
+      "draft": "#support-message",
+      "send": "section[aria-labelledby=\"support-heading\"] .send-button",
+      "count": "section[aria-labelledby=\"support-heading\"] .accepted-count__number",
+      "result": "section[aria-labelledby=\"support-heading\"] .delivery-status",
+      "status": "section[aria-labelledby=\"support-heading\"]",
+      "clear": "section[aria-labelledby=\"support-heading\"] .clear-button",
+      "cancel": "section[aria-labelledby=\"support-heading\"] .inline-confirmation .text-button",
+      "discard": "section[aria-labelledby=\"support-heading\"] .danger-button",
+      "failure": "section[aria-labelledby=\"support-heading\"] .fail-toggle"
+    }
+  ],
+  "help": ".header-help-button, .field-help-button",
+  "emptyText": "本文を入力|空白だけ",
+  "failureText": "送信に失敗"
+}

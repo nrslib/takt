@@ -1,0 +1,62 @@
+[
+  {
+    "path": "README.md",
+    "sha256": "64f7293878f277080ebdccd5b01be359ba79c318ad40a516beb637ab355c9884"
+  },
+  {
+    "path": "TASK.md",
+    "sha256": "c8edf79d13a81cf6a1bc7dcccdb48a653e55df396967087fad10a9e0e8ccdcf5"
+  },
+  {
+    "path": "criteria/knowledge-frontend.md",
+    "sha256": "ca3cf68f2dcf124c5ddc0ffde5c5845f152a9dbf9423b6ef928fb7afdb7209ac"
+  },
+  {
+    "path": "criteria/knowledge-gui.md",
+    "sha256": "98ef420bb47f5d6944d677857355b9a4cadf57b240cf5cc47b2b461546b5c008"
+  },
+  {
+    "path": "criteria/knowledge-react.md",
+    "sha256": "202afd85ab7e8cdaa645cf320585e03849b611a807069c6696c88927315f681e"
+  },
+  {
+    "path": "criteria/policies-frontend.md",
+    "sha256": "fc365dae227843c571161063e71e6debe5b4bdee9e09b170b069364b14e68c15"
+  },
+  {
+    "path": "criteria/policies-gui.md",
+    "sha256": "d74654ade07b094f18d3971ece9d393303da8c898819caf4f3dac658fae82e83"
+  },
+  {
+    "path": "criteria/policies-react.md",
+    "sha256": "f8b23a3f10c9ce9ebabb67bddf000bffec0627a808bb3d4fa7578b872a168fea"
+  },
+  {
+    "path": "index.html",
+    "sha256": "34eef7c43eb6b073779f56a2976d2c59fe5f30de9f9aaa354d58e3df1b7211b5"
+  },
+  {
+    "path": "package-lock.json",
+    "sha256": "cadb9501a5e894e5fb565175db352614375e753be9632e13971f2032feae7ef8"
+  },
+  {
+    "path": "package.json",
+    "sha256": "5e38ecd41b9f7f8cac69e5d6986ed7201657736660372fdbcdded2c621b89efc"
+  },
+  {
+    "path": "src/App.tsx",
+    "sha256": "fa26a331a15e6a110248c169c836a6d7463616d1c00216ed134091f0df0e31bf"
+  },
+  {
+    "path": "src/main.tsx",
+    "sha256": "77aaa85d0a532963cd63d1c6171a833f73b608dd83b4085f855b279dbe922939"
+  },
+  {
+    "path": "src/styles.css",
+    "sha256": "f90603092192aac35a1136643a92fc13e2a6f6e4410fcde549a007bf9255e3fb"
+  },
+  {
+    "path": "tsconfig.json",
+    "sha256": "ca79f7e83afc848d5fd980462555ceeadea6dbe21bb48abe1dc700898267a85f"
+  }
+]

@@ -1,0 +1,16 @@
+{
+ "draft":"#reply-content",
+ "rows":".inquiry-list button",
+ "selected":"#detail-title",
+ "count":".save-counter strong",
+ "status":"#reply-editor-status",
+ "save":".save-button",
+ "failure":".failure-toggle",
+ "reset":"button:has-text('保存済みに戻す')",
+ "help":"button:has-text('操作説明')",
+ "cancel":"button:has-text('編集を続ける')",
+ "discard":"button:has-text('編集を破棄して切り替える')",
+ "search":"#inquiry-search",
+ "failureText":"失敗",
+ "emptyText":"該当する問い合わせがありません"
+}

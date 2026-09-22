@@ -30,6 +30,10 @@ const reasons = {
   'guard-b.tsx': 'editingと入力を確認し、拒否時はreturnして受理した保存だけをonSaveへ渡す。',
   'mediator-a.tsx': 'startedとfailedはdispatchするがsave成功時の次状態をdispatchせず表示がsavingのままになる。',
   'mediator-b.tsx': 'saveの前後でstarted、succeeded、failedをdispatchしstateのstatusとmessageを表示へ渡す。',
+  'confirmation-a.tsx': '破棄確認中でもrequestSaveがonSaveを呼び、保存回数と保存内容を変える。',
+  'confirmation-b.tsx': 'requestSaveが確認中の要求をreturnで拒否し、確認待ちの保存回数と保存内容を変えない。',
+  'modal-a.tsx': 'custom role dialogは名前とEscape復帰を持つが、Tab移動と背景操作を抑止するfocus境界がない。',
+  'modal-b.tsx': 'showModalで背景を抑止し、dialogの名前、開閉focus、Escapeとトリガーへのfocus復帰、確認中の拒否を保つ。',
   'form-action.tsx': 'useActionStateのformActionをformのactionへ渡しpendingと成功・入力エラーのstateを表示する。',
 };
 

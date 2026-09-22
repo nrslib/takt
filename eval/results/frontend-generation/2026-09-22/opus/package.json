@@ -1,0 +1,22 @@
+{
+  "name": "frontend-generation-sample",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "verify": "esbuild verify/machine.check.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify/machine.check.mjs --log-level=warning && node node_modules/.cache/verify/machine.check.mjs"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3",
+    "vite": "6.4.3"
+  }
+}

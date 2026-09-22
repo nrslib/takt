@@ -1,0 +1,12 @@
+[
+  {
+    "file": "src/gui-patterns/guard-a.tsx",
+    "verdict": "REJECT",
+    "reason": "`requestSave`（27〜34行目）は保存中または空入力でメッセージを設定しても`return`せず、34行目の`onSave(name)`を必ず実行する。したがって空入力が`Root.saveName`へ渡り、`savedName`が空文字で保存される。また、保存中も`Save empty`から同じ経路に到達でき、重複保存や保存内容の上書きが起こる。"
+  },
+  {
+    "file": "src/gui-patterns/guard-b.tsx",
+    "verdict": "OK",
+    "reason": "`Root.saveName`（9〜14行目）が保存処理と`status`・`savedName`を管理し、`Screen.requestSave`（27〜38行目）が保存中は28〜30行目、空入力は31〜34行目で拒否して`onSave`へ渡さない。受理した入力だけが36行目で親へ一度渡され、完了後にRootが`saving`から`editing`へ戻し、43〜45行目の表示へ保存内容を反映する。"
+  }
+]

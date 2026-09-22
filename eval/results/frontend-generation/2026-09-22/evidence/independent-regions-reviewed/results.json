@@ -1,0 +1,72 @@
+{
+  "url": "http://127.0.0.1:4179",
+  "adapter": {
+    "regions": [
+      {
+        "draft": ".destination-card.tone-violet textarea",
+        "send": ".destination-card.tone-violet .send-button",
+        "count": ".destination-card.tone-violet .accepted-count strong",
+        "result": ".destination-card.tone-violet .result-panel",
+        "clear": ".destination-card.tone-violet .clear-button",
+        "cancel": ".destination-card.tone-violet .confirmation-actions .button-secondary",
+        "discard": ".destination-card.tone-violet .confirmation-actions .button-danger",
+        "failure": ".destination-card.tone-violet .failure-button",
+        "status": ".destination-card.tone-violet"
+      },
+      {
+        "draft": ".destination-card.tone-aqua textarea",
+        "send": ".destination-card.tone-aqua .send-button",
+        "count": ".destination-card.tone-aqua .accepted-count strong",
+        "result": ".destination-card.tone-aqua .result-panel",
+        "clear": ".destination-card.tone-aqua .clear-button",
+        "cancel": ".destination-card.tone-aqua .confirmation-actions .button-secondary",
+        "discard": ".destination-card.tone-aqua .confirmation-actions .button-danger",
+        "failure": ".destination-card.tone-aqua .failure-button",
+        "status": ".destination-card.tone-aqua"
+      }
+    ],
+    "help": "button[aria-haspopup=\"dialog\"]",
+    "emptyText": "空白だけ",
+    "failureText": "送信失敗"
+  },
+  "results": [
+    {
+      "name": "二領域の入力と送信結果が混ざらない",
+      "status": "PASS"
+    },
+    {
+      "name": "一方の処理中も他方を編集して送信できる",
+      "status": "PASS"
+    },
+    {
+      "name": "同一タスク内の連続通知を一回だけ受理する",
+      "status": "PASS"
+    },
+    {
+      "name": "通常Enterは改行し、CtrlとCommandで送信する",
+      "status": "PASS"
+    },
+    {
+      "name": "空白だけの入力を両入口から拒否し、修正後に送信できる",
+      "status": "PASS"
+    },
+    {
+      "name": "確認中の領域は保存通知を拒否し、取消後は同じ入口から送信できる",
+      "status": "PASS"
+    },
+    {
+      "name": "一方の破棄確認中も他方を送信でき、確認した側だけ破棄する",
+      "status": "PASS"
+    },
+    {
+      "name": "失敗は宛先ごとに一度だけ起こり、本文を保持して再試行できる",
+      "status": "PASS"
+    },
+    {
+      "name": "三つのヘルプ入口が同じ説明を開き、背景へ移動せず元へ戻る",
+      "status": "PASS"
+    }
+  ],
+  "passed": 9,
+  "failed": 0
+}

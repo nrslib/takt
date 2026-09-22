@@ -1,0 +1,29 @@
+{
+  "regions": [
+    {
+      "draft": ".message-card--violet textarea",
+      "send": ".message-card--violet .send-button",
+      "count": ".message-card--violet .metric-chip strong",
+      "result": ".message-card--violet .sent-preview",
+      "clear": ".message-card--violet .form-actions .text-button",
+      "cancel": ".message-card--violet .confirmation-actions .secondary-button",
+      "discard": ".message-card--violet .confirmation-actions .danger-button",
+      "failure": ".message-card--violet .failure-toggle",
+      "status": ".message-card--violet"
+    },
+    {
+      "draft": ".message-card--teal textarea",
+      "send": ".message-card--teal .send-button",
+      "count": ".message-card--teal .metric-chip strong",
+      "result": ".message-card--teal .sent-preview",
+      "clear": ".message-card--teal .form-actions .text-button",
+      "cancel": ".message-card--teal .confirmation-actions .secondary-button",
+      "discard": ".message-card--teal .confirmation-actions .danger-button",
+      "failure": ".message-card--teal .failure-toggle",
+      "status": ".message-card--teal"
+    }
+  ],
+  "help": ".top-guide-button, .guide-button",
+  "emptyText": "空白|本文を入力",
+  "failureText": "送信に失敗"
+}

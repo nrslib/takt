@@ -1,0 +1,38 @@
+[
+  {
+    "path": "prompts/frontend-review.phase1.j2",
+    "sha256": "128e1762123e95bcc6d80a76609ef0bf9c000936bf6a46ec312296b8f6e57c27"
+  },
+  {
+    "path": ".work/frontend-review/.takt/eval-snapshots/frontend-review-knowledge.md",
+    "sha256": "8c92a03b2be97db94c9e8e54f173083b2228fbeb7683ec6864df5dc26fe3f97a"
+  },
+  {
+    "path": ".work/frontend-review/.takt/eval-snapshots/frontend-review-policies.md",
+    "sha256": "9eef127e8ea8f29391002603d2b7589203ff48cd988100fc973b8292d57da640"
+  },
+  {
+    "path": "prompts/frontend-review-react.phase1.j2",
+    "sha256": "a0f5e5746f284cc2894e49e45383f3fc1980feec1382743405a660e6c4213444"
+  },
+  {
+    "path": ".work/frontend-review-react/.takt/eval-snapshots/frontend-review-react-knowledge.md",
+    "sha256": "1f6f1583f4f03c683ff9433ae9d14e83c148688a7532f02e820469ea299eec77"
+  },
+  {
+    "path": ".work/frontend-review-react/.takt/eval-snapshots/frontend-review-react-policies.md",
+    "sha256": "3834a7f4ccba92efc4acc022101514d313a4769887f5445a9f5d0f90ce8d106f"
+  },
+  {
+    "path": "cases/frontend-gui-patterns.md",
+    "sha256": "1b74077491ff4d2426870516ba435eb43f097e43217ab0533a15e8e9819484bd"
+  },
+  {
+    "path": "agents/frontend-review/frontend.yaml",
+    "sha256": "8970a80fdd1230c6ec3fedd696e3c9f07784d81b42f92de52d7c4dc724bb860d"
+  },
+  {
+    "path": "agents/frontend-review/frontend-opus.yaml",
+    "sha256": "27ac2a46447d78464b56c3eb4bf16e166b66b25873f731037ff6b694ddd762a5"
+  }
+]

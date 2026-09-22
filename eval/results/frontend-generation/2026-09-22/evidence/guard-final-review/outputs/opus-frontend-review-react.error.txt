@@ -1,0 +1,2 @@
+claude exited with code 1: Not logged in · Please run /login
+

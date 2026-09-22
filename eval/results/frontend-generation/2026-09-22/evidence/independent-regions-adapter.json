@@ -1,0 +1,29 @@
+{
+  "regions": [
+    {
+      "draft": ".destination-card.tone-violet textarea",
+      "send": ".destination-card.tone-violet .send-button",
+      "count": ".destination-card.tone-violet .accepted-count strong",
+      "result": ".destination-card.tone-violet .result-panel",
+      "clear": ".destination-card.tone-violet .clear-button",
+      "cancel": ".destination-card.tone-violet .confirmation-actions .button-secondary",
+      "discard": ".destination-card.tone-violet .confirmation-actions .button-danger",
+      "failure": ".destination-card.tone-violet .failure-button",
+      "status": ".destination-card.tone-violet"
+    },
+    {
+      "draft": ".destination-card.tone-aqua textarea",
+      "send": ".destination-card.tone-aqua .send-button",
+      "count": ".destination-card.tone-aqua .accepted-count strong",
+      "result": ".destination-card.tone-aqua .result-panel",
+      "clear": ".destination-card.tone-aqua .clear-button",
+      "cancel": ".destination-card.tone-aqua .confirmation-actions .button-secondary",
+      "discard": ".destination-card.tone-aqua .confirmation-actions .button-danger",
+      "failure": ".destination-card.tone-aqua .failure-button",
+      "status": ".destination-card.tone-aqua"
+    }
+  ],
+  "help": "button[aria-haspopup=\"dialog\"]",
+  "emptyText": "空白だけ",
+  "failureText": "送信失敗"
+}

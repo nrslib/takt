@@ -1,0 +1,12 @@
+{
+  "script": "evidence/check-reply-desk-absolute-import.mjs",
+  "sha256": "c7b85b88eda8394e2458087829ffc438b66399a718e2c33f0621b55619a19fe4",
+  "previous": {
+    "script": "check-reply-desk.mjs",
+    "sha256": "8ef24c32c886da194ffbccff0da7822a349b21ea9c06d3a0bd9b835ad99e2889",
+    "baseline_result": "baseline/results.json",
+    "policy": "Generated UI adapter selectors may change; behavior assertions are frozen before candidate generation. Original 16 checks remain in the first experiment; this comparison groups reset/search and adds handler-level confirmation rejection."
+  },
+  "calibration": "Before candidate generation, native dialog.showModal() was measured in Chromium: Tab can briefly leave document.activeElement at BODY before returning inside. Background interactive elements remain disallowed. Baseline is re-run with this calibration.",
+  "superseded_by": "harness-review-revision.json"
+}
