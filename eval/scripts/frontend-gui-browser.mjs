@@ -132,7 +132,7 @@ async function assertSavingPersistsWhileWallClockRuns(status, description) {
 }
 
 async function isFocused(page, locator) {
-  return locator.evaluate((element) => element === document.activeElement);
+  return locator.evaluate((element) => element === element.ownerDocument.activeElement);
 }
 
 async function reloadPage(page) {
@@ -145,7 +145,7 @@ async function openSaveModal(page, fixture) {
   const dialog = page.getByRole('dialog', { name: 'Save changes?' });
   await assertVisible(dialog, `${fixture.file} save dialog`);
   assert.equal(
-    await dialog.evaluate((element) => element.contains(document.activeElement)),
+    await dialog.evaluate((element) => element.contains(element.ownerDocument.activeElement)),
     true,
     `${fixture.file} did not move focus inside the dialog on open`,
   );

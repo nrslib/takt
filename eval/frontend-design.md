@@ -8,9 +8,13 @@ node eval/scripts/prepare.mjs frontend-review frontend-review-react
 npm run eval:prompts -- frontend --no-cache
 npm run eval:prompts -- frontend-opus --no-cache
 # 6 fixtureの実ブラウザ検証に必要なReactとReactDOMを一時ディレクトリへ用意する
-frontend_deps="$(mktemp -d)"
-npm install --prefix "$frontend_deps" --no-save --package-lock=false react@19.2.8 react-dom@19.2.8
-node eval/scripts/frontend-gui-browser.mjs --dependency-dir "$frontend_deps/node_modules"
+(
+  set -e
+  frontend_deps="$(mktemp -d)"
+  trap 'rm -rf "$frontend_deps"' EXIT
+  npm install --prefix "$frontend_deps" --no-save --package-lock=false react@19.2.8 react-dom@19.2.8
+  node eval/scripts/frontend-gui-browser.mjs --dependency-dir "$frontend_deps/node_modules"
+)
 ```
 
 課題は `cases/frontend-gui-patterns.md`、コードは `fixtures/frontend-design/`、期待判定は `asserts/frontend-gui.mjs` にある。CLI providerは構成ごとにprepareが作成した実行ディレクトリと、その構成のファセットスナップショットだけを一時ディレクトリへコピーして実行する。期待判定と採点コードはコピーしない。
