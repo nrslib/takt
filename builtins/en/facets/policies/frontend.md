@@ -34,7 +34,7 @@ Do not decide from whether someone checked an accessible name or role alone; ins
 | The display distinguishes not started, loading, success, empty, failure, and cancelled | OK |
 | Loading or failure is converted to an empty array, leaving users unable to tell whether to wait or retry | REJECT |
 | After a failure, users cannot take a required action such as retrying, correcting input, or going back | REJECT |
-| Form, click, keyboard, or other entries send the same save twice | REJECT |
+| Form, click, keyboard, or other entries execute or send the same operation twice | REJECT |
 
 ## Data fetching, cache, and paging
 

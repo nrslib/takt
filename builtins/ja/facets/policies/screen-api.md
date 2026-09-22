@@ -21,19 +21,12 @@ APIを分けるか同じ応答を使うかは、必要な項目、件数、認�
 | 条件 | 判定 |
 |------|------|
 | 件数上限が仕様と実データから説明できる小さい集合を全件返す | OK |
-| `limit`、page size、sort、filterをクライアントが指定し、サーバーが型・権限・上限を検証する | OK |
+| ページサイズ、sort、filterをクライアントが指定し、サーバーが型・権限・上限を検証する | OK |
 | クライアントの指定を無制限に受け、結果量や応答時間の上限がない | REJECT |
 | 大きくなり得る一覧を上限なしで全件返す | REJECT |
 | cursorにsort、filter、tenant、snapshotなど結果を決める条件がなく、ページが重複・欠落する | REJECT |
 
-```typescript
-// リクエスト値を受け、サーバーの上限へ収める
-const requestedSize = request.limit ?? DEFAULT_PAGE_SIZE
-if (!Number.isInteger(requestedSize) || requestedSize < 1) {
-  throw new RangeError('limit must be a positive integer')
-}
-const pageSize = Math.min(requestedSize, MAX_PAGE_SIZE)
-```
+クライアントから受けたページサイズは、サーバーが整数か、正の値か、主体の権限範囲に適合するかを確認し、サーバーが定めた最大値へ収める。省略時の値や最大値をクライアントの都合だけで決めず、取得量と応答時間を守るサーバー側の契約として扱う。
 
 クライアントが件数を指定できるかどうかではなく、実際の最大件数、権限の範囲、応答時間、cursorの安定性で判定する。
 
@@ -51,7 +44,7 @@ const pageSize = Math.min(requestedSize, MAX_PAGE_SIZE)
 
 ## 認可と更新
 
-サーバーは、認証された主体、対象リソース、tenant、現在状態、操作権限を確認してから更新する。クライアントが表示した価格、在庫、権限、`canApprove`などを最終判定として受け取らない。
+サーバーは、認証された主体、対象リソース、tenant、現在状態、操作権限を確認してから更新する。クライアントの表示や許可操作の判断を最終判定として受け取らない。
 
 | 条件 | 判定 |
 |------|------|

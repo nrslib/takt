@@ -1,47 +1,30 @@
 # GUI Knowledge
 
-Build components in a hierarchy that starts at Root, and separate display work from interaction handling.
+Build screens and parts in a hierarchy that starts at Root, and separate display, operation notification, and operation handling.
 
 ## A hierarchy that starts at Root
 
-Root builds the screen, and the screen combines parts such as a list and a detail view.
+Root assembles the screen, and the screen combines several display parts. Following the hierarchy shows where values enter a display part and where operations are reported.
 
-```
-Root
-└── Order screen
-    ├── Order list
-    └── Order detail
-```
+Keep state in the screen or region whose use range and lifetime match the value.
 
-Following this hierarchy shows which screen displays a part and where an operation is handled. Use Root to assemble the screen, and keep state close to the screen or part that uses it.
+## The role of Passive View
 
-## Where to keep state
+A Passive View display part renders values received from above and reports the user's operation intent upward. Keep communication, navigation, and state decisions in the screen or region that handles them instead of in the display part.
 
-When the list and detail view select the same order, keep one `selectedId` in their common parent and pass it to both. Keep an in-progress input value or open/closed state in the part that uses it.
+Keep an in-progress input value or open/closed state in the part that uses it. Share an identifier for the target or the progress of processing in the screen or region that coordinates the parts. Keep a value that survives several screens in a shared manager whose scope and lifetime match its use.
 
-If both the list and detail view show the save state, keep one `saveState` in the screen. Keep long-lived values such as login information in a shared part that contains the screens that use them. Choose the location from the parts that read the same value and how long the value must remain.
+## Pass unhandled operations with Chain of Responsibility
 
-## Separate display from interaction
+Pass an operation to the next parent when the current part does not handle it. Each level handles only the operations it owns, and a handled operation is not run again at another level.
 
-A display part renders values received from the screen and reports operations upward. A save button calls `onSave`. The screen checks whether a save is already in progress and starts communication only when saving is allowed. It updates state on success or failure and reflects that state in the button and message.
+## Process according to state with Mediator
 
-```
-editing    --save--> submitting --success--> success
-                                └--failure--> failure
-submitting --save--> rejected
-```
+Mediator receives an operation notification and examines the current state and target to decide whether to accept or reject the operation, what processing an accepted operation needs, the next state, and the values to display as its result. Prevent re-running an operation while it is already processing when the operation cannot run concurrently.
 
-While `submitting`, disable the save button so the same save is not sent twice. Show completion on success and an error with retry on failure. The screen makes this decision; the display part renders the values it receives.
+Do not rely only on an enabled or disabled control: notifications from different entries such as clicks and keyboard input go through the same Mediator state decision. Reflect success, failure, invalid input, and insufficient permission in state and update the display. Show a rejected operation at the point of rejection, and pass only unhandled operations upward.
 
-## Pass operations upward
-
-Pass an operation upward when a part does not handle it. For example, pass a delete request from a row to the list and from the list to the screen; the screen checks its current state and deletes the item. An ancestor must not run an operation again after it has been handled or rejected.
-
-## Mapping to established patterns
-
-MVP Passive View describes a display part that receives values needed for drawing and reports operation intent. A mechanism that passes an operation to the next handler when the current handler cannot process it is called Chain of Responsibility. Mediator describes a screen or region deciding, from its current state, whether to accept an operation and what state and processing should follow. A state machine represents those states and transitions.
-
-Frameworks realize this division with standard mechanisms such as props, callbacks, bindings, hooks, and reducers. For example, a descendant calls a callback provided by an ancestor to notify that ancestor directly of an operation.
+Mediator behaves as a state machine that determines the next state from the current state and operation. Frameworks realize the roles of Passive View, Chain of Responsibility, and Mediator with standard mechanisms such as props, callbacks, bindings, hooks, and reducers. A descendant can notify the responsible screen or region directly through a callback or Context operation provided by an ancestor.
 
 ## Reference
 

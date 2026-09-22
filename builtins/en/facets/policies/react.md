@@ -1,6 +1,6 @@
 # React Policy
 
-Judge React state, props, Context, reducers, Effects, and Hooks from rerenders, state lifetime, operation paths, and synchronization with external systems.
+Judge React state, props, Context, reducers, Effects, and Hooks from rerenders, state lifetime, Mediator operation decisions, and synchronization with external systems.
 
 ## State, props, and derived values
 

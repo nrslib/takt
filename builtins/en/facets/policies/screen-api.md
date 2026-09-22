@@ -21,19 +21,12 @@ A fixed small collection can be returned in one response. A result that may grow
 | Condition | Decision |
 |------|------|
 | A small collection has a limit that is explained by the specification and actual data, and all items are returned | OK |
-| The client specifies `limit`, page size, sort, or filter, and the server validates type, authorization, and limits | OK |
+| The client specifies page size, sort, or filter, and the server validates type, authorization, and limits | OK |
 | The server accepts the client value without a bound on result size or response time | REJECT |
 | A list that may grow is returned in full with no limit | REJECT |
 | A cursor lacks a sort, filter, tenant, snapshot, or other condition that determines the result, so pages duplicate or omit items | REJECT |
 
-```typescript
-// Accept a request value and keep it within the server's limit
-const requestedSize = request.limit ?? DEFAULT_PAGE_SIZE
-if (!Number.isInteger(requestedSize) || requestedSize < 1) {
-  throw new RangeError('limit must be a positive integer')
-}
-const pageSize = Math.min(requestedSize, MAX_PAGE_SIZE)
-```
+For a page size received from the client, the server checks that it is an integer, positive, and within the subject's authorization scope, then caps it at the server's maximum. Treat an omitted value and the maximum as part of the server contract that protects fetch volume and response time, rather than deciding them only from the client's needs.
 
 Judge client-controlled page size from the actual maximum size, permission scope, response time, and cursor stability, rather than from whether the client can specify a count.
 
@@ -51,7 +44,7 @@ Distinguish display sorting or totals calculated from a finite set already recei
 
 ## Authorization and updates
 
-The server checks the authenticated subject, target resource, tenant, current state, and operation permission before updating. It does not accept a price, inventory value, permission, or `canApprove` displayed by the client as the final decision.
+The server checks the authenticated subject, target resource, tenant, current state, and operation permission before updating. It does not accept the client's display or permission decision as the final decision.
 
 | Condition | Decision |
 |------|------|

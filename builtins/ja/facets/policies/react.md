@@ -1,6 +1,6 @@
 # Reactポリシー
 
-Reactのstate、props、Context、reducer、Effect、hookを、再描画、stateの寿命、操作の経路、外部システムとの同期から判定する。
+Reactのstate、props、Context、reducer、Effect、hookを、再描画、stateの寿命、Mediatorとしての操作判断、外部システムとの同期から判定する。
 
 ## State、Props、派生値
 

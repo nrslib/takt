@@ -1,225 +1,60 @@
 # React Knowledge
 
-In React, parents pass values through props, components keep changing values in state, and rendering creates the screen. Put screen communication and navigation in handlers or hooks rather than inside display components.
+In React, parents pass values through props, components keep changing values in state, and rendering creates the screen. Put screen communication and navigation in handlers or hooks rather than inside display components. React can provide the GUI Mediator role through standard mechanisms such as screen handlers, custom Hooks, Context, and reducers, which decide processing and the next state from an operation and the current state.
 
 ## Props and state
 
-Props are inputs passed by a parent; state is a value a component changes through interaction. Do not keep the same fact in two `useState` calls. Keep it where its scope and lifetime fit.
-
-```tsx
-// NG - the list and detail view keep separate selections
-function List() {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  return <ItemList selectedId={selectedId} onSelect={setSelectedId} />
-}
-
-function Detail() {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  return <ItemDetail id={selectedId} onSelect={setSelectedId} />
-}
-
-// OK - one common parent owns the selection
-function Workspace() {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  return (
-    <>
-      <ItemList selectedId={selectedId} onSelect={setSelectedId} />
-      <ItemDetail id={selectedId} />
-    </>
-  )
-}
-```
-
-If an in-progress value or open/closed state is used by one component, keep it there. If several components use a selection or input, keep it in their common parent. Keep a value that should survive screen changes in a Provider or external store that survives those changes.
+Props are inputs passed by a parent; state is a value a component changes through interaction. Do not keep the same fact in two `useState` calls. Keep it where its scope and lifetime fit. When several parts use the same target identifier or input, keep one value in the parent or screen that coordinates them and pass props and operation notifications. Keep an in-progress input value or open/closed state in the part that uses it. Keep a value that should survive several screens in a Provider or external store whose scope and lifetime fit.
 
 ## Prop changes and state lifetime
 
-The initial value passed to `useState` is not copied into state again when props change. An input that continues to display the parent's value should receive the value and change callback as props.
-
-```tsx
-// NG - shows the first draft even after documentTitle changes
-function TitleEditor({ documentTitle }: { documentTitle: string }) {
-  const [draft, setDraft] = useState(documentTitle)
-  return (
-    <input
-      aria-label="Document title"
-      value={draft}
-      onChange={event => setDraft(event.target.value)}
-    />
-  )
-}
-
-// OK - displays the parent's value and reports changes to the parent
-function TitleEditor({ title, onChange }: {
-  title: string
-  onChange: (title: string) => void
-}) {
-  return (
-    <input
-      aria-label="Document title"
-      value={title}
-      onChange={event => onChange(event.target.value)}
-    />
-  )
-}
-```
-
-A draft that should not reach the parent until it is confirmed can stay in the component's state. When switching to another document, use the document ID as `key` to create a new instance, or reset the state as part of the switch. Copying props into state in an Effect can overwrite a value that is being edited.
+The initial value passed to `useState` is not copied into state again when props change. An input that continues to display the parent's value should receive the value and change handler as props. A draft that should not reach the parent until it is confirmed can stay in the component's state. When switching to another target, use its stable identifier as `key` to create a new instance, or reset state as part of the switch. Copying props into state in an Effect can overwrite a value that is being edited.
 
 ## Compute derived values
 
-Do not store in state a value that can be calculated from props or state. Syncing a derived value with an Effect can show an old value just after an update or make a decision depend on update order.
-
-```tsx
-// NG - store the visible list and all-selected result in separate state via an Effect
-const [visibleItems, setVisibleItems] = useState<Item[]>([])
-const [allSelected, setAllSelected] = useState(false)
-
-useEffect(() => {
-  const next = items.filter(item => matches(item, filter))
-  setVisibleItems(next)
-  setAllSelected(next.length > 0 && next.every(item => selectedIds.has(item.id)))
-}, [items, filter, selectedIds])
-
-// OK - calculate both from the same condition each time
-const visibleItems = items.filter(item => matches(item, filter))
-const allSelected = visibleItems.length > 0
-  && visibleItems.every(item => selectedIds.has(item.id))
-```
-
-If the amount of computation is an actual problem, reuse it with `useMemo` or a similar mechanism. Use it when you can explain which dependencies allow the computation to be skipped.
+Do not store a list, count, all-selected result, label, or other value calculable from props or state as separate state. Calculate it from the same conditions during rendering to avoid an old display or a decision that depends on update order. If the amount of computation is an actual problem, reuse it with `useMemo` or a similar mechanism and state its dependencies.
 
 ## Context passes values
 
-Context lets descendants read a value provided by an ancestor's Provider. A Provider can use `useState` or `useReducer` and pass the state and its update function.
+`createContext` creates a mechanism for descendants to read a value provided by an ancestor's Provider. A Provider can use `useState` or `useReducer` and pass state, dispatch, and handlers that start operations shared by several screen parts. `useContext` reads the value within its scope and lifetime; keep local values local.
 
-```tsx
-const CartContext = createContext<CartContextValue | null>(null)
+## Mediator, reducers, and operations
 
-function CartProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(cartReducer, initialCart)
-  return (
-    <CartContext.Provider value={{ state, dispatch }}>
-      {children}
-    </CartContext.Provider>
-  )
-}
+A screen handler or custom Hook receives an operation notification, checks the current state and target, and decides the accepted processing, a rejection result, and the next state. Form, button, keyboard, and other entries for the same operation go through the same Mediator decision. Do not use a control's `disabled` display as the only decision; check state before starting communication or another side effect, and start it once.
 
-function CartTotal() {
-  const context = useContext(CartContext)
-  if (!context) throw new Error('CartTotal must be inside CartProvider')
-  return <output>{formatTotal(context.state.items)}</output>
-}
-```
+A reducer is a pure function that returns the next state from the current state and an event. A handler starts communication outside the reducer and dispatches its start, success, and failure results. The reducer does not perform communication, timers, or notifications. Rejection, invalid input, insufficient permission, and conflicts become display results through this state flow.
 
-Passing a save function through Context lets a deep child call the same save operation. The reducer calculates state, and the passed function starts communication.
+Use `onSubmit` as the single form submission entry for a submit operation. Do not call the same processing directly from `onClick`; keyboard input that submits the form should reach the same handler, and the current state should decide whether it is accepted.
 
-## Reducers and save communication
-
-A reducer is a pure function that returns the next state from the current state and an event. A handler starts save communication and dispatches at start, success, and failure. The reducer does not perform communication or notifications.
-
-## Prevent duplicate submits
-
-The following is a form that receives `onSave`. It uses form submission as the one entry point; the button's click path does not call `onSave`.
-
-```tsx
-function SaveForm({ disabled, onSave }: {
-  disabled: boolean
-  onSave: () => void
-}) {
-  return (
-    <form onSubmit={event => {
-      event.preventDefault()
-      if (!disabled) onSave()
-    }}>
-      <button type="submit" disabled={disabled}>Save</button>
-    </form>
-  )
-}
-```
-
-An Enter key or another entry into the form also reaches submit, so the save is reported once.
-
-Even when a portal places a part elsewhere in the DOM, its React events propagate to ancestors along the React tree.
+Even when a Portal places a part elsewhere in the DOM, React events propagate through the React tree to its ancestors.
 
 ## Effects and external systems
 
-`useEffect` synchronizes React with connections, subscriptions, timers, fetches, and other systems outside rendering. A save or notification caused by one user operation belongs in an event handler or command, not in an Effect.
+`useEffect` synchronizes React with connections, subscriptions, timers, fetches, and other systems outside rendering. A submission or notification caused by one user operation belongs in an event handler or command, not in an Effect.
 
-Include props, state, and variables or functions declared inside the component that the Effect reads in its dependency array. Define what is being synchronized, such as recreating a connection when its room changes.
+Include props, state, and variables or functions declared inside the component that the Effect reads in its dependency array. Dependencies must match the conditions that should cause reconnection or refetching; do not remove one only to silence a lint warning. If a callback reference actually causes unnecessary reruns, stabilize the handler, move it outside the Effect, or separate the synchronization targets.
 
-```tsx
-// NG - keeps using the old room connection after roomId changes
-useEffect(() => {
-  const connection = connectToRoom(roomId)
-  connection.subscribe(onMessage)
-  return () => connection.close()
-}, [])
-
-// OK - connects for each room and closes before rerunning and on unmount
-useEffect(() => {
-  const connection = connectToRoom(roomId)
-  connection.subscribe(onMessage)
-  return () => connection.close()
-}, [roomId, onMessage])
-```
-
-If a callback reference changes on every render and actually causes unnecessary reconnections, stabilize the handler, move it outside the Effect, or move the work to event handling. Do not remove a dependency and make the Effect use an old value.
-
-When an identifier change should start a new fetch, include the identifier in the dependencies and cancel the previous fetch in cleanup. Do not turn an aborted result into a failure message.
-
-```tsx
-useEffect(() => {
-  const controller = new AbortController()
-  setResult({ status: 'loading' })
-
-  void loadDocument(documentId, controller.signal)
-    .then(document => setResult({ status: 'success', document }))
-    .catch(error => {
-      if (error.name !== 'AbortError') setResult({ status: 'error', error })
-    })
-
-  return () => controller.abort()
-}, [documentId])
-```
+Connections, subscriptions, timers, and fetches need cleanup before rerun and on unmount. When an identifier change should start a new fetch, include it in the dependencies and cancel the previous fetch in cleanup with `AbortController` or an equivalent. Do not turn an aborted result into a failure message, and prevent an old response from overwriting newer state.
 
 ## React execution rules
 
 Call Hooks at the top level of a component or custom Hook, never inside a condition or loop. During rendering, do not communicate, notify, manipulate the DOM, change an external variable, or mutate props and state directly.
 
-In a reorderable list, use the item's ID as `key` instead of the array index. When a `key` changes, React treats the element as a different component and resets its state.
+In a reorderable list, use the item's stable identifier as `key` instead of the array index. When a `key` changes, React treats the element as a different component and resets its state, so match component position and state lifetime to the intended behavior.
 
 ## Custom Hooks
 
-A custom Hook can group state, Effects, refs, Context, queries, forms, and event conversion as one screen behavior. Put pure calculations in a regular function.
-
-State created by `useState` inside a Hook is separate for each call to that Hook. A Hook that reads Context, a query, or an external store can return shared values, so determine sharing from what the Hook reads and writes rather than its name.
+A custom Hook can group state, Effects, refs, Context, queries, forms, and event conversion as one screen behavior. Put pure calculations in a regular function. State created by `useState` inside a Hook is separate for each call to that Hook. A Hook that reads Context, a query, or an external store can return a value shared by its source, so determine sharing from what it reads and writes rather than its name.
 
 ## TanStack Query and cache
 
-With TanStack Query, pass conditions that change the result with the same meaning to `queryKey` and `queryFn`. Omitting a key item for some conditions puts another user's or filter's result in the same cache.
+With TanStack Query's `useQuery`, pass conditions that change a result with the same meaning to `queryKey` and `queryFn`. Do not omit user, tenant, target identifier, filter, sort, page, cursor, or another condition from the key when it changes the result, or different results will share one cache entry.
 
-```tsx
-import { useQuery } from '@tanstack/react-query'
-
-// NG - removes accountId from the key when there is no filter
-const result = useQuery({
-  queryKey: ['orders', filter ? { accountId, filter, page } : { page }],
-  queryFn: () => fetchOrders({ accountId, filter, page }),
-})
-
-// OK - always includes the fetch conditions in the same key
-const result = useQuery({
-  queryKey: ['orders', { accountId, filter, page }],
-  queryFn: () => fetchOrders({ accountId, filter, page }),
-})
-```
-
-After an update, replace stale results with invalidation, a refetch, or a TanStack Query cache update. In a paged list, ensure that the cursor, sort, filter, and snapshot match the server result and that duplicates and gaps are handled.
+After an update, replace stale results with invalidation, a refetch, or a TanStack Query cache update. In a paged list, ensure that cursor, sort, filter, and snapshot match the server result and that duplicates and gaps caused by intervening updates are handled.
 
 ## Props types and Hook placement
 
-Keep a Props type used by one component near that component. Put a type used by several parts where it can be shared. A screen Hook can return the values and operation functions needed for display, and the component can render from them.
+Keep a Props type used by one component near that component. Put a type used by several parts where it can be shared. A screen Hook can return the values and operations needed for display, and the component can render from them.
 
 ## References
 
