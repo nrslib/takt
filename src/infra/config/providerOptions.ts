@@ -22,6 +22,7 @@ import type {
 import { resolveWorkflowStepTarget } from '../../core/workflow/provider-target-resolution.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
+import { getPresentProviderOptionPaths } from './providerOptionsContract.js';
 
 type RawProviderGuardOptions = {
   call_timeout_ms?: number;
@@ -701,6 +702,54 @@ export function resolveProviderOptionOrigin(
   return resolver('');
 }
 
+export function selectEnvironmentProviderOptions(
+  providerOptions: StepProviderOptions | undefined,
+  originResolver: ProviderOptionsOriginResolver,
+  allowedRoots: readonly (keyof StepProviderOptions)[],
+): StepProviderOptions | undefined {
+  const allowedRootSet = new Set(allowedRoots);
+  const selected: Record<string, unknown> = {};
+
+  for (const path of getPresentProviderOptionPaths(providerOptions)) {
+    const root = path.split('.')[0];
+    if (root === undefined || !allowedRootSet.has(root as keyof StepProviderOptions)) {
+      continue;
+    }
+
+    const origin = resolveProviderOptionOrigin(originResolver, path, 'default');
+    if (origin !== 'env' && origin !== 'cli') {
+      continue;
+    }
+
+    const value = path.split('.').reduce<unknown>((current, segment) => {
+      if (typeof current !== 'object' || current === null) {
+        return undefined;
+      }
+      return (current as Record<string, unknown>)[segment];
+    }, providerOptions);
+    if (value === undefined) {
+      continue;
+    }
+
+    const segments = path.split('.');
+    const leaf = segments.pop();
+    if (leaf === undefined) {
+      continue;
+    }
+    let target = selected;
+    for (const segment of segments) {
+      const nested = target[segment];
+      if (typeof nested !== 'object' || nested === null || Array.isArray(nested)) {
+        target[segment] = {};
+      }
+      target = target[segment] as Record<string, unknown>;
+    }
+    target[leaf] = value;
+  }
+
+  return Object.keys(selected).length === 0 ? undefined : selected as StepProviderOptions;
+}
+
 function selectProviderValue<T>(
   configValue: T | undefined,
   personaValue: T | undefined,
@@ -828,21 +877,26 @@ export function resolveProfileScopedProviderOptionsLayers(
   ];
 }
 
-/** Combine config, persona, and step options using per-field origins. */
+/** Combine the provider-option union; Codex-only constraints need a resolved Codex provider. */
 export function resolveEffectiveProviderOptions(
   source: ProviderOptionsSource | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
   resolvedConfigOptions: StepProviderOptions | undefined,
   stepOptions: StepProviderOptions | undefined,
   personaOptions?: StepProviderOptions,
+  resolvedProvider?: ProviderType,
 ): StepProviderOptions | undefined {
   if (!resolvedConfigOptions) {
     const merged = mergeProviderOptions(personaOptions, stepOptions);
-    assertCodexConfigProfilePermissionControl(merged?.codex);
+    if (resolvedProvider === 'codex') {
+      assertCodexConfigProfilePermissionControl(merged?.codex);
+    }
     return merged;
   }
   if (!personaOptions && !stepOptions) {
-    assertCodexConfigProfilePermissionControl(resolvedConfigOptions.codex);
+    if (resolvedProvider === 'codex') {
+      assertCodexConfigProfilePermissionControl(resolvedConfigOptions.codex);
+    }
     return resolvedConfigOptions;
   }
 
@@ -1333,7 +1387,9 @@ export function resolveEffectiveProviderOptions(
   };
 
   const effective = Object.keys(result).length > 0 ? result : undefined;
-  assertCodexConfigProfilePermissionControl(effective?.codex);
+  if (resolvedProvider === 'codex') {
+    assertCodexConfigProfilePermissionControl(effective?.codex);
+  }
   return effective;
 }
 
@@ -1437,6 +1493,7 @@ export function resolveEffectiveTeamLeaderPartProviderOptions(
     resolvedConfigOptions,
     stepOptions,
     personaOptions,
+    resolvedProvider,
   );
 
   const shouldStripClaudeTools = partAllowedTools !== undefined

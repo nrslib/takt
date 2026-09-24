@@ -697,7 +697,11 @@ export async function createWorkflowExecutionBootstrap(
       name,
       {
         ...companion,
-        providerOptions: resolveRuntimeProviderOptions(projectCwd, companion.providerOptions),
+        providerOptions: resolveRuntimeProviderOptions(
+          projectCwd,
+          companion.provider,
+          companion.providerOptions,
+        ),
       },
     ]),
   );

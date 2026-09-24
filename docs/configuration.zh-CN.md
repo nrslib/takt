@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` 是可选项。provider/model 的优先级为显式 CLI 或环境变量覆盖、项目 selector、全局 selector、项目顶层、全局顶层。model 只有在其 candidate 属于解析出的 provider 时才有效。只有 selector 条目提供 `provider_options`，并按 option leaf 从全局到项目合并；顶层、persona 和 pool sub-step 的 options 不会传给 selector。空 selector 条目或空 `provider_options` 条目会在加载配置时被拒绝。dynamic parallel 和 `dynamic_facets` selector 使用 provider-neutral 的新 session，并传入固定的只读工具 allowlist `Read`、`Glob`、`Grep` 以及 `permission_mode: readonly`。Companion selector 不接收固定的 `allowedTools` 列表，因此可以使用 selector profile 中的 `allowed_tools`。工具 allowlist 只对遵守它的 provider 生效。没有 dynamic parallel、dynamic facets 或启用的 companion pool 时，selector 设置不会使用，也不会影响 workflow。
+`takt_providers.selector` 是可选项。provider/model 的优先级为显式 CLI 或环境变量覆盖、项目 selector、全局 selector、项目顶层、全局顶层。model 只有在其 candidate 属于解析出的 provider 时才有效。只有 selector 条目提供 `provider_options`，并按 option leaf 从全局到项目合并；顶层、persona 和 pool sub-step 的 options 不会传给 selector。provider option 的环境变量覆盖只应用于已解析的 selector provider。Codex selector 使用 `config_profile` 时，selector 自身的有效 options（selector 条目或匹配的环境变量覆盖）必须包含 `permission_control: codex`；顶层 `provider_options` 不会继承。空 selector 条目或空 `provider_options` 条目会在加载配置时被拒绝。dynamic parallel 和 `dynamic_facets` selector 使用 provider-neutral 的新 session，并传入固定的只读工具 allowlist `Read`、`Glob`、`Grep` 以及 `permission_mode: readonly`。Companion selector 不接收固定的 `allowedTools` 列表，因此可以使用 selector profile 中的 `allowed_tools`。工具 allowlist 只对遵守它的 provider 生效。没有 dynamic parallel、dynamic facets 或启用的 companion pool 时，selector 设置不会使用，也不会影响 workflow。
 
 ```yaml
 # ~/.takt/config.yaml（续）
@@ -1014,7 +1014,7 @@ provider_options:
     config_profile: automation-review
 ```
 
-环境变量 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` 也可以设置它。`config_profile` 只接受由 ASCII 字母、数字、连字符和下划线组成的名称；空值和路径会被拒绝，且只有与 `permission_control: codex` 一起使用时才有效。省略 permission control（默认的 `takt`）或明确设置为 `takt` 都会产生配置错误。TAKT 会将名称作为 `codex exec --profile <name>` 传给 CLI，Codex 从 `$CODEX_HOME/<name>.config.toml` 解析 profile，并按照 Codex 规范决定该文件、基础配置、trusted project 设置和运行时 override 的优先级。
+环境变量 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` 也可以设置它。`config_profile` 只接受由 ASCII 字母、数字、连字符和下划线组成的名称；空值和路径会被拒绝，且只有与 `permission_control: codex` 一起使用时才有效。省略 permission control（默认的 `takt`）或明确设置为 `takt` 都会产生配置错误。TAKT 会将名称作为 `codex exec --profile <name>` 传给 CLI，Codex 从 `$CODEX_HOME/<name>.config.toml` 解析 profile，并按照 Codex 规范决定该文件、基础配置、trusted project 设置和运行时 override 的优先级。项目、workflow 和 capability 的 provider options 均可选择 profile；Codex 会在运行中应用该 profile 的权限设置，因此只应指定可信的配置和 profile 文件。
 
 #### Codex Skill 继承（`skills`）
 

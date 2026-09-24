@@ -101,7 +101,11 @@ function resolveAssistantFromRuntimeV1(
     },
     { provider: providerOverride, model: modelOverride },
   );
-  const providerOptions = resolveRuntimeProviderOptions(projectDir, composed.providerOptions);
+  const providerOptions = resolveRuntimeProviderOptions(
+    projectDir,
+    composed.provider,
+    composed.providerOptions,
+  );
   return {
     runtimeManaged: true,
     provider: composed.provider,

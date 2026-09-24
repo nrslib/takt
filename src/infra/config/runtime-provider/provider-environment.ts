@@ -342,11 +342,15 @@ function validateRuntimeStepProviderOptions(
       personaKey: step.providerRoutingPersonaKey,
     }).candidates) {
       if (candidate.providerOptions !== undefined) {
-        resolveRuntimeProviderOptions(projectCwd, candidate.providerOptions);
+        resolveRuntimeProviderOptions(projectCwd, candidate.provider, candidate.providerOptions);
       }
     }
     if (autoRouting.router.providerOptions !== undefined) {
-      resolveRuntimeProviderOptions(projectCwd, autoRouting.router.providerOptions);
+      resolveRuntimeProviderOptions(
+        projectCwd,
+        autoRouting.router.provider,
+        autoRouting.router.providerOptions,
+      );
     }
     return;
   }
@@ -361,7 +365,7 @@ function validateRuntimeStepProviderOptions(
     config.providerOptionsOriginResolver,
   );
   if (baseProviderInfo.providerOptions !== undefined) {
-    resolveRuntimeProviderOptions(projectCwd, baseProviderInfo.providerOptions);
+    resolveRuntimeProviderOptions(projectCwd, providerInfo.provider, baseProviderInfo.providerOptions);
   }
 
   const agentStep = getWorkflowStepKind(step) === 'agent'
@@ -397,7 +401,11 @@ function validateRuntimeStepProviderOptions(
       ladderStage.entry.providerOptions,
     );
     if (promotedProviderOptions.providerOptions !== undefined) {
-      resolveRuntimeProviderOptions(projectCwd, promotedProviderOptions.providerOptions);
+      resolveRuntimeProviderOptions(
+        projectCwd,
+        ladderStage.entry.provider ?? providerInfo.provider,
+        promotedProviderOptions.providerOptions,
+      );
     }
   }
 }
@@ -598,7 +606,11 @@ export function resolveRuntimeEnvironment(
   // Validate the runtime default profile together with explicit provider-options environment
   // overrides before workflow execution. Keep the resolved environment bundle separate from
   // configProviderOptions; the execution seam still applies that split per step.
-  resolveRuntimeProviderOptions(input.projectCwd, providerEnvironment.providerOptions);
+  resolveRuntimeProviderOptions(
+    input.projectCwd,
+    providerEnvironment.provider,
+    providerEnvironment.providerOptions,
+  );
   if (input.workflow !== undefined) {
     const providerOptionsConfig: RuntimeProviderOptionsValidationContext = {
       providerOptions: input.legacy.providerOptions,

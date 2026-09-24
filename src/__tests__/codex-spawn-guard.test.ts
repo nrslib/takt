@@ -481,9 +481,11 @@ describe('codex-spawn-guard', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-codex-config-'));
     tempRoots.add(root);
     const projectDir = join(root, 'project');
-    const globalDir = join(root, 'global');
+    const globalDir = process.env.TAKT_CONFIG_DIR;
+    if (globalDir === undefined) {
+      throw new Error('TAKT_CONFIG_DIR must be provided by the shared test setup');
+    }
     mkdirSync(join(projectDir, '.takt'), { recursive: true });
-    mkdirSync(globalDir, { recursive: true });
     writeFileSync(join(globalDir, 'config.yaml'), [
       'provider_options:',
       '  codex:',
@@ -494,12 +496,11 @@ describe('codex-spawn-guard', () => {
       '  codex:',
       '    config_profile: project-review',
     ].join('\n'));
-    vi.stubEnv('TAKT_CONFIG_DIR', globalDir);
     vi.stubEnv('TAKT_CODEX_CLI_PATH', fixture.executablePath);
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    const providerOptions = resolveNonWorkflowProviderOptions(projectDir);
+    const providerOptions = resolveNonWorkflowProviderOptions(projectDir, undefined, undefined, 'codex');
     expect(providerOptions).toMatchObject({
       codex: { permissionControl: 'codex', configProfile: 'project-review' },
     });

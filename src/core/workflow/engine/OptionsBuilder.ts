@@ -347,6 +347,7 @@ export class OptionsBuilder {
           baseProviderOptions,
           directStepProviderOptions,
           mergeProviderOptions(runtimeProviderOptions, middleProviderOptions),
+          resolvedProviderInfo.provider,
         );
       }
       const stepProviderOptions = mergeRuntimeAndDirectStepProviderOptions(
@@ -360,6 +361,7 @@ export class OptionsBuilder {
         baseProviderOptions,
         stepProviderOptions,
         profileProviderOptions,
+        resolvedProviderInfo.provider,
       );
     }
 
@@ -386,6 +388,7 @@ export class OptionsBuilder {
       baseProviderOptions,
       directStepProviderOptions,
       profileProviderOptions,
+      resolvedProviderInfo.provider,
     );
   }
 

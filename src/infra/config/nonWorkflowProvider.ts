@@ -59,7 +59,7 @@ export function resolveNonWorkflowProviderModel(cwd: string): ResolvedNonWorkflo
     validateProviderModelRequirements(composed.provider, composed.model, {
       modelFieldName: 'Configuration error: runtime.yaml defaults resolved model',
     });
-    const providerOptions = resolveRuntimeProviderOptions(cwd, composed.providerOptions);
+    const providerOptions = resolveRuntimeProviderOptions(cwd, composed.provider, composed.providerOptions);
     return {
       runtimeManaged: true,
       provider: composed.provider,

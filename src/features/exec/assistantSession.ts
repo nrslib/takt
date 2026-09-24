@@ -86,10 +86,11 @@ export function createExecSessionContext(
     && runtimeProvider.provider === config.session.provider
     ? resolveRuntimeProviderOptions(
         cwd,
+        runtimeProvider.provider,
         runtimeProvider.providerOptions,
         sessionProviderOptions,
-      )
-    : resolveNonWorkflowProviderOptions(cwd, sessionProviderOptions);
+    )
+    : resolveNonWorkflowProviderOptions(cwd, sessionProviderOptions, undefined, config.session.provider);
   return {
     provider: getProvider(config.session.provider as ProviderType),
     providerType: config.session.provider,

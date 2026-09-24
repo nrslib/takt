@@ -7,9 +7,9 @@ import type { PermissionMode } from '../../core/models/types.js';
 import {
   mergeProviderOptions,
   resolveEffectiveProviderOptions,
-  resolveProviderOptionOrigin,
+  selectEnvironmentProviderOptions,
 } from './providerOptions.js';
-import { getPresentProviderOptionPaths } from './providerOptionsContract.js';
+import { getSelectorProviderOptionRoots } from './providerOptionsContract.js';
 import { validateProviderModelRequirements } from '../../core/workflow/provider-model-requirements.js';
 import { ConfiguredModelSchema } from '../../core/models/model-schema.js';
 import { loadProjectConfig } from './project/projectConfig.js';
@@ -260,7 +260,11 @@ function resolveSelectorFromRuntimeValues(
   validateProviderModelRequirements(provider, model, {
     modelFieldName: 'Configuration error: runtime.yaml internal_agents.selector resolved model',
   });
-  const providerOptions = resolveRuntimeProviderOptions(projectCwd, composed.providerOptions);
+  const providerOptions = resolveRuntimeProviderOptions(
+    projectCwd,
+    provider,
+    composed.providerOptions,
+  );
   return {
     ...(provider === undefined ? {} : { provider }),
     ...(providerSource === undefined ? {} : { providerSource }),
@@ -284,7 +288,7 @@ function resolveSelectorProviderOptions(
   if (merged === undefined) {
     return undefined;
   }
-  const applicableOptions = Object.fromEntries(getSelectorProviderOptionKeys(provider).flatMap((key) => (
+  const applicableOptions = Object.fromEntries(getSelectorProviderOptionRoots(provider).flatMap((key) => (
     merged[key] === undefined ? [] : [[key, merged[key]]]
   )));
   return Object.keys(applicableOptions).length === 0 ? undefined : applicableOptions as StepProviderOptions;
@@ -296,72 +300,18 @@ function resolveLegacySelectorProviderOptions(
   selectorOptions: StepProviderOptions | undefined,
 ): StepProviderOptions | undefined {
   const resolved = resolveProviderOptionsWithTrace(projectCwd);
-  const environmentOptions = selectEnvironmentSelectorProviderOptions(
+  const environmentOptions = selectEnvironmentProviderOptions(
     resolved.value,
     resolved.originResolver,
-    provider,
+    getSelectorProviderOptionRoots(provider),
   );
   const providerOptions = resolveEffectiveProviderOptions(
     'env',
     resolved.originResolver,
     environmentOptions,
     selectorOptions,
+    undefined,
+    provider,
   );
   return providerOptions;
-}
-
-function selectEnvironmentSelectorProviderOptions(
-  providerOptions: StepProviderOptions | undefined,
-  originResolver: (path: string) => 'env' | 'cli' | 'local' | 'global' | 'default',
-  provider: ProviderType,
-): StepProviderOptions | undefined {
-  if (providerOptions === undefined) {
-    return undefined;
-  }
-  const applicableKeys = new Set(getSelectorProviderOptionKeys(provider));
-  const selected: Record<string, unknown> = {};
-  for (const path of getPresentProviderOptionPaths(providerOptions)) {
-    const [root] = path.split('.');
-    if (root === undefined || !applicableKeys.has(root as keyof StepProviderOptions)) {
-      continue;
-    }
-    if (resolveProviderOptionOrigin(originResolver, path, 'default') !== 'env'
-      && resolveProviderOptionOrigin(originResolver, path, 'default') !== 'cli') {
-      continue;
-    }
-    const value = path.split('.').reduce<unknown>((current, segment) => {
-      if (current === null || typeof current !== 'object') {
-        return undefined;
-      }
-      return (current as Record<string, unknown>)[segment];
-    }, providerOptions);
-    if (value === undefined) {
-      continue;
-    }
-    const segments = path.split('.');
-    let current = selected;
-    for (const segment of segments.slice(0, -1)) {
-      const nested = current[segment];
-      if (nested === null || typeof nested !== 'object' || Array.isArray(nested)) {
-        current[segment] = {};
-      }
-      current = current[segment] as Record<string, unknown>;
-    }
-    current[segments[segments.length - 1]!] = value;
-  }
-  return Object.keys(selected).length === 0 ? undefined : selected as StepProviderOptions;
-}
-
-function getSelectorProviderOptionKeys(provider: ProviderType): readonly (keyof StepProviderOptions)[] {
-  if (provider === 'claude-sdk') return ['claude'];
-  if (provider === 'claude-terminal') return ['claude', 'claudeTerminal'];
-  return provider === 'codex'
-    || provider === 'opencode'
-    || provider === 'claude'
-    || provider === 'copilot'
-    || provider === 'kiro'
-    || provider === 'pi'
-    || provider === 'deepseek-harness'
-    ? [provider === 'deepseek-harness' ? 'deepseekHarness' : provider]
-    : [];
 }

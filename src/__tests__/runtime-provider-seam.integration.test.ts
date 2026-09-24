@@ -1141,6 +1141,37 @@ describe('runtime provider options through workflow execution', () => {
     });
   });
 
+  it('allows a non-Codex workflow when only the Codex config profile env option is set', async () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'opencode', model: 'opencode/qwen' },
+        },
+      },
+    });
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'review';
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([makeResponse({ persona: 'planner', content: 'done' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const result = await runWorkflowExecution({
+      task: 'non-Codex workflow with Codex-only environment option',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+      resolvedProvider: 'opencode',
+    });
+  });
+
   it.each(['project', 'global'] as const)(
     'rejects %s provider_options when an unrelated env leaf is also present',
     async (scope) => {

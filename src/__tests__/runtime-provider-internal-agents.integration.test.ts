@@ -3,8 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
+import type { WorkflowConfig } from '../core/models/workflow-types.js';
 import { resolveRuntimeInternalAgentProvider } from '../infra/config/runtime-provider/internal-agents.js';
-import { resolveSelectorProviderForProject } from '../infra/config/selectorProviderResolution.js';
+import {
+  resolveSelectorProviderForProject,
+  resolveSelectorProviderFromRuntimeEnvironment,
+} from '../infra/config/selectorProviderResolution.js';
 import { resolveAssistantProviderModel } from '../features/interactive/assistantConfig.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 import {
@@ -16,6 +20,7 @@ import {
 } from '../infra/config/index.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 import { resolveRuntimeEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
+import { resolveProviderOptionsWithTrace } from '../infra/config/resolveConfigValue.js';
 
 /**
  * Integration coverage for the internal-agent (selector/assistant) seams reading the runtime.yaml
@@ -87,6 +92,77 @@ describe('runtime.yaml internal_agents resolution', () => {
     } finally {
       if (previous === undefined) delete process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
       else process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = previous;
+      invalidate();
+    }
+  });
+
+  it('does not apply Codex profile env options to an OpenCode runtime default or workflow step', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'opencode', model: 'opencode/qwen' },
+          router: {
+            provider: 'codex',
+            model: 'gpt-router',
+            options: { permission_control: 'codex' },
+          },
+        },
+        targets: { internal_agents: { selector: { profile: 'router' } } },
+      },
+    });
+    const previousConfigProfile = process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'review';
+    invalidate();
+
+    try {
+      const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
+      const workflow: WorkflowConfig = {
+        name: 'open-code-workflow',
+        steps: [{
+          kind: 'agent',
+          name: 'implementation',
+          personaDisplayName: 'Implementation',
+          instruction: 'implement',
+        }],
+        initialStep: 'implementation',
+        maxSteps: 1,
+      };
+      const resolved = resolveRuntimeEnvironment({
+        projectCwd,
+        legacySignals: [],
+        legacy: {
+          provider: undefined,
+          providerSource: 'default',
+          model: undefined,
+          modelSource: 'default',
+          personaProviders: undefined,
+          providerRouting: undefined,
+          autoRouting: undefined,
+          providerOptions: providerOptions.value,
+        },
+        providerOptionsSource: providerOptions.source,
+        providerOptionsOriginResolver: providerOptions.originResolver,
+        workflow,
+      });
+
+      expect(resolved.providerEnvironment.provider).toBe('opencode');
+      expect(resolveSelectorProviderFromRuntimeEnvironment(
+        resolved.providerEnvironment,
+        projectCwd,
+      )).toMatchObject({
+        provider: 'codex',
+        providerOptions: {
+          codex: { configProfile: 'review', permissionControl: 'codex' },
+        },
+      });
+    } finally {
+      if (previousConfigProfile === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = previousConfigProfile;
+      }
       invalidate();
     }
   });

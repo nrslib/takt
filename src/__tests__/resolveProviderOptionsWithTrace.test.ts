@@ -82,6 +82,16 @@ describe('resolveProviderOptionsWithTrace', () => {
       .toThrow(/unsupported/iu);
   });
 
+  it('Codex profile env は非 Codex の選択時に Codex permission control を要求しない', () => {
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'review';
+
+    const options = resolveNonWorkflowProviderOptions(projectDir, undefined, undefined, 'opencode');
+
+    expect(options?.codex?.configProfile).toBe('review');
+    expect(() => resolveNonWorkflowProviderOptions(projectDir, undefined, undefined, 'codex'))
+      .toThrow(/config_profile requires permission_control: codex/);
+  });
+
   it('既定の Skill 設定を解決結果ごとに分離する', () => {
     const first = resolveProviderOptionsWithTrace(projectDir);
     const firstCodexSkills = first.value?.codex?.skills;

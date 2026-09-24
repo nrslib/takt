@@ -1,5 +1,42 @@
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { EnvSpec } from './env/config-env-overrides.js';
+import type { ProviderType } from '../../shared/types/provider.js';
+
+const PROVIDER_OPTION_ROOTS: Readonly<Record<ProviderType, readonly (keyof StepProviderOptions)[]>> = {
+  claude: ['claude'],
+  'claude-sdk': ['claude'],
+  'claude-terminal': ['claude', 'claudeTerminal'],
+  codex: ['codex'],
+  opencode: ['opencode'],
+  cursor: ['cursor'],
+  copilot: ['copilot'],
+  kiro: ['kiro'],
+  pi: ['pi'],
+  'deepseek-harness': ['deepseekHarness'],
+  mock: [],
+};
+
+export function getProviderOptionRoots(provider: ProviderType): readonly (keyof StepProviderOptions)[] {
+  return PROVIDER_OPTION_ROOTS[provider];
+}
+
+const SELECTOR_PROVIDER_OPTION_TYPES: ReadonlySet<ProviderType> = new Set([
+  'claude',
+  'claude-sdk',
+  'claude-terminal',
+  'codex',
+  'opencode',
+  'copilot',
+  'kiro',
+  'pi',
+  'deepseek-harness',
+]);
+
+export function getSelectorProviderOptionRoots(
+  provider: ProviderType,
+): readonly (keyof StepProviderOptions)[] {
+  return SELECTOR_PROVIDER_OPTION_TYPES.has(provider) ? getProviderOptionRoots(provider) : [];
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

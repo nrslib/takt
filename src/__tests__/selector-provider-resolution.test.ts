@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantProviderConfig } from '../core/config/provider-resolution.js';
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import type { WorkflowConfig } from '../core/models/types.js';
@@ -189,6 +189,22 @@ describe('selector provider resolution', () => {
     expect(resolved.providerOptions).toEqual({ codex: { reasoningEffort: 'medium' } });
   });
 
+  it('should keep Cursor provider options out of selector agents', () => {
+    const resolved = resolveSelectorProviderFromConfig({
+      local: {
+        taktProviders: {
+          selector: {
+            provider: 'cursor',
+            providerOptions: { cursor: { guards: { callTimeoutMs: 60_000 } } },
+          },
+        },
+      },
+      global: {},
+    });
+
+    expect(resolved.providerOptions).toBeUndefined();
+  });
+
   it('should not reject Codex options that are not selected by a mock selector', () => {
     const resolved = resolveSelectorProviderFromConfig({
       local: {
@@ -296,6 +312,7 @@ describe('workflow selector resolution', () => {
   const originalConfigDir = process.env.TAKT_CONFIG_DIR;
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     for (const root of roots.splice(0)) {
       rmSync(root, { recursive: true, force: true });
     }
@@ -693,6 +710,63 @@ describe('workflow selector resolution', () => {
       invalidateGlobalConfigCache();
       invalidateAllResolvedConfigCache();
     }
+  });
+
+  it('should apply a Codex profile env override when selector options enable Codex permission control', () => {
+    const projectDir = createProject([
+      'provider: codex',
+      'model: gpt-selector',
+      'takt_providers:',
+      '  selector:',
+      '    provider: codex',
+      '    provider_options:',
+      '      codex:',
+      '        permission_control: codex',
+    ].join('\n'));
+    vi.stubEnv('TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE', 'review');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    expect(resolveSelectorProviderForProject(projectDir)).toMatchObject({
+      provider: 'codex',
+      providerOptions: {
+        codex: { configProfile: 'review', permissionControl: 'codex' },
+      },
+    });
+  });
+
+  it('should not inherit top-level Codex permission control for a selector profile env override', () => {
+    const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR;
+    if (globalConfigDir === undefined) {
+      throw new Error('TAKT_CONFIG_DIR must be provided by the shared test setup');
+    }
+    writeFileSync(join(globalConfigDir, 'config.yaml'), [
+      'provider_options:',
+      '  codex:',
+      '    permission_control: codex',
+    ].join('\n'));
+    vi.stubEnv('TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE', 'review');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    expect(() => resolveSelectorProviderForProject(projectDir))
+      .toThrow(/config_profile requires permission_control: codex/);
+  });
+
+  it('should apply Codex profile and permission control env overrides to the selector together', () => {
+    const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
+    vi.stubEnv('TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE', 'review');
+    vi.stubEnv('TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL', 'codex');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    expect(resolveSelectorProviderForProject(projectDir)).toMatchObject({
+      provider: 'codex',
+      providerOptions: {
+        codex: { configProfile: 'review', permissionControl: 'codex' },
+      },
+    });
   });
 
   it('should reject an invalid legacy selector Codex options combination before the consumer runs', () => {

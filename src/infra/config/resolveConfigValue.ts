@@ -27,6 +27,7 @@ import type {
   ProviderOptionsTraceOrigin,
 } from '../../core/workflow/provider-options-trace.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
+import type { ProviderType } from '../../shared/types/provider.js';
 
 export type { ConfigParameterKey } from './resolvedConfig.js';
 export { invalidateResolvedConfigCache, invalidateAllResolvedConfigCache } from './resolutionCache.js';
@@ -611,6 +612,7 @@ export function resolveNonWorkflowProviderOptions(
   projectDir: string,
   callOptions?: StepProviderOptions,
   codexSkillDefaults?: CodexSkillDefaults,
+  resolvedProvider?: ProviderType,
 ): StepProviderOptions | undefined {
   const resolved = resolveProviderOptionsWithTrace(projectDir, codexSkillDefaults);
   const providerOptions = resolveEffectiveProviderOptions(
@@ -618,6 +620,8 @@ export function resolveNonWorkflowProviderOptions(
     resolved.originResolver,
     resolved.value,
     callOptions,
+    undefined,
+    resolvedProvider,
   );
   return providerOptions;
 }
