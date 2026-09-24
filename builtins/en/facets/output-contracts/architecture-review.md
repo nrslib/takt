@@ -29,6 +29,8 @@
 {{include:output-contracts/base-review-reopened-findings}}
 | 1 | ARCH-REOPENED-src-file-L55 | design-violation | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at src/file.ts:55` | Issue description | Fix approach |
 
+{{include:output-contracts/base-review-non-finding-concerns}}
+
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-verification-evidence}}
 
@@ -41,6 +43,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE → Summary + Verification Evidence + Impact-Path Evidence. Omit everything else
+- APPROVE → Summary + Verification Evidence + Impact-Path Evidence. Omit everything else. Never omit Non-Finding Concerns (including carry-forwards of plan caveats) when they have content
 - REJECT → Include every verified finding row and aggregate locations with the same cause
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

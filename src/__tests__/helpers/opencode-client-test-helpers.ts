@@ -136,13 +136,14 @@ export class StallingEventStream implements AsyncGenerator<unknown, void, unknow
     if (this.signal?.aborted) {
       return { done: true, value: undefined };
     }
-    if (this.signal) {
+    const signal = this.signal;
+    if (signal) {
       return new Promise<IteratorResult<unknown, void>>((resolve) => {
         const onAbort = (): void => {
-          this.signal?.removeEventListener('abort', onAbort);
+          signal.removeEventListener('abort', onAbort);
           resolve({ done: true, value: undefined });
         };
-        this.signal.addEventListener('abort', onAbort, { once: true });
+        signal.addEventListener('abort', onAbort, { once: true });
       });
     }
     return new Promise<IteratorResult<unknown, void>>(() => {});
@@ -245,7 +246,9 @@ export function deferred<T = void>(): {
   let resolve!: (value?: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
   const promise = new Promise<T>((res, rej) => {
-    resolve = res;
+    resolve = (value) => {
+      res(value as T);
+    };
     reject = rej;
   });
   return { promise, resolve, reject };

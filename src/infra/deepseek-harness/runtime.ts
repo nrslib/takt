@@ -31,37 +31,42 @@ export function redactDeepSeekHarnessDiagnostic(
 
 const PROBE_SCRIPT = `
 import importlib.metadata
-import inspect
 import json
 import sys
 from deepseek_harness import DeepSeekHarness
 
 sdk_distribution = importlib.metadata.distribution('deepseek-harness-sdk')
 runtime_distribution = importlib.metadata.distribution('deepseek-harness-runtime-bin')
-constructor_signature = inspect.signature(DeepSeekHarness)
-try:
-    constructor_signature.bind(
-        provider='__takt_probe_provider__',
-        model='__takt_probe_model__',
-        cwd='.',
-        runtime_cwd='.',
-        max_tokens=None,
-        session_root=None,
-        cordis=None,
-        request_timeout_seconds=1.0,
-        shutdown_timeout_seconds=1.0,
-    )
-except TypeError as error:
-    raise RuntimeError(
-        'DeepSeek Harness SDK constructor signature is incompatible with the managed runtime contract'
-    ) from error
+base_probe_kwargs = {
+    'provider': '__takt_probe_provider__',
+    'model': '__takt_probe_model__',
+    'cwd': '.',
+    'runtime_cwd': '.',
+    'max_tokens': None,
+    'request_timeout_seconds': 1.0,
+    'shutdown_timeout_seconds': 1.0,
+}
+for reasoning_effort in (None, 'off', 'low', 'high', 'max'):
+    probe_kwargs = dict(base_probe_kwargs)
+    if reasoning_effort is not None:
+        probe_kwargs['reasoning_effort'] = reasoning_effort
+    harness = None
+    try:
+        try:
+            harness = DeepSeekHarness(**probe_kwargs)
+        except TypeError as error:
+            raise RuntimeError(
+                'DeepSeek Harness SDK constructor signature is incompatible with the managed runtime contract'
+            ) from error
+    finally:
+        if harness is not None:
+            harness.close()
 print(json.dumps({
     'implementation': sys.implementation.name,
     'python': list(sys.version_info[:3]),
     'sdkVersion': sdk_distribution.metadata.get('Version'),
     'sdkRequiresPython': sdk_distribution.metadata.get('Requires-Python'),
     'runtimeVersion': runtime_distribution.metadata.get('Version'),
-    'constructorParameters': list(constructor_signature.parameters),
 }))
 `;
 
@@ -77,7 +82,6 @@ export interface DeepSeekHarnessRuntimeInfo {
   sdkVersion: string;
   sdkRequiresPython: string | undefined;
   runtimeVersion: string;
-  constructorParameters: readonly string[];
 }
 
 function createProbeTimeoutError(timeoutMs: number): Error {
@@ -86,9 +90,11 @@ function createProbeTimeoutError(timeoutMs: number): Error {
   return error;
 }
 
+/** Probe the managed SDK with its own home, never an ambient user's profile tree. */
 async function runProbeCommand(
   pythonPath: string,
   probeCwd: string,
+  dshHomeDir: string,
   abortSignal: AbortSignal | undefined,
   timeoutMs: number | undefined,
 ): Promise<ProbeCommandResult> {
@@ -105,6 +111,7 @@ async function runProbeCommand(
     ? undefined
     : setTimeout(() => probeController.abort(createProbeTimeoutError(timeoutMs)), timeoutMs);
   const environment = { ...process.env };
+  environment.DSH_HOME = dshHomeDir;
   delete environment.PYTHONHOME;
   delete environment.PYTHONPATH;
   delete environment.VIRTUAL_ENV;
@@ -219,7 +226,6 @@ function parseProbeOutput(stdout: string): DeepSeekHarnessRuntimeInfo {
   }
   const record = parsed as Record<string, unknown>;
   const python = record.python;
-  const constructorParameters = record.constructorParameters;
   if (
     typeof record.implementation !== 'string'
     || !Array.isArray(python)
@@ -228,8 +234,6 @@ function parseProbeOutput(stdout: string): DeepSeekHarnessRuntimeInfo {
     || typeof record.sdkVersion !== 'string'
     || (record.sdkRequiresPython !== undefined && typeof record.sdkRequiresPython !== 'string')
     || typeof record.runtimeVersion !== 'string'
-    || !Array.isArray(constructorParameters)
-    || !constructorParameters.every((value) => typeof value === 'string')
   ) {
     throw new Error(
       `managed interpreter probe returned incomplete metadata: ${redactDeepSeekHarnessDiagnostic(JSON.stringify(parsed), process.env)}`,
@@ -241,17 +245,18 @@ function parseProbeOutput(stdout: string): DeepSeekHarnessRuntimeInfo {
     sdkVersion: record.sdkVersion,
     sdkRequiresPython: record.sdkRequiresPython,
     runtimeVersion: record.runtimeVersion,
-    constructorParameters: constructorParameters as string[],
   };
 }
 
+/** Parse an isolated SDK probe result, redacting process failures before reporting them. */
 async function probeDeepSeekHarnessRuntime(
   pythonPath: string,
   probeCwd: string,
+  dshHomeDir: string,
   abortSignal: AbortSignal | undefined,
   timeoutMs: number | undefined,
 ): Promise<DeepSeekHarnessRuntimeInfo> {
-  const result = await runProbeCommand(pythonPath, probeCwd, abortSignal, timeoutMs);
+  const result = await runProbeCommand(pythonPath, probeCwd, dshHomeDir, abortSignal, timeoutMs);
   if (result.code !== 0) {
     const diagnostic = redactDeepSeekHarnessDiagnostic(result.stderr, process.env);
     throw new Error(
@@ -263,6 +268,7 @@ async function probeDeepSeekHarnessRuntime(
   return parseProbeOutput(result.stdout);
 }
 
+/** Reject interpreter or package versions that differ from the pinned managed runtime contract. */
 function assertDeepSeekHarnessRuntimeContract(
   info: DeepSeekHarnessRuntimeInfo,
 ): void {
@@ -295,31 +301,17 @@ function assertDeepSeekHarnessRuntimeContract(
       + `does not allow CPython ${DEEPSEEK_HARNESS_PYTHON_VERSION}`,
     );
   }
-  const requiredParameters = [
-    'provider',
-    'model',
-    'cwd',
-    'runtime_cwd',
-    'max_tokens',
-    'session_root',
-    'cordis',
-    'request_timeout_seconds',
-    'shutdown_timeout_seconds',
-  ];
-  if (requiredParameters.some((parameter) => !info.constructorParameters.includes(parameter))) {
-    throw new Error(
-      'DeepSeek Harness SDK constructor signature is incompatible with the managed runtime contract',
-    );
-  }
 }
 
+/** Validate pinned versions and constructor/close using the same home as the managed bridge. */
 export async function validateDeepSeekHarnessRuntime(
   pythonPath: string,
   probeCwd: string,
+  dshHomeDir: string,
   abortSignal?: AbortSignal,
   timeoutMs?: number,
 ): Promise<DeepSeekHarnessRuntimeInfo> {
-  const info = await probeDeepSeekHarnessRuntime(pythonPath, probeCwd, abortSignal, timeoutMs);
+  const info = await probeDeepSeekHarnessRuntime(pythonPath, probeCwd, dshHomeDir, abortSignal, timeoutMs);
   assertDeepSeekHarnessRuntimeContract(info);
   return info;
 }

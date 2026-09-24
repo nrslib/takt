@@ -37,7 +37,7 @@ export function resolveOpenCodePermissionReply(
     return 'once';
   }
 
-  if (!permission || !isOpenCodePermissionKey(permission)) {
+  if (!permission) {
     return 'reject';
   }
 
@@ -45,6 +45,10 @@ export function resolveOpenCodePermissionReply(
     return isPermissionAllowedByRuleset(permission, allowedToolsRuleset)
       ? mapAllowedRulesetReply(mode)
       : 'reject';
+  }
+
+  if (!isOpenCodePermissionKey(permission)) {
+    return 'reject';
   }
 
   return mode ? mapToOpenCodePermissionReply(mode) : 'once';
@@ -180,9 +184,10 @@ export function buildOpenCodePermissionRuleset(
   mode?: PermissionMode,
   networkAccess?: boolean,
   allowedTools?: OpenCodeAllowedTools,
+  allowedMcpTools?: readonly string[],
 ): OpenCodePermissionRule[] {
   if (allowedTools !== undefined) {
-    return buildOpenCodeAllowedToolsRuleset(mode, networkAccess, allowedTools);
+    return buildOpenCodeAllowedToolsRuleset(mode, networkAccess, allowedTools, allowedMcpTools);
   }
 
   if (mode === 'full' && networkAccess === undefined) {
@@ -222,8 +227,9 @@ export function buildOpenCodeSessionPermission(
   mode?: PermissionMode,
   networkAccess?: boolean,
   allowedTools?: OpenCodeAllowedTools,
+  allowedMcpTools?: readonly string[],
 ): OpenCodePermissionRule[] {
-  const rules = buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools)
+  const rules = buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools)
     .map((rule) => (
       (rule.permission === 'edit' || rule.permission === 'write') && rule.action === 'deny'
         ? { ...rule, action: 'allow' as const }
@@ -306,10 +312,16 @@ export function buildOpenCodePromptTools(
   mode?: PermissionMode,
   networkAccess?: boolean,
   allowedTools?: OpenCodeAllowedTools,
+  allowedMcpTools?: readonly string[],
 ): Record<string, boolean> {
   const enabledPermissions = new Set<string>();
   if (allowedTools !== undefined) {
-    for (const permission of resolveOpenCodeAllowedPermissions(mode, networkAccess, allowedTools)) {
+    for (const permission of resolveOpenCodeAllowedPermissions(
+      mode,
+      networkAccess,
+      allowedTools,
+      allowedMcpTools,
+    )) {
       enabledPermissions.add(permission);
     }
   } else {
@@ -320,12 +332,18 @@ export function buildOpenCodePromptTools(
       }
     }
   }
+  for (const permission of allowedMcpTools ?? []) {
+    enabledPermissions.add(permission);
+  }
 
   const tools: Record<string, boolean> = { task: false };
   for (const [permission, toolIds] of Object.entries(OPEN_CODE_TOOL_IDS_BY_PERMISSION)) {
     for (const toolId of toolIds) {
       tools[toolId] = (tools[toolId] ?? false) || enabledPermissions.has(permission);
     }
+  }
+  for (const permission of allowedMcpTools ?? []) {
+    tools[permission] = enabledPermissions.has(permission);
   }
   return tools;
 }
@@ -334,8 +352,13 @@ function buildOpenCodeAllowedToolsRuleset(
   mode: PermissionMode | undefined,
   networkAccess: boolean | undefined,
   allowedTools: OpenCodeAllowedTools,
+  allowedMcpTools: readonly string[] | undefined,
 ): OpenCodePermissionRule[] {
-  if (allowedTools.length === 0) {
+  const mcpRules = (allowedMcpTools ?? [])
+    .filter((permission) => permission.length > 0)
+    .map((permission) => ({ permission, pattern: '*', action: 'allow' as const }));
+
+  if (allowedTools.length === 0 && mcpRules.length === 0) {
     return [{ permission: '*', pattern: '*', action: 'deny' }];
   }
 
@@ -344,6 +367,7 @@ function buildOpenCodeAllowedToolsRuleset(
   return [
     { permission: '*', pattern: '*', action: 'deny' },
     ...uniqueAllowed.map((permission) => ({ permission, pattern: '*', action: 'allow' as const })),
+    ...mcpRules,
   ];
 }
 
@@ -351,6 +375,7 @@ export function resolveOpenCodeAllowedPermissions(
   mode: PermissionMode | undefined,
   networkAccess: boolean | undefined,
   allowedTools: OpenCodeAllowedTools,
+  allowedMcpTools: readonly string[] = [],
 ): string[] {
   const allowed = allowedTools
     .map(toOpenCodeAllowedPermission)
@@ -360,7 +385,7 @@ export function resolveOpenCodeAllowedPermissions(
       && (permission !== 'edit' || isAllowedByPermissionMode(permission, mode))
       && (networkAccess !== false || !isOpenCodeWebPermission(permission))
     ));
-  return Array.from(new Set(allowed));
+  return Array.from(new Set([...allowed, ...allowedMcpTools]));
 }
 
 function isOpenCodeWebPermission(permission: string): boolean {
@@ -430,6 +455,8 @@ export interface OpenCodeCallOptions {
   systemPrompt?: string;
   /** Resolved OpenCode tool allowlist from provider_options.opencode.allowed_tools. */
   allowedTools?: OpenCodeAllowedTools;
+  /** Trusted task-state MCP tools in OpenCode's normalized permission names. */
+  allowedMcpTools?: readonly string[];
   permissionMode?: PermissionMode;
   networkAccess?: boolean;
   variant?: string;

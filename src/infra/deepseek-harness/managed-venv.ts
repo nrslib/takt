@@ -241,6 +241,7 @@ function isManagedAssetIntegrityFailure(diagnostic: string): boolean {
   return mentionsManagedAsset && describesMismatch;
 }
 
+/** Install the locked SDK environment and validate it using the managed home before recording readiness. */
 async function installManagedEnvironment(
   uvPath: string,
   paths: DeepSeekHarnessManagedPaths,
@@ -268,6 +269,7 @@ async function installManagedEnvironment(
   const runtime = await validateDeepSeekHarnessRuntime(
     paths.pythonPath,
     paths.managedRoot,
+    paths.dshHomeDir,
     undefined,
     UV_COMMAND_TIMEOUT_MS,
   );

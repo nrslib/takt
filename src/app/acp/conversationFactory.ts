@@ -12,11 +12,13 @@ export function createDefaultConversationSession(options: AcpConversationSession
     assistantMode: 'assistant',
     formalSpec: formalSpecConfiguration.mode,
     formalSpecComments: formalSpecConfiguration.comments,
+    modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
   });
   return createConversationSession({
     ...options,
     formalSpec: formalSpecConfiguration.mode,
     formalSpecComments: formalSpecConfiguration.comments,
+    modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
     ctx,
     strategy,
   });

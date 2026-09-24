@@ -111,12 +111,34 @@ function summaryTemplateVars(): Record<string, unknown> {
   return call[2] as Record<string, unknown>;
 }
 
-function createPlan(assistantMode: AssistantInteractiveMode = 'assistant'): ConversationPlan {
+function createPlan(
+  assistantMode: AssistantInteractiveMode = 'assistant',
+  permissionMode?: PermissionMode,
+): ConversationPlan {
+  const resolvedSessionContext = permissionMode === undefined
+    ? undefined
+    : {
+      provider: {
+        supportsStructuredOutput: false,
+        supportsNativeImageInput: false,
+        keepsAllowedToolWithoutEdit: vi.fn(() => true),
+        setup: vi.fn(),
+        getRuntimeInstructions: vi.fn(() => null),
+      },
+      providerType: 'mock' as const,
+      model: 'mock-model',
+      lang: 'en' as const,
+      personaName: 'interactive',
+      sessionId: undefined,
+      permissionMode,
+    };
   return createAssistantConversationPlan('/repo', {
     assistantMode,
     formalSpec: false,
     formalSpecComments: true,
+    modelCheckTimeoutSeconds: 300,
     workflowContext: WORKFLOW_CONTEXT,
+    ...(resolvedSessionContext === undefined ? {} : { resolvedSessionContext }),
   });
 }
 
@@ -137,7 +159,7 @@ function createConversationForMode(mode: 'assistant' | 'grill-me' | 'persona'): 
       personaContent: 'You are the reviewer.',
       personaDisplayName: 'Reviewer',
       allowedTools: ['Read'],
-    })
+    }, { modelCheckTimeoutSeconds: 300 })
     : createPlan(mode);
   return createConversation({ plan });
 }
@@ -153,6 +175,12 @@ function send(
     abortSignal,
     onAssistantChunk: (chunk) => chunks.push(chunk),
   });
+}
+
+function expectPermissionResolution(callIndex: number): void {
+  const call = mockCallAIWithRetry.mock.calls[callIndex];
+  expect(call?.[4]).toEqual(expect.objectContaining({ permissionMode: 'readonly' }));
+  expect(call?.[5]).toEqual(expect.objectContaining({ permissionMode: undefined }));
 }
 
 async function submit(text: string, chunks: string[], overrides?: Partial<TuiConversationOptions>) {
@@ -171,7 +199,11 @@ beforeEach(() => {
   });
   mockLoadTemplate.mockReturnValue('rendered template');
   mockLoadAssistantInitContext.mockReturnValue(undefined);
-  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({
+    mode: false,
+    comments: true,
+    modelCheckTimeoutSeconds: 300,
+  });
   mockRunFormalSpecVerification.mockResolvedValue({
     verdict: 'passed',
     verificationStarted: true,
@@ -393,18 +425,18 @@ describe('TUI conversation layer', () => {
     expect(outcome).toMatchObject({ kind: 'error', message: 'rate limit reached' });
   });
 
-  it('should carry the Grill Me read-only permission mode into the provider call', async () => {
+  it('should preserve configured Grill Me permission through initial and subsequent TUI turns', async () => {
     const chunks: string[] = [];
-    const grillMe = createConversation({ plan: createPlan('grill-me') });
+    const grillMe = createConversation({ plan: createPlan('grill-me', 'readonly') });
 
     await send(grillMe, 'hello', chunks);
 
-    expect(lastCallOptions().permissionMode).toBe('readonly');
-    expect(lastCallAllowedTools()).not.toContain('Bash');
+    expectPermissionResolution(0);
+    expect(lastCallAllowedTools()).toContain('Bash');
 
-    await submit('hello', chunks);
+    await send(grillMe, 'hello again', chunks);
 
-    expect(lastCallOptions().permissionMode).toBeUndefined();
+    expectPermissionResolution(1);
     expect(lastCallAllowedTools()).toContain('Bash');
   });
 });
@@ -655,7 +687,10 @@ describe('TUI local commands', () => {
     expect(mockLoadTemplate).toHaveBeenCalledWith(
       'score_summary_formal_spec_instructions',
       'en',
-      { formalSpecComments: true },
+      expect.objectContaining({
+        formalSpecComments: true,
+        formalSpecVerifierConstraints: expect.any(String),
+      }),
     );
   });
 
@@ -764,7 +799,7 @@ describe('TUI local commands', () => {
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       '```quint\nmodule currentAgreement {}\n```',
       '/repo',
-      abortController.signal,
+      { abortSignal: abortController.signal, modelCheckTimeoutSeconds: 300 },
     );
     expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
@@ -775,6 +810,34 @@ describe('TUI local commands', () => {
       internalAgentIsolation: 'strict-readonly',
     }));
     expect(chunks).toEqual([]);
+  });
+
+  it('should pass the plan model-check timeout to the TUI verifier', async () => {
+    const plan = createPlan();
+    const conversation = createConversation({
+      plan: {
+        ...plan,
+        strategy: { ...plan.strategy, formalSpec: true, modelCheckTimeoutSeconds: 9 },
+      },
+      persistSession: false,
+    });
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({
+        result: { content: '```quint\nmodule currentAgreement {}\n```', sessionId: 'session-1', success: true },
+        sessionId: 'session-1',
+      })
+      .mockResolvedValueOnce({
+        result: { content: 'The formal specification passed.', sessionId: 'session-1', success: true },
+        sessionId: 'session-1',
+      });
+
+    await send(conversation, '/verify', []);
+
+    expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+      expect.any(String),
+      '/repo',
+      { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 9 },
+    );
   });
 
   it('should report /replay and /retry as unavailable, matching the readline loop', () => {
@@ -973,7 +1036,11 @@ describe('TUI local commands', () => {
       retryNote: '',
       workflowContext: WORKFLOW_CONTEXT,
     } as const;
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({ mode: true, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({
+      mode: true,
+      comments: true,
+      modelCheckTimeoutSeconds: 300,
+    });
     const formalPlan = createInstructConversationPlan('/repo', instructOptions);
     expect(formalPlan.strategy.enabledCommands).toContain(SlashCommand.Verify);
     const formalConversation = createTuiConversation({
@@ -1000,7 +1067,7 @@ describe('TUI local commands', () => {
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       '```quint\nmodule taskActionAgreement {}\n```',
       '/repo',
-      expect.any(AbortSignal),
+      { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
     );
   });
 
@@ -1014,7 +1081,11 @@ describe('TUI local commands', () => {
       retryNote: '',
       workflowContext: WORKFLOW_CONTEXT,
     } as const;
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({ mode: false, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValueOnce({
+      mode: false,
+      comments: true,
+      modelCheckTimeoutSeconds: 300,
+    });
     const regularPlan = createInstructConversationPlan('/repo', instructOptions);
     expect(regularPlan.strategy.enabledCommands).not.toContain(SlashCommand.Verify);
     const regularConversation = createTuiConversation({

@@ -20,6 +20,7 @@ import {
   type InteractiveSummaryUIText,
   type ActionWithoutExecuteUIText,
 } from './interactive-summary-types.js';
+import { loadFormalSpecVerifierConstraints } from './formalSpecPrompts.js';
 
 export type {
   ConversationMessage,
@@ -179,7 +180,10 @@ export function buildTaskInstructionFormat(
 ): string {
   const gherkinInstructions = loadTemplate('score_summary_gherkin_instructions', lang).trim();
   const formalSpecInstructions = formalSpec
-    ? `\n\n${loadTemplate('score_summary_formal_spec_instructions', lang, { formalSpecComments }).trim()}`
+    ? `\n\n${loadTemplate('score_summary_formal_spec_instructions', lang, {
+      formalSpecComments,
+      formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang),
+    }).trim()}`
     : '';
   return `\n${gherkinInstructions}${formalSpecInstructions}`;
 }

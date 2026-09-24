@@ -1,6 +1,34 @@
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { EnvSpec } from './env/config-env-overrides.js';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Reject DeepSeek effort in legacy file or root JSON option objects before overrides merge.
+ * Dedicated leaf env and runtime profile options are validated through their own paths.
+ */
+export function assertNoRemovedProviderOptionConfigurationValues(
+  configuration: unknown,
+): void {
+  if (!isRecord(configuration)) {
+    return;
+  }
+  const providerOptions = configuration.provider_options;
+  if (!isRecord(providerOptions)) {
+    return;
+  }
+  const deepSeekHarness = providerOptions.deepseek_harness;
+  if (!isRecord(deepSeekHarness) || deepSeekHarness.reasoning_effort === undefined) {
+    return;
+  }
+  throw new Error(
+    'Configuration error: provider_options.deepseek_harness.reasoning_effort is supported only '
+    + 'in runtime profile options or the standard environment override.',
+  );
+}
+
 const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options', type: 'json' },
   { path: 'provider_options.codex.base_url', type: 'string' },
@@ -38,12 +66,11 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.kiro.guards.call_timeout_ms', type: 'number' },
   { path: 'provider_options.cursor.guards.call_timeout_ms', type: 'number' },
   { path: 'provider_options.deepseek_harness.base_url', type: 'string' },
-  { path: 'provider_options.deepseek_harness.session_root', type: 'string' },
-  { path: 'provider_options.deepseek_harness.cordis', type: 'string' },
   { path: 'provider_options.deepseek_harness.max_tokens', type: 'number' },
   { path: 'provider_options.deepseek_harness.request_timeout_ms', type: 'number' },
   { path: 'provider_options.deepseek_harness.shutdown_timeout_ms', type: 'number' },
   { path: 'provider_options.deepseek_harness.runtime_mode', type: 'string' },
+  { path: 'provider_options.deepseek_harness.reasoning_effort', type: 'string' },
   { path: 'provider_options.pi.extensions', type: 'json' },
   { path: 'provider_options.pi.thinking_level', type: 'string' },
   { path: 'provider_options.pi.guards.call_timeout_ms', type: 'number' },
@@ -110,12 +137,11 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.cursor.guards.call_timeout_ms',
   'provider_options.deepseek_harness',
   'provider_options.deepseek_harness.base_url',
-  'provider_options.deepseek_harness.session_root',
-  'provider_options.deepseek_harness.cordis',
   'provider_options.deepseek_harness.max_tokens',
   'provider_options.deepseek_harness.request_timeout_ms',
   'provider_options.deepseek_harness.shutdown_timeout_ms',
   'provider_options.deepseek_harness.runtime_mode',
+  'provider_options.deepseek_harness.reasoning_effort',
   'provider_options.pi',
   'provider_options.pi.guards',
   'provider_options.pi.guards.call_timeout_ms',
@@ -171,12 +197,11 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
   'deepseekHarness.baseUrl',
-  'deepseekHarness.sessionRoot',
-  'deepseekHarness.cordis',
   'deepseekHarness.maxTokens',
   'deepseekHarness.requestTimeoutMs',
   'deepseekHarness.shutdownTimeoutMs',
   'deepseekHarness.runtimeMode',
+  'deepseekHarness.reasoningEffort',
   'pi.extensions',
   'pi.thinkingLevel',
   'pi.guards.callTimeoutMs',

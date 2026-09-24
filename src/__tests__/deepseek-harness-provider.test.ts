@@ -19,6 +19,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
+import type { DeepSeekHarnessProviderOptions } from '../core/models/workflow-provider-options.js';
 
 describe('DeepSeekHarnessProvider', () => {
   it('declares the official SDK capability boundary', () => {
@@ -42,16 +43,16 @@ describe('DeepSeekHarnessProvider', () => {
     const agent = provider.setup({ name: 'worker', systemPrompt: 'Use Cordis.' });
     const onStream = vi.fn();
     const abortController = new AbortController();
+    const providerOptions: DeepSeekHarnessProviderOptions = {
+      requestTimeoutMs: 12_000,
+      reasoningEffort: 'high',
+    };
 
     await agent.call('implement', {
       cwd: '/tmp/work',
       model: 'deepseek-v4-flash',
       sessionId: 'session-1',
-      providerOptions: {
-        deepseekHarness: {
-          requestTimeoutMs: 12_000,
-        },
-      },
+      providerOptions: { deepseekHarness: providerOptions },
       abortSignal: abortController.signal,
       onStream,
     });
@@ -60,9 +61,7 @@ describe('DeepSeekHarnessProvider', () => {
       cwd: '/tmp/work',
       model: 'deepseek-v4-flash',
       sessionId: 'session-1',
-      providerOptions: {
-        requestTimeoutMs: 12_000,
-      },
+      providerOptions,
       abortSignal: abortController.signal,
       systemPrompt: 'Use Cordis.',
       onStream,
@@ -71,10 +70,11 @@ describe('DeepSeekHarnessProvider', () => {
   });
 
   it.each([
-    ['permissionMode', { permissionMode: 'readonly' as const }],
-    ['bypassPermissions', { bypassPermissions: true }],
-    ['allowedTools', { allowedTools: ['Read'] as string[] }],
-  ] as const)('returns an error before bridge invocation for unsupported %s constraints', async (_name, constraint) => {
+    ['permissionMode', { permissionMode: 'readonly' as const }, 'permission controls'],
+    ['bypassPermissions', { bypassPermissions: true }, 'permission controls'],
+    ['allowedTools', { allowedTools: ['Read'] as string[] }, 'allowedTools'],
+    ['empty allowedTools', { allowedTools: [] as string[] }, 'allowedTools'],
+  ] as const)('returns an error before bridge invocation for unsupported %s constraints', async (_name, constraint, expectedConstraint) => {
     mockCallDeepSeekHarness.mockClear();
 
     const response = await new DeepSeekHarnessProvider().setup({ name: 'worker' }).call('implement', {
@@ -83,7 +83,7 @@ describe('DeepSeekHarnessProvider', () => {
     });
 
     expect(response.status).toBe('error');
-    expect(response.error).toContain('cannot honor');
+    expect(response.error).toContain(`cannot honor ${expectedConstraint}`);
     expect(mockCallDeepSeekHarness).not.toHaveBeenCalled();
   });
 
@@ -110,7 +110,7 @@ describe('DeepSeekHarnessProvider', () => {
       'DeepSeek Harness does not expose TAKT permission callbacks through the Python SDK; ignoring',
     );
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      'DeepSeek Harness does not support TAKT mcpServers; configure tools in Cordis',
+      expect.stringContaining('mcpServers'),
     );
     expect(mockLogger.warn).toHaveBeenCalledWith('DeepSeek Harness does not support maxTurns; ignoring');
     expect(mockLogger.warn).toHaveBeenCalledWith('DeepSeek Harness does not support TAKT structured output; ignoring');

@@ -5,14 +5,16 @@ if (!triggerPath) {
   throw new Error('TAKT_E2E_PAUSE_STDIN_TRIGGER is required');
 }
 
-const deadline = Date.now() + 20_000;
+const LISTENER_WAIT_MS = 20_000;
+let deadline;
 
 const timer = setInterval(() => {
-  if (
-    existsSync(triggerPath)
-    && process.stdin.isTTY
-    && process.stdin.listenerCount('data') > 0
-  ) {
+  if (!existsSync(triggerPath)) {
+    return;
+  }
+  deadline ??= Date.now() + LISTENER_WAIT_MS;
+
+  if (process.stdin.isTTY && process.stdin.listenerCount('data') > 0) {
     clearInterval(timer);
     process.stdin.pause();
     process.stdout.write('[e2e] stdin paused\n');

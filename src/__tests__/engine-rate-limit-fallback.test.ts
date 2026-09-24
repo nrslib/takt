@@ -283,6 +283,15 @@ describe('WorkflowEngine rate limit fallback', () => {
           content: `${status} on fallback`,
           ...(status === 'error' ? { error: 'fallback failed' } : {}),
         }),
+        // error 終端はエンジンの fresh retry が 1 回走るため再試行分も並べる
+        ...(status === 'error'
+          ? [makeResponse({
+              persona: 'plan',
+              status,
+              content: `${status} on fallback`,
+              error: 'fallback failed',
+            })]
+          : []),
       ]);
 
       const rateLimited = await engine.runSingleIteration();
@@ -693,7 +702,7 @@ describe('WorkflowEngine rate limit fallback', () => {
             maxRetries: 0,
             retryDelayMs: 0,
           },
-        },
+        } as WorkflowConfig['steps'][number],
         makeStep('verify', {
           rules: [makeRule('verify done', 'COMPLETE')],
         }),

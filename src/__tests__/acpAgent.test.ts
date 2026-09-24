@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CreateElicitationRequest } from '@agentclientprotocol/sdk';
+import { CreateElicitationRequest } from '@agentclientprotocol/sdk';
+import type { PromptRequest } from '@agentclientprotocol/sdk';
 import type { AskUserQuestionInput } from '../core/workflow/types.js';
 import { saveTaskFile } from '../features/tasks/add/index.js';
 
@@ -37,7 +38,11 @@ vi.mock('../shared/prompt/confirm.js', async (importOriginal) => ({
 }));
 
 import { createTaktAcpAgent, mapTaktAcpUpdateToSessionUpdate } from '../app/acp/agent.js';
-import { createConversationSession } from '../features/interactive/conversationSession.js';
+import {
+  createConversationSession,
+  type ConversationSessionResult,
+} from '../features/interactive/conversationSession.js';
+import type { WorkflowExecutionRequest } from '../features/tasks/execute/workflowExecutionApi.js';
 
 function newSessionParams(overrides: Record<string, unknown> = {}) {
   return {
@@ -67,10 +72,14 @@ function createRealConversationSessionForAcp(input: {
     cwd: input.cwd,
     outputMode: input.outputMode,
     formalSpec: false,
+    modelCheckTimeoutSeconds: 300,
     ctx: {
       provider: {
         setup: vi.fn(),
         getRuntimeInstructions: vi.fn(() => null),
+        supportsStructuredOutput: true,
+        supportsNativeImageInput: false,
+        keepsAllowedToolWithoutEdit: vi.fn(() => true),
       },
       providerType: 'mock',
       model: 'mock-model',
@@ -80,6 +89,7 @@ function createRealConversationSessionForAcp(input: {
     },
     strategy: {
       systemPrompt: 'system prompt',
+      modelCheckTimeoutSeconds: 300,
       allowedTools: ['Read'],
       transformPrompt: (message: string) => `transformed: ${message}`,
       summaryPromptContext: 'summary context',
@@ -90,7 +100,7 @@ function createRealConversationSessionForAcp(input: {
 async function captureElicitationRequest(
   question: AskUserQuestionInput['questions'][number],
   answer: string | string[],
-): Promise<CreateElicitationRequest> {
+): Promise<Extract<CreateElicitationRequest, { mode: 'form' }>> {
   const createElicitation = vi.fn().mockResolvedValue({
     action: 'accept',
     content: { answer },
@@ -113,6 +123,7 @@ async function captureElicitationRequest(
         kind: 'workflow_execution_requested',
         task: 'Implement ACP support',
       }),
+      createTaskInstruction: vi.fn(),
     })),
     runWorkflowExecution,
     createElicitation,
@@ -136,8 +147,22 @@ async function captureElicitationRequest(
   if (!request) {
     throw new Error('ACP elicitation was not requested');
   }
+  if (!CreateElicitationRequest.isForm(request)) {
+    throw new Error('ACP elicitation did not use form mode');
+  }
   return request;
 }
+
+const unsupportedAcpPromptBlocks: Array<[PromptRequest['prompt']]> = [
+  [[{ type: 'image', data: 'base64', mimeType: 'image/png' }]],
+  [[{ type: 'audio', data: 'base64', mimeType: 'audio/wav' }]],
+  [[{ type: 'resource', resource: { text: 'inline', uri: 'file:///repo/order.md' } }]],
+];
+
+const emptyAcpPrompts: Array<[PromptRequest['prompt']]> = [
+  [[]],
+  [[{ type: 'text', text: '   ' }]],
+];
 
 describe('TAKT ACP agent adapter', () => {
   beforeEach(() => {
@@ -151,7 +176,7 @@ describe('TAKT ACP agent adapter', () => {
       sendSessionUpdate: vi.fn(),
     });
 
-    const result = await agent.handleInitialize({});
+    const result = await agent.handleInitialize({ protocolVersion: 1 });
 
     expect(result).toEqual(expect.objectContaining({
       agentInfo: expect.objectContaining({
@@ -326,6 +351,7 @@ describe('TAKT ACP agent adapter', () => {
   it('should create a session from root session/new params', async () => {
     const createConversationSession = vi.fn(() => ({
       handleUserMessage: vi.fn(),
+      createTaskInstruction: vi.fn(),
     }));
     const agent = createTaktAcpAgent({
       createConversationSession,
@@ -403,7 +429,7 @@ describe('TAKT ACP agent adapter', () => {
           expect(systemPrompt).not.toMatch(/\bAlloy\b/);
         }
         expect(mockConfirm).not.toHaveBeenCalled();
-        expect(stdinOnSpy.mock.calls.filter(([event]) => event === 'data')).toEqual([]);
+        expect(stdinOnSpy.mock.calls.filter(([event]) => String(event) === 'data')).toEqual([]);
         expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
           kind: 'agent_message',
           text: 'Which parser states matter?',
@@ -438,6 +464,7 @@ describe('TAKT ACP agent adapter', () => {
   it('should create a session without mcpServers', async () => {
     const createConversationSession = vi.fn(() => ({
       handleUserMessage: vi.fn(),
+      createTaskInstruction: vi.fn(),
     }));
     const agent = createTaktAcpAgent({
       createConversationSession,
@@ -594,6 +621,7 @@ describe('TAKT ACP agent adapter', () => {
             task: 'Use docs MCP',
           },
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate: vi.fn(),
@@ -636,6 +664,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Use docs MCP',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate: vi.fn(),
@@ -675,7 +704,7 @@ describe('TAKT ACP agent adapter', () => {
       sessionId: 'provider-session-1',
     });
     const agent = createTaktAcpAgent({
-      createConversationSession: vi.fn(() => ({ handleUserMessage })),
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
       runWorkflowExecution: vi.fn(),
       sendSessionUpdate,
     });
@@ -743,12 +772,14 @@ describe('TAKT ACP agent adapter', () => {
       worktree: true,
       autoPr: false,
     });
-    expect(createTaskInstruction.mock.invocationCallOrder[0]).toBeLessThan(
-      saveTaskFile.mock.invocationCallOrder[0],
-    );
-    expect(saveTaskFile.mock.invocationCallOrder[0]).toBeLessThan(
-      sendSessionUpdate.mock.invocationCallOrder[0],
-    );
+    const createTaskInstructionOrder = createTaskInstruction.mock.invocationCallOrder[0];
+    const saveTaskFileOrder = saveTaskFile.mock.invocationCallOrder[0];
+    const sendSessionUpdateOrder = sendSessionUpdate.mock.invocationCallOrder[0];
+    expect(createTaskInstructionOrder).toBeDefined();
+    expect(saveTaskFileOrder).toBeDefined();
+    expect(sendSessionUpdateOrder).toBeDefined();
+    expect(createTaskInstructionOrder!).toBeLessThan(saveTaskFileOrder!);
+    expect(saveTaskFileOrder!).toBeLessThan(sendSessionUpdateOrder!);
     expect(runWorkflowExecution).not.toHaveBeenCalled();
     expect(handleUserMessage).not.toHaveBeenCalled();
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
@@ -848,9 +879,11 @@ describe('TAKT ACP agent adapter', () => {
       autoPr: false,
       issue: 913,
     }, undefined, expect.any(AbortSignal));
-    expect(createIssueFromTaskResult.mock.invocationCallOrder[0]).toBeLessThan(
-      saveTaskFile.mock.invocationCallOrder[0],
-    );
+    const createIssueOrder = createIssueFromTaskResult.mock.invocationCallOrder[0];
+    const saveTaskFileOrder = saveTaskFile.mock.invocationCallOrder[0];
+    expect(createIssueOrder).toBeDefined();
+    expect(saveTaskFileOrder).toBeDefined();
+    expect(createIssueOrder!).toBeLessThan(saveTaskFileOrder!);
     expect(runWorkflowExecution).not.toHaveBeenCalled();
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
       kind: 'agent_message',
@@ -1893,14 +1926,10 @@ describe('TAKT ACP agent adapter', () => {
     expect(result).toEqual({ stopReason: 'end_turn' });
   });
 
-  it.each([
-    [[{ type: 'image', data: 'base64', mimeType: 'image/png' }]],
-    [[{ type: 'audio', data: 'base64', mimeType: 'audio/wav' }]],
-    [[{ type: 'resource', resource: { text: 'inline', uri: 'file:///repo/order.md' } }]],
-  ] as const)('should reject unsupported ACP prompt block %o before conversation', async (prompt) => {
+  it.each(unsupportedAcpPromptBlocks)('should reject unsupported ACP prompt block %o before conversation', async (prompt) => {
     const handleUserMessage = vi.fn();
     const agent = createTaktAcpAgent({
-      createConversationSession: vi.fn(() => ({ handleUserMessage })),
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
       runWorkflowExecution: vi.fn(),
       sendSessionUpdate: vi.fn(),
     });
@@ -1913,13 +1942,10 @@ describe('TAKT ACP agent adapter', () => {
     expect(handleUserMessage).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [[]],
-    [[{ type: 'text', text: '   ' }]],
-  ] as const)('should reject empty ACP prompt %o before conversation', async (prompt) => {
+  it.each(emptyAcpPrompts)('should reject empty ACP prompt %o before conversation', async (prompt) => {
     const handleUserMessage = vi.fn();
     const agent = createTaktAcpAgent({
-      createConversationSession: vi.fn(() => ({ handleUserMessage })),
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
       runWorkflowExecution: vi.fn(),
       sendSessionUpdate: vi.fn(),
     });
@@ -1938,7 +1964,7 @@ describe('TAKT ACP agent adapter', () => {
       content: 'I can read the referenced task.',
     });
     const agent = createTaktAcpAgent({
-      createConversationSession: vi.fn(() => ({ handleUserMessage })),
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
       runWorkflowExecution: vi.fn(),
       sendSessionUpdate: vi.fn(),
     });
@@ -1973,7 +1999,7 @@ describe('TAKT ACP agent adapter', () => {
       content: 'I can inspect the resource.',
     });
     const agent = createTaktAcpAgent({
-      createConversationSession: vi.fn(() => ({ handleUserMessage })),
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
       runWorkflowExecution: vi.fn(),
       sendSessionUpdate: vi.fn(),
     });
@@ -2000,15 +2026,18 @@ describe('TAKT ACP agent adapter', () => {
 
   it('should abort an active conversation turn on session/cancel', async () => {
     let receivedSignal: AbortSignal | undefined;
-    let resolveMessage: ((value: { kind: 'error'; message: string }) => void) | undefined;
-    const handleUserMessage = vi.fn((input: { abortSignal?: AbortSignal }) => {
+    let resolveMessage: ((value: ConversationSessionResult) => void) | undefined;
+    const handleUserMessage = vi.fn((input: {
+      text: string;
+      abortSignal?: AbortSignal;
+    }): Promise<ConversationSessionResult> => {
       receivedSignal = input.abortSignal;
-      return new Promise((resolve) => {
+      return new Promise<ConversationSessionResult>((resolve) => {
         resolveMessage = resolve;
       });
     });
     const agent = createTaktAcpAgent({
-      createConversationSession: vi.fn(() => ({ handleUserMessage })),
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
       runWorkflowExecution: vi.fn(),
       sendSessionUpdate: vi.fn(),
     });
@@ -2038,7 +2067,7 @@ describe('TAKT ACP agent adapter', () => {
       });
     });
     const agent = createTaktAcpAgent({
-      createConversationSession: vi.fn(() => ({ handleUserMessage })),
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
       runWorkflowExecution: vi.fn(),
       sendSessionUpdate: vi.fn(),
     });
@@ -2063,6 +2092,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution: vi.fn().mockResolvedValue({
         success: false,
@@ -2098,6 +2128,7 @@ describe('TAKT ACP agent adapter', () => {
             task: 'Implement ACP support',
           },
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate: vi.fn(),
@@ -2138,6 +2169,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2282,6 +2314,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2338,6 +2371,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2394,6 +2428,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2449,6 +2484,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2515,6 +2551,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2586,6 +2623,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2644,6 +2682,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2707,6 +2746,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2756,6 +2796,7 @@ describe('TAKT ACP agent adapter', () => {
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution,
       sendSessionUpdate,
@@ -2793,6 +2834,7 @@ describe('TAKT ACP agent adapter', () => {
             task: 'Implement ACP support',
           },
         }),
+        createTaskInstruction: vi.fn(),
       })),
       runWorkflowExecution: vi.fn().mockRejectedValue(new Error('Provider is not configured.')),
       sendSessionUpdate,
@@ -2853,8 +2895,8 @@ describe('TAKT ACP agent adapter', () => {
         });
       });
     const agent = createTaktAcpAgent({
-      createConversationSession: vi.fn(() => ({ handleUserMessage })),
-      runWorkflowExecution: vi.fn(async (request: { abortSignal: AbortSignal }) => {
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
+      runWorkflowExecution: vi.fn(async (request: WorkflowExecutionRequest) => {
         workflowSignal = request.abortSignal;
         resolveWorkflowStarted?.();
         await new Promise((resolve) => setTimeout(resolve, 1));

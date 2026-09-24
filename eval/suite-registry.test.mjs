@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -95,6 +95,34 @@ test('prepare targets are resolved from the same suite registry', () => {
   assert.deepEqual(
     promptEvalPrepareTargets(selected),
     ['coding-review', 'final-readiness-supervision-phase2'],
+  );
+});
+
+test('frontend suite prompts bind to their matching prepared run directories', () => {
+  for (const configName of ['frontend.yaml', 'frontend-opus.yaml']) {
+    const source = readFileSync(
+      new URL(`./agents/frontend-review/${configName}`, import.meta.url),
+      'utf8',
+    );
+    assert.match(
+      source,
+      /label: frontend-review\s+raw: file:\/\/\.\.\/\.\.\/prompts\/frontend-review\.phase1\.j2\s+config:\s+working_dir: \.work\/frontend-review/s,
+    );
+    assert.match(
+      source,
+      /label: frontend-review-react\s+raw: file:\/\/\.\.\/\.\.\/prompts\/frontend-review-react\.phase1\.j2\s+config:\s+working_dir: \.work\/frontend-review-react/s,
+    );
+    assert.match(
+      source,
+      /required_snapshots:\s+- \.takt\/eval-snapshots\/frontend-review(?:-react)?-policies\.md\s+- \.takt\/eval-snapshots\/frontend-review(?:-react)?-knowledge\.md/s,
+    );
+    assert.doesNotMatch(source, /working_dir: fixtures\/frontend-design/);
+  }
+
+  const selected = selectPromptEvalSuites({ names: ['frontend', 'frontend-opus'] });
+  assert.deepEqual(
+    promptEvalPrepareTargets(selected),
+    ['frontend-review', 'frontend-review-react'],
   );
 });
 

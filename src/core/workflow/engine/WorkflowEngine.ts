@@ -28,6 +28,7 @@ import { createRunFailure } from '../run/run-failure.js';
 import type {
   WorkflowCallChildEngine,
   WorkflowAbortKind,
+  WorkflowAbortResult,
   AutoRoutingEstimatorSource,
   WorkflowEngineOptions,
   WorkflowRunResult,
@@ -196,6 +197,7 @@ export class WorkflowEngine extends EventEmitter {
         cwd,
         provider: effectiveAutoRouting.router.provider,
         model: effectiveAutoRouting.router.model,
+        providerOptions: effectiveAutoRouting.router.providerOptions,
         language: options.language,
         childProcessEnv: options.childProcessEnv,
         abortSignal: options.abortSignal,
@@ -901,6 +903,7 @@ export class WorkflowEngine extends EventEmitter {
     isComplete: boolean;
     returnValue?: string;
     loopDetected?: boolean;
+    abort?: WorkflowAbortResult;
   }> {
     return this.runWithSystemCleanup(
       () => runWithWorkflowSpan(

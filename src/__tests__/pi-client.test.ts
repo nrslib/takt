@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
     { name: 'bash', sourceInfo: createSourceInfo('<sdk:bash>', 'sdk') },
     {
       name: 'trusted_extension_tool',
-      sourceInfo: createSourceInfo('/private/tmp/takt-trusted-extension.ts', 'npm:trusted-extension'),
+      sourceInfo: createSourceInfo('/private/tmp/takt-trusted-extension.ts', './trusted-extension.ts'),
     },
     {
       name: 'ambient_extension_tool',
@@ -335,7 +335,206 @@ function sessionOptions(id: string) {
   };
 }
 
+type PiCodingAgentModule = typeof import('@earendil-works/pi-coding-agent');
+type PiAiModule = typeof import('@earendil-works/pi-ai');
+
+async function createActualPiSession(
+  codingAgent: PiCodingAgentModule,
+  piAi: PiAiModule,
+  cwd: string,
+  agentDir: string,
+  settingsManager: ReturnType<PiCodingAgentModule['SettingsManager']['inMemory']>,
+  resourceLoader: InstanceType<PiCodingAgentModule['DefaultResourceLoader']>,
+) {
+  const modelRuntime = await codingAgent.ModelRuntime.create({
+    credentials: new piAi.InMemoryCredentialStore(),
+    modelsPath: null,
+    modelsStore: new piAi.InMemoryModelsStore(),
+    allowModelNetwork: false,
+    refreshOnCreate: false,
+  });
+
+  return codingAgent.createAgentSession({
+    cwd,
+    agentDir,
+    modelRuntime,
+    resourceLoader,
+    sessionManager: codingAgent.SessionManager.inMemory(cwd),
+    settingsManager,
+  });
+}
+
 describe('Pi SDK client', () => {
+  it('registers an extension tool through the real Pi SDK lifecycle', async () => {
+    const codingAgent = await vi.importActual<PiCodingAgentModule>('@earendil-works/pi-coding-agent');
+    const piAi = await vi.importActual<PiAiModule>('@earendil-works/pi-ai');
+    const root = mkdtempSync(path.join(tmpdir(), 'takt-pi-sdk-real-'));
+    const cwd = path.join(root, 'project');
+    const agentDir = path.join(root, 'agent');
+    const extensionPath = path.join(root, 'extension.js');
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(extensionPath, `
+export default function registerLifecycleTool(pi) {
+  pi.on('session_start', () => {
+    pi.registerTool({
+      name: 'takt_pi_sdk_lifecycle_tool',
+      label: 'TAKT Pi SDK lifecycle tool',
+      description: 'Credential-free SDK compatibility fixture',
+      parameters: { type: 'object', properties: {} },
+      async execute() {
+        return { content: [{ type: 'text', text: 'ok' }], details: {} };
+      },
+    });
+  });
+}
+`, 'utf8');
+
+    let session: InstanceType<PiCodingAgentModule['AgentSession']> | undefined;
+    try {
+      const settingsManager = codingAgent.SettingsManager.inMemory({}, { projectTrusted: false });
+      const resourceLoader = new codingAgent.DefaultResourceLoader({
+        cwd,
+        agentDir,
+        settingsManager,
+        additionalExtensionPaths: [extensionPath],
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+      });
+      await resourceLoader.reload();
+      const result = await createActualPiSession(
+        codingAgent,
+        piAi,
+        cwd,
+        agentDir,
+        settingsManager,
+        resourceLoader,
+      );
+      session = result.session;
+
+      expect(result.extensionsResult.errors).toEqual([]);
+      const bindErrors: unknown[] = [];
+      await session.bindExtensions({
+        mode: 'print',
+        onError: (error) => bindErrors.push(error),
+      });
+      expect(bindErrors).toEqual([]);
+      expect(session.getAllTools().map((tool) => tool.name)).toContain('takt_pi_sdk_lifecycle_tool');
+
+      const registeredTool = result.extensionsResult.extensions
+        .flatMap((extension) => [...extension.tools.values()])
+        .find((tool) => tool.definition.name === 'takt_pi_sdk_lifecycle_tool');
+      const sessionTool = session.getAllTools()
+        .find((tool) => tool.name === 'takt_pi_sdk_lifecycle_tool');
+      expect(registeredTool).toBeDefined();
+      expect(sessionTool).toBeDefined();
+      expect(sessionTool!.sourceInfo.source).toBe(registeredTool!.sourceInfo.source);
+      expect(path.resolve(cwd, sessionTool!.sourceInfo.path))
+        .toBe(path.resolve(cwd, registeredTool!.sourceInfo.path));
+      expect(path.resolve(cwd, registeredTool!.sourceInfo.path)).toBe(extensionPath);
+
+      session.setActiveToolsByName(['takt_pi_sdk_lifecycle_tool']);
+      expect(session.getActiveToolNames()).toEqual(['takt_pi_sdk_lifecycle_tool']);
+    } finally {
+      session?.dispose();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('discards failed extension registrations and subscriptions in the real Pi SDK', async () => {
+    const codingAgent = await vi.importActual<PiCodingAgentModule>('@earendil-works/pi-coding-agent');
+    const piAi = await vi.importActual<PiAiModule>('@earendil-works/pi-ai');
+    const root = mkdtempSync(path.join(tmpdir(), 'takt-pi-sdk-failed-extension-'));
+    const cwd = path.join(root, 'project');
+    const agentDir = path.join(root, 'agent');
+    const observedEvents: unknown[] = [];
+    let healthyFactoryStarted = false;
+    mkdirSync(cwd, { recursive: true });
+
+    let session: InstanceType<PiCodingAgentModule['AgentSession']> | undefined;
+    try {
+      const settingsManager = codingAgent.SettingsManager.inMemory({}, { projectTrusted: false });
+      const resourceLoader = new codingAgent.DefaultResourceLoader({
+        cwd,
+        agentDir,
+        settingsManager,
+        extensionFactories: [
+          (pi) => {
+            pi.events.on('takt_failed_factory_probe', (data) => observedEvents.push(data));
+            pi.registerProvider('failed-factory-provider', {});
+            pi.registerTool({
+              name: 'failed_factory_tool',
+              label: 'Failed factory tool',
+              description: 'Must be discarded with its failed factory',
+              parameters: { type: 'object', properties: {} },
+              async execute() {
+                return { content: [{ type: 'text', text: 'failed' }], details: {} };
+              },
+            });
+            throw new Error('factory failed');
+          },
+          (pi) => {
+            pi.on('session_start', () => {
+              healthyFactoryStarted = true;
+              pi.events.emit('takt_failed_factory_probe', 'healthy extension reached session_start');
+              pi.registerTool({
+                name: 'healthy_factory_tool',
+                label: 'Healthy factory tool',
+                description: 'Retains provenance after another factory fails',
+                parameters: { type: 'object', properties: {} },
+                async execute() {
+                  return { content: [{ type: 'text', text: 'ok' }], details: {} };
+                },
+              });
+            });
+          },
+        ],
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+      });
+      await resourceLoader.reload();
+
+      const extensionsResult = resourceLoader.getExtensions();
+      expect(extensionsResult.errors).toHaveLength(1);
+      expect(extensionsResult.extensions).toHaveLength(1);
+      expect(extensionsResult.runtime.pendingProviderRegistrations).toEqual([]);
+
+      const result = await createActualPiSession(
+        codingAgent,
+        piAi,
+        cwd,
+        agentDir,
+        settingsManager,
+        resourceLoader,
+      );
+      session = result.session;
+      await session.bindExtensions({ mode: 'print' });
+
+      expect(healthyFactoryStarted).toBe(true);
+      expect(observedEvents).toEqual([]);
+      const registeredTools = extensionsResult.extensions
+        .flatMap((extension) => [...extension.tools.values()]);
+      expect(registeredTools.map((tool) => tool.definition.name)).toEqual(['healthy_factory_tool']);
+      const registeredTool = registeredTools[0]!;
+      const sessionTools = session.getAllTools();
+      expect(sessionTools.map((tool) => tool.name)).not.toContain('failed_factory_tool');
+      const sessionTool = sessionTools.find((tool) => tool.name === 'healthy_factory_tool');
+      expect(sessionTool).toBeDefined();
+      expect(sessionTool!.sourceInfo.source).toBe(registeredTool.sourceInfo.source);
+      expect(path.resolve(cwd, sessionTool!.sourceInfo.path))
+        .toBe(path.resolve(cwd, registeredTool.sourceInfo.path));
+      session.setActiveToolsByName(['healthy_factory_tool']);
+      expect(session.getActiveToolNames()).toEqual(['healthy_factory_tool']);
+    } finally {
+      session?.dispose();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('streams text and returns the SDK session response', async () => {
     mocks.resetTransient();
     const events: string[] = [];
@@ -1397,9 +1596,9 @@ describe('Pi SDK client', () => {
       piTool('edit', '<builtin:edit>', 'builtin'),
       piTool('write', '<builtin:write>', 'builtin'),
       piTool('bash', '<sdk:bash>', 'sdk'),
-      piTool('first_extension_tool', firstPath, 'npm:first-extension'),
-      piTool('first_auxiliary_tool', firstPath, 'npm:first-extension'),
-      piTool('second_extension_tool', secondPath, 'npm:second-extension'),
+      piTool('first_extension_tool', firstPath, './first-extension.ts'),
+      piTool('first_auxiliary_tool', firstPath, './first-extension.ts'),
+      piTool('second_extension_tool', secondPath, './second-extension.ts'),
       piTool('ambient_extension_tool', AMBIENT_EXTENSION_PATH, 'npm:ambient-extension'),
     ]);
     configureExplicitExtensions([
@@ -1496,6 +1695,27 @@ describe('Pi SDK client', () => {
 
     const response = await callPi('worker', 'use a mismatched extension tool', {
       ...sessionOptions('pi-sdk-extension-tool-provenance-mismatch'),
+      permissionMode: 'readonly',
+      providerOptions: { extensions: ['./trusted-extension.ts'] },
+    });
+
+    expect(response.status).toBe('error');
+    expect(mocks.session.setActiveToolsByName).not.toHaveBeenCalled();
+    expect(mocks.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when an explicit extension registry tool has mismatched source provenance', async () => {
+    mocks.resetTransient();
+    configureExplicitExtensions([{
+      source: './trusted-extension.ts',
+      path: TRUSTED_EXTENSION_PATH,
+    }]);
+    mocks.session.getAllTools.mockReturnValue([
+      piTool('trusted_extension_tool', TRUSTED_EXTENSION_PATH, 'npm:ambient-extension'),
+    ]);
+
+    const response = await callPi('worker', 'use a source-mismatched extension tool', {
+      ...sessionOptions('pi-sdk-extension-source-provenance-mismatch'),
       permissionMode: 'readonly',
       providerOptions: { extensions: ['./trusted-extension.ts'] },
     });
@@ -1636,6 +1856,32 @@ describe('Pi SDK client', () => {
       'trusted_extension_tool',
     ]);
     expect(mocks.createAgentSession).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when cached tool provenance changes between calls', async () => {
+    mocks.resetTransient();
+    configureExplicitExtensions([{
+      source: './trusted-extension.ts',
+      path: TRUSTED_EXTENSION_PATH,
+    }]);
+    const options = {
+      ...sessionOptions('pi-sdk-cached-source-provenance'),
+      permissionMode: 'readonly' as const,
+      providerOptions: { extensions: ['./trusted-extension.ts'] },
+    };
+
+    await callPi('worker', 'inspect before provenance mutation', options);
+    mocks.setToolDefinitions([
+      piTool('trusted_extension_tool', TRUSTED_EXTENSION_PATH, 'npm:ambient-extension'),
+    ]);
+
+    const response = await callPi('worker', 'inspect after provenance mutation', options);
+
+    expect(response.status).toBe('error');
+    expect(mocks.createAgentSession).toHaveBeenCalledOnce();
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith([]);
+    expect(mocks.session.abort).toHaveBeenCalled();
+    expect(mocks.session.prompt).toHaveBeenCalledOnce();
   });
 
   it('reapplies the restrictive policy after SDK refresh registers an ambient tool', async () => {
@@ -1882,16 +2128,36 @@ describe('Pi SDK client', () => {
       toolNames: ['read', 'grep', 'find', 'ls'],
     }]);
     mocks.session.getAllTools.mockReturnValue([
-      piTool('read', TRUSTED_EXTENSION_PATH, 'npm:mutating-extension'),
-      piTool('grep', TRUSTED_EXTENSION_PATH, 'npm:mutating-extension'),
-      piTool('find', TRUSTED_EXTENSION_PATH, 'npm:mutating-extension'),
-      piTool('ls', TRUSTED_EXTENSION_PATH, 'npm:mutating-extension'),
+      piTool('read', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
+      piTool('grep', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
+      piTool('find', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
+      piTool('ls', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
     ]);
 
     await callPi('worker', 'review safely', {
       ...sessionOptions('pi-sdk-shadowed-read-tool'),
       permissionMode: 'edit',
       allowedTools: ['read', 'grep', 'find', 'ls'],
+      providerOptions: { extensions: ['./mutating-extension.ts'] },
+    });
+
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith([]);
+  });
+
+  it('does not activate an extension tool that shadows powershell in an explicit allowlist', async () => {
+    mocks.resetTransient();
+    configureExplicitExtensions([{
+      source: './mutating-extension.ts',
+      path: TRUSTED_EXTENSION_PATH,
+      toolNames: ['powershell'],
+    }]);
+    mocks.session.getAllTools.mockReturnValue([
+      piTool('powershell', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
+    ]);
+
+    await callPi('worker', 'review safely', {
+      ...sessionOptions('pi-sdk-shadowed-powershell-tool'),
+      allowedTools: ['powershell'],
       providerOptions: { extensions: ['./mutating-extension.ts'] },
     });
 
@@ -1906,10 +2172,10 @@ describe('Pi SDK client', () => {
       toolNames: ['read', 'grep', 'find', 'ls'],
     }]);
     mocks.session.getAllTools.mockReturnValue([
-      piTool('read', TRUSTED_EXTENSION_PATH, 'npm:mutating-extension'),
-      piTool('grep', TRUSTED_EXTENSION_PATH, 'npm:mutating-extension'),
-      piTool('find', TRUSTED_EXTENSION_PATH, 'npm:mutating-extension'),
-      piTool('ls', TRUSTED_EXTENSION_PATH, 'npm:mutating-extension'),
+      piTool('read', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
+      piTool('grep', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
+      piTool('find', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
+      piTool('ls', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
     ]);
 
     await callPi('worker', 'review safely', {
@@ -1929,7 +2195,7 @@ describe('Pi SDK client', () => {
       toolNames: ['read'],
     }]);
     mocks.session.getAllTools.mockReturnValue([
-      piTool('read', TRUSTED_EXTENSION_PATH, 'npm:mutating-extension'),
+      piTool('read', TRUSTED_EXTENSION_PATH, './mutating-extension.ts'),
     ]);
 
     await callPi('worker', 'edit safely', {

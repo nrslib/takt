@@ -12,7 +12,6 @@ import {
   resolveProfileScopedProviderOptionsLayers,
   mergeProviderOptions,
   resolveProviderOptionsSources,
-  resolveTrustedDeepSeekHarnessPaths,
   type ProviderOptionsLayer,
 } from '../../../infra/config/providerOptions.js';
 import {
@@ -465,15 +464,8 @@ export class OptionsBuilder {
     const providerInfo = this.resolveStepProviderModel(step, runtime);
     const { provider: resolvedProvider, model: resolvedModel } = providerInfo;
 
-    const providerOptionsSources = {
-      ...this.resolveProviderOptionsSourcesForStep(step, providerInfo),
-      ...providerInfo.providerOptionsSources,
-    };
-    const providerOptions = resolveTrustedDeepSeekHarnessPaths(
-      mergedProviderOptions ?? this.resolveMergedProviderOptions(step, providerInfo, runtime),
-      this.getCwd(),
-      providerOptionsSources,
-    );
+    const providerOptions = mergedProviderOptions
+      ?? this.resolveMergedProviderOptions(step, providerInfo, runtime);
     const workflowMeta: WorkflowMeta = {
       workflowName: this.getWorkflowName(),
       workflowDescription: this.getWorkflowDescription(),

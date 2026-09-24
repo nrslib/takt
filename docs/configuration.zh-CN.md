@@ -33,6 +33,7 @@ assistant:
   formal_spec:
     mode: 'y/N'                # Alloy/Quint 模式：true、false、Y/n 或 y/N（默认 y/N）
     comments: true             # 为每个形式结构添加自然语言含义注释（默认 true）
+    model_check_timeout_seconds: 300  # /verify 中 quint verify 与 Alloy 模型检查的上限秒数，1～86400 的整数（默认 300）
 # auto_fetch: false           # 创建 clone 前 fetch remote（默认 false）
 # base_branch: main           # 创建 clone 的基分支（默认使用 remote 默认分支）
 
@@ -191,7 +192,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` 并行任务数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | 交互模式中的 step 预览数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode` 和 `comments`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 300），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
@@ -292,7 +293,6 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 #   deepseek_harness:
 #     # managed environment 由 `takt deepseek-harness install` 创建。
 #     base_url: http://127.0.0.1:8787/v1
-#     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
 #     request_timeout_ms: 3600000
 #     shutdown_timeout_ms: 1000
@@ -373,7 +373,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` 的迭代限制绕过 |
 | `base_branch` | string | - | 创建 clone 的基分支 |
 | `assistant.init_files` | string[] | - | 仅项目级的 assistant 初始上下文文件。路径必须相对于项目根；绝对路径、解析到项目根之外的路径，以及 `.env*`、`.npmrc`、`.pypirc`、`.netrc`、`*.pem`、`*.key` 和 `.git/**` 等敏感文件模式会被拒绝。路径不存在、指向目录或文件不可读时会明确报错。最多 16 个文件，每个最多 256 KiB，合计最多 1 MiB。未设置或为空时，TAKT 不会自动发现 `CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` 或其他文件。 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true`（来自全局/默认值） | 项目级覆盖，添加 Alloy/Quint 指导并要求同时用两种记法表达。object 格式可独立设置 `mode` 和 `comments`，未设置的字段回退到全局或默认值。`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。项目值优先于全局值。提示回答仅在当前会话中生效，恢复会话时重新解析。ACP 和非 TTY 不提问，使用配置的默认答案。Gherkin 指导仅适用于开发和实现任务。已弃用的 `assistant.gherkin` 会警告后忽略，不转换、不持久化，也不修改配置文件。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true`（来自全局/默认值） | 项目级覆盖，添加 Alloy/Quint 指导并要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`，未设置的字段回退到全局或默认值。`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。项目值优先于全局值。提示回答仅在当前会话中生效，恢复会话时重新解析。ACP 和非 TTY 不提问，使用配置的默认答案。Gherkin 指导仅适用于开发和实现任务。已弃用的 `assistant.gherkin` 会警告后忽略，不转换、不持久化，也不修改配置文件。 |
 | `provider_options` | object | - | provider 专属选项 |
 | `provider_profiles` | object | - | provider 专属权限 profile |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自动检测 | 覆盖全局 VCS provider |
@@ -715,9 +715,9 @@ Provider profile 可以为不同 provider 设置默认权限模式和按 step �
 
 | 模式 | 说明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
 |------|------|--------|-------|----------|----|------------------|--------------|---------|----------|
-| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls` | Cordis 配置 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` |
-| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash` | Cordis 配置 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | Cordis 配置 | `--force` | `--yolo` | `--trust-all-tools` |
+| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` |
+| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | 此 SDK 不提供 | `--force` | `--yolo` | `--trust-all-tools` |
 
 Pi 的权限模式是 SDK active-tool allowlist，而不是操作系统 sandbox；TAKT 不为 Pi 增加逐工具确认。使用 Pi 时请确保 workflow 输入和 extension 可信。
 
@@ -917,12 +917,35 @@ model: deepseek-v4-flash
 provider_options:
   deepseek_harness:
     base_url: http://127.0.0.1:8787/v1  # 可选；项目/workflow 配置中使用 loopback
-    session_root: .takt/deepseek-sessions
     max_tokens: 4096
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
     runtime_mode: exe                  # exe 或 node；node 仅用于显式 SDK 开发模式
 ```
+
+DeepSeek 的推理强度只能通过 `runtime.yaml` 的 provider profile 或标准 TAKT 环境变量
+override 配置：
+
+```yaml
+version: 1
+provider:
+  defaults:
+    profile: deepseek
+  profiles:
+    deepseek:
+      provider: deepseek-harness
+      model: deepseek-v4-flash
+      options:
+        reasoning_effort: high
+```
+
+允许的值为 `off`、`low`、`high` 和 `max`。省略时不设置该字段，由 SDK 使用默认值。
+对应的环境变量 override 是
+`TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT`。旧版 `provider_options`、
+workflow step、persona 和 routing entry 不支持此选项；在那里指定会产生配置错误。
+
+更改或清除推理强度会从下一轮生效，保留会话 ID 和已保存的历史记录。
+必要时只替换该会话的 bridge，不影响其他会话。替换失败时返回错误，不会继续使用旧强度。
 
 DeepSeek Harness 的 `model` 字段既接受 `deepseek-v4-flash` 这样的纯 model
 引用，也接受 `openai/gpt-5.4` 或 `my-gateway/org/custom-model` 这样的
@@ -938,7 +961,11 @@ allowlist，也不转换 provider alias。route 和 model 两部分都会按原�
 provider 和 model 字段传给 bridge/SDK；若 SDK 拒绝，错误会标明原始引用以及
 bridge/SDK 的失败位置。
 
-`cordis` 会选择可执行的 tool composition，因此只允许来自受信任的全局配置或 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS`；上面的示例省略了它。managed interpreter 由 install command 固定，不能通过 provider option 选择。`session_root` 和 `cordis` 相对配置的工作目录解析。带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、TAKT `allowed_tools`、MCP server map、图片附件、structured output、permission mode 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略；工具组合请通过 Cordis 配置。
+managed interpreter 由 install command 固定，不能通过 provider option 选择。project runtime profile 的 `base_url` 只能使用 loopback。对应的 DeepSeek provider option 环境变量还包括 `_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` 和 `_REASONING_EFFORT`。
+
+带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、MCP server map、图片附件、structured output 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略。工具组合 option 不在此 provider contract 中公开。
+
+权限控制和工具限制不会被忽略。provider 调用设置了 `permissionMode`、`bypassPermissions: true` 或显式 `allowedTools`（包括空列表）时，会在 bridge 启动前返回 `status: 'error'`。需要这些约束时，请使用支持它们的 provider。另一方面，workflow step 不支持 `allowed_tools` 字段，workflow schema 校验会在调用 provider 之前拒绝该字段，不会进入上述 provider 错误响应流程。
 
 #### 网络访问（`network_access`）
 
@@ -1047,7 +1074,7 @@ provider_options:
 
 在 `readonly` 和 `edit` 模式下，每个显式配置的 extension 注册的所有 tool 会作为一个 trust unit 一起启用。自动 discovery 得到的 ambient extension tool 不会在这些 restrictive mode 中启用。非空的 `allowedTools` 仍然只过滤 builtin tool，而 `allowedTools: []` 会拒绝所有 tool，包括显式 extension tool。Pi permission mode 是 active-tool allowlist，而不是操作系统 sandbox；即使 `permission_mode: readonly`，受信任的显式 extension 仍可能运行进程或修改文件。显式 extension 加载失败或 provenance 验证失败时，Pi call 会以错误停止。
 
-未指定 permission mode 时，显式 `allowedTools` 列表仍决定允许范围；配置 extension 不会添加列表以外的 tool。仅包含 skills、prompts 或 themes 的 package 仍可正常加载，且不会因此授权 extension tool。
+未指定 permission mode 时，显式 `allowedTools` 列表也会经过 tool 来源验证。自动发现的 extension tool 即使列在 `allowedTools` 中也会被排除；要启用 extension tool，必须在 `extensions` 中明确配置其来源，并在 `allowedTools` 中列出 tool 名称。配置 extension 不会添加列表以外的 tool。仅包含 skills、prompts 或 themes 的 package 仍可正常加载，且不会因此授权 extension tool。
 
 <a id="workflow-categories"></a>
 

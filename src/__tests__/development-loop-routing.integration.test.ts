@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -179,6 +179,42 @@ describe('shipped development completion and remediation routes', () => {
     expect((await execute(config, 'replan', 2)).nextStep).toBe('ABORT');
   });
 
+  it.each(['ja', 'en'] as const)('%s: loads scenario-based fix-replan through the dynamic remediation fragment', (language) => {
+    const resourceRoot = resolve(repoRoot, 'builtins', language);
+    const config = loadWorkflowFromFile(
+      resolve(resourceRoot, 'workflows', 'development-remediation-dynamic.yaml'),
+      directory,
+      { resourceRoot, callableArgs: { fix_replan_instruction: 'scenario-based-fix-replan' } },
+    );
+    const step = config.steps.find(candidate => candidate.name === 'fix-replan');
+    const scenario = readFileSync(resolve(resourceRoot, 'facets/partials/instructions/requirement-scenario-maintenance.md'), 'utf8').trim();
+    expect(step).toBeDefined();
+    expect(step?.instructionRef).toContain('scenario-based-fix-replan');
+    expect(step?.instructionRef).toContain('review-remediation-problem-tracking');
+    expect(step?.instruction).toContain('{report:fix-verification.md}');
+    expect(step?.instruction).toContain(scenario);
+    expect(step?.instruction).not.toContain('{{include:');
+  });
+
+  it.each(variants(remediations))('$language/$name keeps return guidance exclusive to replanning and supplies reopening criteria', ({ language, name }) => {
+    const config = load(language, name);
+    const returnGuidance = language === 'ja'
+      ? '実質同一の計画を繰り返さない'
+      : 'substantively identical plan';
+    const initialPlan = config.steps.find(step => step.name === 'fix-plan');
+    const replan = config.steps.find(step => step.name === 'fix-replan');
+    expect(initialPlan?.instruction).toContain(language === 'ja' ? '全修正対象と受入条件を列挙' : 'Enumerate every remediation target');
+    expect(initialPlan?.instruction).not.toContain(returnGuidance);
+    expect(replan?.instruction).toContain(returnGuidance);
+    if (name === 'review-remediation') {
+      const reopened = language === 'ja'
+        ? '修正が同じ問題を再導入した場合だけ'
+        : 'reintroduced the same issue';
+      const adjudication = config.steps.find(step => step.name === 'review-adjudication');
+      expect(adjudication?.instruction).toContain(reopened);
+    }
+  });
+
   it.each(variants(remediations))('$language/$name executes plan-scoped investigation in fix and preserves the repair path', async ({ language, name }) => {
     const config = load(language, name);
     expect(config.steps.find(step => step.name === 'investigate')).toBeUndefined();
@@ -209,12 +245,13 @@ describe('shipped development completion and remediation routes', () => {
     const config = load(language, name);
     const detector = new CycleDetector(config.loopMonitors);
     expect(config.loopMonitors?.some(monitor => monitor.cycle.includes('investigate')) ?? false).toBe(false);
+    const planningStep = 'fix-replan';
     for (let cycle = 1; cycle <= 4; cycle++) {
-      expect(detector.recordAndCheck('fix-plan', 'fix').triggered).toBe(false);
-      const result = detector.recordAndCheck('fix', 'fix-plan');
+      expect(detector.recordAndCheck(planningStep, 'fix').triggered).toBe(false);
+      const result = detector.recordAndCheck('fix', planningStep);
       expect(result.triggered).toBe(cycle === 4);
       if (result.triggered) {
-        expect(result.monitor?.judge.rules.map(rule => rule.next)).toEqual(['fix-plan', 'fix-plan', 'fix-plan', 'ABORT']);
+        expect(result.monitor?.judge.rules.map(rule => rule.next)).toEqual([planningStep, planningStep, planningStep, 'ABORT']);
       }
     }
   });

@@ -71,6 +71,7 @@ export type { ProjectConfig as ProjectLocalConfig } from '../types.js';
 type ProviderType = NonNullable<ProjectConfig['provider']>;
 type RawProviderReference = ConfigProviderReference<ProviderType>;
 
+/** Load project configuration with provenance, validating it before normalizing provider options. */
 export function loadProjectConfig(projectDir: string): ProjectConfig {
   const configPath = getProjectConfigPath(projectDir);
   const loadedTrace = loadProjectConfigTrace(
@@ -125,11 +126,6 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   } = parsedConfigResult;
   const projectProviderOptionsPolicy = {
     baseUrlTrust: 'local-loopback-only' as const,
-    pathTrust: 'local-untrusted' as const,
-    // Cordis selects executable tool composition and is therefore never
-    // accepted from repository/project configuration. Keep it restricted to
-    // trusted global or explicit environment configuration.
-    cordisTrust: 'untrusted' as const,
     getOrigin: trace.getOrigin,
   };
   const normalizedProvider = normalizeConfigProviderReference(

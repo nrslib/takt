@@ -104,9 +104,9 @@ Selections are temporary and are not persisted. Workflow, mode, provider, and mo
 
 ### Formal Specification Verification
 
-When formal specification mode is enabled for the current interactive session, run `/verify` to verify the current agreement in one shot. TAKT asks the assistant to output the current agreement as formal specifications, extracts the `quint` and `alloy` code blocks from that response, runs the verifiers, and sends the results back to the same session for the assistant to interpret.
+When formal specification mode is enabled for the current interactive session, run `/verify` to verify the current agreement in one shot. TAKT asks the assistant to output the current agreement as Quint and Alloy specifications, runs the verifiers on the extracted code blocks, and sends the results back to the same session for the assistant to interpret. The basic Quint stages run with nothing extra installed; model checking with `quint verify` and the Alloy Analyzer needs Java 17 or later.
 
-Verification starts only when the response contains a Quint or Alloy code block. For a Quint block, TAKT runs `parse`; `typecheck` runs only after parsing passes, and `run` runs only after typechecking passes, a main module with `init` and `step` actions is found, and the selected verification targets are in that module. With Java 17 or later, TAKT additionally runs `quint verify` only when those preceding Quint stages pass, and runs the Alloy Analyzer when an Alloy block is present, independently of Quint results. When Java is unavailable or older than 17, these Java-dependent stages are skipped; the applicable basic Quint stages still run, and the result explicitly reports that the Alloy specification was not verified. Set `TAKT_ALLOY_JAR` to use an explicit Alloy JAR path (relative paths are resolved from the project directory); otherwise TAKT downloads and caches the pinned artifact at `.takt/cache/alloy/6.2.0/alloy.jar` within the project.
+See [Formal Specification Verification](./formal-verification.md) for requirements, first-run downloads, how the stages and verification targets are chosen, and how to read the result.
 
 ### Execution Example
 

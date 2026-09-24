@@ -430,6 +430,38 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(providerInfo?.autoRoutingDecision).toBeUndefined();
   });
 
+  it.each(['high', 'max', undefined] as const)('passes router profile effort %s to the engine-default estimator', async (reasoningEffort) => {
+    const step = makeStep('implement', { rules: [makeRule('done', 'COMPLETE')] });
+    const providerOptions = reasoningEffort === undefined
+      ? undefined : { deepseekHarness: { reasoningEffort } };
+    const autoRouting: AutoRoutingConfig = {
+      ...createAutoRoutingConfig(),
+      rules: undefined,
+      router: { provider: 'deepseek-harness', model: 'deepseek/model:latest', providerOptions },
+    };
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: task,
+      });
+      return makeResponse({
+        persona: typeof persona === 'string' ? persona : step.persona,
+        content: persona === 'auto-router'
+          ? '{"required_tier":"medium","reason_codes":["focused-change"]}' : 'done',
+      });
+    });
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+    engine = new WorkflowEngine({
+      name: 'router-profile-options', initialStep: 'implement', maxSteps: 1, steps: [step],
+    }, tmpDir, 'implement feature', createEngineOptions(tmpDir, { autoRouting }));
+
+    expect((await engine.run()).status).toBe('completed');
+    const routerCalls = vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'auto-router');
+    expect(routerCalls).toHaveLength(1);
+    expect(routerCalls[0]?.[2]?.resolvedExecution).toMatchObject({
+      provider: 'deepseek-harness', model: 'deepseek/model:latest', providerOptions,
+    });
+  });
+
   it('Given a normal step needs AI routing, When the estimator prompt is built, Then it receives the normalized work snapshot', async () => {
     const instruction = 'Route using workflow instruction with {task} and {previous_response}';
     const step = makeStep('implement', {

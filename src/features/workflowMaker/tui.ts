@@ -32,6 +32,7 @@ import {
   type TuiSubmission,
 } from '../tui/tuiConversation.js';
 import { describeSessionModel } from '../tui/tuiSetup.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/taskInstructionFormat.js';
 import {
   materializeWorkflowMakerArtifact,
   planWorkflowMakerArtifact,
@@ -91,6 +92,7 @@ function buildMakerPlan(
     assistantMode: 'assistant' as const,
     formalSpec: false,
     formalSpecComments: true,
+    modelCheckTimeoutSeconds: resolveFormalSpecConfigurationWithoutPrompt(projectDir).modelCheckTimeoutSeconds,
     ...(agentOverrides?.provider ? { provider: agentOverrides.provider } : {}),
     ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
   };

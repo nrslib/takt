@@ -233,6 +233,7 @@ export function resolveWorkflowProviderOptionsWithHost(
   );
 }
 
+/** Resolve and validate workflow option inheritance within the resource boundary, tracking cycles. */
 function resolveWorkflowProviderOptionsFromDir(
   raw: RawWorkflowProviderOptions | undefined,
   currentDir: string,
@@ -250,8 +251,6 @@ function resolveWorkflowProviderOptionsFromDir(
   if (ref === undefined) {
     return normalizeProviderOptions(parsedRaw, {
       baseUrlTrust: 'loopback-only',
-      pathTrust: 'untrusted',
-      cordisTrust: 'untrusted',
       pathPrefix: 'provider_options',
     });
   }
@@ -285,8 +284,6 @@ function resolveWorkflowProviderOptionsFromDir(
   );
   const inlineOptions = normalizeProviderOptions(removeProviderOptionsExtends(parsedRaw), {
     baseUrlTrust: 'loopback-only',
-    pathTrust: 'untrusted',
-    cordisTrust: 'untrusted',
     pathPrefix: 'provider_options',
   });
   return mergeProviderOptions(referencedOptions, inlineOptions);

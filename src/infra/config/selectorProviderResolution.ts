@@ -8,8 +8,6 @@ import {
   mergeProviderOptions,
   resolveEffectiveProviderOptions,
   resolveProviderOptionOrigin,
-  resolveProviderOptionsSources,
-  resolveTrustedDeepSeekHarnessPaths,
 } from './providerOptions.js';
 import { getPresentProviderOptionPaths } from './providerOptionsContract.js';
 import { validateProviderModelRequirements } from '../../core/workflow/provider-model-requirements.js';
@@ -309,18 +307,7 @@ function resolveLegacySelectorProviderOptions(
     environmentOptions,
     selectorOptions,
   );
-  const providerOptionsSources = resolveProviderOptionsSources(
-    selectorOptions,
-    [],
-    environmentOptions,
-    resolved.originResolver,
-    'env',
-  );
-  return resolveTrustedDeepSeekHarnessPaths(
-    providerOptions,
-    projectCwd,
-    providerOptionsSources,
-  );
+  return providerOptions;
 }
 
 function selectEnvironmentSelectorProviderOptions(

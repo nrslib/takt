@@ -88,6 +88,7 @@ import { createRuntimeProviderResolutionContext } from './resolution-context.js'
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { resolveRuntimeProviderOptions } from './provider-options.js';
+import { applyDeepSeekEnvironmentOptions } from './environment-options.js';
 
 export interface ResolvedRuntimeEnvironment {
   providerEnvironment: CompiledProviderEnvironment;
@@ -576,7 +577,7 @@ export function resolveRuntimeEnvironment(
   // The runtime-v1 bundle carries only the runtime.yaml `profiles.default`; re-apply the CLI/env
   // provider/model override the bootstrap already resolved so the main execution path honors an
   // explicit `--provider`/`--model` the same way the selector seam does.
-  const providerEnvironment = applyRuntimeProviderOverride(
+  const providerEnvironment = applyDeepSeekEnvironmentOptions(input.projectCwd, applyRuntimeProviderOverride(
     compileProviderEnvironment({
       kind: 'runtime-v1',
       section,
@@ -593,7 +594,7 @@ export function resolveRuntimeEnvironment(
       model: input.legacy.model,
       modelSource: input.legacy.modelSource,
     },
-  );
+  ));
   // Validate the runtime default profile together with explicit provider-options environment
   // overrides before workflow execution. Keep the resolved environment bundle separate from
   // configProviderOptions; the execution seam still applies that split per step.

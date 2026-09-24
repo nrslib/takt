@@ -18,13 +18,14 @@ import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 const require = createRequire(import.meta.url);
 
 const QUINT_TIMEOUT_MS = 60_000;
-const ALLOY_TIMEOUT_MS = 60_000;
 const ALLOY_VERSION = '6.2.0';
 const ALLOY_JAR_URL = `https://repo1.maven.org/maven2/org/alloytools/org.alloytools.alloy.dist/${ALLOY_VERSION}/org.alloytools.alloy.dist-${ALLOY_VERSION}.jar`;
 const ALLOY_JAR_SHA256 = '6037cbeee0e8423c1c468447ed10f5fcf2f2743a2ffc39cb1c81f2905c0fdb9d';
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
 const ALLOY_COMMAND_OUTPUT_TRUNCATED_MESSAGE = 'Alloy command enumeration output was truncated before all commands could be read.';
 const MAX_FAILURE_MESSAGE = 8_000;
+const TLC_TIMEOUT_GUIDANCE = 'TLC exhaustively explores the entire state space; --max-steps does not limit TLC. Bound all state variables, especially int variables, to finite ranges.';
+const TLC_OUTPUT_TRUNCATED_MESSAGE = 'TLC output was truncated at the capture limit; diagnostics may be missing.';
 // Each bounded process refreshes the workspace timestamp, so cleanup measures
 // inactivity rather than the total duration of sequential verification stages.
 const STALE_VERIFY_RUN_MAX_AGE_MS = 60 * 60 * 1000;
@@ -59,6 +60,11 @@ export interface FormalSpecVerificationResult {
   readonly alloy: FormalSpecAlloyResult;
 }
 
+export interface FormalSpecVerificationOptions {
+  readonly abortSignal?: AbortSignal;
+  readonly modelCheckTimeoutSeconds: number;
+}
+
 export interface FormalSpecBlocks {
   readonly quint: readonly string[];
   readonly alloy: readonly string[];
@@ -81,6 +87,7 @@ export interface AlloyParsedCommand {
 }
 
 type ProcessOutcome = 'exit' | 'spawn_error' | 'timeout' | 'signal';
+type QuintVerificationBackend = 'typescript' | 'apalache' | 'tlc';
 
 interface ProcessResult {
   readonly outcome: ProcessOutcome;
@@ -291,6 +298,29 @@ function appendProcessOutput(current: string, chunk: string): { output: string; 
   };
 }
 
+const TLC_ERROR_LINE_PATTERN = /^\s*Error:/u;
+const TLC_FAILURE_LINE_PATTERN = /^\s*\[failure\]/u;
+
+function extractTlcDiagnostics(output: string): string | undefined {
+  const ansiEscapePattern = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'gu');
+  const lines = output
+    .replace(ansiEscapePattern, '')
+    .split(/\r\n?|\n/u);
+  const startIndex = lines.findIndex((line) => TLC_ERROR_LINE_PATTERN.test(line));
+  if (startIndex < 0) {
+    return undefined;
+  }
+
+  const failureIndex = lines.findIndex((line, index) => (
+    index >= startIndex && TLC_FAILURE_LINE_PATTERN.test(line)
+  ));
+  const endIndex = failureIndex >= 0 ? failureIndex + 1 : lines.length;
+  return lines
+    .slice(startIndex, endIndex)
+    .join('\n')
+    .trim();
+}
+
 async function runProcess(
   command: string,
   args: readonly string[],
@@ -396,8 +426,18 @@ async function runProcess(
   }
 }
 
-function processFailureMessage(result: ProcessResult): string {
-  const details = [result.error, result.stderr.trim(), result.stdout.trim()]
+function rawProcessOutput(result: ProcessResult): string {
+  return [result.stderr.trim(), result.stdout.trim()]
+    .filter((detail) => detail.length > 0)
+    .join('\n');
+}
+
+function formatProcessFailureMessage(
+  result: ProcessResult,
+  output: string,
+  additionalMessage?: string,
+): string {
+  const details = [additionalMessage, result.error, output]
     .filter((detail): detail is string => detail !== undefined && detail.length > 0)
     .join('\n');
   const exitStatus = result.status === null ? 'unknown' : String(result.status);
@@ -410,6 +450,23 @@ function processFailureMessage(result: ProcessResult): string {
   return message.length > MAX_FAILURE_MESSAGE
     ? `${message.slice(0, MAX_FAILURE_MESSAGE)}\n[output truncated]`
     : message;
+}
+
+function processFailureMessage(result: ProcessResult): string {
+  return formatProcessFailureMessage(result, rawProcessOutput(result));
+}
+
+function tlcFailureMessage(result: ProcessResult): string {
+  // Preserve unrecognized failures instead of replacing their details with a generic summary.
+  const output = extractTlcDiagnostics(result.stdout) ?? rawProcessOutput(result);
+  const notices: string[] = [];
+  if (result.outcome === 'timeout') {
+    notices.push(TLC_TIMEOUT_GUIDANCE);
+  }
+  if (result.stdoutTruncated || result.stderrTruncated) {
+    notices.push(TLC_OUTPUT_TRUNCATED_MESSAGE);
+  }
+  return formatProcessFailureMessage(result, output, notices.join('\n'));
 }
 
 function passedStage(): FormalSpecStageResult {
@@ -438,13 +495,17 @@ function specificationProcessStage(result: ProcessResult): FormalSpecStageResult
     : errorStage(processFailureMessage(result));
 }
 
-function verificationProcessStage(result: ProcessResult): FormalSpecStageResult {
+function verificationProcessStage(
+  result: ProcessResult,
+  backend: QuintVerificationBackend,
+): FormalSpecStageResult {
   if (isSuccessfulProcess(result)) {
     return passedStage();
   }
+  const message = backend === 'tlc' ? tlcFailureMessage(result) : processFailureMessage(result);
   return result.outcome === 'exit' && result.status !== null
-    ? failedStage(result)
-    : errorStage(processFailureMessage(result));
+    ? { status: 'failed', message }
+    : errorStage(message);
 }
 
 function selectPrimaryStage(stages: readonly FormalSpecStageResult[]): FormalSpecStageResult {
@@ -580,7 +641,11 @@ function assertTrustedAlloyJar(bytes: Buffer, source: string): void {
   }
 }
 
-async function ensureAlloyJar(cwd: string, abortSignal?: AbortSignal): Promise<string> {
+async function ensureAlloyJar(
+  cwd: string,
+  timeoutMs: number,
+  abortSignal?: AbortSignal,
+): Promise<string> {
   const configuredPath = process.env.TAKT_ALLOY_JAR;
   if (configuredPath) {
     const resolvedConfiguredPath = resolve(cwd, configuredPath);
@@ -600,7 +665,7 @@ async function ensureAlloyJar(cwd: string, abortSignal?: AbortSignal): Promise<s
   mkdirSync(cacheDirectory, { recursive: true, mode: 0o700 });
   const temporaryPath = join(cacheDirectory, `.alloy-${randomUUID()}.tmp`);
   try {
-    const timeoutSignal = AbortSignal.timeout(ALLOY_TIMEOUT_MS);
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const signal = abortSignal === undefined
       ? timeoutSignal
       : AbortSignal.any([abortSignal, timeoutSignal]);
@@ -636,13 +701,14 @@ async function runQuintCommand(
   quintCli: string,
   args: readonly string[],
   cwd: string,
+  timeoutMs: number,
   abortSignal?: AbortSignal,
 ): Promise<ProcessResult> {
   return runProcess(
     process.execPath,
     [quintCli, ...args],
     cwd,
-    QUINT_TIMEOUT_MS,
+    timeoutMs,
     abortSignal,
   );
 }
@@ -651,13 +717,14 @@ async function runAlloyCommand(
   jarPath: string,
   args: readonly string[],
   cwd: string,
+  timeoutMs: number,
   abortSignal?: AbortSignal,
 ): Promise<ProcessResult> {
   return runProcess(
     'java',
     ['-jar', jarPath, ...args],
     cwd,
-    ALLOY_TIMEOUT_MS,
+    timeoutMs,
     abortSignal,
   );
 }
@@ -690,13 +757,14 @@ function quintResultFromStages(
 
 /**
  * Extract and deterministically verify one newly generated provider response.
- * The response is intentionally the only input from the conversation layer.
+ * The conversation layer supplies only the response and resolved verifier options.
  */
 export async function runFormalSpecVerification(
   response: string,
   cwd: string,
-  abortSignal?: AbortSignal,
+  options: FormalSpecVerificationOptions,
 ): Promise<FormalSpecVerificationResult> {
+  const { abortSignal, modelCheckTimeoutSeconds } = options;
   abortSignal?.throwIfAborted();
   cleanupAbandonedVerifyRuns(cwd);
   let blocks: FormalSpecBlocks;
@@ -709,6 +777,8 @@ export async function runFormalSpecVerification(
   if (blocks.quint.length === 0 && blocks.alloy.length === 0) {
     return resultForNoBlocks('No formal specification blocks found.');
   }
+
+  const modelCheckTimeoutMs = modelCheckTimeoutSeconds * 1000;
 
   let runDirectory: string | undefined;
   let verificationStarted = false;
@@ -740,6 +810,7 @@ export async function runFormalSpecVerification(
           quintCli,
           ['parse', quintPath, '--out', parseJsonPath],
           runDirectory,
+          QUINT_TIMEOUT_MS,
           abortSignal,
         ),
       );
@@ -767,6 +838,7 @@ export async function runFormalSpecVerification(
             quintCli,
             ['typecheck', quintPath],
             runDirectory,
+            QUINT_TIMEOUT_MS,
             abortSignal,
           ),
         );
@@ -794,7 +866,8 @@ export async function runFormalSpecVerification(
             ...(invariantNames.length > 0 ? ['--invariants', ...invariantNames] : []),
           ];
           run = verificationProcessStage(
-            await runQuintCommand(quintCli, runArgs, runDirectory, abortSignal),
+            await runQuintCommand(quintCli, runArgs, runDirectory, QUINT_TIMEOUT_MS, abortSignal),
+            'typescript',
           );
         }
       }
@@ -818,16 +891,16 @@ export async function runFormalSpecVerification(
 
     if (canRunQuintVerify && hasJava17 && quintPath !== undefined && mainModule !== undefined) {
       const quintCli = resolveQuintCli();
+      const verifyBackend: QuintVerificationBackend = targets.temporal.length > 0 ? 'tlc' : 'apalache';
       const verifyArgs = [
         'verify',
         quintPath,
         '--main',
         mainModule,
-        ...(targets.temporal.length > 0 ? ['--backend', 'tlc'] : []),
+        ...(verifyBackend === 'tlc' ? ['--backend', verifyBackend] : []),
         '--max-steps',
         '20',
-        '--verbosity',
-        '0',
+        ...(verifyBackend === 'tlc' ? [] : ['--verbosity', '0']),
         ...(targets.invariants.length > 0
           ? ['--invariant', targets.invariants.map(({ name }) => name).join(',')]
           : []),
@@ -836,7 +909,8 @@ export async function runFormalSpecVerification(
           : []),
       ];
       const verify = verificationProcessStage(
-        await runQuintCommand(quintCli, verifyArgs, runDirectory, abortSignal),
+        await runQuintCommand(quintCli, verifyArgs, runDirectory, modelCheckTimeoutMs, abortSignal),
+        verifyBackend,
       );
       if (quintPath) {
         quintStageSet = { ...quintStageSet, verify };
@@ -866,7 +940,7 @@ export async function runFormalSpecVerification(
     } else {
       let jarPath: string | undefined;
       try {
-        jarPath = await ensureAlloyJar(cwd, abortSignal);
+        jarPath = await ensureAlloyJar(cwd, modelCheckTimeoutMs, abortSignal);
       } catch (error) {
         const message = `Alloy Analyzer could not be prepared: ${error instanceof Error ? error.message : String(error)}`;
         alloy = { status: 'error', message };
@@ -878,6 +952,7 @@ export async function runFormalSpecVerification(
           jarPath,
           ['commands', alloyPath],
           runDirectory,
+          modelCheckTimeoutMs,
           abortSignal,
         );
         if (!isSuccessfulProcess(commandsProcess)) {
@@ -899,6 +974,7 @@ export async function runFormalSpecVerification(
                 jarPath,
                 ['exec', '--quiet', '--type', 'text', '--output', '-', '--command', String(commandNumber), alloyPath],
                 runDirectory,
+                modelCheckTimeoutMs,
                 abortSignal,
               );
               const check = isSuccessfulProcess(checkProcess) && checkProcess.stdout.trim() === ''

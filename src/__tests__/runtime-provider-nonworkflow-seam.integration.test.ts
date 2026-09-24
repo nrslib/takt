@@ -92,6 +92,46 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     });
   });
 
+  it('applies the standard DeepSeek environment override over the runtime defaults profile', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: {
+            provider: 'deepseek-harness',
+            model: 'deepseek-chat:latest',
+            options: { reasoning_effort: 'high' },
+          },
+        },
+      },
+    });
+    const previousEffort = process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'max';
+    invalidate();
+
+    try {
+      expect(resolveRuntimeNonWorkflowProvider(projectCwd)).toEqual({
+        provider: 'deepseek-harness',
+        model: 'deepseek-chat:latest',
+        providerOptions: { deepseekHarness: { reasoningEffort: 'max' } },
+      });
+      expect(resolveNonWorkflowProviderModel(projectCwd)).toEqual({
+        runtimeManaged: true,
+        provider: 'deepseek-harness',
+        model: 'deepseek-chat:latest',
+        providerOptions: { deepseekHarness: { reasoningEffort: 'max' } },
+      });
+    } finally {
+      if (previousEffort === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = previousEffort;
+      }
+      invalidate();
+    }
+  });
+
   it('does not resolve an internal_agents profile for a non-workflow agent (uses defaults)', () => {
     writeGlobalRuntimeFile({
       version: 1,

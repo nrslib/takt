@@ -18,6 +18,12 @@
  * error, terminates the child when a stream fails, and tears down listeners
  * on child close. The SDK can then surface `Codex Exec exited with ...`
  * through the existing provider-error classification.
+ *
+ * Matching spawns also get their stdout routed through the U+2028 / U+2029
+ * escape stream from `json-line-separator-stream.ts`, so the SDK's
+ * readline-based JSONL parser never splits one JSON event into fragments.
+ * The replacement happens synchronously inside the spawn wrapper, before the
+ * SDK reads `child.stdout`.
  */
 
 import { basename } from 'node:path';
@@ -26,6 +32,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { guardChildProcessStreams } from '../../shared/utils/child-process-guard.js';
 import { createLogger } from '../../shared/utils/debug.js';
 import { CODEX_CONFIG_PROFILE_ENV } from './types.js';
+import { escapeChildStdoutLineSeparators } from './json-line-separator-stream.js';
 
 const log = createLogger('codex-spawn-guard');
 
@@ -117,6 +124,8 @@ export function installCodexSpawnGuard(): void {
     if (!codexSpawn) {
       return child;
     }
+
+    escapeChildStdoutLineSeparators(child);
 
     let streamFailureHandled = false;
     const teardown = guardChildProcessStreams(child, (error, source) => {

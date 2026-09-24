@@ -441,6 +441,22 @@ describe('system workflow execution integration', () => {
           },
         }),
       },
+      // エンジンの fresh retry でも同じ error を返して abort を検証する
+      {
+        persona: 'planner',
+        status: 'error',
+        content: '## Implement provider error fallback\nDetails',
+        error: 'provider failed after partial response',
+        failureCategory: 'provider_error',
+        structuredOutput: createFollowupStructuredOutput({
+          action: 'enqueue_new_task',
+          goals: [],
+          acceptance_criteria: [],
+          issue: {
+            create: true,
+          },
+        }),
+      },
     ]);
 
     const config = normalizeWorkflowConfig(
@@ -526,6 +542,14 @@ describe('system workflow execution integration', () => {
     },
   ])('followup-task の $name は本文があっても fallback せず abort する', async (input) => {
     setMockScenario([
+      {
+        persona: 'planner',
+        status: 'error',
+        content: `## ${input.contentTitle}\nDetails`,
+        error: input.error,
+        failureCategory: input.failureCategory,
+      },
+      // エンジンの fresh retry でも同じ error を返して abort を検証する
       {
         persona: 'planner',
         status: 'error',
@@ -631,6 +655,14 @@ describe('system workflow execution integration', () => {
         error: input.error,
         failureCategory: input.failureCategory,
       },
+      // エンジンの fresh retry でも同じ error を返して abort を検証する
+      {
+        persona: 'planner',
+        status: 'error',
+        content: '',
+        error: input.error,
+        failureCategory: input.failureCategory,
+      },
     ]);
 
     const state = await new WorkflowEngine(
@@ -675,6 +707,14 @@ describe('system workflow execution integration', () => {
     },
   ])('followup-task の $name は content が error と同一なら fallback せず abort する', async (input) => {
     setMockScenario([
+      {
+        persona: 'planner',
+        status: 'error',
+        content: input.error,
+        error: input.error,
+        failureCategory: input.failureCategory,
+      },
+      // エンジンの fresh retry でも同じ error を返して abort を検証する
       {
         persona: 'planner',
         status: 'error',

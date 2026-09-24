@@ -11,7 +11,12 @@ type PackageJson = {
 };
 
 type PackageLock = {
-  packages?: Record<string, { version?: string; engines?: Record<string, string> }>;
+  packages?: Record<string, {
+    version?: string;
+    engines?: Record<string, string>;
+    resolved?: string;
+    integrity?: string;
+  }>;
 };
 
 function readPackageJson(): PackageJson {
@@ -127,6 +132,40 @@ function getCaretUpperBound(version: NodeVersion): NodeVersion {
 }
 
 describe('dependency versions', () => {
+  it('records integrity for registry tarballs required by the Nix dependency fetcher', () => {
+    const packages = Object.entries(readPackageLock().packages ?? {});
+    const registryPackages = packages.filter(([, info]) => (
+      info.resolved?.startsWith('https://registry.npmjs.org/')
+    ));
+
+    expect(registryPackages.length).toBeGreaterThan(0);
+    expect(registryPackages.filter(([, info]) => !info.integrity)
+      .map(([packagePath]) => packagePath)).toEqual([]);
+  });
+
+  it('declares and resolves both Pi SDK packages at 0.85.1', () => {
+    const packageJson = readPackageJson();
+    const packageLock = readPackageLock();
+    const piPackages = [
+      '@earendil-works/pi-ai',
+      '@earendil-works/pi-coding-agent',
+    ] as const;
+
+    for (const packageName of piPackages) {
+      expect(packageJson.dependencies?.[packageName]).toBe('^0.85.1');
+
+      const lockEntries = Object.entries(packageLock.packages ?? {})
+        .filter(([packagePath]) => (
+          packagePath === `node_modules/${packageName}`
+          || packagePath.endsWith(`/node_modules/${packageName}`)
+        ));
+      expect(lockEntries.length).toBeGreaterThan(0);
+      for (const [packagePath, packageInfo] of lockEntries) {
+        expect(packageInfo.version, packagePath).toBe('0.85.1');
+      }
+    }
+  });
+
   it('declares OpenTelemetry foundation dependencies', () => {
     const packageJson = readPackageJson();
     const packageLock = readPackageLock();

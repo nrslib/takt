@@ -110,7 +110,11 @@ describe('runDirectInstructMode', () => {
     mockInitializeSession.mockReturnValue({ sessionId: 'session-1' });
     mockLoadTemplate.mockReturnValue('direct instruct system prompt');
     mockRunConversationLoop.mockResolvedValue({ action: 'execute', task: 'Add regression coverage' });
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({
+      mode: false,
+      comments: true,
+      modelCheckTimeoutSeconds: 300,
+    });
   });
 
   afterEach(() => {
@@ -227,7 +231,11 @@ describe('runDirectInstructMode', () => {
   it.each([false, true])(
     'passes resolved formal specification mode=%s without prompting',
     async (formalSpec) => {
-      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: formalSpec, comments: true });
+      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({
+        mode: formalSpec,
+        comments: true,
+        modelCheckTimeoutSeconds: 300,
+      });
 
       await runDirectInstructMode(buildOptions(null));
 

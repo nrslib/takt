@@ -14,11 +14,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import {
   resolveRefToContent,
   type FacetResolutionContext,
@@ -35,6 +39,25 @@ describe('facet include expansion', () => {
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it.each(['ja', 'en'] as const)('%s: builtin instruction includes reference existing partials', (language) => {
+    const facetsRoot = fileURLToPath(new URL(`../../builtins/${language}/facets/`, import.meta.url));
+    let references = 0;
+    for (const directory of ['instructions', 'partials/instructions']) {
+      const root = join(facetsRoot, directory);
+      const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter(name => name.endsWith('.md'));
+      expect(files.length).toBeGreaterThan(0);
+      for (const file of files) {
+        const body = readFileSync(join(root, file), 'utf8');
+        for (const match of body.matchAll(/\{\{include:instructions\/([^}]+)\}\}/g)) {
+          const target = join(facetsRoot, 'partials', 'instructions', `${match[1]}.md`);
+          expect(statSync(target, { throwIfNoEntry: false })?.isFile(), `${language}/${directory}/${file}: ${match[0]}`).toBe(true);
+          references += 1;
+        }
+      }
+    }
+    expect(references).toBeGreaterThan(0);
   });
 
   it('should expand {{include:instructions/<name>}} in an instruction facet', () => {

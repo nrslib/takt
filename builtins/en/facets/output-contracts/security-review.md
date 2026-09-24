@@ -23,6 +23,8 @@
 {{include:output-contracts/base-review-reopened-findings}}
 | 1 | SEC-REOPENED-src-auth-L55 | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at src/auth.ts:55` | Issue description | Fix approach |
 
+{{include:output-contracts/base-review-non-finding-concerns}}
+
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-verification-evidence}}
 
@@ -39,4 +41,5 @@
 - APPROVE with warnings → add Warnings in 1-2 lines
 - APPROVE after a repair → include only the necessary adjudicated, resolved, or verification sections
 - Vulnerabilities found → include every verified finding in tables and aggregate locations with the same cause
+- Exception: Never omit Non-Finding Concerns (including carry-forwards of plan caveats) when they have content
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

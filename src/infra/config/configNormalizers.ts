@@ -16,6 +16,7 @@ import type { ProviderPermissionProfiles } from '../../core/models/provider-prof
 import type {
   AssistantConfig,
   AutoRoutingConfig,
+  FormalSpecMode,
   FormalSpecSetting,
   WorkflowOverrides,
   PersonaProviderEntry,
@@ -48,6 +49,13 @@ type RawProviderRoutingEntry = string | {
 type RawQualityGate = NonNullable<z.output<typeof QualityGatesSchema>>[number];
 type RawWorkflowOverrides = z.output<typeof WorkflowOverridesSchema>;
 type SerializedQualityGateOverride = { quality_gates?: RawQualityGate[] };
+
+type RawFormalSpecConfig = {
+  mode?: FormalSpecMode;
+  comments?: boolean;
+  model_check_timeout_seconds?: number;
+};
+type RawFormalSpecSetting = FormalSpecMode | RawFormalSpecConfig;
 
 type RawAutoRoutingConfig = {
   strategy: AutoRoutingConfig['strategy'];
@@ -523,7 +531,7 @@ export function normalizePipelineConfig(raw: {
 }
 
 export function normalizeAssistantConfig(
-  raw: { init_files?: string[]; formal_spec?: FormalSpecSetting } | undefined,
+  raw: { init_files?: string[]; formal_spec?: RawFormalSpecSetting } | undefined,
 ): AssistantConfig | undefined {
   const initFiles = raw?.init_files?.length ? raw.init_files : undefined;
   if (initFiles === undefined && raw?.formal_spec === undefined) {
@@ -535,26 +543,48 @@ export function normalizeAssistantConfig(
   };
 }
 
-function normalizeFormalSpecSetting(setting: FormalSpecSetting): FormalSpecSetting {
+function normalizeFormalSpecSetting(setting: RawFormalSpecSetting | FormalSpecSetting): FormalSpecSetting {
+  if (typeof setting !== 'object' || setting === null) {
+    return setting;
+  }
+  const rawSetting = setting as {
+    mode?: FormalSpecMode;
+    comments?: boolean;
+    model_check_timeout_seconds?: number;
+    modelCheckTimeoutSeconds?: number;
+  };
+  const modelCheckTimeoutSeconds = rawSetting.model_check_timeout_seconds
+    ?? rawSetting.modelCheckTimeoutSeconds;
+  return {
+    ...(rawSetting.mode !== undefined ? { mode: rawSetting.mode } : {}),
+    ...(rawSetting.comments !== undefined ? { comments: rawSetting.comments } : {}),
+    ...(modelCheckTimeoutSeconds !== undefined ? { modelCheckTimeoutSeconds } : {}),
+  };
+}
+
+function denormalizeFormalSpecSetting(setting: FormalSpecSetting): RawFormalSpecSetting {
   if (typeof setting !== 'object' || setting === null) {
     return setting;
   }
   return {
     ...(setting.mode !== undefined ? { mode: setting.mode } : {}),
     ...(setting.comments !== undefined ? { comments: setting.comments } : {}),
+    ...(setting.modelCheckTimeoutSeconds !== undefined
+      ? { model_check_timeout_seconds: setting.modelCheckTimeoutSeconds }
+      : {}),
   };
 }
 
 export function denormalizeAssistantConfig(
   config: AssistantConfig | undefined,
-): { init_files?: string[]; formal_spec?: FormalSpecSetting } | undefined {
+): { init_files?: string[]; formal_spec?: RawFormalSpecSetting } | undefined {
   const initFiles = config?.initFiles?.length ? config.initFiles : undefined;
   if (initFiles === undefined && config?.formalSpec === undefined) {
     return undefined;
   }
   return {
     ...(initFiles !== undefined ? { init_files: initFiles } : {}),
-    ...(config?.formalSpec !== undefined ? { formal_spec: normalizeFormalSpecSetting(config.formalSpec) } : {}),
+    ...(config?.formalSpec !== undefined ? { formal_spec: denormalizeFormalSpecSetting(config.formalSpec) } : {}),
   };
 }
 
@@ -663,11 +693,21 @@ export function buildRawTaktProvidersOrThrow(
   };
 }
 
+/**
+ * Serialize supported internal provider options to legacy YAML keys, omitting unset values.
+ * Reject runtime-only DeepSeek effort instead of silently losing it during persistence.
+ */
 export function denormalizeProviderOptions(
   providerOptions: StepProviderOptions | undefined,
 ): Record<string, unknown> | undefined {
   if (!providerOptions) {
     return undefined;
+  }
+  if (providerOptions.deepseekHarness?.reasoningEffort !== undefined) {
+    throw new Error(
+      'Configuration error: DeepSeek reasoning_effort cannot be saved in legacy provider_options; '
+      + 'use runtime profile options or the standard environment override.',
+    );
   }
 
   const raw: Record<string, unknown> = {};
@@ -823,12 +863,6 @@ export function denormalizeProviderOptions(
     const deepseekHarness = {
       ...(providerOptions.deepseekHarness.baseUrl !== undefined
         ? { base_url: providerOptions.deepseekHarness.baseUrl }
-        : {}),
-      ...(providerOptions.deepseekHarness.sessionRoot !== undefined
-        ? { session_root: providerOptions.deepseekHarness.sessionRoot }
-        : {}),
-      ...(providerOptions.deepseekHarness.cordis !== undefined
-        ? { cordis: providerOptions.deepseekHarness.cordis }
         : {}),
       ...(providerOptions.deepseekHarness.maxTokens !== undefined
         ? { max_tokens: providerOptions.deepseekHarness.maxTokens }

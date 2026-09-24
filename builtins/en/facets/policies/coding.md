@@ -388,8 +388,8 @@ When adding a new feature or screen, update the paths by which users reach it in
 ### Dependency Direction
 
 - Upper layers → Lower layers (reverse direction prohibited)
-- Fetch data at the root (View/Controller) and pass it down
-- Children do not know about their parents
+- The screen or region that retrieves and updates data and handles failures passes the values and operations the display needs
+- Children do not change parent internals directly; they report operations through a callback, dispatch, store, or binding passed to them
 
 ### Align execution triggers with actual intent
 
@@ -417,10 +417,10 @@ When changing contracts that other code or users depend on — types, interfaces
 ## State Management
 
 - Confine state to where it is used
-- Do not directly mutate values owned by callers, shared state, or values exposed externally
+- Do not directly mutate caller-owned, shared, or externally exposed values; use the update method provided by the code that owns the value
 - A function or test may mutate a local accumulator collection that it creates internally and never exposes
-- Children do not modify state directly (notify parents via events)
-- State flow is unidirectional
+- Children do not change state in a parent or another subtree directly; they report operations through a callback, dispatch, store, or binding
+- Keep the path from state to display and operation readable
 - Do not keep derived values that can be computed from canonical state as independent state
 - If multiple fields require constant synchronization, revisit the state model
 
@@ -642,7 +642,7 @@ Verification approach:
 - **Unused code** - Do not write "just in case" code
 - **Unfinished code** - Do not defer required work with TODO/FIXME or leave stubs or commented-out old code
 - **any type** - Do not break type safety
-- **Direct mutation of objects/arrays outside local ownership** - Do not mutate caller-owned, shared, or externally exposed values; create new values instead
+- **Direct mutation of shared values** - Do not directly rewrite caller-owned, shared, or externally exposed values; create a new value or use the update method provided by the code that owns the value
 - **console.log** - Do not leave in production code
 - **Sensitive information exposure** - Do not include sensitive data in hardcoded values, logs, error responses, or test output
 - **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited

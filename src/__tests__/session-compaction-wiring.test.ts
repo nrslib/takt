@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
-import type { RunPaths } from '../core/workflow/run/run-paths.js';
+import { buildRunPaths, type RunPaths } from '../core/workflow/run/run-paths.js';
 import type { StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import type { ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
@@ -54,6 +54,9 @@ function makeState(): WorkflowState {
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map(),
+    restoredStepIterationNames: new Set(),
+    dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
     status: 'running',
   };
 }
@@ -69,28 +72,6 @@ function makeDoneResponse(overrides: Partial<AgentResponse> = {}): AgentResponse
   };
 }
 
-function makeRunPaths(cwd: string): RunPaths {
-  return {
-    slug: 'test-run',
-    runRootRel: '.takt/runs/test-run',
-    reportsRel: '.takt/runs/test-run/reports',
-    contextRel: '.takt/runs/test-run/context',
-    contextKnowledgeRel: '.takt/runs/test-run/context/knowledge',
-    contextPolicyRel: '.takt/runs/test-run/context/policy',
-    contextPreviousResponsesRel: '.takt/runs/test-run/context/previous_responses',
-    logsRel: '.takt/runs/test-run/logs',
-    metaRel: '.takt/runs/test-run/meta.json',
-    runRootAbs: join(cwd, '.takt/runs/test-run'),
-    reportsAbs: join(cwd, '.takt/runs/test-run/reports'),
-    contextAbs: join(cwd, '.takt/runs/test-run/context'),
-    contextKnowledgeAbs: join(cwd, '.takt/runs/test-run/context/knowledge'),
-    contextPolicyAbs: join(cwd, '.takt/runs/test-run/context/policy'),
-    contextPreviousResponsesAbs: join(cwd, '.takt/runs/test-run/context/previous_responses'),
-    logsAbs: join(cwd, '.takt/runs/test-run/logs'),
-    metaAbs: join(cwd, '.takt/runs/test-run/meta.json'),
-  };
-}
-
 function makeCompactStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   return makeStep({
     name: 'review',
@@ -99,9 +80,9 @@ function makeCompactStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     instruction: 'Review',
     provider: 'opencode',
     model: 'opencode/big-pickle',
-    session: 'compact' as unknown as WorkflowStep['session'],
+    session: 'compact',
     ...overrides,
-  });
+  } as Partial<WorkflowStep>);
 }
 
 function queueAgentResponse(response: AgentResponse): void {
@@ -141,7 +122,9 @@ function makeParallelDeps(
     } as unknown as ParallelRunnerDeps['stepExecutor'],
     engineOptions: { projectCwd: cwd },
     getCwd: () => cwd,
-    getReportDir: () => '.takt/runs/test-run/reports',
+    dynamicParallelSelector: {
+      selectParticipants: vi.fn(),
+    } as unknown as ParallelRunnerDeps['dynamicParallelSelector'],
     getWorkflowName: () => 'test-workflow',
     getTask: () => 'task',
     getInteractive: () => false,
@@ -151,9 +134,6 @@ function makeParallelDeps(
     updateMaxSteps: vi.fn(),
     setActiveResumePoint: vi.fn(),
     getRunId: () => 'test-run',
-    structuredCaller: {
-      evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
-    },
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
     ...overrides,
   };
@@ -193,16 +173,13 @@ function makeNormalDeps(
     getWorkflowRules: () => undefined,
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-    structuredCaller: {
-      evaluateCondition: vi.fn(),
-      judgeStatus: vi.fn(),
-      decomposeTask: vi.fn(),
-      requestMoreParts: vi.fn(),
-    },
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
     emitEvent: vi.fn(),
     recordSynthesizedAgentUsage: vi.fn(),
     getRunId: () => 'test-run',
+    getRunPathNamespace: () => [],
+    companionEnabled: false,
+    companionReviewMode: 'completion',
     executionProvider: 'opencode',
     executionModel: 'opencode/big-pickle',
     ...overrides,
@@ -215,7 +192,7 @@ describe('session compaction Phase 1 wiring', () => {
 
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), 'session-compaction-wiring-'));
-    runPaths = makeRunPaths(cwd);
+    runPaths = buildRunPaths(cwd, 'test-run');
     mkdirSync(runPaths.contextPreviousResponsesAbs, { recursive: true });
     vi.clearAllMocks();
     vi.mocked(executeAgent).mockReset();
@@ -240,36 +217,11 @@ describe('session compaction Phase 1 wiring', () => {
       resolvedModel: 'opencode/big-pickle',
       sessionId: 'session-1',
     };
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/runs/test-run/reports',
-      getRunPaths: () => runPaths,
-      getFailureDir: () => join(runPaths.runRootAbs, 'failures'),
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'review' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getWorkflowRules: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+    const deps = makeNormalDeps(cwd, runPaths, {
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
-    };
+    });
     queueAgentResponse(makeDoneResponse());
 
     await new StepExecutor(deps).runNormalStep(step, makeState(), 'task', 5, vi.fn());
@@ -282,37 +234,7 @@ describe('session compaction Phase 1 wiring', () => {
 
   it('Given normal compaction failure When Phase 1 runs Then it clears the old session and executes fresh', async () => {
     const step = makeCompactStep();
-    const phase1Options = {
-      cwd,
-      projectCwd: cwd,
-      resolvedProvider: 'opencode',
-      resolvedModel: 'opencode/big-pickle',
-      sessionId: 'session-1',
-    };
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/runs/test-run/reports',
-      getRunPaths: () => runPaths,
-      getFailureDir: () => join(runPaths.runRootAbs, 'failures'),
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'review' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getWorkflowRules: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-    };
+    const deps = makeNormalDeps(cwd, runPaths);
     const state = makeState();
     state.personaSessions.set(
       '["reviewer","opencode","opencode/big-pickle"]',
@@ -362,39 +284,14 @@ describe('session compaction Phase 1 wiring', () => {
       resolvedModel: 'opencode/big-pickle',
       sessionId: 'session-1',
     };
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/runs/test-run/reports',
-      getRunPaths: () => runPaths,
-      getFailureDir: () => join(runPaths.runRootAbs, 'failures'),
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'review' }],
-      getWorkflowName: () => 'test-workflow',
+    const deps = makeNormalDeps(cwd, runPaths, {
       getCurrentWorkflowStack: () => [
         makeWorkflowResumePointEntry({ step: 'review' }),
       ],
-      getWorkflowDescription: () => undefined,
-      getWorkflowRules: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
-    };
+    });
     queueAgentResponse(makeDoneResponse());
 
     await new StepExecutor(deps).runNormalStep(step, makeState(), 'task', 5, vi.fn());
@@ -419,40 +316,7 @@ describe('session compaction Phase 1 wiring', () => {
       resolvedModel: 'opencode/big-pickle',
       sessionId: 'session-1',
     };
-    const deps: ParallelRunnerDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
-      } as unknown as ParallelRunnerDeps['optionsBuilder'],
-      stepExecutor: {
-        prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
-        prepareInstruction: vi.fn((step: WorkflowStep) => ({ text: `instruction:${step.name}`, injectedReports: [] })),
-        emitStepReports: vi.fn(),
-        persistPreviousResponseSnapshot: vi.fn(),
-        normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
-        normalizeStructuredOutputWithDiagnostics: vi.fn((_step: WorkflowStep, response: AgentResponse) => ({
-          response,
-          invalidDetail: undefined,
-        })),
-      } as unknown as ParallelRunnerDeps['stepExecutor'],
-      engineOptions: {
-        projectCwd: cwd,
-      },
-      getCwd: () => cwd,
-      getReportDir: () => '.takt/runs/test-run/reports',
-      getWorkflowName: () => 'test-workflow',
-      getInteractive: () => false,
-      observabilityEnabled: false,
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
-    };
+    const deps = makeParallelDeps(cwd);
     queueAgentResponse(makeDoneResponse());
 
     await new ParallelRunner(deps).runParallelStep(parentStep, makeState(), 'task', 5, vi.fn());
@@ -473,32 +337,7 @@ describe('session compaction Phase 1 wiring', () => {
       resolvedModel: 'opencode/big-pickle',
       sessionId: 'session-1',
     };
-    const deps: ParallelRunnerDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
-      } as unknown as ParallelRunnerDeps['optionsBuilder'],
-      stepExecutor: {
-        prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
-        prepareInstruction: vi.fn((step: WorkflowStep) => ({ text: `instruction:${step.name}`, injectedReports: [] })),
-        emitStepReports: vi.fn(),
-        persistPreviousResponseSnapshot: vi.fn(),
-        normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
-        normalizeStructuredOutputWithDiagnostics: vi.fn((_step: WorkflowStep, response: AgentResponse) => ({ response, invalidDetail: undefined })),
-      } as unknown as ParallelRunnerDeps['stepExecutor'],
-      engineOptions: { projectCwd: cwd },
-      getCwd: () => cwd,
-      getReportDir: () => '.takt/runs/test-run/reports',
-      getWorkflowName: () => 'test-workflow',
-      getInteractive: () => false,
-      observabilityEnabled: false,
-      structuredCaller: {
-        evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
-      },
-      runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
-    };
+    const deps = makeParallelDeps(cwd);
     const state = makeState();
     state.personaSessions.set(
       '["reviewer","opencode","opencode/big-pickle"]',
@@ -525,7 +364,7 @@ describe('session compaction Phase 1 wiring', () => {
     )).toBe(false);
   });
 
-  it('Given fresh fallback Phase 1 returns a provider error When a parallel sub-step runs Then it does not execute the side effect twice', async () => {
+  it('Given fresh fallback Phase 1 returns a provider error When a parallel sub-step runs Then it retries once in a fresh session', async () => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
     const state = makeState();
@@ -535,7 +374,7 @@ describe('session compaction Phase 1 wiring', () => {
     );
     compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
     let sideEffectCount = 0;
-    vi.mocked(executeAgent).mockImplementationOnce(async (_persona, instruction, options) => {
+    vi.mocked(executeAgent).mockImplementation(async (_persona, instruction, options) => {
       sideEffectCount++;
       options.onPromptResolved?.({ systemPrompt: 'system prompt', userInstruction: instruction });
       return {
@@ -549,14 +388,12 @@ describe('session compaction Phase 1 wiring', () => {
 
     await new ParallelRunner(makeParallelDeps(cwd)).runParallelStep(parentStep, state, 'task', 5, vi.fn());
 
-    expect(sideEffectCount).toBe(1);
-    expect(vi.mocked(executeAgent)).toHaveBeenCalledOnce();
-    expect(vi.mocked(executeAgent)).toHaveBeenCalledWith('reviewer', expect.any(String), expect.objectContaining({
-      sessionId: undefined,
-    }));
+    expect(sideEffectCount).toBe(2);
+    expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId))
+      .toEqual([undefined, undefined]);
   });
 
-  it('Given parallel compaction starts fresh When empty continuation hits a provider error Then it stops without another fresh retry', async () => {
+  it('Given parallel compaction starts fresh When empty continuation hits a provider error Then it retries the original instruction fresh once', async () => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
     compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
@@ -569,15 +406,22 @@ describe('session compaction Phase 1 wiring', () => {
       timestamp: new Date(),
       sessionId: 'session-fresh',
     });
+    queueAgentResponse({
+      persona: 'reviewer',
+      status: 'error',
+      content: 'provider failed',
+      error: 'provider failed',
+      timestamp: new Date(),
+    });
     const state = makeState();
 
     const result = await new ParallelRunner(
       makeParallelDeps(cwd),
     ).runParallelStep(parentStep, state, 'task', 5, vi.fn());
 
-    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(3);
     expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId))
-      .toEqual([undefined, 'session-fresh']);
+      .toEqual([undefined, 'session-fresh', undefined]);
     expect(state.stepOutputs.get('api-review')).toMatchObject({
       status: 'error',
       error: 'provider failed',

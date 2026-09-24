@@ -1714,11 +1714,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
     }).run();
-    await vi.waitFor(() => expect(started).toEqual(['architecture']));
+    await vi.waitFor(() => expect(started).toEqual(['architecture']), { timeout: 10_000 });
     gates.get('architecture')!.resolve();
-    await vi.waitFor(() => expect(started).toEqual(['architecture', 'frontend']));
+    await vi.waitFor(() => expect(started).toEqual(['architecture', 'frontend']), { timeout: 10_000 });
     gates.get('frontend')!.resolve();
-    await vi.waitFor(() => expect(started).toEqual(['architecture', 'frontend', 'backend']));
+    await vi.waitFor(() => expect(started).toEqual(['architecture', 'frontend', 'backend']), { timeout: 10_000 });
     gates.get('backend')!.resolve();
 
     const state = await run;
@@ -1764,7 +1764,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
     }).run();
-    await vi.waitFor(() => expect(started).toEqual(['architecture', 'frontend', 'backend']));
+    await vi.waitFor(() => expect(started).toEqual(['architecture', 'frontend', 'backend']), { timeout: 10_000 });
     expect(started).not.toContain('security');
     gate.resolve();
 

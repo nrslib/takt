@@ -36,6 +36,7 @@ assistant:
   formal_spec:
     mode: 'y/N'                # Alloy／Quint モード: true, false, Y/n, y/N（デフォルト: y/N）
     comments: true             # 各形式構造への自然言語の意味コメント（デフォルト: true）
+    model_check_timeout_seconds: 300  # /verify の quint verify と Alloy モデル検査の上限秒数。1〜86400 の整数（デフォルト: 300）
 # auto_fetch: false           # クローン作成前にリモートを fetch（デフォルト: false）
 # base_branch: main           # クローン作成のベースブランチ（デフォルト: リモートのデフォルトブランチ）
 
@@ -194,7 +195,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` の並列タスク数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode` と `comments` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 300）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
 | `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
@@ -295,7 +296,6 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #   deepseek_harness:
 #     # managed environment は `takt deepseek-harness install` で作成します。
 #     base_url: http://127.0.0.1:8787/v1
-#     session_root: .takt/deepseek-sessions
 #     max_tokens: 4096
 #     request_timeout_ms: 3600000
 #     shutdown_timeout_ms: 1000
@@ -409,7 +409,7 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true`（global 設定またはデフォルト由来） | 要件を Alloy／Quint の両方の記法でも表現するガイダンスを追加するプロジェクト上書きです。object 形式では `mode` と `comments` を独立して指定でき、未指定フィールドは global またはデフォルトへフォールバックします。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true`（global 設定またはデフォルト由来） | 要件を Alloy／Quint の両方の記法でも表現するガイダンスを追加するプロジェクト上書きです。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定でき、未指定フィールドは global またはデフォルトへフォールバックします。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |
@@ -974,9 +974,9 @@ TAKT は provider 非依存の3つのパーミッションモードを使用し�
 
 | モード | 説明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
 |--------|------|--------|-------|----------|----|-----------------|--------------|---------|----------|
-| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | Cordis 設定 | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` |
-| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | Cordis 設定 | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | Cordis 設定 | `--force` | `--yolo` | `--trust-all-tools` |
+| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` |
+| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | この SDK では公開されません | `--force` | `--yolo` | `--trust-all-tools` |
 
 Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。internal agent の role に狭い権限が必要なら、Pi の profile に capabilities と permission mode を明示してください。
 
@@ -1210,12 +1210,37 @@ model: deepseek-v4-flash
 provider_options:
   deepseek_harness:
     base_url: http://127.0.0.1:8787/v1  # 任意。project/workflow config では loopback
-    session_root: .takt/deepseek-sessions
     max_tokens: 4096
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
     runtime_mode: exe                  # exe または node
 ```
+
+DeepSeek の推論強度は `runtime.yaml` の provider profile、または標準の TAKT 環境変数
+override からだけ設定します。
+
+```yaml
+version: 1
+provider:
+  defaults:
+    profile: deepseek
+  profiles:
+    deepseek:
+      provider: deepseek-harness
+      model: deepseek-v4-flash
+      options:
+        reasoning_effort: high
+```
+
+指定できる値は `off`、`low`、`high`、`max` です。省略時はフィールドを設定せず、SDK の
+既定値へ委譲します。対応する環境変数 override は
+`TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT` です。legacy の
+`provider_options`、workflow step、persona、routing entry での指定は対応せず、設定エラーに
+なります。
+
+強度の変更・指定解除は次のturnから適用し、会話IDと保存済みの履歴を維持します。
+必要に応じてそのsessionのbridgeだけを交換し、別sessionのbridgeは変更しません。
+交換に失敗した場合はエラーを返し、古い強度では続行しません。
 
 DeepSeek Harness の `model` フィールドは、`deepseek-v4-flash` のような
 model 参照だけの形式と、`openai/gpt-5.4` や
@@ -1234,11 +1259,13 @@ bridge 起動前に拒否されます。空白だけの route または model �
 bridge/SDK に渡します。SDK が拒否した場合は、入力された参照と bridge/SDK で
 失敗した箇所を含むエラーになります。
 
-credential safety のため、`cordis` は実行する tool composition を選択するため、信頼できる global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS` からのみ設定できます。上の例では省略しています。managed interpreter は install command が固定し、provider option から選択できません。同じ制約は project の `runtime.yaml` profile にも適用されます。global runtime profile では信頼できる値を選択できます。project runtime profile の `base_url` は loopback のみ使用できます。
+managed interpreter は install command が固定し、provider option から選択できません。project runtime profile の `base_url` は loopback のみ使用できます。
 
-`session_root` と `cordis` は設定された作業ディレクトリからの相対パスとして解決されます。workflow が `session_key` を指定するとセッションを再利用し、one-shot call は bridge を直ちに close します。`request_timeout_ms` は Python bridge request 全体を終了させ、TAKT call の abort は bridge の process tree を終了させます。公式 `session.event` notification は TAKT の text、thinking、tool-use、tool-result、error、result event へ変換されます。system prompt、TAKT の `allowed_tools`、MCP server map、画像添付、structured output、permission mode、`maxTurns` は公式 SDK の call に存在しないため warning とともに無視されます。system/tool composition は Cordis で設定してください。
+workflow が `session_key` を指定するとセッションを再利用し、one-shot call は bridge を直ちに close します。`request_timeout_ms` は Python bridge request 全体を終了させ、TAKT call の abort は bridge の process tree を終了させます。公式 `session.event` notification は TAKT の text、thinking、tool-use、tool-result、error、result event へ変換されます。system prompt、MCP server map、画像添付、structured output、`maxTurns` は公式 SDK の call に存在しないため warning とともに無視されます。tool composition option はこの provider contract では公開されません。
 
-対応する環境変数 override は `_BASE_URL`、`_SESSION_ROOT`、`_CORDIS`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
+権限制御とツール制限は無視しません。provider への呼び出しで `permissionMode`、`bypassPermissions: true`、または `allowedTools`（空配列も含む）が明示された場合は、bridge を起動せず `status: 'error'` を返します。これらの制約が必要な場合は、対応する provider を使用してください。一方、workflow step の `allowed_tools` は対応していないフィールドであり、workflow の schema 検証で拒否されます。provider 呼び出しには到達せず、上記のエラー応答とは別の段階で失敗します。
+
+対応する環境変数 override は `_BASE_URL`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE`、`_REASONING_EFFORT` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
 
 #### ネットワークアクセス (`network_access`)
 
@@ -1321,7 +1348,7 @@ provider_options:
 
 環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` でも設定できます。
 
-`config_profile` は ASCII の英字・数字・ハイフン・アンダースコアだけを含む名前を受け付けます。空文字や path は拒否され、`permission_control: codex` の場合だけ有効です。省略時の既定値や `permission_control: takt` との併用は設定エラーになります。TAKT は名前を `codex exec --profile <name>` として渡し、Codex が `$CODEX_HOME/<name>.config.toml` を解決します。そのファイル、基本設定、trusted project 設定、実行時 override の優先順位は Codex の仕様に従います。
+`config_profile` は ASCII の英字・数字・ハイフン・アンダースコアだけを含む名前を受け付けます。空文字や path は拒否され、`permission_control: codex` の場合だけ有効です。`permission_control` を省略した場合（既定値は `takt`）や `permission_control: takt` と併用した場合は設定エラーになります。TAKT は名前を `codex exec --profile <name>` として渡し、Codex が `$CODEX_HOME/<name>.config.toml` を解決します。そのファイル、基本設定、trusted project 設定、実行時 override の優先順位は Codex の仕様に従います。
 
 #### Codex Skill の継承 (`skills`)
 
@@ -1398,7 +1425,7 @@ provider_options:
 - その他の `no_*` オプションは、それぞれ対応するリソース種別の探索を無効にします。
 - 暗黙の project-local Pi resource は信頼せず、読み込みません。project package storage から再利用するのは、明示した npm source に対して検出した絶対 path だけです。
 - `readonly` と `edit` では、明示的に設定した各 extension に登録された全 tool を1つの trust unit としてまとめて有効化します。ambient に自動探索された extension tool は、これらの restrictive mode では有効化しません。`allowedTools` が非空の場合も builtin tool の filtering は維持し、`allowedTools: []` は明示 extension tool を含むすべての tool を拒否します。
-- permission mode 未指定時は、明示した `allowedTools` の許可範囲を維持します。extension を設定しても未指定の tool は追加しません。skills・prompts・themes のみを含む package も、extension tool を許可せず従来どおり読み込みます。
+- permission mode 未指定時も、明示した `allowedTools` に登録元の検証を適用します。自動探索された extension の tool は、`allowedTools` に記載しても除外されます。extension の tool を有効にするには、`extensions` に読み込み元を明示し、`allowedTools` に tool 名を指定してください。extension を設定しても、リストにない tool は追加しません。skills・prompts・themes のみを含む package も、extension tool を許可せず従来どおり読み込みます。
 - Pi の permission mode は active-tool allowlist であり、OS sandbox ではありません。信頼した明示 extension は `permission_mode: readonly` でも process を実行したり file を変更したりできます。明示 extension の読み込み失敗や provenance 検証失敗は、Pi call を error で停止します。
 - 明示した extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。
 - 認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。

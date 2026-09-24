@@ -31,6 +31,8 @@
 {{include:output-contracts/base-review-reopened-findings}}
 | 1 | FE-REOPENED-src-file-L55 | 直前の裁定: 解消済み | 修正で再発 | `src/file.tsx:55 で再発` | 問題の説明 | 修正方法 |
 
+{{include:output-contracts/base-review-non-finding-concerns}}
+
 {{include:output-contracts/base-review-reopened}}
 ## REJECT判定条件
 {{include:output-contracts/base-review-rejection-gate}}

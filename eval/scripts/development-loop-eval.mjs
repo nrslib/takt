@@ -15,18 +15,30 @@ export const providers = [
   { cli: 'kimi', model: 'kimi-code/k3' },
 ];
 
+export class KimiAssistantOutputError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'KimiAssistantOutputError';
+    this.code = code;
+  }
+}
+
 export function parseKimiAssistantOutput(jsonl) {
   const messages = [];
   for (const line of jsonl.split(/\r?\n/).filter(line => line.trim())) {
     const event = JSON.parse(line);
-    if (event.role === 'meta') continue;
+    if (event.role === 'meta' || event.role === 'tool') continue;
+    if (event.role === 'assistant' && event.content == null && Array.isArray(event.tool_calls)) continue;
     if (event.role !== 'assistant' || typeof event.content !== 'string') {
       throw new Error('Unexpected Kimi event; expected assistant text');
     }
     messages.push(event.content);
   }
-  if (messages.length === 0) throw new Error('Kimi returned no assistant text');
-  return messages.join('');
+  const answer = messages.join('');
+  if (answer.trim() === '') {
+    throw new KimiAssistantOutputError('no_assistant_text', 'Kimi returned no assistant text');
+  }
+  return answer;
 }
 
 function digest(value) {

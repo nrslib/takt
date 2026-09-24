@@ -1,79 +1,58 @@
 # React Policy
 
-Provide one source of truth for independent judgments about react.
+Judge React state, props, Context, reducers, Effects, and Hooks from rerenders, state lifetime, Mediator operation decisions, and synchronization with external systems.
 
-## Principles
+## State, props, and derived values
 
-| Principle | Criterion |
-|-----------|-----------|
-| Check applicability | Apply these criteria only to the original requirement, changed contract, and real impact paths |
-| Use evidence | Judge only conditions confirmed by code, contracts, or evidence |
-| Preserve ownership boundaries | Distinguish the responsible owner from observable effects |
-| Keep the scope bounded | Judge only the scope causally related to the request |
-| Use consistent grounds | Do not add a judgment criterion from an example that cannot be derived from the original requirement, changed contract, or real impact paths |
+| Criterion | Decision |
+|------|------|
+| Sibling components keep shared state in separate `useState` calls, so their displays or operations diverge | REJECT |
+| A component needs to respond to prop changes but copies the initial value into state and keeps displaying the old value | REJECT |
+| A list, count, all-selected result, or label calculable from state is synchronized as separate state through an Effect | REJECT |
+| A common parent owns one state value shared by sibling components and passes props and operation callbacks to the children | OK |
+| Controlled input, an editing draft, or recreation with `key` is chosen to match the required state lifetime | OK |
+| Memoization hides dependencies and update paths without addressing an actual computation or reference problem | REJECT |
 
-## React Criteria
+## Context, reducers, and operations
 
-### Effects and Re-execution
+| Criterion | Decision |
+|------|------|
+| A Provider or component creates values with `useState`, `useReducer`, a query, or similar, and Context distributes the values and operations | OK |
+| A reducer performs communication, timers, notifications, or other side effects | REJECT |
+| A notification that arrives before the next render is judged with old render state, and communication or a timer starts for an operation that must be rejected | REJECT |
+| A reducer returns the next state from state and an event; a handler starts communication or another side effect only for an accepted operation, and dispatch reflects the result | OK |
+| Multiple entries such as click and submit call the same communication directly and send it twice | REJECT |
 
-| Criteria | Judgment |
-|----------|----------|
-| A mount-only initial load depends on recreated function references | REJECT |
-| Context/Provider functions are used as effect dependencies without a clear refetch requirement | REJECT |
-| Mount-only initialization is expressed with `useEffect(..., [])` and its intent is documented | OK |
-| Refetching on dependency change is required by the feature and those dependencies are explicit | OK |
+## Effects and dependencies
 
-### Context and Provider Values
+| Criterion | Decision |
+|------|------|
+| An Effect reads a reactive value without including it in the dependencies and synchronizes with an old value | REJECT |
+| Dependencies do not match the conditions that should cause reconnection or refetching | REJECT |
+| A callback or Context value reference changes and actually causes repeated refetching or reconnection that is unnecessary for the behavior | REJECT |
+| One Effect combines separate synchronizations, so an unrelated value reruns both | REJECT |
+| A connection, subscription, timer, or fetch has no cleanup before rerun or on unmount, leaving old resources or results | REJECT |
+| The synchronization target and rerun conditions are defined, dependencies are explicit, and cleanup is returned | OK |
 
-| Criteria | Judgment |
-|----------|----------|
-| Context-derived functions are placed in effect dependencies without checking reference stability | REJECT |
-| Mount effects rely on Provider functions whose stability is not guaranteed | REJECT |
-| Context functions are used from event handlers while initial load stays mount-only | OK |
-| Provider values are stabilized and refetch conditions are defined explicitly | OK |
+Do not change a dependency array just to silence a lint warning. First organize what is synchronized by moving values outside the Effect, moving one-off work to an operation handler, or splitting synchronizations.
 
-### Initial Page Load
+## React execution rules
 
-| Criteria | Judgment |
-|----------|----------|
-| A mount-only list load is retriggered by loading-state updates | REJECT |
-| A mount-only list load is retriggered by message display or dialog toggles | REJECT |
-| The initial load is mount-only and later refetch conditions are explicit | OK |
+| Criterion | Decision |
+|------|------|
+| A Hook is called outside the top level of a component or custom Hook, so its call order changes between renders | REJECT |
+| Rendering performs communication, notifications, DOM operations, or changes to external variables | REJECT |
+| Props, state, or values inside them are mutated directly | REJECT |
+| A reorderable list uses an index as `key`, so input or selection state moves to another item after reordering | REJECT |
+| A stable item identifier is used as `key`, and component position and state lifetime match the intended behavior | OK |
 
-### Data Fetching Library Cache Suitability
+## Custom Hooks
 
-| Data Characteristics | Cache | Verdict |
-|---------------------|-------|---------|
-| Single resource detail (settings, profile, etc.) | Effective | OK |
-| Stable list (master data, low change frequency) | Effective | OK |
-| Cursor-paginated list with mid-stream additions, deletions, or reordering | Ineffective | Use local state |
-| Offset-paginated list with mid-stream data changes | Ineffective | Use local state |
+| Criterion | Decision |
+|------|------|
+| A Hook groups state, Effects, Context, queries, forms, and event conversion as one screen behavior | OK |
+| A Hook wraps only a pure calculation | Consider using a regular function instead |
+| A Hook, component, and screen have circular dependencies that hide the path for changing display or communication | REJECT |
+| The path from state, events, and derived values returned by a Hook to rendering inputs is clear | OK |
 
-### Custom Hook Responsibility
-
-| Criteria | Judgment |
-|----------|----------|
-| A module is named `use*` but does not use React state/effect/ref | Warning |
-| Pure functions are modeled as a custom hook | Warning |
-| Stateful UI control lives in a custom hook and pure calculations live in functions | OK |
-| Multiple components call the same stateful hook independently when they need shared state | REJECT |
-| A hook returns JSX | REJECT |
-
-### Props Type Placement and Hook Boundaries
-
-| Criteria | Judgment |
-|----------|----------|
-| A single component's private Props type is moved to a `types` file without a clear reason | Warning |
-| Props are moved to a separate file only so a hook can import a component's Props type | REJECT |
-| Shared Props/data contracts used by multiple components or public APIs live in a separate file | OK |
-| A hook returns state, events, and derived values while a container maps them to component props | OK |
-| Even when a hook returns a props-like object, the hook does not depend on the component's Props type | OK |
-
-### Handling exhaustive-deps
-
-| Criteria | Judgment |
-|----------|----------|
-| Dependencies are added only to satisfy lint and they change runtime behavior | REJECT |
-| Lint suppression is added without explanation | Warning |
-| Mount-only suppression is documented with intent | OK |
-| A reactive effect that should rerun is incorrectly frozen with `[]` | REJECT |
+`useState` inside a Hook creates separate state for each call to that Hook. A Hook that reads Context, a query, or an external store can return a value shared by its source, so judge what it actually reads and writes.

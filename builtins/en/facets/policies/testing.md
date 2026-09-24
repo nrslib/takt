@@ -210,7 +210,7 @@ When mocking an external SDK, external API, generated client, or CLI, align mock
 
 ## Refetch loop regressions
 
-When a page performs initial loading, tests must prove that the load does not rerun because of unrelated re-renders, loading toggles, or Context callback identity changes.
+When a screen performs initial loading, tests should ensure that unrelated rerenders or loading toggles do not call the same API repeatedly.
 
 | Criteria | Verdict |
 |----------|---------|

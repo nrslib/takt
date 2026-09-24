@@ -1,4 +1,3 @@
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   compileProviderEnvironment,
@@ -131,6 +130,34 @@ describe('compileRuntimeProviderEnvironment (profile path)', () => {
 });
 
 describe('compileRuntimeProviderEnvironment (profile options)', () => {
+  it.each(['off', 'low', 'high', 'max'] as const)('maps DeepSeek reasoning_effort=%s from a runtime profile', (reasoning_effort) => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: {
+          provider: 'deepseek-harness',
+          model: 'deepseek-v4-flash',
+          options: { reasoning_effort },
+        },
+      },
+    };
+
+    expect(compileRuntimeProviderEnvironment(section).providerOptions).toEqual({
+      deepseekHarness: { reasoningEffort: reasoning_effort },
+    });
+  });
+
+  it('leaves DeepSeek reasoning effort undefined when the runtime profile omits it', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: { provider: 'deepseek-harness', model: 'deepseek-v4-flash' },
+      },
+    };
+
+    expect(compileRuntimeProviderEnvironment(section).providerOptions).toBeUndefined();
+  });
+
   it('nests a flat profile options bag under the profile provider on defaults', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },
@@ -276,51 +303,36 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
       .toThrow('python_path');
   });
 
-  it('resolves relative paths from a trusted global runtime profile before execution', () => {
+  it('rejects unknown DeepSeek options from a global runtime profile', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },
       profiles: {
         p: {
           provider: 'deepseek-harness',
           model: 'deepseek-v4-flash',
-          options: {
-            session_root: 'deepseek-sessions',
-            cordis: 'cordis.yml',
-          },
+          options: { unsupported: true },
         },
       },
     };
 
-    const env = compileRuntimeProviderEnvironment(section, {
-      ...globalRuntimeResolutionContext,
-      executionDir: '/execution',
-    });
-
-    expect(env.providerOptions).toEqual({
-      deepseekHarness: {
-        sessionRoot: resolve('/execution', 'deepseek-sessions'),
-        cordis: resolve('/execution', 'cordis.yml'),
-      },
-    });
+    expect(() => compileRuntimeProviderEnvironment(section, globalRuntimeResolutionContext))
+      .toThrow(/unsupported/iu);
   });
 
-  it('keeps project runtime session roots relative for the client boundary check', () => {
+  it('rejects unknown DeepSeek options from a project runtime profile', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },
       profiles: {
         p: {
           provider: 'deepseek-harness',
           model: 'deepseek-v4-flash',
-          options: { session_root: 'deepseek-sessions' },
+          options: { unsupported: true },
         },
       },
     };
 
-    const env = compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext);
-
-    expect(env.providerOptions).toEqual({
-      deepseekHarness: { sessionRoot: 'deepseek-sessions' },
-    });
+    expect(() => compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext))
+      .toThrow(/unsupported/iu);
   });
 
   it('rejects a DeepSeek executable override from a project runtime profile', () => {
@@ -374,6 +386,11 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
   it.each([
     { runtime_mode: 'invalid' },
     { request_timeout_ms: 'slow' },
+    { reasoning_effort: 'medium' },
+    { reasoning_effort: '' },
+    { reasoning_effort: 'HIGH' },
+    { reasoning_effort: ' high ' },
+    { reasoning_effort: null },
     { unknown_option: true },
   ])('rejects an invalid DeepSeek runtime profile option before normalization', (options) => {
     const section: RuntimeProviderSection = {

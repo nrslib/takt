@@ -104,6 +104,7 @@ def _error_message(error: BaseException) -> str:
 
 
 def _start_harness(config: dict[str, Any]) -> Any:
+    """Translate supported wire fields and start the managed SDK."""
     python_version = (sys.version_info.major, sys.version_info.minor)
     if sys.implementation.name != "cpython" or python_version != (3, 12):
         raise RuntimeError("DeepSeek Harness requires managed CPython 3.12")
@@ -124,8 +125,6 @@ def _start_harness(config: dict[str, Any]) -> Any:
     }
     optional_fields = {
         "maxTokens": "max_tokens",
-        "sessionRoot": "session_root",
-        "cordis": "cordis",
     }
     for wire_name, sdk_name in optional_fields.items():
         value = config.get(wire_name)
@@ -137,6 +136,9 @@ def _start_harness(config: dict[str, Any]) -> Any:
     shutdown_timeout_ms = config.get("shutdownTimeoutMs")
     if shutdown_timeout_ms is not None:
         kwargs["shutdown_timeout_seconds"] = shutdown_timeout_ms / 1000
+    reasoning_effort = config.get("reasoningEffort")
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
 
     harness = DeepSeekHarness(**kwargs)
     harness.start()

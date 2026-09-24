@@ -102,8 +102,8 @@ function setupMockProvider(responses: string[]): void {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSelectOption.mockResolvedValue('execute');
-  mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: false, comments: true });
-  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+  mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
+  mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   mockSelectRecentSession.mockResolvedValue(null);
   mockRunFormalSpecVerification.mockResolvedValue({
     verdict: 'passed',
@@ -181,6 +181,7 @@ describe('interactiveMode', () => {
     mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({
       mode: initialFormalSpec,
       comments: true,
+      modelCheckTimeoutSeconds: 300,
     });
     mockSelectRecentSession.mockResolvedValue('selected-session');
     setupRawStdin(toRawInputs(['/resume', '/verify', '/cancel']));
@@ -203,6 +204,7 @@ describe('interactiveMode', () => {
       systemPrompt: 'resumed system prompt',
       formalSpec: resumedFormalSpec,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
     });
 
     const result = await runConversationLoop(
@@ -219,7 +221,7 @@ describe('interactiveMode', () => {
       expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
         '```quint\nmodule resumedAgreement {}\n```',
         '/project',
-        expect.any(AbortSignal),
+        { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
       );
     } else {
       expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyUnavailable', 'en'));
@@ -235,7 +237,7 @@ describe('interactiveMode', () => {
     setupRawStdin(toRawInputs(['plan a stateful feature', '/cancel']));
     const { provider, capture } = createMockProvider(['Which states are involved?']);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
 
     await interactiveMode('/project', undefined, undefined, undefined, undefined, options);
 
@@ -302,7 +304,7 @@ describe('interactiveMode', () => {
     }));
   });
 
-  it('should restrict Grill Me provider calls to read-only tools', async () => {
+  it('should allow Grill Me to use the same default tools as assistant', async () => {
     setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
     const { provider } = createMockProvider(['Which roles may approve?']);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
@@ -314,12 +316,12 @@ describe('interactiveMode', () => {
     expect((provider as { _call: ReturnType<typeof vi.fn> })._call).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
-        allowedTools: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+        allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
       }),
     );
   });
 
-  it('should propagate readonly permission mode for Grill Me calls', async () => {
+  it('should leave Grill Me permission resolution to the configured session', async () => {
     setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
     const { provider, capture } = createMockProvider(['Which roles may approve?']);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
@@ -328,7 +330,7 @@ describe('interactiveMode', () => {
       assistantMode: 'grill-me',
     });
 
-    expect(capture.permissionModes).toEqual(['readonly']);
+    expect(capture.permissionModes).toEqual([undefined]);
   });
 
   it('should show the Grill Me intro when selected', async () => {
@@ -592,7 +594,7 @@ describe('interactiveMode', () => {
       'The current agreement passed verification.',
     ]);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
 
     const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
       provider: 'codex',
@@ -603,7 +605,7 @@ describe('interactiveMode', () => {
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       generatedResponse,
       '/project',
-      expect.any(AbortSignal),
+      { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
     );
     expect(capture.allowedTools).toEqual([undefined, undefined]);
     expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
@@ -613,7 +615,7 @@ describe('interactiveMode', () => {
   it('should stop the /verify flow with an explicit error when the generated response has no formal blocks', async () => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     setupMockProvider(['The current agreement has no formal blocks.']);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
     mockRunFormalSpecVerification.mockResolvedValueOnce({
       verdict: 'error',
       verificationStarted: false,
@@ -640,7 +642,7 @@ describe('interactiveMode', () => {
       'The current agreement passed verification.',
     ]);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
     mockRunFormalSpecVerification.mockResolvedValueOnce({
       verdict: 'failed',
       verificationStarted: true,
@@ -656,7 +658,7 @@ describe('interactiveMode', () => {
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       generatedResponse,
       '/project',
-      expect.any(AbortSignal),
+      { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
     );
     expect(capture.prompts[0]).toContain('<initial-user-input>');
     expect(capture.prompts[0]).toContain(initialAgreement);
@@ -673,7 +675,7 @@ describe('interactiveMode', () => {
       { content: 'formal generation failed', status: 'error' },
     ]);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
 
     const result = await interactiveMode('/project', undefined, undefined, 'stale-formal-session');
 
@@ -693,7 +695,7 @@ describe('interactiveMode', () => {
       { content: 'formal interpretation failed', status: 'error' },
     ]);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
 
     const result = await interactiveMode('/project');
 
@@ -711,10 +713,10 @@ describe('interactiveMode', () => {
       '```quint\nmodule currentAgreement {}\n```',
     ]);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
     let verificationSignal: AbortSignal | undefined;
     mockRunFormalSpecVerification.mockImplementationOnce(async (...args: unknown[]) => {
-      verificationSignal = args[2] as AbortSignal;
+      verificationSignal = (args[2] as { abortSignal: AbortSignal }).abortSignal;
       process.emit('SIGINT');
       verificationSignal.throwIfAborted();
       return {
@@ -741,7 +743,7 @@ describe('interactiveMode', () => {
       'The generated specification has a counterexample; use this corrected block.',
     ]);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
     mockRunFormalSpecVerification.mockResolvedValueOnce({
       verdict: 'failed',
       verificationStarted: true,
@@ -756,12 +758,12 @@ describe('interactiveMode', () => {
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       generatedResponse,
       '/project',
-      expect.any(AbortSignal),
+      { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
     );
   });
 
   it('should route an enabled task-action /verify through the readline verifier with its task content', async () => {
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     setupMockProvider([
       '```quint\nmodule taskActionAgreement {}\n```',
@@ -790,7 +792,7 @@ describe('interactiveMode', () => {
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       '```quint\nmodule taskActionAgreement {}\n```',
       '/project',
-      expect.any(AbortSignal),
+      { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
     );
   });
 
@@ -802,7 +804,7 @@ describe('interactiveMode', () => {
       'The direct instruct specification passed.',
     ]);
     mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 17 });
 
     const result = await runDirectInstructMode({
       cwd: '/project',
@@ -829,12 +831,12 @@ describe('interactiveMode', () => {
     expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
       '```quint\nmodule directInstructAgreement {}\n```',
       '/project',
-      expect.any(AbortSignal),
+      { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 17 },
     );
   });
 
   it('should reject an unavailable task-action /verify before the readline provider or verifier', async () => {
-    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true });
+    mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     setupMockProvider([]);
 

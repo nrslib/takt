@@ -147,14 +147,14 @@ function mockProcessBoundary(): void {
       }
     }
     const wait = async () => {
+      await response.beforeExit?.();
+      if (response.stdout !== undefined) stdout.emit('data', response.stdout);
+      if (response.stderr !== undefined) stderr.emit('data', response.stderr);
       if (response.hang) {
         await new Promise<never>((_resolve, reject) => {
           signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         });
       }
-      await response.beforeExit?.();
-      if (response.stdout !== undefined) stdout.emit('data', response.stdout);
-      if (response.stderr !== undefined) stderr.emit('data', response.stderr);
       if (response.error !== undefined) throw response.error;
       return {
         code: response.code === undefined ? 0 : response.code,
@@ -175,6 +175,26 @@ function createTestDirectory(): string {
 
 function validAlloyResponse(): string {
   return ['```alloy', 'sig A {}', 'check Safety for 1', '```'].join('\n');
+}
+
+function mockTlcVerification(response: MockProcessResponse): void {
+  parseResult = {
+    modules: [{
+      name: 'workflowModel',
+      declarations: [
+        { kind: 'def', name: 'init', qualifier: 'action' },
+        { kind: 'def', name: 'step', qualifier: 'action' },
+        { kind: 'def', name: 'propEventually', qualifier: 'temporal' },
+      ],
+    }],
+  };
+  processResponses.push(
+    { code: 0 },
+    { code: 0 },
+    { code: 0 },
+    { code: 0, stderr: 'openjdk version "17.0.1"' },
+    response,
+  );
 }
 
 beforeEach(() => {
@@ -213,7 +233,7 @@ afterEach(() => {
 
 describe('runFormalSpecVerification', () => {
   it('should fail explicitly without invoking verification when the response has no target blocks', async () => {
-    const result = await runFormalSpecVerification('No formal specification was generated.', '/repo');
+    const result = await runFormalSpecVerification('No formal specification was generated.', '/repo', { modelCheckTimeoutSeconds: 300 });
 
     expect(result).toEqual({
       verdict: 'error',
@@ -235,7 +255,7 @@ describe('runFormalSpecVerification', () => {
     writeFileSync(join(directory, '.takt'), 'not a directory');
 
     try {
-      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory);
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result).toMatchObject({
         verdict: 'error',
@@ -254,7 +274,7 @@ describe('runFormalSpecVerification', () => {
     failSpecsDirectoryCreation.enabled = true;
 
     try {
-      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory);
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result).toMatchObject({
         verdict: 'error',
@@ -275,7 +295,7 @@ describe('runFormalSpecVerification', () => {
     processBoundaryControls.throwOnSpawn = true;
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result).toMatchObject({ verdict: 'error', verificationStarted: true });
       expect(mockSpawnManagedProcess).toHaveBeenCalledOnce();
@@ -299,7 +319,7 @@ describe('runFormalSpecVerification', () => {
     utimesSync(staleDirectory, staleTime, staleTime);
 
     try {
-      await runFormalSpecVerification('No formal specification was generated.', directory);
+      await runFormalSpecVerification('No formal specification was generated.', directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(existsSync(staleDirectory)).toBe(false);
       expect(existsSync(recentDirectory)).toBe(true);
@@ -326,14 +346,14 @@ describe('runFormalSpecVerification', () => {
             throw new Error('Alloy process has no workspace');
           }
           vi.setSystemTime(Date.now() + 50_000);
-          await runFormalSpecVerification('No formal specification was generated.', directory);
+          await runFormalSpecVerification('No formal specification was generated.', directory, { modelCheckTimeoutSeconds: 300 });
           retainedSpecifications.push(existsSync(join(activeWorkspace, 'specs', 'spec.als')));
         },
       })),
     );
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.alloy).toMatchObject({ status: 'passed', checks: checkNumbers });
       expect(retainedSpecifications).toEqual(checkNumbers.map(() => true));
@@ -354,7 +374,7 @@ describe('runFormalSpecVerification', () => {
     failVerifyRunRemoval.enabled = true;
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('failed');
       expect(result.alloy).toMatchObject({ status: 'failed', message: 'counterexample' });
@@ -375,7 +395,7 @@ describe('runFormalSpecVerification', () => {
         { code: 0 },
         { code: 1, stderr: 'counterexample' },
       );
-      const failed = await runFormalSpecVerification(quintResponse, directory);
+      const failed = await runFormalSpecVerification(quintResponse, directory, { modelCheckTimeoutSeconds: 300 });
       expect(failed.verdict).toBe('failed');
       expect(failed.quint.run).toMatchObject({ status: 'failed', message: 'counterexample' });
 
@@ -384,7 +404,7 @@ describe('runFormalSpecVerification', () => {
         { code: 0 },
         { error: new Error('spawn failed') },
       );
-      const errored = await runFormalSpecVerification(quintResponse, directory);
+      const errored = await runFormalSpecVerification(quintResponse, directory, { modelCheckTimeoutSeconds: 300 });
       expect(errored.verdict).toBe('error');
       expect(errored.quint.run).toMatchObject({ status: 'error', message: 'spawn failed' });
 
@@ -393,7 +413,7 @@ describe('runFormalSpecVerification', () => {
         { code: 0 },
         { code: null },
       );
-      const statusless = await runFormalSpecVerification(quintResponse, directory);
+      const statusless = await runFormalSpecVerification(quintResponse, directory, { modelCheckTimeoutSeconds: 300 });
       expect(statusless.verdict).toBe('error');
       expect(statusless.quint.run).toMatchObject({ status: 'error' });
     } finally {
@@ -410,7 +430,7 @@ describe('runFormalSpecVerification', () => {
       { hang: true },
     );
     try {
-      const verification = runFormalSpecVerification('```quint\nmodule verify {}\n```', directory);
+      const verification = runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
       await vi.advanceTimersByTimeAsync(60_000);
       const result = await verification;
 
@@ -444,7 +464,7 @@ describe('runFormalSpecVerification', () => {
       { code: 0 },
     );
     try {
-      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory);
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
       const runCall = spawnedProcesses.find(({ args }) => args.includes('run'));
       const verifyCall = spawnedProcesses.find(({ args }) => args.includes('verify'));
 
@@ -458,6 +478,301 @@ describe('runFormalSpecVerification', () => {
         '--invariant', 'invSafe,invConsistent',
         '--temporal', 'propEventually',
       ]));
+      expect(verifyCall?.args).not.toContain('--verbosity');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should extract TLC stdout diagnostics without including the stderr summary or startup logs', async () => {
+    const directory = createTestDirectory();
+    const diagnostics = [
+      'Error: TLC threw an unexpected exception.',
+      'This was probably caused by an error in the spec or model.',
+      'The exception was a java.lang.RuntimeException',
+      ': TLC encountered a non-enumerable quantifier bound',
+      'Int.',
+      'Error: The behavior up to this point is:',
+      'State 1: <Initial predicate>',
+      '/\\ rejected = FALSE',
+      '[failure] TLC encountered an error (592ms).',
+    ].join('\n');
+    mockTlcVerification({
+      code: 1,
+      stderr: 'error: TLC error (see output above)',
+      stdout: [
+        'Parsing file /tmp/spec.tla',
+        'Semantic processing of module verify',
+        'SANY parser log',
+        'WARNING: protobuf warning',
+        '[0.123s][warning][gc] GC warning',
+        'fingerprint statistics: 100 states',
+        diagnostics,
+      ].join('\n'),
+    });
+
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result.quint.verify).toEqual({ status: 'failed', message: diagnostics });
+      expect(result.message).toBe(diagnostics);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['\n', '\r\n'])('should retain diagnostic words and trace values with line ending %j', async (newline) => {
+    const directory = createTestDirectory();
+    const diagnosticLines = [
+      'Error: TLC could not compute a fingerprint.',
+      'Error: The behavior up to this point is:',
+      'State 1: <Initial predicate>',
+      '/\\ phase = "GC"',
+      '/\\ source = "SANY"',
+      '/\\ format = "protobuf"',
+      '/\\ fingerprint = 1',
+      '[failure] TLC encountered an error (592ms).',
+    ];
+    mockTlcVerification({
+      code: 1,
+      stdout: diagnosticLines.join(newline),
+      stderr: 'error: TLC error (see output above)',
+    });
+
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result.quint.verify).toEqual({ status: 'failed', message: diagnosticLines.join('\n') });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { stdout: 'unclassified TLC output', stderr: 'error: TLC error (see output above)' },
+    { stdout: 'error: unknown failure\nParsing file /tmp/spec.tla', stderr: 'unknown stderr detail' },
+    { stdout: 'unclassified TLC output', stderr: 'Error: stderr failure\n[failure] stderr summary' },
+  ])('should retain both raw streams when stdout has no TLC diagnostic marker: %j', async (output) => {
+    const directory = createTestDirectory();
+    mockTlcVerification({ code: 1, ...output });
+
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result.quint.verify).toEqual({ status: 'failed', message: `${output.stderr}\n${output.stdout}` });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should retain both raw streams when a failure summary has no Error block', async () => {
+    const directory = createTestDirectory();
+    const summary = '[failure] TLC encountered an error (592ms).';
+    const output = {
+      stdout: `Parsing file /tmp/spec.tla\n${summary}`,
+      stderr: 'error: TLC error (see output above)',
+    };
+    mockTlcVerification({ code: 1, ...output });
+
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result.quint.verify).toEqual({ status: 'failed', message: `${output.stderr}\n${output.stdout}` });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should retain the Java spawn failure from stderr alongside the stdout failure summary', async () => {
+    const directory = createTestDirectory();
+    const output = {
+      stdout: '[failure] TLC encountered an error (592ms).',
+      stderr: 'error: Failed to spawn TLC: spawn java EAGAIN',
+    };
+    mockTlcVerification({ code: 1, ...output });
+
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result.quint.verify).toEqual({ status: 'failed', message: `${output.stderr}\n${output.stdout}` });
+      expect(result.message).toBe(result.quint.verify?.message);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([0, 8_001, 1024 * 1024 + 1])('should retain TLC timeout guidance with %i output characters', async (outputLength) => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    mockTlcVerification({ hang: true, stdout: 'x'.repeat(outputLength) });
+
+    try {
+      const verification = runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+      await vi.advanceTimersByTimeAsync(300_000);
+      const result = await verification;
+
+      expect(result.verdict).toBe('error');
+      expect(result.quint.verify).toMatchObject({ status: 'error' });
+      expect(result.quint.verify?.message).toMatch(/^TLC exhaustively/);
+      expect(result.quint.verify?.message).toContain('Process timed out after 300000 ms');
+      expect(result.quint.verify?.message).toContain('entire state space');
+      expect(result.quint.verify?.message).toContain('--max-steps does not limit TLC');
+      expect(result.quint.verify?.message).toContain('Bound all state variables');
+      expect(result.quint.verify?.message).toContain('finite ranges');
+      if (outputLength > 8_000) {
+        expect(result.quint.verify?.message).toHaveLength(8_000 + '\n[output truncated]'.length);
+        expect(result.quint.verify?.message).toContain('[output truncated]');
+      }
+      if (outputLength > 1024 * 1024) {
+        expect(result.quint.verify?.message).toContain('capture limit');
+        expect(result.quint.verify?.message).toContain('diagnostics may be missing');
+      } else {
+        expect(result.quint.verify?.message).not.toContain('capture limit');
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['stdout', 'stderr'] as const)('should warn when TLC %s exceeds the capture limit', async (stream) => {
+    const directory = createTestDirectory();
+    mockTlcVerification({
+      code: 1,
+      stdout: 'Error: TLC encountered a non-enumerable quantifier bound\nInt.',
+      stderr: 'error: TLC error (see output above)',
+      [stream]: `${'x'.repeat(1024 * 1024)}\nError: diagnostic beyond capture limit`,
+    });
+
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result.quint.verify).toMatchObject({ status: 'failed' });
+      expect(result.quint.verify?.message).toMatch(/^TLC output[^\n]*capture limit[^\n]*diagnostics may be missing/);
+      expect(result.quint.verify?.message).not.toContain('diagnostic beyond capture limit');
+      expect(result.message).toBe(result.quint.verify?.message);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should apply a configured timeout to Quint model checking while keeping TLC guidance', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    mockTlcVerification({ hang: true });
+
+    try {
+      const verification = runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, {
+        modelCheckTimeoutSeconds: 2,
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+      const result = await verification;
+
+      expect(result.quint.verify?.message).toContain('Process timed out after 2000 ms');
+      expect(result.quint.verify?.message).toMatch(/^TLC exhaustively/);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should keep Quint parse, typecheck, and run at 60 seconds when model-check timeout is customized', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    processResponses.push(
+      { code: 0 },
+      { code: 0 },
+      { hang: true },
+    );
+    let settled = false;
+
+    try {
+      const verification = runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, {
+        modelCheckTimeoutSeconds: 2,
+      });
+      void verification.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(58_000);
+      const result = await verification;
+      expect(result.quint.run?.message).toContain('Process timed out after 60000 ms');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should apply the configured timeout to Alloy command enumeration', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { hang: true },
+    );
+
+    try {
+      const verification = runFormalSpecVerification(validAlloyResponse(), directory, {
+        modelCheckTimeoutSeconds: 3,
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      const result = await verification;
+
+      expect(result.alloy).toMatchObject({
+        status: 'error',
+        message: expect.stringContaining('Process timed out after 3000 ms'),
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should apply the configured timeout to each Alloy check execution', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0, stdout: '0 . Check Safety for 1\n' },
+      { hang: true },
+    );
+
+    try {
+      const verification = runFormalSpecVerification(validAlloyResponse(), directory, {
+        modelCheckTimeoutSeconds: 4,
+      });
+      await vi.advanceTimersByTimeAsync(4_000);
+      const result = await verification;
+
+      expect(result.alloy).toMatchObject({
+        status: 'error',
+        message: expect.stringContaining('Process timed out after 4000 ms'),
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('should use the configured timeout for Alloy jar downloads', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    let downloadSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      downloadSignal = init?.signal ?? undefined;
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
+
+    try {
+      const verification = runFormalSpecVerification(validAlloyResponse(), directory, {
+        modelCheckTimeoutSeconds: 5,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await verification;
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(downloadSignal?.aborted).toBe(true);
+      expect(result.alloy.status).toBe('error');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -478,7 +793,7 @@ describe('runFormalSpecVerification', () => {
     );
 
     try {
-      const result = await runFormalSpecVerification('```quint\nmodule helper {}\n```', directory);
+      const result = await runFormalSpecVerification('```quint\nmodule helper {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('error');
       expect(result.quint.run).toMatchObject({
@@ -497,7 +812,7 @@ describe('runFormalSpecVerification', () => {
     processResponses.push({ code: 1, stderr: 'Quint parse failed' });
 
     try {
-      const result = await runFormalSpecVerification('```quint\nmodule invalid {}\n```', directory);
+      const result = await runFormalSpecVerification('```quint\nmodule invalid {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.quint.verify).toMatchObject({
         status: 'skipped',
@@ -523,6 +838,7 @@ describe('runFormalSpecVerification', () => {
       const result = await runFormalSpecVerification(
         ['```quint', 'module invalid {', '```', validAlloyResponse()].join('\n'),
         directory,
+        { modelCheckTimeoutSeconds: 300 },
       );
 
       expect(result.verdict).toBe('error');
@@ -546,7 +862,7 @@ describe('runFormalSpecVerification', () => {
     installConfiguredAlloyJar(directory);
     processResponses.push({ error: new Error('java is unavailable') });
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('error');
       expect(result.quint.status).toBe('skipped');
@@ -565,7 +881,7 @@ describe('runFormalSpecVerification', () => {
         { code: 0, stdout: '0 . Check Safety for 3\n' },
         { code: 0, stdout: 'counterexample' },
       );
-      const failed = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const failed = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       expect(failed.verdict).toBe('failed');
       expect(failed.alloy).toMatchObject({ status: 'failed', message: 'counterexample' });
 
@@ -574,7 +890,7 @@ describe('runFormalSpecVerification', () => {
         { code: 0, stdout: '0 . Check Safety for 3\n' },
         { error: new Error('Alloy process unavailable') },
       );
-      const errored = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const errored = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       expect(errored.verdict).toBe('error');
       expect(errored.alloy).toMatchObject({ status: 'error', message: 'Alloy process unavailable' });
 
@@ -583,7 +899,7 @@ describe('runFormalSpecVerification', () => {
         { code: 0, stdout: '0 . Check Safety for 3\n' },
         { code: null },
       );
-      const statusless = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const statusless = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       expect(statusless.verdict).toBe('error');
       expect(statusless.alloy).toMatchObject({ status: 'error' });
     } finally {
@@ -597,7 +913,7 @@ describe('runFormalSpecVerification', () => {
     process.env.TAKT_ALLOY_JAR = join(directory, 'missing-alloy.jar');
     processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('error');
       expect(result.alloy).toMatchObject({ status: 'error' });
@@ -627,7 +943,7 @@ describe('runFormalSpecVerification', () => {
     );
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.alloy.status).toBe('passed');
       const alloyCalls = spawnedProcesses.filter(({ command }) => command === 'java');
@@ -652,7 +968,7 @@ describe('runFormalSpecVerification', () => {
     );
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       const cacheDirectory = join(directory, '.takt', 'cache', 'alloy', '6.2.0');
 
       expect(result.alloy.status).toBe('passed');
@@ -671,7 +987,7 @@ describe('runFormalSpecVerification', () => {
     processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       const cacheDirectory = join(directory, '.takt', 'cache', 'alloy', '6.2.0');
 
       expect(result.alloy).toMatchObject({
@@ -695,7 +1011,7 @@ describe('runFormalSpecVerification', () => {
     processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       const cacheDirectory = join(directory, '.takt', 'cache', 'alloy', '6.2.0');
 
       expect(result.alloy).toMatchObject({
@@ -718,7 +1034,7 @@ describe('runFormalSpecVerification', () => {
     processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.alloy).toMatchObject({
         status: 'error',
@@ -740,7 +1056,7 @@ describe('runFormalSpecVerification', () => {
     );
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.alloy).toMatchObject({
         status: 'error',
@@ -763,7 +1079,7 @@ describe('runFormalSpecVerification', () => {
     processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
 
     try {
-      const result = await runFormalSpecVerification(validAlloyResponse(), directory);
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
       const cacheDirectory = join(directory, '.takt', 'cache', 'alloy', '6.2.0');
 
       expect(result.alloy).toMatchObject({

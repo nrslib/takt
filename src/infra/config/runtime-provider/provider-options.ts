@@ -7,8 +7,6 @@ import {
   mergeProviderOptions,
   resolveEffectiveProviderOptions,
   resolveProviderOptionOrigin,
-  resolveProviderOptionsSources,
-  resolveTrustedDeepSeekHarnessPaths,
 } from '../providerOptions.js';
 import { resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
 
@@ -90,12 +88,5 @@ export function resolveRuntimeProviderOptions(
     environmentOptions,
     runtimeAndCallOptions,
   );
-  const providerOptionsSources = resolveProviderOptionsSources(
-    runtimeAndCallOptions,
-    [],
-    environmentOptions,
-    resolved.originResolver,
-    'env',
-  );
-  return resolveTrustedDeepSeekHarnessPaths(providerOptions, projectCwd, providerOptionsSources);
+  return providerOptions;
 }

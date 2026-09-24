@@ -213,6 +213,7 @@ export async function interactiveMode(
     assistantMode,
     formalSpec: initialFormalSpec.mode,
     formalSpecComments: initialFormalSpec.comments,
+    modelCheckTimeoutSeconds: initialFormalSpec.modelCheckTimeoutSeconds,
     resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd),
     ...(workflowContext ? { workflowContext } : {}),
     ...(runSessionContext ? { runSessionContext } : {}),

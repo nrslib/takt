@@ -46,9 +46,24 @@ vi.mock('../shared/utils/spawn.js', async () => {
   };
 });
 
-import { runFormalSpecVerification } from '../features/interactive/formalSpecVerifier.js';
+import {
+  detectJavaMajorVersion,
+  runFormalSpecVerification,
+} from '../features/interactive/formalSpecVerifier.js';
 
 const require = createRequire(import.meta.url);
+
+const java17Available = (() => {
+  const result = spawnSync('java', ['-version'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+  if (result.status !== 0) {
+    return false;
+  }
+  const version = detectJavaMajorVersion(`${result.stdout}\n${result.stderr}`);
+  return version !== undefined && version >= 17;
+})();
 
 function runQuint(quintCli: string, args: string[], cwd: string) {
   return spawnSync(process.execPath, [quintCli, ...args], {
@@ -308,7 +323,7 @@ describe('bundled Quint CLI verification boundary', () => {
         '```',
       ].join('\n');
 
-      const result = await runFormalSpecVerification(response, directory);
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('passed');
       expect(result.quint.parse?.status).toBe('passed');
@@ -343,12 +358,42 @@ describe('bundled Quint CLI verification boundary', () => {
     fakeQuintVerify.mode = 'failed';
 
     try {
-      const result = await runFormalSpecVerification(response, directory);
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('failed');
       expect(result.quint.temporal).toEqual(['propEventually']);
       expect(result.quint.verify?.status).toBe('failed');
       expect(result.quint.verify?.message).not.toMatch(/Do you want to proceed/i);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!java17Available)('reports the TLC reason for a non-enumerable temporal model', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-tlc-diagnostic-'));
+    const prime = String.fromCharCode(39);
+    const response = [
+      '```quint',
+      'module verify {',
+      '  var n: int',
+      `  action init = n${prime} = 0`,
+      '  action step = {',
+      '    nondet value = Int.oneOf()',
+      `    n${prime} = value`,
+      '  }',
+      '  temporal propEventually = eventually(n == 0)',
+      '}',
+      '```',
+    ].join('\n');
+
+    try {
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
+
+      expect(result.verdict).toBe('failed');
+      expect(result.quint.verify?.status).toBe('failed');
+      expect(result.quint.verify?.message).toMatch(/non-enumerable/i);
+      expect(result.quint.verify?.message).not.toMatch(/Parsing file|Semantic processing of module|error: TLC error/);
+      expect(result.message).toBe(result.quint.verify?.message);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -387,7 +432,7 @@ describe('bundled Quint CLI verification boundary', () => {
     ].join('\n');
 
     try {
-      const result = await runFormalSpecVerification(response, directory);
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
       const quintCli = require.resolve('@informalsystems/quint/dist/src/cli.js');
       const quintCalls = spawnedProcessCalls.filter(({ command, args }) => (
         command === process.execPath && args.includes(quintCli)
@@ -447,7 +492,7 @@ describe('bundled Quint CLI verification boundary', () => {
     ].join('\n');
 
     try {
-      const result = await runFormalSpecVerification(response, directory);
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
       const quintCli = require.resolve('@informalsystems/quint/dist/src/cli.js');
       const quintCalls = spawnedProcessCalls.filter(({ command, args }) => (
         command === process.execPath && args.includes(quintCli)
@@ -481,7 +526,7 @@ describe('bundled Quint CLI verification boundary', () => {
         '  val invSafe = true',
         '}',
         '```',
-      ].join('\n'), directory);
+      ].join('\n'), directory, { modelCheckTimeoutSeconds: 300 });
 
       const quintCli = require.resolve('@informalsystems/quint/dist/src/cli.js');
       const quintCalls = spawnedProcessCalls.filter(({ command, args }) => (
@@ -527,7 +572,7 @@ describe('bundled Quint CLI verification boundary', () => {
     ].join('\n');
 
     try {
-      const result = await runFormalSpecVerification(response, directory);
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
       const quintCli = require.resolve('@informalsystems/quint/dist/src/cli.js');
       const runCall = spawnedProcessCalls.find(({ command, args }) => (
         command === process.execPath && args.includes(quintCli) && args.includes('run')
@@ -566,7 +611,7 @@ describe('bundled Quint CLI verification boundary', () => {
         'check Liveness for 3',
         'run Report for 3',
         '```',
-      ].join('\n'), directory);
+      ].join('\n'), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('passed');
       expect(result.javaMajorVersion).toBeGreaterThanOrEqual(17);
@@ -624,7 +669,7 @@ describe('bundled Quint CLI verification boundary', () => {
         'run Run9 for 3',
         'check Check10 for 3',
         '```',
-      ].join('\n'), directory);
+      ].join('\n'), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('passed');
       expect(result.alloy).toMatchObject({
@@ -672,7 +717,7 @@ describe('bundled Quint CLI verification boundary', () => {
         'sig A {}',
         'check Safety for 1',
         '```',
-      ].join('\n'), directory);
+      ].join('\n'), directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('error');
       expect(result.quint.parse?.status).toBe('error');
@@ -696,7 +741,10 @@ describe('bundled Quint CLI verification boundary', () => {
     const abortController = new AbortController();
 
     try {
-      const verification = runFormalSpecVerification(validAlloyResponse(), directory, abortController.signal);
+      const verification = runFormalSpecVerification(validAlloyResponse(), directory, {
+        abortSignal: abortController.signal,
+        modelCheckTimeoutSeconds: 300,
+      });
       setTimeout(() => abortController.abort(), 50);
       await expect(verification).rejects.toBeDefined();
       expect(readdirSync(join(directory, '.takt', 'runs')).filter((name) => name.startsWith('verify-'))).toEqual([]);

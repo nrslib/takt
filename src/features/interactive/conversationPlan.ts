@@ -32,6 +32,7 @@ import {
 import { formatRunSessionForPrompt, type RunSessionContext } from './runSessionReader.js';
 import { initializeSession } from './sessionInitialization.js';
 import { resolveTaskStateMcp } from './taskStateMcp.js';
+import { loadFormalSpecVerifierConstraints } from './formalSpecPrompts.js';
 
 /**
  * The order `/replay` resubmits and `/retry` offers, or nothing when there is
@@ -45,9 +46,6 @@ export function resolvePreviousOrder(previousOrderContent: string | undefined): 
     : previousOrderContent;
 }
 
-/** Grill Me withholds Bash so the assistant interrogates instead of acting. */
-const GRILL_ME_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
-
 const EMPTY_RUN_SESSION_VARS = {
   runTask: '',
   runWorkflow: '',
@@ -59,19 +57,13 @@ const EMPTY_RUN_SESSION_VARS = {
   runLiveIntervention: '',
 };
 
-const INTERACTIVE_INVESTIGATION_POLICIES = {
-  assistant: {
-    currentStateScope: 'current-state-and-prerequisites',
-    implementationInvestigationOwner: 'workflow-execution',
-  },
-  grillMe: {
-    currentStateScope: 'requirements-decisions-only',
-    implementationInvestigationOwner: 'workflow-execution',
-  },
+const INTERACTIVE_INVESTIGATION_POLICY = {
+  currentStateScope: 'current-state-and-prerequisites',
+  implementationInvestigationOwner: 'workflow-execution',
 } as const;
 
 function serializeInvestigationPolicy(
-  policy: (typeof INTERACTIVE_INVESTIGATION_POLICIES)[keyof typeof INTERACTIVE_INVESTIGATION_POLICIES],
+  policy: typeof INTERACTIVE_INVESTIGATION_POLICY,
 ): string {
   const serialized = JSON.stringify(policy);
   if (serialized === undefined) {
@@ -99,19 +91,18 @@ export function buildInteractiveSystemPrompt(
   const runSessionVars = input.runSessionContext
     ? formatRunSessionForPrompt(input.runSessionContext)
     : EMPTY_RUN_SESSION_VARS;
-  const investigationPolicy = input.grillMe
-    ? INTERACTIVE_INVESTIGATION_POLICIES.grillMe
-    : INTERACTIVE_INVESTIGATION_POLICIES.assistant;
   const enableTellCommand = input.enableTellCommand ?? true;
   const tellAvailable = enableTellCommand;
+  const formalSpec = input.formalSpec ?? false;
 
   return loadTemplate('score_interactive_system_prompt', lang, {
     grillMe: input.grillMe,
     tellAvailable,
-    investigationPolicy: serializeInvestigationPolicy(investigationPolicy),
-    formalSpec: input.formalSpec ?? false,
+    investigationPolicy: serializeInvestigationPolicy(INTERACTIVE_INVESTIGATION_POLICY),
+    formalSpec,
     formalSpecComments: input.formalSpecComments ?? true,
-    formalSpecCommentsEnabled: (input.formalSpec ?? false) && (input.formalSpecComments ?? true),
+    formalSpecCommentsEnabled: formalSpec && (input.formalSpecComments ?? true),
+    formalSpecVerifierConstraints: formalSpec ? loadFormalSpecVerifierConstraints(lang) : '',
     hasWorkflowPreview,
     workflowStructure: input.workflowContext?.workflowStructure ?? '',
     stepDetails: hasWorkflowPreview ? formatStepPreviews(stepPreviews, lang) : '',
@@ -152,8 +143,14 @@ export interface AssistantConversationInput {
   formalSpec: boolean;
   /** Whether formal notation blocks must include natural-language meaning comments. */
   formalSpecComments: boolean;
+  /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
+  modelCheckTimeoutSeconds: number;
   /** Resolve the formal-spec setting again when the user resumes another session. */
-  resolveResumedFormalSpecConfiguration?: () => Promise<{ mode: boolean; comments: boolean }>;
+  resolveResumedFormalSpecConfiguration?: () => Promise<{
+    mode: boolean;
+    comments: boolean;
+    modelCheckTimeoutSeconds: number;
+  }>;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
   /** Lightweight metadata selected by `takt list`; reports are not loaded. */
@@ -181,6 +178,8 @@ interface ConversationSessionResolution {
 interface ConversationSessionOverrides extends ConversationSessionResolution {
   /** Whether this front-end can hand off a running task with `/tell`. */
   enableTellCommand?: boolean;
+  /** Resolved timeout for Quint model checking and Alloy verification stages. */
+  modelCheckTimeoutSeconds: number;
   effort?: string;
   disableSessionRetry?: boolean;
 }
@@ -231,11 +230,16 @@ export function createAssistantConversationPlan(
     input.initialTaskContext === undefined ? undefined : formatInitialTaskContext(input.initialTaskContext),
   ].filter((value): value is string => value !== undefined).join('\n\n');
   const buildPromptConfiguration = (
-    formalSpecConfiguration: { mode: boolean; comments: boolean },
+    formalSpecConfiguration: {
+      mode: boolean;
+      comments: boolean;
+      modelCheckTimeoutSeconds: number;
+    },
     runSessionContext = input.runSessionContext,
   ): ConversationPromptConfiguration => ({
     formalSpec: formalSpecConfiguration.mode,
     formalSpecComments: formalSpecConfiguration.comments,
+    modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
     systemPrompt: buildInteractiveSystemPrompt(ctx.lang, {
       grillMe,
       enableTellCommand,
@@ -254,6 +258,7 @@ export function createAssistantConversationPlan(
       {
         mode: input.formalSpec,
         comments: input.formalSpecComments,
+        modelCheckTimeoutSeconds: input.modelCheckTimeoutSeconds,
       },
       input.resolveRunSessionContext!(),
     )
@@ -261,14 +266,14 @@ export function createAssistantConversationPlan(
   const initialPromptConfiguration = buildPromptConfiguration({
     mode: input.formalSpec,
     comments: input.formalSpecComments,
+    modelCheckTimeoutSeconds: input.modelCheckTimeoutSeconds,
   });
 
   return {
     ctx,
     strategy: {
       ...initialPromptConfiguration,
-      allowedTools: grillMe ? GRILL_ME_INTERACTIVE_TOOLS : DEFAULT_INTERACTIVE_TOOLS,
-      ...(grillMe ? { permissionMode: 'readonly' as const } : {}),
+      allowedTools: DEFAULT_INTERACTIVE_TOOLS,
       transformPrompt: (message: string, sourceContext?: string) =>
         prependSourceContext(ctx.lang, frameUserComment(ctx.lang, message), sourceContext),
       introMessage: getLabel(
@@ -299,7 +304,7 @@ export function createAssistantConversationPlan(
 export function createPersonaConversationPlan(
   cwd: string,
   firstStep: FirstStepInfo,
-  overrides: ConversationSessionOverrides = {},
+  overrides: ConversationSessionOverrides,
 ): ConversationPlan {
   const baseCtx = resolveConversationSessionContext(cwd, 'persona-interactive', overrides);
   const enableTellCommand = overrides.enableTellCommand ?? true;
@@ -314,6 +319,7 @@ export function createPersonaConversationPlan(
     strategy: {
       systemPrompt: prependSourceContextGuardToSystemPrompt(ctx.lang, firstStep.personaContent),
       formalSpec: false,
+      modelCheckTimeoutSeconds: overrides.modelCheckTimeoutSeconds,
       allowedTools: firstStep.allowedTools.length > 0
         ? firstStep.allowedTools
         : DEFAULT_INTERACTIVE_TOOLS,

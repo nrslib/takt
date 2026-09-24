@@ -12,6 +12,35 @@ import { providerDefaultAllowedToolsWithoutEdit } from '../infra/providers/provi
 import { resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
 
 describe('allowed-tool-edit-policy', () => {
+  it.each(['PowerShell', 'POWERSHELL', ' powershell '])('normalizes the Pi %s alias without widening permissions', (alias) => {
+    const builtin = { name: 'powershell', source: 'builtin' };
+    const extension = { name: 'powershell', source: 'extension', sourcePath: '/trusted.ts' };
+
+    for (const mode of [undefined, 'full'] as const) {
+      expect(resolvePiActiveTools(mode, [alias], [builtin])).toEqual(['powershell']);
+    }
+    for (const mode of ['readonly', 'edit'] as const) {
+      expect(resolvePiActiveTools(mode, [alias], [builtin])).toEqual([]);
+    }
+    expect(resolvePiActiveTools(undefined, [alias], [builtin, extension], ['/trusted.ts']))
+      .toEqual([]);
+  });
+
+  it('rejects builtin shadowing for a readonly allowlist even in full Pi mode', () => {
+    const builtin = { name: 'read', source: 'builtin' };
+    const extension = { name: 'read', source: 'extension', sourcePath: '/trusted.ts' };
+
+    for (const alias of ['read', 'Read']) {
+      expect(resolvePiActiveTools('full', [alias], [builtin])).toEqual(['read']);
+      expect(resolvePiActiveTools('full', [alias], [builtin, extension], ['/trusted.ts']))
+        .toEqual([]);
+    }
+    expect(resolvePiActiveTools('full', [], [builtin, extension])).toEqual([]);
+    expect(resolvePiActiveTools('full', undefined, [extension])).toEqual(['read']);
+    expect(resolvePiActiveTools('full', ['read', 'bash'], [extension]))
+      .toEqual(['read', 'bash']);
+  });
+
   it('keeps an ordinary allowlist authoritative when Pi permission mode is unset', () => {
     const tools = [
       { name: 'read', source: 'builtin' },
@@ -24,6 +53,29 @@ describe('allowed-tool-edit-policy', () => {
       expect(resolvePiActiveTools(mode, ['read'], tools, ['/trusted.ts']))
         .toEqual(['read', 'extension_write']);
     }
+  });
+
+  it('requires builtin provenance for an explicit allowlist when Pi mode is unset', () => {
+    const tools = [
+      { name: 'read', source: 'builtin' },
+      { name: 'bash', source: 'sdk' },
+      { name: 'powershell', source: 'builtin' },
+      { name: 'powershell', source: 'extension', sourcePath: '/trusted.ts' },
+      { name: 'trusted_extension', source: 'extension', sourcePath: '/trusted.ts' },
+      { name: 'ambient_extension', source: 'extension', sourcePath: '/ambient.ts' },
+    ];
+
+    expect(resolvePiActiveTools(
+      undefined,
+      ['read', 'bash', 'powershell', 'trusted_extension', 'ambient_extension'],
+      tools,
+      ['/trusted.ts'],
+    )).toEqual(['read', 'bash', 'trusted_extension']);
+    expect(resolvePiActiveTools(
+      undefined,
+      ['powershell'],
+      [{ name: 'powershell', source: 'builtin' }],
+    )).toEqual(['powershell']);
   });
 
   it('should export Claude edit tool names for provider policy checks', () => {

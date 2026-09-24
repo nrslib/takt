@@ -15,6 +15,7 @@ import {
   invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
+import { resolveRuntimeEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
 
 /**
  * Integration coverage for the internal-agent (selector/assistant) seams reading the runtime.yaml
@@ -50,6 +51,92 @@ describe('runtime.yaml internal_agents resolution', () => {
   afterEach(() => {
     rmSync(projectCwd, { recursive: true, force: true });
     invalidate();
+  });
+
+  it.each(['high', undefined])('applies the standard effort env override to bootstrap targets with profile effort %s', (effort) => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      companion: { enabled: true },
+      provider: {
+        defaults: { profile: 'deepseek' },
+        profiles: { deepseek: {
+          provider: 'deepseek-harness', model: 'deepseek/deepseek-v4-flash',
+          ...(effort === undefined ? {} : { options: { reasoning_effort: effort } }),
+        } },
+        targets: {
+          internal_agents: { selector: { profile: 'deepseek' }, assistant: { profile: 'deepseek' } },
+          companions: { reviewer: { profile: 'deepseek' } },
+        },
+      },
+    });
+    const previous = process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'max';
+    invalidate();
+    try {
+      const { providerEnvironment: env } = resolveRuntimeEnvironment({
+        projectCwd, legacySignals: [], legacy: {
+          provider: undefined, providerSource: 'default', model: undefined, modelSource: 'default',
+          personaProviders: undefined, providerRouting: undefined, autoRouting: undefined,
+          providerOptions: { deepseekHarness: { reasoningEffort: 'max' } },
+        },
+      });
+      for (const options of [env.providerOptions, env.internalAgents?.selector?.providerOptions,
+        env.internalAgents?.assistant?.providerOptions, env.companions?.reviewer?.providerOptions]) {
+        expect(options?.deepseekHarness?.reasoningEffort).toBe('max');
+      }
+    } finally {
+      if (previous === undefined) delete process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
+      else process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = previous;
+      invalidate();
+    }
+  });
+
+  it.each([
+    { provider: 'deepseek-harness', effort: 'high', override: undefined, expected: 'high' },
+    { provider: 'deepseek-harness', effort: 'high', override: 'max', expected: 'max' },
+    { provider: 'deepseek-harness', effort: undefined, override: 'max', expected: 'max' },
+    { provider: 'deepseek-harness', effort: undefined, override: undefined, expected: undefined },
+    { provider: 'codex', effort: 'high', override: 'max', expected: 'high' },
+  ])('resolves auto-router profile and env options: %j', ({ provider, effort, override, expected }) => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'mock', model: 'worker' },
+          router: { provider, model: 'router/model:latest',
+            ...(effort === undefined ? {} : { options: { reasoning_effort: effort } }) },
+        },
+        auto_routing: {
+          router_profile: 'router',
+          pools: { general: { candidates: [{ profile: 'default', tier: 'medium' }], fallback_profile: 'default' } },
+        },
+      },
+    });
+    const previous = process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
+    if (override === undefined) delete process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
+    else process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = override;
+    invalidate();
+    try {
+      const { providerEnvironment } = resolveRuntimeEnvironment({
+        projectCwd, legacySignals: [], legacy: {
+          provider: undefined, providerSource: 'default', model: undefined, modelSource: 'default',
+          personaProviders: undefined, providerRouting: undefined, autoRouting: undefined,
+          providerOptions: undefined,
+        },
+      });
+      expect(providerEnvironment.autoRouting?.router).toEqual({
+        provider, model: 'router/model:latest',
+        ...(expected === undefined ? {} : { providerOptions: {
+          [provider === 'codex' ? 'codex' : 'deepseekHarness']: { reasoningEffort: expected },
+        } }),
+      });
+      expect(providerEnvironment.providerOptions).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
+      else process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = previous;
+      invalidate();
+    }
   });
 
   it('resolves an explicit internal_agents.selector profile', () => {
@@ -252,6 +339,49 @@ describe('runtime.yaml internal_agents resolution', () => {
       model: 'sonnet',
       providerOptions: { codex: { reasoningEffort: 'high' } },
     });
+  });
+
+  it('applies the standard DeepSeek environment override to selector and assistant runtime profiles', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: {
+            provider: 'deepseek-harness',
+            model: 'deepseek-chat:latest',
+            options: { reasoning_effort: 'high' },
+          },
+        },
+      },
+    });
+    const previousEffort = process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'max';
+    invalidate();
+
+    try {
+      expect(resolveRuntimeInternalAgentProvider(projectCwd, 'selector')).toEqual({
+        provider: 'deepseek-harness',
+        model: 'deepseek-chat:latest',
+        providerOptions: { deepseekHarness: { reasoningEffort: 'max' } },
+      });
+      expect(resolveSelectorProviderForProject(projectCwd).providerOptions).toEqual({
+        deepseekHarness: { reasoningEffort: 'max' },
+      });
+      expect(resolveAssistantProviderModel(projectCwd)).toEqual({
+        runtimeManaged: true,
+        provider: 'deepseek-harness',
+        model: 'deepseek-chat:latest',
+        providerOptions: { deepseekHarness: { reasoningEffort: 'max' } },
+      });
+    } finally {
+      if (previousEffort === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = previousEffort;
+      }
+      invalidate();
+    }
   });
 
   // Unit A: the runtime assistant options reach the interactive session context (the unit the

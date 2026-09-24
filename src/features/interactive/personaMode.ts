@@ -18,6 +18,7 @@ import {
   runConversationLoop,
 } from './conversationLoop.js';
 import { createPersonaConversationPlan } from './conversationPlan.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from './taskInstructionFormat.js';
 
 /**
  * Run persona mode: converse as the first step's persona.
@@ -38,7 +39,10 @@ export async function personaMode(
   initialInput?: InteractiveSeedInput,
   workflowContext?: WorkflowContext,
 ): Promise<InteractiveModeResult> {
-  const { ctx, strategy } = createPersonaConversationPlan(cwd, firstStep);
+  const formalSpecConfiguration = resolveFormalSpecConfigurationWithoutPrompt(cwd);
+  const { ctx, strategy } = createPersonaConversationPlan(cwd, firstStep, {
+    modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
+  });
 
   displayAndClearSessionState(cwd, ctx.lang);
 

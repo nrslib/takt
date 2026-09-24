@@ -152,6 +152,7 @@ describe('instruct context for live intervention history', () => {
         assistantMode: 'assistant',
         formalSpec: false,
         formalSpecComments: true,
+        modelCheckTimeoutSeconds: 300,
         runSessionContext: context,
       });
       const conversation = createTuiConversation({
@@ -309,6 +310,7 @@ describe('instruct context for live intervention history', () => {
           enableTellCommand,
           formalSpec: false,
           formalSpecComments: true,
+          modelCheckTimeoutSeconds: 300,
         });
         const conversation = createTuiConversation({
           cwd,
@@ -334,6 +336,7 @@ describe('instruct context for live intervention history', () => {
           enableTellCommand,
           formalSpec: false,
           formalSpecComments: true,
+          modelCheckTimeoutSeconds: 300,
         });
         const conversation = createTuiConversation({
           cwd,

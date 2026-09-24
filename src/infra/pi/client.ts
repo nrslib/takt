@@ -99,6 +99,11 @@ interface PiResourceLoaderResolution {
 
 type PiAgentToolInfo = ReturnType<AgentSession['getAllTools']>[number];
 
+interface PiToolProvenance {
+  readonly source: string;
+  readonly sourcePath: string;
+}
+
 const sessions = new Map<string, PiSessionRecord>();
 const sessionCreations = new Map<string, PiSessionCreation>();
 const MAX_CACHED_PI_SESSIONS = 64;
@@ -255,23 +260,39 @@ function assertSafeExtensionSources(sources: readonly string[]): void {
   }
 }
 
+function getPiToolProvenance(
+  cwd: string,
+  sourceInfo: { source: string; path: string },
+): PiToolProvenance {
+  return {
+    source: sourceInfo.source,
+    sourcePath: extensionPathKey(cwd, sourceInfo.path),
+  };
+}
+
+function hasMatchingPiToolProvenance(
+  left: PiToolProvenance,
+  right: PiToolProvenance,
+): boolean {
+  return left.source === right.source && left.sourcePath === right.sourcePath;
+}
+
 /** Validates registered tool provenance before selecting the session's active tools. */
 function applyPiTools(
   session: AgentSession,
   options: PiCallOptions,
   explicitExtensionPaths: readonly string[],
-  registeredProvenance: ReadonlyMap<string, { source: string; sourcePath: string }>,
+  registeredProvenance: ReadonlyMap<string, PiToolProvenance>,
 ): void {
   const allTools = session.getAllTools().map((tool) => ({
     name: tool.name,
-    source: tool.sourceInfo.source,
-    sourcePath: extensionPathKey(options.cwd, tool.sourceInfo.path),
+    ...getPiToolProvenance(options.cwd, tool.sourceInfo),
   }));
   if (options.permissionMode !== 'full') {
     for (const tool of allTools) {
       const original = registeredProvenance.get(tool.name);
       if (original !== undefined
-        ? original.source !== tool.source || original.sourcePath !== tool.sourcePath
+        ? !hasMatchingPiToolProvenance(original, tool)
         : tool.source === 'builtin' || explicitExtensionPaths.includes(tool.sourcePath)) {
         throw new Error('Pi explicit extension provenance could not be verified');
       }
@@ -307,14 +328,12 @@ function installPiToolRefreshPolicy(
   let policyFailure: unknown;
   const owners = extensionsResult.extensions.map((extension) => ({
     tools: extension.tools,
-    source: extension.sourceInfo.source,
-    sourcePath: extensionPathKey(initialOptions.cwd, extension.sourceInfo.path),
+    ...getPiToolProvenance(initialOptions.cwd, extension.sourceInfo),
   }));
   // Copy primitive provenance before binding extension lifecycle callbacks. SDK
   // getAllTools() exposes mutable sourceInfo objects; never retain those objects.
   const registeredProvenance = new Map(session.getAllTools().map((tool) => [tool.name, {
-    source: tool.sourceInfo.source,
-    sourcePath: extensionPathKey(initialOptions.cwd, tool.sourceInfo.path),
+    ...getPiToolProvenance(initialOptions.cwd, tool.sourceInfo),
   }]));
   const refreshTools = extensionRuntime.refreshTools;
   const setActiveTools = extensionRuntime.setActiveTools;
@@ -324,15 +343,17 @@ function installPiToolRefreshPolicy(
       if (currentOptions.permissionMode !== 'full') {
         for (const owner of owners) {
           for (const [name, tool] of owner.tools) {
-            if (extensionPathKey(initialOptions.cwd, tool.sourceInfo.path) !== owner.sourcePath
-              || tool.sourceInfo.source !== owner.source) {
+            const toolProvenance = getPiToolProvenance(initialOptions.cwd, tool.sourceInfo);
+            if (!hasMatchingPiToolProvenance(toolProvenance, owner)) {
               throw new Error('Pi explicit extension provenance could not be verified');
             }
             const original = registeredProvenance.get(name);
-            if (original && original.sourcePath !== owner.sourcePath) {
+            if (original && !hasMatchingPiToolProvenance(original, owner)) {
               throw new Error('Pi explicit extension provenance could not be verified');
             }
-            if (!original) registeredProvenance.set(name, { source: owner.source, sourcePath: owner.sourcePath });
+            if (!original) {
+              registeredProvenance.set(name, { source: owner.source, sourcePath: owner.sourcePath });
+            }
           }
         }
       }
@@ -766,8 +787,8 @@ function assertExplicitExtensionTools(
     }
     for (const [toolName, tool] of extension.tools) {
       explicitToolNames.add(toolName);
-      const toolSourcePath = extensionPathKey(cwd, tool.sourceInfo.path);
-      if (!explicitPaths.has(toolSourcePath)) {
+      const toolProvenance = getPiToolProvenance(cwd, tool.sourceInfo);
+      if (!explicitPaths.has(toolProvenance.sourcePath)) {
         throw new Error('Pi explicit extension provenance could not be verified');
       }
       const registeredTools = allTools.filter((candidate) => candidate.name === toolName);
@@ -775,7 +796,11 @@ function assertExplicitExtensionTools(
         throw new Error('Pi explicit extension provenance could not be verified');
       }
       const registeredTool = registeredTools[0];
-      if (registeredTool === undefined || extensionPathKey(cwd, registeredTool.sourceInfo.path) !== toolSourcePath) {
+      if (registeredTool === undefined
+        || !hasMatchingPiToolProvenance(
+          toolProvenance,
+          getPiToolProvenance(cwd, registeredTool.sourceInfo),
+        )) {
         throw new Error('Pi explicit extension provenance could not be verified');
       }
     }

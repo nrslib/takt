@@ -767,7 +767,6 @@ export class ParallelRunner {
         const phase1Result = await runPhase1WithEmptyRecovery({
           instruction: phase1Instruction,
           initialSessionId: agentOptions.sessionId,
-          retryProviderErrorFresh: compactionOutcome !== 'fresh',
           execute: async (attempt) => {
             const result = await executeObservedPhase1Attempt({
               enabled: this.deps.observabilityEnabled,
@@ -921,7 +920,6 @@ export class ParallelRunner {
               const retry = await runPhase1WithEmptyRecovery({
                 instruction,
                 initialSessionId: sessionId,
-                retryProviderErrorFresh: false,
                 execute: async (attempt) => {
                   const observedAttempt = resolveObservedAttempt(attempt);
                   const observed = await executeObservedPhase1Attempt({

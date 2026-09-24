@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildRawTaktProvidersOrThrow,
+  denormalizeAssistantConfig,
   denormalizeProviderOptions,
+  normalizeAssistantConfig,
   normalizeTaktSelectorProvider,
 } from '../infra/config/configNormalizers.js';
 import { normalizeProviderOptions } from '../infra/config/providerOptions.js';
 import { StepProviderOptionsObjectSchema } from '../core/models/schema-base.js';
+import { FormalSpecSettingSchema } from '../core/models/config-schemas.js';
+import { getGlobalTracedSchema, getProjectTracedSchema } from '../infra/config/traced/tracedConfigSchema.js';
 import type { StepProviderOptions } from '../core/models/workflow-provider-options.js';
 
 describe('provider option schema', () => {
@@ -30,6 +34,52 @@ describe('provider option schema', () => {
     ['empty string', ''],
   ])('rejects a %s Pi thinking_level value', (_label, thinkingLevel) => {
     expect(() => StepProviderOptionsObjectSchema.parse({ pi: { thinking_level: thinkingLevel } })).toThrow();
+  });
+});
+
+describe('formal specification assistant normalization', () => {
+  it('tracks the model-check timeout as an independently mergeable global and project field', () => {
+    expect(getProjectTracedSchema()['assistant.formal_spec.model_check_timeout_seconds']?.sources).toMatchObject({
+      local: true,
+      global: false,
+      env: false,
+      cli: false,
+    });
+    expect(getGlobalTracedSchema()['assistant.formal_spec.model_check_timeout_seconds']?.sources).toMatchObject({
+      local: false,
+      global: true,
+      env: false,
+      cli: false,
+    });
+  });
+
+  it.each([0, -1, 1.5, 86_401, Number.MAX_SAFE_INTEGER + 1, '45', null])('should reject an invalid model-check timeout: %j', (timeout) => {
+    expect(() => FormalSpecSettingSchema.parse({ model_check_timeout_seconds: timeout })).toThrow();
+  });
+
+  it('should normalize and denormalize the model-check timeout in snake_case', () => {
+    const normalized = normalizeAssistantConfig({
+      formal_spec: {
+        mode: true,
+        comments: false,
+        model_check_timeout_seconds: 45,
+      },
+    });
+
+    expect(normalized).toEqual({
+      formalSpec: {
+        mode: true,
+        comments: false,
+        modelCheckTimeoutSeconds: 45,
+      },
+    });
+    expect(denormalizeAssistantConfig(normalized)).toEqual({
+      formal_spec: {
+        mode: true,
+        comments: false,
+        model_check_timeout_seconds: 45,
+      },
+    });
   });
 });
 

@@ -117,10 +117,130 @@ implementation/evidence gaps separate from omitted family paths and excludes a
 neighboring contract. Invoke it with
 `npm run eval:prompts:fix-verifier-family-boundary`.
 
+The `instruction-research-handoff` suite evaluates the instruction-summary,
+plan, report, and routing boundaries from the instruction-research handoff
+regression. It contains ten fixed cases (five summary cases and five
+downstream cases), uses the production prompt builders, and runs the four
+model matrix from `fix-verifier-model-matrix`: Claude Opus 5, Codex Sol High,
+Codex Luna Max, and Kimi K3. The semantic rubric is judged by Codex Luna Max;
+the generator receives only the role-separated case history and the isolated
+fixture, while the judge receives the rubric and fixture evidence separately.
+Run a fresh baseline and then a candidate comparison with:
+
+```sh
+node eval/scripts/instruction-research-handoff-eval.mjs baseline \
+  .tmp/instruction-research-handoff-baseline \
+  --skip-provider kimi-k3
+node eval/scripts/instruction-research-handoff-eval.mjs candidate \
+  .tmp/instruction-research-handoff-baseline \
+  .tmp/instruction-research-handoff-candidate \
+  --skip-provider kimi-k3
+```
+
+If a confirmed provider outage prevents one matrix member from running, pass
+its exact matrix ID, for example `--skip-provider kimi-k3`. The manifest keeps
+the skipped provider as infrastructure failure and does not substitute
+another model. The same skip flag must be supplied to both baseline and
+candidate; omit it from both commands when that provider is available. A
+candidate still must complete every active provider/case row. Exit status is
+calculated from active rows: `0` means the selected active subset completed,
+`1` means an active candidate row failed its model assertion, and `2` means
+an active provider or grader failed or a row was unexecuted. Skipped rows stay
+visible as infrastructure failures in the manifest and summary, so exit `0`
+does not mean that all four matrix providers ran. At least one provider must
+remain active. A candidate-sourced `rescore` uses the same candidate failure
+status; a baseline-sourced `rescore` preserves baseline REDs and only fails for
+active infrastructure or unexecuted rows. Use `rescore` when only the rubric
+or judge needs to change:
+
+```sh
+node eval/scripts/instruction-research-handoff-eval.mjs rescore \
+  .tmp/instruction-research-handoff-baseline \
+  .tmp/instruction-research-handoff-rescored
+```
+
+Rescoring reuses the saved source prompts and raw model outputs. It rejects
+changed case input, prompt, or fixture hashes; the fixture manifest records
+each file hash and an aggregate hash. `manifestHash` is the SHA-256 of the
+canonical manifest JSON, while `rescoredFromManifestFileSha256` is the SHA-256
+of the saved manifest file bytes. Results separate model failures from provider
+or grader failures and unexecuted rows. These are fixed-input prompt
+regressions with stochastic model output, not end-to-end product correctness;
+repeat runs and inspect the saved evidence before making convergence claims.
+
+When the opencode Kimi route is unavailable, the saved baseline and candidate
+artifacts can be supplemented with the installed Kimi Code CLI route. This
+does not regenerate or rescore the other three-provider rows (30 rows per
+phase, 60 rows across baseline and candidate). The runner validates the source
+cases, fixture, prompts, rubrics, and saved row hashes before it executes ten
+baseline prompts and then ten candidate prompts:
+
+```sh
+node eval/scripts/instruction-research-handoff-kimi-cli.mjs run \
+  .tmp/instruction-research-handoff-baseline-rescored-final-v2 \
+  .tmp/instruction-research-handoff-candidate-rescored-final \
+  .tmp/instruction-research-handoff-kimi-code-cli-k3 \
+  --route-provenance "$TAKT_KIMI_ROUTE_PROVENANCE"
+```
+
+The supplemental provider ID is `kimi-code-cli-k3`, labelled
+`KimiCodeCLI K3/high補足`. Its CLI invocation uses the installed
+`kimi-code/k3` alias, an empty skills directory, and prompt mode (`-p`).
+Set `TAKT_EVAL_KIMI_BIN` when the executable is not available as `kimi` on
+`PATH` (for example, `TAKT_EVAL_KIMI_BIN=$HOME/.kimi-code/bin/kimi`).
+Kimi Code CLI 0.43.1 rejects `--auto` together with `-p`, so the manifest
+records that the `--auto` flag was omitted and why. The route provenance must
+show CLI 0.43.1, model `k3`, alias `kimi-code/k3`, effort `high`, and the
+managed endpoint when the optional route probe is supplied. Without that
+probe, the endpoint is recorded as `unknown`; each run still records per-case
+`system.version`, session list, and `agents/main/wire.jsonl` evidence without
+copying logs or credentials.
+
+`--route-provenance` optionally points to a private preflight artifact from an
+authenticated Kimi Code CLI health probe. When supplied, the runner verifies
+its model and managed-endpoint evidence and stores its hash, but does not
+create or publish that artifact. Keep it outside the repository and pass a new
+path when reproducing the run. Omitting the option is supported when no
+preflight artifact is available.
+
+To generate only the candidate phase (ten prompts and ten rows), add
+`--candidate-only` to the `run` command. The baseline source argument remains
+required for a consistent command shape, but is not read or executed:
+
+```sh
+node eval/scripts/instruction-research-handoff-kimi-cli.mjs run \
+  .tmp/instruction-research-handoff-baseline-rescored-final-v2 \
+  .tmp/instruction-research-handoff-candidate-rescored-final \
+  .tmp/instruction-research-handoff-kimi-code-cli-k3-candidate \
+  --candidate-only
+```
+
+The output stores private raw streams in
+`raw/<baseline|candidate>/<caseId>.stdout` (mode 600), promptfoo results,
+ten or twenty scored rows depending on the phase selection,
+`provenance.json`, and `summary.json`. If only the semantic judge needs
+another attempt, replay the saved answers without invoking Kimi:
+
+```sh
+node eval/scripts/instruction-research-handoff-kimi-cli.mjs rescore \
+  .tmp/instruction-research-handoff-kimi-code-cli-k3 \
+  .tmp/instruction-research-handoff-kimi-code-cli-k3-rescored \
+  --route-provenance "$TAKT_KIMI_ROUTE_PROVENANCE"
+```
+
+The output manifest and summary also retain source status counts for every
+original provider and phase, including skipped and incomplete rows. A passing
+Kimi supplement describes the Kimi rows only; it does not mean that the
+four-provider matrix is complete.
+`sourceStatus` summarizes the loaded source rows and does not detect edits to
+the rows' full contents.
+
 The `fix-plan-cause-check` suite uses the same three providers and one-at-a-time
 execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with
 `npm run eval:prompts:fix-plan-cause-check`.
+
+`fix-plan-blocker-absorption` は、登録で露出した型エラーを同じ修正単位に含め、確認のみの計画や修正を反証と呼ぶ読み替えを避ける、改修後の振る舞いを固定する回帰ガードであり、改修の効果を実証するものではない。実 run に合わせた中立的な指示と、確認のみ・反証・テスト本体を変更しない範囲を記した前回計画を使い、Claude Opus 5 / Codex Luna Max / Codex Sol High 各3回で Phase 1 を比較した結果、赤（origin/main のファセット、初回 fix-plan）は9/9合格、緑（改修後、fix-replan）は8/9合格だった。緑の不合格1件は Codex Luna が「登録漏れ自体は反証済み」と記したもので、反証の読み替えとして意図どおり不合格となった。改修後のみ実施した Phase 2 の記録契約評価は7/9合格で、不合格2件は規則名の列に持ち越し規則以外の規則名だけを記したものだった。上位3モデルはこの縮約 fixture では main の手順でも正しく計画できるため、この suite は改修前後を弁別しない。実 run の非収束（Codex Luna、25KB の指示書、切り詰められたポリシー、長い run の文脈）は再現できておらず、弁別の証拠を得るには、より弱いモデル（opencode 経由の無料モデルなど）での比較か、実 run 相当の文脈量での再現が必要となる。実行は `npm run eval:prompts:fix-plan-blocker-absorption` で明示指定し、両 CLI のログインを必要とするためデフォルト実行には含めない。隔離コピーで直列・生成キャッシュ無効・外部 rubric による採点を行い、修正の実行やループ全体の収束は測定しない。Phase 2 は同一 CLI セッションの Phase 1 実応答を引き継ぎ、計画レポートの規則名列と留意点だけを採点する。Phase 1 実応答は結果の metadata に保持する。旧版との比較は、prepare の対象 step を fix-plan に切り替え、変更した ja ファセットを main の内容に差し替えて同じ fixture と rubric で実行する。Phase 2 ケースはレポート内容の評価であり、runtime の Phase 2 ツール禁止契約までは再現しない。
 
 The `fix-plan-bounded-proof` suite runs Claude Opus 5, Codex Luna Max, and
 Codex Sol High against a regression extracted from a real remediation run. It
@@ -213,7 +333,7 @@ remain excluded.
 | `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
 | `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
 | `antipattern-wording-tests` | peer-review / ai-antipattern-review-2nd | sample-project | whether Claude Opus 5 and Codex Luna Max reject wording-fixed tests without contract grounds while accepting declared machine-readable contract assertions |
-| `frontend` | review-frontend / frontend-review | frontend-app | recall on 3 planted layering violations |
+| `frontend`, `frontend-opus` | review-frontend / frontend-review; frontend / frontend-review | frontend-design | 11 paired GUI designs and 6 framework idioms; defect detection and acceptance scored separately, with and without the React facet |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
@@ -226,6 +346,7 @@ remain excluded.
 | `fix-verifier-state-routing` | review-remediation / fix-verifier status judgement | fix-verifier-state-closure | whether workflow-owned rules route a report containing both a plan defect and an implementation gap to fix-plan |
 | `fix-verifier-model-matrix` | review-remediation / fix-verifier | fix-verifier-state-closure | source-derived state closure and workflow-owned mixed-gap routing measured separately on Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3 |
 | `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes a duplicate review update from possible causes and declines to serialize parallel execution until the cause is confirmed, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
+| `fix-plan-blocker-absorption` | peer-review / fix-replan（旧版比較時のみ fix-plan） | fix-plan-blocker-absorption | 改修後の計画・記録契約の回帰ガード。3モデル×3回で Phase 1 は赤9/9・緑8/9、Phase 2 は改修後7/9。上位モデルでは改修前後を弁別せず、改善効果の証拠とはしない |
 | `fix-plan-bounded-proof` | peer-review / fix-plan | fix-plan-bounded-proof | whether Opus 5, Luna Max, and Sol High turn broad format, consumer, and boundary claims into source-backed concrete rows for report variants, helper limits, absence states, branch identity, and locale consumers |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the accepted group of findings, covers every affected use of the same rule, and does not revive findings that were excluded |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
@@ -267,6 +388,8 @@ remain excluded.
 | `fix-verification-scope` | review-remediation / fix-verifier | fix-verification-scope | whether completion verification accepts satisfied planned conditions while recording, but not selecting for repair, a broad-gate failure with no causal connection to the current change |
 | `fix-verification-current-diff-regression` | review-remediation / fix-verifier | fix-verification-current-diff-regression | whether completion verification marks a broad-gate failure incomplete when the current diff caused the regression |
 | `fix-verification-preserved-condition` | review-remediation / fix-verifier | fix-verification-preserved-condition | whether completion verification marks a repair incomplete when it breaks an existing condition that the plan requires preserving |
+
+GUI設計の比較例、採点、旧・新比較の手順は [frontend-design.md](frontend-design.md) を参照。
 
 The `coding` suite requires both Claude and Codex CLI logins and is excluded
 from the default suite run. Invoke it explicitly with

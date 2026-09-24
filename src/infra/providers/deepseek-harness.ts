@@ -19,6 +19,7 @@ async function callDeepSeekHarnessLazy(
   return callDeepSeekHarness(agentType, prompt, options);
 }
 
+/** Fail closed before calling the client when permission or tool restrictions cannot be honored. */
 function unsupportedConstraintResponse(
   agentType: string,
   options: ProviderCallOptions,
@@ -31,7 +32,7 @@ function unsupportedConstraintResponse(
   if (constraint === undefined) {
     return undefined;
   }
-  const content = `DeepSeek Harness cannot honor ${constraint}; configure the constraint in Cordis or use a compatible provider`;
+  const content = `DeepSeek Harness cannot honor ${constraint}; no supported configuration is exposed by the current SDK; use a compatible provider`;
   return {
     persona: agentType,
     status: 'error',
@@ -42,18 +43,21 @@ function unsupportedConstraintResponse(
   };
 }
 
+/** Forward bridge-supported options and warn about unsupported optional TAKT features. */
 function toDeepSeekHarnessOptions(
   options: ProviderCallOptions,
   systemPrompt: string | undefined,
 ): DeepSeekHarnessCallOptions {
   if (systemPrompt !== undefined) {
-    log.warn('DeepSeek Harness does not support per-run system prompts; configure system prompt in Cordis');
+    log.warn(
+      'DeepSeek Harness does not support per-run system prompts; no supported system prompt configuration is exposed by the current SDK',
+    );
   }
   if (options.onPermissionRequest !== undefined || options.onAskUserQuestion !== undefined) {
     log.warn('DeepSeek Harness does not expose TAKT permission callbacks through the Python SDK; ignoring');
   }
   if (options.mcpServers !== undefined && Object.keys(options.mcpServers).length > 0) {
-    log.warn('DeepSeek Harness does not support TAKT mcpServers; configure tools in Cordis');
+    log.warn('DeepSeek Harness does not support TAKT mcpServers; tool composition is not exposed by the current SDK');
   }
   if (options.maxTurns !== undefined) {
     log.warn('DeepSeek Harness does not support maxTurns; ignoring');
