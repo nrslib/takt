@@ -67,10 +67,11 @@ export function formatCommandGateFailure(failure: CommandQualityGateFailure): st
 
   if (failure.timedOut) {
     lines.push(`Timeout: ${failure.timeoutMs}ms`);
-  } else if (failure.outputLimitExceeded) {
-    lines.push(`Output limit exceeded: ${failure.outputLimitBytes} bytes`);
   } else {
     lines.push(`Exit code: ${failure.exitCode}`);
+  }
+  if (failure.outputLimitExceeded) {
+    lines.push(`Output truncated: exceeded ${failure.outputLimitBytes} bytes`);
   }
 
   lines.push(

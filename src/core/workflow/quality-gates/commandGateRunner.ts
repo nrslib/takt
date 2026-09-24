@@ -241,8 +241,11 @@ export function runCommandQualityGate({
       stdout = appended.output;
       outputBytes = appended.bytes;
       if (appended.exceeded) {
+        // Output capture is bounded, not the command: stop appending beyond the
+        // limit but let the process keep running toward its own exit code (or
+        // the configured timeout). Killing it here used to fail successful,
+        // verbose commands solely because they were noisy (#784).
         outputLimitFailure = OUTPUT_LIMIT_FAILURE_DETAILS;
-        terminateProcess();
       }
     });
     child.stderr?.on('data', (chunk: string) => {
@@ -254,7 +257,6 @@ export function runCommandQualityGate({
       outputBytes = appended.bytes;
       if (appended.exceeded) {
         outputLimitFailure = OUTPUT_LIMIT_FAILURE_DETAILS;
-        terminateProcess();
       }
     });
 
@@ -331,14 +333,12 @@ export function runCommandQualityGate({
     child.on('close', (code) => {
       clearTimers();
 
-      if (code === 0 && !timedOut && outputLimitFailure === undefined) {
+      if (code === 0 && !timedOut) {
         settle({ ok: true, stdout, stderr });
         return;
       }
 
-      settle(buildCurrentFailure(
-        timedOut || outputLimitFailure !== undefined ? undefined : code ?? undefined,
-      ));
+      settle(buildCurrentFailure(timedOut ? undefined : code ?? undefined));
     });
   });
 }

@@ -241,16 +241,38 @@ describe('command quality gates', () => {
     }
   });
 
-  it('should fail and stop the command when stdout exceeds the output byte limit', async () => {
+  it('should pass when a successful command prints more than the output byte limit (#784)', async () => {
     const projectRoot = createTempDir();
 
     // 70000 bytes emitted as newline-separated lines: uniform alphanumeric runs
     // trigger quadratic backtracking in sanitizeSensitiveText and only slow the test down.
+    // The command exits 0 on its own — the runner must not kill it just because
+    // captured output crossed the byte limit.
     const result = await runCommandQualityGate({
       gate: {
         type: 'command',
         name: 'noisy-check',
-        command: 'node -e "process.stdout.write((\'x\'.repeat(499)+\'\\n\').repeat(140)); setInterval(()=>{},1000)"',
+        command: 'node -e "process.stdout.write((\'x\'.repeat(499)+\'\\n\').repeat(140))"',
+        timeoutMs: 1000,
+      },
+      projectRoot,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.stdout.length).toBeLessThan(66000);
+      expect(result.stdout).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
+    }
+  });
+
+  it('should still fail when a command prints more than the output byte limit and exits non-zero (#784)', async () => {
+    const projectRoot = createTempDir();
+
+    const result = await runCommandQualityGate({
+      gate: {
+        type: 'command',
+        name: 'noisy-failing-check',
+        command: 'node -e "process.stdout.write((\'o\'.repeat(499)+\'\\n\').repeat(80)); process.stderr.write((\'e\'.repeat(499)+\'\\n\').repeat(80)); process.exit(1)"',
         timeoutMs: 1000,
       },
       projectRoot,
@@ -259,12 +281,14 @@ describe('command quality gates', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.failure).toMatchObject({
-        gateName: 'noisy-check',
+        gateName: 'noisy-failing-check',
+        exitCode: 1,
         outputLimitExceeded: true,
         outputLimitBytes: 65536,
+        timedOut: false,
       });
-      expect(result.failure.stdout.length).toBeLessThan(66000);
-      expect(result.failure.stdout).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
+      expect(result.failure.stdout.length + result.failure.stderr.length).toBeLessThan(67000);
+      expect(`${result.failure.stdout}${result.failure.stderr}`).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
       expect(result.failure.outputLogPath).toBeDefined();
       expect(existsSync(result.failure.outputLogPath!)).toBe(true);
     }
@@ -277,7 +301,7 @@ describe('command quality gates', () => {
       gate: {
         type: 'command',
         name: 'multibyte-noisy-check',
-        command: 'node -e "process.stdout.write((\'x\'.repeat(499)+\'\\n\').repeat(131) + \'x\'.repeat(35) + \'界\' + \'x\'.repeat(1024)); setInterval(()=>{},1000)"',
+        command: 'node -e "process.stdout.write((\'x\'.repeat(499)+\'\\n\').repeat(131) + \'x\'.repeat(35) + \'界\' + \'x\'.repeat(1024)); process.exit(1)"',
         timeoutMs: 1000,
       },
       projectRoot,
@@ -286,48 +310,42 @@ describe('command quality gates', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.failure.outputLimitExceeded).toBe(true);
+      expect(result.failure.exitCode).toBe(1);
       expect(result.failure.stdout).not.toContain('\uFFFD');
       const retained = result.failure.stdout.split('\n[OUTPUT TRUNCATED:')[0] ?? '';
       expect(Buffer.byteLength(retained, 'utf8')).toBeLessThanOrEqual(65536);
     }
   });
 
-  it('should fail and stop the command when stderr exceeds the output byte limit', async () => {
+  it('should stop appending stderr at the output byte limit but let a successful command finish', async () => {
     const projectRoot = createTempDir();
 
     const result = await runCommandQualityGate({
       gate: {
         type: 'command',
         name: 'noisy-stderr-check',
-        command: 'node -e "process.stderr.write((\'x\'.repeat(499)+\'\\n\').repeat(140)); setInterval(()=>{},1000)"',
+        command: 'node -e "process.stderr.write((\'x\'.repeat(499)+\'\\n\').repeat(140))"',
         timeoutMs: 1000,
       },
       projectRoot,
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.failure).toMatchObject({
-        gateName: 'noisy-stderr-check',
-        outputLimitExceeded: true,
-        outputLimitBytes: 65536,
-      });
-      expect(result.failure.stderr.length).toBeLessThan(66000);
-      expect(result.failure.stderr).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
-      expect(result.failure.outputLogPath).toBeDefined();
-      expect(existsSync(result.failure.outputLogPath!)).toBe(true);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.stderr.length).toBeLessThan(66000);
+      expect(result.stderr).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
     }
   });
 
-  it('should fail and stop the command when stdout and stderr exceed the combined output byte limit', async () => {
+  it('should still respect timeout_ms when a command keeps running past the output byte limit', async () => {
     const projectRoot = createTempDir();
 
     const result = await runCommandQualityGate({
       gate: {
         type: 'command',
-        name: 'combined-noisy-check',
-        command: 'node -e "process.stdout.write((\'o\'.repeat(499)+\'\\n\').repeat(80)); process.stderr.write((\'e\'.repeat(499)+\'\\n\').repeat(80)); setInterval(()=>{},1000)"',
-        timeoutMs: 1000,
+        name: 'noisy-hanging-check',
+        command: 'node -e "process.stdout.write((\'x\'.repeat(499)+\'\\n\').repeat(140)); process.on(\'SIGTERM\',()=>{}); setInterval(()=>{},1000)"',
+        timeoutMs: 500,
       },
       projectRoot,
     });
@@ -335,15 +353,12 @@ describe('command quality gates', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.failure).toMatchObject({
-        gateName: 'combined-noisy-check',
+        gateName: 'noisy-hanging-check',
+        timedOut: true,
+        timeoutMs: 500,
         outputLimitExceeded: true,
         outputLimitBytes: 65536,
-        timedOut: false,
       });
-      expect(result.failure.stdout.length + result.failure.stderr.length).toBeLessThan(67000);
-      expect(`${result.failure.stdout}${result.failure.stderr}`).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
-      expect(result.failure.outputLogPath).toBeDefined();
-      expect(existsSync(result.failure.outputLogPath!)).toBe(true);
     }
   });
 
