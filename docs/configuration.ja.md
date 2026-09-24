@@ -36,6 +36,7 @@ assistant:
   formal_spec:
     mode: 'y/N'                # Alloy／Quint モード: true, false, Y/n, y/N（デフォルト: y/N）
     comments: true             # 各形式構造への自然言語の意味コメント（デフォルト: true）
+    model_check_timeout_seconds: 300  # /verify の quint verify と Alloy モデル検査の上限秒数。1〜86400 の整数（デフォルト: 300）
 # auto_fetch: false           # クローン作成前にリモートを fetch（デフォルト: false）
 # base_branch: main           # クローン作成のベースブランチ（デフォルト: リモートのデフォルトブランチ）
 
@@ -194,7 +195,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` の並列タスク数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode` と `comments` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 300）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 |
 | `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
@@ -408,7 +409,7 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true`（global 設定またはデフォルト由来） | 要件を Alloy／Quint の両方の記法でも表現するガイダンスを追加するプロジェクト上書きです。object 形式では `mode` と `comments` を独立して指定でき、未指定フィールドは global またはデフォルトへフォールバックします。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true`（global 設定またはデフォルト由来） | 要件を Alloy／Quint の両方の記法でも表現するガイダンスを追加するプロジェクト上書きです。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定でき、未指定フィールドは global またはデフォルトへフォールバックします。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |
@@ -1215,6 +1216,32 @@ provider_options:
     runtime_mode: exe                  # exe または node
 ```
 
+DeepSeek の推論強度は `runtime.yaml` の provider profile、または標準の TAKT 環境変数
+override からだけ設定します。
+
+```yaml
+version: 1
+provider:
+  defaults:
+    profile: deepseek
+  profiles:
+    deepseek:
+      provider: deepseek-harness
+      model: deepseek-v4-flash
+      options:
+        reasoning_effort: high
+```
+
+指定できる値は `off`、`low`、`high`、`max` です。省略時はフィールドを設定せず、SDK の
+既定値へ委譲します。対応する環境変数 override は
+`TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT` です。legacy の
+`provider_options`、workflow step、persona、routing entry での指定は対応せず、設定エラーに
+なります。
+
+強度の変更・指定解除は次のturnから適用し、会話IDと保存済みの履歴を維持します。
+必要に応じてそのsessionのbridgeだけを交換し、別sessionのbridgeは変更しません。
+交換に失敗した場合はエラーを返し、古い強度では続行しません。
+
 DeepSeek Harness の `model` フィールドは、`deepseek-v4-flash` のような
 model 参照だけの形式と、`openai/gpt-5.4` や
 `my-gateway/org/custom-model` のような `<route>/<model>` 形式を受け付けます。
@@ -1238,7 +1265,7 @@ workflow が `session_key` を指定するとセッションを再利用し、on
 
 権限制御とツール制限は無視しません。provider への呼び出しで `permissionMode`、`bypassPermissions: true`、または `allowedTools`（空配列も含む）が明示された場合は、bridge を起動せず `status: 'error'` を返します。これらの制約が必要な場合は、対応する provider を使用してください。一方、workflow step の `allowed_tools` は対応していないフィールドであり、workflow の schema 検証で拒否されます。provider 呼び出しには到達せず、上記のエラー応答とは別の段階で失敗します。
 
-対応する環境変数 override は `_BASE_URL`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
+対応する環境変数 override は `_BASE_URL`、`_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE`、`_REASONING_EFFORT` です。`base_url` の環境変数 override はユーザー管理なので non-loopback も設定できます。`runtime_mode: node` は公式 SDK の開発用 Node carrier を必要とし、暗黙には選択されません。
 
 #### ネットワークアクセス (`network_access`)
 

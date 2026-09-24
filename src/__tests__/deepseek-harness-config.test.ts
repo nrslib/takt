@@ -21,6 +21,14 @@ const deepseekYaml = {
 };
 
 describe('DeepSeek Harness provider options', () => {
+  it('rejects legacy serialization instead of silently losing effort', () => {
+    const providerOptions = { deepseekHarness: { reasoningEffort: 'high' as const } };
+    expect(() => denormalizeProviderOptions(providerOptions)).toThrow(/reasoning_effort/iu);
+    expect(() => buildRawTaktProvidersOrThrow({
+      selector: { provider: 'deepseek-harness', model: 'deepseek-v4-flash', providerOptions },
+    })).toThrow(/reasoning_effort/iu);
+  });
+
   it('normalizes every documented YAML option and preserves it through merge', () => {
     const normalized = normalizeProviderOptions(deepseekYaml);
 
@@ -62,6 +70,14 @@ describe('DeepSeek Harness provider options', () => {
         unsupported: true,
       },
     })).toThrow();
+  });
+
+  it('rejects reasoning_effort from legacy provider_options configuration', () => {
+    expect(() => normalizeProviderOptions({
+      deepseek_harness: {
+        reasoning_effort: 'high',
+      },
+    })).toThrow(/reasoning_effort/iu);
   });
 
   it('rejects a non-loopback base URL from project/workflow origin', () => {

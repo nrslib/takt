@@ -6,6 +6,34 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.66.0] - 2026-09-18
+
+### Added
+
+- `/verify` で現在の合意内容を形式仕様として検証できます (#1518, #1570, #1578, #1584)。形式仕様モード（`assistant.formal_spec`）が有効な対話セッションで `/verify` を実行すると、assistant が現在の合意を Quint と Alloy の仕様として出力し、抽出したコードブロックを検証器にかけ、結果を同じセッションへ戻して assistant が解釈します。Quint の `parse`・`typecheck`・`run` は追加インストール不要です（Quint CLI は TAKT に同梱）。`quint verify` と Alloy Analyzer によるモデル検査には Java 17 以降が必要で、Java がない場合はその旨を明示してスキップします。Apalache と Alloy Analyzer の JAR は初回利用時にダウンロードされます（`TAKT_ALLOY_JAR` で手元の JAR を指定可能）。時相プロパティを含む仕様は TLC バックエンドで検査し、TLC の失敗理由も結果に含めます。新設の `assistant.formal_spec.model_check_timeout_seconds`（1〜86400 の整数、既定 300）で `quint verify` と Alloy のモデル検査の制限時間を設定できます。`/verify` は provider を問わず利用できます。詳細は新設の [形式仕様検証](./formal-verification.ja.md) を参照してください。
+- `takt deepseek-harness install` で DeepSeek Harness の実行環境を構築できます (#1562)。同梱の `pyproject.toml` と `uv.lock` から、グローバル TAKT ディレクトリ配下に uv 管理の CPython 3.12 環境を作成・修復します（`uv sync --locked`）。システムの Python や手動の `pip install` は不要になりました。uv `>= 0.11.0` が必要で、プラットフォーム・uv・同梱アセットの検査は既存環境を削除する前に行われます。対応プラットフォームは glibc `>= 2.28` の Linux x64/arm64 と macOS arm64 `>= 14.0` で、それ以外は即座に失敗します。
+- Pi の `readonly` / `edit` で、明示的に設定した extension のツールを利用できます (#1565)。`provider_options.pi.extensions` に指定した各 extension が登録するツールは、これらの制限モードでまとめて有効になります。自動検出された extension のツールは無効のままです。`allowedTools` を明示した場合、自動検出された extension のツールは列挙していても除外され、`allowedTools: []` は引き続きすべてのツールを拒否します。明示した extension の読み込み失敗や出所検証の失敗は、Pi の呼び出しをエラーで停止します。
+- Web UI のチャットで assistant の応答を Markdown として表示します (#1555)。ユーザーと system のメッセージ（Retry のタスクアクション指示を含む）は、改行を保ったリテラルテキストのままです。
+
+### Changed
+
+- **BREAKING:** DeepSeek Harness provider は管理環境でのみ動作します (#1562, #1571)。`deepseek-harness` provider を使う前に `takt deepseek-harness install` を一度実行してください。provider の起動は管理環境のインタプリタを使い、環境の欠落や不一致は原因別のエラーで報告し、自動でのインストールや修復は行いません。`provider_options.deepseek_harness` の `python_path`・`session_root`・`cordis` と、対応する `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_*` 環境変数は削除され、これらを設定したままの設定ファイルは検証エラーになります。パッケージインデックスへのアクセスを `pip` 向けに設定していた場合は、`UV_INDEX_URL` など uv の標準設定へ移行してください。
+- `/tell` を `assistant`・`grill-me`・`persona` の各会話で利用できます（モード切り替え後も含む）(#1556)。送信先の選択には、引き続き TAKT 管理の worktree clone を持つ実行中タスクが必要です。Web UI は `/tell` を実行せず、そのテキストを通常のメッセージとして assistant へ送ります。Retry と Instruct の専用会話では `/tell` は使えません。
+- ビルトインの development ワークフローが `reimplement` ステップで不足を補完し、停止判断を計画へ戻します (#1554, #1575)。採用済みの計画は有効だが実装・原因調査・必須検証に不足がある場合、`development-implement`（`-dynamic` / `-team` を含む）は `reimplement` を一度実行して補完します。それでも残る不足は繰り返さずに報告して `replan` へ渡します。計画自体の欠陥や、外部操作だけが残る状態も `replan` へ戻り、続行・計画変更・停止の最終判断は `replan` が行います。必須検証だけが残る場合も `replan` から実装へ戻れるようになりました。
+- ビルトインの remediation ワークフローで `fix-replan` を `fix-plan` から分離しました (#1585)。修正が差し戻された後の `fix-replan` は、前回の計画と直前の修正報告を受け取り、同じ計画を返さずに進行を妨げた理由への方針を示し、解消できない事項は計画の留意点に記録します。修正で新たに発生・露出した問題は同じ修正単位に含め、指摘の前提の反証は前提そのものが誤りだった場合に限ります。レビュアーは計画の留意点を照合し、欠陥の証拠があるものだけを指摘にします。
+
+### Fixed
+
+- 生成した read-only task-state server が接続されている対話では、provider の権限 allowlist に `takt_list_tasks` と `takt_get_run` を追加し、これらの MCP tool が拒否されないようにしました。Grill Me の tool と権限設定も Assistant と統一しました (#1577, #1587)。
+- 生成されるタスク指示書が、ユーザーが実際に了承した範囲を保つようになりました (#1579)。「OK」のような短い了承は、直前に assistant が明示した確認事項だけを承認したものとして扱います。沈黙や話題の変更は了承の根拠にせず、assistant の提案やワークスペースの観察結果を要求や制約へ昇格させません。調査前のファイル一覧を必須の変更範囲として固定することもなくなりました。
+- ツール出力に U+2028 / U+2029 が含まれると Codex の実行が `Failed to parse item:` で失敗する問題を修正しました (#1581)。これらの文字が SDK の JSON イベント行を分断していたため、SDK が読む前に Codex 子プロセスの stdout 上でエスケープします。
+
+### Internal
+
+- Pi SDK の更新 (#1572)。`@earendil-works/pi-ai` と `@earendil-works/pi-coding-agent` を 0.84.1 → 0.85.1 に更新し、extension ツールのポリシーの互換性を維持しました。
+- nested resume point の再利用防止に回帰テストを追加し (#1574)、高負荷時に失敗する時間依存テストを安定化しました (#1590)。指示書の引き継ぎと fix-plan の阻害要因の扱いに関するプロンプト eval を追加しました。
+- README と CONTRIBUTING に、Issue とあわせた PR の提出を歓迎する旨を追記しました (#1567)。
+
 ## [0.65.0] - 2026-09-11
 
 ### Added

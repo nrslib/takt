@@ -4,6 +4,7 @@ import type {
   CodexPermissionControl,
   CodexReasoningEffort,
   CopilotEffort,
+  DeepSeekReasoningEffort,
   DeepSeekHarnessProviderOptions,
   OpenCodeGuardProfile,
   PiProviderOptions,
@@ -89,6 +90,7 @@ type RawProviderOptions = {
     request_timeout_ms?: number;
     shutdown_timeout_ms?: number;
     runtime_mode?: 'exe' | 'node';
+    reasoning_effort?: DeepSeekReasoningEffort;
   };
   pi?: {
     guards?: RawProviderGuardOptions;
@@ -108,6 +110,7 @@ export interface NormalizeProviderOptionsOptions {
   baseUrlTrust?: ProviderBaseUrlTrust;
   pathPrefix?: string;
   getOrigin?: (path: string) => ProviderOptionsTraceOrigin;
+  allowDeepSeekHarnessReasoningEffort?: boolean;
 }
 
 export interface ProviderOptionsLayer {
@@ -181,6 +184,28 @@ function assertAllowedProviderBaseUrl(
   throw new Error(
     `Configuration error: ${path} must use a loopback base_url when defined by workflow or project config. `
     + 'Move non-loopback provider base URLs to global config or TAKT_PROVIDER_OPTIONS_*_BASE_URL.',
+  );
+}
+
+/**
+ * Allow effort only for authorized runtime profiles or the top-level dedicated env path.
+ * The traced loader separately rejects root JSON env values before origin inheritance.
+ */
+function assertAllowedDeepSeekHarnessReasoningEffort(
+  path: string,
+  value: DeepSeekReasoningEffort | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (
+    value === undefined
+    || options.allowDeepSeekHarnessReasoningEffort === true
+    || (path === 'provider_options.deepseek_harness.reasoning_effort'
+      && options.getOrigin?.(path) === 'env')
+  ) {
+    return;
+  }
+  throw new Error(
+    `Configuration error: ${path} is supported only in runtime profile options or the standard environment override.`,
   );
 }
 
@@ -378,6 +403,12 @@ export function normalizeProviderOptions(
       options.deepseek_harness.base_url,
       normalizationOptions,
     );
+    const deepseekReasoningEffortPath = `${deepseekOptionsPath}.reasoning_effort`;
+    assertAllowedDeepSeekHarnessReasoningEffort(
+      deepseekReasoningEffortPath,
+      options.deepseek_harness.reasoning_effort,
+      normalizationOptions,
+    );
     const deepseekHarness: DeepSeekHarnessProviderOptions = {
       ...(options.deepseek_harness.base_url !== undefined
         ? { baseUrl: options.deepseek_harness.base_url }
@@ -393,6 +424,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.deepseek_harness.runtime_mode !== undefined
         ? { runtimeMode: options.deepseek_harness.runtime_mode }
+        : {}),
+      ...(options.deepseek_harness.reasoning_effort !== undefined
+        ? { reasoningEffort: options.deepseek_harness.reasoning_effort }
         : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {
@@ -992,6 +1026,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.deepseekHarness?.runtimeMode,
     resolveProviderOptionOrigin(originResolver, 'deepseekHarness.runtimeMode', source),
   );
+  const deepseekHarnessReasoningEffort = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.reasoningEffort,
+    personaOptions?.deepseekHarness?.reasoningEffort,
+    stepOptions?.deepseekHarness?.reasoningEffort,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.reasoningEffort', source),
+  );
   const piExtensions = selectProviderValue(
     resolvedConfigOptions.pi?.extensions,
     personaOptions?.pi?.extensions,
@@ -1210,6 +1250,7 @@ export function resolveEffectiveProviderOptions(
       || deepseekHarnessRequestTimeoutMs !== undefined
       || deepseekHarnessShutdownTimeoutMs !== undefined
       || deepseekHarnessRuntimeMode !== undefined
+      || deepseekHarnessReasoningEffort !== undefined
       ? {
           deepseekHarness: {
             ...(deepseekHarnessBaseUrl !== undefined ? { baseUrl: deepseekHarnessBaseUrl } : {}),
@@ -1221,6 +1262,9 @@ export function resolveEffectiveProviderOptions(
               ? { shutdownTimeoutMs: deepseekHarnessShutdownTimeoutMs }
               : {}),
             ...(deepseekHarnessRuntimeMode !== undefined ? { runtimeMode: deepseekHarnessRuntimeMode } : {}),
+            ...(deepseekHarnessReasoningEffort !== undefined
+              ? { reasoningEffort: deepseekHarnessReasoningEffort }
+              : {}),
           },
         }
       : {}),
@@ -1421,6 +1465,7 @@ export const PROVIDER_OPTION_PATHS = [
   'deepseekHarness.requestTimeoutMs',
   'deepseekHarness.shutdownTimeoutMs',
   'deepseekHarness.runtimeMode',
+  'deepseekHarness.reasoningEffort',
   'pi.extensions',
   'pi.thinkingLevel',
   'pi.guards.callTimeoutMs',

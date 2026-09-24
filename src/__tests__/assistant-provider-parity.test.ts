@@ -55,6 +55,7 @@ describe('assistant provider resolution', () => {
         assistantMode,
         formalSpec: false,
         formalSpecComments: true,
+        modelCheckTimeoutSeconds: 300,
       });
 
       expect(plan.ctx.providerType).toBe('codex');
@@ -72,6 +73,7 @@ describe('assistant provider resolution', () => {
       assistantMode: 'assistant',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       provider: 'claude-sdk',
       model: 'opus',
     });
@@ -86,6 +88,7 @@ describe('assistant provider resolution', () => {
       assistantMode: 'assistant',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
     });
 
     // No overrides to fold in, so the ladder resolves the configuration as it stands.
@@ -99,7 +102,7 @@ describe('assistant provider resolution', () => {
       personaContent: 'persona',
       personaDisplayName: 'reviewer',
       allowedTools: [],
-    });
+    }, { modelCheckTimeoutSeconds: 300 });
 
     expect(plan.ctx.providerType).toBe('codex');
     expect(mockResolveNonWorkflow).toHaveBeenCalledWith('/repo');
@@ -118,6 +121,7 @@ describe('assistant provider resolution', () => {
       personaDisplayName: 'reviewer',
       allowedTools: [],
     }, {
+      modelCheckTimeoutSeconds: 300,
       provider: 'claude',
       model: 'custom-model',
     });
@@ -142,7 +146,10 @@ describe('assistant provider resolution', () => {
       personaContent: 'persona',
       personaDisplayName: 'reviewer',
       allowedTools: [],
-    }, { provider: 'claude' });
+    }, {
+      modelCheckTimeoutSeconds: 300,
+      provider: 'claude',
+    });
 
     expect(plan.ctx.providerType).toBe('claude');
     expect(plan.ctx.model).toBe('claude-default');
@@ -160,7 +167,10 @@ describe('assistant provider resolution', () => {
       personaContent: 'persona',
       personaDisplayName: 'reviewer',
       allowedTools: [],
-    }, { model: 'custom-model' });
+    }, {
+      modelCheckTimeoutSeconds: 300,
+      model: 'custom-model',
+    });
 
     expect(plan.ctx.providerType).toBe('codex');
     expect(plan.ctx.model).toBe('custom-model');

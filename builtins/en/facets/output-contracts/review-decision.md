@@ -20,6 +20,7 @@
 | Finding ID / Source | Technical Check | Treatment in This Task | Problem ID | Reason and Evidence |
 |---------------------|-----------------|------------------------|------------|---------------------|
 | {ID and report name} | {Confirmed / Disproved / Unverified} | {Repair / Merge into same problem / Unsupported / Unnecessary expansion / Outside this task / No issue after verification / Cannot verify in this environment} | {Problem ID or none} | {Reason based on current code, requirements, or reproduction results} |
+| {Plan report name and caveat item, plus the finding ID if resubmitted} | {Confirmed / Disproved / Unverified} | {Repair in this round / Carry forward / Reject} | {Problem ID or none} | {Decision evidence and, if carried forward, the next responsible stage} |
 
 ## Unresolved Premises
 - {None, or conflicting requirements, plan decisions, or findings and why replanning is required}

@@ -1,79 +1,58 @@
 # Reactポリシー
 
-Reactに関する独立した判定を一つの正本で行う。
+Reactのstate、props、Context、reducer、Effect、hookを、再描画、stateの寿命、Mediatorとしての操作判断、外部システムとの同期から判定する。
 
-## 原則
-
-| 原則 | 基準 |
-|------|------|
-| 適用条件を確認 | 元要件、変更契約、実在する影響経路に基づいて適用する |
-| 事実を根拠にする | コード、契約、証跡で確認できる条件だけを判定する |
-| 責務境界を守る | 判定対象の所有者と観測可能な影響を分けて確認する |
-| 最小範囲に限定する | 今回の要求と因果関係のある範囲だけを判定する |
-| 判定根拠を統一する | 元要件、変更契約、実在する影響経路から導けない例示を判断基準に追加しない |
-
-## React 判定基準
-
-### effect と再実行
+## State、Props、派生値
 
 | 基準 | 判定 |
 |------|------|
-| 初期表示の一度きりのロードなのに、再生成される関数参照を依存に置く | REJECT |
-| 再取得条件が明確でないのに、Context/Provider 由来関数を依存に置く | REJECT |
-| mount-only 初期化を `useEffect(..., [])` で表現し、意図をコメントで残す | OK |
-| 依存変化時の再取得が仕様として必要で、その依存を明示している | OK |
+| 兄弟コンポーネントが共有するstateをそれぞれの`useState`で持ち、表示や操作がずれる | REJECT |
+| propsの変更が必要なコンポーネントで、初期値をstateへコピーしたまま古い値を表示する | REJECT |
+| stateから計算できる一覧、件数、全選択、ラベルを別stateとしてEffectで同期する | REJECT |
+| 兄弟コンポーネントが共有するstateを共通の親が一つ持ち、propsと操作のcallbackを子へ渡す | OK |
+| controlled input、編集草稿、`key`による作り直しを、必要なstateの寿命に合わせて選ぶ | OK |
+| 実際の計算量や参照の問題を解決せず、memo化で依存と更新経路を隠す | REJECT |
 
-### Context と Provider value
-
-| 基準 | 判定 |
-|------|------|
-| Context 由来関数の参照安定性を確認せず、effect 依存に入れる | REJECT |
-| Provider 側で value の安定性が保証されていないのに mount effect の依存に使う | REJECT |
-| Context 関数はイベントハンドラから使い、初期取得は mount-only に閉じる | OK |
-| Provider 側で value 安定化を行い、再取得条件も仕様で定義する | OK |
-
-### 初期表示ロード
+## Context、Reducer、操作
 
 | 基準 | 判定 |
 |------|------|
-| 初期表示で一覧を一度だけ読むのに、loading state 更新で再取得が走る | REJECT |
-| 初期表示で一覧を一度だけ読むのに、message 表示や dialog 開閉で再取得が走る | REJECT |
-| 初期表示は mount-only とし、後続の再取得条件を明示する | OK |
+| Providerやコンポーネントが`useState`・`useReducer`・queryなどで値を作り、Contextがその値と操作を配る | OK |
+| reducerが通信、timer、通知などの副作用を実行する | REJECT |
+| 描画前に続く通知を古いrenderのstateで判定し、受け付けられない操作の通信やtimerを開始する | REJECT |
+| reducerがstateとeventから次のstateを返し、handlerが受理した操作だけ通信や副作用を開始し、結果の反映をdispatchで行う | OK |
+| clickとsubmitなど複数の入口が同じ通信を直接呼び、二重送信を起こす | REJECT |
 
-### データフェッチライブラリのキャッシュ適性
-
-| データ特性 | キャッシュ | 判定 |
-|-----------|----------|------|
-| 単一リソースの詳細（設定値、プロフィール等） | 有効 | OK |
-| 安定した一覧（マスタデータ、変更頻度が低い） | 有効 | OK |
-| cursor ページングかつ途中で追加・削除・並び替えが起きる一覧 | 無効 | local state で取得 |
-| offset ページングかつ途中でデータ変動が起きる一覧 | 無効 | local state で取得 |
-
-### custom hook の責務
+## Effectと依存
 
 | 基準 | 判定 |
 |------|------|
-| React の state/effect を使わないのに `use*` と命名する | 警告 |
-| 純関数群を custom hook として扱う | 警告 |
-| stateful な UI 制御は custom hook に、純粋計算は function module に分ける | OK |
-| 共有状態が必要な複数コンポーネントで同じ stateful hook を個別に呼ぶ | REJECT |
-| hook が JSX を返す | REJECT |
+| Effectが読むreactive valueを依存に含めず、古い値で同期する | REJECT |
+| 依存が再接続・再取得したい条件と一致しない | REJECT |
+| callbackやContext valueの参照が変わるだけで、機能上不要な再取得・再接続が実際に繰り返される | REJECT |
+| 一つのEffectに別々の同期をまとめ、無関係な値で双方が再実行される | REJECT |
+| 接続、購読、timer、取得の再実行前とunmount時にcleanupがなく、古い資源や結果が残る | REJECT |
+| 同期対象と再実行条件を決め、依存を明示してcleanupを返す | OK |
 
-### Props 型の配置と hook の境界
+依存配列をlintの警告だけで変更しない。値をEffectの外へ出す、操作ハンドラへ移す、同期を分けるなど、同期対象を先に整理する。
 
-| 基準 | 判定 |
-|------|------|
-| 1つのコンポーネント専用 Props を、理由なく `types` ファイルへ切り出す | 警告 |
-| hook から component の Props 型を import するためだけに Props を別ファイルへ移す | REJECT |
-| 複数コンポーネントや公開 API が共有する Props/データ契約を別ファイルへ置く | OK |
-| hook は状態・イベント・派生値を返し、container が component props へ束ねる | OK |
-| hook が component props を返す場合でも、component への型依存を hook に持ち込まない | OK |
-
-### exhaustive-deps の扱い
+## Reactの実行規則
 
 | 基準 | 判定 |
 |------|------|
-| ルールに従うためだけに不要な再実行依存を追加する | REJECT |
-| lint 抑制を無言で入れる | 警告 |
-| mount-only の理由をコメントで説明して抑制する | OK |
-| 再実行が必要な effect なのに `[]` にする | REJECT |
+| Hookをコンポーネントまたはcustom hookのトップレベル以外で呼び、呼出し順が描画ごとに変わる | REJECT |
+| 描画中に通信、通知、DOM操作、外部変数の変更などの副作用を行う | REJECT |
+| props、state、その内部の値を直接変更する | REJECT |
+| 並べ替え可能な一覧でindexを`key`にし、行の入れ替え後に入力や選択のstateが別項目へ移る | REJECT |
+| 項目の安定した識別子を`key`に使い、コンポーネントの位置とstateの寿命を意図に合わせる | OK |
+
+## Custom Hook
+
+| 基準 | 判定 |
+|------|------|
+| hookがstate、Effect、Context、query、form、イベント変換を一つの画面の動作としてまとめる | OK |
+| hookが純粋な計算だけを包む | 通常の関数との分割を検討する |
+| hook、コンポーネント、画面が循環依存し、表示や通信の変更経路が読めない | REJECT |
+| hookが返すstate、event、派生値を描画の入力へ渡す経路が分かる | OK |
+
+hook内部の`useState`は呼出しごとに別のstateを作る。Context、query、外部storeを読むhookは共有元の値を返せるため、実際に何を読み書きするかで判定する。

@@ -223,6 +223,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     strategy,
     formalSpec: strategy.formalSpec,
     formalSpecComments: strategy.formalSpecComments,
+    modelCheckTimeoutSeconds: strategy.modelCheckTimeoutSeconds,
     ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
     // `--continue` and `/resume` hand the TUI a live session with no local
     // transcript; summarizing it straight away has to work.

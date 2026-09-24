@@ -8,7 +8,7 @@ const CLASSIFICATIONS = [
   {
     tier: 'active',
     reason: '現在の共有 reviewer persona/policy の代表的な recall・precision 回帰を測る',
-    suites: ['coding', 'arch', 'antipattern', 'antipattern-wording-tests', 'frontend', 'cqrs', 'arch-failure-aggregation'],
+    suites: ['coding', 'arch', 'antipattern', 'antipattern-wording-tests', 'frontend', 'frontend-opus', 'cqrs', 'arch-failure-aggregation'],
   },
   {
     tier: 'active',
@@ -16,6 +16,7 @@ const CLASSIFICATIONS = [
     suites: [
       'fix-loop-convergence',
       'fix-plan-bounded-proof',
+      'fix-plan-blocker-absorption',
       'fix-plan-impact-closure-primary',
       'fix-plan-impact-closure-heldout',
     ],
@@ -147,6 +148,12 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'frontend-opus': {
+    defaultEligible: false,
+    credentials: ['claude'],
+    cost: 'standard',
+    reason: 'Lunaで検証したGUI設計ケースをOpusでも確認する',
+  },
   'resource-flow-review': {
     defaultEligible: false,
     credentials: ['codex'],
@@ -242,6 +249,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '2つの外部CLIを使う比較 suite である',
+  },
+  'fix-plan-blocker-absorption': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '修正で露出した型エラーを同じ修正単位へ含める計画を3モデル・3反復で比較する',
   },
   'fix-plan-bounded-proof': {
     defaultEligible: false,
@@ -421,7 +434,8 @@ const PREPARE_TARGET_OVERRIDES = {
   arch: ['arch-review'],
   antipattern: ['antipattern-review'],
   'antipattern-wording-tests': ['antipattern-review'],
-  frontend: ['frontend-review'],
+  frontend: ['frontend-review', 'frontend-review-react'],
+  'frontend-opus': ['frontend-review', 'frontend-review-react'],
   cqrs: ['cqrs-review'],
   'frontend-coder': ['frontend-implement'],
   'cqrs-coder': ['cqrs-implement'],

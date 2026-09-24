@@ -47,7 +47,11 @@ describe('ACP conversation factory formal specification mode', () => {
   it.each([false, true])(
     'resolves formal specification mode=%s without a prompt and passes it to the ACP session',
     (formalSpec) => {
-      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: formalSpec, comments: true });
+      mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({
+        mode: formalSpec,
+        comments: true,
+        modelCheckTimeoutSeconds: 17,
+      });
 
       const result = createDefaultConversationSession({ cwd: '/repo', outputMode: 'silent' });
 
@@ -58,11 +62,15 @@ describe('ACP conversation factory formal specification mode', () => {
         cwd: '/repo',
         outputMode: 'silent',
         formalSpec,
+        modelCheckTimeoutSeconds: 17,
       }));
 
       const options = mockCreateConversationSession.mock.calls[0]?.[0] as {
-        strategy: { systemPrompt: string };
+        modelCheckTimeoutSeconds: number;
+        strategy: { systemPrompt: string; modelCheckTimeoutSeconds: number };
       };
+      expect(options.modelCheckTimeoutSeconds).toBe(17);
+      expect(options.strategy.modelCheckTimeoutSeconds).toBe(17);
       expect(options.strategy.systemPrompt).toMatch(/Gherkin/);
       if (formalSpec) {
         expect(options.strategy.systemPrompt).toMatch(/\bQuint\b/);

@@ -1065,6 +1065,7 @@ export class OpenCodeAttemptRunner {
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
+      options.allowedMcpTools,
     );
     // The session is created once per step and reused across phases: a
     // session-scoped deny can never be escalated later, and recreating the
@@ -1076,6 +1077,7 @@ export class OpenCodeAttemptRunner {
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
+      options.allowedMcpTools,
     );
     if (sessionId === undefined) {
       throwIfCallAborted();
@@ -1141,6 +1143,7 @@ export class OpenCodeAttemptRunner {
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
+      options.allowedMcpTools,
     );
     log.debug('Selecting OpenCode agent', {
       agentName,

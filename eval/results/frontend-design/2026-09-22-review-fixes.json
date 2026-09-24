@@ -1,0 +1,616 @@
+{
+  "date": "2026-09-22",
+  "candidateRevision": "fcd683487056212fbeeed86d718e62c407390a88",
+  "baselineRevision": "cbbeef661ff7fdf2bd6e1fe3d2e139b8c18bb6a3",
+  "cliVersions": {
+    "codex": "0.153.3",
+    "claude": "2.1.278",
+    "promptfoo": "0.121.17"
+  },
+  "execution": "npm run eval:prompts -- <suite> --no-cache --max-concurrency 2 --no-table --no-share --output <path>; both Luna responses reviewed before Opus started",
+  "inputHashes": {
+    "eval/.work/frontend-review/.takt/eval-snapshots/frontend-review-knowledge.md": "a2b4a5f58255fc94b935f5a2c6d2902ac81bc31fd926065791f63b7fe0b353d1",
+    "eval/.work/frontend-review/.takt/eval-snapshots/frontend-review-policies.md": "110822d5b5d4c1cbddd312b26da24ce5d1f74b8e10b9a2732bb221ca189ad4c1",
+    "eval/.work/frontend-review/package.json": "26a4d516e3f0705249973d783ddf5b7e27601d3cdf3d0a4a1d1960fb3a46947b",
+    "eval/.work/frontend-review/src/gui-patterns/bubble-a.tsx": "7473b4feee653e153d2bf17025feb5a013aad022ad9a27b5aba5c9a6cd1d4c67",
+    "eval/.work/frontend-review/src/gui-patterns/bubble-b.tsx": "7d5e02d96801c0c665e91576b17c5c8b57c35818842942de540ee85b67542c18",
+    "eval/.work/frontend-review/src/gui-patterns/buyer-a.tsx": "6474694806d24d05010000fb740e8cd623edf4a49b001d11e40380993a9b0d0d",
+    "eval/.work/frontend-review/src/gui-patterns/buyer-b.tsx": "8c30c50feac8fe0a7c723f12cac47885391218f5d0be4ff333e0fe653a75811e",
+    "eval/.work/frontend-review/src/gui-patterns/callback-delegation.tsx": "8c396b64ec05319bef512cda4e4712a558fd6eb11a7b1dd8316bc4dbcd2dd03d",
+    "eval/.work/frontend-review/src/gui-patterns/context-dispatch.tsx": "dff4103b104efda3d059856394251c3764b685e89394665ee5a209157acb72f1",
+    "eval/.work/frontend-review/src/gui-patterns/draft.tsx": "f119d66f2110631b399645605e705a9a06ab6e8b96bfa170759e34dab2a247cb",
+    "eval/.work/frontend-review/src/gui-patterns/form-action.tsx": "bd42b69a517cec56c656594c148a7af8a6b224ae1a32e86ee35cd246473ce5bb",
+    "eval/.work/frontend-review/src/gui-patterns/guard-a.tsx": "c446693526464b4a307b71603bbaf13ec421c67fae15c22e37a00dfe59032ff7",
+    "eval/.work/frontend-review/src/gui-patterns/guard-b.tsx": "cfa75526b33e00acc76ca9f4b7ce74a7024365837459873962b578bc6ccfd110",
+    "eval/.work/frontend-review/src/gui-patterns/local-state.tsx": "dc60092d2a9f52a3190de8f0ac4c7b922762970fd06272faa10832454be1f15d",
+    "eval/.work/frontend-review/src/gui-patterns/mediator-a.tsx": "4e4d30ebae9f54dccd769611e21f2e99f04fd59aa44c487e9f3da60e1354adca",
+    "eval/.work/frontend-review/src/gui-patterns/mediator-b.tsx": "7cbe11c2e628fd9141599c2e7c81acbd3c30a5ba6932fe0ede1d68e7e13fa6a8",
+    "eval/.work/frontend-review/src/gui-patterns/query-a.tsx": "8a2f3c73cf3d430b914facc169e2124e6082bdfb1565781483e9034698eff46f",
+    "eval/.work/frontend-review/src/gui-patterns/query-b.tsx": "a6076932070770e040c5d06f8abca7c6aba777f10e456328662d269c9cc3b66d",
+    "eval/.work/frontend-review/src/gui-patterns/row-a.tsx": "7e4a39a5c3ad8d026ee0c6a89246d21813a25f9f52568445b80ddace74a09d0c",
+    "eval/.work/frontend-review/src/gui-patterns/row-b.tsx": "8e497bf9d425e92eab11a2e2f9c8389dd4c91afcb2138bab596ae6478c5c0851",
+    "eval/.work/frontend-review/src/gui-patterns/save-a.tsx": "9d5a579b3fea369b708875cc80a10ceb436dea89e9af7368c7cdd3e046783b66",
+    "eval/.work/frontend-review/src/gui-patterns/save-b.tsx": "87703a09ae18a148a3356c4ae8527189210d932cff1356cfa80dce61a465ca90",
+    "eval/.work/frontend-review/src/gui-patterns/selection-a.tsx": "735a683e997888aa0d9b100bdddaa0ccb1b734981937940b391806b25e473a43",
+    "eval/.work/frontend-review/src/gui-patterns/selection-b.tsx": "1406aa7626def0e375509817dcea67f2faf923ca9c18beb67adb8fde7978cc74",
+    "eval/.work/frontend-review/src/gui-patterns/shared-query.tsx": "188e7cc4fee55fc37b731474bd782fd6fd0a90f0eb32fdd4010d54a77efdabe9",
+    "eval/.work/frontend-review/src/gui-patterns/submit-a.tsx": "2124280d4676f0f6b1726a1745b663fcf88308498338ffca5c78aac355ed60e2",
+    "eval/.work/frontend-review/src/gui-patterns/submit-b.tsx": "6d6a3b602c2bc820004e340cdac0f45a77755297331f8d94aeee207df0c6650e",
+    "eval/.work/frontend-review/src/gui-patterns/subscription-a.tsx": "7840ace181d8c0fe5b2d9b0cd9668490e2a61db8f6ca93fdefc0a02defdc6aa8",
+    "eval/.work/frontend-review/src/gui-patterns/subscription-b.tsx": "2b1b35fea1cf3f329cdf07565af7d0aa0d2cc09d5207dad4e953cea610811fed",
+    "eval/.work/frontend-review/src/gui-patterns/total-a.tsx": "c002d3d79959ba5ac3b3e54bb2080fccaec2c92fda213d3d4eae72739c071503",
+    "eval/.work/frontend-review/src/gui-patterns/total-b.tsx": "9e680bad60714949c372686db2f9351fc35a3d3d978940c8fbb1dadc7ccb0ee2",
+    "eval/.work/frontend-review-react/.takt/eval-snapshots/frontend-review-react-knowledge.md": "87a98d1cee3d6051698367810be9cd1b619b511f6c3bde923d0ec5e1854c6724",
+    "eval/.work/frontend-review-react/.takt/eval-snapshots/frontend-review-react-policies.md": "ecc06d1f8b8d945c0a0a1d220c3e1500ad87d5dd1c37912f8b2e34f965d1be77",
+    "eval/.work/frontend-review-react/package.json": "26a4d516e3f0705249973d783ddf5b7e27601d3cdf3d0a4a1d1960fb3a46947b",
+    "eval/.work/frontend-review-react/src/gui-patterns/bubble-a.tsx": "7473b4feee653e153d2bf17025feb5a013aad022ad9a27b5aba5c9a6cd1d4c67",
+    "eval/.work/frontend-review-react/src/gui-patterns/bubble-b.tsx": "7d5e02d96801c0c665e91576b17c5c8b57c35818842942de540ee85b67542c18",
+    "eval/.work/frontend-review-react/src/gui-patterns/buyer-a.tsx": "6474694806d24d05010000fb740e8cd623edf4a49b001d11e40380993a9b0d0d",
+    "eval/.work/frontend-review-react/src/gui-patterns/buyer-b.tsx": "8c30c50feac8fe0a7c723f12cac47885391218f5d0be4ff333e0fe653a75811e",
+    "eval/.work/frontend-review-react/src/gui-patterns/callback-delegation.tsx": "8c396b64ec05319bef512cda4e4712a558fd6eb11a7b1dd8316bc4dbcd2dd03d",
+    "eval/.work/frontend-review-react/src/gui-patterns/context-dispatch.tsx": "dff4103b104efda3d059856394251c3764b685e89394665ee5a209157acb72f1",
+    "eval/.work/frontend-review-react/src/gui-patterns/draft.tsx": "f119d66f2110631b399645605e705a9a06ab6e8b96bfa170759e34dab2a247cb",
+    "eval/.work/frontend-review-react/src/gui-patterns/form-action.tsx": "bd42b69a517cec56c656594c148a7af8a6b224ae1a32e86ee35cd246473ce5bb",
+    "eval/.work/frontend-review-react/src/gui-patterns/guard-a.tsx": "c446693526464b4a307b71603bbaf13ec421c67fae15c22e37a00dfe59032ff7",
+    "eval/.work/frontend-review-react/src/gui-patterns/guard-b.tsx": "cfa75526b33e00acc76ca9f4b7ce74a7024365837459873962b578bc6ccfd110",
+    "eval/.work/frontend-review-react/src/gui-patterns/local-state.tsx": "dc60092d2a9f52a3190de8f0ac4c7b922762970fd06272faa10832454be1f15d",
+    "eval/.work/frontend-review-react/src/gui-patterns/mediator-a.tsx": "4e4d30ebae9f54dccd769611e21f2e99f04fd59aa44c487e9f3da60e1354adca",
+    "eval/.work/frontend-review-react/src/gui-patterns/mediator-b.tsx": "7cbe11c2e628fd9141599c2e7c81acbd3c30a5ba6932fe0ede1d68e7e13fa6a8",
+    "eval/.work/frontend-review-react/src/gui-patterns/query-a.tsx": "8a2f3c73cf3d430b914facc169e2124e6082bdfb1565781483e9034698eff46f",
+    "eval/.work/frontend-review-react/src/gui-patterns/query-b.tsx": "a6076932070770e040c5d06f8abca7c6aba777f10e456328662d269c9cc3b66d",
+    "eval/.work/frontend-review-react/src/gui-patterns/row-a.tsx": "7e4a39a5c3ad8d026ee0c6a89246d21813a25f9f52568445b80ddace74a09d0c",
+    "eval/.work/frontend-review-react/src/gui-patterns/row-b.tsx": "8e497bf9d425e92eab11a2e2f9c8389dd4c91afcb2138bab596ae6478c5c0851",
+    "eval/.work/frontend-review-react/src/gui-patterns/save-a.tsx": "9d5a579b3fea369b708875cc80a10ceb436dea89e9af7368c7cdd3e046783b66",
+    "eval/.work/frontend-review-react/src/gui-patterns/save-b.tsx": "87703a09ae18a148a3356c4ae8527189210d932cff1356cfa80dce61a465ca90",
+    "eval/.work/frontend-review-react/src/gui-patterns/selection-a.tsx": "735a683e997888aa0d9b100bdddaa0ccb1b734981937940b391806b25e473a43",
+    "eval/.work/frontend-review-react/src/gui-patterns/selection-b.tsx": "1406aa7626def0e375509817dcea67f2faf923ca9c18beb67adb8fde7978cc74",
+    "eval/.work/frontend-review-react/src/gui-patterns/shared-query.tsx": "188e7cc4fee55fc37b731474bd782fd6fd0a90f0eb32fdd4010d54a77efdabe9",
+    "eval/.work/frontend-review-react/src/gui-patterns/submit-a.tsx": "2124280d4676f0f6b1726a1745b663fcf88308498338ffca5c78aac355ed60e2",
+    "eval/.work/frontend-review-react/src/gui-patterns/submit-b.tsx": "6d6a3b602c2bc820004e340cdac0f45a77755297331f8d94aeee207df0c6650e",
+    "eval/.work/frontend-review-react/src/gui-patterns/subscription-a.tsx": "7840ace181d8c0fe5b2d9b0cd9668490e2a61db8f6ca93fdefc0a02defdc6aa8",
+    "eval/.work/frontend-review-react/src/gui-patterns/subscription-b.tsx": "2b1b35fea1cf3f329cdf07565af7d0aa0d2cc09d5207dad4e953cea610811fed",
+    "eval/.work/frontend-review-react/src/gui-patterns/total-a.tsx": "c002d3d79959ba5ac3b3e54bb2080fccaec2c92fda213d3d4eae72739c071503",
+    "eval/.work/frontend-review-react/src/gui-patterns/total-b.tsx": "9e680bad60714949c372686db2f9351fc35a3d3d978940c8fbb1dadc7ccb0ee2",
+    "eval/prompts/frontend-review.phase1.j2": "40484dafe19aebff9f6d63d6b8fdd9ad847234a30cb5c8356d7bfe66972b3aa7",
+    "eval/prompts/frontend-review-react.phase1.j2": "6f6ffaf364b490f9e55b7bbe6253b98703ad423762d36709d0dc7b1171c08679",
+    "eval/cases/frontend-gui-patterns.md": "8fd80e17f6ee1480e819f8831a89959fe5907914c066eace90e955fe72c1b728",
+    "eval/cases/prev-gather-frontend-gui.md": "e91f86297f8bbdc40ebd750fd73f2b9c8f9ffda7b614bde552e4af5cb6773adc",
+    "eval/asserts/frontend-gui.mjs": "bf43935a171791c1559c654e165a56fbcd102737948149709471a562a2c46e70",
+    "eval/providers/cli-review.mjs": "964ce375c88fa265e7bde2498410d0d13308bb94fc47069541f700436ec287f1",
+    "eval/agents/frontend-review/frontend.yaml": "5f256a00d8dbe58c00d5de4bda6ae71bef24b7ffb2bde91278c4c71f19eeebc5",
+    "eval/agents/frontend-review/frontend-opus.yaml": "9a34ab4b339aa618bfed8937982daa61120b62e9ccd940330b1166c8928cf3eb"
+  },
+  "initialTrial": {
+    "revision": "ecbcd9069e2b46992f065329bd10683fe6cbac8b",
+    "inputHashes": {
+      "eval/.work/frontend-review/.takt/eval-snapshots/frontend-review-knowledge.md": "a2b4a5f58255fc94b935f5a2c6d2902ac81bc31fd926065791f63b7fe0b353d1",
+      "eval/.work/frontend-review/.takt/eval-snapshots/frontend-review-policies.md": "110822d5b5d4c1cbddd312b26da24ce5d1f74b8e10b9a2732bb221ca189ad4c1",
+      "eval/.work/frontend-review/package.json": "26a4d516e3f0705249973d783ddf5b7e27601d3cdf3d0a4a1d1960fb3a46947b",
+      "eval/.work/frontend-review/src/gui-patterns/bubble-a.tsx": "7473b4feee653e153d2bf17025feb5a013aad022ad9a27b5aba5c9a6cd1d4c67",
+      "eval/.work/frontend-review/src/gui-patterns/bubble-b.tsx": "7d5e02d96801c0c665e91576b17c5c8b57c35818842942de540ee85b67542c18",
+      "eval/.work/frontend-review/src/gui-patterns/buyer-a.tsx": "6474694806d24d05010000fb740e8cd623edf4a49b001d11e40380993a9b0d0d",
+      "eval/.work/frontend-review/src/gui-patterns/buyer-b.tsx": "8c30c50feac8fe0a7c723f12cac47885391218f5d0be4ff333e0fe653a75811e",
+      "eval/.work/frontend-review/src/gui-patterns/callback-delegation.tsx": "8c396b64ec05319bef512cda4e4712a558fd6eb11a7b1dd8316bc4dbcd2dd03d",
+      "eval/.work/frontend-review/src/gui-patterns/context-dispatch.tsx": "dff4103b104efda3d059856394251c3764b685e89394665ee5a209157acb72f1",
+      "eval/.work/frontend-review/src/gui-patterns/draft.tsx": "f119d66f2110631b399645605e705a9a06ab6e8b96bfa170759e34dab2a247cb",
+      "eval/.work/frontend-review/src/gui-patterns/form-action.tsx": "bd42b69a517cec56c656594c148a7af8a6b224ae1a32e86ee35cd246473ce5bb",
+      "eval/.work/frontend-review/src/gui-patterns/guard-a.tsx": "c446693526464b4a307b71603bbaf13ec421c67fae15c22e37a00dfe59032ff7",
+      "eval/.work/frontend-review/src/gui-patterns/guard-b.tsx": "cfa75526b33e00acc76ca9f4b7ce74a7024365837459873962b578bc6ccfd110",
+      "eval/.work/frontend-review/src/gui-patterns/local-state.tsx": "dc60092d2a9f52a3190de8f0ac4c7b922762970fd06272faa10832454be1f15d",
+      "eval/.work/frontend-review/src/gui-patterns/mediator-a.tsx": "4e4d30ebae9f54dccd769611e21f2e99f04fd59aa44c487e9f3da60e1354adca",
+      "eval/.work/frontend-review/src/gui-patterns/mediator-b.tsx": "7cbe11c2e628fd9141599c2e7c81acbd3c30a5ba6932fe0ede1d68e7e13fa6a8",
+      "eval/.work/frontend-review/src/gui-patterns/query-a.tsx": "8a2f3c73cf3d430b914facc169e2124e6082bdfb1565781483e9034698eff46f",
+      "eval/.work/frontend-review/src/gui-patterns/query-b.tsx": "a6076932070770e040c5d06f8abca7c6aba777f10e456328662d269c9cc3b66d",
+      "eval/.work/frontend-review/src/gui-patterns/row-a.tsx": "c487f6a4a36b88c9362c975cad203dd2caf0660313e2ffe0a8c957ecbcf06620",
+      "eval/.work/frontend-review/src/gui-patterns/row-b.tsx": "6d0cafd047f6fdc90931dca472adadc00575895bfccd9b0858274e45c9d44b33",
+      "eval/.work/frontend-review/src/gui-patterns/save-a.tsx": "9d5a579b3fea369b708875cc80a10ceb436dea89e9af7368c7cdd3e046783b66",
+      "eval/.work/frontend-review/src/gui-patterns/save-b.tsx": "87703a09ae18a148a3356c4ae8527189210d932cff1356cfa80dce61a465ca90",
+      "eval/.work/frontend-review/src/gui-patterns/selection-a.tsx": "735a683e997888aa0d9b100bdddaa0ccb1b734981937940b391806b25e473a43",
+      "eval/.work/frontend-review/src/gui-patterns/selection-b.tsx": "1406aa7626def0e375509817dcea67f2faf923ca9c18beb67adb8fde7978cc74",
+      "eval/.work/frontend-review/src/gui-patterns/shared-query.tsx": "188e7cc4fee55fc37b731474bd782fd6fd0a90f0eb32fdd4010d54a77efdabe9",
+      "eval/.work/frontend-review/src/gui-patterns/submit-a.tsx": "2124280d4676f0f6b1726a1745b663fcf88308498338ffca5c78aac355ed60e2",
+      "eval/.work/frontend-review/src/gui-patterns/submit-b.tsx": "6d6a3b602c2bc820004e340cdac0f45a77755297331f8d94aeee207df0c6650e",
+      "eval/.work/frontend-review/src/gui-patterns/subscription-a.tsx": "7840ace181d8c0fe5b2d9b0cd9668490e2a61db8f6ca93fdefc0a02defdc6aa8",
+      "eval/.work/frontend-review/src/gui-patterns/subscription-b.tsx": "2b1b35fea1cf3f329cdf07565af7d0aa0d2cc09d5207dad4e953cea610811fed",
+      "eval/.work/frontend-review/src/gui-patterns/total-a.tsx": "c002d3d79959ba5ac3b3e54bb2080fccaec2c92fda213d3d4eae72739c071503",
+      "eval/.work/frontend-review/src/gui-patterns/total-b.tsx": "9e680bad60714949c372686db2f9351fc35a3d3d978940c8fbb1dadc7ccb0ee2",
+      "eval/.work/frontend-review-react/.takt/eval-snapshots/frontend-review-react-knowledge.md": "87a98d1cee3d6051698367810be9cd1b619b511f6c3bde923d0ec5e1854c6724",
+      "eval/.work/frontend-review-react/.takt/eval-snapshots/frontend-review-react-policies.md": "ecc06d1f8b8d945c0a0a1d220c3e1500ad87d5dd1c37912f8b2e34f965d1be77",
+      "eval/.work/frontend-review-react/package.json": "26a4d516e3f0705249973d783ddf5b7e27601d3cdf3d0a4a1d1960fb3a46947b",
+      "eval/.work/frontend-review-react/src/gui-patterns/bubble-a.tsx": "7473b4feee653e153d2bf17025feb5a013aad022ad9a27b5aba5c9a6cd1d4c67",
+      "eval/.work/frontend-review-react/src/gui-patterns/bubble-b.tsx": "7d5e02d96801c0c665e91576b17c5c8b57c35818842942de540ee85b67542c18",
+      "eval/.work/frontend-review-react/src/gui-patterns/buyer-a.tsx": "6474694806d24d05010000fb740e8cd623edf4a49b001d11e40380993a9b0d0d",
+      "eval/.work/frontend-review-react/src/gui-patterns/buyer-b.tsx": "8c30c50feac8fe0a7c723f12cac47885391218f5d0be4ff333e0fe653a75811e",
+      "eval/.work/frontend-review-react/src/gui-patterns/callback-delegation.tsx": "8c396b64ec05319bef512cda4e4712a558fd6eb11a7b1dd8316bc4dbcd2dd03d",
+      "eval/.work/frontend-review-react/src/gui-patterns/context-dispatch.tsx": "dff4103b104efda3d059856394251c3764b685e89394665ee5a209157acb72f1",
+      "eval/.work/frontend-review-react/src/gui-patterns/draft.tsx": "f119d66f2110631b399645605e705a9a06ab6e8b96bfa170759e34dab2a247cb",
+      "eval/.work/frontend-review-react/src/gui-patterns/form-action.tsx": "bd42b69a517cec56c656594c148a7af8a6b224ae1a32e86ee35cd246473ce5bb",
+      "eval/.work/frontend-review-react/src/gui-patterns/guard-a.tsx": "c446693526464b4a307b71603bbaf13ec421c67fae15c22e37a00dfe59032ff7",
+      "eval/.work/frontend-review-react/src/gui-patterns/guard-b.tsx": "cfa75526b33e00acc76ca9f4b7ce74a7024365837459873962b578bc6ccfd110",
+      "eval/.work/frontend-review-react/src/gui-patterns/local-state.tsx": "dc60092d2a9f52a3190de8f0ac4c7b922762970fd06272faa10832454be1f15d",
+      "eval/.work/frontend-review-react/src/gui-patterns/mediator-a.tsx": "4e4d30ebae9f54dccd769611e21f2e99f04fd59aa44c487e9f3da60e1354adca",
+      "eval/.work/frontend-review-react/src/gui-patterns/mediator-b.tsx": "7cbe11c2e628fd9141599c2e7c81acbd3c30a5ba6932fe0ede1d68e7e13fa6a8",
+      "eval/.work/frontend-review-react/src/gui-patterns/query-a.tsx": "8a2f3c73cf3d430b914facc169e2124e6082bdfb1565781483e9034698eff46f",
+      "eval/.work/frontend-review-react/src/gui-patterns/query-b.tsx": "a6076932070770e040c5d06f8abca7c6aba777f10e456328662d269c9cc3b66d",
+      "eval/.work/frontend-review-react/src/gui-patterns/row-a.tsx": "c487f6a4a36b88c9362c975cad203dd2caf0660313e2ffe0a8c957ecbcf06620",
+      "eval/.work/frontend-review-react/src/gui-patterns/row-b.tsx": "6d0cafd047f6fdc90931dca472adadc00575895bfccd9b0858274e45c9d44b33",
+      "eval/.work/frontend-review-react/src/gui-patterns/save-a.tsx": "9d5a579b3fea369b708875cc80a10ceb436dea89e9af7368c7cdd3e046783b66",
+      "eval/.work/frontend-review-react/src/gui-patterns/save-b.tsx": "87703a09ae18a148a3356c4ae8527189210d932cff1356cfa80dce61a465ca90",
+      "eval/.work/frontend-review-react/src/gui-patterns/selection-a.tsx": "735a683e997888aa0d9b100bdddaa0ccb1b734981937940b391806b25e473a43",
+      "eval/.work/frontend-review-react/src/gui-patterns/selection-b.tsx": "1406aa7626def0e375509817dcea67f2faf923ca9c18beb67adb8fde7978cc74",
+      "eval/.work/frontend-review-react/src/gui-patterns/shared-query.tsx": "188e7cc4fee55fc37b731474bd782fd6fd0a90f0eb32fdd4010d54a77efdabe9",
+      "eval/.work/frontend-review-react/src/gui-patterns/submit-a.tsx": "2124280d4676f0f6b1726a1745b663fcf88308498338ffca5c78aac355ed60e2",
+      "eval/.work/frontend-review-react/src/gui-patterns/submit-b.tsx": "6d6a3b602c2bc820004e340cdac0f45a77755297331f8d94aeee207df0c6650e",
+      "eval/.work/frontend-review-react/src/gui-patterns/subscription-a.tsx": "7840ace181d8c0fe5b2d9b0cd9668490e2a61db8f6ca93fdefc0a02defdc6aa8",
+      "eval/.work/frontend-review-react/src/gui-patterns/subscription-b.tsx": "2b1b35fea1cf3f329cdf07565af7d0aa0d2cc09d5207dad4e953cea610811fed",
+      "eval/.work/frontend-review-react/src/gui-patterns/total-a.tsx": "c002d3d79959ba5ac3b3e54bb2080fccaec2c92fda213d3d4eae72739c071503",
+      "eval/.work/frontend-review-react/src/gui-patterns/total-b.tsx": "9e680bad60714949c372686db2f9351fc35a3d3d978940c8fbb1dadc7ccb0ee2",
+      "eval/prompts/frontend-review.phase1.j2": "40484dafe19aebff9f6d63d6b8fdd9ad847234a30cb5c8356d7bfe66972b3aa7",
+      "eval/prompts/frontend-review-react.phase1.j2": "6f6ffaf364b490f9e55b7bbe6253b98703ad423762d36709d0dc7b1171c08679",
+      "eval/cases/frontend-gui-patterns.md": "8fd80e17f6ee1480e819f8831a89959fe5907914c066eace90e955fe72c1b728",
+      "eval/cases/prev-gather-frontend-gui.md": "e91f86297f8bbdc40ebd750fd73f2b9c8f9ffda7b614bde552e4af5cb6773adc",
+      "eval/asserts/frontend-gui.mjs": "bf43935a171791c1559c654e165a56fbcd102737948149709471a562a2c46e70",
+      "eval/providers/cli-review.mjs": "569f726ad38aee3d8630f6e44e2dfdb4507a6da9df0ae31bfcf6acf062a2e796",
+      "eval/agents/frontend-review/frontend.yaml": "5f256a00d8dbe58c00d5de4bda6ae71bef24b7ffb2bde91278c4c71f19eeebc5",
+      "eval/agents/frontend-review/frontend-opus.yaml": "9a34ab4b339aa618bfed8937982daa61120b62e9ccd940330b1166c8928cf3eb"
+    },
+    "reasonForNewTrial": "Luna rejected row-b in React configuration for ambiguity in the delete button accessible name. Both row-a and row-b received the same target-specific accessible name; operation paths, task, prompts, and scorer stayed unchanged. Initial responses are retained; the changed fixture input is evaluated as a new trial.",
+    "runs": [
+      {
+        "model": "luna",
+        "target": "frontend-review-react",
+        "evalId": "eval-dC0-2026-09-22T05:17:00",
+        "startedAt": "2026-09-22T05:17:00.088Z",
+        "exportedAt": "2026-09-22T05:27:55.340Z",
+        "renderedPromptBeforeIsolationSha256": "72e16f5de13d269613ef2059f287637dcc0ca0ff04f21eb1f1248eddb4381f3c",
+        "responseSha256": "b8f09a0acb45a06a0ce69083a66fd14227df381e5b44292435caf98c3dff9837",
+        "grading": {
+          "acceptance": {
+            "pass": false,
+            "score": 0.9411764705882353,
+            "reason": "Wrong verdict or insufficient evidence: row-b.tsx"
+          },
+          "detection": {
+            "pass": true,
+            "score": 1,
+            "reason": "11 REJECT cases matched; reasons still require semantic review"
+          }
+        },
+        "jsonCodeFence": false,
+        "manualReview": {
+          "reviewedCases": 28,
+          "labelMismatches": [
+            {
+              "file": "src/gui-patterns/row-b.tsx",
+              "expected": "OK",
+              "actual": "REJECT",
+              "reason": "設計上の委譲は適切と認めつつ、削除ボタンの対象がaccessible nameから識別できないとして拒否。fixtureの対照両方へ同じ対象名を付け、別観点の曖昧さを除いて再評価する。"
+            }
+          ],
+          "reasonIssues": []
+        },
+        "output": "[\n  {\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`Picker`と`Details`がそれぞれ別の`useState`で`selected`を保持しているため、Pickerで`two`を選んでもDetailsは`one`のままです。\"},\n  {\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`Screen`が`selected`を一つだけ管理し、`Picker`へ`onSelect`、`Details`へ同じ`selected`を渡すため、選択直後に表示が同期します。\"},\n  {\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`buyer.name`を`value`として表示し、入力変更を`onNameChange`で親へ通知するcontrolled inputになっています。\"},\n  {\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`onChange`で親から受け取った`buyer.name`を直接変更しており、親への更新通知やReact state更新を行っていません。\"},\n  {\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`quantity`と`total`を別stateで保持し、`Clear`は`quantity`だけを0にするため、数量0でも合計100円が残ります。\"},\n  {\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`quantity`だけをstateで管理し、`total`を`quantity * 100`から描画時に計算するため、AddとClearの後も数量と合計が一致します。\"},\n  {\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"保存はformの`onSubmit`からだけ呼ばれ、`section`の`recordClick`はクリック記録だけを行うため、送信1回につき`save`は1回です。\"},\n  {\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"Saveボタンの`onClick`とformの`onSubmit`の両方から`save`を呼ぶため、ボタンのクリック送信で同じ保存が2回実行されます。\"},\n  {\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ボタン側には`status === 'editing'`の確認がありますが、Ctrl+Sの`onKeyDown`はstatusを確認せず直接`save()`を呼ぶため、savingやsaved中にも保存できます。\"},\n  {\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"ボタンとCtrl+Sの両方が`requestSave`を通り、そこで`status === 'editing'`を再確認してから`save`を1回呼びます。\"},\n  {\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`RecordRow.handleDelete`が`window.location.pathname`からworkspaceを決め、`remove`と`window.location.assign`まで実行しており、共用行が各画面の対象・削除処理・遷移先を決めています。\"},\n  {\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"削除処理を`onDelete(id)`へ委譲している点は適切ですが、各行のボタンのaccessible nameが全て`Delete`だけで、`label`とのaria関連付けもないため、支援技術から対象行を識別できません。\"},\n  {\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`queryKey`に`accountId`を含め、`queryFn`にも同じaccountIdを渡すため、アカウントごとにキャッシュを分離できます。pending、error、空、成功も分けて表示しています。\"},\n  {\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`queryKey`が常に`['orders']`で`accountId`を含まないため、異なるアカウントの注文が同一キャッシュを共有し、後から表示したアカウントの結果が別アカウントに表示されます。\"},\n  {\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"依存配列が空で初回の`channel`だけを購読し、`subscribe`の戻り値もcleanupとして返していないため、channel変更後も旧購読が残り、unmount時も解除されません。\"},\n  {\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`channel`などをEffectの依存に含め、`subscribe(channel, onMessage)`が返す解除関数をEffectから返しているため、channel変更前とunmount時に購読が終了します。\"},\n  {\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"`SelectionProvider`がreducerの`state`をoutputへ表示し、Provider内のchildrenから`UserSelectionButton`がContextの`dispatch`を呼ぶため、選択した`userId`が`selectedId`として表示されます。\"},\n  {\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"検索語は`SearchBox`内の`query` stateだけで保持され、Enter時に`query.trim()`を`onSubmit`へ通知するため、入力途中の値を親へ反映しません。\"},\n  {\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"`OrderList`が`onSelect`を各`OrderRow`へ渡し、行のボタンが自身の`order.id`を付けて呼び出し元へ通知しています。\"},\n  {\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"`draft`はマウント時の`initialName`から部品内stateとして初期化され、編集は`setDraft`だけで行われ、親の`onConfirm`はConfirm送信時にだけ呼ばれます。\"},\n  {\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"`useState`で一つの`QueryClient`を保持し、そのProvider内に同じ`accountId`の`Orders`を2箇所配置しているため、両表示が同じTanStack Queryキャッシュを共有します。\"},\n  {\"file\":\"src/gui-patterns/bubble-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`Screen.handleAction`がselectを`selectedId`へ反映した後も`onAction`へ渡すため、Rootの`handleAction`もselectを処理し、Screen担当の選択がRootで二重に実行されます。\"},\n  {\"file\":\"src/gui-patterns/bubble-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`Screen.handleAction`はselectを自身のstateへ反映してreturnし、Rootへ渡すのはremoveだけなので、Rootのrecords削除だけが一度実行されます。\"},\n  {\"file\":\"src/gui-patterns/guard-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"statusがsavingの場合も、空入力の場合もメッセージ設定後に`setStatus('saving')`と`onSave(name)`を続けて実行するため、拒否すべき要求がRootへ渡ります。\"},\n  {\"file\":\"src/gui-patterns/guard-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`requestSave`はsaving中と空入力でreturnして`onSave`を呼ばず、editing中の有効な入力だけで`setStatus('saving')`と`onSave(name)`を1回実行します。\"},\n  {\"file\":\"src/gui-patterns/mediator-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`SaveEvent`に`succeeded`がなく、`await save(value)`の成功時にもdispatchしないため、saveが解決してもstateはsavingのままで成功表示へ遷移しません。\"},\n  {\"file\":\"src/gui-patterns/mediator-b.tsx\",\"verdict\":\"OK\",\"reason\":\"save開始時に`started`、Promise解決時に`succeeded`、例外時に`failed`をdispatchし、reducerのstateをScreenとSaveFormへ渡してsaving・saved・errorを表示しています。\"},\n  {\"file\":\"src/gui-patterns/form-action.tsx\",\"verdict\":\"OK\",\"reason\":\"React 19の`useActionState`で得た`formAction`をformの`action`へ渡し、`saveProfile`が空入力をerror、正常入力をsavedへ遷移させ、`isPending`でSaveを無効化しています。\"}\n]"
+      },
+      {
+        "model": "luna",
+        "target": "frontend-review",
+        "evalId": "eval-dC0-2026-09-22T05:17:00",
+        "startedAt": "2026-09-22T05:17:00.088Z",
+        "exportedAt": "2026-09-22T05:27:55.340Z",
+        "renderedPromptBeforeIsolationSha256": "10ea229755a1ce32d484601b5f50f27c154d6e3eeea779b5ebe1d58e88388df3",
+        "responseSha256": "7d540d1b49becd2a8a5c8029476bbebd5c588db379cad352e54a1430397e1106",
+        "grading": {
+          "acceptance": {
+            "pass": true,
+            "score": 1,
+            "reason": "17 OK cases matched; reasons still require semantic review"
+          },
+          "detection": {
+            "pass": true,
+            "score": 1,
+            "reason": "11 REJECT cases matched; reasons still require semantic review"
+          }
+        },
+        "jsonCodeFence": false,
+        "manualReview": {
+          "reviewedCases": 28,
+          "labelMismatches": [],
+          "reasonIssues": [
+            {
+              "file": "src/gui-patterns/row-b.tsx",
+              "detail": "void戻り値を同期処理の証明に用いているが、voidだけでは渡される処理が同期とは保証できない。委譲の判定自体は仕様と一致する。"
+            },
+            {
+              "file": "src/gui-patterns/form-action.tsx",
+              "detail": "pendingをdisabledとoutputで表示すると説明したが、outputが読むのは完了結果のstateであり、isPendingを読むのはbuttonのdisabledだけ。"
+            }
+          ]
+        },
+        "output": "[\n  {\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"Pickerのselected（3行目）とDetailsのselected（7行目）が別々のstateで、Pickerの操作がDetailsへ伝わらない。\"},\n  {\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"ScreenのselectedをPickerとDetailsへ渡し、PickerのonSelect（3行目）がsetSelectedを呼ぶため、選択値が両方へ直ちに反映される。\"},\n  {\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"inputのvalueをbuyer.nameで制御し、onChange（5行目）からonNameChangeを親へ通知している。\"},\n  {\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"onChange（3行目）で親から受け取ったbuyer.nameを直接変更しており、親への更新通知と再描画経路がない。\"},\n  {\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"quantityとtotalを別stateで保持し、Clear（11行目）がquantityだけを0にするため、表示が0個・100円となり一致しない。\"},\n  {\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"totalをquantity * 100（4行目）から導出し、AddとClearはquantityだけを更新するため数量と合計が一致する。\"},\n  {\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"recordClickはsectionの操作記録（2行目）だけで、saveはformのonSubmit（3行目）からのみ呼ばれるため、送信1回につきsaveは1回である。\"},\n  {\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"buttonのonClick（4行目）とformのonSubmit（3行目）の両方がsaveを呼ぶため、Saveクリックで二重実行される。\"},\n  {\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"Ctrl+Sの処理（4行目）がstatusを確認せずsaveを呼ぶため、savingやsavedでも保存でき、editing時だけという契約を破る。\"},\n  {\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"buttonとCtrl+Sが共通のrequestSaveを通り、requestSave（3〜4行目）がstatus === editingの場合だけsaveを呼ぶ。\"},\n  {\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"行自身がURLからworkspaceを決め、removeとwindow.location.assign（5〜7行目）を実行しており、削除対象・処理・移動先を各画面へ委譲していない。\"},\n  {\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"OK\",\"reason\":\"行はonDelete(id)（4行目）で識別子だけを通知し、workspaceの決定、削除処理、移動先を持たない。void戻り値で同期処理も表現されている。\"},\n  {\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"queryKeyにaccountIdを含め、queryFnがload(accountId)（5行目）を呼ぶためアカウント別にキャッシュされ、loading・error・空状態も分けて表示する。\"},\n  {\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"accountIdで結果が変わるのにqueryKeyがordersだけ（5行目）で、同一QueryClient内の別アカウントが同じキャッシュを共有して誤った注文一覧を表示する。\"},\n  {\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"useEffectの依存配列が空で、subscribeの戻り値も破棄している（7行目）。channel変更を追従せず、消滅時や再購読時に旧購読を解除しない。\"},\n  {\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"useEffect（7行目）がsubscribeの解除関数を戻り値として返し、channel・subscribe・onMessageの変更を依存配列で追跡するため、現在のchannelだけを購読する。\"},\n  {\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"Providerがreducer stateを保持してoutput（18行目）へ表示し、childrenをContext内で描画する。UserSelectionButtonはdispatch（29行目）で選択IDをProviderへ通知する。\"},\n  {\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"検索語はSearchBox内のquery state（8行目）だけで保持し、Enter時（11行目）にtrimした確定値をonSubmitで親へ通知する。\"},\n  {\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"OrderListがonSelectを各OrderRowへ渡し（12〜13行目）、行のbuttonがorder.id（25行目）を呼び出し元へ通知する。\"},\n  {\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"draftはマウント時のinitialNameで初期化され（5行目）、編集中は部品内だけを更新し、Confirmのsubmit（6行目）までonConfirmを呼ばない。\"},\n  {\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"QueryClientを一度だけ生成し（7行目）、同じQueryClientProvider内の2つのOrders（8〜10行目）へ同じaccountIdを渡してキャッシュを共有する。\"},\n  {\"file\":\"src/gui-patterns/bubble-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"Screenはselectを自分のstateへ反映した後もonActionへ渡し（28〜30行目）、RootのhandleActionがselectを処理する（11〜12行目）ため、Screen担当のselectをRootでも実行する。\"},\n  {\"file\":\"src/gui-patterns/bubble-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenはselectを更新後にreturnしてRootへ渡さず（25〜28行目）、removeだけをonActionへ通知し（30行目）、Rootがrecordsを更新する。\"},\n  {\"file\":\"src/gui-patterns/guard-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"requestSave（22〜26行目）がsaving中や空入力でもreturnせず、setStatusとonSaveを実行するため、拒否対象がRootへ渡る。\"},\n  {\"file\":\"src/gui-patterns/guard-b.tsx\",\"verdict\":\"OK\",\"reason\":\"requestSaveがsaving中（23〜25行目）と空入力（27〜29行目）を即時returnし、検証を通った場合だけstatus更新とonSave（31〜32行目）を1回行う。\"},\n  {\"file\":\"src/gui-patterns/mediator-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"saveが成功した後にsucceededをdispatchする経路がなく（25〜26行目）、Promise解決後もstateがsavingのままで成功表示へ遷移しない。\"},\n  {\"file\":\"src/gui-patterns/mediator-b.tsx\",\"verdict\":\"OK\",\"reason\":\"saveのPromise解決後にsucceeded（28〜29行目）、拒否時にfailed（30〜31行目）をdispatchし、reducerの状態がScreenとSaveFormの表示へ渡る。\"},\n  {\"file\":\"src/gui-patterns/form-action.tsx\",\"verdict\":\"OK\",\"reason\":\"React 19のuseActionState（22行目）からform action（40行目）へ処理を渡し、空入力はerror（15〜16行目）、成功はsaved（18行目）、pendingはbuttonのdisabled（45行目）とoutputで表示する。\"}\n]"
+      }
+    ]
+  },
+  "promptHashScope": "Rendered prompt before provider rewrites prepared directory paths to per-call temporary directory paths; templates and snapshots are hashed separately.",
+  "isolationRegression": {
+    "baselineRevision": "cbbeef661ff7fdf2bd6e1fe3d2e139b8c18bb6a3",
+    "scope": "Snapshot contents copied by provider prepareWorkingDirectory; no model call",
+    "results": [
+      {
+        "condition": "before",
+        "target": "frontend-review",
+        "expectedSnapshots": [
+          "frontend-review-knowledge.md",
+          "frontend-review-policies.md"
+        ],
+        "actualSnapshots": [
+          "frontend-review-knowledge.md",
+          "frontend-review-policies.md",
+          "frontend-review-react-knowledge.md",
+          "frontend-review-react-policies.md"
+        ],
+        "pass": false
+      },
+      {
+        "condition": "after",
+        "target": "frontend-review",
+        "expectedSnapshots": [
+          "frontend-review-knowledge.md",
+          "frontend-review-policies.md"
+        ],
+        "actualSnapshots": [
+          "frontend-review-knowledge.md",
+          "frontend-review-policies.md"
+        ],
+        "pass": true
+      },
+      {
+        "condition": "before",
+        "target": "frontend-review-react",
+        "expectedSnapshots": [
+          "frontend-review-react-knowledge.md",
+          "frontend-review-react-policies.md"
+        ],
+        "actualSnapshots": [
+          "frontend-review-knowledge.md",
+          "frontend-review-policies.md",
+          "frontend-review-react-knowledge.md",
+          "frontend-review-react-policies.md"
+        ],
+        "pass": false
+      },
+      {
+        "condition": "after",
+        "target": "frontend-review-react",
+        "expectedSnapshots": [
+          "frontend-review-react-knowledge.md",
+          "frontend-review-react-policies.md"
+        ],
+        "actualSnapshots": [
+          "frontend-review-react-knowledge.md",
+          "frontend-review-react-policies.md"
+        ],
+        "pass": true
+      }
+    ]
+  },
+  "runs": [
+    {
+      "model": "luna",
+      "target": "frontend-review",
+      "suite": "frontend",
+      "evalId": "eval-Nhb-2026-09-22T05:33:24",
+      "startedAt": "2026-09-22T05:33:24.839Z",
+      "exportedAt": "2026-09-22T05:43:10.374Z",
+      "latencyMs": 337997,
+      "provider": {
+        "id": "file://../../providers/cli-review.mjs",
+        "label": "codex-luna-max",
+        "config": {
+          "cli": "codex",
+          "model": "gpt-5.6-luna",
+          "reasoning_effort": "max",
+          "isolate_working_dir": true,
+          "disable_inherited_skills": true
+        }
+      },
+      "promptConfig": {
+        "working_dir": ".work/frontend-review",
+        "required_snapshots": [
+          ".takt/eval-snapshots/frontend-review-policies.md",
+          ".takt/eval-snapshots/frontend-review-knowledge.md"
+        ]
+      },
+      "renderedPromptBeforeIsolationSha256": "10ea229755a1ce32d484601b5f50f27c154d6e3eeea779b5ebe1d58e88388df3",
+      "responseSha256": "9f2c5be0599df75e9f32f52cedb8b25a696b7fc2b274e2091395d8e33adabab1",
+      "labelCounts": {
+        "OK": {
+          "matched": 17,
+          "total": 17
+        },
+        "REJECT": {
+          "matched": 11,
+          "total": 11
+        }
+      },
+      "grading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "17 OK cases matched; reasons still require semantic review"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "11 REJECT cases matched; reasons still require semantic review"
+        }
+      },
+      "jsonCodeFence": false,
+      "manualReview": {
+        "reviewedCases": 28,
+        "labelMismatches": [],
+        "reasonIssues": [
+          {
+            "file": "src/gui-patterns/total-a.tsx",
+            "detail": "初期状態でも0 items: 100 yenとする説明は不正確。初期表示は1個100円で、初期状態からClearを押した後に0個100円となる。Clearがtotalを更新しないという主な指摘は正しい。"
+          }
+        ]
+      },
+      "output": "[\n  {\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"Pickerのselected（3-4行）とDetailsのselected（6-8行）が別stateで、Pickerをtwoに変更してもDetailsはoneのままになる。Screenでselectedを共有してPickerのonSelectとDetailsへ渡す必要がある。\"},\n  {\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenのselected/setSelected（9行）をPickerとDetailsへ渡し、PickerのonSelect（3行）が同じstateを更新するため、選択結果がDetailsへ直ちに反映される。\"},\n  {\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"buyer.nameをvalueとして表示し、onChangeでonNameChange（1-5行）を呼ぶため、氏名の所有者である親が更新を受けて新しいbuyerを再度渡せる。\"},\n  {\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"onChange（3行）が親への通知を行わず、propsのbuyer.nameを直接変更している。親の状態更新と再描画を経ないため、親管理の氏名編集契約を満たさない。\"},\n  {\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"quantityとtotalを別stateで持ち、Clear（11行）はquantityだけを0にするため、初期状態でも表示が0 items: 100 yenとなる。totalを同時に0へ更新するかquantityから導出する必要がある。\"},\n  {\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"quantityだけをstateとして持ち、totalをquantity * 100（4行）から導出している。AddとClear（6-7行）はquantityを更新するため、数量と合計が常に一致する。\"},\n  {\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"保存はformのonSubmit（3行）だけでsaveを呼び、sectionのonClick（2行）はrecordClickだけを呼ぶ。Saveボタン1回のクリックでもsaveは1回で、記録処理が保存を兼ねていない。\"},\n  {\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"SaveボタンのonClick（4行）とformのonSubmit（3行）の両方がsaveを呼ぶため、1回のクリックでsaveが二重実行される。保存開始の入口をformのonSubmitなど一つにする必要がある。\"},\n  {\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ボタン経路（6-8行）はeditingを確認するが、Ctrl+S経路（3-5行）はstatusを確認せず直接saveを呼ぶ。savingまたはsaved中のCtrl+Sでsaveが実行されるため、requestSaveへ両入口を集約する必要がある。\"},\n  {\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"requestSave（3-5行）がstatus === editingを共通判定し、ボタン（9行）とCtrl+S（6-8行）の両方がこの関数を通るため、親から渡されたstatusに応じてsaveを呼べる。\"},\n  {\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"RecordRow自身がwindow.location.pathnameからworkspaceを決め、removeとwindow.location.assign（4-7行）まで実行している。共用行が削除対象・処理・削除後の移動先を決めており、workspace画面と検索画面の親へ責務を委譲できない。\"},\n  {\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"OK\",\"reason\":\"RecordRowはidとonDeleteを受け、ボタンでonDelete(id)だけを通知する（1-4行）。対象workspace、同期remove処理、削除後の移動先は各画面側で決められる。\"},\n  {\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"useQueryのqueryKeyにaccountIdを含め（5行）、queryFnもload(accountId)を呼ぶため、アカウント変更や同一QueryClient内の複数アカウントを分離できる。pending、error、空配列、一覧表示も6-9行で区別している。\"},\n  {\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"queryFnはaccountIdを使う一方、queryKeyがordersだけ（5行）でアカウントを含まない。同一QueryClientで別アカウントの結果が同じcacheへ混在し、accountId変更時にも別一覧を取得できない。\"},\n  {\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"useEffect（7行）が空の依存配列で初回channelだけを購読し、subscribeが返す解除関数も返していない。channel変更後も旧channelを購読し続け、アンマウント時にも購読が終了しない。\"},\n  {\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"useEffect（7行）がchannel、subscribe、onMessageを依存値に含め、subscribeの返り値をcleanupとして返しているため、channel変更時の再購読とアンマウント時の購読解除が行われる。\"},\n  {\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"SelectionProviderはreducerのselectedIdをoutputへ表示し（13-21行）、childrenをdispatch context配下に置く。UserSelectionButtonはcontextのdispatchでselected actionを通知する（24-30行）ため、Provider内で選択したuserIdがoutputへ反映される。\"},\n  {\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"検索語はSearchBox内のquery state（8行）とinputのonChange（15-19行）だけで保持され、Enter時にquery.trim()をonSubmitへ通知する（10-12行）。入力途中の値を親へ反映していない。\"},\n  {\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"OrderListがonSelectをOrderRowへ渡し（12-14行）、OrderRowのbuttonがorder.idを付けてonSelectを呼ぶ（23-27行）ため、行の選択を一覧の呼び出し元へ委譲できる。\"},\n  {\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"draftはmount時のinitialNameで初期化され（5行）、入力変更は部品内stateだけを更新する。Confirmのform submit時だけonConfirm(draft)を呼ぶ（6-8行）ため、表示中のinitialName変更で編集中の値が上書きされず、親へもConfirm前は反映されない。\"},\n  {\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"QueryClientをuseStateで一度だけ生成し（7行）、同じQueryClientProvider内の2箇所へ同じaccountIdのOrdersを配置している（8-10行）。Ordersはquery-aのaccountId入りkeyを使うため、2箇所でcacheを共有できる。\"},\n  {\"file\":\"src/gui-patterns/bubble-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ScreenがselectedIdを更新した後もselect actionをonActionへ渡し（28-30行）、RootがrootSelectedIdを更新している（9-14行）。Screen担当のselectをRootでも実行し、ScreenとRootの選択stateも二重化しているため、selectはScreenでreturnしremoveだけをRootへ通知する必要がある。\"},\n  {\"file\":\"src/gui-patterns/bubble-b.tsx\",\"verdict\":\"OK\",\"reason\":\"ScreenのhandleActionはselectをselectedIdへ反映してreturnし（25-29行）、removeだけをonActionへ渡す（30行）。RootのhandleActionもremoveだけでrecordsを更新する（10-13行）ため、担当外の処理だけが一度上位へ通知される。\"},\n  {\"file\":\"src/gui-patterns/guard-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"requestSaveはsaving中や空入力でmessageを設定してもreturnせず（22-24行）、常にsetStatus('saving')とonSave(name)を実行する（25-26行）。拒否すべき空入力・処理中要求がRootへ渡り、保存が実行される。\"},\n  {\"file\":\"src/gui-patterns/guard-b.tsx\",\"verdict\":\"OK\",\"reason\":\"requestSaveはsaving中と空入力でmessageを表示してreturnし（22-30行）、受理した場合だけstatusをsavingへ変更してonSaveを一度呼ぶ（31-32行）。RootのsaveNameは受理済みの保存だけを処理する。\"},\n  {\"file\":\"src/gui-patterns/mediator-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"SaveEventにstartedとfailedしかなく（8-10行）、saveのPromiseが成功してもhandleSubmitは成功イベントをdispatchしない（22-29行）。成功後もstateがsavingのままで、SaveFormへsaved状態を表示できない。\"},\n  {\"file\":\"src/gui-patterns/mediator-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Mediatorがstarted、succeeded、failedを定義し（8-11行）、saveのPromise解決後にsucceeded、reject時にfailedをdispatchする（24-32行）。stateはScreenとSaveFormへ渡され、saving中のdisabledとstatus表示にも反映される（38-55行）。\"},\n  {\"file\":\"src/gui-patterns/form-action.tsx\",\"verdict\":\"OK\",\"reason\":\"React 19のuseActionStateでsaveProfileをformActionへ渡し（21-23行）、formのaction属性で実行している（39-45行）。saveProfileはnameの入力不備とsavedをstateへ返し（10-18行）、isPendingのdisabledとoutput role=statusで状態を表示する。\"}\n]"
+    },
+    {
+      "model": "luna",
+      "target": "frontend-review-react",
+      "suite": "frontend",
+      "evalId": "eval-Nhb-2026-09-22T05:33:24",
+      "startedAt": "2026-09-22T05:33:24.839Z",
+      "exportedAt": "2026-09-22T05:43:10.374Z",
+      "latencyMs": 585482,
+      "provider": {
+        "id": "file://../../providers/cli-review.mjs",
+        "label": "codex-luna-max",
+        "config": {
+          "cli": "codex",
+          "model": "gpt-5.6-luna",
+          "reasoning_effort": "max",
+          "isolate_working_dir": true,
+          "disable_inherited_skills": true
+        }
+      },
+      "promptConfig": {
+        "working_dir": ".work/frontend-review-react",
+        "required_snapshots": [
+          ".takt/eval-snapshots/frontend-review-react-policies.md",
+          ".takt/eval-snapshots/frontend-review-react-knowledge.md"
+        ]
+      },
+      "renderedPromptBeforeIsolationSha256": "72e16f5de13d269613ef2059f287637dcc0ca0ff04f21eb1f1248eddb4381f3c",
+      "responseSha256": "678937edfc6135ef2c6cbab479a2b325665dde931bd282735a4c9363b7c996ab",
+      "labelCounts": {
+        "OK": {
+          "matched": 17,
+          "total": 17
+        },
+        "REJECT": {
+          "matched": 11,
+          "total": 11
+        }
+      },
+      "grading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "17 OK cases matched; reasons still require semantic review"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "11 REJECT cases matched; reasons still require semantic review"
+        }
+      },
+      "jsonCodeFence": false,
+      "manualReview": {
+        "reviewedCases": 28,
+        "labelMismatches": [],
+        "reasonIssues": [
+          {
+            "file": "src/gui-patterns/buyer-b.tsx",
+            "detail": "親の購入者名が更新されないとの断定は不正確。受け取ったオブジェクトのname自体は直接変更されるが、親への更新通知とReactの再描画経路がない。REJECTの主な理由は一致する。"
+          },
+          {
+            "file": "src/gui-patterns/row-b.tsx",
+            "detail": "idとlabelを表示すると記述したが、表示するのはlabelであり、idはonDeleteの引数に渡す。委譲の判定は一致する。"
+          }
+        ]
+      },
+      "output": "[\n  {\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"Pickerのselected（3行目）とDetailsのselected（7行目）が別stateで、Picker操作はDetailsへ渡らないため、選択後もDetailsはoneのままです。\"},\n  {\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenのselected state（9行目）をPickerへ渡し、onSelectで更新した同じ値をDetailsにも渡しているため、選択結果が直ちに同期表示されます。\"},\n  {\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"buyer.nameをcontrolledなvalueとして表示し、onChangeでonNameChangeを親へ通知しているため、親が更新した氏名を再度propsで表示できます。\"},\n  {\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"3行目でpropsのbuyer.nameを直接変更しており、親への更新通知がないため、親の購入者名と表示が更新されません。\"},\n  {\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"quantityとtotalを別stateで保持し、Clear（11行目）はquantityだけを0にするため、表示が0 items: 100 yenとなり数量と合計が不一致になります。\"},\n  {\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"quantityだけをstateで管理し、totalをquantity * 100（4行目）から導出しているため、AddとClearのどちらでも合計が数量に一致します。\"},\n  {\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"saveはformのonSubmit（3行目）から一度だけ呼ばれ、sectionのrecordClick（2行目）は記録通知だけなので、クリックイベントのバブルで保存が重複しません。\"},\n  {\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"送信ボタンのonClick（4行目）とformのonSubmit（3行目）の両方がsaveを呼ぶため、1回の送信操作でsaveが2回実行されます。\"},\n  {\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ボタン側はstatusを確認しますが、Ctrl+Sの処理（3〜4行目）はstatusを確認せずsaveを呼ぶため、savingやsaved中にも保存できます。\"},\n  {\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"ボタンとCtrl+Sが共通のrequestSave（3行目）を通り、statusがeditingのときだけsaveを呼ぶため、親から渡されたsaving・saved状態でも保存を拒否できます。\"},\n  {\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"RecordRow自身がURLからworkspaceを抽出し、removeとwindow.location.assign（5〜7行目）まで実行しているため、各画面が削除対象・処理・削除後の遷移先を決められません。\"},\n  {\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"OK\",\"reason\":\"行はidとlabelを表示し、削除操作ではonDelete(id)だけを親へ通知するため、workspace画面と検索画面がそれぞれ削除処理と遷移先を決められます。\"},\n  {\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"queryKeyにaccountIdを含め、queryFnでも同じaccountIdをloadへ渡しているため、アカウント変更時に別cacheへ切り替わり、Loading・エラー・空結果も区別して表示します。\"},\n  {\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"queryFnはaccountIdに依存するのにqueryKeyがorders固定（5行目）なので、別アカウントの結果が同じcacheを共有し、accountId変更後に別アカウントの注文IDを表示します。\"},\n  {\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"Effectの依存配列が空で、subscribeの解除関数も返していない（7行目）ため、channel変更後も旧channelを購読し続け、unmount時にも購読が終了しません。\"},\n  {\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"channel・subscribe・onMessageをEffectの依存に含め、subscribeの返却する解除関数をEffectから返しているため、channel変更前とunmount時に旧購読を解除できます。\"},\n  {\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"SelectionProviderがuseReducerのstateとdispatchを持ち、childrenへdispatch Contextを提供し、UserSelectionButtonがselected actionをdispatchするため、output（18行目）が選択されたuserIdを表示します。\"},\n  {\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"検索語はSearchBox内のquery state（8行目）だけで保持され、入力中は親へ渡さず、Enter時にtrimした確定値をonSubmitへ通知しています。\"},\n  {\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"OrderListがonSelectをOrderRowへ渡し、OrderRowのbuttonがorder.idを引数にonSelectを呼ぶため、行の選択を一覧の呼び出し元へ委譲しています。\"},\n  {\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"draftはmount時のinitialNameから部品内stateとして初期化され、入力中はdraftだけを更新し、Confirmのsubmit時にだけonConfirm(draft)を呼ぶため、編集中の値を親へ反映しません。\"},\n  {\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"QueryClientをuseStateで一度だけ生成し、同じQueryClientProvider内のMain ordersとOrder summaryへ同じaccountId・loadを渡しているため、query-aのcacheを2箇所で共有します。\"},\n  {\"file\":\"src/gui-patterns/bubble-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ScreenのhandleAction（28〜30行目）はselectを自分のstateへ反映した後もonActionへ渡すため、Rootがselectを処理してrootSelectedIdまで更新し、Screen担当の操作をRootで再実行しています。\"},\n  {\"file\":\"src/gui-patterns/bubble-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenはselectを更新した後にreturnし、removeだけをonActionへ渡す（25〜30行目）ため、Screen担当のselectはRootへ届かず、Root担当のremoveだけが一度実行されます。\"},\n  {\"file\":\"src/gui-patterns/guard-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"空入力やstatusがsavingの場合もメッセージ設定後にreturnせず、setStatus('saving')とonSave（22〜26行目）を実行するため、拒否すべき要求がRootへ渡ります。\"},\n  {\"file\":\"src/gui-patterns/guard-b.tsx\",\"verdict\":\"OK\",\"reason\":\"requestSaveはsaving中または空入力でreturnし、editingかつ有効な入力の場合だけsetStatus('saving')とonSaveを実行するため、Rootの保存処理は受理された要求に限定されます。\"},\n  {\"file\":\"src/gui-patterns/mediator-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"save成功後にdispatchするsucceeded eventがなく、成功時はstarted後のsaving stateが残るため、SaveFormの表示もSavingのままで成功結果を反映できません。\"},\n  {\"file\":\"src/gui-patterns/mediator-b.tsx\",\"verdict\":\"OK\",\"reason\":\"handleSubmitが開始時にstarted、Promise解決時にsucceeded、reject時にfailedをdispatchし、stateをScreenとSaveFormへ渡すため、saving・saved・errorを実際のPromise結果から表示できます。\"},\n  {\"file\":\"src/gui-patterns/form-action.tsx\",\"verdict\":\"OK\",\"reason\":\"RootがuseActionStateで得たformActionとisPendingをformへ渡し、saveProfileがFormDataのnameを検証してerrorまたはsaved stateを返し、buttonのdisabledとoutputでpending・結果を表示しています。\"}\n]"
+    },
+    {
+      "model": "opus",
+      "target": "frontend-review",
+      "suite": "frontend-opus",
+      "evalId": "eval-bsN-2026-09-22T05:45:11",
+      "startedAt": "2026-09-22T05:45:11.795Z",
+      "exportedAt": "2026-09-22T05:46:52.375Z",
+      "latencyMs": 92480,
+      "provider": {
+        "id": "file://../../providers/cli-review.mjs",
+        "label": "claude-opus-5",
+        "config": {
+          "cli": "claude",
+          "model": "claude-opus-5",
+          "isolate_working_dir": true
+        }
+      },
+      "promptConfig": {
+        "working_dir": ".work/frontend-review",
+        "required_snapshots": [
+          ".takt/eval-snapshots/frontend-review-policies.md",
+          ".takt/eval-snapshots/frontend-review-knowledge.md"
+        ]
+      },
+      "renderedPromptBeforeIsolationSha256": "10ea229755a1ce32d484601b5f50f27c154d6e3eeea779b5ebe1d58e88388df3",
+      "responseSha256": "ed31304dfc271b417c1c412e2d885a62bec297012a4ba6faf368e3fa2850e0e3",
+      "labelCounts": {
+        "OK": {
+          "matched": 17,
+          "total": 17
+        },
+        "REJECT": {
+          "matched": 11,
+          "total": 11
+        }
+      },
+      "grading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "17 OK cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "11 REJECT cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        }
+      },
+      "jsonCodeFence": true,
+      "manualReview": {
+        "reviewedCases": 28,
+        "labelMismatches": [],
+        "reasonIssues": [
+          {
+            "file": "src/gui-patterns/row-a.tsx",
+            "detail": "課題にない検索画面のURL構造を前提に、誤ったワークスペースを読むと断定している。共用行が特定URL構造と遷移先へ依存するという主な指摘は正しい。"
+          }
+        ]
+      },
+      "output": "```json\n[\n  {\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"PickerとDetailsがそれぞれ別の`useState('one')`で`selected`を持っている（2行目と7行目）。Pickerのボタンは`setSelected('two')`で自分の状態だけを更新し、Detailsの`selected`は'one'のまま変わらない。このため、Pickerで選んだ値をDetailsに直ちに表示するという仕様を満たさない。修正案: `selected`をScreenへ移し、両方の部品へpropsで渡す。\"},\n  {\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenが`useState('one')`で`selected`を1か所だけで持ち、Pickerへ`selected`と`onSelect={setSelected}`、Detailsへ`selected`を渡している。Pickerのクリックは`onSelect('two')`でScreenへ通知され、同じ値がDetailsの`<output>`にも同じ描画で表示される。\"},\n  {\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`input`は`value={buyer.name}`で親から受け取った値を表示し、`onChange`で`onNameChange(event.target.value)`を親へ通知している。親が新しい`buyer`を渡すと表示が更新されるため、親が状態を持つ制御された入力として仕様どおりに動く。入力欄には`aria-label=\\\"Buyer name\\\"`で名前が付いている。\"},\n  {\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`onChange`内の`buyer.name = event.target.value`で親が持つオブジェクトを直接書き換えており、親への更新通知callbackがない（3行目）。親はReactの状態更新を受け取らないため再描画されず、制御された`input`の`value={buyer.name}`は入力前の表示に戻る。そのため、更新通知を受けた親が新しい値を渡す仕様を満たさない。修正案: `onNameChange(name)` propsを追加して親へ通知し、直接の書き換えをやめる。\"},\n  {\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`quantity`と`total`を別々の`useState`で持っている。Clearボタンは`setQuantity(0)`だけを呼び、`total`を更新しない（11行目）。たとえばAddを1回押した後にClearを押すと「0 items: 200 yen」と表示され、数量と合計が一致しない。修正案: `total`を状態にせず、`quantity * 100`から計算する。\"},\n  {\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"状態は`quantity`だけで、`total = quantity * 100`を描画のたびに計算している。Addの`setQuantity(quantity + 1)`でもClearの`setQuantity(0)`でも、`<output>`の数量と合計は常に一致する。\"},\n  {\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`save()`を呼ぶ入口は`form`の`onSubmit`だけなので、送信1回につき`save`は1回呼ばれる。`section`の`onClick={recordClick}`はボタンのclickがbubbleして届いたときに操作を記録するだけで、保存は行わない。\"},\n  {\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"submitボタンの`onClick={save}`（4行目）と`form`の`onSubmit`内の`save()`（3行目）の両方が保存を始める。Saveボタンを1回クリックすると、click処理と、それに続くsubmit処理で`save`が2回呼ばれる。修正案: ボタンの`onClick={save}`を削除し、保存の入口を`onSubmit`の1つにする。\"},\n  {\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ボタンのclickは`status === 'editing'`を確認するが、`section`の`onKeyDown`で処理するCtrl+Sは`status`を確認せずに`save()`を呼ぶ（4行目）。statusが'saving'や'saved'のときにCtrl+Sを押すと、ボタンがdisabledでも`save`が呼ばれ、editingのときだけ保存できるという仕様に反する。修正案: 両方の入口から同じ`requestSave`を呼び、その中で`status`を確認する。\"},\n  {\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"ボタンの`onClick`とCtrl+Sの`onKeyDown`が、どちらも同じ`requestSave`を呼ぶ。`requestSave`は`status === 'editing'`のときだけ`save()`を呼び、statusは親が更新して渡すので、どちらの入口からも同じ状態の確認を通る。\"},\n  {\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"共用の行部品である`RecordRow`が、`handleDelete`の中で`window.location.pathname.split('/')[2]`から削除対象のワークスペースを決め（5行目）、削除後に`window.location.assign('/workspaces/${workspace}/records')`で移動先まで決めている（7行目）。検索画面で使うとパスの2番目がワークスペースではないため、`remove`に誤った値が渡り、ワークスペース画面の一覧へ移動する。これは、各画面が対象・削除処理・移動先を決めるという仕様に反する。修正案: 行は`onDelete(id)`だけを通知し、ワークスペースの判断と画面遷移は各画面で行う。\"},\n  {\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`RecordRow`は`label`を表示し、削除ボタンから`onDelete(id)`で削除の意図だけを通知する。ワークスペース、削除処理、移動先は呼び出し側の画面が`onDelete`の中で決められる。ボタンの`aria-label={`Delete ${label}`}`で、どの行を削除するかも識別できる。\"},\n  {\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"`queryKey: ['orders', accountId]`にアカウントIDが入っているため、別アカウントの一覧を同時に表示してもキャッシュを共有しない。`accountId`を変更するとキーが変わって再取得される。`queryFn`は`load(accountId)`を呼ぶ。また`isPending`で読み込み中、`isError`で失敗（`role=\\\"alert\\\"`）、`length === 0`で空をそれぞれ表示している。\"},\n  {\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`queryKey: ['orders']`に`accountId`が含まれていない（5行目）。同じQueryClientProvider内でアカウントAとBの`Orders`を同時に表示すると、同じキャッシュを共有して片方のアカウントの注文が両方に表示される。表示中の`accountId`を変更してもキーが変わらないため再取得されず、以前のアカウントの注文が表示され続ける。修正案: `queryKey: ['orders', accountId]`にする。\"},\n  {\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`useEffect(() => { subscribe(channel, onMessage); }, [])`は、`subscribe`が返す購読解除関数をcleanupとして返しておらず、依存配列も空である（7行目）。そのため`channel`が変わっても元のchannelの購読が続き、新しいchannelは購読されない。部品が消えても購読は終了しない。修正案: `useEffect(() => subscribe(channel, onMessage), [channel, subscribe, onMessage])`にする。\"},\n  {\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`useEffect(() => subscribe(channel, onMessage), [channel, subscribe, onMessage])`で、購読解除関数をeffectのcleanupとして返している。`channel`が変わると前の購読を解除してから新しいchannelを購読し、部品が消えるとcleanupで購読を終了するため、メッセージは現在のchannelからだけ受け取る。\"},\n  {\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"`SelectionProvider`が`useReducer(selectionReducer)`で`selectedId`を持ち、`dispatch`を`SelectionDispatchContext`で子孫へ渡している。`UserSelectionButton`は`useContext`で取得した`dispatch({ type: 'selected', id: userId })`でProviderへ直接通知し、結果はProviderの`<output>`に表示される。Providerの外で使った場合は例外を出して、使い方の誤りが分かるようにしている。\"},\n  {\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"入力中の`query`は`SearchBox`内の`useState`だけで持ち、`onChange`では親へ通知しない。`onKeyDown`でEnterが押されたときだけ、`onSubmit(query.trim())`で確定した検索語を親へ通知する。入力欄には`aria-label=\\\"Search\\\"`が付いている。\"},\n  {\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"`OrderList`は呼び出し元から受け取った`onSelect`を各`OrderRow`へそのまま渡している。行のbuttonは`onSelect(order.id)`で選択を呼び出し元へ通知し、自分では処理しない。ボタンの名前は`order.label`なので、どの行を選ぶボタンか識別できる。\"},\n  {\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"編集中の値`draft`は`useState(initialName)`で部品内に持ち、入力中は親へ通知しない。formの`onSubmit`（Confirm）のときだけ`onConfirm(draft)`で親へ反映する。ダイアログを開くたびに新しくマウントされ、表示中に`initialName`は変わらないという前提なので、初期値だけを使うことで古い値が表示される問題は起きない。\"},\n  {\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"`useState(() => new QueryClient())`で1つのclientを作り、その1つの`QueryClientProvider`の中で2つの`Orders`（query-aのもの）に同じ`accountId`を渡している。どちらも`queryKey: ['orders', accountId]`が同じなので、同じキャッシュを共有する。2か所の表示は`aria-label`で区別できる。\"},\n  {\"file\":\"src/gui-patterns/bubble-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"Screenの`handleAction`は、selectを`setSelectedId`で処理した後、`onAction(action)`でRootにもselectを渡している（29〜30行目）。Rootの`handleAction`はそれを受けて`setRootSelectedId`を実行する（12行目）。そのためScreenが担当するselectをRootでも実行しており、removeだけをRootへ通知するという仕様に反する。修正案: Screenでselectを処理したら`return`し、`onAction`はremoveのときだけ呼ぶ。Rootの`rootSelectedId`とselectの分岐は削除する。\"},\n  {\"file\":\"src/gui-patterns/bubble-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenの`handleAction`はselectを`setSelectedId`で処理して`return`し、それ以外のremoveだけを`onAction`でRootへ1回渡す。Rootは`remove`だけを処理して`records`を更新するため、それぞれの階層が自分の担当する操作だけを実行している。\"},\n  {\"file\":\"src/gui-patterns/guard-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`requestSave`は、`status !== 'editing'`のときや`name.trim() === ''`のときに`setMessage`を呼ぶが、`return`していない（23〜24行目）。そのため、どの場合も`setStatus('saving')`と`onSave(name)`まで進む。disabledではない「Save empty」ボタンを押すと空の名前がRootの`saveName`へ渡り、保存中に押してもRootの保存が実行される。修正案: 拒否したそれぞれの分岐でメッセージを設定した後に`return`する。\"},\n  {\"file\":\"src/gui-patterns/guard-b.tsx\",\"verdict\":\"OK\",\"reason\":\"`requestSave`は、`status !== 'editing'`なら「Saving」、空の入力なら「Name is required」を表示して`return`するため、拒否した要求はRootへ届かない。受け付けた要求だけが`setStatus('saving')`を経て`onSave(name)`に渡り、Rootの`saveName`が1回実行される。\"},\n  {\"file\":\"src/gui-patterns/mediator-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"`SaveEvent`に成功を表すイベントがなく、`handleSubmit`は`await save(value)`が成功しても何もdispatchしない（26行目）。saveのPromiseが成功すると状態は`saving`のまま残り、`saved`は表示されない。ボタンもdisabledのままになり、`state.status === 'saving'`の確認によってその後の保存もすべて拒否される。修正案: `{ type: 'succeeded' }`イベントとreducerの分岐を追加し、`await`の直後にdispatchする。\"},\n  {\"file\":\"src/gui-patterns/mediator-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Rootの`handleSubmit`が`saving`中の要求を拒否し、`started`で保存中へ移る。`await save(value)`が成功すれば`succeeded`、失敗すれば`catch`で`failed`をdispatchするため、Promiseの結果がそれぞれ`saved`と`error`の状態に反映される。`state`はScreenを経てSaveFormへ渡され、`<output role=\\\"status\\\">`に表示される。\"},\n  {\"file\":\"src/gui-patterns/form-action.tsx\",\"verdict\":\"OK\",\"reason\":\"`useActionState(saveProfile, initialState)`で得た`formAction`を`<form action={action}>`に渡している。`saveProfile`は空の名前なら`error`（Name is required）、それ以外なら`saved`を返し、結果は`<output role=\\\"status\\\">`に表示される。`isPending`の間は送信ボタンをdisabledにする。入力欄は`<label>`で囲まれてラベルと関連付けられている。\"}\n]\n```\n"
+    },
+    {
+      "model": "opus",
+      "target": "frontend-review-react",
+      "suite": "frontend-opus",
+      "evalId": "eval-bsN-2026-09-22T05:45:11",
+      "startedAt": "2026-09-22T05:45:11.795Z",
+      "exportedAt": "2026-09-22T05:46:52.375Z",
+      "latencyMs": 99795,
+      "provider": {
+        "id": "file://../../providers/cli-review.mjs",
+        "label": "claude-opus-5",
+        "config": {
+          "cli": "claude",
+          "model": "claude-opus-5",
+          "isolate_working_dir": true
+        }
+      },
+      "promptConfig": {
+        "working_dir": ".work/frontend-review-react",
+        "required_snapshots": [
+          ".takt/eval-snapshots/frontend-review-react-policies.md",
+          ".takt/eval-snapshots/frontend-review-react-knowledge.md"
+        ]
+      },
+      "renderedPromptBeforeIsolationSha256": "72e16f5de13d269613ef2059f287637dcc0ca0ff04f21eb1f1248eddb4381f3c",
+      "responseSha256": "674335196ce8215949d78282d29781b8ba837d2bc1c2c60c71c29b5c56ca963b",
+      "labelCounts": {
+        "OK": {
+          "matched": 17,
+          "total": 17
+        },
+        "REJECT": {
+          "matched": 11,
+          "total": 11
+        }
+      },
+      "grading": {
+        "acceptance": {
+          "pass": true,
+          "score": 1,
+          "reason": "17 OK cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        },
+        "detection": {
+          "pass": true,
+          "score": 1,
+          "reason": "11 REJECT cases matched; reasons still require semantic review; format deviation: JSON code fence instead of raw JSON"
+        }
+      },
+      "jsonCodeFence": true,
+      "manualReview": {
+        "reviewedCases": 28,
+        "labelMismatches": [],
+        "reasonIssues": [
+          {
+            "file": "src/gui-patterns/row-a.tsx",
+            "detail": "課題にない検索画面のURL構造を前提に、誤ったワークスペースを読むと断定している。共用行が特定URL構造と遷移先へ依存するという主な指摘は正しい。"
+          },
+          {
+            "file": "src/gui-patterns/local-state.tsx",
+            "detail": "このファイルにformがないことだけからEnterの二重送信がないと断定している。呼び出し側のformと組み合わせる経路は提示されていないため未確認。ローカル値と通知の判定は一致する。"
+          },
+          {
+            "file": "src/gui-patterns/bubble-b.tsx",
+            "detail": "RecordActionsがselectedIdを表示すると述べたが、選択値を表示するのはScreenであり、RecordActionsではremove通知の対象に使う。未担当操作だけを委譲するという判定は一致する。"
+          }
+        ],
+        "scopeNotes": [
+          {
+            "file": "src/gui-patterns/guard-b.tsx",
+            "detail": "回答は空入力拒否後に有効な保存を受理してもmessageが残る点を正しく指摘し、受理・拒否・上位通知という課題の範囲外として区別している。この組を保存完了後の表示検証として扱わない。"
+          }
+        ]
+      },
+      "output": "```json\n[\n  {\"file\":\"src/gui-patterns/selection-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"PickerとDetailsがそれぞれuseState('one')で別々にselectedを持っている。Pickerのボタンを押すとPicker内のsetSelected('two')だけが動き、Detailsのselectedは'one'のまま変わらない。そのため、Pickerで選んだ値をDetailsにも直ちに表示するという仕様を満たさない。修正案: Screenでselectedを一つだけ持ち、Pickerにはselectedとコールバック、Detailsにはselectedを渡す。\"},\n  {\"file\":\"src/gui-patterns/selection-b.tsx\",\"verdict\":\"OK\",\"reason\":\"Screenがselectedを一つだけuseStateで持ち、PickerにはselectedとonSelect=setSelectedを、Detailsにはselectedを渡している。PickerはonSelect('two')で選択を知らせるだけで、Screenのstateが更新されると両方の部品が同じ値で再描画される。\"},\n  {\"file\":\"src/gui-patterns/buyer-a.tsx\",\"verdict\":\"OK\",\"reason\":\"BuyerEditorは親から受け取ったbuyer.nameをinputのvalueに表示する制御入力で、onChangeではonNameChange(event.target.value)で親へ知らせるだけ。親が新しいbuyerを渡すと表示が更新されるので、親が値を管理する仕様に合っている。aria-label=\\\"Buyer name\\\"で入力欄の名前も読み上げられる。\"},\n  {\"file\":\"src/gui-patterns/buyer-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"onChangeでbuyer.name = event.target.valueとpropsのオブジェクトを直接書き換えており、親へ更新を知らせるコールバックがない。親のstateが変わらないため再描画されず、制御入力のvalue={buyer.name}も古い値のまま戻る。更新通知を受けた親が新しい値を渡すという仕様を満たさない。修正案: onNameChange(name)をpropsで受け取り、onChangeからそれを呼ぶ。\"},\n  {\"file\":\"src/gui-patterns/total-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"quantityとtotalを別々のuseStateで持っている。addは両方を更新するが、ClearのonClickはsetQuantity(0)しか呼ばず、totalは前の値のまま残る。例えば初期状態でClearを押すと『0 items: 100 yen』と表示され、数量と合計が一致しない。修正案: totalをstateにせず、描画時にquantity * 100で計算する。\"},\n  {\"file\":\"src/gui-patterns/total-b.tsx\",\"verdict\":\"OK\",\"reason\":\"stateはquantityだけで、totalは描画のたびにquantity * 100で計算している。AddのsetQuantity(quantity + 1)でもClearのsetQuantity(0)でも、表示される合計は常に数量×100円になる。\"},\n  {\"file\":\"src/gui-patterns/submit-a.tsx\",\"verdict\":\"OK\",\"reason\":\"saveを呼ぶのはformのonSubmitだけで、preventDefaultのあとにsave()を1回呼ぶ。クリックがsectionへ伝わるとonClick={recordClick}も動くが、recordClickは操作記録用で保存しないので、1回の送信でsaveは1回だけ呼ばれる。\"},\n  {\"file\":\"src/gui-patterns/submit-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"submitボタンのonClick={save}と、formのonSubmitの中のsave()の両方からsaveを呼んでいる。ボタンを1回クリックすると、クリック処理のあとにformの送信処理も動き、saveが2回呼ばれる。1回の送信操作につきsaveは1回という仕様に反する。修正案: ボタンのonClick={save}を削除し、saveを呼ぶ入口をonSubmitだけにする。\"},\n  {\"file\":\"src/gui-patterns/save-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ボタンのonClickはstatus === 'editing'を確認してからsave()を呼ぶが、sectionのonKeyDownはCtrl+Sを受けるとstatusを確認せずsave()を呼ぶ。そのためstatusがsavingやsavedのときでもCtrl+Sで保存でき、処理中の再保存も起こる。editingのときだけsaveを呼べるという仕様を満たさない。修正案: 両方の入口が同じstatus判定を持つ関数を通るようにする。\"},\n  {\"file\":\"src/gui-patterns/save-b.tsx\",\"verdict\":\"OK\",\"reason\":\"ボタンのonClickもCtrl+SのonKeyDownも、同じrequestSaveを呼ぶ。requestSaveはstatus === 'editing'のときだけsave()を呼ぶので、disabled表示に頼らず、どちらの入口でも同じ状態確認を通る。statusは親から受け取っている。\"},\n  {\"file\":\"src/gui-patterns/row-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"共通の行部品なのに、handleDeleteの中でwindow.location.pathname.split('/')[2]から削除対象のワークスペースを自分で読み取り、remove後にwindow.location.assign(`/workspaces/${workspace}/records`)で移動先まで決めている。検索画面のURLではワークスペースが正しく取れず、移動先もワークスペース画面に固定される。各画面が削除対象・削除処理・削除後の移動先を決めるという仕様に反する。修正案: 行部品はonDelete(id)で削除の意図を知らせるだけにし、移動は画面側で行う。\"},\n  {\"file\":\"src/gui-patterns/row-b.tsx\",\"verdict\":\"OK\",\"reason\":\"RecordRowはlabelを表示し、削除ボタンではonDelete(id)で削除の意図を知らせるだけ。ワークスペース・削除処理・移動先は、propsでonDeleteを渡す各画面が決められる。aria-label={`Delete ${label}`}により、どの行を削除するボタンか読み上げで区別できる。\"},\n  {\"file\":\"src/gui-patterns/query-a.tsx\",\"verdict\":\"OK\",\"reason\":\"queryKeyを['orders', accountId]、queryFnを() => load(accountId)とし、同じaccountIdをキーと取得処理の両方に使っている。別アカウントを同時に表示してもキャッシュは分かれ、accountIdが変わると新しいキーで取得し直す。isPending(読み込み中)・isError(role=alertで失敗表示)・空配列(No orders)・一覧表示を区別している。\"},\n  {\"file\":\"src/gui-patterns/query-b.tsx\",\"verdict\":\"REJECT\",\"reason\":\"queryFnはload(accountId)でアカウントごとに取得するのに、queryKeyは['orders']だけでaccountIdを含まない。同じQueryClientProvider内で別アカウントのOrdersを表示すると、最初に取得した注文一覧を共有してしまう。表示中のaccountIdを変えてもキーが変わらないため再取得されず、前のアカウントの注文が表示され続ける。修正案: queryKeyを['orders', accountId]にする。\"},\n  {\"file\":\"src/gui-patterns/subscription-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"useEffect(() => { subscribe(channel, onMessage); }, [])は、subscribeが返す購読解除関数を返していない。依存配列も空なので、channelが変わっても最初のchannelの購読が続き、部品が消えても購読は終わらない。現在のchannelからのみ受信し、部品が消えたら購読を終える仕様に反する。修正案: useEffect(() => subscribe(channel, onMessage), [channel, subscribe, onMessage])とする。\"},\n  {\"file\":\"src/gui-patterns/subscription-b.tsx\",\"verdict\":\"OK\",\"reason\":\"useEffect(() => subscribe(channel, onMessage), [channel, subscribe, onMessage])で、subscribeが返す購読解除関数をそのままcleanupとして返している。channelが変わると前の購読を解除してから新しいchannelを購読し、部品が消えたときも購読を解除する。親が渡すsubscribeやonMessageの参照が描画ごとに変わるかは、呼び出し側を確認していないため未確認。\"},\n  {\"file\":\"src/gui-patterns/context-dispatch.tsx\",\"verdict\":\"OK\",\"reason\":\"SelectionProviderがuseReducer(selectionReducer)でstateを作り、SelectionDispatchContextでdispatchを子孫へ渡している。UserSelectionButtonはuseContextで受け取ったdispatchを使い、クリック時に{type:'selected', id:userId}を送る。reducerは副作用のない関数で、結果はProviderの<output>{state.selectedId ?? 'none'}</output>に表示される。Providerの外で使った場合はErrorを投げて気付けるようにしている。\"},\n  {\"file\":\"src/gui-patterns/local-state.tsx\",\"verdict\":\"OK\",\"reason\":\"入力中の検索語queryはSearchBoxのuseStateだけで持ち、onChangeで更新する。handleKeyDownはEnterのときだけonSubmit(query.trim())で確定した検索語を親へ知らせる。formを使っていないため、Enterで送信処理が二重に動くこともない。\"},\n  {\"file\":\"src/gui-patterns/callback-delegation.tsx\",\"verdict\":\"OK\",\"reason\":\"OrderListは呼び出し元から受け取ったonSelectをそのままOrderRowへ渡し、OrderRowはbuttonのonClickでonSelect(order.id)を呼んで選択を知らせる。行の要素はbuttonでラベルを名前として持ち、keyには安定したorder.idを使っている。\"},\n  {\"file\":\"src/gui-patterns/draft.tsx\",\"verdict\":\"OK\",\"reason\":\"編集中の値draftはuseState(initialName)で部品内に持ち、formのonSubmitでpreventDefaultのあとonConfirm(draft)を呼ぶときだけ親へ渡す。ダイアログは開くたびに新しくマウントされ、表示中にinitialNameは変わらないという前提なので、初期値だけstateへ写しても古い値が残る問題は起きない。送信の入口もonSubmitの一つだけ。\"},\n  {\"file\":\"src/gui-patterns/shared-query.tsx\",\"verdict\":\"OK\",\"reason\":\"Dashboardはuse­State(() => new QueryClient())でQueryClientを一度だけ作り、一つのQueryClientProviderの中でquery-aのOrdersを2箇所に同じaccountIdで表示している。Ordersのキーは['orders', accountId]なので、2箇所は同じキャッシュを共有する。2つの領域はaria-labelで区別できる。\"},\n  {\"file\":\"src/gui-patterns/bubble-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"ScreenのhandleActionはselectのときsetSelectedId(action.id)で自分の選択を更新したあと、returnせずにonAction(action)を呼んでいる。そのためRootのhandleActionでもsetRootSelectedIdが実行され、Screenが担当するselectをRootも処理してしまう。Screen担当のselectはRootへ渡さず、removeだけを一度通知するという仕様に反する。修正案: Screenでselectを処理したらreturnし、Rootからselectの処理とrootSelectedIdを削除する。\"},\n  {\"file\":\"src/gui-patterns/bubble-b.tsx\",\"verdict\":\"OK\",\"reason\":\"ScreenのhandleActionはselectならsetSelectedIdのあとreturnし、Rootへは渡さない。removeのときだけonAction(action)を1回呼び、Rootのフィルタ処理でrecordsから取り除く。RecordActionsはselectedIdを表示・送信に使い、操作を知らせるだけ。\"},\n  {\"file\":\"src/gui-patterns/guard-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"requestSaveはstatus !== 'editing'や空入力のときsetMessageを呼ぶが、returnしていない。そのため必ずsetStatus('saving')とonSave(name)まで進む。disabledのない『Save empty』ボタンからは空文字もRootのsaveNameへ渡り、処理中の要求も拒否されない。拒否した操作をRootへ渡さないという仕様に反する。修正案: 拒否する各分岐でメッセージを設定したあとreturnする。\"},\n  {\"file\":\"src/gui-patterns/guard-b.tsx\",\"verdict\":\"OK\",\"reason\":\"requestSaveは、status !== 'editing'ならsetMessage('Saving')でreturnし、空入力ならsetMessage('Name is required')でreturnする。両方の確認を通ったときだけsetStatus('saving')とonSave(name)を1回呼ぶので、disabledのないSave emptyボタンからの要求も同じ確認を通る。確認: 空入力を拒否したあと保存に成功しても、messageが消えないため<output>には'Name is required'が表示され続ける。これは仕様が求める受理・拒否の判定の範囲外なので、指摘にはしない。\"},\n  {\"file\":\"src/gui-patterns/mediator-a.tsx\",\"verdict\":\"REJECT\",\"reason\":\"SaveEventに'succeeded'がなく、handleSubmitはawait save(value)が成功してもdispatchしない。成功したあともstateは{status:'saving', message:'Saving'}のまま残り、SaveFormのボタンはdisabledのままになる。saved表示にも進まない。saveの成功をPromiseの結果から追えないため、仕様を満たさない。修正案: 'succeeded'イベントとreducerの分岐を追加し、await save(value)のあとにdispatchする。\"},\n  {\"file\":\"src/gui-patterns/mediator-b.tsx\",\"verdict\":\"OK\",\"reason\":\"RootのhandleSubmitは、state.status === 'saving'なら要求を受け付けない。受け付けた場合は'started'をdispatchしてからawait save(value)を呼び、成功したら'succeeded'、失敗したらcatchで'failed'をdispatchする。reducerは副作用のない関数でsaving/saved/errorの状態を返し、ScreenからSaveFormへstateが渡されて<output role=\\\"status\\\">に表示される。送信の入口もformのonSubmitの一つだけ。\"},\n  {\"file\":\"src/gui-patterns/form-action.tsx\",\"verdict\":\"OK\",\"reason\":\"RootがuseActionState(saveProfile, initialState)で受け取ったformActionとisPendingを、ProfileScreenからProfileFormへ渡し、<form action={action}>に設定している。saveProfileは名前が空のとき{status:'error', message:'Name is required'}、それ以外は{status:'saved'}を返し、その結果は<output role=\\\"status\\\">に表示される。処理中はisPendingでSaveボタンを無効にする。inputは<label>で囲まれ、名前と関連付けられている。\"}\n]\n```\n"
+    }
+  ],
+  "localChecks": {
+    "build": "passed",
+    "lint": "passed",
+    "unit": {
+      "passed": 6231,
+      "exitCode": 0
+    },
+    "focusedBeforeInternalSymlinkFix": {
+      "passed": 39,
+      "failed": 0
+    },
+    "fixtureTypecheck": {
+      "newFixtures": 7,
+      "updatedRowFixtures": 2,
+      "typescript": "5.9.3",
+      "reactTypes": "19.2.18",
+      "result": "passed"
+    },
+    "lightIntegration": [
+      {
+        "passed": 2648,
+        "exitCode": 0,
+        "onTaskUpdateTimeouts": 3
+      },
+      {
+        "passed": 2648,
+        "exitCode": 0,
+        "maxWorkers": 2,
+        "onTaskUpdateTimeouts": 1
+      }
+    ],
+    "opencodeProbe": {
+      "passed": 10,
+      "failed": 1,
+      "failure": "prompt-capture execution timed out after 30000ms"
+    },
+    "e2eSmoke": {
+      "passed": 19,
+      "skipped": 1,
+      "exitCode": 0
+    },
+    "focusedFinal": {
+      "passed": 39,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "postEvaluationProviderFix": {
+    "description": "After the model calls had loaded the provider at candidateRevision, the snapshot validator was changed to reject internal symbolic links as well as external links. Prompts, tasks, fixture code, and scorer were unchanged by this validation-only fix. The final 39 focused tests include this check.",
+    "providerSha256": "c06eec21bedb58642526814bbc5d98d8c148efd10226889be8e112816a3df617",
+    "testSha256": "8d974ee2101f1850c36b9d868d2603dc7063abd3f267214152150c34f94eb306"
+  }
+}

@@ -105,7 +105,7 @@ Vertical Slice selection factors:
 **Separation of Concerns:**
 
 - Read and write responsibilities separated
-- Data fetching at root (View/Controller), passed to children
+- The screen or region that retrieves and updates data and handles failures passes the values and operations the display needs
 - Exception translation for the same external contract is consolidated under its boundary owner, while different contracts remain at their respective boundaries
 - Business logic not leaking into Controller/View
 

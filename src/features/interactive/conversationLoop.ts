@@ -141,6 +141,7 @@ export interface ConversationPromptConfiguration {
   readonly systemPrompt: string;
   readonly formalSpec: boolean;
   readonly formalSpecComments?: boolean;
+  readonly modelCheckTimeoutSeconds: number;
 }
 
 /** Strategy for customizing conversation loop behavior */
@@ -151,6 +152,8 @@ export interface ConversationStrategy {
   formalSpec: boolean;
   /** Whether formal notation blocks must include natural-language meaning comments. */
   formalSpecComments?: boolean;
+  /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
+  modelCheckTimeoutSeconds: number;
   /** Resolve prompt configuration after the user selects another session. */
   resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
   /** Resolve the prompt again immediately before a regular turn or /go summary. */
@@ -227,6 +230,7 @@ export async function runConversationLoop(
     systemPrompt: strategy.systemPrompt,
     formalSpec: strategy.formalSpec,
     formalSpecComments: strategy.formalSpecComments ?? true,
+    modelCheckTimeoutSeconds: strategy.modelCheckTimeoutSeconds,
   };
   const refreshPromptConfiguration = async (): Promise<void> => {
     const resolved = await strategy.resolveCurrentPromptConfiguration?.();
@@ -402,7 +406,10 @@ export async function runConversationLoop(
         verification = await runFormalSpecVerification(
           generated.content,
           cwd,
-          verificationAbortController.signal,
+          {
+            abortSignal: verificationAbortController.signal,
+            modelCheckTimeoutSeconds: activePromptConfiguration.modelCheckTimeoutSeconds,
+          },
         );
       } catch (caught) {
         info(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));

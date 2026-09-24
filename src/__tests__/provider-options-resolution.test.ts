@@ -63,7 +63,7 @@ describe('resolveEffectiveProviderOptions', () => {
     expect(resolveEffectiveProviderOptions(
       'project',
       undefined,
-      {
+      asProviderOptions({
         deepseekHarness: {
           baseUrl: 'https://config.example.test',
           maxTokens: 1024,
@@ -71,8 +71,8 @@ describe('resolveEffectiveProviderOptions', () => {
           shutdownTimeoutMs: 2000,
           runtimeMode: 'exe',
         },
-      },
-      {
+      }),
+      asProviderOptions({
         deepseekHarness: {
           baseUrl: 'https://step.example.test',
           maxTokens: 2048,
@@ -80,7 +80,7 @@ describe('resolveEffectiveProviderOptions', () => {
           shutdownTimeoutMs: 4000,
           runtimeMode: 'node',
         },
-      },
+      }),
     )).toEqual({
       deepseekHarness: {
         baseUrl: 'https://step.example.test',
@@ -314,19 +314,24 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
-  it('env origin は codex.reasoningEffort と claude.effort にも適用される', () => {
+  it('env origin は codex.reasoningEffort、claude.effort、DeepSeek reasoningEffort にも適用される', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
       (path: string) => {
-        if (path === 'codex.reasoningEffort' || path === 'claude.effort') {
+        if (
+          path === 'codex.reasoningEffort'
+          || path === 'claude.effort'
+          || path === 'deepseekHarness.reasoningEffort'
+        ) {
           return 'env';
         }
         return 'local';
       },
-      {
+      asProviderOptions({
         codex: { reasoningEffort: 'high' },
         claude: { effort: 'medium' },
-      },
+        deepseekHarness: { reasoningEffort: 'max' },
+      }),
       {
         codex: { reasoningEffort: 'low' },
         claude: { effort: 'low' },
@@ -336,6 +341,7 @@ describe('resolveEffectiveProviderOptions', () => {
     expect(result).toEqual({
       codex: { reasoningEffort: 'high' },
       claude: { effort: 'medium' },
+      deepseekHarness: { reasoningEffort: 'max' },
     });
   });
 
@@ -993,6 +999,7 @@ describe('providerOptionsContract', () => {
       'provider_options.deepseek_harness.request_timeout_ms',
       'provider_options.deepseek_harness.shutdown_timeout_ms',
       'provider_options.deepseek_harness.runtime_mode',
+      'provider_options.deepseek_harness.reasoning_effort',
       'provider_options.pi.extensions',
       'provider_options.pi.thinking_level',
       'provider_options.pi.guards.call_timeout_ms',
@@ -1028,6 +1035,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.cursor.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.base_url');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.reasoning_effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.extensions');
@@ -1085,6 +1093,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.kiro.agent');
     expect(toProviderOptionsTracePath('deepseekHarness.requestTimeoutMs'))
       .toBe('provider_options.deepseek_harness.request_timeout_ms');
+    expect(toProviderOptionsTracePath('deepseekHarness.reasoningEffort'))
+      .toBe('provider_options.deepseek_harness.reasoning_effort');
     expect(toProviderOptionsTracePath('pi.extensions'))
       .toBe('provider_options.pi.extensions');
     expect(toProviderOptionsTracePath('pi.thinkingLevel'))
@@ -1151,6 +1161,12 @@ describe('providerOptionsContract', () => {
       'copilot.guards.callTimeoutMs',
       'cursor.guards.callTimeoutMs',
     ]);
+  });
+
+  it('enumerates DeepSeek reasoning effort when present', () => {
+    expect(getPresentProviderOptionPaths({
+      deepseekHarness: { reasoningEffort: 'max' },
+    } as Parameters<typeof getPresentProviderOptionPaths>[0])).toEqual(['deepseekHarness.reasoningEffort']);
   });
 
   it('enumerates kiro.agent when present', () => {

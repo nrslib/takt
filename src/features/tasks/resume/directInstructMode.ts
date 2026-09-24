@@ -109,6 +109,7 @@ export async function runDirectInstructMode(
     systemPrompt,
     formalSpec: formalSpecConfiguration.mode,
     formalSpecComments: formalSpecConfiguration.comments,
+    modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
     allowedTools: DIRECT_INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),

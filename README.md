@@ -134,6 +134,7 @@ Optional:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) — for `takt #N` (GitHub Issue tasks)
 - [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab`) — for GitLab Issue/MR integration (auto-detected from remote URL)
+- Java 17 or later (`java` on `PATH`) — for the model-checking stages of `/verify` in formal specification mode (`quint verify` and the Alloy Analyzer). The Quint CLI itself is bundled with TAKT; see [Formal Specification Verification](./docs/formal-verification.md) for what is downloaded on first use
 
 > **OAuth usage:** Whether OAuth is permitted varies by provider and use case. Check each provider's terms of service before using TAKT.
 
@@ -450,6 +451,7 @@ See [External Integrations](./docs/external-integrations.md) for other community
 | [Builtin Catalog](./docs/builtin-catalog.md) | All builtin workflows and personas |
 | [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |
 | [Token Saving](./docs/token-saving.md) | Measuring and reducing token consumption |
+| [Formal Specification Verification](./docs/formal-verification.md) | Checking agreed requirements with Quint and Alloy via `/verify` |
 | [Repertoire Packages](./docs/repertoire.md) | Installing and sharing packages |
 | [Task Management](./docs/task-management.md) | Task queuing, execution, isolation |
 | [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |

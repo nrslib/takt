@@ -130,6 +130,34 @@ describe('compileRuntimeProviderEnvironment (profile path)', () => {
 });
 
 describe('compileRuntimeProviderEnvironment (profile options)', () => {
+  it.each(['off', 'low', 'high', 'max'] as const)('maps DeepSeek reasoning_effort=%s from a runtime profile', (reasoning_effort) => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: {
+          provider: 'deepseek-harness',
+          model: 'deepseek-v4-flash',
+          options: { reasoning_effort },
+        },
+      },
+    };
+
+    expect(compileRuntimeProviderEnvironment(section).providerOptions).toEqual({
+      deepseekHarness: { reasoningEffort: reasoning_effort },
+    });
+  });
+
+  it('leaves DeepSeek reasoning effort undefined when the runtime profile omits it', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: { provider: 'deepseek-harness', model: 'deepseek-v4-flash' },
+      },
+    };
+
+    expect(compileRuntimeProviderEnvironment(section).providerOptions).toBeUndefined();
+  });
+
   it('nests a flat profile options bag under the profile provider on defaults', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },
@@ -328,6 +356,11 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
   it.each([
     { runtime_mode: 'invalid' },
     { request_timeout_ms: 'slow' },
+    { reasoning_effort: 'medium' },
+    { reasoning_effort: '' },
+    { reasoning_effort: 'HIGH' },
+    { reasoning_effort: ' high ' },
+    { reasoning_effort: null },
     { unknown_option: true },
   ])('rejects an invalid DeepSeek runtime profile option before normalization', (options) => {
     const section: RuntimeProviderSection = {

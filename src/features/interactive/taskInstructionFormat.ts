@@ -1,6 +1,7 @@
-import type {
-  FormalSpecMode,
-  FormalSpecSetting,
+import {
+  DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS,
+  type FormalSpecMode,
+  type FormalSpecSetting,
 } from '../../core/models/config-types.js';
 import { loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
 import { loadProjectConfig } from '../../infra/config/project/projectConfig.js';
@@ -17,6 +18,7 @@ interface FormalSpecSettingLayers {
 export interface ResolvedFormalSpecConfiguration {
   mode: boolean;
   comments: boolean;
+  modelCheckTimeoutSeconds: number;
 }
 
 function resolveFormalSpecSettingLayers(projectDir: string): FormalSpecSettingLayers {
@@ -40,6 +42,10 @@ function getComments(setting: FormalSpecSetting | undefined): boolean | undefine
   return typeof setting === 'object' ? setting.comments : undefined;
 }
 
+function getModelCheckTimeoutSeconds(setting: FormalSpecSetting | undefined): number | undefined {
+  return typeof setting === 'object' ? setting.modelCheckTimeoutSeconds : undefined;
+}
+
 function configuredDefault(setting: Exclude<FormalSpecMode, boolean>): boolean {
   return setting === 'Y/n';
 }
@@ -47,12 +53,16 @@ function configuredDefault(setting: Exclude<FormalSpecMode, boolean>): boolean {
 function resolveFormalSpecSettingValues(projectDir: string): {
   mode: FormalSpecMode;
   comments: boolean;
+  modelCheckTimeoutSeconds: number;
   lang: 'en' | 'ja';
 } {
   const { projectSetting, globalSetting, lang } = resolveFormalSpecSettingLayers(projectDir);
   const mode = getMode(projectSetting) ?? getMode(globalSetting) ?? 'y/N';
   const comments = getComments(projectSetting) ?? getComments(globalSetting) ?? true;
-  return { mode, comments, lang };
+  const modelCheckTimeoutSeconds = getModelCheckTimeoutSeconds(projectSetting)
+    ?? getModelCheckTimeoutSeconds(globalSetting)
+    ?? DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS;
+  return { mode, comments, modelCheckTimeoutSeconds, lang };
 }
 
 function resolveModeWithoutPrompt(mode: FormalSpecMode): boolean {
@@ -65,29 +75,31 @@ function resolveModeWithoutPrompt(mode: FormalSpecMode): boolean {
 export function resolveFormalSpecConfigurationWithoutPrompt(
   projectDir: string,
 ): ResolvedFormalSpecConfiguration {
-  const { mode, comments } = resolveFormalSpecSettingValues(projectDir);
+  const { mode, comments, modelCheckTimeoutSeconds } = resolveFormalSpecSettingValues(projectDir);
   return {
     mode: resolveModeWithoutPrompt(mode),
     comments,
+    modelCheckTimeoutSeconds,
   };
 }
 
 export async function resolveFormalSpecConfiguration(
   projectDir: string,
 ): Promise<ResolvedFormalSpecConfiguration> {
-  const { mode, comments, lang } = resolveFormalSpecSettingValues(projectDir);
+  const { mode, comments, modelCheckTimeoutSeconds, lang } = resolveFormalSpecSettingValues(projectDir);
   if (typeof mode === 'boolean') {
-    return { mode, comments };
+    return { mode, comments, modelCheckTimeoutSeconds };
   }
 
   const defaultYes = configuredDefault(mode);
   if (!resolveTtyPolicy().useTty) {
-    return { mode: defaultYes, comments };
+    return { mode: defaultYes, comments, modelCheckTimeoutSeconds };
   }
 
   return {
     mode: await confirm(getLabel('interactive.formalSpecPrompt', lang), defaultYes),
     comments,
+    modelCheckTimeoutSeconds,
   };
 }
 

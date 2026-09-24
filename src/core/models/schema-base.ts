@@ -163,12 +163,17 @@ const CursorProviderOptionsSchema = z.object({
   guards: ProviderGuardOptionsSchema.optional(),
 });
 
+const DeepSeekReasoningEffortSchema = z.enum(['off', 'low', 'high', 'max'], {
+  error: (issue) => `Invalid DeepSeek reasoning_effort ${JSON.stringify(issue.input)}; expected off, low, high, or max`,
+});
+
 const DeepSeekHarnessProviderOptionsSchema = z.object({
   base_url: z.string().min(1).optional(),
   max_tokens: z.number().int().positive().safe().optional(),
   request_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
   shutdown_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
   runtime_mode: z.enum(['exe', 'node']).optional(),
+  reasoning_effort: DeepSeekReasoningEffortSchema.optional(),
 }).strict();
 
 const PiProviderOptionsSchema = z.object({
@@ -676,6 +681,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
     requestTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
     shutdownTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
     runtimeMode: z.enum(['exe', 'node']).optional(),
+    reasoningEffort: DeepSeekReasoningEffortSchema.optional(),
   }).strict().optional(),
   pi: z.object({
     guards: z.object({

@@ -15,7 +15,7 @@ This review is a defensive quality and security audit performed, on request, aga
 
 | Principle | Criteria |
 |-----------|----------|
-| Fix immediately | Do not defer problems introduced by the change or causally required for the requirement or safety conditions |
+| Fix immediately | Do not defer problems introduced by the change or causally required for the requirement or safety conditions. Include changes needed to resolve an accepted finding and blockers newly introduced or exposed by its repair in the same repair unit when necessary to meet its acceptance criteria, excluding unrelated problems and readoption of findings excluded by adjudication |
 | Eliminate ambiguity | Vague feedback like "clean this up a bit" is prohibited. Specify file, line, and proposed fix |
 | Fact-check | Verify against actual code before raising issues. Do not speculate |
 | Practical fixes | Propose implementable solutions, not theoretical ideals |
@@ -32,6 +32,8 @@ This review is a defensive quality and security audit performed, on request, aga
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Demonstrability | Distinguish items that environmental factors prevent demonstrating from implementation defects confirmed by current evidence |
 | Boy Scout | Have existing problems fixed within task scope only when the change depends on, expands, or newly exposes them |
+
+Compare caveats in the plan report (items carried forward as open questions in a regular plan). Submit only those meeting the existing evidence and scope criteria as findings, explicitly identifying them as known items. Do not raise the remaining items as findings; record them under the report contract's "Non-Finding Concerns" section (or "Unverified Scope" in testing-review) as "carried forward as plan caveats" with the evidence and the next stage responsible for them. This record does not count as an issue, does not trigger REJECT, and is not a repair target. Retain existing decisions on previously adjudicated findings unless the reopening conditions are met.
 
 ## Finding Decision Invariants
 
@@ -95,7 +97,7 @@ Apply the next three test-related REJECT conditions only when all five facts are
 - Fallback value abuse (`?? 'unknown'`)
 - Explanatory comments (What/How comments)
 - Unused code ("just in case" code)
-- Direct mutation of caller-owned, shared, or externally exposed objects/arrays
+- Direct mutation of caller-owned, shared, or externally exposed objects/arrays without going through the update method provided by the code that owns the value
 - Swallowed errors (empty catch blocks)
 - Method proliferation doing the same thing (should be absorbed by configuration differences)
 - Specific implementation leaking into generic layers (imports and branching for specific implementations in generic layers)

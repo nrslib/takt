@@ -5,6 +5,7 @@ import {
   buildFormalSpecGenerationPrompt,
   buildFormalSpecGenerationSystemPrompt,
   buildFormalSpecInterpretationSystemPrompt,
+  loadFormalSpecVerifierConstraints,
 } from '../features/interactive/formalSpecPrompts.js';
 
 const EXPECTED_INVESTIGATION_POLICY = {
@@ -98,6 +99,16 @@ function expectToolFreeVerificationInstruction(prompt: string, lang: 'en' | 'ja'
   }
 }
 
+function expectFormalSpecVerifierConstraints(prompt: string, lang: 'en' | 'ja'): void {
+  const constraints = loadFormalSpecVerifierConstraints(lang);
+  expect(constraints.trim().length).toBeGreaterThan(0);
+  expect(prompt).toContain(constraints);
+}
+
+function expectNoUnexpandedTemplateVariables(prompt: string): void {
+  expect(prompt).not.toMatch(/\{\{|\}\}/u);
+}
+
 describe('interactive investigation policy template wiring', () => {
   it.each([
     ['en', false, EXPECTED_INVESTIGATION_POLICY],
@@ -165,6 +176,53 @@ describe('formal specification tool-free execution instructions', () => {
 
   it.each(['en', 'ja'] as const)('instructs the %s interpretation prompt to avoid tools and commands', (lang) => {
     expectToolFreeVerificationInstruction(buildFormalSpecInterpretationSystemPrompt(lang), lang);
+  });
+});
+
+describe('formal specification verifier constraint wiring', () => {
+  it.each(['en', 'ja'] as const)('includes verifier constraints in generation and interpretation system prompts for %s', (lang) => {
+    const generationPrompt = buildFormalSpecGenerationSystemPrompt(lang);
+    const interpretationPrompt = buildFormalSpecInterpretationSystemPrompt(lang);
+    expectFormalSpecVerifierConstraints(generationPrompt, lang);
+    expectFormalSpecVerifierConstraints(interpretationPrompt, lang);
+    expectNoUnexpandedTemplateVariables(generationPrompt);
+    expectNoUnexpandedTemplateVariables(interpretationPrompt);
+  });
+
+  it.each(['en', 'ja'] as const)('includes verifier constraints in interactive and task instruction prompts for %s', (lang) => {
+    const interactivePrompt = renderInteractivePrompt(lang, true);
+    const summaryPrompt = lang === 'ja' ? renderJapaneseSummaryPrompt(true) : renderEnglishSummaryPrompt(true);
+    expectFormalSpecVerifierConstraints(interactivePrompt, lang);
+    expectFormalSpecVerifierConstraints(summaryPrompt, lang);
+    expectNoUnexpandedTemplateVariables(interactivePrompt);
+    expectNoUnexpandedTemplateVariables(summaryPrompt);
+  });
+
+  it.each(['en', 'ja'] as const)('omits verifier constraints and template placeholders when formalSpec is false for %s', (lang) => {
+    const constraints = loadFormalSpecVerifierConstraints(lang);
+    const interactivePrompt = renderInteractivePrompt(lang, false);
+    const summaryPrompt = lang === 'ja' ? renderJapaneseSummaryPrompt(false) : renderEnglishSummaryPrompt(false);
+
+    for (const prompt of [interactivePrompt, summaryPrompt]) {
+      expect(prompt).not.toContain(constraints);
+      expectNoUnexpandedTemplateVariables(prompt);
+    }
+  });
+});
+
+describe('formal specification generation user prompt boundaries', () => {
+  it.each(['en', 'ja'] as const)('keeps generation-only fences without duplicating verifier constraints for %s', (lang) => {
+    const prompt = buildFormalSpecGenerationPrompt(lang, `generation-context-${lang}`);
+
+    expect(prompt).toContain('```quint');
+    expect(prompt).toContain('```alloy');
+    expect(prompt).not.toContain(loadFormalSpecVerifierConstraints(lang));
+    if (lang === 'ja') {
+      expect(prompt).not.toMatch(/Quintの不変条件名はinvで始め|Alloyの検証対象には必ずcheckコマンド/iu);
+    } else {
+      expect(prompt).not.toMatch(/Prefix every Quint invariant name with inv|Include a check command for every Alloy property/iu);
+    }
+    expectNoUnexpandedTemplateVariables(prompt);
   });
 });
 

@@ -1,181 +1,79 @@
+{extends:gui}
+
 # Frontend Policy
 
-Provide one source of truth for independent judgments about frontend.
+Judge URLs, HTML interactions, communication states, accessibility, and values entering or leaving the browser from the actual operation path and screen output.
 
-## Principles
+## URLs and navigation
 
-| Principle | Criterion |
-|-----------|-----------|
-| Check applicability | Apply these criteria only to the original requirement, changed contract, and real impact paths |
-| Use evidence | Judge only conditions confirmed by code, contracts, or evidence |
-| Preserve ownership boundaries | Distinguish the responsible owner from observable effects |
-| Keep the scope bounded | Judge only the scope causally related to the request |
-| Use consistent grounds | Do not add a judgment criterion from an example that cannot be derived from the original requirement, changed contract, or real impact paths |
+| Criterion | Decision |
+|------|------|
+| The screen opens from the URLs, menus, or links required by the specification and Back/Forward returns to the expected display | OK |
+| The screen distinguishes an omitted or invalid path/query, a missing target, and insufficient permission | OK |
+| The screen reads URL values without handling their type, omission, or invalid value and displays another target | REJECT |
+| A screen operation leads to a link or button and history behavior that match the user's intent | OK |
 
-## Frontend Criteria
+## HTML interactions and accessibility
 
-### Routing Wiring When Adding a Page
+| Criterion | Decision |
+|------|------|
+| An element that looks clickable has no name, keyboard behavior, appropriate element, or role | REJECT |
+| A form does not relate its input to its label, error, or required state, so users cannot tell what to enter | REJECT |
+| States such as selected, expanded, checked, and disabled do not reach assistive technology, so users cannot tell the current state | REJECT |
+| After a modal dialog or menu opens, focus movement, closing, or the return focus target is missing, so users cannot continue the operation | REJECT |
+| While a modal dialog is open, Tab or Shift+Tab can move to the background, or a background control can be operated through a click, keyboard action, or shortcut | REJECT |
+| An edit or delete operation in a list does not identify its target row by name or relationship | REJECT |
+| DOM capture/bubble and screen notification cause the same operation to run twice | REJECT |
+| Props absent from the installed version are passed, or the generated element's name, role, state, or operation disagrees with the implementation and breaks display, operation, or announcement | REJECT |
 
-| Criteria | Judgment |
-|----------|----------|
-| A new page exists but no route is registered for it | REJECT |
-| Basename-based URL and route path mapping is not verified | REJECT |
-| Router wiring and page entry are decided together with the page implementation | OK |
-| A temporary development route is used and its purpose/removal plan is recorded | OK |
-| Routes are updated but actual entry points such as menus, buttons, links, or external callers are not checked | Warning |
+Do not decide from whether someone checked an accessible name or role alone; inspect the implementation to see whether users can identify the target and its state.
 
-### Integrating third-party UI libraries
+## Communication states and display
 
-| Criteria | Judgment |
-|----------|----------|
-| Major UI library props are guessed without checking the version used by the project | REJECT |
-| Tests fully mock the library and miss real mount failures | Warning |
-| The real component is rendered with representative props and verified not to crash at screen level | OK |
-| Prop shapes are chosen by referencing existing in-project usage patterns and the installed version | OK |
+| Criterion | Decision |
+|------|------|
+| The display distinguishes not started, loading, success, empty, failure, and cancelled | OK |
+| Loading or failure is converted to an empty array, leaving users unable to tell whether to wait or retry | REJECT |
+| When retry is offered, the failure display shows the target and content, with current retry availability, and the actual processing uses the displayed retry target and content | OK |
+| After a failure, a required operation from the specification is unavailable; when retry is offered, retry is shown as executable although the current state disallows it; or the actual processing uses a retry target or content different from what is displayed | REJECT |
+| Form, click, keyboard, or other entries execute or send the same operation twice | REJECT |
 
-### Accessibility Contracts
+## Data fetching, cache, and paging
 
-| Criteria | Judgment |
-|----------|----------|
-| A new interactive element has no accessible name | REJECT |
-| Checked, expanded, disabled, or similar state is not exposed to assistive technologies | Warning |
-| An existing accessible name is changed without being required by the task | REJECT |
-| A dynamic accessible name is assembled by concatenating fragments without checking the final sentence for meaning and naturalness | REJECT |
-| Distinct elements in the same interaction context cannot be identified by name or programmatic context (row/group association, etc.) | REJECT. Including the target name in the accessible name is a strong way to identify it |
-| Existing accessible names are preserved while missing role/state is added | OK |
-| The reason and impact scope for changing an existing contract are explicit | OK |
+| Criterion | Decision |
+|------|------|
+| Conditions that change a result, such as user, tenant, URL, filter, sort, page, and cursor, are in the cache key or dependencies | OK |
+| A condition that changes a result is missing from the key, so data from another user or screen is shared | REJECT |
+| After an update, there is no invalidation, refetch, or library update, so stale cached data remains displayed | REJECT |
+| Cursor or offset order, filter, or snapshot does not match, and duplicate or missing pages cannot be handled | REJECT |
+| An existing API client's types, authentication, and error handling are duplicated, so a change is reflected in only one copy | REJECT |
 
-### State Management
+## Browser and server responsibilities
 
-| Criteria | Judgment |
-|----------|----------|
-| Unnecessary global state | Consider localizing |
-| Same state managed in multiple places | REJECT. Normalize it in the nearest common parent or shared store |
-| State changes from child to parent (reverse data flow) | REJECT |
-| API response stored as-is in state | Consider normalization |
-| Inappropriate useEffect dependencies | REJECT |
-| Initial load tied to unstable Context/Provider function references | REJECT |
+| Criterion | Decision |
+|------|------|
+| The client treats inventory, payment, authorization, or business state managed and confirmed by the server as confirmed based only on a display decision | REJECT |
+| Input format validation, display filters, sorting, and previews are handled as screen state | OK |
+| The screen displays an allowed operation or result returned by the server and sends the operation to a server command | OK |
+| The same business decision is implemented in multiple layers, leaving the correct result and update path unclear | REJECT |
 
-### Canonical and Derived State
+## Browser safety
 
-| Criteria | Judgment |
-|----------|----------|
-| A value that can always be computed from one state is kept as another state | REJECT |
-| Multiple state fields have invariants that require constant synchronization | REJECT |
-| Display labels, counts, totals, all-selected flags, sorted results, or grouped results are kept as canonical state | REJECT |
-| API sending, persistence, or diffing depends on derived state instead of canonical state | REJECT |
-| A display-position sequence number after filtering, paging, or grouping is treated as the ordering of the source data | REJECT. Define which collection's order the label represents and derive it from that collection |
-| Only canonical state is stored, and display, aggregation, and decisions are derived via selectors, render logic, or useMemo | OK |
-| Derived values required by external contracts are generated from canonical state at send or persistence boundaries | OK |
+| Criterion | Decision |
+|------|------|
+| A path that sends user input to HTML, script, style, or URL has no escaping or sanitization | REJECT |
+| The source and allowed range of values for direct HTML, external navigation, Storage, cookies, and cross-origin requests are readable | OK |
+| CSRF, authentication data, or sensitive data handling disagrees with the browser/server contract | REJECT |
+| Unvalidated input is passed to `innerHTML` or `eval` and executed as code | REJECT |
 
-### Initial load and refetch boundaries
+## Example
 
-| Criteria | Judgment |
-|----------|----------|
-| Initial load reruns because a Provider/Context callback changed identity | REJECT |
-| Refetch conditions are explicit (URL, filter, paging, refresh action) | OK |
-| Message display, loading toggles, or modal state cause refetching | REJECT |
-| Initial load is mount-only and later refetches are triggered explicitly | OK |
+Before: After a modal dialog appears, a background keyboard operation reaches the
+        handler and starts processing that competes with the pending decision.
+After:  While the modal dialog is open, focus stays inside it and all background user
+        interaction is suppressed.
 
-### Data Fetching
-
-| Criteria | Judgment |
-|----------|----------|
-| Direct fetch in component | Separate to Container layer |
-| No error handling | REJECT |
-| Loading state not handled | REJECT |
-| N+1 query-like fetching | REJECT |
-
-### Screen-Specific API Usage
-
-| Criteria | Judgment |
-|----------|----------|
-| Reusing list API response for detail screen | REJECT |
-| Display unit and API fetch unit mismatch | REJECT |
-| Fetching all records just for a decision (should use aggregation API) | REJECT |
-| A concept the UI needs is missing from the response, and a semantically different body/description field is implicitly repurposed as a heading | REJECT. Define the summary/fallback as an explicit display contract, or add a dedicated field |
-| Each screen has dedicated fetch endpoints returning only needed data | OK |
-
-### Communication Scope Limitation
-
-| Criteria | Judgment |
-|----------|----------|
-| Only visible tab communicates on tab switch | OK |
-| Parent fetches for all tabs and distributes to children | REJECT |
-| Polling continues on hidden tabs | REJECT |
-
-### Display Format Responsibility
-
-| Criteria | Judgment |
-|----------|----------|
-| Backend returns display strings | Suggest design review |
-| Same format logic copy-pasted | Unify to utility function |
-| Inline formatting in component | Extract to function |
-
-### Domain Logic Placement (Smart UI Elimination)
-
-| Criteria | Judgment |
-|----------|----------|
-| Price calculation/stock validation in frontend | Move to backend → **REJECT** |
-| Status transition rules in frontend | Move to backend → **REJECT** |
-| Business validation in frontend | Move to backend → **REJECT** |
-| Recalculating server-computable values in frontend | Redundant → **REJECT** |
-
-### Performance
-
-| Criteria | Judgment |
-|----------|----------|
-| Unnecessary re-renders | Needs optimization |
-| Large lists without virtualization | Warning |
-| Unoptimized images | Warning |
-| Unused code in bundle | Check tree-shaking |
-| Excessive memoization | Verify necessity |
-
-### Accessibility
-
-| Criteria | Judgment |
-|----------|----------|
-| Interactive elements without keyboard support | REJECT |
-| Images without alt attribute | REJECT |
-| Form elements without labels | REJECT |
-| Information conveyed by color only | REJECT |
-| Missing focus management (modals, etc.) | REJECT |
-
-### TypeScript/Type Safety
-
-| Criteria | Judgment |
-|----------|----------|
-| Use of `any` type | REJECT |
-| Excessive type assertions (as) | Needs review |
-| No Props type definition | REJECT |
-| Inappropriate event handler types | Needs fix |
-
-### Frontend Security
-
-| Criteria | Judgment |
-|----------|----------|
-| dangerouslySetInnerHTML usage | Check XSS risk |
-| Unsanitized user input | REJECT |
-| Sensitive data stored in frontend | REJECT |
-| CSRF token not used | Needs verification |
-
-### Testability
-
-| Criteria | Judgment |
-|----------|----------|
-| No data-testid, etc. | Warning |
-| Structure difficult to test | Consider separation |
-| Business logic embedded in UI | REJECT |
-
-## Anti-Pattern Detection
-
-| Pattern | Decision |
-|---------|----------|
-| God Component | REJECT: all features are concentrated in one component |
-| Prop Drilling | REJECT: props are passed through a deep bucket brigade |
-| Inline Styles abuse | REJECT: inline styles degrade maintainability |
-| useEffect hell | REJECT: effects accumulate overly complex dependencies |
-| Premature Optimization | REJECT: memoization is added without a current need |
-| Magic Strings | REJECT: meaningful strings are hardcoded |
-| Hidden Dependencies | REJECT: child components make hidden API calls |
-| Over-generalization | REJECT: components are forced to be generic without a contract need |
+Before: A failure is shown for one target while the retry operation receives another
+        currently selected target.
+After:  The failed target and current state determine the failure content and retry
+        availability, and actual retry processing uses the displayed target and content.

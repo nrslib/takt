@@ -16,6 +16,7 @@ import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import { createMcpAdapter, type PreparedProviderMcp, type ResolvedMcpServers } from '../../infra/providers/mcp/index.js';
+import { resolveTrustedTaskStateMcpAllowedTools } from '../../infra/providers/mcp/task-state.js';
 import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { InternalAgentIsolation, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
@@ -83,6 +84,7 @@ const TASK_GET_RUN_TOOL_NAMES = new Set([
   'takt_get_run',
   'mcp__takt__takt_get_run',
   'takt__takt_get_run',
+  'takt_takt_get_run',
 ]);
 
 function isTaskGetRunTool(tool: string): boolean {
@@ -194,6 +196,12 @@ async function prepareConversationMcp(
       ? { taskStateMcpServers: ctx.taskStateMcpServers }
       : {}),
   });
+  const taskStateMcpTools = ctx.taskStateMcpServers === servers.servers
+    ? resolveTrustedTaskStateMcpAllowedTools(ctx.taskStateMcpServers)
+    : undefined;
+  if (taskStateMcpTools !== undefined) {
+    prepared.taskStateMcpTools = taskStateMcpTools;
+  }
   return { servers, prepared };
 }
 
@@ -295,9 +303,16 @@ export async function callAIWithRetry(
     const promptForProvider = ctx.provider.supportsNativeImageInput
       ? prompt
       : expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
+    const taskStateMcpTools = options.internalAgentIsolation === 'strict-readonly'
+      ? undefined
+      : ctx.mcpServers === ctx.taskStateMcpServers
+        ? resolveTrustedTaskStateMcpAllowedTools(ctx.taskStateMcpServers)
+        : undefined;
     const allowedToolsForProvider = providerSupportsAllowedTools(ctx.providerType) === false
       ? undefined
-      : allowedTools;
+      : taskStateMcpTools === undefined
+        ? allowedTools
+        : [...new Set([...allowedTools, ...taskStateMcpTools])];
     // Per-call permissionMode is used for operations with a dedicated constraint; a session-level
     // mode is resolved user configuration and must still reach the provider for explicit-constraint errors.
     const permissionModeForProvider = providerSupportsPermissionControls(ctx.providerType) === false

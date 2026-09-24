@@ -46,6 +46,69 @@ afterEach(() => {
 });
 
 describe('config traced env overrides', () => {
+  describe.each(['project', 'global'] as const)('DeepSeek root JSON env in %s config', (scope) => {
+    function loadConfig() {
+      return scope === 'project'
+        ? loadProjectConfig(join(testRoot, 'root-json-effort')) : loadGlobalConfig();
+    }
+
+    it.each([undefined, 'max'])('rejects root effort even with dedicated override %s', (leafEffort) => {
+      process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
+        deepseek_harness: { reasoning_effort: 'high' },
+      });
+      if (leafEffort !== undefined) {
+        process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = leafEffort;
+      }
+
+      expect(loadConfig).toThrow(/reasoning_effort.*runtime profile/iu);
+    });
+
+    it('preserves other root options together with dedicated DeepSeek effort', () => {
+      process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
+        codex: { reasoning_effort: 'low' },
+        deepseek_harness: { max_tokens: 1024 },
+      });
+      process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'max';
+
+      expect(loadConfig().providerOptions).toMatchObject({
+        codex: { reasoningEffort: 'low' },
+        deepseekHarness: { maxTokens: 1024, reasoningEffort: 'max' },
+      });
+    });
+  });
+
+  it.each(['project', 'global'] as const)('rejects effort from legacy routing/persona file and env entries in %s config', (scope) => {
+    const projectDir = join(testRoot, 'legacy-effort');
+    const configDir = scope === 'project' ? getProjectConfigDir(projectDir) : globalTaktDir;
+    mkdirSync(configDir, { recursive: true });
+    const entry = { provider: 'deepseek-harness', model: 'deepseek-v4-flash',
+      provider_options: { deepseek_harness: { reasoning_effort: 'high' } } };
+    const cases = [
+      ['provider_routing', 'TAKT_PROVIDER_ROUTING', { steps: { implement: entry } }],
+      ['provider_routing', 'TAKT_PROVIDER_ROUTING', { personas: { coder: entry } }],
+      ['provider_routing', 'TAKT_PROVIDER_ROUTING', { tags: { coding: entry } }],
+      ['persona_providers', 'TAKT_PERSONA_PROVIDERS', { coder: entry }],
+    ] as const;
+    for (const [key, envName, value] of cases) {
+      for (const source of ['file', 'env']) {
+        writeFileSync(join(configDir, 'config.yaml'), JSON.stringify(source === 'file' ? { [key]: value } : {}));
+        if (source === 'env') process.env[envName] = JSON.stringify(value);
+        invalidateGlobalConfigCache();
+        try {
+          if (scope === 'global' && key === 'persona_providers' && source === 'env') {
+            // This env variable belongs to the project schema, not the global schema.
+            expect(loadGlobalConfig().personaProviders).toBeUndefined();
+          } else {
+            expect(() => scope === 'project' ? loadProjectConfig(projectDir) : loadGlobalConfig(), `${scope}/${key}/${source}`)
+              .toThrow(/reasoning_effort/iu);
+          }
+        } finally {
+          delete process.env[envName];
+        }
+      }
+    }
+  });
+
   it('dotted path から traced-config 用の env 名を生成する', () => {
     expect(envVarNameFromPath('provider_options.claude.sandbox.allow_unsandboxed_commands'))
       .toBe('TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS');
@@ -53,6 +116,8 @@ describe('config traced env overrides', () => {
       .toBe('TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE');
     expect(envVarNameFromPath('provider_options.pi.thinking_level'))
       .toBe('TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL');
+    expect(envVarNameFromPath('provider_options.deepseek_harness.reasoning_effort'))
+      .toBe('TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT');
   });
 
   it('global config はホワイトリストされた env のみを反映する', () => {
@@ -109,6 +174,55 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は DeepSeek reasoning_effort の env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-deepseek-reasoning-effort-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: deepseek-harness\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'max';
+
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      deepseekHarness: { reasoningEffort: 'max' },
+    });
+  });
+
+  it('project config rejects an invalid DeepSeek reasoning_effort env override', () => {
+    const projectDir = join(testRoot, 'project-deepseek-reasoning-effort-invalid-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: deepseek-harness\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'medium';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/reasoning_effort.*medium/iu);
+  });
+
+  it('project config rejects DeepSeek reasoning_effort in legacy YAML provider_options', () => {
+    const projectDir = join(testRoot, 'project-deepseek-reasoning-effort-legacy-yaml');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  deepseek_harness:', '    reasoning_effort: high'].join('\n'),
+      'utf-8',
+    );
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/reasoning_effort/iu);
+  });
+
+  it('project config rejects legacy DeepSeek reasoning_effort when the environment also specifies the supported override', () => {
+    const projectDir = join(testRoot, 'project-deepseek-reasoning-effort-legacy-yaml-with-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  deepseek_harness:', '    reasoning_effort: high'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'max';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/reasoning_effort/iu);
+  });
+
   it('ignores the removed DeepSeek Python path environment override', () => {
     const projectDir = join(testRoot, 'project-deepseek-python-path-removed');
     const configDir = getProjectConfigDir(projectDir);
@@ -117,7 +231,6 @@ describe('config traced env overrides', () => {
     process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH = '/tmp/removed-python';
 
     const config = loadProjectConfig(projectDir);
-
     expect(config.providerOptions?.deepseekHarness).toBeUndefined();
   });
 

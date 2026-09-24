@@ -202,6 +202,7 @@ export function createRetryConversationPlan(
     systemPrompt,
     formalSpec: formalSpecConfiguration.mode,
     formalSpecComments: formalSpecConfiguration.comments,
+    modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
     allowedTools: RETRY_TOOLS,
     transformPrompt: (message, sourceContext) => prependSourceContext(lang, message, sourceContext),
     introMessage: lang === 'ja'
@@ -238,6 +239,7 @@ export function createInstructConversationPlan(
     ),
     formalSpec: formalSpecConfiguration.mode,
     formalSpecComments: formalSpecConfiguration.comments,
+    modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
     allowedTools: INSTRUCT_TOOLS,
     transformPrompt: (message, sourceContext) => prependSourceContext(lang, message, sourceContext),
     introMessage: `${ui.intro}${buildReplayHint(lang, !!options.previousOrderContent)}`,

@@ -11,6 +11,7 @@ import {
   OPEN_CODE_MANAGED_TOOL_IDS,
   resolveOpenCodePermissionReply,
 } from '../infra/opencode/types.js';
+import { toOpenCodeMcpToolName } from '../infra/opencode/allowedTools.js';
 import type { PermissionMode } from '../core/models/index.js';
 
 describe('mapToOpenCodePermissionReply', () => {
@@ -71,12 +72,31 @@ describe('resolveOpenCodePermissionReply', () => {
     expect(resolveOpenCodePermissionReply('full', 'mcp__github__search')).toBe('reject');
   });
 
+  it('should allow trusted normalized task-state MCP permissions when supplied separately', () => {
+    const allowedMcpTools = ['takt_takt_list_tasks', 'takt_takt_get_run'];
+    const ruleset = buildOpenCodePermissionRuleset(undefined, undefined, ['Read'], allowedMcpTools);
+
+    expect(resolveOpenCodePermissionReply(undefined, 'takt_takt_get_run', ruleset)).toBe('once');
+    expect(resolveOpenCodePermissionReply(undefined, 'mcp__github__search', ruleset)).toBe('reject');
+    expect(buildOpenCodePromptTools(undefined, undefined, ['Read'], allowedMcpTools)).toMatchObject({
+      takt_takt_list_tasks: true,
+      takt_takt_get_run: true,
+    });
+  });
+
   it('should keep known full mode permissions always allowed', () => {
     expect(resolveOpenCodePermissionReply('full', 'bash')).toBe('always');
   });
 });
 
 describe('OpenCode permissions', () => {
+  it('should normalize common MCP task-state tool names for OpenCode', () => {
+    expect(toOpenCodeMcpToolName('mcp__takt__takt_get_run')).toBe('takt_takt_get_run');
+    expect(toOpenCodeMcpToolName('mcp__takt__takt_list_tasks')).toBe('takt_takt_list_tasks');
+    expect(toOpenCodeMcpToolName('mcp__github__search')).toBe('github_search');
+    expect(toOpenCodeMcpToolName('takt_takt_get_run')).toBeUndefined();
+  });
+
   it('should build ruleset for edit mode', () => {
     const ruleset = buildOpenCodePermissionRuleset('edit');
     expect(ruleset.length).toBeGreaterThan(0);

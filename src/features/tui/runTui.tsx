@@ -40,6 +40,7 @@ import { formatSessionStatus } from '../interactive/interactive.js';
 import type { InteractiveModeResult, InteractiveUIText } from '../interactive/interactive.js';
 import {
   resolveFormalSpecConfiguration,
+  resolveFormalSpecConfigurationWithoutPrompt,
   type ResolvedFormalSpecConfiguration,
 } from '../interactive/taskInstructionFormat.js';
 import { runTuiConversation } from './conversationRunner.js';
@@ -246,8 +247,14 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       if (!initial) {
         referenceRunSlug = currentConversation.getReferenceRunSlug?.() ?? referenceRunSlug;
       }
+      const resolvedModelCheckTimeoutSeconds = formalSpecConfiguration?.modelCheckTimeoutSeconds
+        ?? resolveFormalSpecConfigurationWithoutPrompt(options.cwd).modelCheckTimeoutSeconds;
+      const overridesWithTimeout = {
+        ...overrides,
+        modelCheckTimeoutSeconds: resolvedModelCheckTimeoutSeconds,
+      };
       if (usePersonaPlan) {
-        nextPlan = createPersonaConversationPlan(options.cwd, description.firstStep!, overrides);
+        nextPlan = createPersonaConversationPlan(options.cwd, description.firstStep!, overridesWithTimeout);
       } else {
         if (formalSpecConfiguration === undefined) {
           throw new Error('Formal specification configuration is required for assistant mode');
@@ -264,7 +271,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           ...(referenceRunSlug === undefined
             ? {}
             : { initialReferenceRunSlug: referenceRunSlug }),
-          ...overrides,
+          ...overridesWithTimeout,
           ...(continued.sessionId ? { sessionId: continued.sessionId } : {}),
         });
       }

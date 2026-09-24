@@ -8,6 +8,9 @@ import {
   type TracedOrigin,
 } from './tracedConfigSchema.js';
 import { loadTraceEntriesViaRuntime } from './tracedConfigRuntimeBridge.js';
+import {
+  assertNoRemovedProviderOptionConfigurationValues,
+} from '../providerOptionsContract.js';
 
 type TraceEntry = {
   traced: TracedValue<unknown>;
@@ -155,6 +158,10 @@ function buildRawConfig(
   return rawConfig;
 }
 
+/**
+ * Load YAML and environment values with their origins, then assemble the effective config.
+ * Validate forbidden source values before leaf overrides can hide legacy effort settings.
+ */
 export function loadConfigTrace(options: LoadConfigTraceOptions): {
   parsedConfig: Record<string, unknown>;
   rawConfig: Record<string, unknown>;
@@ -165,7 +172,14 @@ export function loadConfigTrace(options: LoadConfigTraceOptions): {
   const parsedConfig = existsSync(options.configPath)
     ? (parser(readFileSync(options.configPath, 'utf-8')) as Record<string, unknown>)
     : {};
+  assertNoRemovedProviderOptionConfigurationValues(parsedConfig);
   const traceEntries = loadTraceEntriesViaRuntime(options.schema, options.fileOrigin, parsedConfig);
+  const rootProviderOptions = traceEntries.get('provider_options');
+  if (rootProviderOptions?.origin === 'env') {
+    // Validate the root JSON source before leaf overrides can hide a forbidden value.
+    // An inherited env origin is not proof of the dedicated effort env variable.
+    assertNoRemovedProviderOptionConfigurationValues({ provider_options: rootProviderOptions.value });
+  }
   const rawConfig = buildRawConfig(Object.keys(options.schema), traceEntries, parsedConfig, filePreferredEnvPaths);
 
   const trace: ConfigTrace = {

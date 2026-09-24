@@ -132,6 +132,7 @@ install 的 `--python` 选项和 provider 的 `python_path` 选项已删除，�
 
 - [GitHub CLI](https://cli.github.com/)（`gh`）— 用于 `takt #N` GitHub Issue 任务
 - [GitLab CLI](https://gitlab.com/gitlab-org/cli)（`glab`）— GitLab Issue/MR 集成（根据 remote URL 自动检测）
+- Java 17 或更高版本（`PATH` 上的 `java`）— 在形式规范模式下运行 `/verify` 的模型检查阶段（`quint verify` 与 Alloy Analyzer）时需要。Quint CLI 本身随 TAKT 一起提供；首次运行时会下载的内容请参阅[形式规范验证](./formal-verification.zh-CN.md)
 
 > **关于 OAuth：** 是否可以使用 OAuth 取决于 provider 和使用场景。使用 TAKT 前请查看各 provider 的服务条款。
 
@@ -489,6 +490,7 @@ npx create-takt-sdd
 | [配置](./configuration.zh-CN.md) | 全局与项目设置、provider 和 runtime |
 | [Workflow 指南](./workflows.zh-CN.md) | 创建和定制 workflow |
 | [任务管理](./task-management.zh-CN.md) | 任务排队、执行和隔离 |
+| [形式规范验证](./formal-verification.zh-CN.md) | 通过 `/verify` 用 Quint 和 Alloy 验证已达成共识的需求 |
 | [外部集成](./external-integrations.zh-CN.md) | 不修改核心的社区集成示例 |
 | [中文文档入口](./README.zh-CN.md) | 安装、快速开始和文档导航 |
 

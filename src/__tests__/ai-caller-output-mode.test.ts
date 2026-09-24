@@ -324,6 +324,7 @@ describe('AI call output ownership', () => {
       assistantMode: 'assistant',
       formalSpec: false,
       formalSpecComments: true,
+      modelCheckTimeoutSeconds: 300,
       resolvedSessionContext: baseContext,
     });
 
@@ -541,6 +542,7 @@ describe('AI call output ownership', () => {
         assistantMode: 'assistant',
         formalSpec: false,
         formalSpecComments: true,
+        modelCheckTimeoutSeconds: 300,
         resolvedSessionContext: ctx,
       });
 

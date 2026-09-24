@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentWorkflowStep } from '../core/models/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { resolveWorkflowProviderOptions } from '../infra/config/loaders/workflowProviderOptionsResolver.js';
 
 let tempDir: string;
 
@@ -49,6 +50,18 @@ describe('workflow capability provider-options references', () => {
 });
 
 describe('workflow runtime ownership boundary', () => {
+  it('rejects DeepSeek effort through workflow, step, and referenced option loaders', () => {
+    const options = { deepseek_harness: { reasoning_effort: 'high' } };
+    expect(() => normalizeWorkflow({ workflow_config: { provider_options: options } }))
+      .toThrow(/runtime\.yaml/);
+    expect(() => normalizeWorkflow({}, [{ name: 'implement', instruction: '{task}', provider_options: options }]))
+      .toThrow(/runtime\.yaml/);
+    expect(() => resolveWorkflowProviderOptions(options, tempDir)).toThrow(/reasoning_effort/);
+    writeCapabilitySet('effort', 'deepseek_harness:\n  reasoning_effort: high\n');
+    expect(() => resolveWorkflowProviderOptions({ extends: 'provider-options/effort.yaml' }, tempDir))
+      .toThrow(/reasoning_effort/);
+  });
+
   it.each([
     {
       name: 'workflow_config provider_options',

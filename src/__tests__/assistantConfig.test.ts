@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS } from '../core/models/config-types.js';
 
 const testId = randomUUID();
 const testDir = join(tmpdir(), `takt-assistant-config-test-${testId}`);
@@ -44,8 +45,16 @@ const { invalidateAllResolvedConfigCache } = await import('../infra/config/resol
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
 
 type FormalSpecResolverModule = {
-  resolveFormalSpecConfiguration(projectDir: string): Promise<{ mode: boolean; comments: boolean }>;
-  resolveFormalSpecConfigurationWithoutPrompt(projectDir: string): { mode: boolean; comments: boolean };
+  resolveFormalSpecConfiguration(projectDir: string): Promise<{
+    mode: boolean;
+    comments: boolean;
+    modelCheckTimeoutSeconds: number;
+  }>;
+  resolveFormalSpecConfigurationWithoutPrompt(projectDir: string): {
+    mode: boolean;
+    comments: boolean;
+    modelCheckTimeoutSeconds: number;
+  };
   resolveFormalSpecMode(projectDir: string): Promise<boolean>;
   resolveFormalSpecModeWithoutPrompt(projectDir: string): boolean;
 };
@@ -181,6 +190,7 @@ describe('assistantConfig', () => {
     expect(resolveFormalSpecConfigurationWithoutPrompt(projectDir)).toEqual({
       mode: true,
       comments: false,
+      modelCheckTimeoutSeconds: DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS,
     });
     expect(mockConfirm).not.toHaveBeenCalled();
   });
@@ -202,6 +212,7 @@ describe('assistantConfig', () => {
     expect(resolveFormalSpecConfigurationWithoutPrompt(projectDir)).toEqual({
       mode: true,
       comments: false,
+      modelCheckTimeoutSeconds: DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS,
     });
   });
 
@@ -211,8 +222,59 @@ describe('assistantConfig', () => {
     await expect(resolveFormalSpecConfiguration(projectDir)).resolves.toEqual({
       mode: false,
       comments: true,
+      modelCheckTimeoutSeconds: DEFAULT_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS,
     });
   });
+
+  it('should resolve model-check timeout independently across project and global layers', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'assistant:',
+        '  formal_spec:',
+        '    model_check_timeout_seconds: 120',
+      ].join('\n'),
+      'utf-8',
+    );
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['assistant:', '  formal_spec:', '    comments: false'].join('\n'),
+      'utf-8',
+    );
+
+    expect(resolveFormalSpecConfigurationWithoutPrompt(projectDir)).toEqual({
+      mode: false,
+      comments: false,
+      modelCheckTimeoutSeconds: 120,
+    });
+
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['assistant:', '  formal_spec:', '    model_check_timeout_seconds: 45'].join('\n'),
+      'utf-8',
+    );
+    invalidateAllResolvedConfigCache();
+
+    expect(resolveFormalSpecConfigurationWithoutPrompt(projectDir).modelCheckTimeoutSeconds).toBe(45);
+  });
+
+  it.each([0, -1, 1.5, 86_401, '300', null])(
+    'should reject an invalid model-check timeout value %j',
+    (timeout) => {
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'config.yaml'),
+        ['assistant:', '  formal_spec:', `    model_check_timeout_seconds: ${timeout === null ? 'null' : JSON.stringify(timeout)}`].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => resolveFormalSpecConfigurationWithoutPrompt(projectDir)).toThrow(/model_check_timeout_seconds|invalid/i);
+    },
+  );
 
   it.each([
     ['Y/n', 'y/N', false],

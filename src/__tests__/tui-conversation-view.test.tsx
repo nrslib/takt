@@ -512,6 +512,7 @@ describe('ConversationView', () => {
         strategy: {
           systemPrompt: 'system prompt',
           formalSpec: false,
+          modelCheckTimeoutSeconds: 300,
           allowedTools: [],
           transformPrompt: (message: string) => message,
           introMessage: 'Interactive mode',

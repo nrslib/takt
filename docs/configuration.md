@@ -36,6 +36,7 @@ assistant:
   formal_spec:
     mode: 'y/N'                # Alloy/Quint mode: true, false, Y/n, or y/N (default: y/N)
     comments: true             # Add natural-language meaning comments to each formal construct (default: true)
+    model_check_timeout_seconds: 300  # Limit for /verify quint verify and Alloy model checking, integer 1-86400 (default: 300)
 # auto_fetch: false           # Fetch remote before cloning (default: false)
 # base_branch: main           # Base branch for clone creation (default: remote default branch)
 
@@ -194,7 +195,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` |
 | `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks |
 | `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` | Adds Alloy/Quint guidance and expresses requirements in both notations. The structured form accepts independent `mode` and `comments` fields; `comments: false` removes only the natural-language meaning-comment instruction and does not reduce formal specification coverage, requirement coverage, or syntax/correctness guidance. Project and global object fields are resolved independently, with project values taking precedence. `true` and `false` are used without prompting; on a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. Gherkin guidance applies only to development and implementation tasks. |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` | Adds Alloy/Quint guidance and expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction and does not reduce formal specification coverage, requirement coverage, or syntax/correctness guidance. `model_check_timeout_seconds` is the limit in seconds for `quint verify` and the Alloy Analyzer during `/verify` (an integer from 1 to 86,400, default 300); the 60-second limit for `parse`/`typecheck`/`run` is unchanged. Project and global object fields are resolved independently, with project values taking precedence. `true` and `false` are used without prompting; on a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. Gherkin guidance applies only to development and implementation tasks. |
 | `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into the worktree before retry / re-execution; set `false` to keep the worktree copy |
@@ -413,7 +414,7 @@ Project config accepts most global keys and overrides their global values (e.g. 
 | `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` (from global/default) | Project override for Alloy/Quint guidance that expresses requirements in both notations. The structured form accepts independent `mode` and `comments` fields; `comments: false` removes only the natural-language meaning-comment instruction while retaining formal specification amount, requirement coverage, and syntax/correctness guidance. Project and global object fields resolve independently, with project values taking precedence; omitted fields fall through to the lower layer or defaults. Answers to `"Y/n"` or `"y/N"` prompts are session-local and are resolved again when a conversation is resumed; ACP and non-TTY execution never prompt and use the configured default answer. Gherkin guidance applies only to development and implementation tasks. The deprecated `assistant.gherkin` key produces a warning and is ignored without conversion, persistence, or file modification. |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` (from global/default) | Project override for Alloy/Quint guidance that expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction while retaining formal specification amount, requirement coverage, and syntax/correctness guidance. Project and global object fields resolve independently, with project values taking precedence; omitted fields fall through to the lower layer or defaults. Answers to `"Y/n"` or `"y/N"` prompts are session-local and are resolved again when a conversation is resumed; ACP and non-TTY execution never prompt and use the configured default answer. Gherkin guidance applies only to development and implementation tasks. The deprecated `assistant.gherkin` key produces a warning and is ignored without conversion, persistence, or file modification. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
@@ -1276,6 +1277,32 @@ provider_options:
     runtime_mode: exe                  # exe or node; node is for explicit SDK development mode
 ```
 
+DeepSeek reasoning effort is configured only in a `runtime.yaml` provider profile or through
+the standard TAKT environment override:
+
+```yaml
+version: 1
+provider:
+  defaults:
+    profile: deepseek
+  profiles:
+    deepseek:
+      provider: deepseek-harness
+      model: deepseek-v4-flash
+      options:
+        reasoning_effort: high
+```
+
+The accepted values are `off`, `low`, `high`, and `max`. If the option is omitted, TAKT leaves
+the field unset so the SDK default is used. `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT`
+is the corresponding environment override. The legacy `provider_options` bag, workflow steps,
+personas, and routing entries do not support this option; specifying it there fails with a
+configuration error.
+
+Changing or clearing the effort applies to the next turn without resetting the session ID or
+persisted history. A session's bridge is replaced when necessary; other sessions keep their own
+bridges. A failed replacement returns an error rather than continuing with the old effort.
+
 The DeepSeek Harness `model` field accepts either a bare model reference such as
 `deepseek-v4-flash` or `<route>/<model>` such as `openai/gpt-5.4` and
 `my-gateway/org/custom-model`. TAKT uses the text before the first `/` as the
@@ -1299,7 +1326,7 @@ Sessions are reused when a workflow supplies `session_key`; one-shot calls close
 
 Permission controls and tool restrictions are not ignored: provider calls with `permissionMode` set, `bypassPermissions: true`, or an explicit `allowedTools` value (including an empty list) return `status: 'error'` before the bridge starts. Use a compatible provider when these constraints are required. Separately, `allowed_tools` is not a supported workflow-step field: workflow schema validation rejects it before any provider call, so it does not reach the provider error-response path described above.
 
-The corresponding environment overrides are `_BASE_URL`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, and `_RUNTIME_MODE`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
+The corresponding environment overrides are `_BASE_URL`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, `_RUNTIME_MODE`, and `_REASONING_EFFORT`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
 
 #### Network access (`network_access`)
 

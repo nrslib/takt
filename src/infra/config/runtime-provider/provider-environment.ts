@@ -49,6 +49,7 @@ import type { StepProviderOptions } from '../../../core/models/workflow-types.js
 import { getEffectiveRuntimeProviderFile } from './schema.js';
 import { createRuntimeProviderResolutionContext } from './resolution-context.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
+import { applyDeepSeekEnvironmentOptions } from './environment-options.js';
 
 export interface ResolvedRuntimeEnvironment {
   providerEnvironment: CompiledProviderEnvironment;
@@ -130,7 +131,7 @@ export function resolveRuntimeEnvironment(
   // provider/model override the bootstrap already resolved so the main execution path honors an
   // explicit `--provider`/`--model` the same way the selector seam does.
   return {
-    providerEnvironment: applyRuntimeProviderOverride(
+    providerEnvironment: applyDeepSeekEnvironmentOptions(input.projectCwd, applyRuntimeProviderOverride(
       compileProviderEnvironment({
         kind: 'runtime-v1',
         section,
@@ -147,7 +148,7 @@ export function resolveRuntimeEnvironment(
         model: input.legacy.model,
         modelSource: input.legacy.modelSource,
       },
-    ),
+    )),
     configProviderOptions: input.legacy.providerOptions,
     companionEnabled,
     companionReviewMode,

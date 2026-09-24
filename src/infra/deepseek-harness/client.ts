@@ -35,12 +35,20 @@ import {
   SENSITIVE_TEXT_BOUNDARY_WINDOW,
 } from '../../shared/utils/sensitive-text.js';
 import { collectSensitiveStringValues } from '../../shared/utils/sensitive-value.js';
-import type { DeepSeekHarnessProviderOptions } from '../../core/models/workflow-types.js';
+import type {
+  DeepSeekHarnessProviderOptions,
+  DeepSeekReasoningEffort,
+} from '../../core/models/workflow-types.js';
 import { DEEPSEEK_HARNESS_DEFAULT_MODEL } from './constants.js';
 import { getDeepSeekHarnessManagedPaths } from './managed-venv.js';
 import { assertSupportedDeepSeekHarnessPlatform } from './platform.js';
 import { validateDeepSeekHarnessRuntime } from './runtime.js';
 import { parseDeepSeekHarnessModelReference } from './model-reference.js';
+import {
+  abortError,
+  createSessionDispatchQueue,
+  waitForAbortable,
+} from './session-dispatch.js';
 import type { DeepSeekHarnessCallOptions } from './types.js';
 const DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS = 30_000;
 const DEEPSEEK_HARNESS_CALL_TIMEOUT_MS = 3_600_000;
@@ -163,6 +171,7 @@ interface ResolvedBridgeConfiguration {
   maxTokens?: number;
   requestTimeoutMs: number;
   shutdownTimeoutMs: number;
+  reasoningEffort?: DeepSeekReasoningEffort;
 }
 
 interface ProcessEnvironmentResolution {
@@ -295,6 +304,10 @@ function resolveBridgeConfiguration(
     'shutdownTimeoutMs',
     DEEPSEEK_HARNESS_MAX_NODE_TIMER_MS,
   ) ?? DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS;
+  const reasoningEffort = providerOptions?.reasoningEffort;
+  if (reasoningEffort !== undefined && !['off', 'low', 'high', 'max'].includes(reasoningEffort)) {
+    throw new Error(`Invalid DeepSeek reasoning_effort ${JSON.stringify(reasoningEffort)}; expected off, low, high, or max`);
+  }
   return {
     provider,
     model,
@@ -302,6 +315,7 @@ function resolveBridgeConfiguration(
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     requestTimeoutMs,
     shutdownTimeoutMs,
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
   };
 }
 
@@ -432,23 +446,30 @@ function stableValue(value: unknown): unknown {
   );
 }
 
-/** Identify reusable bridges by configuration and environment fingerprints without embedding secrets. */
+/**
+ * Identify bridge configurations using environment fingerprints without embedding secrets.
+ * Exclude effort for logical session identity so changing effort can replace its process
+ * without rebinding the conversation to a different project or configuration.
+ */
 function processKey(
   configuration: ResolvedBridgeConfiguration,
   providerOptions: DeepSeekHarnessProviderOptions | undefined,
   environment: ProcessEnvironmentResolution,
+  includeReasoningEffort = true,
 ): string {
   const secretFingerprint = createHash('sha256')
     .update(JSON.stringify(environment.knownSecrets))
     .digest('hex');
-  const nonSecretProviderOptions = providerOptions === undefined
-    ? undefined
-    : {
-        ...providerOptions,
-        baseUrl: undefined,
-      };
+  const nonSecretProviderOptions = Object.fromEntries(
+    Object.entries(providerOptions ?? {})
+      .filter(([name, value]) => value !== undefined && name !== 'baseUrl'
+        && (includeReasoningEffort || name !== 'reasoningEffort')),
+  );
+  const keyConfiguration = includeReasoningEffort
+    ? configuration
+    : { ...configuration, reasoningEffort: undefined };
   return JSON.stringify({
-    configuration,
+    configuration: keyConfiguration,
     providerOptions: stableValue(nonSecretProviderOptions),
     secretFingerprint,
     nestedObservabilityFingerprint: environment.nestedObservabilityFingerprint,
@@ -500,13 +521,6 @@ function isRuntimeSetupFailure(error: unknown, diagnostic: string): boolean {
     diagnostic.includes('ENOENT')
     || diagnostic.toLowerCase().includes('no such file or directory')
   );
-}
-
-function abortError(reason: unknown): Error {
-  const message = reason instanceof Error ? reason.message : 'DeepSeek Harness execution aborted';
-  const error = new Error(message || 'DeepSeek Harness execution aborted');
-  error.name = 'AbortError';
-  return error;
 }
 
 function getBridgePath(): string {
@@ -1063,6 +1077,11 @@ class DeepSeekHarnessProcess {
     return this.environment.knownSecrets;
   }
 
+  /** Await the current operation tail, including failures, before replacing this bridge. */
+  async waitForIdle(): Promise<void> {
+    await this.operationTail.catch(() => undefined);
+  }
+
   async start(abortSignal?: AbortSignal): Promise<void> {
     if (this.ready) {
       return;
@@ -1599,42 +1618,14 @@ class DeepSeekHarnessProcess {
   }
 }
 
-async function waitForAbortable(
-  operation: Promise<void>,
-  abortSignal: AbortSignal | undefined,
-): Promise<void> {
-  if (abortSignal === undefined) {
-    await operation;
-    return;
-  }
-  if (abortSignal.aborted) {
-    throw abortError(abortSignal.reason);
-  }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = (): void => {
-      abortSignal.removeEventListener('abort', onAbort);
-      reject(abortError(abortSignal.reason));
-    };
-    abortSignal.addEventListener('abort', onAbort, { once: true });
-    void operation.then(
-      () => {
-        abortSignal.removeEventListener('abort', onAbort);
-        resolve();
-      },
-      (error: unknown) => {
-        abortSignal.removeEventListener('abort', onAbort);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
-}
-
 interface SessionBinding {
   identity: string;
+  processKey: string;
 }
 
 const processes = new Map<string, DeepSeekHarnessProcess>();
 const sessionBindings = new Map<string, SessionBinding>();
+const sessionDispatchQueue = createSessionDispatchQueue();
 let oneShotProcessSequence = 0;
 let exitCleanupRegistered = false;
 
@@ -1663,6 +1654,7 @@ function removeProcess(processRecord: DeepSeekHarnessProcess): void {
 function registerProcessBindings(
   sessionId: string | undefined,
   identity: string,
+  processKeyValue: string,
 ): void {
   if (sessionId !== undefined) {
     const existingSession = sessionBindings.get(sessionId);
@@ -1674,12 +1666,15 @@ function registerProcessBindings(
   }
 
   if (sessionId !== undefined) {
-    sessionBindings.set(sessionId, { identity });
+    sessionBindings.set(sessionId, { identity, processKey: processKeyValue });
   }
 }
 
-/** Reuse compatible session bridges while assigning unbound calls distinct one-shot process keys. */
-function getOrCreateProcess(options: DeepSeekHarnessCallOptions): DeepSeekHarnessProcess {
+/**
+ * Reuse a session-local bridge, or replace its idle process when only effort changed.
+ * Reject incompatible session identities; unbound calls always get distinct one-shot keys.
+ */
+async function getOrCreateProcess(options: DeepSeekHarnessCallOptions): Promise<DeepSeekHarnessProcess> {
   assertSupportedDeepSeekHarnessPlatform();
   const providerOptions = options.providerOptions;
   const configuration = resolveBridgeConfiguration(options, providerOptions);
@@ -1691,9 +1686,10 @@ function getOrCreateProcess(options: DeepSeekHarnessCallOptions): DeepSeekHarnes
   );
   assertOpaqueSessionId(options.sessionId, environment.knownSecrets);
   const baseKey = processKey(configuration, providerOptions, environment);
+  const sessionIdentity = processKey(configuration, providerOptions, environment, false);
   const key = options.sessionId === undefined
     ? `${baseKey}:one-shot:${++oneShotProcessSequence}`
-    : `${baseKey}:session`;
+    : `${baseKey}:session:${JSON.stringify(options.sessionId)}`;
   if (options.sessionId !== undefined) {
     const existing = processes.get(key);
     if (existing !== undefined && !existing.isClosed) {
@@ -1701,6 +1697,20 @@ function getOrCreateProcess(options: DeepSeekHarnessCallOptions): DeepSeekHarnes
     }
     if (existing !== undefined) {
       removeProcess(existing);
+    }
+    const existingBinding = sessionBindings.get(options.sessionId);
+    if (existingBinding !== undefined && existingBinding.processKey !== key) {
+      if (existingBinding.identity !== sessionIdentity) {
+        throw new Error(
+          'DeepSeek Harness sessionId is already bound to a different project or bridge configuration',
+        );
+      }
+      const previousProcess = processes.get(existingBinding.processKey);
+      if (previousProcess !== undefined) {
+        await waitForAbortable(previousProcess.waitForIdle(), options.abortSignal);
+        removeProcess(previousProcess);
+        await previousProcess.close();
+      }
     }
   }
   const processRecord = new DeepSeekHarnessProcess(
@@ -1711,7 +1721,7 @@ function getOrCreateProcess(options: DeepSeekHarnessCallOptions): DeepSeekHarnes
   );
   processes.set(key, processRecord);
   try {
-    registerProcessBindings(options.sessionId, baseKey);
+    registerProcessBindings(options.sessionId, sessionIdentity, key);
   } catch (error) {
     removeProcess(processRecord);
     throw error;
@@ -1854,13 +1864,27 @@ function createSuccessResponse(
   };
 }
 
+/**
+ * Capture this turn's options and execute it in session order, or as a one-shot call.
+ * Validate responses and dispose broken bridges before releasing the session queue slot;
+ * translate failures into the provider response contract without silently retrying.
+ */
 export async function callDeepSeekHarness(
   agentType: string,
   prompt: string,
   options: DeepSeekHarnessCallOptions,
 ): Promise<AgentResponse> {
+  const turnOptions: DeepSeekHarnessCallOptions = {
+    ...options,
+    ...(options.providerOptions === undefined
+      ? {}
+      : { providerOptions: { ...options.providerOptions } }),
+    ...(options.childProcessEnv === undefined
+      ? {}
+      : { childProcessEnv: { ...options.childProcessEnv } }),
+  };
   let processRecord: DeepSeekHarnessProcess | undefined;
-  const requestedSessionId = options.sessionId;
+  const requestedSessionId = turnOptions.sessionId;
   const state: HarnessStreamState = {
     initializedSessions: new Set(),
     sawSessionEvent: false,
@@ -1876,38 +1900,60 @@ export async function callDeepSeekHarness(
     emittedToolResults: new Set(),
   };
   try {
-    processRecord = getOrCreateProcess(options);
-    const result = await processRecord.run(
-      prompt,
-      requestedSessionId,
-      state,
-      options.onStream,
-      options.abortSignal,
-    );
-    const response = createSuccessResponse(
-      agentType,
-      result,
-      state,
-      options,
-      processRecord.knownSecrets,
-    );
+    const run = async (): Promise<AgentResponse> => {
+      const currentProcess = await getOrCreateProcess(turnOptions);
+      processRecord = currentProcess;
+      try {
+        const result = await currentProcess.run(
+          prompt,
+          requestedSessionId,
+          state,
+          turnOptions.onStream,
+          turnOptions.abortSignal,
+        );
+        // Keep validation and cleanup inside the session queue: the next turn
+        // must not acquire this process before its response has been validated.
+        return createSuccessResponse(agentType, result, state, turnOptions, currentProcess.knownSecrets);
+      } catch (error) {
+        if (
+          requestedSessionId !== undefined
+          && (
+            error instanceof DeepSeekHarnessProtocolError
+            || error instanceof DeepSeekHarnessTimeoutError
+          )
+        ) {
+          await currentProcess.close();
+          removeProcess(currentProcess);
+        } else if (requestedSessionId !== undefined && currentProcess.isClosed) {
+          removeProcess(currentProcess);
+        }
+        throw error;
+      }
+    };
+    const response = requestedSessionId === undefined
+      ? await run()
+      : await sessionDispatchQueue.run(requestedSessionId, turnOptions.abortSignal, run);
+    const activeProcess = processRecord;
+    if (activeProcess === undefined) {
+      throw new Error('DeepSeek Harness process was not created');
+    }
     if (requestedSessionId === undefined) {
-      await processRecord.close();
-      removeProcess(processRecord);
+      await activeProcess.close();
+      removeProcess(activeProcess);
     }
     return response;
   } catch (error) {
     const knownSecrets = processRecord?.knownSecrets
-      ?? resolveKnownSecretsForFailure(options.providerOptions, options.childProcessEnv);
-    flushHarnessResponseRedactor(state, options.onStream, knownSecrets, true);
-    const detail = failureDetail(error, options, knownSecrets);
+      ?? resolveKnownSecretsForFailure(turnOptions.providerOptions, turnOptions.childProcessEnv);
+    flushHarnessResponseRedactor(state, turnOptions.onStream, knownSecrets, true);
+    const detail = failureDetail(error, turnOptions, knownSecrets);
     const content = formatAgentFailure(detail);
     const responseStatus = error instanceof DeepSeekHarnessTurnEndError
       ? error.responseStatus
       : 'error';
     const preserveRequestedSessionId = processRecord !== undefined && requestedSessionId !== undefined;
     emitFailure(
-      options.onStream,
+      turnOptions.onStream,
       content,
       requestedSessionId,
       detail,
@@ -1916,12 +1962,6 @@ export async function callDeepSeekHarness(
       preserveRequestedSessionId,
     );
     if (requestedSessionId === undefined && processRecord !== undefined) {
-      await processRecord.close();
-      removeProcess(processRecord);
-    } else if (
-      processRecord !== undefined
-      && (error instanceof DeepSeekHarnessProtocolError || error instanceof DeepSeekHarnessTimeoutError)
-    ) {
       await processRecord.close();
       removeProcess(processRecord);
     } else if (processRecord?.isClosed === true) {
@@ -1945,4 +1985,5 @@ export async function closeDeepSeekHarnessProcesses(): Promise<void> {
   processes.clear();
   sessionBindings.clear();
   await Promise.all(active.map((processRecord) => processRecord.close()));
+  sessionDispatchQueue.clear();
 }

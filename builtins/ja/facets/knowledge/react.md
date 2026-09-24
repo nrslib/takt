@@ -1,127 +1,80 @@
 # React知識
 
-## effect と再実行
+Reactでは、propsで親から値を受け、stateで変化する値を持ち、描画で画面を作る。画面の通信や遷移はハンドラやhookへ置き、表示用コンポーネントへ埋め込まない。GUIのMediatorの役割は、画面用handler、custom hook、Context、reducerなどReact標準の仕組みで、操作と現在stateから処理と次のstateを決める形で担う。
 
-`useEffect` は「いつ再実行してよいか」を明示する仕組みであり、初期化処理の置き場ではない。初期表示で1回だけ行う処理か、依存変化で再実行すべき処理かを先に決める。
+## Propsとstate
 
+propsは親から渡される入力、stateはコンポーネントが操作で変える値である。同じ事実を二つの`useState`で持たず、値を使う範囲と残る時間に合う位置で保持する。複数の部品が同じ対象の識別子や入力を使うなら、それらを調整する親または画面で一つに管理し、propsと操作の通知を渡す。部品内だけで使う入力途中の値や開閉状態は、その部品で持つ。複数画面に残す値は、Providerや外部storeなど寿命に合う共有元で持つ。
 
-```tsx
-// 避ける例: 初期取得なのに不安定な関数依存を経由して再実行されうる
-const fetchList = useCallback(async () => {
-  await loadItems()
-}, [setIsLoading, errorPage])
+## Propsの変更とstateの寿命
 
-useEffect(() => {
-  fetchList()
-}, [fetchList])
+`useState`へ渡した初期値は、後からpropsが変わってもstateへ反映されない。親の値を表示し続ける入力欄は、値と変更ハンドラをpropsで受け取る。確定するまで親へ反映しない下書きはコンポーネント内のstateに持ち、別の対象へ切り替えるときは対象の安定した識別子を`key`にして作り直すか、切替操作で初期化する。propsの変化をEffectで毎回コピーすると、編集中の値まで上書きする。
 
-// 例: 初期表示の一度きりロードとして固定
-useEffect(() => {
-  void loadItemsOnMount()
-  // mount-only initial load
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [])
-```
+## 派生値は計算する
 
-## Context と Provider value
+propsやstateから計算できる一覧、件数、全選択、ラベルなどを別のstateとして保存しない。描画中に同じ条件から計算すれば、更新順による古い表示や判定のずれを防げる。計算量が実際に問題なら`useMemo`などで再利用し、計算に使う値を依存として明示する。
 
-Context の `value={{ ... }}` は Provider の再描画ごとに新しい参照になる。Context から受け取った関数を `useEffect` の依存に置くと、利用側が意図せず再実行ループに入ることがある。
+## Contextは値を渡す
 
+`createContext`で作ったContextは、祖先のProviderが渡した値を子孫から読む仕組みである。Providerで`useState`や`useReducer`を使い、state、dispatch、操作を開始するhandlerなど、画面の複数部品が共有する値を渡す。`useContext`で読む値の範囲と寿命を確認し、局所的な値まで共有しない。
 
-```tsx
-// 避ける例: Context 関数をそのまま初期取得 effect の依存に使う
-const { setIsLoading, errorPage } = useAppContext()
-useEffect(() => {
-  void loadInitialData(setIsLoading, errorPage)
-}, [setIsLoading, errorPage])
+## Mediator、Reducer、操作
 
-// 例: 初期取得は mount-only、Context 関数は内部で使う
-const { setIsLoading, errorPage } = useAppContext()
-useEffect(() => {
-  void loadInitialData({ setIsLoading, errorPage })
-  // mount-only initial load
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [])
-```
+画面用handlerやcustom hookはMediatorとして操作の通知を受け、現在stateと対象を確認して、操作を受理または拒否し、受理した操作に必要な処理、拒否の結果、次のstate、表示する値を決める。form、button、keyboardなど異なる入口から同じ操作が来ても、同じMediatorの判断を通す。操作要素の`disabled`表示だけを判定にせず、処理を開始する箇所でもstateと対象を確認する。
 
-## 初期表示ロード
+`reducer`は現在stateとeventから次のstateを返す純粋な関数である。通信、timer、通知などの副作用はreducerの外でhandlerが開始し、開始・成功・失敗の結果を`dispatch`してstateへ反映する。拒否、入力不備、権限不足、競合など、結果に応じた表示もこの状態の流れから作る。
 
-初期表示ロードは「画面を開いたときに1回だけ必要な処理」か、「状態変化に応じて再実行する処理」かを区別する。後者でない限り、再取得のトリガーは明示的なユーザー操作や URL/検索条件の変化に限定する。
+Reactのstate更新は次のrenderで反映され、`dispatch`直後に同じhandlerが読むstateは、そのhandler内では変わらない。描画前に次の通知が届く経路では、先の受理を反映しない古いstateで後続通知を判定し、受け付けられない操作の通信やtimerを開始しないよう、受理判定と副作用開始を同じ制御経路で扱い、受理した操作だけを開始する。続く通知は、先の受理を反映したstateで判断できるようにする。実装方式はフレームワークの慣用方法から条件に合うものを選ぶ。
 
-| 条件 | 動作 |
-|------|------|
-| 初期表示で一覧を1回読むだけ | mount-only effect |
-| フィルタ、ページング、URL パラメータ変更で再取得 | その状態を依存に明示 |
-| loading state や message/dialog の表示状態が変わる | 初期取得の再実行条件とは分離する |
+フォーム送信は、`onSubmit`、formの`action`、その他の標準的な仕組みなど、選んだ入口から処理担当へ一度だけ通知し、同じ状態判断を通す。Enterキーなどフォームを送信する操作も同じ状態判断を通し、送信処理を重複実行しない。PortalでDOM上の配置が異なる部品でも、ReactのイベントはReactツリーに沿って祖先へ伝わる。
 
-## データフェッチライブラリのキャッシュ適性
+## Effectと外部システム
 
-データフェッチライブラリ（React Query 等）のキャッシュはすべてのデータ取得に適するわけではない。データの変動頻度とページング方式で判断する。
+`useEffect`は描画の外にある接続、購読、timer、取得などとReactを同期する。利用者の一回の操作に属する送信や通知は、Effectではなくイベントハンドラやcommandへ置く。
 
+Effect内で読むprops、state、コンポーネント内で宣言した値や関数を依存配列に含める。依存は再接続・再取得したい条件と一致させ、lintの警告だけを理由に削らない。不要な再実行が起きる場合は、handlerを安定させる、Effectの外へ出す、同期対象を分けるなど、実際の同期対象を整理する。
 
-cursor ページングとキャッシュの相性が悪い理由:
+接続、購読、timer、取得は再実行前とunmount時にcleanupする。識別子の変更で取得をやり直す場合は識別子を依存に含め、`AbortController`などで前の取得をキャンセルする。Abortされた結果を失敗表示へ変換せず、古い応答が新しいstateを上書きしないよう競合を扱う。
 
-- nextId（cursor）が古くなり、次ページ取得で欠落や重複が発生する
-- 削除された行を基準に次ページを取ると取りこぼしが起きる
-- タブ復帰時に途中ページを自動再取得すると「いま見えている一覧」とサーバーの実態がズレる
+## Reactの実行規則
 
-データフェッチライブラリを使う場合でもキャッシュを実質無効にする必要があるなら、そのライブラリを使う意味がない。画面の責務として毎回取り直す方が安全。
+Hookはコンポーネントまたはcustom hookのトップレベルで呼び、条件分岐やloopの中で呼ばない。描画中は通信、通知、DOM操作、外部変数の変更などの副作用を行わず、propsとstate、その内部の値を直接変更しない。
 
-```tsx
-// 避ける例: 変動する cursor paged 一覧に React Query のキャッシュを適用
-const { data } = useInfiniteQuery({
-  queryKey: ['records'],
-  queryFn: ({ pageParam }) => fetchRecords(pageParam),
-  getNextPageParam: (last) => last.nextId,
-  staleTime: 5 * 60 * 1000,  // 途中で削除されうるのにキャッシュを効かせている
-})
+並べ替え可能な一覧では配列の添字ではなく、項目の安定した識別子を`key`に使う。`key`が変わるとReactは別のコンポーネントとして扱い、stateを初期化するため、位置とstateの寿命を意図に合わせる。
 
-// 例: local state で画面の責務として取得
-const [records, setRecords] = useState<Record[]>([])
-const [nextId, setNextId] = useState<string | undefined>()
+## Custom Hook
 
-const loadMore = async () => {
-  const result = await fetchRecords(nextId)
-  setRecords(prev => [...prev, ...result.items])
-  setNextId(result.nextId)
-}
-```
+画面や領域を担当するコンポーネントは、custom hookでstate、Effect、ref、Context、query、form、イベント変換などを一つの画面の動作としてまとめ、表示部品へ必要な値と操作の通知先を渡せる。純粋な計算だけなら通常の関数に分ける。hook内部の`useState`で作ったstateはhookの呼び出しごとに別になる。Context、query、外部storeを読むhookは共有された値を返せるため、hookの名前ではなく内部で何を読み書きするかを見る。
 
-## custom hook の責務
+## TanStack Queryとcache
 
-React custom hook は「React の state/effect/ref を使う状態遷移」に限定する。純粋計算だけなら custom hook ではなく関数モジュールでよい。
-custom hook 内の `useState` は呼び出し元ごとに別インスタンスになる。同じ hook を複数コンポーネントから呼んでも状態は共有されない。
-共有状態が必要な場合は、最小共通親で hook を1回だけ呼んで props で渡すか、Context/外部 store に移す。
+TanStack Queryの`useQuery`では、取得結果を変える条件を`queryKey`と`queryFn`へ同じ意味で渡す。利用者、tenant、対象の識別子、filter、sort、page、cursorなどの条件をkeyから省くと、異なる結果が同じcacheへ置かれる。
 
+更新後はinvalidation、再取得、またはTanStack Queryのcache更新で古い結果を置き換える。ページングでは、cursor、sort、filter、snapshotがサーバーの結果と一致し、途中の更新による重複や欠落を扱えることを確認する。
 
-### Props 型の配置と hook の境界
+## Props型とhookの配置
 
-コンポーネント専用の Props 型は、基本的にそのコンポーネントと同じファイルへ置く。別ファイルの型定義は、複数コンポーネントで共有する契約、外部公開 API、またはドメインモデルとして独立した意味を持つ場合に使う。
+一つのコンポーネントだけが使うProps型は、その近くに置く。複数の部品が使う型は共通で使える場所へ置く。画面用hookから表示に必要な値と操作を返せば、コンポーネントはそれらを使って描画できる。
 
+## 参考資料
 
-```tsx
-// 避ける例: hook が特定 component の Props 契約に依存している
-import type { DialogProps } from './Dialog'
-
-export function useDialog(): { dialogProps: DialogProps } {
-  return { dialogProps: { open, onOpenChange } }
-}
-
-// 例: component 専用 Props は component 側に閉じる
-interface DialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}
-
-export function Dialog(props: DialogProps) {
-  return <Modal {...props} />
-}
-
-// 例: hook は UI 状態と操作を返し、呼び出し側で component に渡す
-const dialog = useDialog()
-return <Dialog open={dialog.open} onOpenChange={dialog.setOpen} />
-```
-
-## exhaustive-deps の扱い
-
-`react-hooks/exhaustive-deps` は無条件で従うものではなく、effect の意味を壊さない範囲で従う。mount-only 初期化で依存を増やすと挙動が壊れる場合は、理由を残して抑制する。
+- React: Thinking in React
+  https://react.dev/learn/thinking-in-react
+- React: Sharing State Between Components
+  https://react.dev/learn/sharing-state-between-components
+- React: Responding to Events
+  https://react.dev/learn/responding-to-events
+- React: Passing Data Deeply with Context
+  https://react.dev/learn/passing-data-deeply-with-context
+- React: Reusing Logic with Custom Hooks
+  https://react.dev/learn/reusing-logic-with-custom-hooks
+- React: useEffect
+  https://react.dev/reference/react/useEffect
+- React: useReducer
+  https://react.dev/reference/react/useReducer
+- React: State as a Snapshot
+  https://react.dev/learn/state-as-a-snapshot
+- React: You Might Not Need an Effect
+  https://react.dev/learn/you-might-not-need-an-effect
+- Martin Fowler: Passive View
+  https://martinfowler.com/eaaDev/PassiveScreen.html

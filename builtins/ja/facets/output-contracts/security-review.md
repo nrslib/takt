@@ -23,6 +23,8 @@
 {{include:output-contracts/base-review-reopened-findings}}
 | 1 | SEC-REOPENED-src-auth-L55 | 直前の裁定: 解消済み | 修正で再発 | `src/auth.ts:55 で再発` | 問題の説明 | 修正方法 |
 
+{{include:output-contracts/base-review-non-finding-concerns}}
+
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-verification-evidence}}
 
@@ -39,4 +41,5 @@
 - APPROVE で警告のみ → 警告を1～2行追加
 - 修正後レビューの APPROVE → 必要な裁定済み・解消済み・検証の欄だけを追加
 - 脆弱性あり → 確認済みの指摘をすべて表へ記載し、同じ原因の場所は集約
+- 例外: 非finding化した懸念（計画の留意点の持ち越しを含む）は内容がある場合は省略しない
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

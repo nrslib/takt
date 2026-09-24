@@ -127,6 +127,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: fix-plan-from-review-resolution
+    fix_replan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix-replan
     fix_plan_report_format:
       type: facet_ref
       facet_kind: report_format
@@ -284,6 +288,8 @@ steps:
         $param: review_policy
       fix_plan_instruction:
         $param: fix_plan_instruction
+      fix_replan_instruction:
+        $param: fix_replan_instruction
       fix_plan_report_format:
         $param: fix_plan_report_format
       final_gate_instruction:

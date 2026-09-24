@@ -45,6 +45,7 @@ function createSession({
     cwd: '/repo',
     outputMode: 'silent',
     formalSpec,
+    modelCheckTimeoutSeconds: 300,
     ...(persistSession === false ? { persistSession: false } : {}),
     ctx: makeSessionContext({
       provider: makeProvider({ setup: () => ({ call: mockCall }) }),
@@ -55,6 +56,7 @@ function createSession({
     }),
     strategy: {
       systemPrompt: 'system',
+      modelCheckTimeoutSeconds: 300,
       allowedTools: [],
       transformPrompt: (message: string) => message,
       resolveCurrentPromptConfiguration,

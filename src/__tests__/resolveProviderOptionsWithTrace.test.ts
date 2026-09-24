@@ -320,6 +320,48 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.originResolver('claude.effort')).toBe('env');
   });
 
+  it('deepseekHarness.reasoningEffort の env override を traced-config 実経路で返す', () => {
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: deepseek-harness\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'max';
+
+    const result = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(result.source).toBe('env');
+    expect(result.value?.deepseekHarness).toEqual({ reasoningEffort: 'max' });
+    expect(result.originResolver('deepseekHarness.reasoningEffort')).toBe('env');
+  });
+
+  it.each([undefined, 'max'])('rejects root JSON DeepSeek effort with dedicated override %s', (leafEffort) => {
+    process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
+      deepseek_harness: { reasoning_effort: 'high' },
+    });
+    if (leafEffort !== undefined) {
+      process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = leafEffort;
+    }
+
+    expect(() => resolveProviderOptionsWithTrace(projectDir)).toThrow(/reasoning_effort.*runtime profile/iu);
+  });
+
+  it('keeps dedicated DeepSeek env provenance alongside unrelated root JSON options', () => {
+    process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({ codex: { reasoning_effort: 'low' } });
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'max';
+
+    const result = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(result.value).toMatchObject({
+      codex: { reasoningEffort: 'low' }, deepseekHarness: { reasoningEffort: 'max' },
+    });
+    expect(result.originResolver('deepseekHarness.reasoningEffort')).toBe('env');
+  });
+
+  it('rejects an unsupported DeepSeek reasoning effort from the env override', () => {
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT = 'medium';
+
+    expect(() => resolveProviderOptionsWithTrace(projectDir)).toThrow(/reasoning_effort|medium/iu);
+  });
+
   it('provider_options の root JSON env override 配下も leaf origin を env として返す', () => {
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });

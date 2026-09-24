@@ -135,6 +135,7 @@ export class GlobalConfigManager {
       parsed.provider as RawProviderReference,
       parsed.model,
       parsed.provider_options as Record<string, unknown> | undefined,
+      { getOrigin: trace.getOrigin },
     );
     const config: GlobalConfig = {
       language: parsed.language,

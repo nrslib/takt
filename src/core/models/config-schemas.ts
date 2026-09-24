@@ -6,6 +6,7 @@ import { z } from 'zod/v4';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
+import { MAX_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS } from './config-types.js';
 import {
   AnalyticsConfigSchema,
   AutoRoutingSchema,
@@ -68,6 +69,12 @@ export const FormalSpecSettingSchema = z.union([
   z.object({
     mode: FormalSpecModeSchema.optional(),
     comments: z.boolean().optional(),
+    model_check_timeout_seconds: z.number()
+      .int()
+      .positive()
+      .max(MAX_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS)
+      .safe()
+      .optional(),
   }).strict(),
 ]);
 

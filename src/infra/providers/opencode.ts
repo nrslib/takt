@@ -9,7 +9,7 @@ import {
   type OpenCodeCallOptions,
   type OpenCodeCompactSessionOptions,
 } from '../opencode/index.js';
-import { keepsOpenCodeAllowedToolWithoutEdit } from '../opencode/allowedTools.js';
+import { keepsOpenCodeAllowedToolWithoutEdit, toOpenCodeMcpToolName } from '../opencode/allowedTools.js';
 import { resolveOpenCodeAllowedPermissions } from '../opencode/types.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
@@ -52,6 +52,9 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
   const model = requireOpenCodeModel(options.model);
 
   const openCodeAllowedTools = options.allowedTools;
+  const allowedMcpTools = options.preparedMcp?.taskStateMcpTools
+    ?.map(toOpenCodeMcpToolName)
+    .filter((tool): tool is string => tool !== undefined);
   if (options.imageAttachments && options.imageAttachments.length > 0) {
     log.info('OpenCode provider does not support imageAttachments; ignoring');
   }
@@ -62,6 +65,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     sessionId: options.sessionId,
     model,
     allowedTools: openCodeAllowedTools,
+    ...(allowedMcpTools === undefined ? {} : { allowedMcpTools }),
     permissionMode: options.permissionMode,
     networkAccess: options.providerOptions?.opencode?.networkAccess,
     variant: options.providerOptions?.opencode?.variant,

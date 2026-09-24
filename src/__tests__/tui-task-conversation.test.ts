@@ -50,6 +50,7 @@ function createPlan(strategy: Partial<ConversationStrategy>): ConversationPlan {
       allowedTools: [],
       transformPrompt: (message: string) => message,
       introMessage: 'Retry mode - describe additional instructions.',
+      modelCheckTimeoutSeconds: strategy.modelCheckTimeoutSeconds ?? 300,
       ...strategy,
       formalSpec: strategy.formalSpec ?? false,
     },

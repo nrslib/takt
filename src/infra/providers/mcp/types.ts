@@ -68,6 +68,8 @@ export interface PreparedProviderMcp {
   serverConfig?: Record<string, unknown>;
   /** Identity of the resolved set (for shared server pool isolation). */
   identity?: string;
+  /** Trusted task-state MCP tools allowed for this prepared server set. */
+  taskStateMcpTools?: readonly string[];
   /** Isolated workspace config root (Cursor). */
   configRoot?: string;
   /** Resolved server set for test inspection (Mock). */

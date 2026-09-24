@@ -33,6 +33,7 @@ assistant:
   formal_spec:
     mode: 'y/N'                # Alloy/Quint 模式：true、false、Y/n 或 y/N（默认 y/N）
     comments: true             # 为每个形式结构添加自然语言含义注释（默认 true）
+    model_check_timeout_seconds: 300  # /verify 中 quint verify 与 Alloy 模型检查的上限秒数，1～86400 的整数（默认 300）
 # auto_fetch: false           # 创建 clone 前 fetch remote（默认 false）
 # base_branch: main           # 创建 clone 的基分支（默认使用 remote 默认分支）
 
@@ -191,7 +192,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` 并行任务数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | 交互模式中的 step 预览数 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode` 和 `comments`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 300），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
@@ -372,7 +373,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` 的迭代限制绕过 |
 | `base_branch` | string | - | 创建 clone 的基分支 |
 | `assistant.init_files` | string[] | - | 仅项目级的 assistant 初始上下文文件。路径必须相对于项目根；绝对路径、解析到项目根之外的路径，以及 `.env*`、`.npmrc`、`.pypirc`、`.netrc`、`*.pem`、`*.key` 和 `.git/**` 等敏感文件模式会被拒绝。路径不存在、指向目录或文件不可读时会明确报错。最多 16 个文件，每个最多 256 KiB，合计最多 1 MiB。未设置或为空时，TAKT 不会自动发现 `CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` 或其他文件。 |
-| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true`（来自全局/默认值） | 项目级覆盖，添加 Alloy/Quint 指导并要求同时用两种记法表达。object 格式可独立设置 `mode` 和 `comments`，未设置的字段回退到全局或默认值。`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。项目值优先于全局值。提示回答仅在当前会话中生效，恢复会话时重新解析。ACP 和非 TTY 不提问，使用配置的默认答案。Gherkin 指导仅适用于开发和实现任务。已弃用的 `assistant.gherkin` 会警告后忽略，不转换、不持久化，也不修改配置文件。 |
+| `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true`（来自全局/默认值） | 项目级覆盖，添加 Alloy/Quint 指导并要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`，未设置的字段回退到全局或默认值。`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。项目值优先于全局值。提示回答仅在当前会话中生效，恢复会话时重新解析。ACP 和非 TTY 不提问，使用配置的默认答案。Gherkin 指导仅适用于开发和实现任务。已弃用的 `assistant.gherkin` 会警告后忽略，不转换、不持久化，也不修改配置文件。 |
 | `provider_options` | object | - | provider 专属选项 |
 | `provider_profiles` | object | - | provider 专属权限 profile |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自动检测 | 覆盖全局 VCS provider |
@@ -922,6 +923,30 @@ provider_options:
     runtime_mode: exe                  # exe 或 node；node 仅用于显式 SDK 开发模式
 ```
 
+DeepSeek 的推理强度只能通过 `runtime.yaml` 的 provider profile 或标准 TAKT 环境变量
+override 配置：
+
+```yaml
+version: 1
+provider:
+  defaults:
+    profile: deepseek
+  profiles:
+    deepseek:
+      provider: deepseek-harness
+      model: deepseek-v4-flash
+      options:
+        reasoning_effort: high
+```
+
+允许的值为 `off`、`low`、`high` 和 `max`。省略时不设置该字段，由 SDK 使用默认值。
+对应的环境变量 override 是
+`TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT`。旧版 `provider_options`、
+workflow step、persona 和 routing entry 不支持此选项；在那里指定会产生配置错误。
+
+更改或清除推理强度会从下一轮生效，保留会话 ID 和已保存的历史记录。
+必要时只替换该会话的 bridge，不影响其他会话。替换失败时返回错误，不会继续使用旧强度。
+
 DeepSeek Harness 的 `model` 字段既接受 `deepseek-v4-flash` 这样的纯 model
 引用，也接受 `openai/gpt-5.4` 或 `my-gateway/org/custom-model` 这样的
 `<route>/<model>` 格式。TAKT 将第一个 `/` 之前的文本作为 provider route，
@@ -936,7 +961,7 @@ allowlist，也不转换 provider alias。route 和 model 两部分都会按原�
 provider 和 model 字段传给 bridge/SDK；若 SDK 拒绝，错误会标明原始引用以及
 bridge/SDK 的失败位置。
 
-managed interpreter 由 install command 固定，不能通过 provider option 选择。project runtime profile 的 `base_url` 只能使用 loopback。
+managed interpreter 由 install command 固定，不能通过 provider option 选择。project runtime profile 的 `base_url` 只能使用 loopback。对应的 DeepSeek provider option 环境变量还包括 `_MAX_TOKENS`、`_REQUEST_TIMEOUT_MS`、`_SHUTDOWN_TIMEOUT_MS`、`_RUNTIME_MODE` 和 `_REASONING_EFFORT`。
 
 带有 `session_key` 的 workflow 会复用 session；one-shot call 会立即关闭 bridge。官方 event 会转换成 TAKT 的 text、thinking、tool-use、tool-result、error 和 result event。system prompt、MCP server map、图片附件、structured output 和 `maxTurns` 不属于官方 SDK 调用，会被警告并忽略。工具组合 option 不在此 provider contract 中公开。
 

@@ -197,6 +197,7 @@ export class WorkflowEngine extends EventEmitter {
         cwd,
         provider: effectiveAutoRouting.router.provider,
         model: effectiveAutoRouting.router.model,
+        providerOptions: effectiveAutoRouting.router.providerOptions,
         language: options.language,
         childProcessEnv: options.childProcessEnv,
         abortSignal: options.abortSignal,

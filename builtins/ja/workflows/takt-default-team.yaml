@@ -16,6 +16,7 @@ steps:
       testing_instruction: scenario-based-write-tests-first
       testing_report_format: scenario-based-test-report
       fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
+      fix_replan_instruction: scenario-based-fix-replan
       fix_plan_report_format: scenario-based-fix-plan
       final_gate_instruction: scenario-based-supervise-review-resolution
       reviewer_suite: takt-development-review

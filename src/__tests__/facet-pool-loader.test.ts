@@ -272,6 +272,95 @@ describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, 
       expect(pool?.candidates.map((c) => c.id)).toEqual(['backend', 'transaction', 'backward-compatibility']);
     });
 
+    it('should resolve an external pool facet parent beside the source without capturing the caller layer', () => {
+      const poolBody = `policies:
+  child-policy: ./facets/policies/child-policy.md
+candidates:
+  - id: child
+    description: child policy
+    policy: child-policy
+`;
+      writeProjectPool(projectDir, 'implementation-fix', poolBody);
+      writeFacet(
+        projectDir,
+        '.takt/facet-pools/facets/policies/child-policy.md',
+        '{extends:base-policy}\n# Pool child\n',
+      );
+      writeFacet(projectDir, '.takt/facet-pools/facets/policies/base-policy.md', '# Pool base\n');
+      writeFacet(projectDir, 'facets/policies/base-policy.md', '# Caller base\n');
+
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'external-pool-sibling-parent',
+        EXTERNAL_POOL_WORKFLOW.replace('max_selected: 3', 'max_selected: 1'),
+        'fix',
+      );
+      const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+
+      expect(workflow.facetPools?.fix?.candidates[0]?.resolvedPolicyContents?.[0]?.content)
+        .toBe('# Pool base\n\n# Pool child\n');
+    });
+
+    it('should reject a symlinked external pool facet parent instead of reading outside the pool', () => {
+      const poolBody = `policies:
+  child-policy: ./facets/policies/child-policy.md
+candidates:
+  - id: child
+    description: child policy
+    policy: child-policy
+`;
+      writeProjectPool(projectDir, 'implementation-fix', poolBody);
+      writeFacet(
+        projectDir,
+        '.takt/facet-pools/facets/policies/child-policy.md',
+        '{extends:base-policy}\n# Pool child\n',
+      );
+      const outsideParentPath = writeFacet(projectDir, 'secrets/base-policy.md', '# Outside base\n');
+      symlinkSync(
+        outsideParentPath,
+        join(projectDir, '.takt/facet-pools/facets/policies/base-policy.md'),
+      );
+
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'external-pool-symlink-parent',
+        EXTERNAL_POOL_WORKFLOW.replace('max_selected: 3', 'max_selected: 1'),
+        'fix',
+      );
+
+      expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow(
+        /Facet inheritance parent must stay beside the source facet and must not use symlinks/,
+      );
+    });
+
+    it('should reject an external pool parent reference that escapes the sibling facet namespace', () => {
+      const poolBody = `policies:
+  child-policy: ./facets/policies/child-policy.md
+candidates:
+  - id: child
+    description: child policy
+    policy: child-policy
+`;
+      writeProjectPool(projectDir, 'implementation-fix', poolBody);
+      writeFacet(
+        projectDir,
+        '.takt/facet-pools/facets/policies/child-policy.md',
+        '{extends:../outside-policy}\n# Pool child\n',
+      );
+      writeFacet(projectDir, '.takt/facet-pools/facets/outside-policy.md', '# Outside policy\n');
+
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'external-pool-traversal-parent',
+        EXTERNAL_POOL_WORKFLOW.replace('max_selected: 3', 'max_selected: 1'),
+        'fix',
+      );
+
+      expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow(
+        /only bare facet names are supported/,
+      );
+    });
+
     it('should NOT capture a same-named alias from the caller workflow (C-EXTERNAL-POOL 暗黙 capture 拒否)', () => {
       // Caller defines a policy alias "transaction-correctness" pointing to a DIFFERENT file.
       // External pool defines its own "transaction-correctness" pointing to its own file.

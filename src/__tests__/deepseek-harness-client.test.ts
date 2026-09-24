@@ -8,10 +8,12 @@ import {
   callDeepSeekHarness,
   closeDeepSeekHarnessProcesses,
 } from '../infra/deepseek-harness/index.js';
+import { createSessionDispatchQueue } from '../infra/deepseek-harness/session-dispatch.js';
 import {
   DEEPSEEK_HARNESS_RUNTIME_VERSION,
   DEEPSEEK_HARNESS_SDK_VERSION,
 } from '../infra/deepseek-harness/constants.js';
+import type { DeepSeekHarnessProviderOptions } from '../core/models/workflow-provider-options.js';
 
 function isSupportedPythonVersion(version: readonly [number, number]): boolean {
   const minimum: readonly [number, number] = [3, 10];
@@ -115,7 +117,7 @@ class JsonRpcError(Exception):
     pass
 
 class DeepSeekHarnessConfig:
-    def __init__(self, provider, model, cwd, runtime_cwd, max_tokens=None, request_timeout_seconds=None, shutdown_timeout_seconds=None):
+    def __init__(self, provider, model, cwd, runtime_cwd, max_tokens=None, request_timeout_seconds=None, shutdown_timeout_seconds=None, reasoning_effort=None):
         kwargs = {
             'provider': provider,
             'model': model,
@@ -125,6 +127,10 @@ class DeepSeekHarnessConfig:
             'request_timeout_seconds': request_timeout_seconds,
             'shutdown_timeout_seconds': shutdown_timeout_seconds,
         }
+        if reasoning_effort is not None:
+            if reasoning_effort not in ('off', 'low', 'high', 'max'):
+                raise ValueError('unsupported reasoning_effort')
+            kwargs['reasoning_effort'] = reasoning_effort
         self.kwargs = kwargs
 
 class DeepSeekHarness:
@@ -137,6 +143,8 @@ class DeepSeekHarness:
             config_file = os.path.join(kwargs['cwd'], 'bridge-start-configs.jsonl')
             with open(config_file, 'a', encoding='utf-8') as config:
                 config.write(json.dumps(kwargs, sort_keys=True) + '\\n')
+        if kwargs.get('reasoning_effort') == 'max' and sys.argv[0] != '-c' and os.path.exists(${JSON.stringify(path.join(root, 'fail-max-effort'))}):
+            raise RuntimeError('reasoning effort process startup failure')
         if kwargs.get('provider') == 'unknown-route':
             raise RuntimeError('SDK rejected unknown provider route "unknown-route"')
         if kwargs.get('model') == 'unknown-model':
@@ -170,6 +178,14 @@ class DeepSeekHarness:
     def run(self, input, *, session_id=None, on_notification=None):
         if input == 'hang':
             time.sleep(30)
+        if input == 'block-turn':
+            with open(${JSON.stringify(path.join(root, 'turn-started.marker'))}, 'w', encoding='utf-8') as marker:
+                marker.write('started\\n')
+            while not os.path.exists(${JSON.stringify(path.join(root, 'turn-release.marker'))}):
+                time.sleep(0.01)
+        if input == 'mark-turn-start':
+            with open(${JSON.stringify(path.join(root, 'third-turn-started.marker'))}, 'w', encoding='utf-8') as marker:
+                marker.write('started\\n')
         if input == 'fail-secret':
             raise RuntimeError(os.environ.get('DEEPSEEK_API_KEY', 'missing-secret'))
         if input == 'malformed-json':
@@ -179,6 +195,13 @@ class DeepSeekHarness:
         if input == 'unexpected-exit':
             os._exit(23)
         active_session = session_id or 'generated-session'
+        history_path = os.path.join(os.environ['DSH_HOME'], 'session-history.jsonl')
+        with open(history_path, 'a', encoding='utf-8') as history_file:
+            history_file.write(json.dumps({
+                'sessionId': active_session,
+                'prompt': input,
+                'reasoning_effort': self.kwargs.get('reasoning_effort'),
+            }, sort_keys=True) + '\\n')
         if input.startswith('capture-prompt:'):
             with open(os.path.join(self.kwargs['cwd'], 'received-prompt.txt'), 'w', encoding='utf-8') as prompt_file:
                 prompt_file.write(input)
@@ -266,6 +289,8 @@ class DeepSeekHarness:
                 for event in events:
                     on_notification(Notification('session.event', {'sessionId': active_session, 'event': event}))
         final_response = 'firstsecond' if input == 'message-events' else (secret if secret_events or input == 'split-secret-events' else 'hello')
+        if input == 'empty-response':
+            final_response = ''
         return Result(active_session, final_response, result_finish_reason)
 `, 'utf8');
     await writeFile(path.join(root, 'sitecustomize.py'), `
@@ -355,6 +380,176 @@ sys.implementation = types.SimpleNamespace(
       provider: 'deepseek-official',
       model: 'deepseek-v4-flash',
     });
+    expect(configuration).not.toHaveProperty('reasoning_effort');
+  });
+
+  it.each(['off', 'low', 'high', 'max'] as const)('passes reasoning_effort=%s to the SDK constructor', async (reasoningEffort) => {
+    const providerOptions = {
+      requestTimeoutMs: 10_000,
+      reasoningEffort,
+    } satisfies DeepSeekHarnessProviderOptions;
+    const response = await callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      providerOptions,
+    });
+
+    const [configuration] = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(response.status).toBe('done');
+    expect(configuration).toMatchObject({ reasoning_effort: reasoningEffort });
+  });
+
+  it('keeps the effort captured for a running turn when the caller mutates its options', async () => {
+    const providerOptions: DeepSeekHarnessProviderOptions = {
+      requestTimeoutMs: 10_000,
+      reasoningEffort: 'high',
+    };
+    const pending = callDeepSeekHarness('worker', 'hello', {
+      cwd: root,
+      providerOptions,
+    });
+    providerOptions.reasoningEffort = 'max';
+    const response = await pending;
+
+    const [configuration] = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(response.status).toBe('done');
+    expect(configuration).toMatchObject({ reasoning_effort: 'high' });
+  });
+
+  it('keeps queued turn options captured before the session dispatch waits', async () => {
+    const first = callDeepSeekHarness('worker', 'block-turn', {
+      cwd: root,
+      sessionId: 'queued-mutation-session',
+      providerOptions: {
+        requestTimeoutMs: 10_000,
+        reasoningEffort: 'high',
+      },
+    });
+    await vi.waitFor(async () => {
+      await expect(readFile(path.join(root, 'turn-started.marker'), 'utf8')).resolves.toContain('started');
+    });
+
+    const secondProviderOptions: DeepSeekHarnessProviderOptions = {
+      requestTimeoutMs: 10_000,
+      reasoningEffort: 'max',
+    };
+    const second = callDeepSeekHarness('worker', 'queued-turn', {
+      cwd: root,
+      sessionId: 'queued-mutation-session',
+      providerOptions: secondProviderOptions,
+    });
+    secondProviderOptions.reasoningEffort = 'low';
+    await writeFile(path.join(root, 'turn-release.marker'), '', 'utf8');
+
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    expect(firstResponse).toMatchObject({ status: 'done', sessionId: 'queued-mutation-session' });
+    expect(secondResponse).toMatchObject({ status: 'done', sessionId: 'queued-mutation-session' });
+
+    const configurations = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(configurations.map((configuration) => configuration.reasoning_effort))
+      .toEqual(['high', 'max']);
+
+    const history = (await readFile(path.join(root, 'global', 'deepseek-harness', 'dsh-home', 'session-history.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(history).toEqual([
+      { prompt: 'block-turn', reasoning_effort: 'high', sessionId: 'queued-mutation-session' },
+      { prompt: 'queued-turn', reasoning_effort: 'max', sessionId: 'queued-mutation-session' },
+    ]);
+  });
+
+  it('aborts a session turn while it is waiting for the previous turn', async () => {
+    const first = callDeepSeekHarness('worker', 'block-turn', {
+      cwd: root,
+      sessionId: 'queued-abort-session',
+      providerOptions: { requestTimeoutMs: 10_000 },
+    });
+    await vi.waitFor(async () => {
+      await expect(readFile(path.join(root, 'turn-started.marker'), 'utf8')).resolves.toContain('started');
+    });
+
+    const controller = new AbortController();
+    const second = callDeepSeekHarness('worker', 'queued-turn', {
+      cwd: root,
+      sessionId: 'queued-abort-session',
+      abortSignal: controller.signal,
+      providerOptions: { requestTimeoutMs: 10_000 },
+    });
+    controller.abort(new Error('cancelled while waiting for session dispatch'));
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const secondResponse = await Promise.race([
+        second,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('queued session abort was not observed')), 1_000);
+        }),
+      ]);
+      expect(secondResponse).toMatchObject({
+        status: 'error',
+        failureCategory: 'external_abort',
+      });
+    } finally {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+      await writeFile(path.join(root, 'turn-release.marker'), '', 'utf8');
+    }
+
+    await expect(first).resolves.toMatchObject({ status: 'done', sessionId: 'queued-abort-session' });
+    const history = (await readFile(path.join(root, 'global', 'deepseek-harness', 'dsh-home', 'session-history.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(history).toEqual([
+      { prompt: 'block-turn', reasoning_effort: null, sessionId: 'queued-abort-session' },
+    ]);
+  });
+
+  it('keeps a session tail until the preceding turn completes after a queued abort', async () => {
+    const first = callDeepSeekHarness('worker', 'block-turn', {
+      cwd: root,
+      sessionId: 'queued-abort-order-session',
+      providerOptions: { requestTimeoutMs: 10_000 },
+    });
+    await vi.waitFor(async () => {
+      await expect(readFile(path.join(root, 'turn-started.marker'), 'utf8')).resolves.toContain('started');
+    });
+
+    const controller = new AbortController();
+    const second = callDeepSeekHarness('worker', 'queued-turn', {
+      cwd: root,
+      sessionId: 'queued-abort-order-session',
+      abortSignal: controller.signal,
+      providerOptions: { requestTimeoutMs: 10_000 },
+    });
+    const third = callDeepSeekHarness('worker', 'mark-turn-start', {
+      cwd: root,
+      sessionId: 'queued-abort-order-session',
+      providerOptions: { requestTimeoutMs: 10_000 },
+    });
+    controller.abort(new Error('cancelled while waiting for session dispatch'));
+
+    await expect(second).resolves.toMatchObject({
+      status: 'error',
+      failureCategory: 'external_abort',
+    });
+    await expect(readFile(path.join(root, 'third-turn-started.marker'), 'utf8')).rejects.toThrow();
+
+    await writeFile(path.join(root, 'turn-release.marker'), '', 'utf8');
+    await expect(first).resolves.toMatchObject({ status: 'done', sessionId: 'queued-abort-order-session' });
+    await expect(third).resolves.toMatchObject({ status: 'done', sessionId: 'queued-abort-order-session' });
+    await expect(readFile(path.join(root, 'third-turn-started.marker'), 'utf8')).resolves.toContain('started');
   });
 
   it('propagates all DeepSeek provider options to the SDK and bridge environment', async () => {
@@ -884,6 +1079,19 @@ sys.implementation = types.SimpleNamespace(
     expect(events.some((event) => event.type === 'result' && event.data.success === true)).toBe(false);
   });
 
+  it.each(['reason:future-reason', 'empty-response'])('closes a session process after response validation fails for %s before its queued turn', async (prompt) => {
+    const options = { cwd: root, sessionId: 'postrun-cleanup',
+      providerOptions: { requestTimeoutMs: 10_000, shutdownTimeoutMs: 100 } };
+    const [failed, next] = await Promise.all([
+      callDeepSeekHarness('worker', prompt, options),
+      callDeepSeekHarness('worker', 'next-turn', options),
+    ]);
+    expect(failed).toMatchObject({ status: 'error', failureCategory: 'provider_stream_parse_error', sessionId: options.sessionId });
+    expect(next).toMatchObject({ status: 'done', sessionId: options.sessionId });
+    expect((await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8')).trim().split('\n'))
+      .toHaveLength(2);
+  });
+
   it('rejects an unknown finish reason as a provider stream protocol error', async () => {
     const response = await callDeepSeekHarness('worker', 'reason:future-reason', {
       cwd: root,
@@ -1011,6 +1219,42 @@ sys.implementation = types.SimpleNamespace(
     expect(response.content).toContain('jsonrpc failure');
   });
 
+  it('does not let protocol-error cleanup race with the next queued session turn', async () => {
+    const providerOptions = {
+      requestTimeoutMs: 10_000,
+      shutdownTimeoutMs: 100,
+    } satisfies DeepSeekHarnessProviderOptions;
+    const [failed, next] = await Promise.all([
+      callDeepSeekHarness('worker', 'malformed-frame', {
+        cwd: root,
+        sessionId: 'protocol-cleanup-session',
+        providerOptions,
+      }),
+      callDeepSeekHarness('worker', 'queued-turn', {
+        cwd: root,
+        sessionId: 'protocol-cleanup-session',
+        providerOptions,
+      }),
+    ]);
+
+    expect(failed).toMatchObject({ status: 'error', failureCategory: 'provider_stream_parse_error' });
+    expect(next).toMatchObject({ status: 'done', sessionId: 'protocol-cleanup-session' });
+
+    const configurations = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(configurations).toHaveLength(2);
+    const history = (await readFile(path.join(root, 'global', 'deepseek-harness', 'dsh-home', 'session-history.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(history).toEqual([
+      { prompt: 'malformed-frame', reasoning_effort: null, sessionId: 'protocol-cleanup-session' },
+      { prompt: 'queued-turn', reasoning_effort: null, sessionId: 'protocol-cleanup-session' },
+    ]);
+  });
+
   it('maps an unexpected bridge exit to a provider error without hanging', async () => {
     const response = await callDeepSeekHarness('worker', 'unexpected-exit', {
       cwd: root,
@@ -1054,6 +1298,170 @@ sys.implementation = types.SimpleNamespace(
       .trim()
       .split('\n'))
       .toHaveLength(1);
+  });
+
+  it('isolates process replacement from another session using the same configuration', async () => {
+    for (const sessionId of ['effort-a', 'effort-b']) {
+      expect((await callDeepSeekHarness('worker', 'initial', {
+        cwd: root, sessionId, providerOptions: { reasoningEffort: 'high' },
+      })).status).toBe('done');
+    }
+    const results = await Promise.all([
+      callDeepSeekHarness('worker', 'switch-a', {
+        cwd: root, sessionId: 'effort-a', providerOptions: { reasoningEffort: 'max' },
+      }),
+      callDeepSeekHarness('worker', 'continue-b', {
+        cwd: root, sessionId: 'effort-b', providerOptions: { reasoningEffort: 'high' },
+      }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(['done', 'done']);
+    const configurations = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(configurations.map((config) => config.reasoning_effort)).toEqual(['high', 'high', 'max']);
+  });
+
+  it('preserves the session when its only option is added and removed', async () => {
+    for (const reasoningEffort of [undefined, 'high', undefined] as const) {
+      const result = await callDeepSeekHarness('worker', 'turn', {
+        cwd: root, sessionId: 'only-effort-session',
+        ...(reasoningEffort === undefined ? {} : { providerOptions: { reasoningEffort } }),
+      });
+      expect(result).toMatchObject({ status: 'done', sessionId: 'only-effort-session' });
+    }
+  });
+
+  it('changes reasoning effort between turns without losing the session or durable history', async () => {
+    const first = await callDeepSeekHarness('worker', 'turn-1', {
+      cwd: root,
+      sessionId: 'effort-session',
+      providerOptions: {
+        requestTimeoutMs: 10_000,
+        reasoningEffort: 'high',
+      },
+    });
+    const second = await callDeepSeekHarness('worker', 'turn-2', {
+      cwd: root,
+      sessionId: 'effort-session',
+      providerOptions: {
+        requestTimeoutMs: 10_000,
+        reasoningEffort: 'max',
+      },
+    });
+    const third = await callDeepSeekHarness('worker', 'turn-3', {
+      cwd: root,
+      sessionId: 'effort-session',
+      providerOptions: { requestTimeoutMs: 10_000 },
+    });
+
+    expect(first).toMatchObject({ status: 'done', sessionId: 'effort-session' });
+    expect(second).toMatchObject({ status: 'done', sessionId: 'effort-session' });
+    expect(third).toMatchObject({ status: 'done', sessionId: 'effort-session' });
+
+    const configurations = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(configurations).toHaveLength(3);
+    expect(configurations.map((configuration) => configuration.reasoning_effort))
+      .toEqual(['high', 'max', undefined]);
+
+    const history = (await readFile(path.join(root, 'global', 'deepseek-harness', 'dsh-home', 'session-history.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(history).toEqual([
+      { prompt: 'turn-1', reasoning_effort: 'high', sessionId: 'effort-session' },
+      { prompt: 'turn-2', reasoning_effort: 'max', sessionId: 'effort-session' },
+      { prompt: 'turn-3', reasoning_effort: null, sessionId: 'effort-session' },
+    ]);
+  });
+
+  it('serializes concurrent effort changes for one session before selecting the replacement process', async () => {
+    const [first, second] = await Promise.all([
+      callDeepSeekHarness('worker', 'parallel-high', {
+        cwd: root,
+        sessionId: 'concurrent-effort-session',
+        providerOptions: {
+          requestTimeoutMs: 10_000,
+          reasoningEffort: 'high',
+        },
+      }),
+      callDeepSeekHarness('worker', 'parallel-max', {
+        cwd: root,
+        sessionId: 'concurrent-effort-session',
+        providerOptions: {
+          requestTimeoutMs: 10_000,
+          reasoningEffort: 'max',
+        },
+      }),
+    ]);
+
+    expect(first).toMatchObject({ status: 'done', sessionId: 'concurrent-effort-session' });
+    expect(second).toMatchObject({ status: 'done', sessionId: 'concurrent-effort-session' });
+
+    const configurations = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(configurations.map((configuration) => configuration.reasoning_effort))
+      .toEqual(['high', 'max']);
+
+    const history = (await readFile(path.join(root, 'global', 'deepseek-harness', 'dsh-home', 'session-history.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(history.map((entry) => [entry.prompt, entry.reasoning_effort, entry.sessionId]))
+      .toEqual([
+        ['parallel-high', 'high', 'concurrent-effort-session'],
+        ['parallel-max', 'max', 'concurrent-effort-session'],
+      ]);
+  });
+
+  it('propagates a replacement process failure instead of continuing with the previous effort', async () => {
+    const first = await callDeepSeekHarness('worker', 'turn-1', {
+      cwd: root,
+      sessionId: 'failed-replacement-session',
+      providerOptions: {
+        requestTimeoutMs: 10_000,
+        reasoningEffort: 'high',
+      },
+    });
+    await writeFile(path.join(root, 'fail-max-effort'), 'fail', 'utf8');
+    const failed = await callDeepSeekHarness('worker', 'turn-2', {
+      cwd: root,
+      sessionId: 'failed-replacement-session',
+      providerOptions: {
+        requestTimeoutMs: 10_000,
+        reasoningEffort: 'max',
+      },
+    });
+    const third = await callDeepSeekHarness('worker', 'turn-3', {
+      cwd: root,
+      sessionId: 'failed-replacement-session',
+      providerOptions: {
+        requestTimeoutMs: 10_000,
+        reasoningEffort: 'high',
+      },
+    });
+
+    expect(first.status).toBe('done');
+    expect(failed.status).toBe('error');
+    expect(failed.content).toContain('reasoning effort process startup failure');
+    expect(third.status).toBe('done');
+    const configurations = (await readFile(path.join(root, 'bridge-start-configs.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(configurations.map((configuration) => configuration.reasoning_effort))
+      .toEqual(['high', 'max', 'high']);
+    expect([first.sessionId, failed.sessionId, third.sessionId])
+      .toEqual(Array.from({ length: 3 }, () => 'failed-replacement-session'));
+    const history = (await readFile(path.join(root, 'global', 'deepseek-harness', 'dsh-home', 'session-history.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(history).toEqual([
+      { prompt: 'turn-1', reasoning_effort: 'high', sessionId: 'failed-replacement-session' },
+      { prompt: 'turn-3', reasoning_effort: 'high', sessionId: 'failed-replacement-session' },
+    ]);
   });
 
   it('reuses one process when bare and explicit default routes have the same effective identity', async () => {
@@ -1183,5 +1591,79 @@ sys.implementation = types.SimpleNamespace(
     expect(response.status).toBe('error');
     expect(response.failureCategory).toBe('external_abort');
     expect(Date.now() - startedAt).toBeLessThan(10_000);
+  });
+});
+
+describe('DeepSeek Harness session dispatch ordering', () => {
+  it('keeps the session tail after a queued caller abort', async () => {
+    const queue = createSessionDispatchQueue();
+    let releaseFirst: (() => void) | undefined;
+    let firstFinished = false;
+    let thirdStarted = false;
+    const first = queue.run('session', undefined, async () => new Promise<void>((resolve) => {
+      releaseFirst = (): void => {
+        firstFinished = true;
+        resolve();
+      };
+    }));
+    await vi.waitFor(() => {
+      expect(releaseFirst).toBeTypeOf('function');
+    });
+
+    const controller = new AbortController();
+    const second = queue.run('session', controller.signal, async () => {
+      throw new Error('aborted turn must not run');
+    });
+    const third = queue.run('session', undefined, async () => {
+      thirdStarted = true;
+      expect(firstFinished).toBe(true);
+    });
+    controller.abort(new Error('cancelled while waiting for session dispatch'));
+
+    await expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(thirdStarted).toBe(false);
+
+    releaseFirst?.();
+    await expect(first).resolves.toBeUndefined();
+    await expect(third).resolves.toBeUndefined();
+    expect(thirdStarted).toBe(true);
+  });
+
+  it('does not start a pre-aborted queued operation or release the session tail', async () => {
+    const queue = createSessionDispatchQueue();
+    let releaseFirst: (() => void) | undefined;
+    let firstFinished = false;
+    let secondStarted = false;
+    let thirdStarted = false;
+    const first = queue.run('session', undefined, async () => new Promise<void>((resolve) => {
+      releaseFirst = (): void => {
+        firstFinished = true;
+        resolve();
+      };
+    }));
+    await vi.waitFor(() => {
+      expect(releaseFirst).toBeTypeOf('function');
+    });
+
+    const controller = new AbortController();
+    controller.abort(new Error('already cancelled'));
+    const second = queue.run('session', controller.signal, async () => {
+      secondStarted = true;
+    });
+    const third = queue.run('session', undefined, async () => {
+      thirdStarted = true;
+      expect(firstFinished).toBe(true);
+    });
+
+    await expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(secondStarted).toBe(false);
+    expect(thirdStarted).toBe(false);
+
+    releaseFirst?.();
+    await expect(first).resolves.toBeUndefined();
+    await expect(third).resolves.toBeUndefined();
+    expect(thirdStarted).toBe(true);
   });
 });

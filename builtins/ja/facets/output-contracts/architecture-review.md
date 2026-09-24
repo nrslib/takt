@@ -29,6 +29,8 @@
 {{include:output-contracts/base-review-reopened-findings}}
 | 1 | ARCH-REOPENED-src-file-L55 | design-violation | 直前の裁定: 解消済み | 修正で再発 | `src/file.ts:55 で再発` | 問題の説明 | 修正方法 |
 
+{{include:output-contracts/base-review-non-finding-concerns}}
+
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-verification-evidence}}
 
@@ -41,6 +43,6 @@
 ```
 
 **認知負荷軽減ルール:**
-- APPROVE → サマリー + 検証証跡 + 影響経路の確認証跡。それ以外は省略
+- APPROVE → サマリー + 検証証跡 + 影響経路の確認証跡。それ以外は省略。非finding化した懸念（計画の留意点の持ち越しを含む）は内容がある場合は省略しない
 - REJECT → 確認済みの指摘をすべて表で記載し、同じ原因の場所は集約
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

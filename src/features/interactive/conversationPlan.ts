@@ -32,6 +32,7 @@ import {
 import { formatRunSessionForPrompt, type RunSessionContext } from './runSessionReader.js';
 import { initializeSession } from './sessionInitialization.js';
 import { resolveTaskStateMcp } from './taskStateMcp.js';
+import { loadFormalSpecVerifierConstraints } from './formalSpecPrompts.js';
 
 /**
  * The order `/replay` resubmits and `/retry` offers, or nothing when there is
@@ -92,14 +93,16 @@ export function buildInteractiveSystemPrompt(
     : EMPTY_RUN_SESSION_VARS;
   const enableTellCommand = input.enableTellCommand ?? true;
   const tellAvailable = enableTellCommand;
+  const formalSpec = input.formalSpec ?? false;
 
   return loadTemplate('score_interactive_system_prompt', lang, {
     grillMe: input.grillMe,
     tellAvailable,
     investigationPolicy: serializeInvestigationPolicy(INTERACTIVE_INVESTIGATION_POLICY),
-    formalSpec: input.formalSpec ?? false,
+    formalSpec,
     formalSpecComments: input.formalSpecComments ?? true,
-    formalSpecCommentsEnabled: (input.formalSpec ?? false) && (input.formalSpecComments ?? true),
+    formalSpecCommentsEnabled: formalSpec && (input.formalSpecComments ?? true),
+    formalSpecVerifierConstraints: formalSpec ? loadFormalSpecVerifierConstraints(lang) : '',
     hasWorkflowPreview,
     workflowStructure: input.workflowContext?.workflowStructure ?? '',
     stepDetails: hasWorkflowPreview ? formatStepPreviews(stepPreviews, lang) : '',
@@ -140,8 +143,14 @@ export interface AssistantConversationInput {
   formalSpec: boolean;
   /** Whether formal notation blocks must include natural-language meaning comments. */
   formalSpecComments: boolean;
+  /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
+  modelCheckTimeoutSeconds: number;
   /** Resolve the formal-spec setting again when the user resumes another session. */
-  resolveResumedFormalSpecConfiguration?: () => Promise<{ mode: boolean; comments: boolean }>;
+  resolveResumedFormalSpecConfiguration?: () => Promise<{
+    mode: boolean;
+    comments: boolean;
+    modelCheckTimeoutSeconds: number;
+  }>;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
   /** Lightweight metadata selected by `takt list`; reports are not loaded. */
@@ -169,6 +178,8 @@ interface ConversationSessionResolution {
 interface ConversationSessionOverrides extends ConversationSessionResolution {
   /** Whether this front-end can hand off a running task with `/tell`. */
   enableTellCommand?: boolean;
+  /** Resolved timeout for Quint model checking and Alloy verification stages. */
+  modelCheckTimeoutSeconds: number;
   effort?: string;
   disableSessionRetry?: boolean;
 }
@@ -219,11 +230,16 @@ export function createAssistantConversationPlan(
     input.initialTaskContext === undefined ? undefined : formatInitialTaskContext(input.initialTaskContext),
   ].filter((value): value is string => value !== undefined).join('\n\n');
   const buildPromptConfiguration = (
-    formalSpecConfiguration: { mode: boolean; comments: boolean },
+    formalSpecConfiguration: {
+      mode: boolean;
+      comments: boolean;
+      modelCheckTimeoutSeconds: number;
+    },
     runSessionContext = input.runSessionContext,
   ): ConversationPromptConfiguration => ({
     formalSpec: formalSpecConfiguration.mode,
     formalSpecComments: formalSpecConfiguration.comments,
+    modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
     systemPrompt: buildInteractiveSystemPrompt(ctx.lang, {
       grillMe,
       enableTellCommand,
@@ -242,6 +258,7 @@ export function createAssistantConversationPlan(
       {
         mode: input.formalSpec,
         comments: input.formalSpecComments,
+        modelCheckTimeoutSeconds: input.modelCheckTimeoutSeconds,
       },
       input.resolveRunSessionContext!(),
     )
@@ -249,6 +266,7 @@ export function createAssistantConversationPlan(
   const initialPromptConfiguration = buildPromptConfiguration({
     mode: input.formalSpec,
     comments: input.formalSpecComments,
+    modelCheckTimeoutSeconds: input.modelCheckTimeoutSeconds,
   });
 
   return {
@@ -286,7 +304,7 @@ export function createAssistantConversationPlan(
 export function createPersonaConversationPlan(
   cwd: string,
   firstStep: FirstStepInfo,
-  overrides: ConversationSessionOverrides = {},
+  overrides: ConversationSessionOverrides,
 ): ConversationPlan {
   const baseCtx = resolveConversationSessionContext(cwd, 'persona-interactive', overrides);
   const enableTellCommand = overrides.enableTellCommand ?? true;
@@ -301,6 +319,7 @@ export function createPersonaConversationPlan(
     strategy: {
       systemPrompt: prependSourceContextGuardToSystemPrompt(ctx.lang, firstStep.personaContent),
       formalSpec: false,
+      modelCheckTimeoutSeconds: overrides.modelCheckTimeoutSeconds,
       allowedTools: firstStep.allowedTools.length > 0
         ? firstStep.allowedTools
         : DEFAULT_INTERACTIVE_TOOLS,

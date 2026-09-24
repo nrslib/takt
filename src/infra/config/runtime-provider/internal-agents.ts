@@ -23,6 +23,7 @@ import { resolveRuntimeProviderFileWithOrigins } from './loader.js';
 import { determineProviderConfigMode } from './mode.js';
 import { getEffectiveRuntimeProviderFile } from './schema.js';
 import { createRuntimeProviderResolutionContext } from './resolution-context.js';
+import { applyDeepSeekEnvironmentOptions } from './environment-options.js';
 
 export type RuntimeInternalAgent = 'selector' | 'assistant';
 
@@ -69,15 +70,18 @@ function resolveActiveRuntimeProviderEnvironment(
     }
     return env;
   }
-  return compileProviderEnvironment({
-    kind: 'runtime-v1',
-    section,
-    mcp: runtimeFile?.mcp,
-    resolutionContext: createRuntimeProviderResolutionContext(
-      projectCwd,
-      resolvedRuntimeFile.profileOrigins,
-    ),
-  });
+  return applyDeepSeekEnvironmentOptions(
+    projectCwd,
+    compileProviderEnvironment({
+      kind: 'runtime-v1',
+      section,
+      mcp: runtimeFile?.mcp,
+      resolutionContext: createRuntimeProviderResolutionContext(
+        projectCwd,
+        resolvedRuntimeFile.profileOrigins,
+      ),
+    }),
+  );
 }
 
 /**

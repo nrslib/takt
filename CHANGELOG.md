@@ -6,6 +6,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.66.0] - 2026-09-18
+
+### Added
+
+- `/verify` checks the current agreement with formal specifications (#1518, #1570, #1578, #1584). In an interactive session with formal specification mode (`assistant.formal_spec`) enabled, `/verify` asks the assistant to write the current agreement as Quint and Alloy specifications, runs the verifiers on the extracted code blocks, and sends the results back to the same session for the assistant to interpret. Quint `parse`, `typecheck`, and `run` need nothing extra (the Quint CLI ships with TAKT); model checking with `quint verify` and the Alloy Analyzer needs Java 17 or later and is skipped with an explicit note when Java is missing. Apalache and the Alloy Analyzer JAR are downloaded on first use (`TAKT_ALLOY_JAR` points at a local JAR instead). Specifications with temporal properties are checked with the TLC backend, and TLC failure reasons are included in the result. The new `assistant.formal_spec.model_check_timeout_seconds` (integer 1–86400, default 300) limits `quint verify` and Alloy model checking. `/verify` works with any provider. See the new [Formal Specification Verification](./docs/formal-verification.md) guide.
+- `takt deepseek-harness install` builds the DeepSeek Harness environment (#1562). The command creates or repairs a uv-managed CPython 3.12 environment under the global TAKT directory from the shipped `pyproject.toml` and `uv.lock` (`uv sync --locked`), so a system Python installation and manual `pip install` are no longer needed. It requires uv `>= 0.11.0`; platform, uv, and shipped-asset checks run before an existing environment is deleted. Supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`; others fail fast.
+- Pi can use tools from explicitly configured extensions in `readonly` and `edit` (#1565). All tools registered by each extension listed in `provider_options.pi.extensions` are enabled together in these restrictive modes, while auto-discovered extension tools stay disabled. With an explicit `allowedTools` list, auto-discovered extension tools are excluded even if listed, `allowedTools: []` still denies every tool, and explicit extension load failures or provenance verification failures stop the Pi call with an error.
+- The Web UI chat renders assistant responses as Markdown (#1555). User and system messages, including Retry task-action instructions, remain literal text with their line breaks preserved.
+
+### Changed
+
+- **BREAKING:** The DeepSeek Harness provider runs only in the managed environment (#1562, #1571). Run `takt deepseek-harness install` once before using the `deepseek-harness` provider; provider startup uses the managed interpreter, reports cause-specific errors for a missing or mismatched environment, and never installs or repairs it automatically. The `provider_options.deepseek_harness` options `python_path`, `session_root`, and `cordis` and their `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_*` environment overrides are removed, and a configuration that still sets them fails validation. If package-index access was configured for `pip`, migrate to uv's standard settings such as `UV_INDEX_URL`.
+- `/tell` is available in `assistant`, `grill-me`, and `persona` conversations, including after switching between those modes (#1556). Selecting a recipient still requires a running task backed by a TAKT-managed worktree clone. The Web UI does not execute `/tell` and sends such text to the assistant as a regular message; the dedicated Retry and Instruct conversations do not expose `/tell`.
+- Builtin development workflows fill gaps with a `reimplement` step and return stop decisions to planning (#1554, #1575). When the adopted plan is still valid but implementation, investigation, or required verification is incomplete, `development-implement` (and its `-dynamic` / `-team` variants) runs `reimplement` once to fill the gap; anything still missing afterwards is reported and handed to `replan` instead of looping. A plan defect, or a state where only external operations remain, also returns to `replan`, which makes the final decision to continue, change the plan, or stop. `replan` can also route back to implementation when only required verification remains.
+- Builtin remediation workflows separate `fix-replan` from `fix-plan` (#1585). After a fix is sent back, `fix-replan` receives the previous plan and the latest fix report, must give a direction for whatever blocked progress instead of returning the same plan, and records items it cannot resolve as plan notes. Problems newly caused or exposed by a fix belong to the same fix unit, a finding's premise counts as refuted only when the premise itself was wrong, and reviewers check the plan notes and raise only those with evidence of a defect.
+
+### Fixed
+
+- Interactive task-state MCP tools are included in the provider permission allowlist when the generated read-only server is connected, so `takt_list_tasks` and `takt_get_run` are no longer rejected; Grill Me uses the same tools and permission settings as Assistant (#1577, #1587).
+- Generated task instructions keep the scope of what the user actually approved (#1579). A short approval such as "OK" confirms only the specific question the assistant asked, silence or a topic change is not treated as approval, assistant proposals and workspace observations are not promoted to requirements or constraints, and a file list made before investigation is not fixed as the required change scope.
+- Codex runs no longer fail with `Failed to parse item:` when tool output contains U+2028 or U+2029 (#1581). These characters split the SDK's JSON event lines; TAKT now escapes them on the Codex child process stdout before the SDK reads it.
+
+### Internal
+
+- Pi SDK update (#1572): `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` 0.84.1 → 0.85.1, keeping the extension tool policy compatible.
+- Added a regression test for nested resume-point reuse (#1574), stabilized time-dependent tests that failed under high machine load (#1590), and added prompt evals for instruction handoff and fix-plan blocker absorption.
+- README and CONTRIBUTING now welcome pull requests that accompany an issue (#1567).
+
 ## [0.65.0] - 2026-09-11
 
 ### Added

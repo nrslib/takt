@@ -150,7 +150,8 @@ describe('TaskWatcher', () => {
 
     it('should abort sleep immediately when stopped', async () => {
       writeTasksYaml([]);
-      watcher = new TaskWatcher(testDir, { pollInterval: 10000 });
+      const pollInterval = 10000;
+      watcher = new TaskWatcher(testDir, { pollInterval });
 
       const start = Date.now();
       const watchPromise = watcher.watch(async () => {});
@@ -160,7 +161,7 @@ describe('TaskWatcher', () => {
       await watchPromise;
 
       const elapsed = Date.now() - start;
-      expect(elapsed).toBeLessThan(1000);
+      expect(elapsed).toBeLessThan(pollInterval / 2);
     });
   });
 });

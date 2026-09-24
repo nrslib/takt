@@ -61,7 +61,7 @@ const runtimeRoutes = [
   {
     name: 'mixed-gap plan_invalid',
     ruleIndex: 1,
-    expectedNext: 'fix-plan',
+    expectedNext: 'fix-replan',
     report: mixedGapPhase1Report,
   },
   {
@@ -114,7 +114,7 @@ function buildRuntimeConfig(
       initialStep: 'fix-verifier',
       steps: [
         makeStep('fix-verifier', { rules }),
-        makeStep('fix-plan'),
+        makeStep('fix-replan'),
         makeStep('fix-retry'),
       ],
     },
@@ -159,7 +159,7 @@ describe('fix-verifier result ownership', () => {
     for (const workflowName of workflowNames) {
       const rules = verifierRules(language, workflowName);
 
-      expect(rules.map((rule) => rule.next)).toEqual(['COMPLETE', 'fix-plan', 'fix-retry']);
+      expect(rules.map((rule) => rule.next)).toEqual(['COMPLETE', 'fix-replan', 'fix-retry']);
       expect(rules[1]?.condition).toEqual(expect.stringContaining('plan_invalid'));
       expect(rules[1]?.condition).toEqual(expect.stringContaining(
         language === 'ja' ? '同時にある場合を含む' : 'also have implementation or evidence gaps',
@@ -179,25 +179,26 @@ describe('fix-verifier result ownership', () => {
       if (selectedRule?.condition.kind !== 'semantic') {
         throw new Error(`semantic rule ${ruleIndex} is required in ${language}/${workflowName}`);
       }
+      const selectedLabel = selectedRule.condition.label;
       mockRunAgentSequence([
         makeResponse({ persona: 'fix-verifier', content: report }),
       ]);
       if (report === mixedGapPhase1Report) {
         expect(selectedRule.condition.label).toMatch(/^plan_invalid(?:\s+—|$)/);
-        expect(selectedRule.next).toBe('fix-plan');
+        expect(selectedRule.next).toBe(expectedNext);
         expect(report).toContain('implementation gap');
         expect(report).toContain('plan constraint violation');
         expect(report).not.toContain('[FIX-VERIFIER:2]');
         vi.mocked(runStatusJudgmentPhase).mockImplementationOnce(async (_step, context) => {
           expect(context.lastResponse).toBe(report);
           return {
-            label: selectedRule.condition.label,
+            label: selectedLabel,
             method: 'phase3_tag',
           };
         });
       } else {
         vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({
-          label: selectedRule.condition.label,
+          label: selectedLabel,
           method: 'phase3_tag',
         });
       }
