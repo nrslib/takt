@@ -932,7 +932,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     let facetSelectionCount = 0;
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options?.outputSchema !== undefined) {
-        const selectedIds = facetSelectionCount++ % 2 === 0 ? ['web'] : ['cli'];
+        facetSelectionCount += 1;
+        const selectedIds = parallelFacetSelection(instruction, options.internalAgentName);
         return makeResponse({
           persona: 'selector',
           structuredOutput: { selected_ids: selectedIds, rationale: 'repeatable child selection' },
