@@ -312,10 +312,13 @@ describe('IT: config provider_options reflection', () => {
   });
 
   it.each([
-    ['implicit default', 'config_profile: review-only'],
-    ['explicit takt', 'config_profile: review-only\npermission_control: takt'],
-  ])('should reject Codex config profile with %s permission control before running an agent', async (_label, codexOptions) => {
+    ['codex', 'implicit default', 'config_profile: review-only', false],
+    ['codex', 'explicit takt', 'config_profile: review-only\npermission_control: takt', false],
+    ['claude', 'implicit default', 'config_profile: review-only', true],
+    ['claude', 'explicit takt', 'config_profile: review-only\npermission_control: takt', true],
+  ] as const)('should validate Codex config profile for provider %s with %s permission control', async (provider, _label, codexOptions, expectedSuccess) => {
     setGlobalConfig(env.globalDir, [
+      `provider: ${provider}`,
       'provider_options:',
       '  codex:',
       ...codexOptions.split('\n').map((line) => `    ${line}`),
@@ -327,8 +330,8 @@ describe('IT: config provider_options reflection', () => {
       cwd: env.projectDir,
       projectCwd: env.projectDir,
       workflowIdentifier: 'config-it',
-    })).resolves.toBe(false);
-    expect(runAgent).not.toHaveBeenCalled();
+    })).resolves.toBe(expectedSuccess);
+    expect(runAgent).toHaveBeenCalledTimes(expectedSuccess ? 1 : 0);
   });
 
   it('should preserve provider options origin precedence through executeTask to WorkflowEngine', async () => {
