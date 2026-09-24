@@ -52,7 +52,7 @@ export function createWorkflowCallOptions(
 ) {
   return {
     projectCwd: projectDir,
-    provider: 'mock',
+    provider: 'mock' as const,
     model: 'parent-model',
     selectorGitCommandRunner: new GitSelectorCommandRunner(),
     workflowCallResolver: ({

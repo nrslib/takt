@@ -334,6 +334,8 @@ export interface WorkflowEvents {
     resumeStepName: string,
     stepIteration: number,
     workflowStack: WorkflowResumePointEntry[],
+    stepIndex?: number,
+    totalSteps?: number,
   ) => void;
   'step:complete': (
     step: WorkflowStep,

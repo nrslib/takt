@@ -44,6 +44,7 @@ import {
   createTestTmpDir,
   makeRule,
   makeResponse,
+  makeStep,
   mockRuleEvaluationSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
@@ -57,6 +58,8 @@ import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
 import type { RoutingDecisionEvent } from '../features/analytics/index.js';
 import type { WorkflowCallResolver } from '../core/workflow/types.js';
+import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowExecutionEvents.js';
+import { createWorkflowTerminalPayloadFactory } from '../features/tasks/execute/workflowTerminalPayload.js';
 
 import {
   createOwnedResumePoint,
@@ -316,10 +319,12 @@ steps:
       name: 'child',
       subworkflow: { callable: true },
       initialStep: 'finish-child',
+      maxSteps: 'infinite',
       steps: [
         {
           name: 'finish-child',
           persona: 'child-finisher',
+          personaDisplayName: 'child-finisher',
           instruction: 'Finish child without delegation',
           rules: [makeRule('done', 'COMPLETE')],
         },
@@ -327,6 +332,8 @@ steps:
           name: 'unreachable-grandchild',
           kind: 'workflow_call',
           call: 'grandchild-that-must-not-load',
+          personaDisplayName: 'unreachable-grandchild',
+          instruction: '',
           rules: [makeRule('COMPLETE', 'COMPLETE')],
         },
       ],
@@ -1872,6 +1879,9 @@ steps:
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map([['delegate', 1]]),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       },
       projectCwd: tmpDir,
@@ -1911,6 +1921,248 @@ steps:
         autoRouting: expect.objectContaining({ strategy: 'balanced' }),
       }),
     );
+  });
+
+  describe('#883: step progress display across workflow_call', () => {
+    // Mirrors engine-loop-monitors.test.ts's buildConfigWithLoopMonitor (a
+    // known-working real-engine loop-monitor fixture), as a callable
+    // workflow_call child instead of a top-level workflow.
+    function buildLoopMonitorChildConfig(): WorkflowConfig {
+      return {
+        name: 'child',
+        subworkflow: { callable: true },
+        maxSteps: 'infinite',
+        initialStep: 'implement',
+        loopMonitors: [
+          {
+            cycle: ['ai_review', 'ai_fix'],
+            threshold: 2,
+            judge: {
+              persona: 'supervisor',
+              instruction: 'The loop repeated {cycle_count} times.',
+              rules: [
+                makeRule('Healthy', 'ai_review'),
+                makeRule('Unproductive', 'reviewers'),
+              ],
+            },
+          },
+        ],
+        steps: [
+          makeStep('implement', {
+            rules: [makeRule('done', 'ai_review')],
+          }),
+          makeStep('ai_review', {
+            rules: [
+              makeRule('No issues', 'reviewers'),
+              makeRule('Issues found', 'ai_fix'),
+            ],
+          }),
+          makeStep('ai_fix', {
+            rules: [
+              makeRule('Fixed', 'ai_review'),
+              makeRule('No fix needed', 'reviewers'),
+            ],
+          }),
+          makeStep('reviewers', {
+            rules: [makeRule('All approved', 'COMPLETE')],
+          }),
+        ],
+      } as unknown as WorkflowConfig;
+    }
+
+    function buildParentWithDelegateAndFinalReview(): WorkflowConfig {
+      return createParentWorkflow(tmpDir, {
+        name: 'parent',
+        initial_step: 'delegate',
+        max_steps: 15,
+        steps: [
+          {
+            name: 'delegate',
+            kind: 'workflow_call',
+            call: 'child',
+            rules: [
+              { condition: 'COMPLETE', next: 'final_review' },
+              { condition: 'ABORT', next: 'ABORT' },
+            ],
+          },
+          {
+            name: 'final_review',
+            persona: 'supervisor',
+            instruction: 'Review child output:\n{previous_response}',
+            rules: [
+              { condition: 'approved', next: 'COMPLETE' },
+            ],
+          },
+        ],
+      });
+    }
+
+    function mockLoopMonitorRunThroughWorkflowCall(): void {
+      // Mirrors engine-loop-monitors.test.ts's mockRunAgentSequence wrapper:
+      // a 'supervisor' persona response ('done') needs structuredOutput, or
+      // StepExecutor falls back to parsing a ```json``` block from content
+      // that was never written to look like one.
+      mockRunAgentSequence([
+        // child, mirroring engine-loop-monitors.test.ts's first "cycle
+        // triggers judge -> unproductive -> reviewers" case:
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: Y' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed Y' }),
+        // loop-judge (synthetic step, cycle threshold reached on the step above)
+        makeResponse({
+          persona: 'supervisor',
+          content: 'Unproductive loop detected',
+          structuredOutput: { content: 'Unproductive loop detected' },
+        }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+        // back in the parent, after the child workflow_call returns
+        makeResponse({
+          persona: 'supervisor',
+          content: 'approved',
+          structuredOutput: { content: 'approved' },
+        }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' }, // implement -> ai_review
+        { index: 1, method: 'phase3_tag' }, // ai_review -> ai_fix (issues found)
+        { index: 0, method: 'phase3_tag' }, // ai_fix -> ai_review (fixed)
+        { index: 1, method: 'phase3_tag' }, // ai_review -> ai_fix (issues found again)
+        { index: 0, method: 'phase3_tag' }, // ai_fix -> ai_review (fixed) -- cycle detected!
+        { index: 1, method: 'ai_judge' },   // judge: Unproductive (index 1) -> reviewers
+        { index: 0, method: 'phase3_tag' }, // reviewers -> COMPLETE
+        { index: 0, method: 'phase3_tag' }, // parent final_review -> COMPLETE
+      ]);
+    }
+
+    it('relays real engine stepIndex/totalSteps through WorkflowCallExecutor.relayChildEvents, including a loop-judge step triggered inside the workflow_call child (not a hand-fed emit)', async () => {
+      const childConfig = buildLoopMonitorChildConfig();
+      const config = buildParentWithDelegateAndFinalReview();
+      mockLoopMonitorRunThroughWorkflowCall();
+
+      const started: Array<{ step: string; workflow: string; stepIndex?: number; totalSteps?: number }> = [];
+      engine = new WorkflowEngine(config, tmpDir, 'Run loop monitor inside workflow_call', createWorkflowCallOptions(tmpDir, {
+        workflowCallResolver: () => childConfig,
+      }));
+      engine.on('step:start', (step, _iteration, _instruction, _providerInfo, workflowName, _resumeStepName, _stepIteration, _workflowStack, stepIndex, totalSteps) => {
+        started.push({ step: step.name, workflow: workflowName, stepIndex, totalSteps });
+      });
+
+      const state = await engine.run();
+      expect(state.status).toBe('completed');
+
+      // child steps are counted against the child's own 4-step list, not the
+      // parent's 2-step list (the #883 regression)
+      expect(started).toEqual([
+        { step: 'implement', workflow: 'child', stepIndex: 0, totalSteps: 4 },
+        { step: 'ai_review', workflow: 'child', stepIndex: 1, totalSteps: 4 },
+        { step: 'ai_fix', workflow: 'child', stepIndex: 2, totalSteps: 4 },
+        { step: 'ai_review', workflow: 'child', stepIndex: 1, totalSteps: 4 },
+        { step: 'ai_fix', workflow: 'child', stepIndex: 2, totalSteps: 4 },
+        // loop-judge: reuses the triggering step's ("ai_fix", index 2) position in the
+        // child's own 4-step list -- must NOT fall back to the parent's totalSteps (2).
+        { step: '_loop_judge_ai_review_ai_fix', workflow: 'child', stepIndex: 2, totalSteps: 4 },
+        { step: 'reviewers', workflow: 'child', stepIndex: 3, totalSteps: 4 },
+        // back in the parent: its own 2-step list, continuing past the workflow_call step
+        { step: 'final_review', workflow: 'parent', stepIndex: 1, totalSteps: 2 },
+      ]);
+    });
+
+    it('renders the same corrected stepIndex/totalSteps through the real WorkflowRunLoop -> WorkflowCallExecutor.relayChildEvents -> workflowExecutionEvents display path', async () => {
+      const childConfig = buildLoopMonitorChildConfig();
+      const config = buildParentWithDelegateAndFinalReview();
+      mockLoopMonitorRunThroughWorkflowCall();
+
+      engine = new WorkflowEngine(config, tmpDir, 'Run loop monitor inside workflow_call', createWorkflowCallOptions(tmpDir, {
+        workflowCallResolver: () => childConfig,
+      }));
+
+      const sessionLog = {
+        task: 'task',
+        projectDir: tmpDir,
+        workflowName: 'parent',
+        iterations: 0,
+        startTime: new Date().toISOString(),
+        status: 'running' as const,
+        history: [],
+      };
+      const terminalPayloads = createWorkflowTerminalPayloadFactory({
+        runSlug: 'run-1',
+        projectCwd: tmpDir,
+        task: 'task',
+        workflowName: 'parent',
+        sessionLog,
+        sessionId: 'session',
+        ndjsonLogPath: join(tmpDir, 'session.jsonl'),
+        traceReportMode: 'redacted',
+      });
+      const displayRef: { current: { showInit: (model: string) => void } | null } = { current: null };
+      const rendered: string[] = [];
+      const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation((line: string) => {
+        rendered.push(line);
+      });
+
+      try {
+        bindWorkflowExecutionEvents({
+          engine,
+          workflowConfig: config,
+          currentProvider: 'mock',
+          configuredModel: 'gpt-test',
+          out: { info: vi.fn(), blankLine: vi.fn(), status: vi.fn(), error: vi.fn(), logLine: vi.fn(), success: vi.fn(), warn: vi.fn() } as never,
+          prefixWriter: undefined,
+          displayRef: displayRef as never,
+          handlerRef: { current: null },
+          usageEventLogger: { logUsageFor: vi.fn() } as never,
+          analyticsEmitter: { onStepComplete: vi.fn(), onStepReport: vi.fn(), onRoutingDecision: vi.fn(), onCompanionEvent: vi.fn() } as never,
+          sessionLogger: {
+            onPhaseStart: vi.fn(),
+            onPhaseComplete: vi.fn(),
+            onJudgeStage: vi.fn(),
+            onWorkflowCallStart: vi.fn(),
+            onWorkflowCallComplete: vi.fn(),
+            onStepStart: vi.fn(),
+            onStepComplete: vi.fn(),
+            onWorkflowComplete: vi.fn(),
+            onWorkflowAbort: vi.fn(),
+            onCompanionReviewRound: vi.fn(),
+            onCompanionQueueCoalesced: vi.fn(),
+            onCompanionCall: vi.fn(),
+            onCompanionReviewSkipped: vi.fn(),
+          } as never,
+          runMetaManager: { updateStep: vi.fn(), updatePhase: vi.fn(), updateResumePoint: vi.fn(), finalize: vi.fn() } as never,
+          shouldNotifyRateLimit: false,
+          initialResumePoint: undefined,
+          sessionLog,
+          eventSink: undefined,
+          terminalPayloads,
+        });
+
+        // The bridge's own step:start listener (registered above) runs first and
+        // (re)builds displayRef.current for the new step; this listener runs second
+        // in the same synchronous EventEmitter dispatch and immediately renders it,
+        // capturing exactly what a live run would have printed at that point.
+        engine.on('step:start', () => {
+          displayRef.current?.showInit('gpt-test');
+        });
+
+        const state = await engine.run();
+        expect(state.status).toBe('completed');
+      } finally {
+        consoleLogSpy.mockRestore();
+      }
+
+      expect(rendered).toEqual([
+        expect.stringContaining('step 1/4'), // implement
+        expect.stringContaining('step 2/4'), // ai_review
+        expect.stringContaining('step 3/4'), // ai_fix
+        expect.stringContaining('step 2/4'), // ai_review
+        expect.stringContaining('step 3/4'), // ai_fix
+        expect.stringContaining('step 3/4'), // loop-judge (triggering step's position)
+        expect.stringContaining('step 4/4'), // reviewers
+        expect.stringContaining('step 2/2'), // parent final_review, not step 1/2 or step ?/4
+      ]);
+    });
   });
 
 });

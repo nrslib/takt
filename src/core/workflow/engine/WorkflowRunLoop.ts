@@ -79,6 +79,7 @@ interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
   getWorkflowName: () => string;
+  getWorkflowSteps?: () => WorkflowStep[];
   getTask: () => string;
   getCurrentWorkflowStack: () => StepSpanParams['workflowStack'];
   getCwd: () => string;
@@ -987,6 +988,8 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       break;
     }
     if (consumesIterationBudget) {
+      const ownWorkflowSteps = deps.getWorkflowSteps?.();
+      const ownStepIndex = ownWorkflowSteps?.findIndex((candidate) => candidate.name === executionStep.name);
       deps.emit(
         'step:start',
         executionStep,
@@ -997,6 +1000,8 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         step.name,
         stepIteration,
         stepEventWorkflowStack,
+        ownStepIndex !== undefined && ownStepIndex >= 0 ? ownStepIndex : undefined,
+        ownWorkflowSteps?.length,
       );
     }
 

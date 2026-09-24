@@ -556,6 +556,8 @@ export function bindWorkflowExecutionEvents(
     resumeStepName,
     stepIteration,
     workflowStack,
+    stepIndex,
+    totalSteps,
   ) => {
     state.currentIteration = iteration;
     state.currentStepName = resumeStepName;
@@ -629,12 +631,18 @@ export function bindWorkflowExecutionEvents(
     deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
     emitProviderOptionLines(deps.out, stepProvider, providerInfo, showSource);
     if (!deps.prefixWriter) {
-      const stepIndex = deps.workflowConfig.steps.findIndex((workflowStep) => workflowStep.name === step.name);
+      // stepIndex/totalSteps are computed by whichever engine (parent or, during a
+      // workflow_call, the child) actually owns this step, and relayed unchanged
+      // through WorkflowCallExecutor. Falling back to deps.workflowConfig.steps here
+      // would search the *parent's* step list, which doesn't contain child steps.
+      const fallbackStepIndex = deps.workflowConfig.steps.findIndex((workflowStep) => workflowStep.name === step.name);
+      const resolvedStepIndex = stepIndex ?? (fallbackStepIndex >= 0 ? fallbackStepIndex : 0);
+      const resolvedTotalSteps = totalSteps ?? deps.workflowConfig.steps.length;
       deps.displayRef.current = new StreamDisplay(safePersonaDisplayName, isQuietMode(), {
         iteration,
         maxSteps: deps.workflowConfig.maxSteps,
-        stepIndex: stepIndex >= 0 ? stepIndex : 0,
-        totalSteps: deps.workflowConfig.steps.length,
+        stepIndex: resolvedStepIndex,
+        totalSteps: resolvedTotalSteps,
       });
       deps.handlerRef.current = null;
     }

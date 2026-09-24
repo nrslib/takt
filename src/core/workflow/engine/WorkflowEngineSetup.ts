@@ -489,6 +489,17 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       const workflowStack = requireWorkflowResumeStackSnapshot(
         params.getCurrentWorkflowStack(),
       );
+      // `step` here is the engine-synthesized loop-judge step (`_loop_judge_*`), which
+      // is never a member of `config.steps` — it has no real position of its own.
+      // `resumeStepName` is the triggering step (the one whose repeated cycle raised
+      // the monitor), which *is* one of this engine's own steps, so reuse its position
+      // for display. This mirrors the existing triggering-step fallback this runner
+      // already uses for provider/model resolution (see resolveJudgeRuntime).
+      // Using this engine's own `config.steps` (not a parent's) keeps this correct
+      // when the loop monitor fires inside a workflow_call child.
+      const triggeringStepIndex = params.config.steps.findIndex(
+        (candidate) => candidate.name === resumeStepName,
+      );
       params.emitEvent(
         'step:start',
         step,
@@ -499,6 +510,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         resumeStepName,
         stepIteration,
         workflowStack,
+        triggeringStepIndex >= 0 ? triggeringStepIndex : undefined,
+        params.config.steps.length,
       );
       return workflowStack;
     },

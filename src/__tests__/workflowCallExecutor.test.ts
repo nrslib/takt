@@ -25,7 +25,9 @@ function makeState(workflowName: string, status: WorkflowState['status'], iterat
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map([['delegate', 1]]),
+    restoredStepIterationNames: new Set(),
     dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
     status,
   };
 }
@@ -191,6 +193,8 @@ describe('WorkflowCallExecutor', () => {
       childStep?.name,
       5,
       childWorkflowStack,
+      0,
+      1,
     );
     expect(emit).toHaveBeenCalledWith(
       'step:start',
@@ -202,6 +206,8 @@ describe('WorkflowCallExecutor', () => {
       step.name,
       5,
       childWorkflowStack,
+      0,
+      1,
     );
     expect(childEngine.on).toHaveBeenCalledWith('step:complete', expect.any(Function));
     const childResponse = makeResponse({ content: 'relayed response' });

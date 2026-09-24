@@ -421,6 +421,8 @@ export class WorkflowCallExecutor {
         ,
         stepIteration,
         workflowStack,
+        stepIndex,
+        totalSteps,
       ] = args as Parameters<WorkflowEvents['step:start']>;
       this.deps.emit(
         'step:start',
@@ -432,6 +434,8 @@ export class WorkflowCallExecutor {
         resumeStepName,
         stepIteration,
         workflowStack,
+        stepIndex,
+        totalSteps,
       );
     });
     childEngine.on('step:complete', (...args) => {

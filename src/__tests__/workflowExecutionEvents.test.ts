@@ -17,6 +17,7 @@ import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js
 import type { ProviderType } from '../shared/types/provider.js';
 import { MAX_TERMINAL_OUTPUT_BYTES } from '../shared/utils/text.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
+import type { StreamDisplay } from '../shared/ui/index.js';
 
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
@@ -41,6 +42,8 @@ function createBridgeHarness(options?: {
   display?: { flush: ReturnType<typeof vi.fn> };
   engine?: TestEngine;
   sessionLogger?: SessionLogger;
+  prefixWriter?: null;
+  workflowConfig?: { name: string; maxSteps: number; steps: Array<{ name: string }> };
 }) {
   const resumePoint = options?.resumePoint ?? {
     version: 2,
@@ -66,10 +69,14 @@ function createBridgeHarness(options?: {
     success: vi.fn(),
     warn: vi.fn(),
   };
+  // Kept non-null so existing tests can assert against it without a null
+  // check; when the caller opts out (prefixWriter: null), the harness passes
+  // `null` to the bridge itself via prefixWriterArg below instead.
   const prefixWriter = {
     setStepContext: vi.fn(),
     flush: vi.fn(),
   };
+  const prefixWriterArg = options?.prefixWriter === null ? null : prefixWriter;
   const displayRef = {
     current: options?.display ?? null,
   };
@@ -134,7 +141,7 @@ function createBridgeHarness(options?: {
   });
   const bridge = bindWorkflowExecutionEvents({
     engine: engine as never,
-    workflowConfig: {
+    workflowConfig: options?.workflowConfig ?? {
       name: 'parent',
       maxSteps: 5,
       steps: [{ name: 'review' }],
@@ -142,7 +149,7 @@ function createBridgeHarness(options?: {
     currentProvider: options?.currentProvider ?? 'mock',
     configuredModel: options?.configuredModel ?? 'gpt-test',
     out: out as never,
-    prefixWriter: prefixWriter as never,
+    prefixWriter: prefixWriterArg as never,
     displayRef: displayRef as never,
     handlerRef: { current: null },
     usageEventLogger: usageEventLogger as never,
@@ -916,6 +923,75 @@ describe('bindWorkflowExecutionEvents', () => {
         },
       ],
     ]);
+  });
+
+  it('workflow_call中は子workflowのstep数で進捗表示し、親へ戻ったら親のstep数へ戻す', () => {
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const harness = createBridgeHarness({
+        prefixWriter: null,
+        workflowConfig: {
+          name: 'parent',
+          maxSteps: 10,
+          steps: [{ name: 'plan' }, { name: 'call-child' }, { name: 'supervise' }],
+        },
+      });
+      const { engine } = harness;
+      // The bridge replaces displayRef.current with a real StreamDisplay once
+      // prefixWriter is absent; the harness's own type only covers the
+      // {flush} mock shape it defaults to, so read it back through that type.
+      const displayRef = harness.displayRef as unknown as { current: StreamDisplay | null };
+      const planStep = {
+        name: 'plan',
+        personaDisplayName: 'Planner',
+        instruction: '',
+        rules: [],
+      } as WorkflowStep;
+      const implementStep = {
+        name: 'implement',
+        personaDisplayName: 'Child coder',
+        instruction: '',
+        rules: [],
+      } as WorkflowStep;
+      const reviewStep = {
+        name: 'review',
+        personaDisplayName: 'Child reviewer',
+        instruction: '',
+        rules: [],
+      } as WorkflowStep;
+      const superviseStep = {
+        name: 'supervise',
+        personaDisplayName: 'Supervisor',
+        instruction: '',
+        rules: [],
+      } as WorkflowStep;
+      const providerInfo = { provider: 'mock' as const, model: 'gpt-test' };
+
+      // parent step 1/3 ("plan")
+      engine.emit('step:start', planStep, 1, 'plan', providerInfo, 'parent', planStep.name, 1, [], 0, 3);
+      consoleLogSpy.mockClear();
+      displayRef.current!.showInit('gpt-test');
+      expect(consoleLogSpy.mock.calls[0]?.[0]).toContain('step 1/3');
+
+      // workflow_call の子 step は親の steps に存在しない名前 — 子workflowの steps (2件) で数える
+      engine.emit('step:start', implementStep, 2, 'implement', providerInfo, 'child', implementStep.name, 1, [], 0, 2);
+      consoleLogSpy.mockClear();
+      displayRef.current!.showInit('gpt-test');
+      expect(consoleLogSpy.mock.calls[0]?.[0]).toContain('step 1/2');
+
+      engine.emit('step:start', reviewStep, 3, 'review', providerInfo, 'child', reviewStep.name, 1, [], 1, 2);
+      consoleLogSpy.mockClear();
+      displayRef.current!.showInit('gpt-test');
+      expect(consoleLogSpy.mock.calls[0]?.[0]).toContain('step 2/2');
+
+      // 親へ戻った後は親の steps (3件) で数える — step 2/3 が飛ばされず表示される
+      engine.emit('step:start', superviseStep, 4, 'supervise', providerInfo, 'parent', superviseStep.name, 1, [], 2, 3);
+      consoleLogSpy.mockClear();
+      displayRef.current!.showInit('gpt-test');
+      expect(consoleLogSpy.mock.calls[0]?.[0]).toContain('step 3/3');
+    } finally {
+      consoleLogSpy.mockRestore();
+    }
   });
 
   it('parallel substep reportは対応するstep:startなしで実行境界のcontextを使う', () => {
