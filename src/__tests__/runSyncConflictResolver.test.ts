@@ -85,7 +85,7 @@ describe('runSyncConflictResolver', () => {
       onPermissionRequest: undefined,
       onStream,
     });
-    expect(mockResolveNonWorkflowProviderOptions).toHaveBeenCalledWith('/repo');
+    expect(mockResolveNonWorkflowProviderOptions).toHaveBeenCalledWith('/repo', undefined, undefined, 'codex');
   });
 
   it('passes the shared auto-approve handler only when sync_conflict_resolver enables it', async () => {
