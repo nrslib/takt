@@ -73,6 +73,7 @@ import {
 } from '../../../core/models/companion-types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import {
+  mergeProviderOptionLayers,
   mergeProviderOptions,
   resolveDirectStepProviderOptions,
   resolveProviderOptionsSources,
@@ -268,22 +269,19 @@ function runtimeStepProviderOptions(
   const runtimeProfileOptions = providerSource === 'runtime-v1'
     ? environment.providerOptions
     : undefined;
-  const profileProviderOptions = mergeProviderOptions(
-    runtimeProfileOptions,
-    ...profileLayers.map((layer) => layer.options),
-  );
-  const directStepProviderOptions = mergeProviderOptions(
-    resolveDirectStepProviderOptions(step),
-    step.engineSynthesized === true && providerSource === 'step'
-      ? step.internalProviderOptions
-      : undefined,
-  );
   const layers = runtimeProfileOptions === undefined || providerSource !== 'runtime-v1'
     ? profileLayers
     : [
         { source: 'runtime-v1' as const, options: runtimeProfileOptions },
         ...profileLayers,
       ];
+  const profileProviderOptions = mergeProviderOptionLayers(layers);
+  const directStepProviderOptions = mergeProviderOptions(
+    resolveDirectStepProviderOptions(step),
+    step.engineSynthesized === true && providerSource === 'step'
+      ? step.internalProviderOptions
+      : undefined,
+  );
   const providerOptions = mergeProviderOptions(profileProviderOptions, directStepProviderOptions);
   const providerOptionsSources = resolveProviderOptionsSources(
     directStepProviderOptions,

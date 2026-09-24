@@ -121,6 +121,13 @@ export interface ProviderOptionsLayer {
   options: StepProviderOptions | undefined;
 }
 
+/** Merge ordered source layers with the shared provider-option precedence contract. */
+export function mergeProviderOptionLayers(
+  layers: readonly ProviderOptionsLayer[],
+): StepProviderOptions | undefined {
+  return mergeProviderOptions(...layers.map((layer) => layer.options));
+}
+
 interface StepProviderOptionsLayerContext {
   providerRouting: ProviderRoutingConfig | undefined;
   personaProviders: Record<string, PersonaProviderEntry> | undefined;

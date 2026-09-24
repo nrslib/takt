@@ -10,6 +10,7 @@ import {
   resolveEffectiveTeamLeaderPartProviderOptions,
   resolveDirectStepProviderOptions,
   resolveProfileScopedProviderOptionsLayers,
+  mergeProviderOptionLayers,
   mergeProviderOptions,
   resolveProviderOptionsSources,
   type ProviderOptionsLayer,
@@ -319,18 +320,21 @@ export class OptionsBuilder {
     if (runtime?.providerInfoResolution === 'fully_resolved') {
       return runtime.providerInfo?.providerOptions;
     }
-    const middleProviderOptions = mergeProviderOptions(
-      ...this.resolveProfileScopedProviderOptionLayers(
-        step,
-        resolvedProviderInfo.providerSource,
-      ).map((layer) => layer.options),
+    const profileLayers = this.resolveProfileScopedProviderOptionLayers(
+      step,
+      resolvedProviderInfo.providerSource,
     );
+    const middleProviderOptions = mergeProviderOptionLayers(profileLayers);
     const runtimeProfileProviderOptions = this.resolveRuntimeProfileProviderOptions(
       resolvedProviderInfo.providerSource,
     );
-    const profileProviderOptions = mergeProviderOptions(
-      runtimeProfileProviderOptions,
-      middleProviderOptions,
+    const profileProviderOptions = mergeProviderOptionLayers(
+      this.resolveProviderOptionLayersForStep(
+        step,
+        resolvedProviderInfo.providerSource,
+        profileLayers,
+        runtimeProfileProviderOptions,
+      ),
     );
     const directStepProviderOptions = this.resolveIdentityAwareDirectStepProviderOptions(
       step,
@@ -410,10 +414,10 @@ export class OptionsBuilder {
   private resolveProviderOptionLayersForStep(
     step: WorkflowStep,
     resolvedProviderSource: StepProviderInfo['providerSource'],
+    profileLayers = this.resolveProfileScopedProviderOptionLayers(step, resolvedProviderSource),
+    profileOptions = this.resolveRuntimeProfileProviderOptions(resolvedProviderSource),
   ): ProviderOptionsLayer[] {
     const profileSource = this.engineOptions.providerOptionsProviderSource;
-    const profileOptions = this.resolveRuntimeProfileProviderOptions(resolvedProviderSource);
-    const profileLayers = this.resolveProfileScopedProviderOptionLayers(step, resolvedProviderSource);
     return profileSource === undefined || profileOptions === undefined
       ? profileLayers
       : [{ source: profileSource, options: profileOptions }, ...profileLayers];

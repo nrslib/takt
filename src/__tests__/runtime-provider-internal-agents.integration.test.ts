@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
 import type { WorkflowConfig } from '../core/models/workflow-types.js';
 import { resolveRuntimeInternalAgentProvider } from '../infra/config/runtime-provider/internal-agents.js';
+import { createExecSessionContext } from '../features/exec/assistantSession.js';
+import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
+import type { ResolvedExecConfig } from '../features/exec/types.js';
 import {
   resolveSelectorProviderForProject,
   resolveSelectorProviderFromRuntimeEnvironment,
@@ -166,6 +169,66 @@ describe('runtime.yaml internal_agents resolution', () => {
       invalidate();
     }
   });
+
+  it.each(['claude', 'claude-sdk'] as const)(
+    'keeps the default-disabled Claude skills option in a runtime-managed exec session for %s',
+    (provider) => {
+      const previousOpenCodeVariant = process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT;
+      process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT = 'unrelated-env-option';
+      writeGlobalRuntimeFile({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: { default: { provider, model: 'runtime-model' } },
+        },
+      });
+      invalidate();
+
+      try {
+        const context = createExecSessionContext(projectCwd, {
+          ...DEFAULT_EXEC_CONFIG,
+          session: { provider, model: 'runtime-model' },
+        } as ResolvedExecConfig);
+
+        expect(context.providerOptions?.claude?.skills?.enabled).toBe(false);
+        expect(context.providerOptions).not.toHaveProperty('opencode');
+      } finally {
+        if (previousOpenCodeVariant === undefined) {
+          delete process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT;
+        } else {
+          process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT = previousOpenCodeVariant;
+        }
+        invalidate();
+      }
+    },
+  );
+
+  it.each(['claude', 'claude-sdk'] as const)(
+    'keeps an explicit runtime Claude skills setting for %s',
+    (provider) => {
+      writeGlobalRuntimeFile({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: {
+              provider,
+              model: 'runtime-model',
+              options: { skills: { enabled: true } },
+            },
+          },
+        },
+      });
+      invalidate();
+
+      const context = createExecSessionContext(projectCwd, {
+        ...DEFAULT_EXEC_CONFIG,
+        session: { provider, model: 'runtime-model' },
+      } as ResolvedExecConfig);
+
+      expect(context.providerOptions?.claude?.skills?.enabled).toBe(true);
+    },
+  );
 
   it.each([
     { provider: 'deepseek-harness', effort: 'high', override: undefined, expected: 'high' },
