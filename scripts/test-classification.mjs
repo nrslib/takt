@@ -153,6 +153,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/usageEventsSpanProcessor.test.ts',
   'src/__tests__/vcs-provider-config.test.ts',
   'src/__tests__/web-ui.integration.test.ts',
+  'src/__tests__/windows-long-cwd-helper-spawn.test.ts',
   'src/__tests__/work-requirement-estimator-claude.test.ts',
   'src/__tests__/workflow-builtin-toggle.test.ts',
   'src/__tests__/workflow-category-config.test.ts',

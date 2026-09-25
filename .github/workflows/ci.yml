@@ -171,7 +171,7 @@ jobs:
           cache: npm
       - run: npm ci
       # build は pi-cross-platform で Windows / macOS の両方を検証する。
-      - run: npm test -- src/__tests__/private-file.test.ts src/__tests__/resume-report-snapshot.test.ts src/__tests__/promptEvalProbeLifecycle.test.ts src/__tests__/runtime-environment-windows.test.ts src/__tests__/executable-path.test.ts src/__tests__/spawn.test.ts src/__tests__/managed-spawn.test.ts src/__tests__/windows-executable-shadowing.test.ts
+      - run: npm test -- src/__tests__/private-file.test.ts src/__tests__/resume-report-snapshot.test.ts src/__tests__/promptEvalProbeLifecycle.test.ts src/__tests__/runtime-environment-windows.test.ts src/__tests__/executable-path.test.ts src/__tests__/spawn.test.ts src/__tests__/managed-spawn.test.ts src/__tests__/windows-executable-shadowing.test.ts src/__tests__/windows-long-cwd-helper-spawn.test.ts
 
   pi-cross-platform:
     name: Pi SDK (${{ matrix.os }})

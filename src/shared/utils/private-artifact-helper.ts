@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import type { Stats } from 'node:fs';
 import { basename, dirname } from 'node:path';
+import { resolveHelperSpawnCwd } from './spawnCwd.js';
 
 const ARTIFACT_HELPER_TIMEOUT_MS = 5_000;
 
@@ -33,7 +34,7 @@ export function runPrivateArtifactHelper(
   failureMessage: string,
 ): string {
   const result = spawnSync(process.execPath, ['-e', script, request], {
-    cwd,
+    cwd: resolveHelperSpawnCwd(cwd),
     encoding: 'utf-8',
     env: {},
     timeout: ARTIFACT_HELPER_TIMEOUT_MS,
