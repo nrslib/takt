@@ -47,7 +47,7 @@ import {
   emitCodexItemCompleted,
   emitCodexItemUpdate,
 } from './CodexStreamHandler.js';
-import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, containsRateLimitError, isRateLimitNoticeResponse } from '../rate-limit/detection.js';
 import {
   boundCodexFailureMessage,
   type CodexFailureMessageOptions,
@@ -334,8 +334,9 @@ export class CodexClient {
     message: string,
     options: CodexFailureMessageOptions,
     retryCount: number,
+    source: Parameters<typeof buildRateLimitedResponseFields>[1] = 'sdk_error',
   ): AgentResponse {
-    const response = buildRateLimitedResponseFields('codex', 'sdk_error', message);
+    const response = buildRateLimitedResponseFields('codex', source, message);
     return {
       persona: agentType,
       timestamp: new Date(),
@@ -730,6 +731,19 @@ export class CodexClient {
             failure.category,
           );
           return errorResponse;
+        }
+
+        if (isRateLimitNoticeResponse(trimmed)) {
+          const rateLimitedResponse = this.buildRateLimitedResponse(
+            agentType,
+            currentThreadId,
+            trimmed,
+            options,
+            totalRetryCount(),
+            'error_text',
+          );
+          emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+          return rateLimitedResponse;
         }
 
         emitResult(options.onStream, true, trimmed, currentThreadId);
