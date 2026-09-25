@@ -149,6 +149,7 @@
     "src/__tests__/provider-options-resolution.test.ts",
     "src/__tests__/provider-schema.test.ts",
     "src/__tests__/provider-structured-output.test.ts",
+    "src/__tests__/rate-limit-detection.test.ts",
     "src/__tests__/releaseVerificationWiring.test.ts",
     "src/__tests__/report-inheritance.test.ts",
     "src/__tests__/report-phase-blocked.test.ts",
@@ -231,6 +232,7 @@
     "src/__tests__/workflowDiscovery.test.ts",
     "src/__tests__/workflowExecutionApi.test.ts",
     "src/__tests__/workflowExecutionBootstrapDirectResume.test.ts",
+    "src/__tests__/workflowExecutionEvents.test.ts",
     "src/__tests__/workflowLoader.test.ts",
     "vitest.config.tell-eval.ts"
   ],

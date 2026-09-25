@@ -32,6 +32,13 @@ describe('containsRateLimitError', () => {
     "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)",
     "You've hit your 5-hour limit · resets Aug 16 at 1am (Asia/Tokyo)",
     "You've hit your session limit · resets Aug 16 at 1am (Asia/Tokyo)",
+    "You've hit your usage limit",
+    "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits",
+    "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 7:04 PM",
+    'You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 27th, 2026 7:04 PM.',
+    'You’ve hit your usage limit. Try again at Sep 27th, 2026 7:04 PM.',
+    'You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.',
+    'You’ve hit your usage limit. Try again later.',
   ])('error text %j is detected as a rate limit error', (text) => {
     expect(containsRateLimitError(text)).toBe(true);
   });
@@ -45,6 +52,9 @@ describe('containsRateLimitError', () => {
     'The cache resets 5:00 after the scheduled maintenance window.',
     'rate limit',
     'The documentation mentions a weekly limit.',
+    'Network error loading the purchase more credits page',
+    'Failed to render the purchase more credits page',
+    'Visit https://chatgpt.com/codex/settings/usage to purchase more credits',
   ])('ordinary text %j is not detected as a rate limit error', (text) => {
     expect(containsRateLimitError(text)).toBe(false);
   });
@@ -60,6 +70,29 @@ describe('containsRateLimitError', () => {
     const info = buildRateLimitInfo('claude', 'error_text', text);
 
     expect(info.resetAtRaw).toBe('Aug 16 at 1am (Asia/Tokyo)');
+  });
+
+  it.each([
+    '7:04 PM',
+    'Sep 1st, 2026 7:04 PM',
+    'Sep 2nd, 2026 7:04 PM',
+    'Sep 3rd, 2026 7:04 PM',
+    'Sep 11th, 2026 7:04 PM',
+  ])('preserves the Codex retry timestamp %j without converting it', (retryTimestamp) => {
+    const text = `You’ve hit your usage limit. Try again at ${retryTimestamp}.`;
+
+    const info = buildRateLimitInfo('codex', 'error_text', text);
+
+    expect(info.resetAtRaw).toBe(retryTimestamp);
+  });
+
+  it.each([
+    'You’ve hit your usage limit. Try again later.',
+    'You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.',
+  ])('leaves the Codex reset time unknown for %j', (text) => {
+    const info = buildRateLimitInfo('codex', 'error_text', text);
+
+    expect(info.resetAtRaw).toBeUndefined();
   });
 });
 

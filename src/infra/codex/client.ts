@@ -13,6 +13,7 @@ import {
 } from '@openai/codex-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
+import type { RateLimitInfo } from '../../core/models/response.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
@@ -64,6 +65,7 @@ const CODEX_RETRY_MAX_RETRIES = 8;
 const CODEX_RETRY_BASE_DELAY_MS = 1000;
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
 const CODEX_ERROR_MATCH_PREFIX_BYTES = 4 * 1024;
+const CODEX_USAGE_LIMIT_RESPONSE_MAX_CONTENT_LENGTH = 600;
 const CODEX_PARSE_FAILURE_PREFIX = 'Failed to parse item:';
 const CODEX_RECONNECT_ERROR_PATTERNS = [
   'reconnecting...',
@@ -104,6 +106,11 @@ function isCodexSafetyRefusal(content: string): boolean {
   }
   const lower = content.toLowerCase();
   return CODEX_SAFETY_REFUSAL_PATTERNS.some((pattern) => lower.includes(pattern));
+}
+
+function isCodexUsageLimitResponse(content: string): boolean {
+  return content.length <= CODEX_USAGE_LIMIT_RESPONSE_MAX_CONTENT_LENGTH
+    && /^(?:you(?:'|’)ve|you have)\s+hit\s+your\s+usage\s+limit(?:\.\s+visit\s+https:\/\/chatgpt\.com\/codex\/settings\/usage\s+to\s+purchase\s+more\s+credits)?(?:(?:,?\s+or|\.)\s+try\s+again\s+(?:later|at\s+(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}(?:st|nd|rd|th),\s+\d{4}\s+)?\d{1,2}:\d{2}\s*[ap]m))?\.?$/i.test(content);
 }
 
 function getCodexErrorMatchPrefix(message: string): string {
@@ -332,10 +339,11 @@ export class CodexClient {
     agentType: string,
     sessionId: string | undefined,
     message: string,
+    source: RateLimitInfo['source'],
     options: CodexFailureMessageOptions,
     retryCount: number,
   ): AgentResponse {
-    const response = buildRateLimitedResponseFields('codex', 'sdk_error', message);
+    const response = buildRateLimitedResponseFields('codex', source, message);
     return {
       persona: agentType,
       timestamp: new Date(),
@@ -652,6 +660,7 @@ export class CodexClient {
               agentType,
               currentThreadId,
               failureMessage,
+              'sdk_error',
               options,
               totalRetryCount(),
             );
@@ -690,6 +699,19 @@ export class CodexClient {
             finalFailure.category,
           );
           return errorResponse;
+        }
+
+        if (isCodexUsageLimitResponse(trimmed)) {
+          const rateLimitedResponse = this.buildRateLimitedResponse(
+            agentType,
+            currentThreadId,
+            trimmed,
+            'error_text',
+            options,
+            totalRetryCount(),
+          );
+          emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+          return rateLimitedResponse;
         }
 
         const structuredOutput = parseStructuredOutput(lastAgentMessageText.trim(), !!options.outputSchema);
@@ -765,6 +787,7 @@ export class CodexClient {
             agentType,
             currentThreadId,
             rawErrorMessage,
+            'sdk_error',
             options,
             totalRetryCount(),
           );
