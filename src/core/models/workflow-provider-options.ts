@@ -29,6 +29,7 @@ export interface CodexProviderOptions {
   baseUrl?: string;
   networkAccess?: boolean;
   permissionControl?: CodexPermissionControl;
+  configProfile?: string;
   reasoningEffort?: CodexReasoningEffort;
   fastMode?: boolean;
   guards?: ProviderGuardOptions;
@@ -39,6 +40,16 @@ export interface CodexProviderOptions {
 }
 
 export type CodexPermissionControl = 'takt' | 'codex';
+
+export function assertCodexConfigProfilePermissionControl(
+  options: CodexProviderOptions | undefined,
+): void {
+  if (options?.configProfile !== undefined && options.permissionControl !== 'codex') {
+    throw new Error(
+      'Configuration error: provider_options.codex.config_profile requires permission_control: codex.',
+    );
+  }
+}
 
 export const OPENCODE_GUARD_PROFILES = ['standard', 'minimal'] as const;
 export type OpenCodeGuardProfile = (typeof OPENCODE_GUARD_PROFILES)[number];

@@ -12,6 +12,7 @@ import type {
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
 import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../core/models/config-types.js';
+import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
@@ -21,6 +22,7 @@ import type {
 import { resolveWorkflowStepTarget } from '../../core/workflow/provider-target-resolution.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
+import { getPresentProviderOptionPaths } from './providerOptionsContract.js';
 
 type RawProviderGuardOptions = {
   call_timeout_ms?: number;
@@ -32,6 +34,7 @@ type RawProviderOptions = {
     base_url?: string;
     network_access?: boolean;
     permission_control?: CodexPermissionControl;
+    config_profile?: string;
     reasoning_effort?: CodexReasoningEffort;
     fast_mode?: boolean;
     guards?: RawProviderGuardOptions;
@@ -116,6 +119,13 @@ export interface NormalizeProviderOptionsOptions {
 export interface ProviderOptionsLayer {
   source: ProviderResolutionSource;
   options: StepProviderOptions | undefined;
+}
+
+/** Merge ordered source layers with the shared provider-option precedence contract. */
+export function mergeProviderOptionLayers(
+  layers: readonly ProviderOptionsLayer[],
+): StepProviderOptions | undefined {
+  return mergeProviderOptions(...layers.map((layer) => layer.options));
 }
 
 interface StepProviderOptionsLayerContext {
@@ -250,6 +260,7 @@ export function normalizeProviderOptions(
     options.codex?.base_url !== undefined
     || options.codex?.network_access !== undefined
     || options.codex?.permission_control !== undefined
+    || options.codex?.config_profile !== undefined
     || options.codex?.reasoning_effort !== undefined
     || options.codex?.fast_mode !== undefined
     || options.codex?.guards !== undefined
@@ -267,6 +278,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.codex.permission_control !== undefined
         ? { permissionControl: options.codex.permission_control }
+        : {}),
+      ...(options.codex.config_profile !== undefined
+        ? { configProfile: options.codex.config_profile }
         : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
@@ -501,6 +515,9 @@ export function mergeProviderOptions(
         ...(layer.codex.permissionControl !== undefined
           ? { permissionControl: layer.codex.permissionControl }
           : {}),
+        ...(layer.codex.configProfile !== undefined
+          ? { configProfile: layer.codex.configProfile }
+          : {}),
         ...(layer.codex.reasoningEffort !== undefined
           ? { reasoningEffort: layer.codex.reasoningEffort }
           : {}),
@@ -692,6 +709,54 @@ export function resolveProviderOptionOrigin(
   return resolver('');
 }
 
+export function selectEnvironmentProviderOptions(
+  providerOptions: StepProviderOptions | undefined,
+  originResolver: ProviderOptionsOriginResolver,
+  allowedRoots: readonly (keyof StepProviderOptions)[],
+): StepProviderOptions | undefined {
+  const allowedRootSet = new Set(allowedRoots);
+  const selected: Record<string, unknown> = {};
+
+  for (const path of getPresentProviderOptionPaths(providerOptions)) {
+    const root = path.split('.')[0];
+    if (root === undefined || !allowedRootSet.has(root as keyof StepProviderOptions)) {
+      continue;
+    }
+
+    const origin = resolveProviderOptionOrigin(originResolver, path, 'default');
+    if (origin !== 'env' && origin !== 'cli') {
+      continue;
+    }
+
+    const value = path.split('.').reduce<unknown>((current, segment) => {
+      if (typeof current !== 'object' || current === null) {
+        return undefined;
+      }
+      return (current as Record<string, unknown>)[segment];
+    }, providerOptions);
+    if (value === undefined) {
+      continue;
+    }
+
+    const segments = path.split('.');
+    const leaf = segments.pop();
+    if (leaf === undefined) {
+      continue;
+    }
+    let target = selected;
+    for (const segment of segments) {
+      const nested = target[segment];
+      if (typeof nested !== 'object' || nested === null || Array.isArray(nested)) {
+        target[segment] = {};
+      }
+      target = target[segment] as Record<string, unknown>;
+    }
+    target[leaf] = value;
+  }
+
+  return Object.keys(selected).length === 0 ? undefined : selected as StepProviderOptions;
+}
+
 function selectProviderValue<T>(
   configValue: T | undefined,
   personaValue: T | undefined,
@@ -819,18 +884,26 @@ export function resolveProfileScopedProviderOptionsLayers(
   ];
 }
 
-/** Combine config, persona, and step options using per-field origins. */
+/** Combine the provider-option union; Codex-only constraints need a resolved Codex provider. */
 export function resolveEffectiveProviderOptions(
   source: ProviderOptionsSource | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
   resolvedConfigOptions: StepProviderOptions | undefined,
   stepOptions: StepProviderOptions | undefined,
   personaOptions?: StepProviderOptions,
+  resolvedProvider?: ProviderType,
 ): StepProviderOptions | undefined {
   if (!resolvedConfigOptions) {
-    return mergeProviderOptions(personaOptions, stepOptions);
+    const merged = mergeProviderOptions(personaOptions, stepOptions);
+    if (resolvedProvider === 'codex') {
+      assertCodexConfigProfilePermissionControl(merged?.codex);
+    }
+    return merged;
   }
   if (!personaOptions && !stepOptions) {
+    if (resolvedProvider === 'codex') {
+      assertCodexConfigProfilePermissionControl(resolvedConfigOptions.codex);
+    }
     return resolvedConfigOptions;
   }
 
@@ -895,6 +968,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.permissionControl,
     stepOptions?.codex?.permissionControl,
     resolveProviderOptionOrigin(originResolver, 'codex.permissionControl', source),
+  );
+  const codexConfigProfile = selectProviderValue(
+    resolvedConfigOptions.codex?.configProfile,
+    personaOptions?.codex?.configProfile,
+    stepOptions?.codex?.configProfile,
+    resolveProviderOptionOrigin(originResolver, 'codex.configProfile', source),
   );
   const codexReasoningEffort = selectProviderValue(
     resolvedConfigOptions.codex?.reasoningEffort,
@@ -1133,6 +1212,7 @@ export function resolveEffectiveProviderOptions(
     ...(codexBaseUrl !== undefined
       || codexNetworkAccess !== undefined
       || codexPermissionControl !== undefined
+      || codexConfigProfile !== undefined
       || codexReasoningEffort !== undefined
       || codexFastMode !== undefined
       || codexCallTimeoutMs !== undefined
@@ -1143,6 +1223,7 @@ export function resolveEffectiveProviderOptions(
             ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
             ...(codexPermissionControl !== undefined ? { permissionControl: codexPermissionControl } : {}),
+            ...(codexConfigProfile !== undefined ? { configProfile: codexConfigProfile } : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
             ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
             ...(codexCallTimeoutMs !== undefined
@@ -1313,6 +1394,9 @@ export function resolveEffectiveProviderOptions(
   };
 
   const effective = Object.keys(result).length > 0 ? result : undefined;
+  if (resolvedProvider === 'codex') {
+    assertCodexConfigProfilePermissionControl(effective?.codex);
+  }
   return effective;
 }
 
@@ -1416,6 +1500,7 @@ export function resolveEffectiveTeamLeaderPartProviderOptions(
     resolvedConfigOptions,
     stepOptions,
     personaOptions,
+    resolvedProvider,
   );
 
   const shouldStripClaudeTools = partAllowedTools !== undefined
@@ -1442,6 +1527,7 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.fastMode',
   'codex.networkAccess',
   'codex.permissionControl',
+  'codex.configProfile',
   'codex.reasoningEffort',
   'codex.guards.callTimeoutMs',
   'codex.skills.repo',

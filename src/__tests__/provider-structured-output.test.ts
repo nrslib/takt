@@ -327,6 +327,33 @@ describe('CodexProvider — structured output', () => {
     expect(mockCallCodex).toHaveBeenCalledOnce();
   });
 
+  it('provider_options.codex.configProfile を通常実行と strict isolated structured 実行へ渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const providerOptions = {
+      codex: { configProfile: 'automation-review', permissionControl: 'codex' },
+    } as unknown as StepProviderOptions;
+    const provider = new CodexProvider();
+
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+    });
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      sessionId: 'existing-thread',
+      providerOptions,
+    });
+    await provider.setupIsolatedStructured({ name: 'selector' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallCodex.mock.calls[0]?.[2]).toHaveProperty('configProfile', 'automation-review');
+    expect(mockCallCodex.mock.calls[1]?.[2]).toHaveProperty('configProfile', 'automation-review');
+    expect(mockCallCodex.mock.calls[2]?.[2]).toHaveProperty('configProfile', 'automation-review');
+  });
+
   it('provider_options.codex.reasoningEffort を callCodex に渡す', async () => {
     mockCallCodex.mockResolvedValue(doneResponse('coder'));
 

@@ -1,5 +1,42 @@
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { EnvSpec } from './env/config-env-overrides.js';
+import type { ProviderType } from '../../shared/types/provider.js';
+
+const PROVIDER_OPTION_ROOTS: Readonly<Record<ProviderType, readonly (keyof StepProviderOptions)[]>> = {
+  claude: ['claude'],
+  'claude-sdk': ['claude'],
+  'claude-terminal': ['claude', 'claudeTerminal'],
+  codex: ['codex'],
+  opencode: ['opencode'],
+  cursor: ['cursor'],
+  copilot: ['copilot'],
+  kiro: ['kiro'],
+  pi: ['pi'],
+  'deepseek-harness': ['deepseekHarness'],
+  mock: [],
+};
+
+export function getProviderOptionRoots(provider: ProviderType): readonly (keyof StepProviderOptions)[] {
+  return PROVIDER_OPTION_ROOTS[provider];
+}
+
+const SELECTOR_PROVIDER_OPTION_TYPES: ReadonlySet<ProviderType> = new Set([
+  'claude',
+  'claude-sdk',
+  'claude-terminal',
+  'codex',
+  'opencode',
+  'copilot',
+  'kiro',
+  'pi',
+  'deepseek-harness',
+]);
+
+export function getSelectorProviderOptionRoots(
+  provider: ProviderType,
+): readonly (keyof StepProviderOptions)[] {
+  return SELECTOR_PROVIDER_OPTION_TYPES.has(provider) ? getProviderOptionRoots(provider) : [];
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -35,6 +72,7 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.codex.fast_mode', type: 'boolean' },
   { path: 'provider_options.codex.network_access', type: 'boolean' },
   { path: 'provider_options.codex.permission_control', type: 'string' },
+  { path: 'provider_options.codex.config_profile', type: 'string' },
   { path: 'provider_options.codex.reasoning_effort', type: 'string' },
   { path: 'provider_options.codex.guards.call_timeout_ms', type: 'number' },
   { path: 'provider_options.codex.skills.repo', type: 'boolean' },
@@ -87,6 +125,7 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.codex.fast_mode',
   'provider_options.codex.network_access',
   'provider_options.codex.permission_control',
+  'provider_options.codex.config_profile',
   'provider_options.codex.reasoning_effort',
   'provider_options.codex.guards',
   'provider_options.codex.guards.call_timeout_ms',
@@ -163,6 +202,7 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'codex.fastMode',
   'codex.networkAccess',
   'codex.permissionControl',
+  'codex.configProfile',
   'codex.reasoningEffort',
   'codex.guards.callTimeoutMs',
   'codex.skills.repo',

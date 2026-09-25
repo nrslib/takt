@@ -135,7 +135,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic parallel と `dynamic_facets` の selector は provider-neutral な fresh-session transport を使い、固定の read-only tool allowlist `Read`・`Glob`・`Grep` と `permission_mode: readonly` を渡します。companion selector には固定の `allowedTools` を渡さないため、selector profile の `allowed_tools` が採用されることがあります。tool allowlist が実効性を持つのは、それを尊重する provider に限られます。dynamic parallel、dynamic facets、または有効な companion pool のいずれも使わない workflow では selector 設定は未使用で、既存実行へ影響しません。
+`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。provider option の環境変数 override は、解決済み selector provider の枝だけに適用されます。Codex selector で `config_profile` を使うには、selector 自身の有効 options（selector entry または一致する環境変数 override）に `permission_control: codex` が必要です。top-level `provider_options` は継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic parallel と `dynamic_facets` の selector は provider-neutral な fresh-session transport を使い、固定の read-only tool allowlist `Read`・`Glob`・`Grep` と `permission_mode: readonly` を渡します。companion selector には固定の `allowedTools` を渡さないため、selector profile の `allowed_tools` が採用されることがあります。tool allowlist が実効性を持つのは、それを尊重する provider に限られます。dynamic parallel、dynamic facets、または有効な companion pool のいずれも使わない workflow では selector 設定は未使用で、既存実行へ影響しません。
 
 ```yaml
 # ~/.takt/config.yaml（続き）
@@ -1336,6 +1336,19 @@ provider_options:
 ```
 
 `permission_control: codex` では通常の Codex 呼び出しと strict isolated structured 呼び出しの両方で TAKT は `sandboxMode` と `networkAccessEnabled` を渡しません。実効権限は Codex の `config.toml`、`default_permissions`、permission profile に委譲されます。capability、runtime profile、routing、project／global 設定、環境変数 override のいずれから解決された場合も、`network_access` は警告なしで受理され、これらの Codex 権限フィールドには使用されません。非対話実行を成立させるため `approvalPolicy: never` は引き続き設定され、`reasoning_effort`、`fast_mode`、`skills` などの非権限制御 option も従来どおり適用されます。明示的な opt-in のため、権限の結果は利用者の自己責任です。
+
+Codex の設定プロファイルを名前で選択するには、`permission_control: codex` と一緒に `config_profile` を指定します。
+
+```yaml
+provider_options:
+  codex:
+    permission_control: codex
+    config_profile: automation-review
+```
+
+環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` でも設定できます。
+
+`config_profile` は ASCII の英字・数字・ハイフン・アンダースコアだけを含む名前を受け付けます。空文字や path は拒否され、`permission_control: codex` の場合だけ有効です。`permission_control` を省略した場合（既定値は `takt`）や `permission_control: takt` と併用した場合は設定エラーになります。TAKT は名前を `codex exec --profile <name>` として渡し、Codex が `$CODEX_HOME/<name>.config.toml` を解決します。そのファイル、基本設定、trusted project 設定、実行時 override の優先順位は Codex の仕様に従います。project・workflow・capability の provider options から profile を選べます。Codex はその profile の権限設定を実行に適用するため、信頼できる設定と profile だけを指定してください。
 
 #### Codex Skill の継承 (`skills`)
 

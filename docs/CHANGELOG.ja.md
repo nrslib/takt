@@ -6,6 +6,27 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.66.1] - 2026-09-24
+
+### Added
+
+- Codex provider が `permission_control: codex` のとき、`provider_options.codex.config_profile` で名前付き設定プロファイルを選択できるようになりました (#1539, #1583)。TAKT は Codex の TOML を読み込まず、名前を `codex exec --profile <name>` として渡し、Codex が `$CODEX_HOME/<name>.config.toml` から解決します。名前には ASCII の英字・数字・ハイフン・アンダースコアだけを使えます。`permission_control: codex` なしで指定すると設定エラーになります。`TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE` でも設定できます。
+- DeepSeek Harness の推論強度を、`runtime.yaml` の provider profile の `options.reasoning_effort`（`off`・`low`・`high`・`max`）または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT` で指定できるようになりました (#1492, #1588)。未指定時は SDK の既定値を使います。変更や指定解除は、session ID と履歴を保ったまま次の turn から適用されます。`config.yaml` の `provider_options`、workflow の step、persona からは指定できません。
+
+### Changed
+
+- 通常 step と parallel sub-step の provider error を、新しいセッションで 1 回だけ再実行するようになりました (#1582)。ストリームの解析エラー（`provider_stream_parse_error`）も再実行の対象になり、parallel review の 1 体が失敗しても、他のレビュー結果を保ったまま run 全体が abort しなくなります。ユーザーの中断や外部 timeout による失敗、rate limit は再実行しません。
+- ビルトインのフロントエンド指針を、新しい `gui` の knowledge と policy を軸に整理しました (#1592)。`gui` は Root からの画面の階層、ユーザー操作を上位へ通知する表示部品、状態を持ち操作の受理・処理・次の表示を判断する部品を扱います。`frontend` はこれを継承して URL・HTML・通信・アクセシビリティを扱い、React の knowledge と policy はこれらの役割を React で実現する方法を示します。
+
+### Fixed
+
+- 外部ファセットプールのファセットが、同じディレクトリの親を `{extends:...}` で継承できるようになりました (#1592)。symlink の親ファイルやディレクトリ外への参照は拒否します。
+- Codex SDK を 0.156.1 に更新し、ChatGPT 認証で `gpt-6-luna` と reasoning effort `max` を指定したときに 400 エラーにならないようにしました (#1597)。
+
+### Internal
+
+- parallel の再ラウンドでファセットを選び直すテストを、セレクタの呼び出し順に依存しないようにしました (#1599)。
+
 ## [0.66.0] - 2026-09-18
 
 ### Added

@@ -1,9 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AssistantProviderConfig } from '../core/config/provider-resolution.js';
+import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import type { WorkflowConfig } from '../core/models/types.js';
 import {
+  resolveSelectorProviderForProject,
   resolveSelectorProviderFromConfig,
 } from '../infra/config/selectorProviderResolution.js';
 import { resolveWorkflowSelector } from '../infra/config/workflowSelectorResolution.js';
@@ -15,7 +18,14 @@ import {
 import { resolveAuxiliaryRuntimeEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
 
 describe('selector provider resolution', () => {
-  it.each([
+  const blankModelCases: Array<[
+    string,
+    {
+      local?: AssistantProviderConfig['local'];
+      global?: AssistantProviderConfig['global'];
+      overrides?: { model: string };
+    },
+  ]> = [
     ['CLI override', { overrides: { model: '   ' } }],
     ['project selector', {
       local: { taktProviders: { selector: { model: '   ' } } },
@@ -25,7 +35,9 @@ describe('selector provider resolution', () => {
     }],
     ['project top-level fallback', { local: { model: '   ' } }],
     ['global top-level fallback', { global: { model: '   ' } }],
-  ])('should reject a blank model from the %s candidate boundary', (_label, testCase) => {
+  ];
+
+  it.each(blankModelCases)('should reject a blank model from the %s candidate boundary', (_label, testCase) => {
     expect(() => resolveSelectorProviderFromConfig({
       local: testCase.local ?? {},
       global: testCase.global ?? {},
@@ -177,6 +189,41 @@ describe('selector provider resolution', () => {
     expect(resolved.providerOptions).toEqual({ codex: { reasoningEffort: 'medium' } });
   });
 
+  it('should keep Cursor provider options out of selector agents', () => {
+    const resolved = resolveSelectorProviderFromConfig({
+      local: {
+        taktProviders: {
+          selector: {
+            provider: 'cursor',
+            providerOptions: { cursor: { guards: { callTimeoutMs: 60_000 } } },
+          },
+        },
+      },
+      global: {},
+    });
+
+    expect(resolved.providerOptions).toBeUndefined();
+  });
+
+  it('should not reject Codex options that are not selected by a mock selector', () => {
+    const resolved = resolveSelectorProviderFromConfig({
+      local: {
+        taktProviders: {
+          selector: {
+            provider: 'mock',
+            providerOptions: {
+              codex: { configProfile: 'automation-review', permissionControl: 'takt' },
+            },
+          },
+        },
+      },
+      global: {},
+    });
+
+    expect(resolved).toMatchObject({ provider: 'mock' });
+    expect(resolved.providerOptions).toBeUndefined();
+  });
+
   it('should pass Pi selector resource options to the resolved provider', () => {
     const resolved = resolveSelectorProviderFromConfig({
       local: {
@@ -265,6 +312,7 @@ describe('workflow selector resolution', () => {
   const originalConfigDir = process.env.TAKT_CONFIG_DIR;
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     for (const root of roots.splice(0)) {
       rmSync(root, { recursive: true, force: true });
     }
@@ -306,12 +354,12 @@ describe('workflow selector resolution', () => {
             description: 'Review security',
             instruction: 'Review security',
             personaDisplayName: 'security',
-            rules: [{ condition: 'approved' }],
+            rules: [{ condition: parseWorkflowRuleCondition('approved') }],
           }],
           selection: { mode: 'replace' },
         },
         personaDisplayName: 'reviewers',
-        rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+        rules: [{ condition: parseWorkflowRuleCondition('all("approved")'), next: 'COMPLETE' }],
       }],
     };
   }
@@ -342,7 +390,7 @@ describe('workflow selector resolution', () => {
       name: 'ordinary',
       initialStep: 'implement',
       maxSteps: 1,
-      steps: [{ name: 'implement', instruction: 'Implement' }],
+      steps: [{ name: 'implement', personaDisplayName: 'implement', instruction: 'Implement' }],
     };
 
     expect(resolveWorkflowSelectorForProject(workflow, projectDir)).toEqual({ applies: false });
@@ -356,9 +404,10 @@ describe('workflow selector resolution', () => {
       maxSteps: 1,
       steps: [{
         name: 'implement',
+        personaDisplayName: 'implement',
         instruction: 'Implement',
         companion: { fixed: [], pool: ['security-reviewer'] },
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [{ condition: parseWorkflowRuleCondition('done'), next: 'COMPLETE' }],
       }],
     };
 
@@ -372,7 +421,7 @@ describe('workflow selector resolution', () => {
 
   it('should resolve selector configuration for Team Leader dynamic facets and companion pool', () => {
     const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
-    const workflow = {
+    const workflow: WorkflowConfig = {
       name: 'team-leader-selector',
       initialStep: 'implement',
       maxSteps: 1,
@@ -383,7 +432,7 @@ describe('workflow selector resolution', () => {
         teamLeader: { maxConcurrency: 1, timeoutMs: 900000 },
         dynamicFacets: { pool: 'review', maxSelected: 1 },
         companion: { fixed: [], pool: ['security-reviewer'] },
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [{ condition: parseWorkflowRuleCondition('done'), next: 'COMPLETE' }],
       }],
     };
 
@@ -403,9 +452,10 @@ describe('workflow selector resolution', () => {
       maxSteps: 1,
       steps: [{
         name: 'implement',
+        personaDisplayName: 'implement',
         instruction: 'Implement',
         companion: { fixed: [], pool: ['security-reviewer'] },
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [{ condition: parseWorkflowRuleCondition('done'), next: 'COMPLETE' }],
       }],
     };
 
@@ -532,9 +582,9 @@ describe('workflow selector resolution', () => {
           personaDisplayName: 'security',
           instruction: 'Review security',
           dynamicFacets: { pool: 'security', maxSelected: 1 },
-          rules: [{ condition: 'approved' }],
+          rules: [{ condition: parseWorkflowRuleCondition('approved') }],
         }],
-        rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+        rules: [{ condition: parseWorkflowRuleCondition('all("approved")'), next: 'COMPLETE' }],
       }],
     };
 
@@ -623,6 +673,117 @@ describe('workflow selector resolution', () => {
         },
       }),
     });
+  });
+
+  it('should validate legacy selector options after environment overrides are applied', () => {
+    const projectDir = createProject([
+      'provider: codex',
+      'model: gpt-selector',
+      'takt_providers:',
+      '  selector:',
+      '    provider: codex',
+      '    provider_options:',
+      '      codex:',
+      '        config_profile: automation-review',
+    ].join('\n'));
+    const previousPermissionControl = process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL;
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = 'codex';
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    try {
+      expect(resolveSelectorProviderForProject(projectDir)).toMatchObject({
+        provider: 'codex',
+        providerOptions: {
+          codex: {
+            configProfile: 'automation-review',
+            permissionControl: 'codex',
+          },
+        },
+      });
+    } finally {
+      if (previousPermissionControl === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = previousPermissionControl;
+      }
+      invalidateGlobalConfigCache();
+      invalidateAllResolvedConfigCache();
+    }
+  });
+
+  it('should apply a Codex profile env override when selector options enable Codex permission control', () => {
+    const projectDir = createProject([
+      'provider: codex',
+      'model: gpt-selector',
+      'takt_providers:',
+      '  selector:',
+      '    provider: codex',
+      '    provider_options:',
+      '      codex:',
+      '        permission_control: codex',
+    ].join('\n'));
+    vi.stubEnv('TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE', 'review');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    expect(resolveSelectorProviderForProject(projectDir)).toMatchObject({
+      provider: 'codex',
+      providerOptions: {
+        codex: { configProfile: 'review', permissionControl: 'codex' },
+      },
+    });
+  });
+
+  it('should not inherit top-level Codex permission control for a selector profile env override', () => {
+    const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR;
+    if (globalConfigDir === undefined) {
+      throw new Error('TAKT_CONFIG_DIR must be provided by the shared test setup');
+    }
+    writeFileSync(join(globalConfigDir, 'config.yaml'), [
+      'provider_options:',
+      '  codex:',
+      '    permission_control: codex',
+    ].join('\n'));
+    vi.stubEnv('TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE', 'review');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    expect(() => resolveSelectorProviderForProject(projectDir))
+      .toThrow(/config_profile requires permission_control: codex/);
+  });
+
+  it('should apply Codex profile and permission control env overrides to the selector together', () => {
+    const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
+    vi.stubEnv('TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE', 'review');
+    vi.stubEnv('TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL', 'codex');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    expect(resolveSelectorProviderForProject(projectDir)).toMatchObject({
+      provider: 'codex',
+      providerOptions: {
+        codex: { configProfile: 'review', permissionControl: 'codex' },
+      },
+    });
+  });
+
+  it('should reject an invalid legacy selector Codex options combination before the consumer runs', () => {
+    const projectDir = createProject([
+      'provider: codex',
+      'model: gpt-selector',
+      'takt_providers:',
+      '  selector:',
+      '    provider: codex',
+      '    provider_options:',
+      '      codex:',
+      '        config_profile: automation-review',
+      '        permission_control: takt',
+    ].join('\n'));
+
+    expect(() => resolveSelectorProviderForProject(projectDir))
+      .toThrow(/config_profile requires permission_control: codex/);
   });
 
   it('should keep compatible Claude options', () => {

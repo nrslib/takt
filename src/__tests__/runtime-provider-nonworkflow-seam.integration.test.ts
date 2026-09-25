@@ -250,7 +250,7 @@ describe('runtime.yaml non-workflow provider resolution', () => {
           ctx,
           'prompt',
           'system',
-          { outputMode: 'silent', persistSession: false },
+          { outputMode: 'silent' },
         );
 
         expect(result.content).toBe('done');
@@ -267,6 +267,103 @@ describe('runtime.yaml non-workflow provider resolution', () => {
       }
     },
   );
+
+  it('flows runtime Codex config_profile through the exec assistant seam', async () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: {
+            provider: 'codex',
+            model: 'gpt-default',
+            options: { config_profile: 'automation-review', permission_control: 'codex' },
+          },
+        },
+      },
+    });
+    invalidate();
+
+    const config: ResolvedExecConfig = {
+      ...DEFAULT_EXEC_CONFIG,
+      session: { provider: 'codex', model: 'gpt-default' },
+      workers: DEFAULT_EXEC_CONFIG.workers.map((worker) => ({ ...worker, provider: 'codex' })),
+      reviews: DEFAULT_EXEC_CONFIG.reviews.map((review) => ({ ...review, provider: 'codex' })),
+    };
+    const ctx = createExecSessionContext(projectCwd, config);
+    expect(ctx.providerOptions).toMatchObject({
+      codex: { configProfile: 'automation-review', permissionControl: 'codex' },
+    });
+
+    mockCallCodexCustom.mockReset();
+    mockCallCodexCustom.mockResolvedValue({ content: 'done', sessionId: 'exec-session', status: 'completed' });
+    const result = await askExecAssistant(
+      projectCwd,
+      ctx,
+      'prompt',
+      'system',
+      { outputMode: 'silent' },
+    );
+
+    expect(result.content).toBe('done');
+    expect(mockCallCodexCustom.mock.calls[0]?.[3]).toMatchObject({
+      configProfile: 'automation-review',
+      permissionControl: 'codex',
+    });
+  });
+
+  it('applies an env config_profile override before creating an interactive runtime session', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: {
+            provider: 'codex',
+            model: 'gpt-default',
+            options: { config_profile: 'runtime-review', permission_control: 'codex' },
+          },
+        },
+      },
+    });
+    const previous = process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'env-review';
+    invalidate();
+    try {
+      const ctx = initializeSession(projectCwd, 'interactive');
+      expect(ctx.providerType).toBe('codex');
+      expect(ctx.providerOptions).toEqual({
+        codex: { configProfile: 'env-review', permissionControl: 'codex' },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = previous;
+      }
+      invalidate();
+    }
+  });
+
+  it('rejects an invalid runtime profile/permission combination before session creation', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: {
+            provider: 'codex',
+            model: 'gpt-default',
+            options: { config_profile: 'runtime-review' },
+          },
+        },
+      },
+    });
+    invalidate();
+
+    expect(() => initializeSession(projectCwd, 'coder'))
+      .toThrow(/config_profile requires permission_control: codex/);
+  });
 
   it.each([
     { profileFastMode: false, envFastMode: true },
@@ -320,7 +417,7 @@ describe('runtime.yaml non-workflow provider resolution', () => {
         ctx,
         'prompt',
         'system',
-        { outputMode: 'silent', persistSession: false },
+      { outputMode: 'silent' },
       );
 
       expect(result.content).toBe('done');

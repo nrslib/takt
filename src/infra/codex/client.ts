@@ -29,7 +29,11 @@ import {
   type AgentFailureDetail,
 } from '../../shared/types/agent-failure.js';
 import type { StreamToolUseEventData } from '../../shared/types/provider.js';
-import { mapToCodexSandboxMode, type CodexCallOptions } from './types.js';
+import {
+  CODEX_CONFIG_PROFILE_ENV,
+  mapToCodexSandboxMode,
+  type CodexCallOptions,
+} from './types.js';
 import { buildCodexSkillConfig } from './skill-config.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 import {
@@ -85,6 +89,14 @@ const CODEX_SAFETY_REFUSAL_PATTERNS = [
   'trusted access for cyber',
 ];
 const CODEX_SAFETY_REFUSAL_MAX_CONTENT_LENGTH = 600;
+
+function removeCodexConfigProfileMarker(environment: Record<string, string>): void {
+  for (const key of Object.keys(environment)) {
+    if (key.toLowerCase() === CODEX_CONFIG_PROFILE_ENV.toLowerCase()) {
+      delete environment[key];
+    }
+  }
+}
 
 function isCodexSafetyRefusal(content: string): boolean {
   if (content.length === 0 || content.length > CODEX_SAFETY_REFUSAL_MAX_CONTENT_LENGTH) {
@@ -415,6 +427,10 @@ export class CodexClient {
       buildChildProcessEnv(),
       options.childProcessEnv,
     ) as Record<string, string>;
+    removeCodexConfigProfileMarker(codexEnvironment);
+    if (options.configProfile !== undefined) {
+      codexEnvironment[CODEX_CONFIG_PROFILE_ENV] = options.configProfile;
+    }
     const shellPath = codexEnvironment.PATH;
     const codexConfig: CodexOptions['config'] = {
       ...(codexSkillConfig ?? {}),
@@ -487,6 +503,8 @@ export class CodexClient {
           agentType,
           model: options.model,
           hasSystemPrompt: !!options.systemPrompt,
+          configProfile: options.configProfile,
+          permissionControl: options.permissionControl ?? 'takt',
           attempt,
         });
 

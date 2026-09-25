@@ -5,7 +5,9 @@ import {
   resolveNonWorkflowProviderOptions,
   resolveWorkflowConfigValues,
 } from '../../infra/config/index.js';
+import { resolveRuntimeProviderOptions } from '../../infra/config/runtime-provider/provider-options.js';
 import { mergeProviderOptions } from '../../infra/config/providerOptions.js';
+import { createDefaultProviderOptionsForProvider } from '../../infra/config/resolveConfigValue.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
@@ -84,11 +86,16 @@ export function createExecSessionContext(
   const runtimeProvider = resolveNonWorkflowProviderModel(cwd);
   const providerOptions = runtimeProvider.runtimeManaged
     && runtimeProvider.provider === config.session.provider
-    ? resolveNonWorkflowProviderOptions(
+    ? resolveRuntimeProviderOptions(
         cwd,
-        mergeProviderOptions(runtimeProvider.providerOptions, sessionProviderOptions),
+        runtimeProvider.provider,
+        mergeProviderOptions(
+          createDefaultProviderOptionsForProvider(runtimeProvider.provider),
+          runtimeProvider.providerOptions,
+        ),
+        sessionProviderOptions,
       )
-    : resolveNonWorkflowProviderOptions(cwd, sessionProviderOptions);
+    : resolveNonWorkflowProviderOptions(cwd, sessionProviderOptions, undefined, config.session.provider);
   return {
     provider: getProvider(config.session.provider as ProviderType),
     providerType: config.session.provider,

@@ -14,6 +14,7 @@ export function buildCompletionRetryJudgeStep(input: {
   const seat = internalAgentSeatOverride(input.internalAgentSeats?.completionRetryJudge);
   return {
     kind: 'agent',
+    engineSynthesized: true,
     name: `_completion_retry_judge_${input.reviewerStepName}`,
     personaDisplayName: COMPLETION_RETRY_JUDGE_NAME,
     providerRoutingPersonaKey: COMPLETION_RETRY_JUDGE_NAME,

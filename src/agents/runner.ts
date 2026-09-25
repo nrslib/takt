@@ -122,6 +122,7 @@ export class AgentRunner {
     personaDisplayName: string | undefined,
     options: RunnerHandoffOptions,
     personaProviders: ReturnType<typeof AgentRunner.resolvePersonaProviders>,
+    resolvedProvider: ProviderType,
   ): ProviderCallOptions['providerOptions'] {
     if (options.resolvedProviderOptions !== undefined) {
       return options.resolvedProviderOptions ?? undefined;
@@ -143,6 +144,7 @@ export class AgentRunner {
       resolvedConfigProviderOptions,
       options.providerOptions,
       personaProviderOptions,
+      resolvedProvider,
     );
     return resolvedProviderOptions;
   }
@@ -186,6 +188,7 @@ export class AgentRunner {
         personaDisplayName,
         options,
         resolved.personaProviders,
+        resolved.provider,
       ),
       permissionMode: AgentRunner.resolvePermissionMode(
         resolved.provider,

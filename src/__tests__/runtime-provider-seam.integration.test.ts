@@ -1,5 +1,12 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
@@ -14,7 +21,7 @@ import {
   invalidateGlobalConfigCache,
   resolveProviderOptionsWithTrace,
 } from '../infra/config/index.js';
-import { getGlobalConfigDir } from '../infra/config/paths.js';
+import { getGlobalConfigDir, getGlobalConfigPath } from '../infra/config/paths.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 
 // Consumption-side seam (issue #1208): drive a compiled runtime.yaml environment through a real
@@ -249,6 +256,64 @@ describe('resolveCompiledProviderEnvironment seam', () => {
     });
   });
 
+  it.each([
+    {
+      label: 'the planning persona',
+      targets: { personas: { leader: { profile: 'invalid' } } },
+      teamLeader: { personaDisplayName: 'leader' },
+    },
+    {
+      label: 'the part persona',
+      targets: { personas: { part: { profile: 'invalid' } } },
+      teamLeader: { partPersona: 'part' },
+    },
+    {
+      label: 'the inherited part persona',
+      targets: { personas: { parent: { profile: 'invalid' } } },
+      teamLeader: { personaDisplayName: 'leader' },
+    },
+    {
+      label: 'a generated part step target',
+      targets: { steps: { 'team-seam/lead.api': { profile: 'invalid' } } },
+      teamLeader: {},
+    },
+  ])('preflights invalid config_profile options for $label before Team Leader dispatch', ({ targets, teamLeader }) => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'codex', model: 'gpt-default' },
+          invalid: { provider: 'codex', model: 'gpt-invalid', options: { config_profile: 'automation-review' } },
+        },
+        targets,
+      },
+    });
+
+    const workflow: WorkflowConfig = {
+      name: 'team-seam',
+      steps: [{
+        name: 'lead',
+        personaDisplayName: 'parent',
+        instruction: 'decompose the task',
+        teamLeader: {
+          maxConcurrency: 1,
+          timeoutMs: 1_000,
+          ...teamLeader,
+        },
+      }],
+      initialStep: 'lead',
+      maxSteps: 1,
+    };
+
+    expect(() => resolveRuntimeEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+      workflow,
+    })).toThrow(/config_profile requires permission_control: codex/);
+  });
+
   it('resolves a global profile capability from the global layer instead of a project shadow', () => {
     const capabilityName = 'runtime-profile-origin-proof';
     const globalProviderOptionsDir = join(getGlobalConfigDir(), 'provider-options');
@@ -455,7 +520,7 @@ describe('resolveCompiledProviderEnvironment seam', () => {
     expect(resolved.providerEnvironment.provider).toBe('codex');
     expect(resolved.providerEnvironment.model).toBe('gpt-x');
     expect(resolved.providerEnvironment.providerSource).toBe('global');
-    expect(resolved.providerEnvironment.mcpAssignment?.servers.tools).toEqual({
+    expect(resolved.providerEnvironment.mcpAssignment?.servers?.tools).toEqual({
       type: 'stdio',
       command: 'tools-mcp',
       args: undefined,
@@ -763,14 +828,23 @@ describe('providerLadders end-to-end from runtime.yaml (issue #1208)', () => {
 describe('runtime provider options through workflow execution', () => {
   let workflowProjectCwd: string;
   let originalFastMode: string | undefined;
+  let originalPermissionControl: string | undefined;
+  let originalConfigProfile: string | undefined;
   let originalProvider: string | undefined;
   let originalModel: string | undefined;
+  let hadGlobalConfig: boolean;
+  let originalGlobalConfig: string | undefined;
 
   beforeEach(() => {
     vi.resetAllMocks();
     applyDefaultMocks();
     workflowProjectCwd = mkdtempSync(join(tmpdir(), 'takt-seam-workflow-'));
     mkdirSync(join(workflowProjectCwd, '.takt', 'workflows', 'personas'), { recursive: true });
+    const globalConfigPath = getGlobalConfigPath();
+    hadGlobalConfig = existsSync(globalConfigPath);
+    originalGlobalConfig = hadGlobalConfig
+      ? readFileSync(globalConfigPath, 'utf-8')
+      : undefined;
     writeFileSync(
       join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
       [
@@ -795,9 +869,13 @@ describe('runtime provider options through workflow execution', () => {
     );
 
     originalFastMode = process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+    originalPermissionControl = process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL;
+    originalConfigProfile = process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
     originalProvider = process.env.TAKT_PROVIDER;
     originalModel = process.env.TAKT_MODEL;
     delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+    delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL;
+    delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
     delete process.env.TAKT_PROVIDER;
     delete process.env.TAKT_MODEL;
     invalidateGlobalConfigCache();
@@ -809,6 +887,16 @@ describe('runtime provider options through workflow execution', () => {
       delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
     } else {
       process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = originalFastMode;
+    }
+    if (originalPermissionControl === undefined) {
+      delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL;
+    } else {
+      process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = originalPermissionControl;
+    }
+    if (originalConfigProfile === undefined) {
+      delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+    } else {
+      process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = originalConfigProfile;
     }
     if (originalProvider === undefined) {
       delete process.env.TAKT_PROVIDER;
@@ -822,8 +910,132 @@ describe('runtime provider options through workflow execution', () => {
     }
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
+    const globalConfigPath = getGlobalConfigPath();
+    if (hadGlobalConfig) {
+      writeFileSync(globalConfigPath, originalGlobalConfig!, 'utf-8');
+    } else {
+      rmSync(globalConfigPath, { force: true });
+    }
     rmSync(workflowProjectCwd, { recursive: true, force: true });
   });
+
+  function writeRootQualifiedLadderFixture(
+    permissionControl: 'codex' | 'takt',
+    targetName = 'runtime-provider-handoff/plan',
+  ): void {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
+      [
+        'name: runtime-provider-handoff',
+        'description: runtime provider qualified ladder integration test',
+        'max_steps: 2',
+        'initial_step: plan',
+        'steps:',
+        '  - name: plan',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    promotion:',
+        '      - at: 2',
+        '    rules:',
+        '      - condition: again',
+        '        next: plan',
+        '      - condition: done',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'opencode', model: 'opencode/qwen' },
+          review: {
+            provider: 'codex',
+            model: 'gpt-review',
+            options: { config_profile: 'runtime-review', permission_control: permissionControl },
+          },
+        },
+        targets: {
+          steps: { [targetName]: { ladder: ['base', 'review'] } },
+        },
+      },
+    });
+  }
+
+  function writeChildQualifiedLadderFixture(permissionControl: 'codex' | 'takt'): void {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'child-runtime-provider.yaml'),
+      [
+        'name: child-runtime-provider',
+        'subworkflow:',
+        '  callable: true',
+        'max_steps: 2',
+        'initial_step: child-plan',
+        'steps:',
+        '  - name: child-plan',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    promotion:',
+        '      - at: 2',
+        '    rules:',
+        '      - condition: again',
+        '        next: child-plan',
+        '      - condition: done',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
+      [
+        'name: runtime-provider-handoff',
+        'description: child runtime provider qualified ladder integration test',
+        'max_steps: 4',
+        'initial_step: before',
+        'steps:',
+        '  - name: before',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    rules:',
+        '      - condition: done',
+        '        next: delegate',
+        '  - name: delegate',
+        '    kind: workflow_call',
+        '    call: child-runtime-provider',
+        '    rules:',
+        '      - condition: COMPLETE',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'opencode', model: 'opencode/qwen' },
+          review: {
+            provider: 'codex',
+            model: 'gpt-review',
+            options: { config_profile: 'runtime-review', permission_control: permissionControl },
+          },
+        },
+        targets: {
+          steps: { 'child-runtime-provider/child-plan': { ladder: ['base', 'review'] } },
+        },
+      },
+    });
+  }
+
+  function writeLegacyConfigProfile(scope: 'project' | 'global'): void {
+    const configPath = scope === 'project'
+      ? join(workflowProjectCwd, '.takt', 'config.yaml')
+      : getGlobalConfigPath();
+    writeFileSync(configPath, stringifyYaml({
+      provider_options: { codex: { config_profile: 'automation-review' } },
+    }), 'utf-8');
+  }
 
   it.each([
     [false, true],
@@ -888,4 +1100,687 @@ describe('runtime provider options through workflow execution', () => {
       }
     },
   );
+
+  it('allows env config_profile and fast_mode with a runtime Codex provider', async () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: {
+            provider: 'codex',
+            model: 'gpt-runtime',
+            options: { permission_control: 'codex' },
+          },
+        },
+      },
+    });
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'automation-review';
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = 'true';
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([makeResponse({ persona: 'planner', content: 'done' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const result = await runWorkflowExecution({
+      task: 'env provider options with runtime provider',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedProviderOptions).toMatchObject({
+      codex: {
+        configProfile: 'automation-review',
+        fastMode: true,
+        permissionControl: 'codex',
+      },
+    });
+  });
+
+  it('allows a non-Codex workflow when only the Codex config profile env option is set', async () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'opencode', model: 'opencode/qwen' },
+        },
+      },
+    });
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'review';
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([makeResponse({ persona: 'planner', content: 'done' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const result = await runWorkflowExecution({
+      task: 'non-Codex workflow with Codex-only environment option',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+      resolvedProvider: 'opencode',
+    });
+  });
+
+  it.each(['project', 'global'] as const)(
+    'rejects %s provider_options when an unrelated env leaf is also present',
+    async (scope) => {
+      writeGlobalRuntimeFile({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: {
+              provider: 'codex',
+              model: 'gpt-runtime',
+              options: { permission_control: 'codex' },
+            },
+          },
+        },
+      });
+      writeLegacyConfigProfile(scope);
+      process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = 'true';
+      invalidateGlobalConfigCache();
+      invalidateAllResolvedConfigCache();
+
+      await expect(runWorkflowExecution({
+        task: `mixed ${scope} provider options`,
+        cwd: workflowProjectCwd,
+        projectCwd: workflowProjectCwd,
+        workflowIdentifier: 'runtime-provider-handoff',
+        outputMode: 'silent',
+      })).rejects.toThrow(/Mixed provider configuration[\s\S]*provider_options/);
+      expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects an invalid runtime Codex profile before any workflow agent starts', async () => {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', RUNTIME_PROVIDER_FILENAME),
+      stringifyYaml({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: {
+              provider: 'codex',
+              model: 'gpt-runtime',
+              options: { config_profile: 'runtime-review' },
+            },
+          },
+        },
+      }),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = 'takt';
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    await expect(runWorkflowExecution({
+      task: 'invalid runtime provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/config_profile requires permission_control: codex/);
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid runtime Codex profile selected by a workflow step target before execution', async () => {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', RUNTIME_PROVIDER_FILENAME),
+      stringifyYaml({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: { provider: 'opencode', model: 'opencode/qwen' },
+            review: {
+              provider: 'codex',
+              model: 'gpt-review',
+              options: { config_profile: 'runtime-review' },
+            },
+          },
+          targets: {
+            steps: { 'runtime-provider-handoff/plan': { profile: 'review' } },
+          },
+        },
+      }),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    await expect(runWorkflowExecution({
+      task: 'invalid routed runtime provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/config_profile requires permission_control: codex/);
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid runtime Codex profile selected by a child workflow step before execution', async () => {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'child-runtime-provider.yaml'),
+      [
+        'name: child-runtime-provider',
+        'subworkflow:',
+        '  callable: true',
+        'max_steps: 1',
+        'initial_step: child-plan',
+        'steps:',
+        '  - name: child-plan',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    rules:',
+        '      - condition: when(true)',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
+      [
+        'name: runtime-provider-handoff',
+        'description: runtime provider option handoff integration test',
+        'max_steps: 1',
+        'initial_step: delegate',
+        'steps:',
+        '  - name: delegate',
+        '    kind: workflow_call',
+        '    call: child-runtime-provider',
+        '    rules:',
+        '      - condition: COMPLETE',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', RUNTIME_PROVIDER_FILENAME),
+      stringifyYaml({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: { provider: 'opencode', model: 'opencode/qwen' },
+            childReview: {
+              provider: 'codex',
+              model: 'gpt-review',
+              options: { config_profile: 'runtime-review' },
+            },
+          },
+          targets: {
+            steps: { 'child-runtime-provider/child-plan': { profile: 'childReview' } },
+          },
+        },
+      }),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    await expect(runWorkflowExecution({
+      task: 'invalid child workflow runtime provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/config_profile requires permission_control: codex/);
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid runtime Codex profile for a loop judge before execution', async () => {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
+      [
+        'name: runtime-provider-handoff',
+        'description: runtime provider option handoff integration test',
+        'max_steps: 2',
+        'initial_step: plan',
+        'steps:',
+        '  - name: plan',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    rules:',
+        '      - condition: when(true)',
+        '        next: COMPLETE',
+        '  - name: review',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    rules:',
+        '      - condition: when(true)',
+        '        next: COMPLETE',
+        'loop_monitors:',
+        '  - cycle: [plan, review]',
+        '    threshold: 1',
+        '    judge:',
+        '      rules:',
+        '        - condition: when(true)',
+        '          next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', RUNTIME_PROVIDER_FILENAME),
+      stringifyYaml({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: { provider: 'opencode', model: 'opencode/qwen' },
+            judge: {
+              provider: 'codex',
+              model: 'gpt-judge',
+              options: { config_profile: 'runtime-judge' },
+            },
+          },
+          targets: { internal_agents: { 'loop-judge': { profile: 'judge' } } },
+        },
+      }),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    await expect(runWorkflowExecution({
+      task: 'invalid loop judge runtime provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/config_profile requires permission_control: codex/);
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid runtime Codex profile for a completion-retry judge before execution', async () => {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
+      [
+        'name: runtime-provider-handoff',
+        'description: runtime provider option handoff integration test',
+        'max_steps: 1',
+        'initial_step: plan',
+        'steps:',
+        '  - name: plan',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    completion_retry:',
+        '      retry_instruction: retry',
+        '    rules:',
+        '      - condition: when(true)',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', RUNTIME_PROVIDER_FILENAME),
+      stringifyYaml({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: { provider: 'opencode', model: 'opencode/qwen' },
+            judge: {
+              provider: 'codex',
+              model: 'gpt-review',
+              options: { config_profile: 'runtime-review' },
+            },
+          },
+          targets: {
+            internal_agents: { 'review-completion-judge': { profile: 'judge' } },
+          },
+        },
+      }),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    await expect(runWorkflowExecution({
+      task: 'invalid completion retry judge runtime provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/config_profile requires permission_control: codex/);
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
+  it('accepts a runtime Codex profile when env supplies permission_control=codex', async () => {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', RUNTIME_PROVIDER_FILENAME),
+      stringifyYaml({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: {
+              provider: 'codex',
+              model: 'gpt-runtime',
+              options: { config_profile: 'runtime-review' },
+            },
+          },
+        },
+      }),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = 'codex';
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([makeResponse({ persona: 'planner', content: 'done' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const result = await runWorkflowExecution({
+      task: 'valid runtime provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedProviderOptions).toMatchObject({
+      codex: {
+        configProfile: 'runtime-review',
+        permissionControl: 'codex',
+      },
+    });
+  });
+
+  it('accepts a valid root qualified runtime ladder before promotion dispatch', async () => {
+    writeRootQualifiedLadderFixture('codex');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'planner', content: 'again' }),
+      makeResponse({ persona: 'planner', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+    ]);
+
+    const result = await runWorkflowExecution({
+      task: 'valid root qualified ladder provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runAgent).mock.calls[1]?.[2]?.resolvedProviderOptions).toMatchObject({
+      codex: {
+        configProfile: 'runtime-review',
+        permissionControl: 'codex',
+      },
+    });
+  });
+
+  it('rejects an invalid root qualified runtime ladder before the first agent starts', async () => {
+    writeRootQualifiedLadderFixture('takt');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'planner', content: 'again' }),
+      makeResponse({ persona: 'planner', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+    ]);
+
+    await expect(runWorkflowExecution({
+      task: 'invalid root qualified ladder provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/config_profile requires permission_control: codex/);
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
+  it('does not validate a qualified ladder for another workflow', async () => {
+    writeRootQualifiedLadderFixture('takt', 'other/fix');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'planner', content: 'again' }),
+      makeResponse({ persona: 'planner', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+    ]);
+
+    const result = await runWorkflowExecution({
+      task: 'non-selected qualified ladder provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runAgent).mock.calls[1]?.[2]?.resolvedProviderOptions).not.toMatchObject({
+      codex: { configProfile: 'runtime-review' },
+    });
+  });
+
+  it('accepts a valid child qualified runtime ladder before promotion dispatch', async () => {
+    writeChildQualifiedLadderFixture('codex');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'planner', content: 'done' }),
+      makeResponse({ persona: 'planner', content: 'again' }),
+      makeResponse({ persona: 'planner', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+    ]);
+
+    const result = await runWorkflowExecution({
+      task: 'valid child qualified ladder provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent).mock.calls[2]?.[2]?.resolvedProviderOptions).toMatchObject({
+      codex: {
+        configProfile: 'runtime-review',
+        permissionControl: 'codex',
+      },
+    });
+  });
+
+  it('rejects an invalid child qualified runtime ladder before the parent agent starts', async () => {
+    writeChildQualifiedLadderFixture('takt');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'planner', content: 'done' }),
+      makeResponse({ persona: 'planner', content: 'again' }),
+      makeResponse({ persona: 'planner', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+    ]);
+
+    await expect(runWorkflowExecution({
+      task: 'invalid child qualified ladder provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/config_profile requires permission_control: codex/);
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
+  it('validates a consumable runtime ladder stage after composing base options', async () => {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
+      [
+        'name: runtime-provider-handoff',
+        'description: runtime provider ladder validation integration test',
+        'max_steps: 4',
+        'initial_step: fix',
+        'steps:',
+        '  - name: fix',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    promotion:',
+        '      - at: 2',
+        '    rules:',
+        '      - condition: again',
+        '        next: review',
+        '      - condition: done',
+        '        next: COMPLETE',
+        '  - name: review',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    rules:',
+        '      - condition: back',
+        '        next: fix',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', RUNTIME_PROVIDER_FILENAME),
+      stringifyYaml({
+        version: 1,
+        provider: {
+          defaults: { ladder: ['base', 'review'] },
+          profiles: {
+            base: { provider: 'codex', model: 'gpt-base' },
+            review: {
+              provider: 'codex',
+              model: 'gpt-review',
+              options: {
+                config_profile: 'automation-review',
+                permission_control: 'codex',
+              },
+            },
+          },
+        },
+      }),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'fix', content: 'again' }),
+      makeResponse({ persona: 'review', content: 'back' }),
+      makeResponse({ persona: 'fix', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+    ]);
+
+    const result = await runWorkflowExecution({
+      task: 'valid runtime ladder provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent).mock.calls[2]?.[2]?.resolvedProviderOptions).toMatchObject({
+      codex: {
+        configProfile: 'automation-review',
+        permissionControl: 'codex',
+      },
+    });
+  });
+
+  it('rejects an invalid consumable runtime ladder stage before the first agent starts', async () => {
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
+      [
+        'name: runtime-provider-handoff',
+        'description: runtime provider ladder validation integration test',
+        'max_steps: 4',
+        'initial_step: fix',
+        'steps:',
+        '  - name: fix',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    promotion:',
+        '      - at: 2',
+        '    rules:',
+        '      - condition: again',
+        '        next: review',
+        '      - condition: done',
+        '        next: COMPLETE',
+        '  - name: review',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    rules:',
+        '      - condition: back',
+        '        next: fix',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(workflowProjectCwd, '.takt', RUNTIME_PROVIDER_FILENAME),
+      stringifyYaml({
+        version: 1,
+        provider: {
+          defaults: { ladder: ['base', 'review'] },
+          profiles: {
+            base: { provider: 'codex', model: 'gpt-base' },
+            review: {
+              provider: 'codex',
+              model: 'gpt-review',
+              options: {
+                config_profile: 'automation-review',
+                permission_control: 'takt',
+              },
+            },
+          },
+        },
+      }),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    await expect(runWorkflowExecution({
+      task: 'invalid runtime ladder provider options',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/config_profile requires permission_control: codex/);
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
 });

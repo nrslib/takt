@@ -707,6 +707,24 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
     expect(result.model).toBe('sonnet');
   });
 
+  it('does not validate Codex-only env options for an OpenCode step', () => {
+    const step = createStep({
+      provider: 'opencode',
+      model: 'opencode/qwen',
+    });
+    const builder = createBuilder(step, {
+      provider: 'opencode',
+      model: 'opencode/qwen',
+      providerOptions: { codex: { configProfile: 'review' } },
+      providerOptionsSource: 'env',
+      providerOptionsOriginResolver: (path) => (
+        path === 'codex.configProfile' ? 'env' : 'default'
+      ),
+    });
+
+    expect(() => builder.resolveStepProviderModel(step)).not.toThrow();
+  });
+
   it('should prioritize persona providers over engine-level provider', () => {
     const step = createStep({ personaDisplayName: 'coder' });
     const builder = createBuilder(step, {

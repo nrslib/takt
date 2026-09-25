@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.66.1] - 2026-09-24
+
+### Added
+
+- Codex provider can select a named configuration profile with `provider_options.codex.config_profile` when `permission_control: codex` is enabled (#1539, #1583). TAKT passes the name to `codex exec --profile <name>` without reading or merging Codex TOML files; Codex resolves it from `$CODEX_HOME/<name>.config.toml`. The name may contain only ASCII letters, digits, hyphens, and underscores, and setting it without `permission_control: codex` is a configuration error. It can also be set with `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE`.
+- DeepSeek Harness reasoning effort can be set with `options.reasoning_effort` (`off`, `low`, `high`, or `max`) in a `runtime.yaml` provider profile or with `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_REASONING_EFFORT` (#1492, #1588). When unset, the SDK default is used. Changing or clearing the effort applies to the next turn while keeping the session ID and history; the effort cannot be set from `config.yaml` `provider_options`, workflow steps, or personas.
+
+### Changed
+
+- A provider error in a normal step or a parallel sub-step is retried once in a fresh session (#1582). Stream parse errors (`provider_stream_parse_error`) are now retried as well, so one failed reviewer in a parallel review no longer aborts the whole run while the other reviewers' results are kept. Failures caused by a user interruption or an external timeout, and rate limits, are not retried.
+- The builtin frontend guidance is reorganized around a new `gui` knowledge and policy (#1592). `gui` covers the screen hierarchy from the root, display components that report user operations upward, and the component that owns the state deciding whether to accept an operation, what to run, and what to show next; `frontend` extends it with URLs, HTML, communication, and accessibility, and the React knowledge and policy show how to implement these roles with React.
+
+### Fixed
+
+- A facet in an external facet pool can inherit a parent with `{extends:...}` from the same directory (#1592). A symlinked parent file or a reference outside that directory is rejected.
+- The Codex SDK is updated to 0.156.1 so that `gpt-6-luna` with reasoning effort `max` works with ChatGPT authentication instead of failing with a 400 error (#1597).
+
+### Internal
+
+- Made the parallel-round facet reselection test independent of selector call order (#1599).
+
 ## [0.66.0] - 2026-09-18
 
 ### Added

@@ -4,14 +4,23 @@ import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { PermissionMode } from '../../core/models/types.js';
-import { mergeProviderOptions } from './providerOptions.js';
+import {
+  mergeProviderOptions,
+  resolveEffectiveProviderOptions,
+  selectEnvironmentProviderOptions,
+} from './providerOptions.js';
+import { getSelectorProviderOptionRoots } from './providerOptionsContract.js';
 import { validateProviderModelRequirements } from '../../core/workflow/provider-model-requirements.js';
 import { ConfiguredModelSchema } from '../../core/models/model-schema.js';
 import { loadProjectConfig } from './project/projectConfig.js';
 import { loadGlobalConfig } from './global/globalConfig.js';
-import { resolveConfigValueWithSource } from './resolveConfigValue.js';
+import {
+  resolveConfigValueWithSource,
+  resolveProviderOptionsWithTrace,
+} from './resolveConfigValue.js';
 import { resolveRuntimeInternalAgentProvider } from './runtime-provider/internal-agents.js';
 import { composeRuntimeProviderOverride } from './runtime-provider/override.js';
+import { resolveRuntimeProviderOptions } from './runtime-provider/provider-options.js';
 import type { CompiledProviderEnvironment } from './runtime-provider/environment.js';
 
 export interface SelectorProviderOverrides {
@@ -64,12 +73,15 @@ export function resolveSelectorProviderFromConfig(
   validateProviderModelRequirements(provider, modelCandidate?.model, {
     modelFieldName: 'Configuration error: takt_providers.selector resolved model',
   });
+  const providerOptions = provider === undefined
+    ? undefined
+    : resolveSelectorProviderOptions(config, provider);
   return {
     ...(provider === undefined ? {} : { provider }),
     ...(providerCandidate === undefined ? {} : { providerSource: providerCandidate.source }),
     ...(modelCandidate?.model === undefined ? {} : { model: modelCandidate.model }),
     ...(modelCandidate === undefined ? {} : { modelSource: modelCandidate.source }),
-    ...(provider === undefined ? {} : { providerOptions: resolveSelectorProviderOptions(config, provider) }),
+    ...(providerOptions === undefined ? {} : { providerOptions }),
   };
 }
 
@@ -86,6 +98,7 @@ export function resolveSelectorProviderForProject(
 
 export function resolveSelectorProviderFromRuntimeEnvironment(
   environment: CompiledProviderEnvironment,
+  projectCwd: string,
   overrides?: SelectorProviderOverrides,
 ): ResolvedSelectorProvider {
   const runtimeSelector = environment.internalAgents?.selector ?? (
@@ -114,6 +127,7 @@ export function resolveSelectorProviderFromRuntimeEnvironment(
   const modelOverride = overrides?.model ?? modelFromEnvironment;
   return resolveSelectorFromRuntimeValues(
     runtimeSelector,
+    projectCwd,
     {
       provider: providerOverride,
       model: modelOverride,
@@ -143,7 +157,7 @@ export function resolveSelectorProviderFromLegacyProject(
   const modelOverride = overrides?.model ?? (
     configuredModel.source === 'env' ? configuredModel.value : undefined
   );
-  return resolveSelectorProviderFromConfig({
+  const resolved = resolveSelectorProviderFromConfig({
     local: {
       provider: project.provider,
       model: project.model,
@@ -162,6 +176,18 @@ export function resolveSelectorProviderFromLegacyProject(
     modelSource: overrides?.modelSource
       ?? (configuredModel.source === 'env' ? 'env' : undefined),
   });
+  if (resolved.provider === undefined) {
+    return resolved;
+  }
+  const providerOptions = resolveLegacySelectorProviderOptions(
+    projectCwd,
+    resolved.provider,
+    resolved.providerOptions,
+  );
+  return {
+    ...resolved,
+    ...(providerOptions === undefined ? {} : { providerOptions }),
+  };
 }
 
 /**
@@ -187,6 +213,7 @@ function resolveSelectorFromRuntimeV1(
 
   return resolveSelectorFromRuntimeValues(
     runtime,
+    projectCwd,
     {
       provider: providerOverride,
       model: modelOverride,
@@ -198,6 +225,7 @@ function resolveSelectorFromRuntimeV1(
 
 function resolveSelectorFromRuntimeValues(
   runtime: ProviderRoutingEntry,
+  projectCwd: string,
   overrides: {
     provider?: ProviderType;
     model?: string;
@@ -232,7 +260,11 @@ function resolveSelectorFromRuntimeValues(
   validateProviderModelRequirements(provider, model, {
     modelFieldName: 'Configuration error: runtime.yaml internal_agents.selector resolved model',
   });
-  const providerOptions = composed.providerOptions;
+  const providerOptions = resolveRuntimeProviderOptions(
+    projectCwd,
+    provider,
+    composed.providerOptions,
+  );
   return {
     ...(provider === undefined ? {} : { provider }),
     ...(providerSource === undefined ? {} : { providerSource }),
@@ -256,22 +288,30 @@ function resolveSelectorProviderOptions(
   if (merged === undefined) {
     return undefined;
   }
-  const applicableOptions = Object.fromEntries(getSelectorProviderOptionKeys(provider).flatMap((key) => (
+  const applicableOptions = Object.fromEntries(getSelectorProviderOptionRoots(provider).flatMap((key) => (
     merged[key] === undefined ? [] : [[key, merged[key]]]
   )));
   return Object.keys(applicableOptions).length === 0 ? undefined : applicableOptions as StepProviderOptions;
 }
 
-function getSelectorProviderOptionKeys(provider: ProviderType): readonly (keyof StepProviderOptions)[] {
-  if (provider === 'claude-sdk') return ['claude'];
-  if (provider === 'claude-terminal') return ['claude', 'claudeTerminal'];
-  return provider === 'codex'
-    || provider === 'opencode'
-    || provider === 'claude'
-    || provider === 'copilot'
-    || provider === 'kiro'
-    || provider === 'pi'
-    || provider === 'deepseek-harness'
-    ? [provider === 'deepseek-harness' ? 'deepseekHarness' : provider]
-    : [];
+function resolveLegacySelectorProviderOptions(
+  projectCwd: string,
+  provider: ProviderType,
+  selectorOptions: StepProviderOptions | undefined,
+): StepProviderOptions | undefined {
+  const resolved = resolveProviderOptionsWithTrace(projectCwd);
+  const environmentOptions = selectEnvironmentProviderOptions(
+    resolved.value,
+    resolved.originResolver,
+    getSelectorProviderOptionRoots(provider),
+  );
+  const providerOptions = resolveEffectiveProviderOptions(
+    'env',
+    resolved.originResolver,
+    environmentOptions,
+    selectorOptions,
+    undefined,
+    provider,
+  );
+  return providerOptions;
 }

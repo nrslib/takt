@@ -41,7 +41,7 @@ export function initializeSession(
   // resolution unchanged so provider/model/options come from one source.
   const providerOptions = resolved.runtimeManaged
     ? resolved.providerOptions
-    : resolveNonWorkflowProviderOptions(cwd);
+    : resolveNonWorkflowProviderOptions(cwd, undefined, undefined, resolvedProvider);
 
   return {
     provider: getProvider(resolvedProvider),

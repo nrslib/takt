@@ -226,6 +226,21 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip Codex config profile', () => {
+    const rawProviderOptions = {
+      codex: {
+        config_profile: 'automation-review',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: { configProfile: 'automation-review' },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
   it.each([true, false])('should normalize and denormalize Codex fast_mode=%s', (fastMode) => {
     const rawProviderOptions = { codex: { fast_mode: fastMode } };
     const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);

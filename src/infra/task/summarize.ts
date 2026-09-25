@@ -120,7 +120,7 @@ export async function summarizeTaskName(
   // `provider_options` resolution unchanged so provider/model/options come from one source.
   const providerOptions = resolved.runtimeManaged
     ? resolved.providerOptions
-    : resolveNonWorkflowProviderOptions(options.cwd);
+    : resolveNonWorkflowProviderOptions(options.cwd, undefined, undefined, resolved.provider);
   const summarizer = new TaskSummarizer(
     resolved.provider,
     options.model ?? resolved.model,

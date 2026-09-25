@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import type { AgentResponse } from '../core/models/response.js';
 
 const { selectorDebug } = vi.hoisted(() => ({
   selectorDebug: vi.fn(),
@@ -122,7 +123,7 @@ function setProjectConfig(projectDir: string, body: string): void {
   writeFileSync(join(projectDir, '.takt', 'config.yaml'), body, 'utf-8');
 }
 
-function makeDoneResponse() {
+function makeDoneResponse(): AgentResponse {
   return {
     persona: 'planner',
     status: 'done',
@@ -136,6 +137,7 @@ describe('IT: config provider_options reflection', () => {
   let env: TestEnv;
   let originalConfigDir: string | undefined;
   let originalEnvCodex: string | undefined;
+  let originalEnvCodexProfile: string | undefined;
   let originalProvider: string | undefined;
   let originalModel: string | undefined;
 
@@ -145,11 +147,13 @@ describe('IT: config provider_options reflection', () => {
     env = createEnv();
     originalConfigDir = process.env.TAKT_CONFIG_DIR;
     originalEnvCodex = process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
+    originalEnvCodexProfile = process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
     originalProvider = process.env.TAKT_PROVIDER;
     originalModel = process.env.TAKT_MODEL;
 
     process.env.TAKT_CONFIG_DIR = env.globalDir;
     delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
+    delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
     delete process.env.TAKT_PROVIDER;
     delete process.env.TAKT_MODEL;
     invalidateGlobalConfigCache();
@@ -173,6 +177,11 @@ describe('IT: config provider_options reflection', () => {
       delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
     } else {
       process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = originalEnvCodex;
+    }
+    if (originalEnvCodexProfile === undefined) {
+      delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+    } else {
+      process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = originalEnvCodexProfile;
     }
     if (originalProvider === undefined) {
       delete process.env.TAKT_PROVIDER;
@@ -271,6 +280,58 @@ describe('IT: config provider_options reflection', () => {
       codex: { networkAccess: false },
       claude: { skills: defaultClaudeSkills },
     });
+  });
+
+  it('should resolve Codex config profile from project options and environment override', async () => {
+    setGlobalConfig(env.globalDir, [
+      'provider_options:',
+      '  codex:',
+      '    config_profile: global-review',
+      '    permission_control: codex',
+    ].join('\n'));
+    setProjectConfig(env.projectDir, [
+      'provider_options:',
+      '  codex:',
+      '    config_profile: project-review',
+      '    permission_control: codex',
+    ].join('\n'));
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'env-review';
+    invalidateGlobalConfigCache();
+
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: env.projectDir,
+      projectCwd: env.projectDir,
+      workflowIdentifier: 'config-it',
+    });
+
+    expect(ok).toBe(true);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.providerOptions).toMatchObject({
+      codex: { configProfile: 'env-review' },
+    });
+  });
+
+  it.each([
+    ['codex', 'implicit default', 'config_profile: review-only', false],
+    ['codex', 'explicit takt', 'config_profile: review-only\npermission_control: takt', false],
+    ['claude', 'implicit default', 'config_profile: review-only', true],
+    ['claude', 'explicit takt', 'config_profile: review-only\npermission_control: takt', true],
+  ] as const)('should validate Codex config profile for provider %s with %s permission control', async (provider, _label, codexOptions, expectedSuccess) => {
+    setGlobalConfig(env.globalDir, [
+      `provider: ${provider}`,
+      'provider_options:',
+      '  codex:',
+      ...codexOptions.split('\n').map((line) => `    ${line}`),
+    ].join('\n'));
+    invalidateGlobalConfigCache();
+
+    await expect(executeTask({
+      task: 'test task',
+      cwd: env.projectDir,
+      projectCwd: env.projectDir,
+      workflowIdentifier: 'config-it',
+    })).resolves.toBe(expectedSuccess);
+    expect(runAgent).toHaveBeenCalledTimes(expectedSuccess ? 1 : 0);
   });
 
   it('should preserve provider options origin precedence through executeTask to WorkflowEngine', async () => {

@@ -405,6 +405,82 @@ describe('CodexClient — structuredOutput 抽出', () => {
     },
   );
 
+  it('debug 診断に機密入力を含めず config profile と permission control だけを含める', async () => {
+    const sensitivePrompt = 'prompt-secret-1539';
+    const sensitiveSystemPrompt = 'system-secret-1539';
+    const sensitiveCwd = '/private/absolute/path-1539';
+    const sensitiveApiKey = 'api-key-secret-1539';
+    const sensitiveEnvValue = 'child-env-secret-1539';
+    const sensitiveSkillPath = '/private/skill-secret-1539/SKILL.md';
+    const sensitiveMcpCommand = 'mcp-command-secret-1539';
+    const sensitiveMcpArgument = 'mcp-argument-secret-1539';
+    const sensitiveMcpEnvValue = 'mcp-env-secret-1539';
+    const sensitiveSkillConfig = {
+      skills: {
+        config: [{ path: sensitiveSkillPath, enabled: true }],
+      },
+    };
+    const sensitiveMcpConfig = {
+      command: sensitiveMcpCommand,
+      args: [sensitiveMcpArgument],
+      env: { MCP_SECRET: sensitiveMcpEnvValue },
+    };
+    const preparedMcp = {
+      dispose: async () => undefined,
+      config: { mcp_servers: { sensitive: sensitiveMcpConfig } },
+    };
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue(sensitiveSkillConfig);
+
+    await new CodexClient().call('coder', sensitivePrompt, {
+      cwd: sensitiveCwd,
+      model: 'diagnostic-model',
+      systemPrompt: sensitiveSystemPrompt,
+      openaiApiKey: sensitiveApiKey,
+      childProcessEnv: { TAKT_OBSERVABILITY: sensitiveEnvValue },
+      skills: { repo: true, user: true },
+      preparedMcp,
+      permissionControl: 'codex',
+      configProfile: 'automation-review',
+    });
+
+    const diagnostic = mockLogger.debug.mock.calls
+      .find(([message]) => message === 'Executing Codex thread')?.[1];
+    expect(diagnostic).toEqual({
+      agentType: 'coder',
+      model: 'diagnostic-model',
+      hasSystemPrompt: true,
+      configProfile: 'automation-review',
+      permissionControl: 'codex',
+      attempt: 1,
+    });
+    expect(lastCodexConstructorOptions).toMatchObject({
+      apiKey: sensitiveApiKey,
+      env: { TAKT_OBSERVABILITY: sensitiveEnvValue },
+      config: {
+        skills: sensitiveSkillConfig.skills,
+        mcp_servers: { sensitive: sensitiveMcpConfig },
+      },
+    });
+    const serializedDiagnostic = JSON.stringify(diagnostic);
+    for (const sensitiveValue of [
+      sensitivePrompt,
+      sensitiveSystemPrompt,
+      sensitiveCwd,
+      sensitiveApiKey,
+      sensitiveEnvValue,
+      sensitiveSkillPath,
+      sensitiveMcpCommand,
+      sensitiveMcpArgument,
+      sensitiveMcpEnvValue,
+    ]) {
+      expect(serializedDiagnostic).not.toContain(sensitiveValue);
+    }
+  });
+
   it('provider_options.codex.network_access が ThreadOptions に反映される', async () => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },

@@ -19,7 +19,10 @@ import { getAllParallelSubSteps } from '../../../core/models/index.js';
 import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
 import { getWorkflowReference } from '../../../core/workflow/workflow-reference.js';
 import type { WorkflowCallResolver } from '../../../core/workflow/types.js';
-import type { ProviderOptionsSource } from '../../../core/workflow/provider-options-trace.js';
+import type {
+  ProviderOptionsOriginResolver,
+  ProviderOptionsSource,
+} from '../../../core/workflow/provider-options-trace.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
 import {
@@ -27,6 +30,7 @@ import {
   resolveProviderOptionsWithTrace,
   toProviderResolutionSource,
 } from '../resolveConfigValue.js';
+import { getPresentProviderOptionPaths } from '../providerOptionsContract.js';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import type { LegacyProviderEnvironmentInput } from './environment.js';
 import type { LegacyProviderSignal } from './mode.js';
@@ -66,6 +70,7 @@ export function selectConfigTaktProviders(
 export function collectLegacyProviderSignals(
   legacy: LegacyProviderEnvironmentInput,
   providerOptionsSource: ProviderOptionsSource | undefined,
+  providerOptionsOriginResolver?: ProviderOptionsOriginResolver,
 ): LegacyProviderSignal[] {
   const signals: LegacyProviderSignal[] = [];
 
@@ -97,10 +102,14 @@ export function collectLegacyProviderSignals(
   // Only provider_options explicitly written to project/global config.yaml are a legacy signal.
   // The resolver always merges built-in skill defaults into the value (source 'default'), and
   // env overrides (source 'env') are runtime overrides — neither must trip the mixed-config gate.
-  if (
-    (providerOptionsSource === 'project' || providerOptionsSource === 'global')
-    && isNonEmptyRecord(legacy.providerOptions as Record<string, unknown> | undefined)
-  ) {
+  const hasLegacyProviderOptions = providerOptionsOriginResolver === undefined
+    ? (providerOptionsSource === 'project' || providerOptionsSource === 'global')
+      && isNonEmptyRecord(legacy.providerOptions as Record<string, unknown> | undefined)
+    : getPresentProviderOptionPaths(legacy.providerOptions).some((path) => {
+      const origin = providerOptionsOriginResolver(path);
+      return origin === 'local' || origin === 'global';
+    });
+  if (hasLegacyProviderOptions) {
     signals.push({
       setting: 'provider_options',
       location: 'config.yaml:provider_options',
@@ -161,7 +170,11 @@ export function collectProjectLegacyProviderSignals(projectCwd: string): LegacyP
       loadGlobalConfig().taktProviders,
     ),
   };
-  return collectLegacyProviderSignals(legacy, providerOptions.source);
+  return collectLegacyProviderSignals(
+    legacy,
+    providerOptions.source,
+    providerOptions.originResolver,
+  );
 }
 
 /**

@@ -82,6 +82,16 @@ describe('resolveProviderOptionsWithTrace', () => {
       .toThrow(/unsupported/iu);
   });
 
+  it('Codex profile env は非 Codex の選択時に Codex permission control を要求しない', () => {
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'review';
+
+    const options = resolveNonWorkflowProviderOptions(projectDir, undefined, undefined, 'opencode');
+
+    expect(options?.codex?.configProfile).toBe('review');
+    expect(() => resolveNonWorkflowProviderOptions(projectDir, undefined, undefined, 'codex'))
+      .toThrow(/config_profile requires permission_control: codex/);
+  });
+
   it('既定の Skill 設定を解決結果ごとに分離する', () => {
     const first = resolveProviderOptionsWithTrace(projectDir);
     const firstCodexSkills = first.value?.codex?.skills;
@@ -185,6 +195,36 @@ describe('resolveProviderOptionsWithTrace', () => {
     });
     expect(result.originResolver('claude.allowedTools')).toBe('global');
     expect(result.originResolver('codex.networkAccess')).toBe('local');
+  });
+
+  it('Codex config profile を global/project/env の優先順位と trace 付きで解決する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  codex:',
+        '    config_profile: global-review',
+        '    permission_control: codex',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    config_profile: project-review'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'env-review';
+
+    const result = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(result.value?.codex).toMatchObject({ configProfile: 'env-review' });
+    expect(result.originResolver('codex.configProfile')).toBe('env');
+    expect(result.source).toBe('env');
   });
 
   it('provider_options の effort 系キーも trace 付きで解決する', () => {

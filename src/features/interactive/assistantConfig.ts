@@ -3,6 +3,7 @@ import { loadProjectConfig } from '../../infra/config/project/projectConfig.js';
 import { resolveConfigValueWithSource } from '../../infra/config/resolveConfigValue.js';
 import { resolveRuntimeInternalAgentProvider } from '../../infra/config/runtime-provider/internal-agents.js';
 import { composeRuntimeProviderOverride } from '../../infra/config/runtime-provider/override.js';
+import { resolveRuntimeProviderOptions } from '../../infra/config/runtime-provider/provider-options.js';
 import {
   resolveAssistantProviderModelFromConfig,
   type AssistantCliOverrides,
@@ -100,11 +101,16 @@ function resolveAssistantFromRuntimeV1(
     },
     { provider: providerOverride, model: modelOverride },
   );
+  const providerOptions = resolveRuntimeProviderOptions(
+    projectDir,
+    composed.provider,
+    composed.providerOptions,
+  );
   return {
     runtimeManaged: true,
     provider: composed.provider,
     model: composed.model,
-    ...(composed.providerOptions !== undefined ? { providerOptions: composed.providerOptions } : {}),
+    ...(providerOptions !== undefined ? { providerOptions } : {}),
     ...(composed.permissionMode !== undefined ? { permissionMode: composed.permissionMode } : {}),
   };
 }

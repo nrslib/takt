@@ -715,6 +715,7 @@ export function denormalizeProviderOptions(
     providerOptions.codex?.baseUrl !== undefined
     || providerOptions.codex?.networkAccess !== undefined
     || providerOptions.codex?.permissionControl !== undefined
+    || providerOptions.codex?.configProfile !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
     || providerOptions.codex?.fastMode !== undefined
     || providerOptions.codex?.guards?.callTimeoutMs !== undefined
@@ -730,6 +731,9 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.codex.permissionControl !== undefined
         ? { permission_control: providerOptions.codex.permissionControl }
+        : {}),
+      ...(providerOptions.codex.configProfile !== undefined
+        ? { config_profile: providerOptions.codex.configProfile }
         : {}),
       ...(providerOptions.codex.reasoningEffort !== undefined
         ? { reasoning_effort: providerOptions.codex.reasoningEffort }

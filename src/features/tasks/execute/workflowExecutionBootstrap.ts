@@ -91,6 +91,7 @@ import {
 } from '../../../infra/config/runtime-provider/legacy-signals.js';
 import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
 import type { McpAssignmentSection } from '../../../infra/config/runtime-provider/mcp-assignment.js';
+import { resolveRuntimeProviderOptions } from '../../../infra/config/runtime-provider/provider-options.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
 import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
@@ -603,10 +604,15 @@ export async function createWorkflowExecutionBootstrap(
   const resolvedRuntimeEnvironment = resolveRuntimeEnvironment({
     projectCwd,
     executionCwd: cwd,
+    workflow: workflowConfig,
+    workflowCallResolver: options.workflowCallResolver,
+    providerOptionsSource: options.providerOptionsSource,
+    providerOptionsOriginResolver: options.providerOptionsOriginResolver,
     legacy: legacyProviderEnvironment,
     legacySignals: collectLegacyProviderSignals(
       legacyProviderEnvironment,
       options.providerOptionsSource,
+      options.providerOptionsOriginResolver,
     ),
   });
   const providerEnvironment = resolvedRuntimeEnvironment.providerEnvironment;
@@ -677,7 +683,7 @@ export async function createWorkflowExecutionBootstrap(
       ? selectorResolution.selectorProvider
       : undefined;
   }
-  const companionProviders = Object.fromEntries(
+  const resolvedCompanionProviders = Object.fromEntries(
     companionEnabled
       ? resolveWorkflowCompanions(effectiveWorkflowConfig, providerEnvironment, {
           projectCwd,
@@ -685,6 +691,19 @@ export async function createWorkflowExecutionBootstrap(
           workflowCallResolver: options.workflowCallResolver,
         })
       : [],
+  );
+  const companionProviders = Object.fromEntries(
+    Object.entries(resolvedCompanionProviders).map(([name, companion]) => [
+      name,
+      {
+        ...companion,
+        providerOptions: resolveRuntimeProviderOptions(
+          projectCwd,
+          companion.provider,
+          companion.providerOptions,
+        ),
+      },
+    ]),
   );
   validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd);
   const providerEventLogger = createProviderEventLogger({

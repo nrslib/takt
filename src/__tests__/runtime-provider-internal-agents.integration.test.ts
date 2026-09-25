@@ -3,8 +3,15 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
+import type { WorkflowConfig } from '../core/models/workflow-types.js';
 import { resolveRuntimeInternalAgentProvider } from '../infra/config/runtime-provider/internal-agents.js';
-import { resolveSelectorProviderForProject } from '../infra/config/selectorProviderResolution.js';
+import { createExecSessionContext } from '../features/exec/assistantSession.js';
+import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
+import type { ResolvedExecConfig } from '../features/exec/types.js';
+import {
+  resolveSelectorProviderForProject,
+  resolveSelectorProviderFromRuntimeEnvironment,
+} from '../infra/config/selectorProviderResolution.js';
 import { resolveAssistantProviderModel } from '../features/interactive/assistantConfig.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 import {
@@ -16,6 +23,7 @@ import {
 } from '../infra/config/index.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 import { resolveRuntimeEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
+import { resolveProviderOptionsWithTrace } from '../infra/config/resolveConfigValue.js';
 
 /**
  * Integration coverage for the internal-agent (selector/assistant) seams reading the runtime.yaml
@@ -91,6 +99,137 @@ describe('runtime.yaml internal_agents resolution', () => {
     }
   });
 
+  it('does not apply Codex profile env options to an OpenCode runtime default or workflow step', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'opencode', model: 'opencode/qwen' },
+          router: {
+            provider: 'codex',
+            model: 'gpt-router',
+            options: { permission_control: 'codex' },
+          },
+        },
+        targets: { internal_agents: { selector: { profile: 'router' } } },
+      },
+    });
+    const previousConfigProfile = process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'review';
+    invalidate();
+
+    try {
+      const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
+      const workflow: WorkflowConfig = {
+        name: 'open-code-workflow',
+        steps: [{
+          kind: 'agent',
+          name: 'implementation',
+          personaDisplayName: 'Implementation',
+          instruction: 'implement',
+        }],
+        initialStep: 'implementation',
+        maxSteps: 1,
+      };
+      const resolved = resolveRuntimeEnvironment({
+        projectCwd,
+        legacySignals: [],
+        legacy: {
+          provider: undefined,
+          providerSource: 'default',
+          model: undefined,
+          modelSource: 'default',
+          personaProviders: undefined,
+          providerRouting: undefined,
+          autoRouting: undefined,
+          providerOptions: providerOptions.value,
+        },
+        providerOptionsSource: providerOptions.source,
+        providerOptionsOriginResolver: providerOptions.originResolver,
+        workflow,
+      });
+
+      expect(resolved.providerEnvironment.provider).toBe('opencode');
+      expect(resolveSelectorProviderFromRuntimeEnvironment(
+        resolved.providerEnvironment,
+        projectCwd,
+      )).toMatchObject({
+        provider: 'codex',
+        providerOptions: {
+          codex: { configProfile: 'review', permissionControl: 'codex' },
+        },
+      });
+    } finally {
+      if (previousConfigProfile === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = previousConfigProfile;
+      }
+      invalidate();
+    }
+  });
+
+  it.each(['claude', 'claude-sdk'] as const)(
+    'keeps the default-disabled Claude skills option in a runtime-managed exec session for %s',
+    (provider) => {
+      const previousOpenCodeVariant = process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT;
+      process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT = 'unrelated-env-option';
+      writeGlobalRuntimeFile({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: { default: { provider, model: 'runtime-model' } },
+        },
+      });
+      invalidate();
+
+      try {
+        const context = createExecSessionContext(projectCwd, {
+          ...DEFAULT_EXEC_CONFIG,
+          session: { provider, model: 'runtime-model' },
+        } as ResolvedExecConfig);
+
+        expect(context.providerOptions?.claude?.skills?.enabled).toBe(false);
+        expect(context.providerOptions).not.toHaveProperty('opencode');
+      } finally {
+        if (previousOpenCodeVariant === undefined) {
+          delete process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT;
+        } else {
+          process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT = previousOpenCodeVariant;
+        }
+        invalidate();
+      }
+    },
+  );
+
+  it.each(['claude', 'claude-sdk'] as const)(
+    'keeps an explicit runtime Claude skills setting for %s',
+    (provider) => {
+      writeGlobalRuntimeFile({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: {
+              provider,
+              model: 'runtime-model',
+              options: { skills: { enabled: true } },
+            },
+          },
+        },
+      });
+      invalidate();
+
+      const context = createExecSessionContext(projectCwd, {
+        ...DEFAULT_EXEC_CONFIG,
+        session: { provider, model: 'runtime-model' },
+      } as ResolvedExecConfig);
+
+      expect(context.providerOptions?.claude?.skills?.enabled).toBe(true);
+    },
+  );
+
   it.each([
     { provider: 'deepseek-harness', effort: 'high', override: undefined, expected: 'high' },
     { provider: 'deepseek-harness', effort: 'high', override: 'max', expected: 'max' },
@@ -122,6 +261,7 @@ describe('runtime.yaml internal_agents resolution', () => {
         projectCwd, legacySignals: [], legacy: {
           provider: undefined, providerSource: 'default', model: undefined, modelSource: 'default',
           personaProviders: undefined, providerRouting: undefined, autoRouting: undefined,
+          providerOptions: undefined,
         },
       });
       expect(providerEnvironment.autoRouting?.router).toEqual({
@@ -163,6 +303,39 @@ describe('runtime.yaml internal_agents resolution', () => {
     expect(selector.model).toBe('gpt-router');
     expect(selector.providerSource).toBe('runtime-v1');
     expect(selector.providerOptions).toEqual({ codex: { reasoningEffort: 'high' } });
+  });
+
+  it('applies an env config_profile override to the runtime selector options', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'opencode', model: 'qwen' },
+          router: {
+            provider: 'codex',
+            model: 'gpt-router',
+            options: { config_profile: 'runtime-review', permission_control: 'codex' },
+          },
+        },
+        targets: { internal_agents: { selector: { profile: 'router' } } },
+      },
+    });
+    const previous = process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = 'env-review';
+    invalidate();
+    try {
+      expect(resolveSelectorProviderForProject(projectCwd).providerOptions).toEqual({
+        codex: { configProfile: 'env-review', permissionControl: 'codex' },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE = previous;
+      }
+      invalidate();
+    }
   });
 
   it('falls back to the defaults profile when internal_agents.assistant is absent', () => {

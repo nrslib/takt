@@ -50,7 +50,12 @@ export async function runSyncConflictResolver(
   // `provider_options` so provider/model/options come from one source.
   const providerOptions = resolvedProviderModel.runtimeManaged
     ? resolvedProviderModel.providerOptions
-    : resolveNonWorkflowProviderOptions(options.projectCwd);
+    : resolveNonWorkflowProviderOptions(
+      options.projectCwd,
+      undefined,
+      undefined,
+      resolvedProviderModel.provider,
+    );
 
   return agent.call(prompt, {
     cwd: options.cwd,

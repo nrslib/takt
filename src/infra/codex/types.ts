@@ -33,6 +33,8 @@ export interface CodexCallOptions {
   permissionMode?: PermissionMode;
   /** Select whether TAKT or Codex controls permissions. */
   permissionControl?: CodexPermissionControl;
+  /** Name of the Codex config profile selected by the caller. */
+  configProfile?: string;
   /** Enable network access for the TAKT-controlled sandbox */
   networkAccess?: boolean;
   /** Enable streaming mode with callback (best-effort) */
@@ -59,3 +61,5 @@ export interface CodexCallOptions {
   /** Provider-prepared MCP material (issue #1137). */
   preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
 }
+
+export const CODEX_CONFIG_PROFILE_ENV = 'TAKT_CODEX_CONFIG_PROFILE';

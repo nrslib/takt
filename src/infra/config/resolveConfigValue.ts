@@ -8,6 +8,7 @@ import { loadProjectConfig, loadProjectConfigTraceState } from './project/projec
 import { expandOptionalHomePath } from './pathExpansion.js';
 import { resolveObservabilityConfig } from './observabilityConfig.js';
 import {
+  getProviderOptionRoots,
   PROVIDER_OPTIONS_TRACE_PATHS,
   getPresentProviderOptionPaths,
   hasProviderOptionsPath,
@@ -27,6 +28,7 @@ import type {
   ProviderOptionsTraceOrigin,
 } from '../../core/workflow/provider-options-trace.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
+import type { ProviderType } from '../../shared/types/provider.js';
 
 export type { ConfigParameterKey } from './resolvedConfig.js';
 export { invalidateResolvedConfigCache, invalidateAllResolvedConfigCache } from './resolutionCache.js';
@@ -85,6 +87,20 @@ function createDefaultProviderOptions(
       skills: { ...DEFAULT_CLAUDE_SKILLS },
     },
   };
+}
+
+/** Resolve defaults owned by one provider without pulling in another provider's defaults. */
+export function createDefaultProviderOptionsForProvider(
+  provider: ProviderType,
+  codexSkillDefaults: CodexSkillDefaults = DEFAULT_CODEX_SKILLS,
+): StepProviderOptions | undefined {
+  const defaults = createDefaultProviderOptions(codexSkillDefaults);
+  const selected = Object.fromEntries(
+    getProviderOptionRoots(provider)
+      .filter((root) => defaults[root] !== undefined)
+      .map((root) => [root, defaults[root]]),
+  ) as StepProviderOptions;
+  return Object.keys(selected).length === 0 ? undefined : selected;
 }
 
 type ResolutionLayer = 'local' | 'workflow' | 'global';
@@ -611,6 +627,7 @@ export function resolveNonWorkflowProviderOptions(
   projectDir: string,
   callOptions?: StepProviderOptions,
   codexSkillDefaults?: CodexSkillDefaults,
+  resolvedProvider?: ProviderType,
 ): StepProviderOptions | undefined {
   const resolved = resolveProviderOptionsWithTrace(projectDir, codexSkillDefaults);
   const providerOptions = resolveEffectiveProviderOptions(
@@ -618,6 +635,8 @@ export function resolveNonWorkflowProviderOptions(
     resolved.originResolver,
     resolved.value,
     callOptions,
+    undefined,
+    resolvedProvider,
   );
   return providerOptions;
 }
