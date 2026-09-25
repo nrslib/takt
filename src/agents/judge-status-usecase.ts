@@ -115,7 +115,8 @@ export async function runTagJudgeStage(
       instruction: tagInstruction,
       response: getErrorMessage(error),
     });
-    throw error;
+    runOptions.abortSignal?.throwIfAborted();
+    return undefined;
   }
 
   onJudgeStage?.({

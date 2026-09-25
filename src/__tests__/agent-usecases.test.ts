@@ -16,6 +16,7 @@ import {
 import type { AgentResponse, CompanionFinding } from '../core/models/index.js';
 import { runTagJudgeStage as runTagJudgeStageImpl } from '../agents/judge-status-usecase.js';
 import { requestDecompositionRawResponse as requestDecompositionRawResponseImpl } from '../agents/decompose-task-usecase.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import {
@@ -546,6 +547,71 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledTimes(3);
   });
 
+  it('judgeStatus は Stage 1 と Stage 2 の provider rejection 後に Stage 3 を実行し、判定できなければ RuleDetectionExhaustedError を送出する', async () => {
+    const onJudgeStage = vi.fn();
+    vi.mocked(runAgent)
+      .mockRejectedValueOnce(new Error('stage 1 rejected'))
+      .mockRejectedValueOnce(new Error('stage 2 rejected'))
+      .mockResolvedValueOnce(doneResponse('still no match'));
+    vi.mocked(detectJudgeIndex).mockReturnValue(-1);
+
+    await expect(judgeStatus('structured', 'tag', [
+      { label: 'a' },
+      { label: 'b' },
+    ], {
+      ...judgeOptions,
+      onJudgeStage,
+    })).rejects.toBeInstanceOf(RuleDetectionExhaustedError);
+
+    expect(runAgent).toHaveBeenCalledTimes(3);
+    expect(onJudgeStage).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      stage: 1,
+      status: 'error',
+      response: 'stage 1 rejected',
+    }));
+    expect(onJudgeStage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      stage: 2,
+      status: 'error',
+      response: 'stage 2 rejected',
+    }));
+  });
+
+  it.each(['error', 'done'] as const)(
+    'judgeStatus は Stage 2 の %s 記録が失敗したら例外を伝播し Stage 3 を呼ばない',
+    async (stage2Status) => {
+      const recordingError = new Error('stage 2 log write failed');
+      const onJudgeStage = vi.fn((entry: JudgeStageLog) => {
+        if (entry.stage === 2) {
+          throw recordingError;
+        }
+      });
+      vi.mocked(runAgent)
+        .mockResolvedValue(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }))
+        .mockResolvedValueOnce(doneResponse('no match'));
+      if (stage2Status === 'error') {
+        vi.mocked(runAgent).mockRejectedValueOnce(new Error('stage 2 rejected'));
+      } else {
+        vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('[REVIEW:1]'));
+      }
+
+      await expect(judgeStatus('structured', 'tag', [
+        { label: 'a' },
+        { label: 'b' },
+      ], {
+        ...judgeOptions,
+        onJudgeStage,
+      })).rejects.toBe(recordingError);
+
+      expect(runAgent).toHaveBeenCalledTimes(2);
+      expect(onJudgeStage).toHaveBeenCalledTimes(2);
+      expect(onJudgeStage).toHaveBeenLastCalledWith(expect.objectContaining({
+        stage: 2,
+        method: 'phase3_tag',
+        status: stage2Status,
+      }));
+    },
+  );
+
   it('judgeStatus は ai_judge fallback の活動中に親 deadline を生存させる', async () => {
     vi.useFakeTimers();
     const inactivityTimeoutMs = 60_000;
@@ -738,6 +804,34 @@ describe('agent-usecases', () => {
       }
     },
   );
+
+  it('judgeStatus は Stage 2 の provider rejection 中に発生した abort を伝播する', async () => {
+    const abortController = new AbortController();
+    const onJudgeStage = vi.fn();
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce(doneResponse('no structured match'))
+      .mockImplementationOnce(async () => {
+        abortController.abort(new Error('cancelled during stage 2'));
+        throw new Error('stage 2 rejected');
+      });
+
+    await expect(judgeStatus('structured', 'tag', [
+      { label: 'a' },
+      { label: 'b' },
+    ], {
+      ...judgeOptions,
+      abortSignal: abortController.signal,
+      onJudgeStage,
+    })).rejects.toThrow('cancelled during stage 2');
+
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(onJudgeStage).toHaveBeenCalledTimes(2);
+    expect(onJudgeStage).toHaveBeenLastCalledWith(expect.objectContaining({
+      stage: 2,
+      status: 'error',
+      response: 'stage 2 rejected',
+    }));
+  });
 
   it('judgeStatus は provider 分岐なしで全内部ステージに暗黙の maxTurns を付与しない', async () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
