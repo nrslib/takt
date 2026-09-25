@@ -196,6 +196,27 @@ describe('CodexClient failure handling', () => {
     await assertOversizedRateLimitResponseIsBounded(createTurnFailedPlan);
   });
 
+  it.each([
+    'Your workspace is out of credits. Add credits to continue.',
+    'You hit your spend cap set by the owner of your workspace. Ask an owner to increase your spend cap to continue.',
+  ])('should classify a workspace limit from turn.failed: %s', async (message) => {
+    runPlans = [createTurnFailedPlan(message)];
+
+    const result = await new CodexClient().call('coder', 'prompt', createFailureOptions());
+
+    expect(result).toMatchObject({
+      status: 'rate_limited',
+      content: '',
+      error: message,
+      errorKind: 'rate_limit',
+      rateLimitInfo: {
+        provider: 'codex',
+        source: 'sdk_error',
+      },
+    });
+    expect(runPlanIndex).toBe(1);
+  });
+
   it('should keep the generic category when the parse phrase is not at the start', async () => {
     runPlans = [createParseFailurePlan('prefix: Failed to parse item: invalid stdout line')];
 
@@ -411,6 +432,25 @@ describe('CodexClient failure handling', () => {
     expect(writeNewPrivateFileWithModeMock).not.toHaveBeenCalled();
   });
 
+  const additionalUsageLimitNotifications = [
+    ...[
+      'You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits',
+      'You’ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus),',
+      'You’ve hit your usage limit. To get more access now, send a request to your admin',
+      'You’ve hit your usage limit for codex_other. Switch to another model now,',
+    ].flatMap((prefix) => [
+      { message: `${prefix} or try again at 7:04 PM.`, resetAtRaw: '7:04 PM' },
+      { message: `${prefix} or try again at Sep 27th, 2026 7:04 PM.`, resetAtRaw: 'Sep 27th, 2026 7:04 PM' },
+      { message: `${prefix} or try again later.`, resetAtRaw: undefined },
+    ]),
+    ...[
+      'Your workspace is out of credits. Add credits to continue.',
+      'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.',
+      'You hit your spend cap set in your workspace. Increase your spend cap to continue.',
+      'You hit your spend cap set by the owner of your workspace. Ask an owner to increase your spend cap to continue.',
+    ].map((message) => ({ message, resetAtRaw: undefined })),
+  ];
+
   it.each([
     {
       message: "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits",
@@ -440,6 +480,7 @@ describe('CodexClient failure handling', () => {
       message: 'You’ve hit your usage limit. Try again later.',
       resetAtRaw: undefined,
     },
+    ...additionalUsageLimitNotifications,
   ])('should classify a Codex usage limit notification: $message', async ({ message, resetAtRaw }) => {
     runPlans = [{
       type: 'events',
@@ -484,6 +525,12 @@ describe('CodexClient failure handling', () => {
     "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 7:04 PM. This is the literal message reproduced by the test.",
     'You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 27th, 2026 7:04 PM. This is the literal message reproduced by the test. [STEP:1]',
     'You’ve hit your usage limit. Try again later. This is the literal message reproduced by the test. [STEP:1]',
+    ...additionalUsageLimitNotifications.map(({ message }) => `${message} This is the literal message reproduced by the test. The fix is complete.`),
+    'You’ve hit your usage limit. The test reproduced this message.The fix is complete, or try again later.',
+    'You’ve hit your usage limit. The fix is complete, or try again later.',
+    'You’ve hit your usage limit. The test reproduced this message. The fix is complete, or try again later.',
+    'You’ve hit your usage limit. The fix is complete [STEP:1], or try again later.',
+    'You’ve hit your usage limit. Visit https://chatgpt.com/explore/plus. The fix is complete, or try again later.',
   ])('should preserve ordinary assistant text quoting a usage limit: %s', async (message) => {
     runPlans = [{
       type: 'events',

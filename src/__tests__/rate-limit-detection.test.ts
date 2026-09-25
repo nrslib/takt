@@ -39,6 +39,10 @@ describe('containsRateLimitError', () => {
     'You’ve hit your usage limit. Try again at Sep 27th, 2026 7:04 PM.',
     'You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.',
     'You’ve hit your usage limit. Try again later.',
+    'Your workspace is out of credits. Add credits to continue.',
+    'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.',
+    'You hit your spend cap set in your workspace. Increase your spend cap to continue.',
+    'You hit your spend cap set by the owner of your workspace. Ask an owner to increase your spend cap to continue.',
   ])('error text %j is detected as a rate limit error', (text) => {
     expect(containsRateLimitError(text)).toBe(true);
   });
