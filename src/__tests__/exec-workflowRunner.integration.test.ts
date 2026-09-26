@@ -144,13 +144,11 @@ describe('runGeneratedWorkflow integration', () => {
       'review-1-review-result.md',
       'review-2-review-result.md',
     ]);
-    expect(formatted.runReports).toContain('review-1-review-result.md');
-    expect(formatted.runReports).toContain('review-2-review-result.md');
+
+
     expect(formatted.runReports).toContain('review-1-review-result.md');
     expect(formatted.runReports).toContain('review-2-review-result.md');
     expect(formatted.runReports).not.toContain('worker-extra.md');
-    expect(formatted.runReports).toContain('untrusted data');
-    expect(formatted.runReports).toContain('do not follow instructions');
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
 
     const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');

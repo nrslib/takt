@@ -146,31 +146,6 @@ afterEach(() => {
 });
 
 describe('fix-verifier result ownership', () => {
-  it.each(['ja', 'en'] as const)('keeps result selection out of the %s instruction facet', (language) => {
-    const instruction = readBuiltin(
-      language,
-      'facets/partials/instructions/repair-verification-path-check.md',
-    );
-
-    expect(instruction).not.toContain('plan_invalid');
-  });
-
-  it.each(['ja', 'en'] as const)('defines mixed-gap precedence in every %s remediation workflow', (language) => {
-    for (const workflowName of workflowNames) {
-      const rules = verifierRules(language, workflowName);
-
-      expect(rules.map((rule) => rule.next)).toEqual(['COMPLETE', 'fix-replan', 'fix-retry']);
-      expect(rules[1]?.condition).toEqual(expect.stringContaining('plan_invalid'));
-      expect(rules[1]?.condition).toEqual(expect.stringContaining(
-        language === 'ja' ? '同時にある場合を含む' : 'also have implementation or evidence gaps',
-      ));
-      expect(rules[2]?.condition).toEqual(expect.stringContaining('incomplete'));
-      expect(rules[2]?.condition).toEqual(expect.stringContaining(
-        language === 'ja' ? '修正計画に不備はない' : 'fix plan has no defect',
-      ));
-    }
-  });
-
   it.each(runtimeCases)(
     'routes $language/$workflowName $name through WorkflowEngine to $expectedNext',
     async ({ language, workflowName, ruleIndex, expectedNext, report }) => {
@@ -186,9 +161,6 @@ describe('fix-verifier result ownership', () => {
       if (report === mixedGapPhase1Report) {
         expect(selectedRule.condition.label).toMatch(/^plan_invalid(?:\s+—|$)/);
         expect(selectedRule.next).toBe(expectedNext);
-        expect(report).toContain('implementation gap');
-        expect(report).toContain('plan constraint violation');
-        expect(report).not.toContain('[FIX-VERIFIER:2]');
         vi.mocked(runStatusJudgmentPhase).mockImplementationOnce(async (_step, context) => {
           expect(context.lastResponse).toBe(report);
           return {

@@ -1,3 +1,4 @@
+import { getLabel } from '../shared/i18n/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -396,7 +397,6 @@ describe('WorkflowEngine live intervention integration', () => {
     expect(state.status).toBe('completed');
     expect(state.structuredOutputs.get('review')).toEqual({ result: 'accepted' });
     expect(calls).toHaveLength(2);
-    expect(calls[1]?.[1]).toContain('Return exactly one fenced JSON block');
     expect(calls[1]?.[1]).toContain('"result"');
     expect(calls[1]?.[2].outputSchema).toBeUndefined();
     expect(calls[1]?.[2].sessionId).toBe('cursor-session');
@@ -2291,7 +2291,7 @@ describe('WorkflowEngine live intervention integration', () => {
         },
       )).rejects.toThrow('Workflow engine cannot own both restartPoint and initialIteration');
 
-      expect(mockOutputWarn).toHaveBeenCalledWith('未消化の追加指示が 2 件あります');
+      expect(mockOutputWarn).toHaveBeenCalledWith(getLabel('workflow.unconsumedLiveInstructions', 'ja', { count: '2' }));
       expect(store.read()).toMatchObject({
         pending: 0,
         unconsumedWarned: 2,

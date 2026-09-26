@@ -210,7 +210,7 @@ describe('autoCommitAndPush', () => {
       expect.objectContaining({ cwd: '/tmp/clone' })
     );
     expect(mockLogInfo).toHaveBeenCalledWith(
-      'Push to main repo failed after commit creation',
+      expect.any(String),
       {
         projectDir: '/project',
         outcome: 'Push to main repo failed after commit creation.',

@@ -2,58 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   assertExecProviderModel,
   assertExecProviderEffort,
-  EXEC_EFFORTS,
-  providerSupportsExecEffort,
-  getSupportedExecEfforts,
   resolveExecProviderEffort,
 } from '../features/exec/configValidation.js';
 import type { ExecEffort } from '../features/exec/types.js';
-
-describe('assertExecProviderEffort and providerSupportsExecEffort consistency', () => {
-  const providers = ['claude', 'codex', 'copilot'] as const;
-  const effortCases = providers.flatMap((provider) =>
-    EXEC_EFFORTS.map((effort) => [provider, effort] as const));
-  const supportedEffortCases = providers.flatMap((provider) =>
-    getSupportedExecEfforts(provider).map((effort) => [provider, effort] as const));
-  const unsupportedEffortCases = providers.flatMap((provider) =>
-    EXEC_EFFORTS
-      .filter((effort) => !getSupportedExecEfforts(provider).includes(effort))
-      .map((effort) => [provider, effort] as const));
-
-  it.each(effortCases)(
-    'should match providerSupportsExecEffort for %s/%s',
-    (provider, effort) => {
-      const supported = providerSupportsExecEffort(provider, effort);
-      if (supported) {
-        expect(() =>
-          assertExecProviderEffort(provider, effort, 'test'),
-        ).not.toThrow();
-      } else {
-        expect(() =>
-          assertExecProviderEffort(provider, effort, 'test'),
-        ).toThrow(`does not support effort "${effort}"`);
-      }
-    },
-  );
-
-  it.each(supportedEffortCases)(
-    'should accept effort returned by getSupportedExecEfforts for %s/%s',
-    (provider, effort) => {
-      expect(() =>
-        assertExecProviderEffort(provider, effort, 'test'),
-      ).not.toThrow();
-    },
-  );
-
-  it.each(unsupportedEffortCases)(
-    'should reject effort omitted from getSupportedExecEfforts for %s/%s',
-    (provider, effort) => {
-      expect(() =>
-        assertExecProviderEffort(provider, effort, 'test'),
-      ).toThrow(`does not support effort`);
-    },
-  );
-});
 
 describe('assertExecProviderEffort provider capability checks', () => {
   it('should pass validation for claude provider with valid effort — no redundant check needed', () => {

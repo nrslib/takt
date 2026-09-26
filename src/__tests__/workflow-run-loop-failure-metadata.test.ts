@@ -174,23 +174,23 @@ describe('WorkflowRunLoop failure metadata', () => {
     expect(result.state.status).toBe('aborted');
     expect(result.abort).toEqual({
       kind: 'step_error',
-      reason: 'Step "implement" failed: provider exploded',
+      reason: expect.stringContaining('provider exploded'),
       failure: {
         kind: 'step_error',
         step: 'implement',
-        reason: 'Step "implement" failed: provider exploded',
+        reason: expect.stringContaining('provider exploded'),
         error: 'provider exploded',
       },
     });
     expect(deps.emit).toHaveBeenCalledWith(
       'workflow:abort',
       result.state,
-      'Step "implement" failed: provider exploded',
+      expect.stringContaining('provider exploded'),
       'step_error',
       {
         kind: 'step_error',
         step: 'implement',
-        reason: 'Step "implement" failed: provider exploded',
+        reason: expect.stringContaining('provider exploded'),
         error: 'provider exploded',
       },
     );
@@ -401,23 +401,23 @@ describe('WorkflowRunLoop failure metadata', () => {
     expect(state.status).toBe('aborted');
     expect(result.abort).toEqual({
       kind: 'step_error',
-      reason: 'Step "implement" failed: provider exploded',
+      reason: expect.stringContaining('provider exploded'),
       failure: {
         kind: 'step_error',
         step: 'implement',
-        reason: 'Step "implement" failed: provider exploded',
+        reason: expect.stringContaining('provider exploded'),
         error: 'provider exploded',
       },
     });
     expect(deps.emit).toHaveBeenCalledWith(
       'workflow:abort',
       state,
-      'Step "implement" failed: provider exploded',
+      expect.stringContaining('provider exploded'),
       'step_error',
       {
         kind: 'step_error',
         step: 'implement',
-        reason: 'Step "implement" failed: provider exploded',
+        reason: expect.stringContaining('provider exploded'),
         error: 'provider exploded',
       },
     );

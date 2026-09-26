@@ -10,12 +10,13 @@ describe('InstructionBuilder reference content', () => {
     expect(prepareReferenceContent('短い資料', '/tmp/reference.md', 'ja')).toBe('短い資料');
   });
 
-  it('renders a direct Japanese truncation notice without facet metadata', () => {
-    const result = prepareReferenceContent('あ'.repeat(2_001), '/tmp/reference.md', 'ja');
+  it('truncates long reference material and preserves the path to the full source', () => {
+    const content = 'あ'.repeat(2_000) + 'SOURCE_TAIL';
+    const result = prepareReferenceContent(content, '/tmp/reference.md', 'ja');
 
-    expect(result).toContain('...（以下省略）...');
-    expect(result).toContain('判断前に次のファイルを先頭から末尾まで確認してください');
-    expect(result).not.toMatch(/Knowledge|Policy|Source Path|Source:/);
+    expect(result).toContain('あ'.repeat(2_000));
+    expect(result).not.toContain('SOURCE_TAIL');
+    expect(result).toContain('/tmp/reference.md');
   });
 
   it('omits source metadata when a previous response is not truncated', () => {

@@ -765,9 +765,8 @@ describe('IT: missing report source through task resume', () => {
 
     expect(success).toBe(true);
     expect(instructions).toHaveLength(1);
-    expect(instructions[0]).toContain(
-      '（参照先の報告 05-arch-review.md はこの run に存在しない）',
-    );
+    expect(instructions[0]).toContain('05-arch-review.md');
+    expect(instructions[0]).not.toContain('{report:05-arch-review.md}');
     expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
       version: 2,
       sourceRunSlug,

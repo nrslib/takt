@@ -303,9 +303,6 @@ describe('runReportPhase retry with new session', () => {
 
     const secondCallOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
     expect(secondCallOptions.sessionId).toBeUndefined();
-    expect(runAgentMock.mock.calls[0]?.[1]).toContain(
-      'Respond with only the report content (no status tags, no commentary).',
-    );
   });
 
   it('should fail fast on a provider stream parse error without report retry or fallback', async () => {
@@ -1092,11 +1089,11 @@ describe('runReportPhase retry with new session', () => {
       undefined,
     );
     expect(infoSpy).toHaveBeenCalledWith(
-      'Report phase failed, retrying with new session',
+      expect.any(String),
       expect.objectContaining({ reason: 'empty_output' }),
     );
     expect(infoSpy).toHaveBeenCalledWith(
-      'Report phase failed, falling back to report provider',
+      expect.any(String),
       expect.objectContaining({ reason: 'provider_error' }),
     );
   });

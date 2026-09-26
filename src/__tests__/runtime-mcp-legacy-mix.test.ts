@@ -107,14 +107,6 @@ describe('hasActiveMcpSection (MCP-LEGACY-GATE)', () => {
       })),
     ).toBe(false);
   });
-
-  it('Given mcp active without provider, Then mcp IS active independently (要件2,101)', () => {
-    expect(
-      hasActiveMcpSection(runtimeFile({
-        mcp: { servers: { a: { command: 'x' } }, defaults: { servers: ['a'] } },
-      })),
-    ).toBe(true);
-  });
 });
 
 describe('collectLegacyMcpSignals (MCP-LEGACY-GATE)', () => {

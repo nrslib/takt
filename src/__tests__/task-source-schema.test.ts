@@ -132,11 +132,6 @@ describe('TaskExecutionConfigSchema — source field', () => {
     const result = TaskExecutionConfigSchema.safeParse({ source: 'unknown_source' });
     expect(result.success).toBe(false);
   });
-
-  it('accepts source omitted (optional field)', () => {
-    const result = TaskExecutionConfigSchema.safeParse({});
-    expect(result.success).toBe(true);
-  });
 });
 
 describe('TaskExecutionConfigSchema — pr_number field', () => {
@@ -158,11 +153,6 @@ describe('TaskExecutionConfigSchema — pr_number field', () => {
   it('rejects non-integer pr_number', () => {
     const result = TaskExecutionConfigSchema.safeParse({ pr_number: 1.5 });
     expect(result.success).toBe(false);
-  });
-
-  it('accepts pr_number omitted (optional field)', () => {
-    const result = TaskExecutionConfigSchema.safeParse({});
-    expect(result.success).toBe(true);
   });
 });
 

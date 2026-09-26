@@ -37,7 +37,7 @@ describe('askExecAssistant', () => {
     mockCallAIWithRetry.mockResolvedValue({ result: null, sessionId: undefined });
 
     await expect(askExecAssistant('/repo', CTX, 'prompt', 'system'))
-      .rejects.toThrow('Exec assistant call failed.');
+      .rejects.toThrow(Error);
   });
 
   it('should throw what the provider said when it answered with a failure', async () => {

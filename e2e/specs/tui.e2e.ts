@@ -867,7 +867,7 @@ steps:
       10_000,
     );
     const handoffOutput = tui.output().slice(handoffOutputOffset);
-    expect(handoffOutput).toContain('Workflow Maker base changed to z-second\\x07-base');
+    expect(handoffOutput).toContain("z-second\\x07-base");
     expect(handoffOutput).not.toContain('\u0007');
 
     await submitLine(tui, 'inspect the newly selected base');

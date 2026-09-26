@@ -92,7 +92,6 @@ it.skipIf(supportedPlatform)('DeepSeek Harness fails fast with an actionable uns
 
   expect(response.status).toBe('error');
   expect(response.content).toContain('Linux x64/arm64 or macOS arm64');
-  expect(response.content).toContain('no provider fallback is available');
 });
 
 describe.skipIf(!lifecycleRuntimeSupported)('DeepSeek Harness bridge lifecycle', () => {

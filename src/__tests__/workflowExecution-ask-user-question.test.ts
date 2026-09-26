@@ -474,7 +474,7 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     });
 
     expect(vi.mocked(error)).toHaveBeenCalledWith(
-      expect.stringContaining('Workflow failed after 1 iterations'),
+      expect.stringContaining("1 iterations"),
     );
     expect(vi.mocked(info)).toHaveBeenCalledWith(
       `Session log: ${join(

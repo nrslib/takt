@@ -103,10 +103,13 @@ describe('MCP tool input schema', () => {
     })).toThrow();
   });
 
-  it('exposes the nested issue schema in generated JSON Schema', () => {
-    const schema = z.toJSONSchema(enqueueTaskInputSchema, { io: 'input' }) as {
-      properties?: Record<string, { description?: string }>;
-    };
-    expect(schema.properties?.issue?.description).toContain('existing issue number or create settings');
+  it('exposes both issue alternatives in generated JSON Schema', () => {
+    const schema = z.toJSONSchema(enqueueTaskInputSchema, { io: 'input' });
+    expect(schema.properties?.issue).toMatchObject({
+      anyOf: [
+        { type: 'object', required: ['number'], additionalProperties: false },
+        { type: 'object', required: ['create'], additionalProperties: false },
+      ],
+    });
   });
 });

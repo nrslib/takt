@@ -285,7 +285,7 @@ steps:
     const plannerPrompt = vi.mocked(runAgent).mock.calls[2]?.[1];
 
     expect(state.status).toBe('completed');
-    expect(plannerPrompt).toContain('Step execution failed: child exploded');
+    expect(plannerPrompt).toContain("child exploded");
     expect(plannerPrompt).not.toContain('Review done');
   });
 

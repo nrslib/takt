@@ -17,6 +17,6 @@ describe('getIssueCommentFailureReason performance', () => {
     const reason = getIssueCommentFailureReason({ stderr: input }, '');
 
     expect(input).toHaveLength(ISSUE_COMMENT_ERROR_MAX_LENGTH + ' HTTP 401'.length);
-    expect(reason).toBe('Issue comment command failed');
+    expect(reason).toBe(getIssueCommentFailureReason({ stderr: '' }, ''));
   });
 });

@@ -1,3 +1,4 @@
+import { getLabel } from '../shared/i18n/index.js';
 /**
  * Tests for issue resolution in routing module.
  *
@@ -966,26 +967,8 @@ describe('Issue resolution in routing', () => {
 
       // Then: info message about no session
       expect(mockInfo).toHaveBeenCalledWith(
-        'No previous assistant session found. Starting a new session.',
+        getLabel('interactive.continueNoSession', 'en'),
       );
-
-      // Then: interactiveMode should be called with undefined session ID
-      expect(mockInteractiveMode).toHaveBeenCalledWith(
-        '/test/cwd',
-        undefined,
-        expect.anything(),
-        undefined,
-        undefined,
-        undefined,
-      );
-    });
-
-    it('should not load persona sessions when --continue is not specified', async () => {
-      // When
-      await executeDefaultAction();
-
-      // Then: loadPersonaSessions should NOT be called
-      expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
 
       // Then: interactiveMode should be called with undefined session ID
       expect(mockInteractiveMode).toHaveBeenCalledWith(

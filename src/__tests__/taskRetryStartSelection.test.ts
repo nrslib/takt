@@ -461,8 +461,8 @@ describe('resume checkpoint is preserved across the tree picker', () => {
     );
 
     const resumeOption = cap.options.find((option) => option.value === 'resume-checkpoint');
-    expect(resumeOption?.label).toBe(
-      'Resume failed position: "default" > "delegate" > "coding" > "review"',
+    expect(resumeOption?.label).toEqual(
+      expect.stringContaining('"default" > "delegate" > "coding" > "review"'),
     );
     expect(cap.defaultValue).toBe(resumeOption?.value);
     expect(cap.result?.selection).toEqual({ kind: 'resume', resumePoint });

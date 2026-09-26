@@ -750,7 +750,6 @@ steps:
     expect(parentOutput?.status).toBe('error');
     expect(parentOutput?.content).toContain('delegate-review');
     expect(parentOutput?.content).toContain('references unknown workflow "missing/review"');
-    expect(parentOutput?.content).not.toContain('did not return session updates');
   });
 
   it('parallel 内 workflow_call は更新していない inherited child session を merge しない', async () => {

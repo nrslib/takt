@@ -1,3 +1,4 @@
+import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -97,8 +98,6 @@ describe('resolveReportReferenceDetailed', () => {
     const context = { cwd: '/project', reportDir: '/project/reports', stepIteration: 1, language };
     const withoutSnapshot = new ReportInstructionBuilder(step, context).build();
     expect(new ReportInstructionBuilder(step, { ...context, injectedReports: [] }).build()).toBe(withoutSnapshot);
-    expect(withoutSnapshot).not.toContain('Reference Reports Injected into Phase 1');
-    expect(withoutSnapshot).not.toContain('Phase 1に注入された参考レポート');
   });
 
   afterEach(() => {
@@ -125,7 +124,7 @@ describe('resolveReportReferenceDetailed', () => {
       expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
       })).toEqual({
-        content: '（参照先の報告 review.md はこの run に存在しない）',
+        content: formatMissingReportReference('review.md'),
         scope: 'missing',
       });
     },
@@ -146,7 +145,7 @@ describe('resolveReportReferenceDetailed', () => {
       expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
       })).toEqual({
-        content: '（参照先の報告 review.md はこの run に存在しない）',
+        content: formatMissingReportReference('review.md'),
         scope: 'missing',
       });
     },
@@ -338,7 +337,7 @@ describe('resolveReportReferenceDetailed', () => {
       reportsRootDir: reports,
       resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
     })).toEqual({
-      content: '（参照先の報告 review.md はこの run に存在しない）',
+      content: formatMissingReportReference('review.md'),
       scope: 'missing',
     });
   });
@@ -424,7 +423,7 @@ describe('resolveReportReferenceDetailed', () => {
         reportsRootDir: reports,
         resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
       })).toEqual({
-        content: '（参照先の報告 review.md はこの run に存在しない）',
+        content: formatMissingReportReference('review.md'),
         scope: 'missing',
       });
     },

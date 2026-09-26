@@ -1,3 +1,4 @@
+import { buildDecomposePrompt, buildMorePartsPrompt } from '../agents/team-leader-structured-output.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runAgent } from '../agents/runner.js';
 import { parseParts } from '../core/workflow/engine/task-decomposer.js';
@@ -985,8 +986,13 @@ describe('agent-usecases', () => {
     });
 
     const [, prompt, callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
-    expect(prompt).toContain('You may use read-only inspection tools only');
-    expect(prompt).not.toContain('Do not use any tool');
+    expect(prompt).toBe(buildDecomposePrompt('instruction', {
+      maxInitialParts: 3,
+      language: undefined,
+      inspectTools: undefined,
+      inspectGuidance: true,
+      rejectedDecomposition: undefined,
+    }));
     expect(callOptions).not.toHaveProperty('allowedTools');
   });
 
@@ -1044,7 +1050,7 @@ describe('agent-usecases', () => {
     });
 
     await expect(decomposeTask('instruction', 2, { cwd: '/repo' }))
-      .rejects.toThrow('Team leader failed: bad output');
+      .rejects.toThrow("bad output");
   });
 
   it('decomposeTask は onPromptResolved を runAgent に伝搬する', async () => {
@@ -1384,9 +1390,11 @@ describe('agent-usecases', () => {
       allowedTools: ['Read', 'Glob', 'Grep'],
     }));
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
-    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(
-      'You may use read-only inspection tools only',
-    );
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toBe(buildMorePartsPrompt(
+      'original instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
+      ['p1'], undefined, [], ['Read', 'Glob', 'Grep'],
+    ));
   });
 
   it('requestMoreParts は inspectGuidance を feedback prompt へ伝搬する', async () => {
@@ -1410,8 +1418,11 @@ describe('agent-usecases', () => {
     );
 
     const [, prompt, callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
-    expect(prompt).toContain('You may use read-only inspection tools only');
-    expect(prompt).not.toContain('Do not use any tool');
+    expect(prompt).toBe(buildMorePartsPrompt(
+      'original instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
+      ['p1'], undefined, [], undefined, true,
+    ));
     expect(callOptions).not.toHaveProperty('allowedTools');
   });
 
@@ -1429,7 +1440,7 @@ describe('agent-usecases', () => {
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
       ['p1'],
       { cwd: '/repo', persona: 'team-leader', cancellablePartIds: [] },
-    )).rejects.toThrow('Team leader feedback failed: timeout');
+    )).rejects.toThrow("timeout");
   });
 
   it('requestMoreParts は AbortSignal と provider usage を呼び出し境界へ伝搬する', async () => {

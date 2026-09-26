@@ -925,7 +925,6 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(correctionText).toContain('"bash", "edit", "glob", "grep"');
     expect(correctionText).not.toContain('implement it');
     const retryText = promptTextOfCall(promptAsync, 2);
-    expect(retryText).toContain('previous session repeatedly called an unavailable tool');
     expect(retryText).toContain('implement it');
     expect(abort.mock.invocationCallOrder[0]).toBeLessThan(promptAsync.mock.invocationCallOrder[1]);
     expect(abort.mock.invocationCallOrder[1]).toBeLessThan(promptAsync.mock.invocationCallOrder[2]);

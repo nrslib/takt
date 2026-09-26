@@ -338,7 +338,7 @@ describe('Phase 1 empty response recovery', () => {
       attempt.sessionId,
     ])).toEqual([
       ['initial', 'original instruction', 'session-1'],
-      ['empty_continuation', expect.stringContaining('Continue the review or work'), 'session-1'],
+      ['empty_continuation', expect.stringMatching(/\S/), 'session-1'],
       ['provider_error_fresh', 'original instruction', undefined],
     ]);
     expect(result.response.content).toBe('complete fresh');

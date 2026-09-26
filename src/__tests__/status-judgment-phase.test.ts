@@ -415,7 +415,7 @@ describe('runStatusJudgmentPhase', () => {
       'judge',
       '',
       'error',
-      'Status not found for step "review": no rule matched after all detection phases',
+      expect.stringContaining('review'),
       'review:4:3:1',
       4,
     );

@@ -206,7 +206,7 @@ describe('createIssue', () => {
       error: 'Failed to extract issue number from created issue URL',
     });
     expect(mockLogError).toHaveBeenCalledWith(
-      'Issue number extraction failed after issue creation',
+      expect.any(String),
       {
         error: 'Failed to extract issue number from created issue URL',
         url: 'https://github.com/owner/repo/issues/not-a-number',

@@ -19,6 +19,7 @@ import { createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leade
 import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { PHASE1_EMPTY_OUTPUT_ERROR } from '../core/workflow/engine/phase1-empty-recovery.js';
+import { buildStructuredJsonSchemaInstruction } from '../shared/prompts/index.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -135,13 +136,14 @@ describe('StepExecutor', () => {
       },
       getLanguage: () => 'ja',
     } as unknown as StepExecutorDeps);
-    const step = makeStep({
-      structuredOutput: { schema: { type: 'object', properties: {}, required: [] } },
-    });
+    const schema = { type: 'object', properties: {}, required: [] };
+    const step = makeStep({ structuredOutput: { schema } });
 
-    expect(executor.buildPhase1Instruction('指示', step)).toContain(
-      '次の JSON schema に一致する fenced JSON block をちょうど1つ返してください',
-    );
+    const instruction = executor.buildPhase1Instruction('指示', step);
+    expect(instruction).toBe(buildStructuredJsonSchemaInstruction('指示', schema, 'ja'));
+    const schemaBlock = instruction.match(/```json\s+([\s\S]*?)```/);
+    expect(schemaBlock).not.toBeNull();
+    expect(JSON.parse(schemaBlock![1]!)).toEqual(schema);
   });
 
 

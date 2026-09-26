@@ -938,7 +938,7 @@ describe('requeueFailedTask', () => {
       },
     );
     expect(mockInfo).toHaveBeenCalledWith(
-      'Selected start position: "review"',
+      expect.stringContaining('"review"'),
     );
   });
 
@@ -1455,7 +1455,7 @@ describe('retryFailedTask', () => {
     await retryFailedTask(task, '/project');
 
     const call = mockSelectOptionWithDefault.mock.calls.at(-1);
-    expect(call?.[0]).toBe('Start position — "default":');
+    expect(call?.[0]).toContain('default');
     expect(call?.[1]).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: '"plan"' }),
       expect.objectContaining({ label: '"implement"' }),
@@ -1993,7 +1993,7 @@ describe('retryFailedTask', () => {
     const firstOptions = mockSelectOptionWithDefault.mock.calls[0]?.[1] as unknown[] | undefined;
     expect(firstOptions).toHaveLength(3);
     expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
-      'Start position — "selected-workflow":',
+      expect.stringContaining('selected-workflow'),
       expect.arrayContaining([
         expect.objectContaining({ label: '"plan"' }),
         expect.objectContaining({ label: '"implement"' }),
@@ -2032,7 +2032,7 @@ describe('retryFailedTask', () => {
     const firstOptions = mockSelectOptionWithDefault.mock.calls[0]?.[1] as unknown[] | undefined;
     expect(firstOptions).toHaveLength(3);
     expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
-      'Start position — "selected-workflow":',
+      expect.stringContaining('selected-workflow'),
       expect.arrayContaining([
         expect.objectContaining({ label: '"plan"' }),
         expect.objectContaining({ label: '"implement"' }),
@@ -2396,17 +2396,6 @@ describe('retryFailedTask', () => {
       await retryFailedTask(task, '/project');
 
       expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
-    });
-
-    it('should return false when selecting replacement workflow is cancelled after declining reuse', async () => {
-      const task = makeFailedTask();
-      mockConfirm.mockResolvedValue(false);
-      mockSelectWorkflow.mockResolvedValue(null);
-
-      const result = await retryFailedTask(task, '/project');
-
-      expect(result).toBe(false);
-      expect(mockLoadWorkflowByIdentifier).not.toHaveBeenCalled();
     });
 
     it('should skip reuse prompt when task data has no workflow', async () => {

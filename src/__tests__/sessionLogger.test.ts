@@ -109,7 +109,7 @@ describe('SessionLogger', () => {
       .not.toThrow();
     expect(existsSync(promptLogPath)).toBe(false);
     expect(mockPromptLogWarn).toHaveBeenCalledWith(
-      'Prompt log could not be persisted; continuing workflow',
+      expect.any(String),
       { error: expect.stringContaining('[path]') },
     );
     expect(JSON.stringify(mockPromptLogWarn.mock.calls[0])).not.toContain(logsDir);

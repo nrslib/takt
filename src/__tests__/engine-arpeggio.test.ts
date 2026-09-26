@@ -38,6 +38,7 @@ vi.mock('../shared/utils/index.js', async () => {
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
+import { buildGitRules } from '../core/workflow/instruction/instruction-context.js';
 import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, AgentResponse, ArpeggioStepConfig } from '../core/models/index.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
@@ -587,16 +588,12 @@ describe('ArpeggioRunner integration', () => {
     expect(phaseStarts.every((instruction) => !instruction.includes('{review_scope}'))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('{report_dir}'))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('{previous_response}'))).toBe(true);
-    expect(phaseStarts.every((instruction) => (
-      instruction.match(/Apply the following constraints to the current task\./g) ?? []
-    ).length === 1)).toBe(true);
-    expect(phaseStarts.every((instruction) => !/workflow(?:-wide)? rules?/i.test(instruction))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-execution-rule'))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-instruction-rule'))).toBe(true);
+    const gitRules = buildGitRules(undefined, 'en', 'phase1');
     for (const instruction of phaseStarts) {
-      expect(instruction.indexOf('ARPEGGIO_EXECUTION_RULE')).toBeGreaterThan(
-        instruction.indexOf('Do NOT use `cd` in Bash commands.'),
-      );
+      expect(instruction.startsWith(gitRules)).toBe(true);
+      expect(instruction.indexOf('ARPEGGIO_EXECUTION_RULE')).toBeGreaterThanOrEqual(gitRules.length);
       expect(instruction.indexOf('ARPEGGIO_INSTRUCTION_RULE')).toBeLessThan(
         instruction.indexOf('Process '),
       );

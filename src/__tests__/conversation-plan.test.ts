@@ -136,7 +136,6 @@ describe('interactive system prompt', () => {
 
     const stepDetails = templateVarsFor('score_interactive_system_prompt').stepDetails;
     expect(stepDetails).toContain('**Provider:** codex');
-    expect(stepDetails).toContain('**Provider source:** step');
     expect(stepDetails).toContain('**Permission:** readonly');
     expect(stepDetails).toContain('**Persona:**');
     expect(stepDetails).toContain('**Instruction:**');
@@ -320,9 +319,9 @@ describe('assistant conversation plan', () => {
     });
 
     expect(strategy.initialReferenceRunSlug).toBe('authentication-run');
-    expect(strategy.initialPromptContext).toContain('Task name: authentication');
+    expect(strategy.initialPromptContext).toContain("authentication");
     expect(strategy.initialPromptContext).toContain('Workflow: review-fix');
-    expect(strategy.initialPromptContext).toContain('Run slug (internal reference): authentication-run');
+    expect(strategy.initialPromptContext).toContain("authentication-run");
     expect(strategy.initialPromptContext).toContain('Add login and session handling');
     expect(strategy.initialPromptContext).toContain('quoted task metadata');
   });

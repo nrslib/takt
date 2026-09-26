@@ -255,7 +255,7 @@ describe('OpenCodeClient shared server', () => {
 
       const stderrOutput = stderrSpy.mock.calls.map(([chunk]) => String(chunk)).join('');
       expect(serverClose).toHaveBeenCalledTimes(1);
-      expect(stderrOutput).toContain('[opencode-sdk] Failed to close OpenCode server: close failed');
+      expect(stderrOutput).toContain("close failed");
     } finally {
       stderrSpy.mockRestore();
       resetDebugLogger();

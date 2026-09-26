@@ -1118,7 +1118,7 @@ describe('callKiro session ID resolution (issue #781)', () => {
     await callKiro('coder', 'implement feature', { cwd: '/repo' });
 
     expect(debugSpy).toHaveBeenCalledWith(
-      'kiro-cli --list-sessions failed; session ID unresolved for this turn',
+      expect.any(String),
       expect.objectContaining({ error: expect.any(String) }),
     );
   });

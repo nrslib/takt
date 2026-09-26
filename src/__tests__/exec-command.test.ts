@@ -435,7 +435,7 @@ describe('exec command setup', () => {
         expect(props.initialEntries).toEqual([
           {
             role: 'system',
-            content: expect.stringContaining('Assistant agent: claude/opus'),
+            content: expect.stringContaining("claude/opus"),
           },
           {
             role: 'system',

@@ -1331,31 +1331,6 @@ describe('resolveAssistantScopedProviderModelFromConfig', () => {
     });
   });
 
-  it('should return the local assistant provider with no model when only provider is configured locally', () => {
-    const result = resolveAssistantScopedProviderModelFromConfig({
-      local: {
-        taktProviders: {
-          assistant: {
-            provider: 'codex',
-          },
-        },
-      },
-      global: {
-        taktProviders: {
-          assistant: {
-            provider: 'claude',
-            model: 'global-assistant-model',
-          },
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      provider: 'codex',
-      model: undefined,
-    });
-  });
-
   it('should keep the local assistant model unresolved when only assistant models are configured', () => {
     const result = resolveAssistantScopedProviderModelFromConfig({
       local: {

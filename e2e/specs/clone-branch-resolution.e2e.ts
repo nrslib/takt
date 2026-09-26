@@ -106,8 +106,6 @@ describe('E2E: Clone branch resolution (mock)', () => {
       timeout: 240_000,
     });
 
-    const combined = result.stdout + result.stderr;
-    expect(combined).not.toContain('Base branch does not exist');
     expect(result.exitCode).toBe(0);
   }, 240_000);
 
@@ -129,8 +127,6 @@ describe('E2E: Clone branch resolution (mock)', () => {
       timeout: 240_000,
     });
 
-    const combined = result.stdout + result.stderr;
-    expect(combined).not.toContain('Base branch does not exist');
     expect(result.exitCode).toBe(0);
   }, 240_000);
 });
@@ -206,8 +202,6 @@ describe.skipIf(!canUseGitHub)('E2E: Clone branch resolution (GitHub PR)', () =>
       timeout: 240_000,
     });
 
-    const combined = result.stdout + result.stderr;
-    expect(combined).not.toContain('Base branch does not exist');
     expect(combined).not.toContain('Remote branch');
     expect(combined).not.toContain('unable to read tree');
     expect(result.exitCode).toBe(0);

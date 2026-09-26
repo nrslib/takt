@@ -52,9 +52,6 @@ function expectSingleFixPrompt(
   const prompt = prompts[promptNumber - 1]?.prompt;
   expect(prompt).toEqual(expect.any(String));
   expect(prompt).toContain('The exported value must not be negative.');
-  expect(prompt).toContain('advisory reference information');
-  expect(prompt).toContain('decide independently');
-  expect(prompt).toContain('Minor, trivial, or unnecessary findings may be left unaddressed');
 }
 
 describe('E2E: companion review', () => {

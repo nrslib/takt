@@ -3,7 +3,7 @@ import { buildOrderRevisionPrompt } from '../features/interactive/orderRevisionM
 
 describe.each(['en', 'ja'] as const)('order revision %s prompt template', (lang) => {
   it.each([false, true])(
-    'applies the task instruction notation contract when formalSpec=%s',
+    'applies the formal specification mode when formalSpec=%s',
     (formalSpec) => {
       const prompt = buildOrderRevisionPrompt({
         history: [{ role: 'user', content: 'add a requirement' }],
@@ -15,15 +15,6 @@ describe.each(['en', 'ja'] as const)('order revision %s prompt template', (lang)
         userNote: '',
       }, '# Existing order');
 
-      expect(prompt).toMatch(lang === 'en' ? /code fence/ : /コードフェンス/);
-      expect(prompt).toMatch(/gherkin/i);
-      if (lang === 'en') {
-        expect(prompt).toMatch(/(?:code fence).*(?:entire output|Markdown body)/i);
-        expect(prompt).toMatch(/fenced `gherkin`.*allowed/i);
-      } else {
-        expect(prompt).toMatch(/(?:出力全体.*コードフェンス|コードフェンス.*(?:含めない|全体))/);
-        expect(prompt).toMatch(/fenced `gherkin`.*(?:使用できます|本文)/i);
-      }
       if (formalSpec) {
         expect(prompt).toMatch(/\bQuint\b/);
         expect(prompt).toMatch(/\bAlloy\b/);

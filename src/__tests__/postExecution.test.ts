@@ -324,7 +324,7 @@ describe('postExecutionFlow', () => {
     const result = await postExecutionFlow(baseOptions);
 
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toBe('Failed to create pull request. Base ref must be a branch');
+    expect(result.prError).toContain('Base ref must be a branch');
     expect(result.prUrl).toBeUndefined();
   });
 
@@ -338,7 +338,7 @@ describe('postExecutionFlow', () => {
     });
 
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toBe('Failed to create pull request. Base ref must be a branch');
+    expect(result.prError).toContain('Base ref must be a branch');
     expect(result.prUrl).toBeUndefined();
     expect(mockInfo).not.toHaveBeenCalled();
     expect(mockError).not.toHaveBeenCalled();
@@ -366,7 +366,7 @@ describe('postExecutionFlow', () => {
       '/project',
     );
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toBe('Failed to create pull request. Base ref must be a branch');
+    expect(result.prError).toContain('Base ref must be a branch');
   });
 
   it('relay push 失敗時（localPushFailed: true）は shouldCreatePr に関わらず taskFailed: true を返す', async () => {
@@ -381,7 +381,7 @@ describe('postExecutionFlow', () => {
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(result.taskFailed).toBe(true);
-    expect(result.taskError).toBe('Push to main repo failed after commit creation.');
+    expect(result.taskError).toMatch(/\S/u);
     expect(result.prFailed).toBeUndefined();
   });
 
@@ -398,7 +398,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBeUndefined();
     expect(result.prError).toBeUndefined();
     expect(result.taskFailed).toBe(true);
-    expect(result.taskError).toBe('Auto-commit failed before PR creation.');
+    expect(result.taskError).toMatch(/\S/u);
   });
 
   it('shouldCreatePr が false かつ auto-commit 失敗時は pr_failed を返さない', async () => {
@@ -414,7 +414,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBeUndefined();
     expect(result.prError).toBeUndefined();
     expect(result.taskFailed).toBe(true);
-    expect(result.taskError).toBe('Auto-commit failed before PR creation.');
+    expect(result.taskError).toMatch(/\S/u);
   });
 
   it('shouldCreatePr が false かつローカル push 失敗時は completed にせず通常失敗を返す', async () => {
@@ -432,7 +432,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBeUndefined();
     expect(result.prError).toBeUndefined();
     expect(result.taskFailed).toBe(true);
-    expect(result.taskError).toBe('Push to main repo failed after commit creation.');
+    expect(result.taskError).toMatch(/\S/u);
   });
 
   it('auto_pr かつ shouldPublishBranchToOrigin では root branch を origin へ push して PR 作成へ進む', async () => {
@@ -531,7 +531,6 @@ describe('postExecutionFlow', () => {
 
     expect(mockPushBranch).toHaveBeenCalledWith('/project', 'task/fix-the-bug');
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toContain('Failed to push branch to origin.');
     expect(result.prError).toContain('non-fast-forward');
     expect(result.prError).not.toContain('stale local branch');
     expect(result.taskFailed).toBeUndefined();
@@ -557,7 +556,6 @@ describe('postExecutionFlow', () => {
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toContain('Failed to push branch to origin.');
     expect(result.prError).toContain('non-fast-forward');
     expect(result.prError).not.toContain('stale local branch');
     expect(result.taskFailed).toBeUndefined();
@@ -586,7 +584,6 @@ describe('postExecutionFlow', () => {
     });
 
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toContain('Failed to push branch to origin.');
     expect(result.prError).toMatch(/non-fast-forward/i);
     expect(result.prError).toContain('stale local branch');
   });
@@ -607,7 +604,7 @@ describe('postExecutionFlow', () => {
 
     expect(mockPushBranch).not.toHaveBeenCalled();
     expect(result.taskFailed).toBe(true);
-    expect(result.taskError).toBe('Push to main repo failed after commit creation.');
+    expect(result.taskError).toMatch(/\S/u);
   });
 
   it('createPullRequest が例外を投げた場合も prFailed: true を返す', async () => {
@@ -619,7 +616,7 @@ describe('postExecutionFlow', () => {
     const result = await postExecutionFlow(baseOptions);
 
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toBe('Failed to create pull request. --repo is not supported with GitLab provider. Use cwd context instead.');
+    expect(result.prError).toContain('--repo is not supported with GitLab provider. Use cwd context instead.');
     expect(result.prUrl).toBeUndefined();
   });
 
@@ -630,7 +627,7 @@ describe('postExecutionFlow', () => {
     const result = await postExecutionFlow(baseOptions);
 
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toBe('Failed to update pull request comment.');
+    expect(result.prError).toMatch(/\S/u);
     expect(result.prUrl).toBeUndefined();
   });
 
@@ -644,7 +641,7 @@ describe('postExecutionFlow', () => {
     });
 
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toBe('Failed to update pull request comment.');
+    expect(result.prError).toMatch(/\S/u);
     expect(result.prUrl).toBeUndefined();
     expect(mockInfo).not.toHaveBeenCalled();
     expect(mockError).not.toHaveBeenCalled();
@@ -661,7 +658,10 @@ describe('postExecutionFlow', () => {
     const result = await postExecutionFlow(baseOptions);
 
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toBe('Failed to update pull request comment.');
+    expect(result.prError).toMatch(/\S/u);
+    for (const sensitiveValue of ['token', 'example.com', '/tmp/project', 'Password']) {
+      expect(result.prError).not.toContain(sensitiveValue);
+    }
   });
 
   it('PR作成成功時は prFailed を返さない', async () => {

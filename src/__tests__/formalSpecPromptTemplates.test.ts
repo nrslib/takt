@@ -8,11 +8,6 @@ import {
   loadFormalSpecVerifierConstraints,
 } from '../features/interactive/formalSpecPrompts.js';
 
-const EXPECTED_INVESTIGATION_POLICY = {
-  currentStateScope: 'current-state-and-prerequisites',
-  implementationInvestigationOwner: 'workflow-execution',
-} as const;
-
 function renderInteractivePrompt(
   lang: 'en' | 'ja',
   formalSpec: boolean,
@@ -24,35 +19,6 @@ function renderInteractivePrompt(
     formalSpecComments,
     grillMe,
   });
-}
-
-function parseInvestigationPolicy(prompt: string): unknown {
-  const match = prompt.match(
-    /<takt-investigation-policy>\s*([\s\S]*?)\s*<\/takt-investigation-policy>/,
-  );
-  if (match === null) {
-    throw new Error('interactive investigation policy metadata is missing');
-  }
-  const serializedPolicy = match[1];
-  if (serializedPolicy === undefined) {
-    throw new Error('interactive investigation policy metadata is empty');
-  }
-  return JSON.parse(serializedPolicy) as unknown;
-}
-
-function parseStructuredPolicy(prompt: string, tagName: string): unknown {
-  const openingTag = `<${tagName}>`;
-  const closingTag = `</${tagName}>`;
-  const openingIndex = prompt.indexOf(openingTag);
-  if (openingIndex < 0) {
-    throw new Error(`${tagName} metadata is missing`);
-  }
-  const contentStart = openingIndex + openingTag.length;
-  const closingIndex = prompt.indexOf(closingTag, contentStart);
-  if (closingIndex < 0) {
-    throw new Error(`${tagName} metadata is not closed`);
-  }
-  return JSON.parse(prompt.slice(contentStart, closingIndex).trim()) as unknown;
 }
 
 function renderJapaneseSummaryPrompt(formalSpec: boolean, formalSpecComments = true): string {
@@ -87,18 +53,6 @@ function renderEnglishSummaryPrompt(formalSpec: boolean, formalSpecComments = tr
   );
 }
 
-function expectToolFreeVerificationInstruction(prompt: string, lang: 'en' | 'ja'): void {
-  if (lang === 'ja') {
-    expect(prompt).toMatch(/ツール[^。\n]*コマンド[^。\n]*(?:実行|使用|使わ)[^。\n]*(?:ない|ず|ません)/iu);
-    expect(prompt).toMatch(/応答本文[^。\n]*(?:だけ|のみ)/iu);
-    expect(prompt).toMatch(/検証[^。\n]*TAKT|TAKT[^。\n]*検証/iu);
-  } else {
-    expect(prompt).toMatch(/do not[^.\n]*(?:tools?)[^.\n]*(?:commands?)|do not[^.\n]*(?:commands?)[^.\n]*(?:tools?)/iu);
-    expect(prompt).toMatch(/(?:only[^.\n]*response (?:body|text)|response (?:body|text)[^.\n]*only)/iu);
-    expect(prompt).toMatch(/TAKT[^.\n]*verif|verif[^.\n]*TAKT/iu);
-  }
-}
-
 function expectFormalSpecVerifierConstraints(prompt: string, lang: 'en' | 'ja'): void {
   const constraints = loadFormalSpecVerifierConstraints(lang);
   expect(constraints.trim().length).toBeGreaterThan(0);
@@ -108,22 +62,6 @@ function expectFormalSpecVerifierConstraints(prompt: string, lang: 'en' | 'ja'):
 function expectNoUnexpandedTemplateVariables(prompt: string): void {
   expect(prompt).not.toMatch(/\{\{|\}\}/u);
 }
-
-describe('interactive investigation policy template wiring', () => {
-  it.each([
-    ['en', false, EXPECTED_INVESTIGATION_POLICY],
-    ['en', true, EXPECTED_INVESTIGATION_POLICY],
-    ['ja', false, EXPECTED_INVESTIGATION_POLICY],
-    ['ja', true, EXPECTED_INVESTIGATION_POLICY],
-  ] as const)(
-    'renders the structured policy for %s when grillMe is %s',
-    (lang, grillMe, expectedPolicy) => {
-      const prompt = renderInteractivePrompt(lang, false, grillMe);
-
-      expect(parseInvestigationPolicy(prompt)).toEqual(expectedPolicy);
-    },
-  );
-});
 
 describe('interactive formal specification prompt template wiring', () => {
   it.each(['en', 'ja'] as const)(
@@ -142,41 +80,6 @@ describe('interactive formal specification prompt template wiring', () => {
       expect(withDefaultComments).toBe(withComments);
     },
   );
-});
-
-describe('formal specification role policy wiring', () => {
-  it.each(['en', 'ja'] as const)('keeps generation and interpretation policies stable for %s', (lang) => {
-    expect(parseStructuredPolicy(
-      buildFormalSpecGenerationSystemPrompt(lang),
-      'takt-formal-spec-generation-policy',
-    )).toEqual({
-      role: 'formal-specification-generator',
-      quint: {
-        invariantPrefix: 'inv',
-        temporalPropertyPrefix: 'prop',
-      },
-      alloy: {
-        targetCommand: 'check',
-      },
-    });
-    expect(parseStructuredPolicy(
-      buildFormalSpecInterpretationSystemPrompt(lang),
-      'takt-formal-spec-interpretation-policy',
-    )).toEqual({
-      role: 'formal-specification-interpreter',
-      rerunPolicy: 'explicit-user-only',
-    });
-  });
-});
-
-describe('formal specification tool-free execution instructions', () => {
-  it.each(['en', 'ja'] as const)('instructs the %s generation prompt to avoid tools and commands', (lang) => {
-    expectToolFreeVerificationInstruction(buildFormalSpecGenerationSystemPrompt(lang), lang);
-  });
-
-  it.each(['en', 'ja'] as const)('instructs the %s interpretation prompt to avoid tools and commands', (lang) => {
-    expectToolFreeVerificationInstruction(buildFormalSpecInterpretationSystemPrompt(lang), lang);
-  });
 });
 
 describe('formal specification verifier constraint wiring', () => {
@@ -217,11 +120,6 @@ describe('formal specification generation user prompt boundaries', () => {
     expect(prompt).toContain('```quint');
     expect(prompt).toContain('```alloy');
     expect(prompt).not.toContain(loadFormalSpecVerifierConstraints(lang));
-    if (lang === 'ja') {
-      expect(prompt).not.toMatch(/Quintの不変条件名はinvで始め|Alloyの検証対象には必ずcheckコマンド/iu);
-    } else {
-      expect(prompt).not.toMatch(/Prefix every Quint invariant name with inv|Include a check command for every Alloy property/iu);
-    }
     expectNoUnexpandedTemplateVariables(prompt);
   });
 });

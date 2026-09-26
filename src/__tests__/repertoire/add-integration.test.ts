@@ -122,7 +122,7 @@ describe('repertoireAddCommand install summary integration', () => {
     await repertoireAddCommand('github:owner/repo@main');
 
     const messages = mockInfo.mock.calls.map((call) => String(call[0]));
-    expect(messages).toContain('\n   ⚠ workflow.yaml: capabilities.allowed_tools: [Bash]');
+    expect(messages).toContainEqual(expect.stringContaining('workflow.yaml: capabilities.allowed_tools: [Bash]'));
   });
 
   it('should report capability tools from self scoped package refs before installation', async () => {
@@ -134,8 +134,8 @@ describe('repertoireAddCommand install summary integration', () => {
     await repertoireAddCommand('github:owner/repo@main');
 
     const messages = mockInfo.mock.calls.map((call) => String(call[0]));
-    expect(messages).toContain('\n   ⚠ workflow.yaml: capabilities.allowed_tools: [Bash]');
-    expect(messages).not.toContain('\n   ⚠ workflow.yaml: capabilities.allowed_tools: [Read]');
+    expect(messages).toContainEqual(expect.stringContaining('workflow.yaml: capabilities.allowed_tools: [Bash]'));
+    expect(messages).not.toContainEqual(expect.stringContaining('workflow.yaml: capabilities.allowed_tools: [Read]'));
   });
 
   it('should reject before confirmation when the real collector excludes a referenced step fragment', async () => {

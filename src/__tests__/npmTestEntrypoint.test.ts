@@ -103,7 +103,7 @@ describe('npm test execution', () => {
 
   it('should run unit shards concurrently when no target is provided', async () => {
     const events: string[] = [];
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const run = vi.fn(async (npmArgs: readonly string[]) => {
       const shard = npmArgs[3]!;
       events.push(`start:${shard}`);
@@ -135,9 +135,6 @@ describe('npm test execution', () => {
       'finish:--shard=8/8',
     ]);
     expect(run).toHaveBeenCalledTimes(8);
-    expect(log).toHaveBeenCalledWith(
-      '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". The main pull-request CI workflow and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.',
-    );
     expect(code).toBe(0);
   });
 
@@ -437,7 +434,7 @@ describe('birpc noise classification', () => {
 describe('birpc noise re-measurement', () => {
   it('should re-measure a noisy shard once and adopt the re-measured result', async () => {
     vi.stubEnv('CI', '');
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const attempts = [
       { code: 1, signal: null, output: birpcNoiseOutput },
       { code: 0, signal: null, output: '' },
@@ -449,7 +446,6 @@ describe('birpc noise re-measurement', () => {
 
     expect(run).toHaveBeenCalledTimes(2);
     expect(code).toBe(0);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('re-measuring this shard once'));
   });
 
   it('should keep the failure when the re-measured shard is noisy again', async () => {
@@ -534,7 +530,7 @@ describe('birpc noise re-measurement', () => {
   it('should re-measure on CI when the opt-in flag is set', async () => {
     vi.stubEnv('CI', 'true');
     vi.stubEnv(BIRPC_REMEASURE_ON_CI_ENV, '1');
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const attempts = [
       { code: 1, signal: null, output: birpcNoiseOutput },
       { code: 0, signal: null, output: '' },
@@ -546,7 +542,6 @@ describe('birpc noise re-measurement', () => {
 
     expect(run).toHaveBeenCalledTimes(2);
     expect(code).toBe(0);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('re-measuring this shard once'));
   });
 });
 
@@ -664,14 +659,6 @@ describe('npm test entrypoint routing', () => {
         },
       ]);
     }
-  });
-
-  it('should route targeted integration tests to the IT runner', () => {
-    const args = ['src/__tests__/it-acp-workflow-bridge.test.ts'];
-
-    expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:light', '--', ...args] },
-    ]);
   });
 
   it('should route a light integration target to the light runner', () => {

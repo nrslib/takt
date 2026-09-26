@@ -278,7 +278,7 @@ describe('runAllTasks concurrency', () => {
       await runAllTasks('/project');
 
       // Then
-      expect(mockInfo).toHaveBeenCalledWith('No pending tasks in .takt/tasks.yaml');
+      expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('.takt/tasks.yaml'));
     });
 
     it('should execute tasks sequentially via worker pool when concurrency is 1', async () => {

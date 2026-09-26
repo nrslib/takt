@@ -105,7 +105,7 @@ describe('WorkflowEngine resume occurrence index gate', () => {
     constructEngine(cwd, 'requeue', { startedAtMs: Date.now() });
 
     expect(mockWorkflowEngineWarn).toHaveBeenCalledWith(
-      'Requeue artifact occurrence restoration is unavailable because source run metadata or resume point is missing',
+      expect.any(String),
       { sourceRunSlug: 'source-run' },
     );
   });

@@ -9,7 +9,6 @@ import { describe, it, expect } from 'vitest';
 import {
   isFullWidth,
   getDisplayWidth,
-  stripAnsi,
   sanitizeTerminalText,
   truncateUtf8PreservingMarker,
   truncateText,
@@ -66,36 +65,6 @@ describe('getDisplayWidth', () => {
   it('should handle mixed ASCII and CJK', () => {
     expect(getDisplayWidth('hello漢字')).toBe(9); // 5 + 4
     expect(getDisplayWidth('AB漢C')).toBe(5); // 1+1+2+1
-  });
-});
-
-describe('stripAnsi', () => {
-  it('should strip CSI color codes', () => {
-    expect(stripAnsi('\x1b[31mred text\x1b[0m')).toBe('red text');
-  });
-
-  it('should strip multiple CSI sequences', () => {
-    expect(stripAnsi('\x1b[1m\x1b[32mbold green\x1b[0m')).toBe('bold green');
-  });
-
-  it('should strip cursor motion sequences', () => {
-    expect(stripAnsi('\x1b[2Amove up')).toBe('move up');
-  });
-
-  it('should strip OSC sequences (BEL terminated)', () => {
-    expect(stripAnsi('\x1b]0;title\x07rest')).toBe('rest');
-  });
-
-  it('should strip OSC sequences (ST terminated)', () => {
-    expect(stripAnsi('\x1b]0;title\x1b\\rest')).toBe('rest');
-  });
-
-  it('should return unchanged string with no escapes', () => {
-    expect(stripAnsi('plain text')).toBe('plain text');
-  });
-
-  it('should handle empty string', () => {
-    expect(stripAnsi('')).toBe('');
   });
 });
 

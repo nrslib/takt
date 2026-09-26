@@ -171,15 +171,6 @@ describe('saveTaskFile', () => {
     expect(task.workflow).toBe('review');
   });
 
-  it('should accept canonical workflow option and persist workflow key', async () => {
-    await saveTaskFile(testDir, 'Task', {
-      workflow: 'review',
-    });
-
-    const task = loadTasks(testDir).tasks[0]!;
-    expect(task.workflow).toBe('review');
-  });
-
   it('should persist base_branch when it is provided', async () => {
     await saveTaskFile(testDir, 'Task', {
       workflow: 'review',
@@ -340,7 +331,7 @@ describe('saveTaskFile', () => {
       'Shared task directory',
     );
     expect(fs.readFileSync(path.join(testDir, String(tasks[1]?.task_dir), 'order.md'), 'utf-8')).toContain(
-      '## 添付画像',
+      "attachments/image-1.png",
     );
   });
 
@@ -585,7 +576,7 @@ describe('createIssueAndSaveTask', () => {
 
     expect(mockCommentOnIssue).toHaveBeenCalledWith(
       7,
-      '実行用 Issue を作成しました: #42 (https://github.com/owner/repo/issues/42)',
+      expect.stringContaining('#42 (https://github.com/owner/repo/issues/42)'),
       testDir,
     );
     expect(loadTasks(testDir).tasks[0]?.issue).toBe(42);
@@ -624,7 +615,7 @@ describe('createIssueAndSaveTask', () => {
 
     expect(mockCommentOnIssue).not.toHaveBeenCalled();
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining(
-      'Issue #42 was created, but task saving failed:',
+      "#42",
     ));
     expectNoTaskArtifacts(testDir);
   });

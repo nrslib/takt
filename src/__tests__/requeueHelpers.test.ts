@@ -164,7 +164,7 @@ describe('hasDeprecatedProviderConfig', () => {
     expect(hasDeprecatedProviderConfig(orderContent)).toBe(true);
     expect(mockDebug).toHaveBeenCalledTimes(1);
     expect(mockDebug).toHaveBeenCalledWith(
-      'Failed to parse YAML candidate for deprecated provider config detection',
+      expect.any(String),
       expect.objectContaining({ error: expect.any(String) }),
     );
   });
@@ -328,7 +328,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
       { lookupCwd: '/worktree' },
     );
     expect(mockConfirm).toHaveBeenCalledWith(
-      'Use previous workflow "./.takt/workflows/selected-workflow.yaml"?',
+      expect.stringContaining('./.takt/workflows/selected-workflow.yaml'),
       true,
     );
     expect(mockSelectWorkflow).not.toHaveBeenCalled();

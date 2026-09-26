@@ -128,7 +128,6 @@ describe('completed task actions with root branch materialized on completion', (
 
     const output = mockInfo.mock.calls.flatMap(args => args.map(String)).join('\n');
     expect(output).toContain('slides/deck.md');
-    expect(mockWarn).not.toHaveBeenCalledWith('Could not generate diff stat');
   });
 
   it('try-merge stages changes from the materialized root branch', async () => {

@@ -1,3 +1,4 @@
+import { getLabel } from '../shared/i18n/index.js';
 /**
  * Tests for the TUI session connection layer: the provider stays silent, the
  * React tree receives assistant text through the chunk sink, and every slash
@@ -336,7 +337,7 @@ describe('TUI conversation layer', () => {
 
     expect(outcome).toMatchObject({
       kind: 'error',
-      message: 'No conversation yet. Describe your task first.',
+      message: getLabel('tui.errors.noConversation', 'en'),
     });
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
@@ -409,7 +410,7 @@ describe('TUI conversation layer', () => {
 
     expect(outcome).toMatchObject({
       kind: 'error',
-      message: 'The assistant returned no response.',
+      message: getLabel('tui.errors.emptyAiResponse', 'en'),
     });
   });
 
@@ -845,11 +846,11 @@ describe('TUI local commands', () => {
 
     expect(conversation.resolveLocalCommand('/replay')).toEqual({
       kind: 'notice',
-      message: 'Previous order (order.md) not found',
+      message: getLabel('instruct.ui.replayNoOrder', 'en'),
     });
     expect(conversation.resolveLocalCommand('/retry')).toEqual({
       kind: 'notice',
-      message: '/retry is only available in Retry mode from `takt list`.',
+      message: getLabel('interactive.ui.retryUnavailable', 'en'),
     });
     expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: false,
@@ -876,11 +877,11 @@ describe('TUI local commands', () => {
 
     expect(conversation.resolveLocalCommand('/replay')).toEqual({
       kind: 'notice',
-      message: 'Previous order (order.md) not found',
+      message: getLabel('instruct.ui.replayNoOrder', 'en'),
     });
     expect(conversation.resolveLocalCommand('/retry')).toEqual({
       kind: 'notice',
-      message: 'No previous order (order.md) found. /retry is only available during retry.',
+      message: getLabel('interactive.ui.retryNoOrder', 'en'),
     });
     expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: true,
@@ -1162,7 +1163,7 @@ describe('TUI local commands', () => {
 
     expect(conversation.resolveLocalCommand('/accept')).toEqual({
       kind: 'notice',
-      message: 'No assistant response found. Please describe your task first.',
+      message: getLabel('interactive.ui.acceptNoAssistant', 'en'),
     });
 
     await send(conversation, 'hello', []);

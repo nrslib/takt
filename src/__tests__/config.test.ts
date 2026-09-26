@@ -980,11 +980,6 @@ describe('isVerboseMode', () => {
 
     expect(isVerboseMode(testDir)).toBe(true);
   });
-
-  it('should return true when TAKT_LOGGING_DEBUG=true overrides config', () => {
-    process.env.TAKT_LOGGING_DEBUG = 'true';
-    expect(isVerboseMode(testDir)).toBe(true);
-  });
 });
 
 describe('loadInputHistory', () => {

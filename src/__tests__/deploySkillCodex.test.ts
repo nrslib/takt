@@ -139,7 +139,6 @@ describe('deploySkillCodex', () => {
       expect(existsSync(join(skillDir, 'facets', 'output-contracts', 'summary.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'partials', 'policies', 'review-common.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'templates'))).toBe(false);
-      expect(info).not.toHaveBeenCalledWith(expect.stringContaining('テンプレート'));
     });
 
     // Regression #565 / 565-TESTS-DEPLOY-SKILL-CODEX-WORKFLOWS

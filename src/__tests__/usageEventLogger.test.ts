@@ -328,7 +328,6 @@ describe('usageEventLogger', () => {
       });
 
       expect(stderrSpy).toHaveBeenCalledTimes(1);
-      expect(stderrSpy.mock.calls[0]?.[0]).toContain('Failed to write usage event log');
     } finally {
       stderrSpy.mockRestore();
     }

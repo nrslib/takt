@@ -1,7 +1,5 @@
 # Phase 1で注入したレポートのPhase 2への引き継ぎ
 
-初回実装の状態: 実装・対象検証完了。Astraの設計レビューとLuna Maxの実装再レビューはいずれもAPPROVE、残存finding 0件。§7〜10は初回実装時の記録であり、2026-09-08の最新Phase 1応答の明示引き継ぎ修正（§4）の検証結果を含まない。
-
 ## 目的と責務
 
 `development-core` が親名前空間に作成した計画を子の実装担当へ渡し、その担当がPhase 1で実際に受け取ったレポート本文をPhase 2でも使用できるようにする。
@@ -140,52 +138,4 @@ Phase 1に契約台帳を必ず出力させる全workflow共通の新規要件�
 8. 同梱development通常/dynamic/teamの3経路で計画が実装担当へ届くことを確認する。上記の明示override各経路、カスタムinstruction、テストスキップの意味も確認する。単なるYAML文字列一致を動作証拠にしない。teamではleaderに渡った計画から担当義務がpart指示に引き渡されることをモデル評価で確認する。
 9. 自然言語上の効果はモデル評価で別途確認する。合成した親計画のIDとPhase 1実装結果を用い、Phase 2が上流IDを保って報告できるかを評価する。TAKTの決定的テストでモデルの正答を保証したとは言わない。
 
-コード実装時はプロジェクト規定のbuild/lint/unit/light ITと、変更したITの分類契約・対象heavy ITを実行する。設計レビュー時点では実装・モデル評価・テスト実行を行っていない。
-
-## 7. Astraレビュー記録
-
-2026-09-05、独立したAstraエージェントが設計全文と関連コードを確認。修正反映後の最終判定はAPPROVE、blocking問題0件。以下はレビュー結果の要約。
-
-| 指摘 | 反映・確認結果 |
-|---|---|
-| workflow-wide ruleはreport参照を禁止しており初案が成立しない | 専用instruction継承とpartialへ変更。既存禁止契約を維持 |
-| 既定instruction変更だけでは明示overrideに届かない | cli / review-fix-takt-default / maintenance 3種を日英の移行表と受入条件へ追加 |
-| team leaderの一次情報制約とpartへの義務伝達が不足 | 明示reportの利用、担当義務・既存ID・証拠条件のpart指示への引き渡しを追加 |
-| rule内参照はresume consumer抽出に載らない | instructionへの変更で既存の展開後本文抽出を利用できるため、resume抽出拡張は不要と確認 |
-
-通常・parallel・teamのsnapshot所有、Phase 2の初回/新session再試行/fallback、Phase 3の現行責務維持は関連コードと整合すると評価された。非blocking提案として、既存scope型の再利用と、同じPhase 1の再試行/新Phase 1準備の対のテストを反映した。
-
-これは設計承認であり実装承認ではない。Astraはbuild/lint/test/モデル評価を実施せず、#1531の実行記録自体も再確認していない。teamでの義務伝達とPhase 2のID保持のモデル評価は実装後の検証として残る。
-
-## 8. 実装時のモデル確認
-
-2026-09-05、合成した独立2義務（REQ-A: 負のlimit拒否、REQ-B: 入力順保持）で、日英それぞれPhase 2とteam分解の4入力をCodex CLIの `gpt-5.6-luna` / `max` に与えた。実際のbuiltin loader、InstructionBuilder、ReportInstructionBuilder、teamのbuildDecomposePromptを使用し、新規セッション・read-onlyで実行した。
-
-- Phase 2: REQ-Aのみ実装・回帰テスト成功、REQ-Bは未変更・未検証というPhase 1応答を与えた。日英ともIDを保持し、Aをcomplete、Bをincompleteとして、与えた証拠と対応付けた。
-- team: 日英とも各担当指示に担当義務のID・意味・対象ファイル・回帰テストの証拠条件が含まれ、未実行のテストを成功扱いしなかった。
-
-これは4サンプルの意味内容を目視確認した結果であり、統計的な成功率や全providerでの保証ではない。teamは構造化応答transport・part実行を通さない限定的な分解prompt評価である。実際のpart実行への配線とreport本文の保持は別途結合テストで検証する。元runの生ログ・個人情報は評価入力に含めていない。
-
-Phase 2の参考reportはreference/scope/contentを持つJSONレコードで区切った。本文はJSONのエスケープを除き無変更であり、レコードを復号したcontentが注入時本文と一致することを決定的テストで検証する。
-
-## 9. Luna Maxの実装レビュー
-
-2026-09-05、独立した `gpt-5.6-luna` / `max` が実装差分を確認した。
-
-初回のF-001: WorkflowRunLoopとCoordinatorに文字列のprebuilt経路が残り、Coordinatorがその値を捨てていた。通常agentでは別の準備結果が届くが、設計上必要なcaller移行が未完了だった。
-
-対応: full/single両run loop、Coordinator、WorkflowEngineのbindingをPreparedInstructionへ統一。生成済みの本文とsnapshotを同じ値で受け渡し、full/single両経路の回帰テストを追加した。
-
-再レビュー結果はAPPROVE、残存finding 0件。Lunaはソースを確認し、テスト実行は実装担当側の証跡と分離して扱った。
-
-## 10. 最終検証結果
-
-- build / lint / 型契約 / テスト型チェック: 成功。
-- 全unit: 398ファイル、6,177件成功。
-- light IT: 155ファイル、2,290件成功。
-- 変更したheavy IT: 全対象を実行し成功（report/parallel/team/workflow loader/親子workflow/Companion/session/run loop）。
-- IT分類契約: 単独実行で20件成功。
-- smoke E2E: 19件成功、GitHub Issue取得の1件はスキップ。
-- `git diff --check`: 成功。
-
-検証中に発見したテストモック・fixtureの追随漏れは修正後に再実行した。heavy runnerの通信タイムアウトも再測定で解消した。full release gateと全provider E2Eは実行していない。実行中の別runには変更を適用していない。
+コード実装時はプロジェクト規定のbuild/lint/unit/light ITと、変更したITの分類契約・対象heavy ITを実行する。

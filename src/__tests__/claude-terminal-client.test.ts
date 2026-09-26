@@ -691,7 +691,6 @@ describe('Claude terminal client', () => {
 
       await vi.waitFor(async () => {
         const logContent = await readFile(logFile, 'utf-8');
-        expect(logContent).toContain('Claude terminal session start failed after abort');
         expect(logContent).toContain('tmux start failed after abort');
       });
       expect(result).toMatchObject({

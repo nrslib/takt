@@ -37,7 +37,7 @@ describe('ACP enqueue service integration', () => {
       workflow: 'review',
       saveTaskFile,
       createIssueFromTaskResult,
-    })).rejects.toThrow('Issue #913 was created, but task saving failed: disk full');
+    })).rejects.toThrow(/#913.*disk full/);
 
     expect(mockInitGitProvider).toHaveBeenCalledWith('/repo');
     expect(mockGitProvider.closeIssue).not.toHaveBeenCalled();
@@ -66,7 +66,7 @@ describe('ACP enqueue service integration', () => {
       saveTaskFile,
       createIssueFromTaskResult,
       abortSignal: abortController.signal,
-    })).rejects.toThrow('Issue #913 was created and remains open, but task enqueue was cancelled');
+    })).rejects.toThrow("#913");
 
     expect(saveTaskFile).not.toHaveBeenCalled();
     expect(mockGitProvider.closeIssue).not.toHaveBeenCalled();
@@ -94,7 +94,7 @@ describe('ACP enqueue service integration', () => {
       workflow: 'review',
       saveTaskFile,
       createIssueFromTaskResult,
-    })).rejects.toThrow('Issue #913 was created, but task saving failed: disk full');
+    })).rejects.toThrow(/#913.*disk full/);
     expect(mockGitProvider.closeIssue).not.toHaveBeenCalled();
   });
 

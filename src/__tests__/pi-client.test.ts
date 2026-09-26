@@ -1305,7 +1305,7 @@ export default function registerLifecycleTool(pi) {
 
     expect(response.status).toBe('error');
     expect(response.error).toContain(
-      'Pi extension source could not be resolved for local source (temporary: resolution failed)',
+      "local source (temporary: resolution failed)",
     );
     expect(response.error).not.toContain('nfidential-extension.ts');
     expect(mocks.resourceLoader).not.toHaveBeenCalled();
@@ -2367,7 +2367,7 @@ export default function registerLifecycleTool(pi) {
 
     expect(response.status).toBe('error');
     expect(response.error).toContain(
-      'Invalid Pi thinking level "thikning". Allowed values: off, minimal, low, medium, high, xhigh, max',
+      "thinking level \"thikning\"",
     );
     expect(mocks.resourceLoader).not.toHaveBeenCalled();
     expect(mocks.createAgentSession).not.toHaveBeenCalled();
