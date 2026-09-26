@@ -33,7 +33,6 @@
 | `report-phase-retry` / `report-reference` / `escape` / `it-report-inheritance-task-resume` | report指示・見出し・欠落案内の表現を固定 | 再試行、セッション、注入レコード、`scope: missing`、継承診断、未展開プレースホルダーの除去 |
 | `interactive-summary` / `it-live-intervention-engine` / `companion-review.e2e` / `task` | 自然言語の方針が含まれるだけで挙動の保証とする | モード別出力、構造化結果、介入の配送状態、Companionの実行回数・指摘内容、タスク参照パス |
 | `npmTestEntrypoint` | 実行方法の案内段落を全文固定 | shard並行起動・待機・終了コード。案内出力の有無は既存テストを維持 |
-
 | `dependency-versions` | SDK・推移依存・修正済みリリース番号とpackage.jsonの丸写しを削除。正常な更新まで失敗させる完全一致は脆弱性検出にならない | registry integrity、宣言した最低Nodeとruntime依存のengine互換性、traced-configのpublic import。manifest/lockは変更しない |
 | `policy-persona` | personaだけを入力して「agentより優先」と称する重複、display nameの重複、legacy instruction拒否の重複を削除 | persona未指定・inline・ファイル・並列、display name、専用 `instruction-template-removal` のschema pathとnormalize拒否 |
 | `commands-run` / `commands-watch` | オプション説明文を全文固定 | `--ignore-exceed`登録、run/watchへの値の伝播 |
