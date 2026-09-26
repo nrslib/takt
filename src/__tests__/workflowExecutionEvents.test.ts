@@ -1440,6 +1440,70 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
+  it('rate limit の step error を provider と retry time を含む要約で端末表示する', () => {
+    const errorMessage = "You've hit your usage limit. Try again at 7:04 PM";
+    const { engine, out } = createBridgeHarness();
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'codex', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:complete', step, {
+      persona: 'reviewer',
+      status: 'rate_limited',
+      content: '',
+      error: errorMessage,
+      errorKind: 'rate_limit',
+      rateLimitInfo: {
+        provider: 'codex',
+        detectedAt: new Date(),
+        source: 'error_text',
+        resetAtRaw: '7:04 PM',
+      },
+      timestamp: new Date(),
+    }, 'instruction', step.name);
+
+    expect(out.error).toHaveBeenCalledOnce();
+    const terminalMessage = out.error.mock.calls[0]?.[0] as string;
+    expect(terminalMessage).toContain('Error: codex');
+    expect(terminalMessage).toContain('retry after 7:04 PM');
+    expect(terminalMessage).toContain(errorMessage);
+  });
+
+  it('resetAtRaw のない Claude SDK 応答でも元エラーのリセット情報と原因を端末表示に残す', () => {
+    const errorMessage = 'Claude SDK rate limit event: status=rejected, rateLimitType=five_hour, overageStatus=rejected, overageDisabledReason=out_of_credits, resetsAt=1775059200, overageResetsAt=1775059200, isUsingOverage=false';
+    const { engine, out } = createBridgeHarness();
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'claude-sdk', model: 'claude-sonnet-4-6' }, 'parent', step.name);
+    engine.emit('step:complete', step, {
+      persona: 'reviewer',
+      status: 'rate_limited',
+      content: '',
+      error: errorMessage,
+      errorKind: 'rate_limit',
+      rateLimitInfo: {
+        provider: 'claude-sdk',
+        detectedAt: new Date(),
+        source: 'sdk_error',
+      },
+      timestamp: new Date(),
+    }, 'instruction', step.name);
+
+    expect(out.error).toHaveBeenCalledOnce();
+    const terminalMessage = out.error.mock.calls[0]?.[0] as string;
+    expect(terminalMessage).toContain('Error: claude-sdk');
+    expect(terminalMessage).toContain(errorMessage);
+    expect(terminalMessage).not.toContain('retry after');
+    expect(terminalMessage).not.toMatch(/[\n\r]/);
+  });
+
   it('event sink へ rate limited の専用イベントを渡す', async () => {
     const eventSink = vi.fn().mockResolvedValue(undefined);
     const { bridge, engine } = createBridgeHarness({ eventSink });

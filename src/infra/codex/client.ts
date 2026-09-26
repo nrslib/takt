@@ -13,6 +13,7 @@ import {
 } from '@openai/codex-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
+import type { RateLimitInfo } from '../../core/models/response.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
@@ -64,6 +65,21 @@ const CODEX_RETRY_MAX_RETRIES = 8;
 const CODEX_RETRY_BASE_DELAY_MS = 1000;
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
 const CODEX_ERROR_MATCH_PREFIX_BYTES = 4 * 1024;
+const CODEX_USAGE_LIMIT_RESPONSE_MAX_CONTENT_LENGTH = 600;
+const CODEX_USAGE_LIMIT_PREFIX = /(?:you(?:'|’)ve|you have)\s+hit\s+your\s+usage\s+limit/.source;
+const CODEX_USAGE_LIMIT_RETRY = /try\s+again\s+(?:later|at\s+(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}(?:st|nd|rd|th),\s+\d{4}\s+)?\d{1,2}:\d{2}\s*[ap]m)/.source;
+const CODEX_USAGE_LIMIT_PURCHASE_GUIDANCE = /visit\s+https:\/\/chatgpt\.com\/codex\/settings\/usage\s+to\s+purchase\s+more\s+credits/.source;
+// rust-v0.156.1 codex-rs/protocol/src/error.rs の UsageLimitReachedError に対応する。
+// 自由文の promo_message は説明文と区別できないため、分類対象外とする。
+const CODEX_USAGE_LIMIT_RESPONSE_PATTERNS = [
+  String.raw`${CODEX_USAGE_LIMIT_PREFIX}(?:\.\s+${CODEX_USAGE_LIMIT_PURCHASE_GUIDANCE})?(?:(?:,?\s+or|\.)\s+${CODEX_USAGE_LIMIT_RETRY})?`,
+  String.raw`${CODEX_USAGE_LIMIT_PREFIX}\.\s+upgrade\s+to\s+pro\s+\(https:\/\/chatgpt\.com\/explore\/pro\),\s+${CODEX_USAGE_LIMIT_PURCHASE_GUIDANCE}\s+or\s+${CODEX_USAGE_LIMIT_RETRY}`,
+  String.raw`${CODEX_USAGE_LIMIT_PREFIX}\.\s+upgrade\s+to\s+plus\s+to\s+continue\s+using\s+codex\s+\(https:\/\/chatgpt\.com\/explore\/plus\),\s+or\s+${CODEX_USAGE_LIMIT_RETRY}`,
+  String.raw`${CODEX_USAGE_LIMIT_PREFIX}\.\s+to\s+get\s+more\s+access\s+now,\s+send\s+a\s+request\s+to\s+your\s+admin\s+or\s+${CODEX_USAGE_LIMIT_RETRY}`,
+  String.raw`${CODEX_USAGE_LIMIT_PREFIX}\s+for\s+[a-z0-9][a-z0-9._ -]*\.\s+switch\s+to\s+another\s+model\s+now,\s+or\s+${CODEX_USAGE_LIMIT_RETRY}`,
+  /your workspace is out of credits\. (?:add credits to continue|ask your workspace owner to refill in order to continue)/.source,
+  /you hit your spend cap set (?:in your workspace\. increase your spend cap to continue|by the owner of your workspace\. ask an owner to increase your spend cap to continue)/.source,
+].map((pattern) => new RegExp(`^(?:${pattern})\\.?$`, 'i'));
 const CODEX_PARSE_FAILURE_PREFIX = 'Failed to parse item:';
 const CODEX_RECONNECT_ERROR_PATTERNS = [
   'reconnecting...',
@@ -104,6 +120,11 @@ function isCodexSafetyRefusal(content: string): boolean {
   }
   const lower = content.toLowerCase();
   return CODEX_SAFETY_REFUSAL_PATTERNS.some((pattern) => lower.includes(pattern));
+}
+
+function isCodexUsageLimitResponse(content: string): boolean {
+  return content.length <= CODEX_USAGE_LIMIT_RESPONSE_MAX_CONTENT_LENGTH
+    && CODEX_USAGE_LIMIT_RESPONSE_PATTERNS.some((pattern) => pattern.test(content));
 }
 
 function getCodexErrorMatchPrefix(message: string): string {
@@ -332,10 +353,11 @@ export class CodexClient {
     agentType: string,
     sessionId: string | undefined,
     message: string,
+    source: RateLimitInfo['source'],
     options: CodexFailureMessageOptions,
     retryCount: number,
   ): AgentResponse {
-    const response = buildRateLimitedResponseFields('codex', 'sdk_error', message);
+    const response = buildRateLimitedResponseFields('codex', source, message);
     return {
       persona: agentType,
       timestamp: new Date(),
@@ -652,6 +674,7 @@ export class CodexClient {
               agentType,
               currentThreadId,
               failureMessage,
+              'sdk_error',
               options,
               totalRetryCount(),
             );
@@ -690,6 +713,19 @@ export class CodexClient {
             finalFailure.category,
           );
           return errorResponse;
+        }
+
+        if (isCodexUsageLimitResponse(trimmed)) {
+          const rateLimitedResponse = this.buildRateLimitedResponse(
+            agentType,
+            currentThreadId,
+            trimmed,
+            'error_text',
+            options,
+            totalRetryCount(),
+          );
+          emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+          return rateLimitedResponse;
         }
 
         const structuredOutput = parseStructuredOutput(lastAgentMessageText.trim(), !!options.outputSchema);
@@ -765,6 +801,7 @@ export class CodexClient {
             agentType,
             currentThreadId,
             rawErrorMessage,
+            'sdk_error',
             options,
             totalRetryCount(),
           );
